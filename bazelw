@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Compute a salt value so the repository rule re-executes when it changes.
+# If FETCH_SALT_TTL is set to a positive integer, the salt will change
+# every TTL seconds (time-bucketed). Otherwise it will change every run.
+
+now_ts="$(date +%s)"
+ttl_seconds="${FETCH_SALT_TTL:-0}"
+
+if [[ "${ttl_seconds}" =~ ^[0-9]+$ ]] && [[ "${ttl_seconds}" -gt 0 ]]; then
+  salt=$(( now_ts / ttl_seconds ))
+else
+  salt="${now_ts}"
+fi
+
+if command -v bazelisk >/dev/null 2>&1; then
+  bazel_cmd="bazelisk"
+else
+  bazel_cmd="bazel"
+fi
+
+# Split args into startup args (leading dashes) and the command
+startup_args=()
+cmd=""
+rest_args=()
+
+for arg in "$@"; do
+  if [[ -z "${cmd}" ]]; then
+    if [[ "${arg}" == --* ]]; then
+      startup_args+=("${arg}")
+      continue
+    else
+      cmd="${arg}"
+      continue
+    fi
+  else
+    rest_args+=("${arg}")
+  fi
+done
+
+# Default to help if no command provided
+if [[ -z "${cmd}" ]]; then
+  cmd="help"
+fi
+
+# Only inject the repo_env for commands that may trigger repo fetching
+case "${cmd}" in
+  build|test|run|sync|fetch|query|cquery|aquery|coverage|info)
+    ;;
+  *)
+    # No special handling
+    ;;
+esac
+
+# Build final command line safely without expanding empty arrays
+cmdline=("${bazel_cmd}")
+if (( ${#startup_args[@]} )); then
+  for a in "${startup_args[@]}"; do cmdline+=("${a}"); done
+fi
+cmdline+=("${cmd}")
+
+if [[ "${cmd}" =~ ^(build|test|run|sync|fetch|query|cquery|aquery|coverage|info)$ ]]; then
+  # Compute Git metadata if available; ignore failures (e.g., detached or not a repo)
+  git_dirty=""
+  dd_git_repo_url=""
+  dd_git_branch=""
+  dd_git_commit=""
+  dd_git_head_commit=""
+  dd_git_commit_message=""
+  dd_git_head_message=""
+  if command -v git >/dev/null 2>&1; then
+    if git rev-parse --git-dir >/dev/null 2>&1; then
+      dd_git_commit=$(git rev-parse HEAD 2>/dev/null || true)
+      # Use the one-line subject to avoid newlines in --repo_env
+      dd_git_commit_message=$(git log -1 --pretty=%s 2>/dev/null || true)
+      dd_git_head_commit="${dd_git_commit}"
+      dd_git_head_message="${dd_git_commit_message}"
+      if git diff-index --quiet HEAD -- 2>/dev/null; then
+        git_dirty="clean"
+      else
+        git_dirty="dirty"
+      fi
+      # Datadog-specific vars
+      dd_git_repo_url=$(git config --get remote.origin.url 2>/dev/null || true)
+      # Prefer symbolic ref; fallback to abbrev-ref; on detached HEAD output empty and we'll default later
+      dd_git_branch=$(git symbolic-ref --short -q HEAD 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+      if [[ -z "${dd_git_branch}" || "${dd_git_branch}" == "HEAD" ]]; then
+        dd_git_branch="auto:git-detached-head"
+      fi
+    fi
+  fi
+
+  cmdline+=("--repo_env=FETCH_SALT=${salt}")
+  # Allow user-provided env to override computed values
+  if [[ -n "${DD_GIT_REPOSITORY_URL:-}" ]]; then dd_git_repo_url="${DD_GIT_REPOSITORY_URL}"; fi
+  if [[ -n "${DD_GIT_BRANCH:-}" ]]; then dd_git_branch="${DD_GIT_BRANCH}"; fi
+  if [[ -n "${DD_GIT_COMMIT_SHA:-}" ]]; then dd_git_commit="${DD_GIT_COMMIT_SHA}"; fi
+  if [[ -n "${DD_GIT_HEAD_COMMIT:-}" ]]; then dd_git_head_commit="${DD_GIT_HEAD_COMMIT}"; fi
+  if [[ -n "${DD_GIT_COMMIT_MESSAGE:-}" ]]; then dd_git_commit_message="${DD_GIT_COMMIT_MESSAGE}"; fi
+  if [[ -n "${DD_GIT_HEAD_MESSAGE:-}" ]]; then dd_git_head_message="${DD_GIT_HEAD_MESSAGE}"; fi
+
+  if [[ -n "${dd_git_commit}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_SHA=${dd_git_commit}")
+  fi
+  if [[ -n "${git_dirty}" ]]; then
+    cmdline+=("--repo_env=GIT_DIRTY=${git_dirty}")
+  fi
+  if [[ -n "${dd_git_repo_url}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_REPOSITORY_URL=${dd_git_repo_url}")
+  fi
+  if [[ -n "${dd_git_branch}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_BRANCH=${dd_git_branch}")
+  fi
+  if [[ -n "${dd_git_head_commit}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_COMMIT=${dd_git_head_commit}")
+  fi
+  if [[ -n "${dd_git_commit_message}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_MESSAGE=${dd_git_commit_message}")
+  fi
+  if [[ -n "${dd_git_head_message}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_MESSAGE=${dd_git_head_message}")
+  fi
+fi
+
+if (( ${#rest_args[@]} )); then
+  for a in "${rest_args[@]}"; do cmdline+=("${a}"); done
+fi
+
+exec "${cmdline[@]}"
+
+

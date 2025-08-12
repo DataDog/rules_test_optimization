@@ -1,0 +1,4 @@
+module(
+    name    = "datadog-rules-test-optimization",
+    version = "1.0.0",
+)

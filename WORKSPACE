@@ -1,0 +1,1 @@
+load("//tools/test_optimization_sync.bzl", "test_optimization_sync")

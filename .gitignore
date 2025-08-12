@@ -1,0 +1,33 @@
+# Bazel files
+bazel-*
+.bazelrc.user
+.bazelversion
+MODULE.bazel.lock
+
+# Bazel outputs
+/bazel-bin/
+/bazel-out/
+/bazel-testlogs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
