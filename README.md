@@ -33,15 +33,15 @@ Reference them with a single label:
 In your `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "github.com-tonyredondo-bazel-rule-test", version = "")
+bazel_dep(name = "datadog-rules-test-optimization", version = "")
 
 # Optional: develop locally
 local_path_override(
-    module_name = "github.com-tonyredondo-bazel-rule-test",
+    module_name = "datadog-rules-test-optimization",
     path = "/absolute/path/to/bazel-rule-test",
 )
 
-test_optimization_sync = use_extension("@github.com-tonyredondo-bazel-rule-test//tools:test_optimization_sync.bzl", "test_optimization_sync_extension")
+test_optimization_sync = use_extension("@datadog-rules-test-optimization//tools:test_optimization_sync.bzl", "test_optimization_sync_extension")
 
 # Minimal usage: defaults to writing under .testoptimization and creating the filegroup
 test_optimization_sync.test_optimization_sync(
@@ -252,15 +252,6 @@ DD_GIT_BRANCH=main \
 DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
 ./bazelw test //...
 ```
-
-## Referenced API shapes (for development)
-
-These Datadog client references were used to mirror request/response shapes:
-
-- Settings: `internal/civisibility/utils/net/settings_api.go`
-- Known Tests: `internal/civisibility/utils/net/known_tests_api.go`
-- Skippable Tests: `internal/civisibility/utils/net/skippable.go`
-- Test Management Tests: `internal/civisibility/utils/net/test_management_tests_api.go`
 
 ## Tips
 
