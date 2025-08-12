@@ -38,7 +38,7 @@ bazel_dep(name = "datadog-rules-test-optimization", version = "")
 # Optional: develop locally
 local_path_override(
     module_name = "datadog-rules-test-optimization",
-    path = "/absolute/path/to/bazel-rule-test",
+    path = "/absolute/path/to/datadog-rules-test-optimization",
 )
 
 test_optimization_sync = use_extension("@datadog-rules-test-optimization//tools:test_optimization_sync.bzl", "test_optimization_sync_extension")
