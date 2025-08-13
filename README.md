@@ -225,8 +225,6 @@ All above detection variables are also declared in `environ` to ensure changes r
 
 This repo provides a `bazelw` wrapper to simplify running with the right `--repo_env` variables:
 
-- Always injects a changing `FETCH_SALT` for commands that can trigger repo fetching (`build|test|run|sync|fetch|query|cquery|aquery|coverage|info`).
-  - Set `FETCH_SALT_TTL` (seconds) to bucketize the salt and avoid re-fetching too frequently.
 - Computes Git metadata when a Git repo is present and forwards via `--repo_env`:
   - `GIT_DIRTY`: `clean|dirty`
   - `DD_GIT_REPOSITORY_URL`: from `git config --get remote.origin.url`
@@ -240,7 +238,7 @@ This repo provides a `bazelw` wrapper to simplify running with the right `--repo
 Examples:
 
 ```sh
-# Always refresh on each run
+# Refresh only on git environmnet variables
 ./bazelw build //...
 
 # Refresh on an hourly TTL
@@ -255,6 +253,6 @@ DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
 
 ## Tips
 
-- To force re-fetch on demand: `./bazelw build //...` automatically injects a changing `FETCH_SALT` (see the provided wrapper). You can also set a TTL via `FETCH_SALT_TTL`.
+- You can set a TTL via `FETCH_SALT_TTL`.
 - For debugging, set `debug = True` when calling the extension to get verbose logs, including request bodies and detected OS info.
 
