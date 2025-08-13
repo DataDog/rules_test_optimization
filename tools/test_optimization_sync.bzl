@@ -190,6 +190,16 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, re
             # Fallback if wc is unavailable or returns unexpected output
             log_info("Downloaded %s from %s" % (out_file, url))
 
+        # Emit full response body when debug is enabled, similar to request logging
+        # Safe to read here because curl succeeded and wrote the response to out_file
+        if debug:
+            try_body = ctx.read(ctx.path(out_file))
+            if try_body != None:
+                log_debug(
+                    debug,
+                    "HTTP response body (%s %s): %s" % ((method or "GET"), url, try_body),
+                )
+
     return result.return_code
 
 def _http_post_json(ctx, url, headers, json_body_str, tmp_body_file, out_file, debug):
