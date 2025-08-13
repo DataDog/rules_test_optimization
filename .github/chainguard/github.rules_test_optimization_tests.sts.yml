@@ -1,0 +1,12 @@
+# Docs: https://datadoghq.atlassian.net/wiki/spaces/SECENG/pages/5138645099/User+guide+dd-octo-sts
+issuer: https://token.actions.githubusercontent.com
+
+subject: repo:DataDog/rules_test_optimization_tests:.*
+claim_pattern:
+  event_name: (push|schedule|workflow_dispatch|pull_request_target)
+  ref: refs/heads/main
+  ref_protected: "true"
+  job_workflow_ref: DataDog/rules_test_optimization_tests/\.github/workflows/.*
+
+permissions:
+  contents: read
