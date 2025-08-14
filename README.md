@@ -69,7 +69,7 @@ filegroup(
 
 ## Uploading test and coverage payloads (same `bazel test` invocation)
 
-Use the provided test rule `dd_payload_uploader` to watch a shared writable directory for payloads, enrich test payloads with Git metadata, and upload them to Datadog during the same `bazel test` command.
+Use the provided test rule `dd_payload_uploader` to watch a shared writable directory for payloads, enrich test payloads with metadata from `context.json`, and upload them to Datadog during the same `bazel test` command.
 
 ### Where to write payloads
 
@@ -102,6 +102,8 @@ dd_payload_uploader(
     quiescent_sec = 10,      # idle window before uploading starts
     max_wait_sec = 1800,     # upper bound wait
     fail_on_error = False,   # set True to fail the test on upload errors
+    # Provide context.json via runfiles so enrichment can occur
+    data = ["//:dd_test_opt_context"],
     # timeout = "long",     # uncomment if your test phase can be long
 )
 ```
@@ -124,14 +126,13 @@ bazel test //... //tools:dd_upload_payloads \
   - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
   - Adds `X-Datadog-EVP-Subdomain` per endpoint
 - Test payloads are JSON (msgpack not available in Starlark). Coverage is multipart with `event` and `coveragex` parts.
+- Requests include `Accept: application/json`. Test uploads set `Content-Type: application/json`.
 
-### Git metadata enrichment
+### Metadata enrichment (context.json)
 
-Injected into `metadata.*` in test payloads:
-- `git.repository_url`, `git.branch`, `git.commit.sha`, `git.commit.head.sha`, `git.commit.message`, `git.commit.head.message`
-- Plus `env` and `service.name`
-
-Values are resolved from CI env with `DD_GIT_*` override precedence, matching the sync extension.
+- When `context.json` is present in runfiles (provided via the `data` attribute), the uploader enriches each test payload by merging all non-null keys from `context.json` into the payload under `metadata.*`.
+- If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
+- The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
 
 ## Configuration and attributes
 
