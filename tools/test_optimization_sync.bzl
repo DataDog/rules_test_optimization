@@ -434,6 +434,8 @@ def _collect_env(ctx):
     if dd_head_msg:
         env_data["head_message"] = dd_head_msg
 
+    # Expose provider name to callers (e.g., for context tags)
+    env_data["ci_provider_name"] = provider
     return env_data
 
 def _build_configurations_json(ctx, debug):
@@ -453,6 +455,166 @@ def _build_configurations_json(ctx, debug):
         + ' "runtime.version": "%s"' % _safe_json_string(runtime_version)
         + "}"
     )
+
+def _build_context_tags(ctx, env_data, debug):
+    # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
+    tags = {}
+
+    # OS tags
+    osinfo = _detect_os_info(ctx, debug)
+    if osinfo.get("platform"):
+        tags["os.platform"] = osinfo.get("platform")
+    if osinfo.get("version"):
+        tags["os.version"] = osinfo.get("version")
+    if osinfo.get("arch"):
+        tags["os.architecture"] = osinfo.get("arch")
+
+    # Runtime tags
+    if ctx.attr.runtime_name:
+        tags["runtime.name"] = ctx.attr.runtime_name
+    if ctx.attr.runtime_version:
+        tags["runtime.version"] = ctx.attr.runtime_version
+
+    # Git tags (base)
+    if env_data.get("repository_url"):
+        tags["git.repository_url"] = env_data.get("repository_url")
+    if env_data.get("branch"):
+        tags["git.branch"] = env_data.get("branch")
+    if env_data.get("sha"):
+        tags["git.commit.sha"] = env_data.get("sha")
+    if env_data.get("head_sha"):
+        tags["git.commit.head.sha"] = env_data.get("head_sha")
+    if env_data.get("commit_message"):
+        tags["git.commit.message"] = env_data.get("commit_message")
+    if env_data.get("head_message"):
+        tags["git.commit.head.message"] = env_data.get("head_message")
+
+    # Git overrides / extended tags via DD_* env
+    def _opt(env_key, tag_key):
+        v = ctx.os.environ.get(env_key)
+        if v:
+            tags[tag_key] = v
+
+    _opt("DD_GIT_TAG", "git.tag")
+
+    _opt("DD_GIT_COMMIT_AUTHOR_NAME", "git.commit.author.name")
+    _opt("DD_GIT_COMMIT_AUTHOR_EMAIL", "git.commit.author.email")
+    _opt("DD_GIT_COMMIT_AUTHOR_DATE", "git.commit.author.date")
+    _opt("DD_GIT_COMMIT_COMMITTER_NAME", "git.commit.committer.name")
+    _opt("DD_GIT_COMMIT_COMMITTER_EMAIL", "git.commit.committer.email")
+    _opt("DD_GIT_COMMIT_COMMITTER_DATE", "git.commit.committer.date")
+
+    _opt("DD_GIT_HEAD_AUTHOR_NAME", "git.commit.head.author.name")
+    _opt("DD_GIT_HEAD_AUTHOR_EMAIL", "git.commit.head.author.email")
+    _opt("DD_GIT_HEAD_AUTHOR_DATE", "git.commit.head.author.date")
+    _opt("DD_GIT_HEAD_COMMITTER_NAME", "git.commit.head.committer.name")
+    _opt("DD_GIT_HEAD_COMMITTER_EMAIL", "git.commit.head.committer.email")
+    _opt("DD_GIT_HEAD_COMMITTER_DATE", "git.commit.head.committer.date")
+
+    _opt("DD_GIT_PR_BASE_BRANCH", "git.pull_request.base_branch")
+    _opt("DD_GIT_PR_BASE_BRANCH_SHA", "git.pull_request.base_branch_sha")
+    _opt("DD_GIT_PR_BASE_BRANCH_HEAD_SHA", "git.pull_request.base_branch_head_sha")
+    _opt("DD_PR_NUMBER", "pr.number")
+
+    # CI provider/name
+    if env_data.get("ci_provider_name"):
+        tags["ci.provider.name"] = env_data.get("ci_provider_name")
+
+    # CI workspace path
+    ws = _first_env(ctx, [
+        "CI_PROJECT_DIR",
+        "GITHUB_WORKSPACE",
+        "WORKSPACE",
+        "BUILDKITE_BUILD_CHECKOUT_PATH",
+        "TRAVIS_BUILD_DIR",
+    ])
+    if ws:
+        tags["ci.workspace_path"] = ws
+
+    # CI pipeline identifiers
+    pipeline_id = _first_env(ctx, [
+        "CI_PIPELINE_ID",
+        "GITHUB_RUN_ID",
+        "TRAVIS_BUILD_ID",
+        "BUILDKITE_BUILD_ID",
+        "BUILD_BUILDID",
+        "CIRCLE_WORKFLOW_ID",
+    ])
+    if pipeline_id:
+        tags["ci.pipeline.id"] = pipeline_id
+
+    pipeline_number = _first_env(ctx, [
+        "CI_PIPELINE_IID",
+        "GITHUB_RUN_NUMBER",
+        "TRAVIS_BUILD_NUMBER",
+        "BUILDKITE_BUILD_NUMBER",
+        "BUILD_BUILDNUMBER",
+    ])
+    if pipeline_number:
+        tags["ci.pipeline.number"] = pipeline_number
+
+    # CI pipeline URL: prefer provider URL then synthesize for GitHub
+    pipeline_url = _first_env(ctx, [
+        "CI_PIPELINE_URL",
+        "TRAVIS_BUILD_WEB_URL",
+        "CIRCLE_BUILD_URL",
+        "BUILDKITE_BUILD_URL",
+        "BUILD_BUILDURI",
+    ])
+    if not pipeline_url:
+        gh_server = ctx.os.environ.get("GITHUB_SERVER_URL") or ""
+        gh_repo = ctx.os.environ.get("GITHUB_REPOSITORY") or ""
+        gh_run_id = ctx.os.environ.get("GITHUB_RUN_ID") or ""
+        if gh_server and gh_repo and gh_run_id:
+            pipeline_url = "%s/%s/actions/runs/%s" % (gh_server, gh_repo, gh_run_id)
+    if pipeline_url:
+        tags["ci.pipeline.url"] = pipeline_url
+
+    # CI pipeline name (best-effort)
+    pipeline_name = _first_env(ctx, [
+        "GITHUB_WORKFLOW",
+        "CI_PROJECT_PATH",
+    ])
+    if pipeline_name:
+        tags["ci.pipeline.name"] = pipeline_name
+
+    # CI job identifiers
+    job_id = _first_env(ctx, [
+        "CI_JOB_ID",
+        "BUILD_ID",
+        "TRAVIS_JOB_ID",
+    ])
+    if job_id:
+        tags["ci.job.id"] = job_id
+
+    job_name = _first_env(ctx, [
+        "CI_JOB_NAME",
+        "GITHUB_JOB",
+        "JOB_NAME",
+    ])
+    if job_name:
+        tags["ci.job.name"] = job_name
+
+    job_url = _first_env(ctx, [
+        "CI_JOB_URL",
+        "TRAVIS_JOB_WEB_URL",
+        "BUILD_URL",
+    ])
+    if job_url:
+        tags["ci.job.url"] = job_url
+
+    # CI stage, node
+    stage_name = ctx.os.environ.get("CI_JOB_STAGE")
+    if stage_name:
+        tags["ci.stage.name"] = stage_name
+    node_name = ctx.os.environ.get("NODE_NAME")
+    if node_name:
+        tags["ci.node.name"] = node_name
+    node_labels = ctx.os.environ.get("NODE_LABELS")
+    if node_labels:
+        tags["ci.node.labels"] = node_labels
+
+    return tags
 
 # ##########################################################################
 # Request builders
@@ -826,13 +988,23 @@ def _impl(ctx):
         # Minimal valid JSON structure for test management tests
         ctx.file(tmtests_file, '{"data": {"attributes": {"modules": {}}}}\n')
 
-    # 6. Create a BUILD file with a single public filegroup target. We do not
-    #    export individual files; consumers should depend on the filegroup.
+    # Build and write context.json (non-secret metadata) in the same repo
+    context_tags = _build_context_tags(ctx, env_data, debug)
+    ctx.file("context.json", json.encode(context_tags) + "\n")
+
+    # 6. Create a BUILD file with two public filegroup targets.
+    # - test_optimization_files: the JSONs returned or stubbed from HTTP (existing)
+    # - test_optimization_context: the context.json (separate, so consumers can opt-in)
     exp = repr(exports)
     build_content = (
         'filegroup(\n'
         + '    name = "test_optimization_files",\n'
         + ('    srcs = %s,\n' % exp)
+        + '    visibility = ["//visibility:public"],\n'
+        + ')\n\n'
+        + 'filegroup(\n'
+        + '    name = "test_optimization_context",\n'
+        + '    srcs = ["context.json"],\n'
         + '    visibility = ["//visibility:public"],\n'
         + ')\n'
     )
@@ -902,6 +1074,14 @@ test_optimization_sync = repository_rule(
         "DD_GIT_HEAD_COMMIT",                    # Optional: preferred head commit SHA
         "DD_GIT_COMMIT_MESSAGE",                 # Optional: commit message
         "DD_GIT_HEAD_MESSAGE",                   # Optional: preferred head commit message
+        # Extended git tags used for context.json (non-secret)
+        "DD_GIT_TAG",
+        "DD_GIT_COMMIT_AUTHOR_NAME", "DD_GIT_COMMIT_AUTHOR_EMAIL", "DD_GIT_COMMIT_AUTHOR_DATE",
+        "DD_GIT_COMMIT_COMMITTER_NAME", "DD_GIT_COMMIT_COMMITTER_EMAIL", "DD_GIT_COMMIT_COMMITTER_DATE",
+        "DD_GIT_HEAD_AUTHOR_NAME", "DD_GIT_HEAD_AUTHOR_EMAIL", "DD_GIT_HEAD_AUTHOR_DATE",
+        "DD_GIT_HEAD_COMMITTER_NAME", "DD_GIT_HEAD_COMMITTER_EMAIL", "DD_GIT_HEAD_COMMITTER_DATE",
+        "DD_GIT_PR_BASE_BRANCH", "DD_GIT_PR_BASE_BRANCH_SHA", "DD_GIT_PR_BASE_BRANCH_HEAD_SHA",
+        "DD_PR_NUMBER",
         # CI provider detection envs (adds robustness to repo rule caching)
         "APPVEYOR", "APPVEYOR_REPO_NAME", "APPVEYOR_REPO_PROVIDER", "APPVEYOR_REPO_BRANCH", "APPVEYOR_REPO_COMMIT",
         "TF_BUILD", "BUILD_REPOSITORY_URI", "BUILD_SOURCEVERSION", "BUILD_SOURCEBRANCH", "BUILD_SOURCEVERSIONMESSAGE",
@@ -918,6 +1098,16 @@ test_optimization_sync = repository_rule(
         "CF_BUILD_ID", "CF_BRANCH",
         "CODEBUILD_INITIATOR",
         "DRONE", "DRONE_GIT_HTTP_URL", "DRONE_COMMIT_SHA", "DRONE_BRANCH", "DRONE_COMMIT_MESSAGE",
+        # Additional CI and workspace envs used in context.json
+        "CI_PROJECT_DIR", "GITHUB_WORKSPACE", "WORKSPACE", "BUILDKITE_BUILD_CHECKOUT_PATH", "TRAVIS_BUILD_DIR",
+        "CI_PIPELINE_ID", "GITHUB_RUN_ID", "TRAVIS_BUILD_ID", "BUILDKITE_BUILD_ID", "BUILD_BUILDID", "CIRCLE_WORKFLOW_ID",
+        "CI_PIPELINE_IID", "GITHUB_RUN_NUMBER", "TRAVIS_BUILD_NUMBER", "BUILDKITE_BUILD_NUMBER", "BUILD_BUILDNUMBER",
+        "CI_PIPELINE_URL", "TRAVIS_BUILD_WEB_URL", "CIRCLE_BUILD_URL", "BUILDKITE_BUILD_URL", "BUILD_BUILDURI",
+        "CI_JOB_ID", "BUILD_ID", "TRAVIS_JOB_ID",
+        "CI_JOB_NAME", "GITHUB_JOB", "JOB_NAME",
+        "CI_JOB_URL",
+        "CI_JOB_STAGE",
+        "NODE_NAME", "NODE_LABELS",
     ],
     local = True,                               # Always run this rule locally, bypassing repository cache
 )

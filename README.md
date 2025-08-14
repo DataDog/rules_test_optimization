@@ -21,6 +21,7 @@ Given an external repository name `<repo_name>` created by the extension, the ge
   - `knowntests.json` (Known Tests API response or minimal stub)
   - `skippabletests.json` (Skippable Tests API response or minimal stub)
   - `tmtests.json` (Test Management Tests API response or minimal stub)
+  - `context.json` (Non-secret CI/Git/OS/runtime tags for reuse at test runtime)
 
 Reference them with a single label:
 
@@ -58,7 +59,79 @@ filegroup(
     name = "dd_test_opt_files",
     srcs = ["@test_optimization_data//:test_optimization_files"],
 )
+
+# Access context.json separately (for the uploader test rule)
+filegroup(
+    name = "dd_test_opt_context",
+    srcs = ["@test_optimization_data//:test_optimization_context"],
+)
 ```
+
+## Uploading test and coverage payloads (same `bazel test` invocation)
+
+Use the provided test rule `dd_payload_uploader` to watch a shared writable directory for payloads, enrich test payloads with Git metadata, and upload them to Datadog during the same `bazel test` command.
+
+### Where to write payloads
+
+- Write payloads to a stable, non-sandboxed path made writable via `--sandbox_writable_path`.
+- Recommended layout:
+
+```
+<workspace>/.testoptimization/payloads/
+  tests/     # JSON payloads for CI Test Cycle intake
+  coverage/  # JSON payloads for Code Coverage intake
+```
+
+Expose the path to tests via `--test_env=DD_PAYLOADS_DIR=<abs path>`. Tests must write:
+- `$DD_PAYLOADS_DIR/tests/*.json`
+- `$DD_PAYLOADS_DIR/coverage/*.json`
+
+### Add the uploader test target
+
+In a BUILD file (e.g., `//tools`):
+
+```bzl
+load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader")
+
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    # If omitted, the rule uses $DD_PAYLOADS_DIR
+    payloads_dir = "$(execroot)/.testoptimization/payloads",
+    tests_subdir = "tests",
+    coverage_subdir = "coverage",
+    quiescent_sec = 10,      # idle window before uploading starts
+    max_wait_sec = 1800,     # upper bound wait
+    fail_on_error = False,   # set True to fail the test on upload errors
+    # timeout = "long",     # uncomment if your test phase can be long
+)
+```
+
+Run together with your tests:
+
+```bash
+bazel test //... //tools:dd_upload_payloads \
+  --sandbox_writable_path=$PWD/.testoptimization/payloads \
+  --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+```
+
+### Endpoints, headers, and behavior
+
+- Agentless (when `DD_TRACE_AGENT_URL` unset):
+  - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
+  - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
+  - Requires `DD_API_KEY`
+- EVP proxy (when `DD_TRACE_AGENT_URL` set):
+  - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
+  - Adds `X-Datadog-EVP-Subdomain` per endpoint
+- Test payloads are JSON (msgpack not available in Starlark). Coverage is multipart with `event` and `coveragex` parts.
+
+### Git metadata enrichment
+
+Injected into `metadata.*` in test payloads:
+- `git.repository_url`, `git.branch`, `git.commit.sha`, `git.commit.head.sha`, `git.commit.message`, `git.commit.head.message`
+- Plus `env` and `service.name`
+
+Values are resolved from CI env with `DD_GIT_*` override precedence, matching the sync extension.
 
 ## Configuration and attributes
 
