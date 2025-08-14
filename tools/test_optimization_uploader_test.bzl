@@ -107,42 +107,33 @@ else
   COV_EVP=( -H "X-Datadog-EVP-Subdomain: citestcov-intake" )
 fi
 
-# Git metadata from env (populated by wrapper). Optional.
-REPO_URL="${{DD_GIT_REPOSITORY_URL:-}}"
-BRANCH="${{DD_GIT_BRANCH:-}}"
-SHA="${{DD_GIT_COMMIT_SHA:-}}"
-HEAD_SHA="${{DD_GIT_HEAD_COMMIT:-}}"
-COMMIT_MSG="${{DD_GIT_COMMIT_MESSAGE:-}}"
-HEAD_MSG="${{DD_GIT_HEAD_MESSAGE:-}}"
-ENV_NAME="${{DD_ENV:-CI}}"
-SERVICE="${{DD_SERVICE:-unnamed-service}}"
+# Load context.json from runfiles if present (added via data deps)
+CONTEXT_JSON=""
+if [[ -n "${TEST_SRCDIR:-}" ]]; then
+  CONTEXT_JSON="$(find "$TEST_SRCDIR" -type f -name context.json 2>/dev/null | head -n1 || true)"
+fi
+JQ_AVAILABLE=0
+if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 
-merge_with_jq() {{
+enrich_with_context() {
   local infile="$1"; local tmpfile="$2"
-  if ! command -v jq >/dev/null 2>&1; then
-    # No jq; send as-is
+  if (( JQ_AVAILABLE == 0 )) || [[ -z "$CONTEXT_JSON" ]] || [[ ! -f "$CONTEXT_JSON" ]]; then
     cp "$infile" "$tmpfile"
     return 0
   fi
-  jq --arg repo "$REPO_URL" \
-     --arg br "$BRANCH" \
-     --arg sha "$SHA" \
-     --arg hsha "$HEAD_SHA" \
-     --arg msg "$COMMIT_MSG" \
-     --arg hmsg "$HEAD_MSG" \
-     --arg env "$ENV_NAME" \
-     --arg svc "$SERVICE" \
-     '(.metadata["*"] |= ((. // {{}}) + {
-        "git.repository_url": $repo,
-        "git.branch": $br,
-        "git.commit.sha": $sha,
-        "git.commit.head.sha": $hsha,
-        "git.commit.message": $msg,
-        "git.commit.head.message": $hmsg,
-        "env": $env,
-        "service.name": $svc
-      }))' "$infile" > "$tmpfile"
-}}
+  jq --slurpfile ctx "$CONTEXT_JSON" '(
+    .metadata["*"] |= ((. // {}) + {
+      "git.repository_url": ($ctx[0]["git.repository_url"] // empty),
+      "git.branch": ($ctx[0]["git.branch"] // empty),
+      "git.commit.sha": ($ctx[0]["git.commit.sha"] // empty),
+      "git.commit.head.sha": ($ctx[0]["git.commit.head.sha"] // empty),
+      "git.commit.message": ($ctx[0]["git.commit.message"] // empty),
+      "git.commit.head.message": ($ctx[0]["git.commit.head.message"] // empty),
+      "env": ($ctx[0]["env"] // empty),
+      "service.name": ($ctx[0]["service.name"] // empty)
+    })
+  )' "$infile" > "$tmpfile"
+}
 
 upload_tests() {{
   local d="$PAYLOADS_DIR/$TESTS_SUBDIR"
@@ -151,7 +142,7 @@ upload_tests() {{
   for f in "$d"/*.json; do
     local body
     body="${f}.enriched.json"
-    merge_with_jq "$f" "$body"
+    enrich_with_context "$f" "$body"
     if (( AGENTLESS == 1 )); then
       curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused \
         -X POST "${TEST_URL}" "${hdrs[@]}" -H "Content-Type: application/json" --data-binary @"${body}" -o /dev/null -w "%{http_code}" >/dev/null || {{

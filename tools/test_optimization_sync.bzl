@@ -474,6 +474,8 @@ def _build_context_tags(ctx, env_data, debug):
         tags["runtime.name"] = ctx.attr.runtime_name
     if ctx.attr.runtime_version:
         tags["runtime.version"] = ctx.attr.runtime_version
+    if ctx.attr.runtime_arch:
+        tags["runtime.architecture"] = ctx.attr.runtime_arch
 
     # Git tags (base)
     if env_data.get("repository_url"):
@@ -519,6 +521,12 @@ def _build_context_tags(ctx, env_data, debug):
     # CI provider/name
     if env_data.get("ci_provider_name"):
         tags["ci.provider.name"] = env_data.get("ci_provider_name")
+
+    # Service and environment (non-secret)
+    if env_data.get("service"):
+        tags["service.name"] = env_data.get("service")
+    if env_data.get("environment"):
+        tags["env"] = env_data.get("environment")
 
     # CI workspace path
     ws = _first_env(ctx, [
