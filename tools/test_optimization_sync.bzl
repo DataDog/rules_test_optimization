@@ -47,6 +47,12 @@ def _curl_base_args():
         "--retry-connrefused",
     ]
 
+def _is_windows(ctx):
+    # _is_windows: best-effort host OS detection using environment variables available in repository_ctx.
+    os_env = (ctx.os.environ.get("OS") or "").lower()
+    comspec = (ctx.os.environ.get("ComSpec") or ctx.os.environ.get("COMSPEC") or "").lower()
+    return ("windows" in os_env) or comspec.endswith("cmd.exe")
+
 def _ensure_parent_directory(ctx, path, debug):
     # Create parent directory for a given file path if needed.
     # Starlark has no os.path utilities; use simple split/join.
@@ -57,7 +63,16 @@ def _ensure_parent_directory(ctx, path, debug):
     if len(segments) <= 1:
         return
     dirp = "/".join(segments[:-1])
-    res = ctx.execute(["mkdir", "-p", dirp])
+    if _is_windows(ctx):
+        # On Windows use PowerShell New-Item to create intermediate directories robustly
+        win_dir = dirp.replace("/", "\\")
+        ps_cmd = [
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "New-Item -ItemType Directory -Force -Path '%s' | Out-Null" % win_dir.replace("'", "''"),
+        ]
+        res = ctx.execute(ps_cmd)
+    else:
+        res = ctx.execute(["mkdir", "-p", dirp])
     log_debug(debug, "Ensured directory '%s' for output '%s' (rc=%d)" % (dirp, path, res.return_code))
     if res.return_code != 0:
         fail("Failed creating directory %s for output %s: %s" % (dirp, path, (res.stderr or "").strip()))
@@ -81,17 +96,29 @@ def _detect_os_info(ctx, debug):
         res = ctx.execute(args)
         return res.stdout.strip() if res.return_code == 0 and res.stdout else ""
 
+    if _is_windows(ctx):
+        platform = "windows"
+        # Windows arch via environment variables
+        arch = (
+            ctx.os.environ.get("PROCESSOR_ARCHITECTURE")
+            or ctx.os.environ.get("PROCESSOR_ARCHITEW6432")
+            or "unknown"
+        )
+        version = ctx.os.environ.get("OS") or ""
+        log_debug(debug, "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
+        return {"platform": platform, "version": version, "arch": arch}
+
     raw_platform = _run(["uname", "-s"]) or ""
     raw_arch = _run(["uname", "-m"]) or ""
     raw_version = _run(["uname", "-r"]) or ""
 
     p = raw_platform.lower()
-    if "mingw" in p or "msys" in p or "cygwin" in p or p.startswith("windows"):
-        platform = "windows"
-    elif "darwin" in p or p == "macos" or p == "mac" or p == "osx":
+    if "darwin" in p or p == "macos" or p == "mac" or p == "osx":
         platform = "darwin"
     elif "linux" in p:
         platform = "linux"
+    elif "mingw" in p or "msys" in p or "cygwin" in p or p.startswith("windows"):
+        platform = "windows"
     else:
         platform = p or "unknown"
 
@@ -126,42 +153,68 @@ def _compute_dd_api_base(site_env):
     return "https://api.%s" % site
 
 def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, request_debug_payload=None):
-    # _http_request: executes a curl call and writes the response to `out_file`.
-    # - method: HTTP verb (GET/POST)
-    # - url: target endpoint
-    # - headers: map of header -> value
-    # - data_file: path to a file used as the request body (optional)
-    # - request_debug_payload: raw JSON string only used for error logging (optional)
-    # - on success: returns curl's exit code 0; logs output size if possible
-    # - on failure: raises fail() with detailed diagnostics
+    # _http_request: executes an HTTP call and writes the response to `out_file`.
+    # - On Windows: uses PowerShell Invoke-WebRequest for portability.
+    # - On Linux/macOS: uses curl with retries.
+    # - Returns tool exit code (0=success) and prints HTTP status code to stdout when possible.
     # Ensure output directory exists if a subdirectory is provided
     _ensure_parent_directory(ctx, out_file, debug)
-    args = [] + _curl_base_args()
-    # Branch: explicit HTTP method if not GET
-    if method and method != "GET":
-        args.extend(["-X", method])
-    # Append headers (do not log them to avoid secrets in logs)
-    for header_key, header_value in headers.items():
-        args.extend(["-H", "%s: %s" % (header_key, header_value)])
-    # Branch: attach a request body if provided
-    if data_file:
-        args.extend(["--data-binary", "@%s" % data_file])
-    # Write response to file and capture HTTP status code on stdout
-    args.extend([url, "-o", out_file, "-w", "%{http_code}"])
+
+    is_win = _is_windows(ctx)
+    http_method = method or "GET"
 
     # Avoid logging secrets; only log method and URL
-    log_info("curl %s %s" % ((method or "GET"), url))
-    result = ctx.execute(args)
+    log_info("http %s %s" % (http_method, url))
 
-    log_debug(debug, "Curl return code: %d" % result.return_code)
-    if result.stdout:
-        log_debug(debug, "Curl stdout: %s" % result.stdout)
-    if result.stderr:
-        log_debug(debug, "Curl stderr: %s" % result.stderr)
+    if is_win:
+        # Build a small PowerShell script to perform the request with basic retries.
+        # We prefer a script file to avoid complex quoting issues.
+        # Script writes the HTTP status code to stdout on success.
+        script_name = "_http_request_%s.ps1" % (out_file.replace("/", "_").replace("\\", "_") or "out")
+        lines = []
+        lines.append("$ErrorActionPreference = 'Stop'")
+        lines.append("$ProgressPreference = 'SilentlyContinue'")
+        lines.append("$Url = '%s'" % url.replace("'", "''"))
+        lines.append("$OutFile = '%s'" % out_file.replace("'", "''"))
+        lines.append("$Method = '%s'" % http_method)
+        # Headers hashtable (PowerShell expects IDictionary-like; hashtable is safest)
+        lines.append("$Headers = @{}");
+        for hk, hv in headers.items():
+            lines.append("$Headers['%s'] = '%s'" % (str(hk).replace("'", "''"), str(hv).replace("'", "''")))
+        # Optional body file
+        if data_file:
+            lines.append("$BodyFile = '%s'" % data_file.replace("'", "''"))
+        lines.append("$max = 3; $attempt = 0")
+        lines.append("while ($true) {")
+        lines.append("  try {")
+        if data_file:
+            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -InFile $BodyFile -OutFile $OutFile -ContentType 'application/json' -TimeoutSec 60")
+        else:
+            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -OutFile $OutFile -TimeoutSec 60")
+        # Emulate curl -f: treat HTTP >= 400 as failure
+        lines.append("    $code = if ($resp.StatusCode) { [int]$resp.StatusCode } else { 200 }")
+        lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned for ' + $Url) -f $code; exit 1 }")
+        lines.append("    Write-Output $code")
+        lines.append("    exit 0")
+        lines.append("  } catch { if ($attempt -lt ($max - 1)) { Start-Sleep -Seconds 2; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }")
+        lines.append("}")
+        script_content = "\n".join(lines) + "\n"
+        ctx.file(script_name, script_content)
+        result = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name])
+    else:
+        args = [] + _curl_base_args()
+        if http_method and http_method != "GET":
+            args.extend(["-X", http_method])
+        for header_key, header_value in headers.items():
+            args.extend(["-H", "%s: %s" % (header_key, header_value)])
+        if data_file:
+            args.extend(["--data-binary", "@%s" % data_file])
+        args.extend([url, "-o", out_file, "-w", "%{http_code}"])
+        result = ctx.execute(args)
 
-    # Parse HTTP status code captured by -w. On network errors it may be empty.
+    # Parse HTTP status code captured by tool stdout. On network errors it may be empty.
     http_status = (result.stdout or "").strip() or "000"
-    # Branch: network error or curl failure
+    # Branch: network error or tool failure
     if result.return_code != 0:
         fail(
             (
@@ -171,7 +224,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, re
             )
             % (
                 http_status,
-                method or "GET",
+                http_method,
                 url,
                 result.return_code,
                 (result.stderr or "").strip(),
@@ -180,24 +233,33 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, re
         )
     else:
         # Branch: success path; try to emit a concise size summary
-        size_result = ctx.execute(["wc", "-c", out_file])
-        if size_result.return_code == 0 and size_result.stdout:
-            # wc -c prints: "<bytes> <filename>"; Starlark split requires an explicit sep
-            parts = [p for p in size_result.stdout.strip().split(" ") if p]
-            bytes_str = parts[0] if parts else "unknown"
-            log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, url))
+        if _is_windows(ctx):
+            size_cmd = [
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "$fi = Get-Item -LiteralPath '%s'; if ($fi) { Write-Output $fi.Length }" % out_file.replace("'", "''"),
+            ]
+            size_result = ctx.execute(size_cmd)
+            if size_result.return_code == 0 and size_result.stdout:
+                bytes_str = size_result.stdout.strip()
+                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, url))
+            else:
+                log_info("Downloaded %s from %s" % (out_file, url))
         else:
-            # Fallback if wc is unavailable or returns unexpected output
-            log_info("Downloaded %s from %s" % (out_file, url))
+            size_result = ctx.execute(["wc", "-c", out_file])
+            if size_result.return_code == 0 and size_result.stdout:
+                parts = [p for p in size_result.stdout.strip().split(" ") if p]
+                bytes_str = parts[0] if parts else "unknown"
+                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, url))
+            else:
+                log_info("Downloaded %s from %s" % (out_file, url))
 
         # Emit full response body when debug is enabled, similar to request logging
-        # Safe to read here because curl succeeded and wrote the response to out_file
         if debug:
             try_body = ctx.read(ctx.path(out_file))
             if try_body != None:
                 log_debug(
                     debug,
-                    "HTTP response body (%s %s): %s" % ((method or "GET"), url, try_body),
+                    "HTTP response body (%s %s): %s" % (http_method, url, try_body),
                 )
 
     return result.return_code
@@ -824,6 +886,12 @@ test_optimization_sync = repository_rule(
         "DD_SITE",                              # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
         "FETCH_SALT",                           # Optional: cache-busting salt to force re-fetch
         "GIT_DIRTY",                            # Optional: working tree state; triggers refetch on change
+        # Host OS hints used for cross-platform behavior and request configuration
+        "OS",                                   # Windows OS marker (used in _is_windows and _detect_os_info)
+        "ComSpec",                              # Windows command processor path
+        "COMSPEC",                              # Alternate casing for Windows command processor
+        "PROCESSOR_ARCHITECTURE",               # Windows arch detection
+        "PROCESSOR_ARCHITEW6432",               # Windows WOW64 arch detection
         "DD_ENV",                               # Optional: settings payload attribute "env"
         "DD_SERVICE",                           # Optional: settings payload attribute "service"
         # If the following are unset, they will be inferred via git in the workspace
