@@ -36,7 +36,8 @@ log() {{ echo "[dd-uploader] $1"; }}
 dbg() {{ if [[ {debug} == 1 ]]; then echo "[dd-uploader][dbg] $1"; fi }}
 
 if [[ "$(uname -s | tr 'A-Z' 'a-z')" == *mingw* || "$(uname -s | tr 'A-Z' 'a-z')" == *msys* || "$(uname -s | tr 'A-Z' 'a-z')" == *cygwin* ]]; then
-  exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$0.ps1"
+  ps_path="$(dirname "$0")/$(basename "$0" .sh).ps1"
+  exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps_path"
 fi
 
 if [[ ! -d "$PAYLOADS_DIR" ]]; then
@@ -48,7 +49,13 @@ latest_mtime() {{
   local d="$1"
   if [[ ! -d "$d" ]]; then echo 0; return; fi
   local mt
-  mt=$(find "$d" -type f -printf '%T@\n' 2>/dev/null | sort -nr | head -1 || true)
+  if stat -f %m / >/dev/null 2>&1; then
+    # BSD/macOS stat
+    mt=$(find "$d" -type f -exec stat -f '%m' {{}} + 2>/dev/null | sort -nr | head -1 || true)
+  else
+    # GNU/Linux stat
+    mt=$(find "$d" -type f -exec stat -c '%Y' {{}} + 2>/dev/null | sort -nr | head -1 || true)
+  fi
   if [[ -z "$mt" ]]; then echo 0; else printf '%.0f' "$mt"; fi
 }}
 
@@ -122,7 +129,7 @@ enrich_with_context() {
     return 0
   fi
   jq --slurpfile ctx "$CONTEXT_JSON" '(
-    .metadata["*"] |= ((. // {}) + ($ctx[0] | with_entries(select(.value != null))))
+    .metadata["*"] |= ((. // {{}}) + ($ctx[0] | with_entries(select(.value != null))))
   )' "$infile" > "$tmpfile"
 }
 
@@ -154,7 +161,7 @@ upload_coverage() {{
   [[ -d "$d" ]] || return 0
   local eventjson
   eventjson="${d}/event.json"
-  echo '{"dummy":true}' > "$eventjson"
+  echo '{{"dummy":true}}' > "$eventjson"
   shopt -s nullglob
   for f in "$d"/*.json; do
     if (( AGENTLESS == 1 )); then
@@ -180,7 +187,7 @@ upload_tests
 upload_coverage
 log "done"
 """.format(
-        payloads_dir = payloads_dir,
+        payloads_dir = payloads_dir or "",
         tests_subdir = tests_subdir,
         coverage_subdir = coverage_subdir,
         quiescent_sec = quiescent_sec,
@@ -194,7 +201,7 @@ log "done"
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$PayloadsDir = if ([string]::IsNullOrEmpty('{payloads_dir}')) { $env:DD_PAYLOADS_DIR } else { '{payloads_dir}' }
+$PayloadsDir = if (-not [string]::IsNullOrEmpty($env:DD_PAYLOADS_DIR)) {{ $env:DD_PAYLOADS_DIR }} else {{ '{payloads_dir}' }}
 $TestsSubdir = '{tests_subdir}'
 $CoverageSubdir = '{coverage_subdir}'
 $QuiescentSec = {quiescent_sec}
@@ -204,7 +211,7 @@ $FailOnError = {fail_on_error}
 function Log([string]$msg) {{ Write-Output "[dd-uploader] $msg" }}
 function Dbg([string]$msg) {{ if ({debug}) {{ Write-Output "[dd-uploader][dbg] $msg" }} }}
 
-if (-not (Test-Path -LiteralPath $PayloadsDir)) {{ Log "payloads dir not found: $PayloadsDir"; exit 0 }}
+if (-not (Test-Path -LiteralPath $PayloadsDir)) {{ Log "payloads dir not found: $PayloadsDir (nothing to upload)"; exit 0 }}
 
 function Get-LatestMTime([string]$dir) {{
   if (-not (Test-Path -LiteralPath $dir)) {{ return 0 }}
@@ -240,6 +247,7 @@ $CommonHeaders = @{{
   'Datadog-Meta-Lang-Version' = 'n/a'
   'Datadog-Meta-Lang-Interpreter' = 'bazel-test'
   'Datadog-Meta-Tracer-Version' = '1.0.0'
+  'Accept' = 'application/json'
 }}
 if ($Agentless) {{
   if ([string]::IsNullOrEmpty($env:DD_API_KEY)) {{ Log "DD_API_KEY required for agentless uploads"; exit 0 }}
@@ -249,31 +257,33 @@ if ($Agentless) {{
   $CovEvp  = @{{ 'X-Datadog-EVP-Subdomain' = 'citestcov-intake' }}
 }}
 
-# Git metadata (from env)
-$repo = $env:DD_GIT_REPOSITORY_URL
-$branch = $env:DD_GIT_BRANCH
-$sha = $env:DD_GIT_COMMIT_SHA
-$hsha = $env:DD_GIT_HEAD_COMMIT
-$msg = $env:DD_GIT_COMMIT_MESSAGE
-$hmsg = $env:DD_GIT_HEAD_MESSAGE
-$envname = if ([string]::IsNullOrEmpty($env:DD_ENV)) {{ 'CI' }} else {{ $env:DD_ENV }}
-$service = if ([string]::IsNullOrEmpty($env:DD_SERVICE)) {{ 'unnamed-service' }} else {{ $env:DD_SERVICE }}
-
-function Merge-GitMeta([string]$infile, [string]$outfile) {{
+# Load context.json from runfiles if present (added via data deps)
+$ContextJson = $null
+if (-not [string]::IsNullOrEmpty($env:TEST_SRCDIR)) {{
   try {{
-    $obj = Get-Content -LiteralPath $infile -Raw | ConvertFrom-Json -ErrorAction Stop
+    $ctxFile = Get-ChildItem -LiteralPath $env:TEST_SRCDIR -Recurse -File -Filter 'context.json' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($ctxFile) {{ $ContextJson = $ctxFile.FullName }}
+  }} catch {{}}
+}}
+
+function Merge-With-Context([string]$infile, [string]$outfile) {{
+  if (-not $ContextJson -or -not (Test-Path -LiteralPath $ContextJson)) {{
+    Copy-Item -LiteralPath $infile -Destination $outfile -Force; return
+  }}
+  try {{
+    $payload = Get-Content -LiteralPath $infile -Raw | ConvertFrom-Json -ErrorAction Stop
   }} catch {{ Copy-Item -LiteralPath $infile -Destination $outfile -Force; return }}
-  if (-not $obj.metadata) {{ $obj | Add-Member -NotePropertyName metadata -NotePropertyValue @{{}} }}
-  if (-not $obj.metadata.'*') {{ $obj.metadata.'*' = @{{}} }}
-  $obj.metadata.'*'.'git.repository_url' = $repo
-  $obj.metadata.'*'.'git.branch' = $branch
-  $obj.metadata.'*'.'git.commit.sha' = $sha
-  $obj.metadata.'*'.'git.commit.head.sha' = $hsha
-  $obj.metadata.'*'.'git.commit.message' = $msg
-  $obj.metadata.'*'.'git.commit.head.message' = $hmsg
-  $obj.metadata.'*'.'env' = $envname
-  $obj.metadata.'*'.'service.name' = $service
-  $obj | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $outfile -Encoding UTF8
+  try {{
+    $ctx = Get-Content -LiteralPath $ContextJson -Raw | ConvertFrom-Json -ErrorAction Stop
+  }} catch {{ $ctx = $null }}
+  if (-not $payload.metadata) {{ $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{{}} }}
+  if (-not $payload.metadata.'*') {{ $payload.metadata.'*' = @{{}} }}
+  if ($ctx) {{
+    foreach ($prop in $ctx.PSObject.Properties) {{
+      if ($prop.Value -ne $null) {{ $payload.metadata.'*'.($prop.Name) = $prop.Value }}
+    }}
+  }}
+  $payload | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $outfile -Encoding UTF8
 }}
 
 function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
@@ -294,10 +304,11 @@ if (Test-Path -LiteralPath $testDir) {{
   Get-ChildItem -LiteralPath $testDir -Filter *.json -File -ErrorAction SilentlyContinue | ForEach-Object {{
     $f = $_.FullName
     $body = "$f.enriched.json"
-    Merge-GitMeta $f $body
+    Merge-With-Context $f $body
     $hdrs = $CommonHeaders.Clone()
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
     Send-PostJson $TestUrl $hdrs $body
+    Log "uploaded test payload: $f"
   }}
 }}
 
@@ -323,13 +334,13 @@ if (Test-Path -LiteralPath $covDir) {{
     if (-not $resp.IsSuccessStatusCode) {{
       $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
       if ($FailOnError) {{ throw "HTTP $([int]$resp.StatusCode): $body" }} else {{ Log "coverage upload failed (ignored): HTTP $([int]$resp.StatusCode) $body" }}
-    }} else {{ Log "uploaded coverage: $f" }}
+    }} else {{ Log "uploaded coverage payload: $f" }}
   }}
 }}
 
 Log "done"
 """.format(
-        payloads_dir = payloads_dir.replace("'", "''"),
+        payloads_dir = (payloads_dir or "").replace("'", "''"),
         tests_subdir = tests_subdir.replace("'", "''"),
         coverage_subdir = coverage_subdir.replace("'", "''"),
         quiescent_sec = quiescent_sec,
@@ -344,7 +355,8 @@ Log "done"
     ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
     ctx.actions.write(output = ps_file, content = ps_script, is_executable = False)
 
-    runfiles = ctx.runfiles(files = [ps_file])
+    # Include optional data files (e.g., context.json) in runfiles so scripts can locate them via TEST_SRCDIR
+    runfiles = ctx.runfiles(files = [ps_file] + ctx.files.data)
     return [DefaultInfo(executable = bash_file, runfiles = runfiles)]
 
 dd_payload_uploader = rule(
@@ -358,6 +370,8 @@ dd_payload_uploader = rule(
         "max_wait_sec": attr.int(default = 1800),
         "fail_on_error": attr.bool(default = False),
         "debug": attr.bool(default = False),
+        # Optional files to place in runfiles (e.g., a generated context.json)
+        "data": attr.label_list(allow_files = True),
     },
 )
 
