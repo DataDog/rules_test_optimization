@@ -122,16 +122,7 @@ enrich_with_context() {
     return 0
   fi
   jq --slurpfile ctx "$CONTEXT_JSON" '(
-    .metadata["*"] |= ((. // {}) + {
-      "git.repository_url": ($ctx[0]["git.repository_url"] // empty),
-      "git.branch": ($ctx[0]["git.branch"] // empty),
-      "git.commit.sha": ($ctx[0]["git.commit.sha"] // empty),
-      "git.commit.head.sha": ($ctx[0]["git.commit.head.sha"] // empty),
-      "git.commit.message": ($ctx[0]["git.commit.message"] // empty),
-      "git.commit.head.message": ($ctx[0]["git.commit.head.message"] // empty),
-      "env": ($ctx[0]["env"] // empty),
-      "service.name": ($ctx[0]["service.name"] // empty)
-    })
+    .metadata["*"] |= ((. // {}) + ($ctx[0] | with_entries(select(.value != null))))
   )' "$infile" > "$tmpfile"
 }
 
