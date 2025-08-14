@@ -11,6 +11,17 @@
 #   test_suite or add to the same invocation). It runs outside the sandbox and
 #   uploads after the directory is quiescent.
 
+def _render_template(template, substitutions):
+    # Simple template renderer compatible with the existing {key} placeholders.
+    # It also converts doubled braces ({{, }}) into single braces after substitution,
+    # which keeps literal braces used by shell/JSON/PowerShell intact.
+    out = template
+    for k, v in substitutions.items():
+        out = out.replace("{" + k + "}", str(v))
+    # Unescape '{{' and '}}' used to protect literal braces in the template
+    out = out.replace("{{", "{").replace("}}", "}")
+    return out
+
 def _uploader_impl(ctx):
     payloads_dir = ctx.attr.payloads_dir
     tests_subdir = ctx.attr.tests_subdir
@@ -21,7 +32,7 @@ def _uploader_impl(ctx):
     debug = ctx.attr.debug
 
     # Bash implementation (Unix)
-    bash_script = """
+    bash_template = """
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -186,18 +197,23 @@ upload_coverage() {{
 upload_tests
 upload_coverage
 log "done"
-""".format(
-        payloads_dir = payloads_dir or "",
-        tests_subdir = tests_subdir,
-        coverage_subdir = coverage_subdir,
-        quiescent_sec = quiescent_sec,
-        max_wait_sec = max_wait_sec,
-        fail_on_error = 1 if fail_on_error else 0,
-        debug = 1 if debug else 0,
+"""
+
+    bash_script = _render_template(
+        bash_template,
+        {
+            "payloads_dir": payloads_dir or "",
+            "tests_subdir": tests_subdir,
+            "coverage_subdir": coverage_subdir,
+            "quiescent_sec": quiescent_sec,
+            "max_wait_sec": max_wait_sec,
+            "fail_on_error": 1 if fail_on_error else 0,
+            "debug": 1 if debug else 0,
+        },
     )
 
     # PowerShell implementation (Windows)
-    ps_script = """
+    ps_template = """
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -339,14 +355,20 @@ if (Test-Path -LiteralPath $covDir) {{
 }}
 
 Log "done"
-""".format(
-        payloads_dir = (payloads_dir or "").replace("'", "''"),
-        tests_subdir = tests_subdir.replace("'", "''"),
-        coverage_subdir = coverage_subdir.replace("'", "''"),
-        quiescent_sec = quiescent_sec,
-        max_wait_sec = max_wait_sec,
-        fail_on_error = "$true" if fail_on_error else "$false",
-        debug = "$true" if debug else "$false",
+"""
+
+    ps_script = _render_template(
+        ps_template,
+        {
+            # PowerShell single-quote escaping ('' inside '')
+            "payloads_dir": (payloads_dir or "").replace("'", "''"),
+            "tests_subdir": tests_subdir.replace("'", "''"),
+            "coverage_subdir": coverage_subdir.replace("'", "''"),
+            "quiescent_sec": quiescent_sec,
+            "max_wait_sec": max_wait_sec,
+            "fail_on_error": "$true" if fail_on_error else "$false",
+            "debug": "$true" if debug else "$false",
+        },
     )
 
     # Emit scripts
