@@ -657,6 +657,8 @@ def _impl(ctx):
     ctx.report_progress("test_optimization_sync: download complete")
 
     # Decide whether to fetch known tests/skippables/test-management based on settings (use repository_ctx.read + json.decode)
+    # Additionally, support local kill-switches exposed as rule attributes to force-disable
+    # any of these features regardless of server-side configuration.
     known_tests_enabled = False
     tests_skipping_enabled = False
     test_management_enabled = False
@@ -675,6 +677,61 @@ def _impl(ctx):
         log_debug(debug, "known_tests_enabled parsed as: %s" % known_tests_enabled)
         log_debug(debug, "tests_skipping parsed as: %s" % tests_skipping_enabled)
         log_debug(debug, "test_management.enabled parsed as: %s" % test_management_enabled)
+
+        # ------------------------------------------------------------------
+        # Kill-switch overrides
+        # ------------------------------------------------------------------
+        # If any kill-switch is set to False via rule attributes, we:
+        # 1) Force the local enablement variable to False to prevent the HTTP
+        #    request for that feature.
+        # 2) Mutate the downloaded settings JSON to reflect the override so
+        #    any downstream consumer that reads the settings file will observe
+        #    the feature as disabled as well.
+        #
+        # All three kill-switch attributes default to True, which preserves the
+        # server-provided behavior when not explicitly set by the user.
+        if hasattr(ctx.attr, "knowntests") and ctx.attr.knowntests == False:
+            known_tests_enabled = False
+            # Ensure attributes dict exists and update the flag
+            if type(data_obj) != "dict":
+                settings_obj["data"] = {"attributes": {}}
+                data_obj = settings_obj["data"]
+                attrs_obj = data_obj["attributes"]
+            elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
+                data_obj["attributes"] = {}
+                attrs_obj = data_obj["attributes"]
+            attrs_obj["known_tests_enabled"] = False
+
+        if hasattr(ctx.attr, "tests_skipping") and ctx.attr.tests_skipping == False:
+            tests_skipping_enabled = False
+            if type(data_obj) != "dict":
+                settings_obj["data"] = {"attributes": {}}
+                data_obj = settings_obj["data"]
+                attrs_obj = data_obj["attributes"]
+            elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
+                data_obj["attributes"] = {}
+                attrs_obj = data_obj["attributes"]
+            attrs_obj["tests_skipping"] = False
+
+        if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
+            test_management_enabled = False
+            if type(data_obj) != "dict":
+                settings_obj["data"] = {"attributes": {}}
+                data_obj = settings_obj["data"]
+                attrs_obj = data_obj["attributes"]
+            elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
+                data_obj["attributes"] = {}
+                attrs_obj = data_obj["attributes"]
+            # Ensure nested test_management object exists and set enabled=false
+            tm_mut = attrs_obj.get("test_management")
+            if type(tm_mut) != "dict":
+                tm_mut = {}
+            tm_mut["enabled"] = False
+            attrs_obj["test_management"] = tm_mut
+
+        # Persist the possibly-updated settings back to disk so that the
+        # overridden disablement is reflected to later phases.
+        ctx.file(settings_file, json.encode(settings_obj) + "\n")
     else:
         log_debug(debug, "Settings file is empty; cannot determine feature flags")
 
@@ -750,6 +807,16 @@ test_optimization_sync = repository_rule(
         "runtime_name": attr.string(),
         "runtime_version": attr.string(),
         "runtime_arch": attr.string(),
+        # Kill-switches for feature requests
+        # - knowntests: when False, do not request Known Tests and write a minimal stub; also set
+        #               settings.data.attributes.known_tests_enabled=false in the settings file.
+        # - tests_skipping: when False, do not request Skippable Tests and write a minimal stub; also set
+        #                   settings.data.attributes.tests_skipping=false in the settings file.
+        # - test_management: when False, do not request Test Management Tests and write a minimal stub; also set
+        #                    settings.data.attributes.test_management.enabled=false in the settings file.
+        "knowntests": attr.bool(default = True),
+        "tests_skipping": attr.bool(default = True),
+        "test_management": attr.bool(default = True),
         "debug": attr.bool(default = False),                # Toggle verbose debug logging
     },
     environ = [                                 # Environment variables treated as rule inputs
@@ -839,6 +906,9 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
+                knowntests = test_optimization_call.knowntests,
+                tests_skipping = test_optimization_call.tests_skipping,
+                test_management = test_optimization_call.test_management,
                 debug = call_debug,
             )
 
@@ -861,6 +931,10 @@ test_optimization_sync_extension = module_extension(
             "runtime_name": attr.string(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            # Optional kill-switches (default True keeps server behavior; False disables feature locally)
+            "knowntests": attr.bool(default = True),
+            "tests_skipping": attr.bool(default = True),
+            "test_management": attr.bool(default = True),
             "debug": attr.bool(default = False),
         }),
     },

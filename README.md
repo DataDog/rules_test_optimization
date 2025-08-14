@@ -77,6 +77,9 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
   - `runtime_arch` (string): optional runtime architecture. Defaults to auto-detected `os.architecture` when not provided
+  - `knowntests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
+  - `tests_skipping` (bool, default `True`): local kill-switch for Skippable Tests. When `False`, the Skippable Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `tests_skipping: false`.
+  - `test_management` (bool, default `True`): local kill-switch for Test Management Tests. When `False`, the Test Management request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `test_management.enabled: false`.
   - `debug` (bool): default `False`. Enables verbose logging
 
 Notes:
@@ -99,6 +102,18 @@ Settings response attributes determine which follow-up requests are sent:
 - `test_management.enabled` → triggers Test Management Tests
 
 If a feature is disabled, the rule still writes a minimal stub JSON for that output file so consumers can always depend on the filegroup.
+
+You can also disable features locally regardless of the server response using the kill-switch attributes:
+
+```bzl
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data",
+    # Force-disable features locally; settings.json will be updated accordingly
+    knowntests = False,
+    tests_skipping = False,
+    test_management = False,
+)
+```
 
 ## OS and runtime configuration
 
