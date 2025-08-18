@@ -71,7 +71,7 @@ MAX_WAIT_SEC={max_wait_sec}
 FAIL_ON_ERROR={fail_on_error}
 
 log() {{ echo "[dd-uploader] $1"; }}
-dbg() {{ if [[ {debug} == 1 ]]; then echo "[dd-uploader][dbg] $1"; fi }}
+dbg() {{ if [[ {debug} == 1 ]]; then echo "[dd-uploader][dbg] $1" >&2; fi }}
 
 dbg "uname: $(uname -s)"
 dbg "PAYLOADS_DIR='$PAYLOADS_DIR'"
