@@ -182,7 +182,7 @@ if [[ -n "${TEST_SRCDIR:-}" && -d "$TEST_SRCDIR" ]]; then
 fi
 if [[ -z "$CONTEXT_JSON" && -n "${RUNFILES_MANIFEST_FILE:-}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
   dbg "searching manifest for context.json"
-  CONTEXT_JSON="$(awk 'NF>=2 && $1 ~ /context\.json$/ {print $2; exit}' "$RUNFILES_MANIFEST_FILE" 2>/dev/null || true)"
+  CONTEXT_JSON="$(awk 'NF>=2 && $1 ~ /context\\.json$/ {print $2; exit}' "$RUNFILES_MANIFEST_FILE" 2>/dev/null || true)"
 fi
 JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
