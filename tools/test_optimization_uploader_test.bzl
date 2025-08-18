@@ -175,8 +175,14 @@ dbg "headers prepared (agentless=$AGENTLESS)"
 
 # Load context.json from runfiles if present (added via data deps)
 CONTEXT_JSON=""
-if [[ -n "${TEST_SRCDIR:-}" ]]; then
+dbg "TEST_SRCDIR: ${TEST_SRCDIR:-<unset>}"
+dbg "RUNFILES_MANIFEST_FILE: ${RUNFILES_MANIFEST_FILE:-<unset>}"
+if [[ -n "${TEST_SRCDIR:-}" && -d "$TEST_SRCDIR" ]]; then
   CONTEXT_JSON="$(find "$TEST_SRCDIR" -type f -name context.json 2>/dev/null | head -n1 || true)"
+fi
+if [[ -z "$CONTEXT_JSON" && -n "${RUNFILES_MANIFEST_FILE:-}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
+  dbg "searching manifest for context.json"
+  CONTEXT_JSON="$(awk 'NF>=2 && $1 ~ /context\.json$/ {print $2; exit}' "$RUNFILES_MANIFEST_FILE" 2>/dev/null || true)"
 fi
 JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
@@ -355,10 +361,25 @@ Dbg "headers prepared (agentless=$Agentless)"
 
 # Load context.json from runfiles if present (added via data deps)
 $ContextJson = $null
+Dbg "TEST_SRCDIR: $([string]::IsNullOrEmpty($env:TEST_SRCDIR) ? '<unset>' : $env:TEST_SRCDIR)"
+Dbg "RUNFILES_MANIFEST_FILE: $([string]::IsNullOrEmpty($env:RUNFILES_MANIFEST_FILE) ? '<unset>' : $env:RUNFILES_MANIFEST_FILE)"
 if (-not [string]::IsNullOrEmpty($env:TEST_SRCDIR)) {{
   try {{
     $ctxFile = Get-ChildItem -LiteralPath $env:TEST_SRCDIR -Recurse -File -Filter 'context.json' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($ctxFile) {{ $ContextJson = $ctxFile.FullName }}
+  }} catch {{}}
+}}
+if (-not $ContextJson -and -not [string]::IsNullOrEmpty($env:RUNFILES_MANIFEST_FILE) -and (Test-Path -LiteralPath $env:RUNFILES_MANIFEST_FILE)) {{
+  Dbg "searching manifest for context.json"
+  try {{
+    $line = Get-Content -LiteralPath $env:RUNFILES_MANIFEST_FILE -ErrorAction SilentlyContinue | Where-Object {{
+      $p = $_ -split '\\s+', 2
+      ($p.Length -ge 1) -and $p[0].EndsWith('context.json')
+    }} | Select-Object -First 1
+    if ($line) {{
+      $parts = $line -split '\\s+', 2
+      if ($parts.Length -ge 2) {{ $ContextJson = $parts[1] }}
+    }}
   }} catch {{}}
 }}
 Dbg "context.json: $([string]::IsNullOrEmpty($ContextJson) ? '<none>' : $ContextJson)"
