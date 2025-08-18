@@ -178,7 +178,8 @@ CONTEXT_JSON=""
 dbg "TEST_SRCDIR: ${TEST_SRCDIR:-<unset>}"
 dbg "RUNFILES_MANIFEST_FILE: ${RUNFILES_MANIFEST_FILE:-<unset>}"
 if [[ -n "${TEST_SRCDIR:-}" && -d "$TEST_SRCDIR" ]]; then
-  CONTEXT_JSON="$(find "$TEST_SRCDIR" -type f -name context.json 2>/dev/null | head -n1 || true)"
+  dbg "searching runfiles dir for context.json"
+  CONTEXT_JSON="$(find -L "$TEST_SRCDIR" -name context.json 2>/dev/null | head -n1 || true)"
 fi
 if [[ -z "$CONTEXT_JSON" && -n "${RUNFILES_MANIFEST_FILE:-}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
   dbg "searching manifest for context.json"
