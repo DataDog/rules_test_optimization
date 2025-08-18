@@ -386,7 +386,7 @@ Log "done"
     runfiles = ctx.runfiles(files = [ps_file] + ctx.files.data)
     return [DefaultInfo(executable = bash_file, runfiles = runfiles)]
 
-dd_payload_uploader = rule(
+dd_payload_uploader_test = rule(
     implementation = _uploader_impl,
     test = True,
     attrs = {

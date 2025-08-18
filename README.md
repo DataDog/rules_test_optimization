@@ -69,7 +69,7 @@ filegroup(
 
 ## Uploading test and coverage payloads (same `bazel test` invocation)
 
-Use the provided test rule `dd_payload_uploader` to watch a shared writable directory for payloads, enrich test payloads with metadata from `context.json`, and upload them to Datadog during the same `bazel test` command.
+Use the provided test rule `dd_payload_uploader_test` to watch a shared writable directory for payloads, enrich test payloads with metadata from `context.json`, and upload them to Datadog during the same `bazel test` command.
 
 ### Where to write payloads
 
@@ -91,9 +91,9 @@ Expose the path to tests via `--test_env=DD_PAYLOADS_DIR=<abs path>`. Tests must
 In a BUILD file (e.g., `//tools`):
 
 ```bzl
-load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
 
-dd_payload_uploader(
+dd_payload_uploader_test(
     name = "dd_upload_payloads",
     # If omitted, the rule uses $DD_PAYLOADS_DIR (recommended with --sandbox_writable_path)
     tests_subdir = "tests",
