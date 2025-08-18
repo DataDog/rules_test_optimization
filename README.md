@@ -102,7 +102,7 @@ dd_payload_uploader(
     max_wait_sec = 1800,     # upper bound wait
     fail_on_error = False,   # set True to fail the test on upload errors
     # Provide context.json via runfiles so enrichment can occur
-    data = ["//:dd_test_opt_context"],
+    data = [":dd_test_opt_context"],
     # timeout = "long",     # uncomment if your test phase can be long
 )
 ```
