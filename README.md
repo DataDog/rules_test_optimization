@@ -34,7 +34,7 @@ Reference them with a single label:
 In your `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 
 # Optional: develop locally
 local_path_override(
@@ -95,8 +95,7 @@ load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bz
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
-    # If omitted, the rule uses $DD_PAYLOADS_DIR
-    payloads_dir = "$(execroot)/.testoptimization/payloads",
+    # If omitted, the rule uses $DD_PAYLOADS_DIR (recommended with --sandbox_writable_path)
     tests_subdir = "tests",
     coverage_subdir = "coverage",
     quiescent_sec = 10,      # idle window before uploading starts

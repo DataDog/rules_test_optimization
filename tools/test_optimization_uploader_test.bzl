@@ -139,9 +139,10 @@ enrich_with_context() {
     cp "$infile" "$tmpfile"
     return 0
   fi
-  jq --slurpfile ctx "$CONTEXT_JSON" '(
-    .metadata["*"] |= ((. // {{}}) + ($ctx[0] | with_entries(select(.value != null))))
-  )' "$infile" > "$tmpfile"
+  jq --slurpfile ctx "$CONTEXT_JSON" '
+    (.metadata |= (. // {{}}))
+    | (.metadata["*"] |= ((. // {{}}) + ($ctx[0] | with_entries(select(.value != null)))))
+  ' "$infile" > "$tmpfile"
 }
 
 upload_tests() {{
@@ -175,6 +176,9 @@ upload_coverage() {{
   echo '{{"dummy":true}}' > "$eventjson"
   shopt -s nullglob
   for f in "$d"/*.json; do
+    if [[ "$f" == "$eventjson" ]]; then
+      continue
+    fi
     if (( AGENTLESS == 1 )); then
       curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused \
         -X POST "${COV_URL}" "${hdrs[@]}" \
@@ -338,6 +342,7 @@ if (Test-Path -LiteralPath $covDir) {{
   Set-Content -LiteralPath $eventFile -Value '{"dummy":true}' -Encoding UTF8
   Get-ChildItem -LiteralPath $covDir -Filter *.json -File -ErrorAction SilentlyContinue | ForEach-Object {{
     $f = $_.FullName
+    if ($f -eq $eventFile) {{ return }}
     $content = New-Object System.Net.Http.MultipartFormDataContent
     $eventContent = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($eventFile))
     $eventContent.Headers.ContentType = 'application/json'
