@@ -445,7 +445,7 @@ def _build_configurations_json(ctx, debug):
     runtime_name = ctx.attr.runtime_name or "unknown"
     runtime_version = ctx.attr.runtime_version or "unknown"
     runtime_arch = ctx.attr.runtime_arch or osinfo["arch"]
-    return (
+    conf_json = (
         "{"
         + ' "os.platform": "%s",' % _safe_json_string(osinfo["platform"])
         + ' "os.version": "%s",' % _safe_json_string(osinfo["version"])
@@ -455,6 +455,8 @@ def _build_configurations_json(ctx, debug):
         + ' "runtime.version": "%s"' % _safe_json_string(runtime_version)
         + "}"
     )
+    log_debug(debug, "Configurations JSON: %s" % conf_json)
+    return conf_json
 
 def _build_context_tags(ctx, env_data, debug):
     # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
@@ -622,6 +624,7 @@ def _build_context_tags(ctx, env_data, debug):
     if node_labels:
         tags["ci.node.labels"] = node_labels
 
+    log_debug(debug, "context.json tags: %s" % json.encode(tags))
     return tags
 
 # ##########################################################################
@@ -885,6 +888,7 @@ def _impl(ctx):
     log_info("Settings file: %s" % settings_file)
     ctx.report_progress("test_optimization_sync: downloading")
     env_data = _collect_env(ctx)
+    log_debug(debug, "Env data: %s" % env_data)
     _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug)
     ctx.report_progress("test_optimization_sync: download complete")
 
