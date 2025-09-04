@@ -236,6 +236,54 @@ bazel test //... //tools:dd_upload_payloads \
 - If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
 - The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
 
+## Convenience macro: dd_topt_go_test
+
+Replace a `go_test` with a single label that runs the Go test and the uploader. This macro creates:
+- `<name>_go`: underlying `go_test`
+- `<name>_dd_upload_payloads`: uploader test
+- `<name>`: a `test_suite` that includes both
+
+Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data` via Bzlmod or WORKSPACE (see Installation above). If you used a different name, override `context_label` and `files_label`.
+
+### Bzlmod
+
+```bzl
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    # deps = [...],
+    # Optional overrides if you didn't use the default repo name:
+    # context_label = "@test_optimization_data//:test_optimization_context",
+    # files_label = "@test_optimization_data//:test_optimization_files",
+    # Uploader knobs:
+    # quiescent_sec = 10,
+    # max_wait_sec = 1800,
+    # fail_on_error = False,
+)
+
+# Run:
+# bazel test //pkg:pkg_go_test \
+#   --sandbox_writable_path=$PWD/.testoptimization/payloads \
+#   --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+```
+
+### WORKSPACE
+
+```bzl
+load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    # deps = [...],
+    # Optional overrides if you didn't use the default repo name:
+    # context_label = "@test_optimization_data//:test_optimization_context",
+    # files_label = "@test_optimization_data//:test_optimization_files",
+)
+```
+
 ## Configuration and attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`
