@@ -67,6 +67,109 @@ filegroup(
 )
 ```
 
+## Installation (WORKSPACE)
+
+If your project uses legacy WORKSPACE mode instead of Bzlmod, use the repository rule directly.
+
+### 1) Add this repository in `WORKSPACE`
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "datadog_rules_test_optimization",
+    # Pin to a release tarball; example:
+    # urls = ["https://github.com/DataDog/rules_test_optimization/archive/refs/tags/v1.0.0.tar.gz"],
+    # strip_prefix = "rules_test_optimization-1.0.0",
+    # sha256 = "<sha256>",
+)
+
+# Alternatively, for development:
+# load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+# git_repository(
+#     name = "datadog_rules_test_optimization",
+#     remote = "https://github.com/DataDog/rules_test_optimization.git",
+#     tag = "v1.0.0",
+# )
+# Or:
+# local_repository(
+#     name = "datadog_rules_test_optimization",
+#     path = "/absolute/path/to/rules_test_optimization",
+# )
+```
+
+### 2) Instantiate the repository rule in `WORKSPACE`
+
+```bzl
+load("@datadog_rules_test_optimization//tools:test_optimization_sync.bzl", "test_optimization_sync")
+
+test_optimization_sync(
+    name = "test_optimization_data",
+    # Optional:
+    # service = "my-service",
+    # runtime_name = "go",
+    # runtime_version = "go1.22",
+    # knowntests = True,
+    # tests_skipping = True,
+    # test_management = True,
+)
+```
+
+### 3) Depend on the generated files in BUILD files
+
+```bzl
+filegroup(
+    name = "dd_test_opt_files",
+    srcs = ["@test_optimization_data//:test_optimization_files"],
+)
+
+filegroup(
+    name = "dd_test_opt_context",
+    srcs = ["@test_optimization_data//:test_optimization_context"],
+)
+```
+
+### 4) Add the uploader test target
+
+```bzl
+load("@datadog_rules_test_optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
+
+dd_payload_uploader_test(
+    name = "dd_upload_payloads",
+    # If omitted, the rule uses $DD_PAYLOADS_DIR (recommended with --sandbox_writable_path)
+    tests_subdir = "tests",
+    coverage_subdir = "coverage",
+    quiescent_sec = 10,
+    max_wait_sec = 1800,
+    fail_on_error = False,
+    # Provide context.json via runfiles so enrichment can occur
+    data = [":dd_test_opt_context"],
+)
+```
+
+### 5) Forward environment variables in `.bazelrc`
+
+```bash
+# Repository rule (module/repo phase) — affects refetch
+common --repo_env=DD_API_KEY
+common --repo_env=DD_SITE
+common --repo_env=DD_SERVICE
+common --repo_env=DD_ENV
+common --repo_env=DD_GIT_REPOSITORY_URL
+common --repo_env=DD_GIT_BRANCH
+common --repo_env=DD_GIT_COMMIT_SHA
+common --repo_env=DD_GIT_HEAD_COMMIT
+common --repo_env=DD_GIT_COMMIT_MESSAGE
+common --repo_env=DD_GIT_HEAD_MESSAGE
+# Optional TTL: common --repo_env=FETCH_SALT
+
+# Tests (runtime)
+test --test_env=DD_API_KEY
+test --test_env=DD_SITE
+test --test_env=DD_TRACE_AGENT_URL
+test --test_env=DD_PAYLOADS_DIR
+```
+
 ## Uploading test and coverage payloads (same `bazel test` invocation)
 
 Use the provided test rule `dd_payload_uploader_test` to watch a shared writable directory for payloads, enrich test payloads with metadata from `context.json`, and upload them to Datadog during the same `bazel test` command.

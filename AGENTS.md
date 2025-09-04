@@ -129,9 +129,9 @@ Expected tree:
 ### 3) Add the uploader test target
 
 ```bzl
-load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
 
-dd_payload_uploader(
+dd_payload_uploader_test(
     name = "dd_upload_payloads",
     payloads_dir = "$(execroot)/.testoptimization/payloads",  # or rely on $DD_PAYLOADS_DIR
     tests_subdir = "tests",
@@ -251,7 +251,7 @@ Tag constants reference:
   - Exposes `test_optimization_files` and `test_optimization_context` filegroups
 
 - `tools/test_optimization_uploader_test.bzl`
-  - `dd_payload_uploader` test rule
+  - `dd_payload_uploader_test` test rule
   - Waits for payloads, enriches from `context.json`, uploads to Datadog
   - Cross-platform implementation
 
