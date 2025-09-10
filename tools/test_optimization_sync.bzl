@@ -107,12 +107,27 @@ def _sanitize_label_fragment(name):
             if not last_us:
                 out.append("_")
                 last_us = True
-    # Trim leading/trailing underscores
-    while out and out[0] == "_":
-        out = out[1:]
-    while out and out[-1] == "_":
-        out = out[:-1]
-    result = "".join(out)
+    # Trim leading/trailing underscores without while loops
+    n = len(out)
+    start = 0
+    found_start = False
+    for i in range(n):
+        if out[i] != "_":
+            start = i
+            found_start = True
+            break
+    if not found_start:
+        start = n
+    end = 0
+    # Reverse scan without a negative-step range
+    for k in range(n):
+        j = n - 1 - k
+        if j < 0:
+            break
+        if out[j] != "_":
+            end = j + 1
+            break
+    result = "".join(out[start:end])
     if not result:
         result = "module"
     return result
@@ -148,10 +163,7 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
     # Returns a list of dicts with keys: module, label, file
     specs = []
     kt_path = ctx.path(knowntests_file)
-    try:
-        content = ctx.read(kt_path)
-    except:
-        content = ""
+    content = ctx.read(kt_path)
     if not content or not content.strip():
         return specs
     # Decode and navigate to data.attributes.tests (map: module -> suites map)
@@ -166,8 +178,9 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
     # Ensure deterministic ordering for reproducible BUILD content
     module_names = sorted([k for k in tests_obj.keys()])
 
-    used_labels = {}
-    used_files = {}
+    # Counters to create deterministic de-dup suffixed names without while loops
+    label_counts = {}
+    file_counts = {}
 
     for module_name in module_names:
         suites_map = tests_obj.get(module_name)
@@ -176,21 +189,17 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
             continue
         # Compute unique, sanitized target name and filename fragments
         base_label = _sanitize_label_fragment(module_name)
-        label = base_label
-        idx = 2
-        while label in used_labels:
-            label = "%s_%d" % (base_label, idx)
-            idx += 1
-        used_labels[label] = True
+        c = label_counts.get(base_label, 0) + 1
+        label_counts[base_label] = c
+        label = base_label if c == 1 else ("%s_%d" % (base_label, c))
 
         base_file = _sanitize_filename_fragment(module_name)
-        file_name = "knowntests.module.%s.json" % base_file
-        # Make sure we don't collide with another file name
-        fidx = 2
-        while file_name in used_files:
-            file_name = "knowntests.module.%s_%d.json" % (base_file, fidx)
-            fidx += 1
-        used_files[file_name] = True
+        fc = file_counts.get(base_file, 0) + 1
+        file_counts[base_file] = fc
+        file_name = (
+            "knowntests.module.%s.json" % base_file if fc == 1 else
+            "knowntests.module.%s_%d.json" % (base_file, fc)
+        )
 
         out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
 
