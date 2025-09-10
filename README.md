@@ -6,7 +6,6 @@ The extension performs these HTTP POST transactions (via curl):
 
 - Settings: always executed. Parses feature flags from response.
 - Known Tests: executed only when `known_tests_enabled: true` in Settings.
-- Skippable Tests (ITR): executed only when `tests_skipping: true` in Settings.
 - Test Management Tests: executed only when `test_management.enabled: true` in Settings.
 
 All outputs are written under a configurable directory (default: `.testoptimization`) and are grouped under a single filegroup target.
@@ -19,7 +18,7 @@ Given an external repository name `<repo_name>` created by the extension, the ge
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
   - `knowntests.json` (Known Tests API response or minimal stub)
-  - `skippabletests.json` (Skippable Tests API response or minimal stub)
+  
   - `tmtests.json` (Test Management Tests API response or minimal stub)
   - `context.json` (Non-secret CI/Git/OS/runtime tags for reuse at test runtime)
 
@@ -110,7 +109,6 @@ test_optimization_sync(
     # runtime_name = "go",
     # runtime_version = "go1.22",
     # knowntests = True,
-    # tests_skipping = True,
     # test_management = True,
 )
 ```
@@ -296,13 +294,11 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
   - `settings_file` (string): file name or path for settings; if a bare name, it is placed under `out_dir`. Default: `settings.json`
   - `knowntests_file` (string): file name/path for known tests. Default: `knowntests.json`
-  - `skippables_file` (string): file name/path for skippable tests. Default: `skippabletests.json`
   - `tmtests_file` (string): file name/path for test management tests. Default: `tmtests.json`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
   - `runtime_arch` (string): optional runtime architecture. Defaults to auto-detected `os.architecture` when not provided
   - `knowntests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
-  - `tests_skipping` (bool, default `True`): local kill-switch for Skippable Tests. When `False`, the Skippable Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `tests_skipping: false`.
   - `test_management` (bool, default `True`): local kill-switch for Test Management Tests. When `False`, the Test Management request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `test_management.enabled: false`.
   - `debug` (bool): default `False`. Enables verbose logging
 
@@ -316,13 +312,11 @@ The rule executes curl with timeouts and retries to these Datadog endpoints:
 
 - Settings: `https://api.<DD_SITE>/api/v2/libraries/tests/services/setting`
 - Known Tests: `https://api.<DD_SITE>/api/v2/ci/libraries/tests`
-- Skippable Tests: `https://api.<DD_SITE>/api/v2/ci/tests/skippable`
 - Test Management Tests: `https://api.<DD_SITE>/api/v2/test/libraries/test-management/tests`
 
 Settings response attributes determine which follow-up requests are sent:
 
 - `known_tests_enabled` → triggers Known Tests
-- `tests_skipping` → triggers Skippable Tests
 - `test_management.enabled` → triggers Test Management Tests
 
 If a feature is disabled, the rule still writes a minimal stub JSON for that output file so consumers can always depend on the filegroup.
@@ -334,7 +328,6 @@ test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
     # Force-disable features locally; settings.json will be updated accordingly
     knowntests = False,
-    tests_skipping = False,
     test_management = False,
 )
 ```

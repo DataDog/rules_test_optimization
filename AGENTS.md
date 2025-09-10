@@ -22,7 +22,7 @@ There are two main building blocks:
 - What it does
   - Runs during module/repo resolution (outside test sandbox).
   - Detects CI/git/OS/runtime context from environment (provider-aware) and user overrides.
-  - Calls Datadog endpoints to download metadata (settings, known tests, skippables, test management), writing JSON outputs.
+  - Calls Datadog endpoints to download metadata (settings, known tests, test management), writing JSON outputs.
   - Produces `context.json` with a comprehensive, non-secret set of tags to reuse at runtime.
   - Emits two public filegroups in the generated external repo:
     - `test_optimization_files`: all downloaded JSON files
@@ -31,14 +31,12 @@ There are two main building blocks:
 - Outputs (file names configurable; defaults):
   - `settings.json`
   - `knowntests.json`
-  - `skippabletests.json`
   - `tmtests.json`
   - `context.json` (non-secret CI/Git/OS/runtime tags)
 
 - Endpoints used (agent APIs under `api.<DD_SITE>`):
   - Settings: `https://api.<DD_SITE>/api/v2/libraries/tests/services/setting`
   - Known Tests: `https://api.<DD_SITE>/api/v2/ci/libraries/tests`
-  - Skippables (ITR): `https://api.<DD_SITE>/api/v2/ci/tests/skippable`
   - Test Management Tests: `https://api.<DD_SITE>/api/v2/test/libraries/test-management/tests`
 
 2) Runtime uploader test rule (tools/test_optimization_uploader_test.bzl)

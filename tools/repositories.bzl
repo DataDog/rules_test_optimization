@@ -11,13 +11,11 @@ def dd_test_opt_repositories(
         service = None,
         settings_file = None,
         knowntests_file = None,
-        skippables_file = None,
         tmtests_file = None,
         runtime_name = None,
         runtime_version = None,
         runtime_arch = None,
         knowntests = True,
-        tests_skipping = True,
         test_management = True,
         debug = False):
     """Installs the sync repository via WORKSPACE.
@@ -31,13 +29,11 @@ def dd_test_opt_repositories(
         service = service,
         settings_file = settings_file,
         knowntests_file = knowntests_file,
-        skippables_file = skippables_file,
         tmtests_file = tmtests_file,
         runtime_name = runtime_name,
         runtime_version = runtime_version,
         runtime_arch = runtime_arch,
         knowntests = knowntests,
-        tests_skipping = tests_skipping,
         test_management = test_management,
         debug = debug,
     )

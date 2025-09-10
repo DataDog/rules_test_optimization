@@ -749,50 +749,7 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
         debug,
     )
 
-def _perform_dd_skippable_tests_request(ctx, api_key, env_data, skippables_file, debug):
-    # _perform_dd_skippable_tests_request: build and send the Skippable Tests request.
-    # - Writes the JSON response body to `skippables_file`.
-    # Datadog Skippable Tests endpoint
-    # Path: api/v2/ci/tests/skippable
-    # Type: test_params
-    base = _compute_dd_api_base(env_data.get("dd_site"))
-    url = "%s/%s" % (base, "api/v2/ci/tests/skippable")
-
-    # Attributes aligned with Datadog API
-    service = env_data.get("service")
-    environment = env_data.get("environment")
-    repository_url = env_data.get("repository_url")
-    sha = env_data.get("sha")
-
-    body = (
-        "{\n"
-        + "  \"data\": {\n"
-        + "    \"type\": \"test_params\",\n"
-        + "    \"attributes\": {\n"
-        + "      \"test_level\": \"test\",\n"
-        + "      \"configurations\": %s,\n" % _build_configurations_json(ctx, debug)
-        + "      \"service\": \"%s\",\n" % _safe_json_string(service)
-        + "      \"env\": \"%s\",\n" % _safe_json_string(environment)
-        + "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url)
-        + "      \"sha\": \"%s\"\n" % _safe_json_string(sha)
-        + "    }\n"
-        + "  }\n"
-        + "}\n"
-    )
-
-    log_debug(debug, "SkippableTests request body: %s" % body)
-
-    headers = { "DD-API-KEY": api_key }
-
-    return _http_post_json(
-        ctx,
-        url,
-        headers,
-        body,
-        "skippables.request.json",
-        skippables_file,
-        debug,
-    )
+    
 
 def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_file, debug):
     # _perform_dd_test_management_tests_request: build and send the Test Management Tests request.
@@ -878,11 +835,9 @@ def _impl(ctx):
     out_dir = ctx.attr.out_dir or TEST_OPT_DIR
     settings_file = _resolve_output_path(out_dir, ctx.attr.settings_file, "settings.json")
     knowntests_file = _resolve_output_path(out_dir, ctx.attr.knowntests_file, "knowntests.json")
-    skippables_file = _resolve_output_path(out_dir, ctx.attr.skippables_file, "skippabletests.json")
     tmtests_file = _resolve_output_path(out_dir, ctx.attr.tmtests_file, "tmtests.json")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, knowntests_file, debug)
-    _ensure_parent_directory(ctx, skippables_file, debug)
     _ensure_parent_directory(ctx, tmtests_file, debug)
 
     log_info("Settings file: %s" % settings_file)
@@ -892,11 +847,11 @@ def _impl(ctx):
     _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug)
     ctx.report_progress("test_optimization_sync: download complete")
 
-    # Decide whether to fetch known tests/skippables/test-management based on settings (use repository_ctx.read + json.decode)
+    # Decide whether to fetch known tests/test-management based on settings (use repository_ctx.read + json.decode)
     # Additionally, support local kill-switches exposed as rule attributes to force-disable
     # any of these features regardless of server-side configuration.
     known_tests_enabled = False
-    tests_skipping_enabled = False
+    
     test_management_enabled = False
     settings_path = ctx.path(settings_file)
     settings_content = ctx.read(settings_path)
@@ -906,12 +861,11 @@ def _impl(ctx):
         attrs_obj = data_obj.get("attributes") or {}
         enabled_val = attrs_obj.get("known_tests_enabled")
         known_tests_enabled = (enabled_val == True)
-        tests_skipping_val = attrs_obj.get("tests_skipping")
-        tests_skipping_enabled = (tests_skipping_val == True)
+        
         tm_obj = attrs_obj.get("test_management") or {}
         test_management_enabled = (tm_obj.get("enabled") == True)
         log_debug(debug, "known_tests_enabled parsed as: %s" % known_tests_enabled)
-        log_debug(debug, "tests_skipping parsed as: %s" % tests_skipping_enabled)
+        
         log_debug(debug, "test_management.enabled parsed as: %s" % test_management_enabled)
 
         # ------------------------------------------------------------------
@@ -938,16 +892,7 @@ def _impl(ctx):
                 attrs_obj = data_obj["attributes"]
             attrs_obj["known_tests_enabled"] = False
 
-        if hasattr(ctx.attr, "tests_skipping") and ctx.attr.tests_skipping == False:
-            tests_skipping_enabled = False
-            if type(data_obj) != "dict":
-                settings_obj["data"] = {"attributes": {}}
-                data_obj = settings_obj["data"]
-                attrs_obj = data_obj["attributes"]
-            elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
-                data_obj["attributes"] = {}
-                attrs_obj = data_obj["attributes"]
-            attrs_obj["tests_skipping"] = False
+        
 
         if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
             test_management_enabled = False
@@ -971,8 +916,8 @@ def _impl(ctx):
     else:
         log_debug(debug, "Settings file is empty; cannot determine feature flags")
 
-    # Always produce known tests, skippables, and test-management files; write empty stubs when disabled
-    exports = [settings_file, knowntests_file, skippables_file, tmtests_file]
+    # Always produce known tests and test-management files; write empty stubs when disabled
+    exports = [settings_file, knowntests_file, tmtests_file]
     if known_tests_enabled:
         ctx.report_progress("test_optimization_sync: downloading known tests")
         _perform_dd_known_tests_request(ctx, api_key, env_data, knowntests_file, debug)
@@ -982,14 +927,7 @@ def _impl(ctx):
         # Minimal valid JSON structure
         ctx.file(knowntests_file, '{"data": {"attributes": {"tests": {}}}}\n')
 
-    if tests_skipping_enabled:
-        ctx.report_progress("test_optimization_sync: downloading skippable tests")
-        _perform_dd_skippable_tests_request(ctx, api_key, env_data, skippables_file, debug)
-        ctx.report_progress("test_optimization_sync: skippable tests complete")
-    else:
-        log_debug(debug, "tests_skipping is false; writing empty skippables file")
-        # Minimal valid JSON structure for skippables
-        ctx.file(skippables_file, '{"meta": {"correlation_id": ""}, "data": []}\n')
+    
 
     if test_management_enabled:
         ctx.report_progress("test_optimization_sync: downloading test management tests")
@@ -1040,10 +978,9 @@ test_optimization_sync = repository_rule(
     implementation = _impl,                     # Points to the implementation function above
     attrs = {
         # Optional file names; if relative, they will be placed under `out_dir`
-        # Defaults: settings.json, knowntests.json, skippabletests.json, tmtests.json
+        # Defaults: settings.json, knowntests.json, tmtests.json
         "settings_file": attr.string(),
         "knowntests_file": attr.string(),
-        "skippables_file": attr.string(),
         "tmtests_file": attr.string(),
         # Optional output directory; defaults to TEST_OPT_DIR (".testoptimization")
         "out_dir": attr.string(),
@@ -1056,12 +993,9 @@ test_optimization_sync = repository_rule(
         # Kill-switches for feature requests
         # - knowntests: when False, do not request Known Tests and write a minimal stub; also set
         #               settings.data.attributes.known_tests_enabled=false in the settings file.
-        # - tests_skipping: when False, do not request Skippable Tests and write a minimal stub; also set
-        #                   settings.data.attributes.tests_skipping=false in the settings file.
         # - test_management: when False, do not request Test Management Tests and write a minimal stub; also set
         #                    settings.data.attributes.test_management.enabled=false in the settings file.
         "knowntests": attr.bool(default = True),
-        "tests_skipping": attr.bool(default = True),
         "test_management": attr.bool(default = True),
         "debug": attr.bool(default = False),                # Toggle verbose debug logging
     },
@@ -1152,14 +1086,13 @@ def _test_optimization_sync_extension_impl(module_ctx):
             if call_debug:
                 print("test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
                 print(
-                    "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, settings_file=%s, knowntests_file=%s, skippables_file=%s, tmtests_file=%s, debug=%s"
+                    "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, settings_file=%s, knowntests_file=%s, tmtests_file=%s, debug=%s"
                     % (
                         test_optimization_call.name,
                         (test_optimization_call.out_dir or "<default>"),
                         (test_optimization_call.service or "<env/DD_SERVICE>"),
                         test_optimization_call.settings_file,
                         test_optimization_call.knowntests_file,
-                        test_optimization_call.skippables_file,
                         test_optimization_call.tmtests_file,
                         call_debug,
                     )
@@ -1171,13 +1104,11 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 service = test_optimization_call.service,
                 settings_file = test_optimization_call.settings_file,
                 knowntests_file = test_optimization_call.knowntests_file,
-                skippables_file = test_optimization_call.skippables_file,
                 tmtests_file = test_optimization_call.tmtests_file,
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
                 knowntests = test_optimization_call.knowntests,
-                tests_skipping = test_optimization_call.tests_skipping,
                 test_management = test_optimization_call.test_management,
                 debug = call_debug,
             )
@@ -1191,7 +1122,6 @@ test_optimization_sync_extension = module_extension(
             # Optional: individual file names (can be bare names; placed under out_dir)
             "settings_file": attr.string(),
             "knowntests_file": attr.string(),
-            "skippables_file": attr.string(),
             "tmtests_file": attr.string(),
             # Optional: base output directory (defaults to TEST_OPT_DIR)
             "out_dir": attr.string(),
@@ -1203,7 +1133,6 @@ test_optimization_sync_extension = module_extension(
             "runtime_arch": attr.string(),
             # Optional kill-switches (default True keeps server behavior; False disables feature locally)
             "knowntests": attr.bool(default = True),
-            "tests_skipping": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "debug": attr.bool(default = False),
         }),
