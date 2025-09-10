@@ -89,6 +89,134 @@ def _resolve_output_path(out_dir, filename_attr, default_name):
         return filename_attr
     return "%s/%s" % (out_dir, filename_attr)
 
+def _sanitize_label_fragment(name):
+    # _sanitize_label_fragment: produce a safe Bazel target name fragment derived from an arbitrary string.
+    # - Lowercase
+    # - Allowed characters: [a-z0-9_]
+    # - All other characters become '_'
+    # - Collapse multiple consecutive '_'
+    s = (name or "").lower()
+    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
+    out = []
+    last_us = False
+    for ch in s:
+        if ch in allowed:
+            out.append(ch)
+            last_us = (ch == "_")
+        else:
+            if not last_us:
+                out.append("_")
+                last_us = True
+    # Trim leading/trailing underscores
+    while out and out[0] == "_":
+        out = out[1:]
+    while out and out[-1] == "_":
+        out = out[:-1]
+    result = "".join(out)
+    if not result:
+        result = "module"
+    return result
+
+def _sanitize_filename_fragment(name):
+    # _sanitize_filename_fragment: safe filename fragment for JSON files
+    # - Lowercase
+    # - Allowed characters: [a-z0-9._-]
+    # - Others → '_'
+    s = (name or "").lower()
+    allowed = "abcdefghijklmnopqrstuvwxyz0123456789._-"
+    out = []
+    for ch in s:
+        out.append(ch if ch in allowed else "_")
+    result = "".join(out)
+    # Avoid empty names
+    if not result:
+        result = "module"
+    return result
+
+def _dirname(path):
+    # _dirname: return parent directory component of a path using simple split
+    if not path:
+        return ""
+    segs = [s for s in path.split("/") if (s != "" and s != ".")]
+    if len(segs) <= 1:
+        return ""
+    return "/".join(segs[:-1])
+
+def _split_known_tests_by_module(ctx, knowntests_file, debug):
+    # _split_known_tests_by_module: from the combined knowntests JSON, produce
+    # one JSON file per module under the same directory as `knowntests_file`.
+    # Returns a list of dicts with keys: module, label, file
+    specs = []
+    kt_path = ctx.path(knowntests_file)
+    try:
+        content = ctx.read(kt_path)
+    except:
+        content = ""
+    if not content or not content.strip():
+        return specs
+    # Decode and navigate to data.attributes.tests (map: module -> suites map)
+    obj = json.decode(content)
+    data_obj = obj.get("data") or {}
+    attrs_obj = data_obj.get("attributes") or {}
+    tests_obj = attrs_obj.get("tests") or {}
+    if type(tests_obj) != "dict":
+        return specs
+
+    base_dir = _dirname(knowntests_file)
+    # Ensure deterministic ordering for reproducible BUILD content
+    module_names = sorted([k for k in tests_obj.keys()])
+
+    used_labels = {}
+    used_files = {}
+
+    for module_name in module_names:
+        suites_map = tests_obj.get(module_name)
+        # Guard against non-dict anomalies
+        if type(suites_map) != "dict":
+            continue
+        # Compute unique, sanitized target name and filename fragments
+        base_label = _sanitize_label_fragment(module_name)
+        label = base_label
+        idx = 2
+        while label in used_labels:
+            label = "%s_%d" % (base_label, idx)
+            idx += 1
+        used_labels[label] = True
+
+        base_file = _sanitize_filename_fragment(module_name)
+        file_name = "knowntests.module.%s.json" % base_file
+        # Make sure we don't collide with another file name
+        fidx = 2
+        while file_name in used_files:
+            file_name = "knowntests.module.%s_%d.json" % (base_file, fidx)
+            fidx += 1
+        used_files[file_name] = True
+
+        out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
+
+        # Build a minimal per-module JSON preserving top-level data fields when available
+        mod_data = {"attributes": {"tests": {module_name: suites_map}}}
+        # Preserve id/type if present
+        did = data_obj.get("id")
+        dty = data_obj.get("type")
+        if did != None:
+            mod_data["id"] = did
+        if dty != None:
+            mod_data["type"] = dty
+        mod_obj = {"data": mod_data}
+
+        _ensure_parent_directory(ctx, out_file, debug)
+        ctx.file(out_file, json.encode(mod_obj) + "\n")
+        log_debug(debug, "Wrote per-module known tests file '%s' for module '%s'" % (out_file, module_name))
+
+        specs.append({
+            "module": module_name,
+            "label": label,
+            "file": out_file,
+        })
+
+    return specs
+
 def _detect_os_info(ctx, debug):
     # _detect_os_info: detect OS platform, version, and architecture using host tools.
     # Returns a dict with keys: platform, version, arch
@@ -918,6 +1046,7 @@ def _impl(ctx):
 
     # Always produce known tests and test-management files; write empty stubs when disabled
     exports = [settings_file, knowntests_file, tmtests_file]
+    module_specs = []
     if known_tests_enabled:
         ctx.report_progress("test_optimization_sync: downloading known tests")
         _perform_dd_known_tests_request(ctx, api_key, env_data, knowntests_file, debug)
@@ -926,7 +1055,10 @@ def _impl(ctx):
         log_debug(debug, "known_tests_enabled is false; writing empty known tests file")
         # Minimal valid JSON structure
         ctx.file(knowntests_file, '{"data": {"attributes": {"tests": {}}}}\n')
-
+    # Split known tests by module into dedicated files (no-op if empty)
+    module_specs = _split_known_tests_by_module(ctx, knowntests_file, debug)
+    for spec in module_specs:
+        exports.append(spec["file"])   # include per-module files in the main filegroup
     
 
     if test_management_enabled:
@@ -958,6 +1090,23 @@ def _impl(ctx):
         + '    visibility = ["//visibility:public"],\n'
         + ')\n'
     )
+    # Append one filegroup per module so consumers can depend on individual modules
+    if module_specs:
+        # Deterministic order by label
+        labels = sorted([s["label"] for s in module_specs])
+        # Map label back to file path
+        by_label = {}
+        for s in module_specs:
+            by_label[s["label"]] = s["file"]
+        for lab in labels:
+            file_path = by_label.get(lab)
+            build_content += (
+                '\nfilegroup(\n'
+                + ('    name = "known_tests_module_%s",\n' % lab)
+                + ('    srcs = ["%s"],\n' % file_path)
+                + '    visibility = ["//visibility:public"],\n'
+                + ')\n'
+            )
     log_debug(debug, "Creating BUILD file with content: %s" % build_content)
     ctx.report_progress("test_optimization_sync: writing BUILD")
     ctx.file("BUILD", build_content)

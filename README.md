@@ -18,7 +18,7 @@ Given an external repository name `<repo_name>` created by the extension, the ge
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
   - `knowntests.json` (Known Tests API response or minimal stub)
-  
+  - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `knowntests.module.<sanitized_module>.json` and placed alongside `knowntests.json`. See below for details.
   - `tmtests.json` (Test Management Tests API response or minimal stub)
   - `context.json` (Non-secret CI/Git/OS/runtime tags for reuse at test runtime)
 
@@ -26,6 +26,40 @@ Reference them with a single label:
 
 ```bzl
 @<repo_name>//:test_optimization_files
+```
+
+### Per-module Known Tests files and labels
+
+When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module:
+
+- Each module becomes a file: `knowntests.module.<sanitized_module>.json`
+- Each module also becomes a filegroup target: `:known_tests_module_<sanitized_module>`
+- These files are also included in `:test_optimization_files`
+
+Sanitization rules for `<sanitized_module>`:
+
+- For file names: lowercase; characters outside `[a-z0-9._-]` are replaced with `_`
+- For target names: lowercase; characters outside `[a-z0-9_]` are replaced with `_`
+- If collisions occur after sanitization, numeric suffixes like `_2`, `_3` are appended deterministically
+
+Example usage:
+
+```bzl
+# Consume only the module "pkg/foo" tests
+filegroup(
+    name = "dd_known_tests_pkg_foo",
+    srcs = [
+        "@test_optimization_data//:known_tests_module_pkg_foo",
+    ],
+)
+
+# Or depend directly on the file (path relative to the external repo root)
+filegroup(
+    name = "dd_known_tests_pkg_foo_file",
+    srcs = [
+        "@test_optimization_data//:.testoptimization/knowntests.module.pkg_foo.json",
+    ],
+)
 ```
 
 ## Installation (Bzlmod)
