@@ -30,11 +30,16 @@ Reference them with a single label:
 
 ### Per-module Known Tests files and labels
 
-When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module:
+When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module. The same splitting is performed for Test Management tests (`tmtests.json`), keyed by module under `data.attributes.modules`:
 
-- Each module becomes a file: `knowntests.module.<sanitized_module>.json`
-- Each module also becomes a filegroup target: `:known_tests_module_<sanitized_module>`
-- These files are also included in `:test_optimization_files`
+- Each module becomes files:
+  - `knowntests.module.<sanitized_module>.json`
+  - `tmtests.module.<sanitized_module>.json`
+- Each module also becomes a filegroup target: `:known_tests_module_<sanitized_module>` that includes:
+  - The module’s `knowntests.module.<sanitized_module>.json` (when present)
+  - The module’s `tmtests.module.<sanitized_module>.json` (when present)
+  - The global `settings.json`
+- All of the above files are also included in `:test_optimization_files`
 
 Sanitization rules for `<sanitized_module>`:
 
@@ -45,7 +50,7 @@ Sanitization rules for `<sanitized_module>`:
 Example usage:
 
 ```bzl
-# Consume only the module "pkg/foo" tests
+# Consume only the module "pkg/foo" tests metadata
 filegroup(
     name = "dd_known_tests_pkg_foo",
     srcs = [
@@ -53,11 +58,13 @@ filegroup(
     ],
 )
 
-# Or depend directly on the file (path relative to the external repo root)
+# Or depend directly on specific files (paths relative to the external repo root)
 filegroup(
     name = "dd_known_tests_pkg_foo_file",
     srcs = [
         "@test_optimization_data//:.testoptimization/knowntests.module.pkg_foo.json",
+        "@test_optimization_data//:.testoptimization/tmtests.module.pkg_foo.json",
+        "@test_optimization_data//:.testoptimization/settings.json",
     ],
 )
 ```

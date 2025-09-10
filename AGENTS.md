@@ -35,6 +35,7 @@ There are two main building blocks:
   - `tmtests.json`
   - `context.json` (non-secret CI/Git/OS/runtime tags)
   - Per-module Known Tests: `knowntests.module.<sanitized_module>.json` (one per module key)
+  - Per-module Test Management Tests: `tmtests.module.<sanitized_module>.json` (one per module key)
 
 - Endpoints used (agent APIs under `api.<DD_SITE>`):
   - Settings: `https://api.<DD_SITE>/api/v2/libraries/tests/services/setting`

@@ -214,6 +214,71 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
 
     return specs
 
+def _split_tmtests_by_module(ctx, tmtests_file, debug):
+    # _split_tmtests_by_module: from the combined tmtests JSON, produce
+    # one JSON file per module under the same directory as `tmtests_file`.
+    # Returns a list of dicts with keys: module, label, file
+    specs = []
+    tm_path = ctx.path(tmtests_file)
+    content = ctx.read(tm_path)
+    if not content or not content.strip():
+        return specs
+    # Decode and navigate to data.attributes.modules (map: module -> module suites/tests object)
+    obj = json.decode(content)
+    data_obj = obj.get("data") or {}
+    attrs_obj = data_obj.get("attributes") or {}
+    modules_obj = attrs_obj.get("modules") or {}
+    if type(modules_obj) != "dict":
+        return specs
+
+    base_dir = _dirname(tmtests_file)
+    module_names = sorted([k for k in modules_obj.keys()])
+
+    # Counters to create deterministic de-dup suffixed names without while loops (local scope)
+    label_counts = {}
+    file_counts = {}
+
+    for module_name in module_names:
+        module_content = modules_obj.get(module_name)
+        if type(module_content) != "dict":
+            continue
+
+        base_label = _sanitize_label_fragment(module_name)
+        c = label_counts.get(base_label, 0) + 1
+        label_counts[base_label] = c
+        label = base_label if c == 1 else ("%s_%d" % (base_label, c))
+
+        base_file = _sanitize_filename_fragment(module_name)
+        fc = file_counts.get(base_file, 0) + 1
+        file_counts[base_file] = fc
+        file_name = (
+            "tmtests.module.%s.json" % base_file if fc == 1 else
+            "tmtests.module.%s_%d.json" % (base_file, fc)
+        )
+
+        out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
+
+        mod_data = {"attributes": {"modules": {module_name: module_content}}}
+        did = data_obj.get("id")
+        dty = data_obj.get("type")
+        if did != None:
+            mod_data["id"] = did
+        if dty != None:
+            mod_data["type"] = dty
+        mod_obj = {"data": mod_data}
+
+        _ensure_parent_directory(ctx, out_file, debug)
+        ctx.file(out_file, json.encode(mod_obj) + "\n")
+        log_debug(debug, "Wrote per-module tmtests file '%s' for module '%s'" % (out_file, module_name))
+
+        specs.append({
+            "module": module_name,
+            "label": label,
+            "file": out_file,
+        })
+
+    return specs
+
 def _detect_os_info(ctx, debug):
     # _detect_os_info: detect OS platform, version, and architecture using host tools.
     # Returns a dict with keys: platform, version, arch
@@ -1043,7 +1108,8 @@ def _impl(ctx):
 
     # Always produce known tests and test-management files; write empty stubs when disabled
     exports = [settings_file, knowntests_file, tmtests_file]
-    module_specs = []
+    module_specs_known = []
+    module_specs_tm = []
     if known_tests_enabled:
         ctx.report_progress("test_optimization_sync: downloading known tests")
         _perform_dd_known_tests_request(ctx, api_key, env_data, knowntests_file, debug)
@@ -1053,8 +1119,8 @@ def _impl(ctx):
         # Minimal valid JSON structure
         ctx.file(knowntests_file, '{"data": {"attributes": {"tests": {}}}}\n')
     # Split known tests by module into dedicated files (no-op if empty)
-    module_specs = _split_known_tests_by_module(ctx, knowntests_file, debug)
-    for spec in module_specs:
+    module_specs_known = _split_known_tests_by_module(ctx, knowntests_file, debug)
+    for spec in module_specs_known:
         exports.append(spec["file"])   # include per-module files in the main filegroup
     
 
@@ -1066,6 +1132,11 @@ def _impl(ctx):
         log_debug(debug, "test_management.enabled is false; writing empty test management tests file")
         # Minimal valid JSON structure for test management tests
         ctx.file(tmtests_file, '{"data": {"attributes": {"modules": {}}}}\n')
+
+    # Split tmtests by module into dedicated files (no-op if empty)
+    module_specs_tm = _split_tmtests_by_module(ctx, tmtests_file, debug)
+    for spec in module_specs_tm:
+        exports.append(spec["file"])   # include per-module tmtests files in the main filegroup
 
     # Build and write context.json (non-secret metadata) in the same repo
     context_tags = _build_context_tags(ctx, env_data, debug)
@@ -1088,19 +1159,39 @@ def _impl(ctx):
         + ')\n'
     )
     # Append one filegroup per module so consumers can depend on individual modules
-    if module_specs:
-        # Deterministic order by label
-        labels = sorted([s["label"] for s in module_specs])
-        # Map label back to file path
-        by_label = {}
-        for s in module_specs:
-            by_label[s["label"]] = s["file"]
+    if module_specs_known or module_specs_tm:
+        # Deterministic order by label without using set (not available in Starlark)
+        label_seen = {}
+        labels = []
+        for s in module_specs_known:
+            lab = s["label"]
+            if not label_seen.get(lab):
+                label_seen[lab] = True
+                labels.append(lab)
+        for s in module_specs_tm:
+            lab = s["label"]
+            if not label_seen.get(lab):
+                label_seen[lab] = True
+                labels.append(lab)
+        labels = sorted(labels)
+        # Aggregate files per label (include settings.json as requested)
+        files_by_label = {}
+        for s in module_specs_known:
+            arr = files_by_label.get(s["label"]) or []
+            arr.append(s["file"])
+            files_by_label[s["label"]] = arr
+        for s in module_specs_tm:
+            arr = files_by_label.get(s["label"]) or []
+            arr.append(s["file"])
+            files_by_label[s["label"]] = arr
         for lab in labels:
-            file_path = by_label.get(lab)
+            files = [settings_file] + sorted(files_by_label.get(lab) or [])
+            # Format list for Starlark build content
+            srcs_literal = repr(files)
             build_content += (
                 '\nfilegroup(\n'
                 + ('    name = "known_tests_module_%s",\n' % lab)
-                + ('    srcs = ["%s"],\n' % file_path)
+                + ('    srcs = %s,\n' % srcs_literal)
                 + '    visibility = ["//visibility:public"],\n'
                 + ')\n'
             )
