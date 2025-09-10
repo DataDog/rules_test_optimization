@@ -324,10 +324,8 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `name`: external repository name to create
 
 - Optional
-  - `out_dir` (string): base output directory. Defaults to `.testoptimization`
+  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `tmtests.json` under `out_dir`)
   - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
-  - `settings_file` (string): file name or path for settings; if a bare name, it is placed under `out_dir`. Default: `settings.json`
-  - `tmtests_file` (string): file name/path for test management tests. Default: `tmtests.json`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
   - `runtime_arch` (string): optional runtime architecture. Defaults to auto-detected `os.architecture` when not provided

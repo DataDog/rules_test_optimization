@@ -77,18 +77,6 @@ def _ensure_parent_directory(ctx, path, debug):
     if res.return_code != 0:
         fail("Failed creating directory %s for output %s: %s" % (dirp, path, (res.stderr or "").strip()))
 
-def _resolve_output_path(out_dir, filename_attr, default_name):
-    # _resolve_output_path: compute concrete path for an output file.
-    # Rules:
-    # - If filename_attr is empty, use out_dir/default_name
-    # - If filename_attr contains a '/', treat it as an explicit path and keep it
-    # - Otherwise, join out_dir/filename_attr
-    if not filename_attr:
-        return "%s/%s" % (out_dir, default_name)
-    if "/" in filename_attr or filename_attr.startswith("./") or filename_attr.startswith("/"):
-        return filename_attr
-    return "%s/%s" % (out_dir, filename_attr)
-
 def _sanitize_label_fragment(name):
     # _sanitize_label_fragment: produce a safe Bazel target name fragment derived from an arbitrary string.
     # - Lowercase
@@ -970,9 +958,9 @@ def _impl(ctx):
 
     # Perform the settings request (compute and ensure directories exist for outputs)
     out_dir = ctx.attr.out_dir or TEST_OPT_DIR
-    settings_file = _resolve_output_path(out_dir, ctx.attr.settings_file, "settings.json")
+    settings_file = "%s/%s" % (out_dir, "settings.json")
     knowntests_file = "%s/%s" % (out_dir, "knowntests.json")
-    tmtests_file = _resolve_output_path(out_dir, ctx.attr.tmtests_file, "tmtests.json")
+    tmtests_file = "%s/%s" % (out_dir, "tmtests.json")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, knowntests_file, debug)
     _ensure_parent_directory(ctx, tmtests_file, debug)
@@ -1135,10 +1123,6 @@ def _impl(ctx):
 test_optimization_sync = repository_rule(
     implementation = _impl,                     # Points to the implementation function above
     attrs = {
-        # Optional file names; if relative, they will be placed under `out_dir`
-        # Defaults: settings.json, knowntests.json, tmtests.json
-        "settings_file": attr.string(),
-        "tmtests_file": attr.string(),
         # Optional output directory; defaults to TEST_OPT_DIR (".testoptimization")
         "out_dir": attr.string(),
         # Optional explicit service name to use (overrides DD_SERVICE)
@@ -1243,13 +1227,11 @@ def _test_optimization_sync_extension_impl(module_ctx):
             if call_debug:
                 print("test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
                 print(
-                    "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, settings_file=%s, tmtests_file=%s, debug=%s"
+                    "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s"
                     % (
                         test_optimization_call.name,
                         (test_optimization_call.out_dir or "<default>"),
                         (test_optimization_call.service or "<env/DD_SERVICE>"),
-                        test_optimization_call.settings_file,
-                        test_optimization_call.tmtests_file,
                         call_debug,
                     )
                 )
@@ -1258,8 +1240,6 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 name = test_optimization_call.name,
                 out_dir = test_optimization_call.out_dir,
                 service = test_optimization_call.service,
-                settings_file = test_optimization_call.settings_file,
-                tmtests_file = test_optimization_call.tmtests_file,
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
@@ -1274,9 +1254,6 @@ test_optimization_sync_extension = module_extension(
     tag_classes = {
         "test_optimization_sync": tag_class(attrs = {
             "name": attr.string(mandatory = True),
-            # Optional: individual file names (can be bare names; placed under out_dir)
-            "settings_file": attr.string(),
-            "tmtests_file": attr.string(),
             # Optional: base output directory (defaults to TEST_OPT_DIR)
             "out_dir": attr.string(),
             # Optional explicit service name to use (overrides DD_SERVICE)
