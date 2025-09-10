@@ -971,7 +971,7 @@ def _impl(ctx):
     # Perform the settings request (compute and ensure directories exist for outputs)
     out_dir = ctx.attr.out_dir or TEST_OPT_DIR
     settings_file = _resolve_output_path(out_dir, ctx.attr.settings_file, "settings.json")
-    knowntests_file = _resolve_output_path(out_dir, ctx.attr.knowntests_file, "knowntests.json")
+    knowntests_file = "%s/%s" % (out_dir, "knowntests.json")
     tmtests_file = _resolve_output_path(out_dir, ctx.attr.tmtests_file, "tmtests.json")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, knowntests_file, debug)
@@ -1138,7 +1138,6 @@ test_optimization_sync = repository_rule(
         # Optional file names; if relative, they will be placed under `out_dir`
         # Defaults: settings.json, knowntests.json, tmtests.json
         "settings_file": attr.string(),
-        "knowntests_file": attr.string(),
         "tmtests_file": attr.string(),
         # Optional output directory; defaults to TEST_OPT_DIR (".testoptimization")
         "out_dir": attr.string(),
@@ -1244,13 +1243,12 @@ def _test_optimization_sync_extension_impl(module_ctx):
             if call_debug:
                 print("test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
                 print(
-                    "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, settings_file=%s, knowntests_file=%s, tmtests_file=%s, debug=%s"
+                    "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, settings_file=%s, tmtests_file=%s, debug=%s"
                     % (
                         test_optimization_call.name,
                         (test_optimization_call.out_dir or "<default>"),
                         (test_optimization_call.service or "<env/DD_SERVICE>"),
                         test_optimization_call.settings_file,
-                        test_optimization_call.knowntests_file,
                         test_optimization_call.tmtests_file,
                         call_debug,
                     )
@@ -1261,7 +1259,6 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 out_dir = test_optimization_call.out_dir,
                 service = test_optimization_call.service,
                 settings_file = test_optimization_call.settings_file,
-                knowntests_file = test_optimization_call.knowntests_file,
                 tmtests_file = test_optimization_call.tmtests_file,
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
@@ -1279,7 +1276,6 @@ test_optimization_sync_extension = module_extension(
             "name": attr.string(mandatory = True),
             # Optional: individual file names (can be bare names; placed under out_dir)
             "settings_file": attr.string(),
-            "knowntests_file": attr.string(),
             "tmtests_file": attr.string(),
             # Optional: base output directory (defaults to TEST_OPT_DIR)
             "out_dir": attr.string(),
