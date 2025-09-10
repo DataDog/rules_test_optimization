@@ -112,6 +112,30 @@ filegroup(
 )
 ```
 
+### Alternative: WORKSPACE mode
+
+If you use legacy WORKSPACE mode instead of Bzlmod, load the repository rule directly and instantiate it in `WORKSPACE`:
+
+```bzl
+load("@datadog_rules_test_optimization//tools:test_optimization_sync.bzl", "test_optimization_sync")
+
+test_optimization_sync(
+    name = "test_optimization_data",
+    # Optional:
+    # service = "my-service",
+    # runtime_name = "go",
+    # runtime_version = "go1.22",
+)
+```
+
+You can also use the helper to install with sensible defaults:
+
+```bzl
+load("@datadog_rules_test_optimization//tools:repositories.bzl", "dd_test_opt_repositories")
+
+dd_test_opt_repositories(name = "test_optimization_data")
+```
+
 ### 2) Configure a shared payloads directory and pass it to tests
 
 Tests should write JSON payloads to a real filesystem path outside the sandbox. Recommended:
@@ -151,6 +175,53 @@ bazel test //... //tools:dd_upload_payloads \
   --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
 ```
 
+### Endpoints, headers, and behavior
+
+- Agentless (when `DD_TRACE_AGENT_URL` is unset):
+  - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
+  - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
+  - Requires `DD_API_KEY`
+- EVP proxy (when `DD_TRACE_AGENT_URL` is set):
+  - Tests: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/api/v2/citestcycle` with `X-Datadog-EVP-Subdomain: citestcycle-intake`
+  - Coverage: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/api/v2/citestcov` with `X-Datadog-EVP-Subdomain: citestcov-intake`
+- Requests include `Accept: application/json`. Test uploads set `Content-Type: application/json`.
+- Coverage uploads are multipart with two parts: `event` and `coveragex`.
+
+### Convenience macro: dd_topt_go_test
+
+Replace a `go_test` with a single label that runs both the Go test and the uploader. This macro creates:
+- `<name>_go`: underlying `go_test`
+- `<name>_dd_upload_payloads`: uploader test
+- `<name>`: a `test_suite` including both
+
+Bzlmod:
+
+```bzl
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    # Optional overrides if you used a different repo name:
+    # context_label = "@test_optimization_data//:test_optimization_context",
+    # files_label = "@test_optimization_data//:test_optimization_files",
+    # quiescent_sec = 10,
+    # max_wait_sec = 1800,
+    # fail_on_error = False,
+)
+```
+
+WORKSPACE:
+
+```bzl
+load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+)
+```
+
 ---
 
 ## Environment forwarding (.bazelrc)
@@ -181,6 +252,28 @@ test --test_env=DD_PAYLOADS_DIR
 Do not write secrets (like `DD_API_KEY`) to files; keep them in env only.
 
 ---
+
+## Wrapper script (`bazelw`)
+
+This repo ships a `bazelw` wrapper that forwards computed Git metadata via `--repo_env` for you and supports a TTL for refetches.
+
+Examples:
+
+```bash
+# Auto-forward Git repository URL, branch, SHA, and commit message
+./bazelw build //...
+
+# Force a refresh every hour
+FETCH_SALT_TTL=3600 ./bazelw test //...
+
+# Override computed Git values
+DD_GIT_REPOSITORY_URL=https://github.com/acme/api.git \
+DD_GIT_BRANCH=main \
+DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
+./bazelw test //...
+```
+
+Precedence: any `DD_GIT_*` you export will override what `bazelw` computes.
 
 ## `context.json` content
 
@@ -254,6 +347,12 @@ Tag constants reference:
   - `dd_payload_uploader_test` test rule
   - Waits for payloads, enriches from `context.json`, uploads to Datadog
   - Cross-platform implementation
+
+- `tools/topt_go_test.bzl`
+  - `dd_topt_go_test` macro for Go: wraps `go_test` + uploader into a `test_suite`
+
+- `tools/repositories.bzl`
+  - WORKSPACE helper `dd_test_opt_repositories` to install the sync repo
 
 - `README.md`
   - Usage examples for both fetching and uploading flows
