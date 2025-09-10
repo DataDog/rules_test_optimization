@@ -24,15 +24,17 @@ There are two main building blocks:
   - Detects CI/git/OS/runtime context from environment (provider-aware) and user overrides.
   - Calls Datadog endpoints to download metadata (settings, known tests, test management), writing JSON outputs.
   - Produces `context.json` with a comprehensive, non-secret set of tags to reuse at runtime.
-  - Emits two public filegroups in the generated external repo:
-    - `test_optimization_files`: all downloaded JSON files
+  - Emits public filegroups in the generated external repo:
+    - `test_optimization_files`: all downloaded JSON files (also includes per-module known-tests files)
     - `test_optimization_context`: the `context.json` file
+    - One per-module group for Known Tests: `known_tests_module_<sanitized_module>`
 
-- Outputs (file names configurable; defaults):
+- Outputs (file names fixed under `out_dir`):
   - `settings.json`
   - `knowntests.json`
   - `tmtests.json`
   - `context.json` (non-secret CI/Git/OS/runtime tags)
+  - Per-module Known Tests: `knowntests.module.<sanitized_module>.json` (one per module key)
 
 - Endpoints used (agent APIs under `api.<DD_SITE>`):
   - Settings: `https://api.<DD_SITE>/api/v2/libraries/tests/services/setting`
