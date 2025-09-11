@@ -1276,7 +1276,7 @@ def _impl(ctx):
             srcs_literal = repr(files)
             build_content += (
                 '\nfilegroup(\n'
-                + ('    name = "known_tests_module_%s",\n' % lab)
+                + ('    name = "module_%s",\n' % lab)
                 + ('    srcs = %s,\n' % srcs_literal)
                 + '    visibility = ["//visibility:public"],\n'
                 + ')\n'

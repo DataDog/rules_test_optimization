@@ -27,7 +27,7 @@ There are two main building blocks:
   - Emits public filegroups in the generated external repo:
     - `test_optimization_files`: all downloaded JSON files (also includes per-module known-tests files)
     - `test_optimization_context`: the `context.json` file
-    - One per-module group for Known Tests: `known_tests_module_<sanitized_module>`
+    - One per-module group per module: `module_<sanitized_module>` (includes known tests and test management files, plus settings)
 
 - Outputs (file names fixed under `out_dir`):
   - `settings.json`

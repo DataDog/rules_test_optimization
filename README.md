@@ -35,7 +35,7 @@ When Known Tests are enabled, the combined response `data.attributes.tests` is a
 - Each module becomes files:
   - `knowntests.module.<sanitized_module>.json`
   - `tmtests.module.<sanitized_module>.json`
-- Each module also becomes a filegroup target: `:known_tests_module_<sanitized_module>` that includes:
+- Each module also becomes a filegroup target: `:module_<sanitized_module>` that includes:
   - The module’s `knowntests.module.<sanitized_module>.json` (when present)
   - The module’s `tmtests.module.<sanitized_module>.json` (when present)
   - The global `settings.json`
@@ -54,7 +54,7 @@ Example usage:
 filegroup(
     name = "dd_known_tests_pkg_foo",
     srcs = [
-        "@test_optimization_data//:known_tests_module_pkg_foo",
+        "@test_optimization_data//:module_pkg_foo",
     ],
 )
 

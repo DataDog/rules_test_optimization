@@ -127,7 +127,7 @@ def dd_topt_go_test(
 
     # Compute sanitized suffix for the per-module filegroup
     module_suffix = module_label_override if module_label_override else _dd_sanitize_label_fragment(inferred_importpath)
-    per_module_group = "@%s//:known_tests_module_%s" % (sync_repo_name, module_suffix)
+    per_module_group = "@%s//:module_%s" % (sync_repo_name, module_suffix)
 
     if include_per_module_files:
         data.append(per_module_group)
