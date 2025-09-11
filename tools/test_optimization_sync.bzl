@@ -145,7 +145,7 @@ def _dirname(path):
         return ""
     return "/".join(segs[:-1])
 
-def _try_read_abs_file(ctx, abs_path, debug):
+def _try_read_abs_file(ctx, abs_path):
     # _try_read_abs_file: best-effort read of a file at an absolute path using host tools.
     # Returns file content string on success; empty string otherwise.
     if not abs_path:
@@ -186,7 +186,9 @@ def _detect_go_module_path(ctx, debug):
     # _detect_go_module_path: best-effort detection of Go module path.
     # Precedence: GO_MODULE_PATH env > discover go.mod under known workspace envs > git toplevel go.mod
     mod_env = ctx.os.environ.get("GO_MODULE_PATH") or ""
+    log_debug(debug, "GO_MODULE_PATH env: %s" % (mod_env or "<unset>"))
     if mod_env:
+        log_debug(debug, "Using GO_MODULE_PATH from env")
         return mod_env
     # Candidate workspace roots
     candidates = []
@@ -201,10 +203,13 @@ def _detect_go_module_path(ctx, debug):
         if v and (v not in candidates):
             candidates.append(v)
     for root in candidates:
-        content = _try_read_abs_file(ctx, (root.rstrip("/") + "/go.mod"), debug)
+        go_mod_path = root.rstrip("/") + "/go.mod"
+        log_debug(debug, "Checking go.mod at: %s" % go_mod_path)
+        content = _try_read_abs_file(ctx, go_mod_path)
         if content:
             mp = _parse_go_module_path(content)
             if mp:
+                log_debug(debug, "Detected module path '%s' from %s" % (mp, go_mod_path))
                 return mp
     # Fallback: try using git to find toplevel go.mod
     top = ""
@@ -214,12 +219,17 @@ def _detect_go_module_path(ctx, debug):
         r = ctx.execute(["bash", "-c", "git rev-parse --show-toplevel"], timeout = 10)
     if r.return_code == 0 and r.stdout:
         top = r.stdout.strip()
+    log_debug(debug, "git toplevel: %s" % (top or "<unset>"))
     if top:
-        content = _try_read_abs_file(ctx, (top.rstrip("/") + "/go.mod"), debug)
+        go_mod_path = top.rstrip("/") + "/go.mod"
+        log_debug(debug, "Checking go.mod at: %s" % go_mod_path)
+        content = _try_read_abs_file(ctx, go_mod_path)
         if content:
             mp = _parse_go_module_path(content)
             if mp:
+                log_debug(debug, "Detected module path '%s' from %s" % (mp, go_mod_path))
                 return mp
+    log_debug(debug, "Go module path not detected; returning empty")
     return ""
 
 def _split_known_tests_by_module(ctx, knowntests_file, debug):
