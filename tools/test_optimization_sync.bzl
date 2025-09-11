@@ -1399,29 +1399,26 @@ def _test_optimization_sync_extension_impl(module_ctx):
         if extension_debug:
             break
 
-    if extension_debug:
-        print("test_optimization_sync_extension: Starting module extension implementation")
-        print("test_optimization_sync_extension: Number of modules: %d" % len(module_ctx.modules))
+    log_debug(extension_debug, "test_optimization_sync_extension: Starting module extension implementation")
+    log_debug(extension_debug, "test_optimization_sync_extension: Number of modules: %d" % len(module_ctx.modules))
     
     for mod in module_ctx.modules:
-        if extension_debug:
-            print("test_optimization_sync_extension: Processing module: %s" % mod.name)
-            print("test_optimization_sync_extension: Module is_root: %s" % mod.is_root)
-            print("test_optimization_sync_extension: Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
+        log_debug(extension_debug, "test_optimization_sync_extension: Processing module: %s" % mod.name)
+        log_debug(extension_debug, "test_optimization_sync_extension: Module is_root: %s" % mod.is_root)
+        log_debug(extension_debug, "test_optimization_sync_extension: Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
         
         for test_optimization_call in mod.tags.test_optimization_sync:
             call_debug = hasattr(test_optimization_call, "debug") and test_optimization_call.debug
-            if call_debug:
-                print("test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
-                print(
-                    "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s"
-                    % (
-                        test_optimization_call.name,
-                        (test_optimization_call.out_dir or "<default>"),
-                        (test_optimization_call.service or "<env/DD_SERVICE>"),
-                        call_debug,
-                    )
+            log_debug(call_debug, "test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
+            log_debug(call_debug,
+                "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s"
+                % (
+                    test_optimization_call.name,
+                    (test_optimization_call.out_dir or "<default>"),
+                    (test_optimization_call.service or "<env/DD_SERVICE>"),
+                    call_debug,
                 )
+            )
             
             test_optimization_sync(
                 name = test_optimization_call.name,
