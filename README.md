@@ -287,12 +287,13 @@ Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data
 ### Bzlmod
 
 ```bzl
+load("@rules_go//go:def.bzl", "go_test")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
-    # deps = [...],
+    go_test_rule = go_test,
     # Optional overrides if you didn't use the default repo name:
     # context_label = "@test_optimization_data//:test_optimization_context",
     # files_label = "@test_optimization_data//:test_optimization_files",
@@ -301,22 +302,18 @@ dd_topt_go_test(
     # max_wait_sec = 1800,
     # fail_on_error = False,
 )
-
-# Run:
-# bazel test //pkg:pkg_go_test \
-#   --sandbox_writable_path=$PWD/.testoptimization/payloads \
-#   --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
 ```
 
 ### WORKSPACE
 
 ```bzl
+load("@rules_go//go:def.bzl", "go_test")
 load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
-    # deps = [...],
+    go_test_rule = go_test,
     # Optional overrides if you didn't use the default repo name:
     # context_label = "@test_optimization_data//:test_optimization_context",
     # files_label = "@test_optimization_data//:test_optimization_files",

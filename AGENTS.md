@@ -198,11 +198,13 @@ Replace a `go_test` with a single label that runs both the Go test and the uploa
 Bzlmod:
 
 ```bzl
+load("@rules_go//go:def.bzl", "go_test")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
+    go_test_rule = go_test,
     # Optional overrides if you used a different repo name:
     # context_label = "@test_optimization_data//:test_optimization_context",
     # files_label = "@test_optimization_data//:test_optimization_files",
@@ -215,11 +217,13 @@ dd_topt_go_test(
 WORKSPACE:
 
 ```bzl
+load("@rules_go//go:def.bzl", "go_test")
 load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
+    go_test_rule = go_test,
 )
 ```
 

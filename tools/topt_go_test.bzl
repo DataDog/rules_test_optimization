@@ -12,7 +12,6 @@
 # - Pass normal go_test attributes via **kwargs.
 # - Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
 
-load("@rules_go//go:def.bzl", "go_test")
 load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
 load("//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
 load("//tools:repositories.bzl", "dd_test_opt_repositories")
@@ -70,6 +69,8 @@ def dd_topt_go_test(
         go_module_path = None,
         module_label_override = None,
         include_per_module_files = True,
+        # Pass the rules_go go_test rule symbol from your BUILD file (e.g., go_test_rule = go_test)
+        go_test_rule = None,
         # Uploader knobs
         payloads_dir = None,
         tests_subdir = "tests",
@@ -142,7 +143,12 @@ def dd_topt_go_test(
         env_value = "$(rlocationpaths %s)" % files_label
     env["TEST_OPTIMIZATION_PAYLOADS_FILES"] = env_value
 
-    go_test(
+    # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
+    _go_test = go_test_rule if go_test_rule != None else None
+    if _go_test == None:
+        fail("dd_topt_go_test: you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
+
+    _go_test(
         name = inner_name,
         data = data,
         env = env,
