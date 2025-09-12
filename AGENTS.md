@@ -28,9 +28,8 @@ There are two main building blocks:
     - `test_optimization_files`: core group including only `settings.json`
     - `test_optimization_context`: the `context.json` file
     - One per-module group per module: `module_<sanitized_module>` (includes known tests and test management files, plus settings)
-  - Also exports helper .bzl files:
-    - `go_module.bzl` with `GO_MODULE_PATH` and `SANITIZED_GO_MODULE_PATH`
-    - `modules_index.bzl` with `SANITIZED_MODULE_LABELS` and `SANITIZED_MODULE_SET`
+  - Also exports a helper `.bzl` file:
+    - `export.bzl` with `modules` dict: `go_module_path`, `sanitized_go_module_path`, `sanitized_module_labels`, `sanitized_module_set`, `go_module_included`
 
 - Outputs (file names fixed under `out_dir`):
   - `settings.json`
@@ -201,20 +200,15 @@ Bzlmod:
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH", "SANITIZED_GO_MODULE_PATH")
+load("@test_optimization_data//:export.bzl", "modules")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
 
-# Optional: modules index for safe per-module selection
-load("@test_optimization_data//:modules_index.bzl", "SANITIZED_MODULE_SET")
-
 def dd_topt_go_test(name, go_test_rule, **kwargs):
-    # Compute include_per_module_files safely using available labels
-    include = bool(SANITIZED_MODULE_SET.get(SANITIZED_GO_MODULE_PATH))
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = GO_MODULE_PATH,
-        include_per_module_files = include,
+        go_module_path = modules["go_module_path"],
+        include_per_module_files = modules["go_module_included"],
         **kwargs
     )
 ```
@@ -236,17 +230,15 @@ WORKSPACE:
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH", "SANITIZED_GO_MODULE_PATH")
+load("@test_optimization_data//:export.bzl", "modules")
 load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
-load("@test_optimization_data//:modules_index.bzl", "SANITIZED_MODULE_SET")
 
 def dd_topt_go_test(name, go_test_rule, **kwargs):
-    include = bool(SANITIZED_MODULE_SET.get(SANITIZED_GO_MODULE_PATH))
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = GO_MODULE_PATH,
-        include_per_module_files = include,
+        go_module_path = modules["go_module_path"],
+        include_per_module_files = modules["go_module_included"],
         **kwargs
     )
 ```

@@ -92,14 +92,14 @@ test_optimization_sync.test_optimization_sync(
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
-Additional helper files exported by the generated repository:
+Additional helper file exported by the generated repository:
 
-- `go_module.bzl` with:
-  - `GO_MODULE_PATH`: detected Go module path (may be empty)
-  - `SANITIZED_GO_MODULE_PATH`: sanitized label fragment for `GO_MODULE_PATH`
-- `modules_index.bzl` with:
-  - `SANITIZED_MODULE_LABELS`: list of available per-module sanitized labels
-  - `SANITIZED_MODULE_SET`: dict-as-set for fast membership checks
+- `export.bzl` with a single dictionary `modules` containing:
+  - `go_module_path`: detected Go module path (may be empty)
+  - `sanitized_go_module_path`: sanitized label fragment for `go_module_path`
+  - `sanitized_module_labels`: list of available per-module sanitized labels
+  - `sanitized_module_set`: dict-as-set for fast membership checks
+  - `go_module_included`: boolean, true when the detected Go module has a matching per-module filegroup
 
 Then in any BUILD file:
 
@@ -297,14 +297,15 @@ Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
+load("@test_optimization_data//:export.bzl", "modules")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
 
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = GO_MODULE_PATH,
+        go_module_path = modules["go_module_path"],
+        include_per_module_files = modules["go_module_included"],
         **kwargs
     )
 ```
@@ -333,14 +334,15 @@ dd_topt_go_test(
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
+load("@test_optimization_data//:export.bzl", "modules")
 load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
 
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = GO_MODULE_PATH,
+        go_module_path = modules["go_module_path"],
+        include_per_module_files = modules["go_module_included"],
         **kwargs
     )
 ```
