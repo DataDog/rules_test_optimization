@@ -133,9 +133,19 @@ def dd_topt_go_test(
         data.append(per_module_group)
     # Keep full files bundle as well for compatibility/convenience
     data.append(files_label)
+    # Prepare env map: include runfiles-relative paths to the selected payload files
+    user_env = kwargs.pop("env", {})
+    env = dict(user_env)
+    if include_per_module_files:
+        env_value = "$(rlocationpaths %s)" % per_module_group
+    else:
+        env_value = "$(rlocationpaths %s)" % files_label
+    env["TEST_OPTIMIZATION_PAYLOADS_FILES"] = env_value
+
     go_test(
         name = inner_name,
         data = data,
+        env = env,
         **kwargs
     )
 
