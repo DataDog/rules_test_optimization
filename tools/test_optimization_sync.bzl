@@ -87,7 +87,9 @@ def _sanitize_label_fragment(name):
     allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
     out = []
     last_us = False
-    for ch in s:
+    n_s = len(s)
+    for i in range(n_s):
+        ch = s[i]
         if ch in allowed:
             out.append(ch)
             last_us = (ch == "_")
@@ -128,7 +130,9 @@ def _sanitize_filename_fragment(name):
     s = (name or "").lower()
     allowed = "abcdefghijklmnopqrstuvwxyz0123456789._-"
     out = []
-    for ch in s:
+    n_s = len(s)
+    for i in range(n_s):
+        ch = s[i]
         out.append(ch if ch in allowed else "_")
     result = "".join(out)
     # Avoid empty names
