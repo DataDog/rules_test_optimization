@@ -12,7 +12,6 @@
 # - Pass normal go_test attributes via **kwargs.
 # - Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
 
-load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
 load("//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
 load("//tools:repositories.bzl", "dd_test_opt_repositories")
 
@@ -109,13 +108,13 @@ def dd_topt_go_test(
     data = list(user_data)
 
     # Infer the Go package import path for the test's package
-    # Precedence: module_importpath arg > go_test(importpath=...) > (GO_MODULE_PATH or go_module_path) + Bazel package > Bazel package
+    # Precedence: go_test(importpath=...) > (go_module_path) + Bazel package > Bazel package
     pkg_path = native.package_name()
     inferred_importpath = None
     if "importpath" in kwargs and kwargs.get("importpath"):
         inferred_importpath = kwargs.get("importpath")
-    elif GO_MODULE_PATH or go_module_path:
-        base = GO_MODULE_PATH if GO_MODULE_PATH else go_module_path
+    elif go_module_path:
+        base = go_module_path
         # Normalize possible trailing slash
         if base.endswith("/"):
             base = base[:-1]

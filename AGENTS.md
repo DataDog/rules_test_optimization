@@ -198,8 +198,24 @@ Replace a `go_test` with a single label that runs both the Go test and the uploa
 Bzlmod:
 
 ```bzl
+# tools/dd_topt_go_test_auto.bzl (in your repo)
+load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
+
+def dd_topt_go_test(name, go_test_rule, **kwargs):
+    _dd_topt_go_test(
+        name = name,
+        go_test_rule = go_test_rule,
+        go_module_path = GO_MODULE_PATH,
+        **kwargs
+    )
+```
+
+Usage in BUILD:
+
+```bzl
 load("@rules_go//go:def.bzl", "go_test")
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("//tools:dd_topt_go_test_auto.bzl", "dd_topt_go_test")
 
 dd_topt_go_test(
     name = "pkg_go_test",
@@ -217,8 +233,24 @@ dd_topt_go_test(
 WORKSPACE:
 
 ```bzl
+# tools/dd_topt_go_test_auto.bzl (in your repo)
+load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
+load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
+
+def dd_topt_go_test(name, go_test_rule, **kwargs):
+    _dd_topt_go_test(
+        name = name,
+        go_test_rule = go_test_rule,
+        go_module_path = GO_MODULE_PATH,
+        **kwargs
+    )
+```
+
+Usage in BUILD:
+
+```bzl
 load("@rules_go//go:def.bzl", "go_test")
-load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("//tools:dd_topt_go_test_auto.bzl", "dd_topt_go_test")
 
 dd_topt_go_test(
     name = "pkg_go_test",
