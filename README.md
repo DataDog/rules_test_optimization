@@ -14,15 +14,15 @@ All outputs are written under a configurable directory (default: `.testoptimizat
 
 Given an external repository name `<repo_name>` created by the extension, the generated BUILD inside the external repo contains:
 
-- A filegroup target named `test_optimization_files` which includes all produced JSON files
+- A core filegroup target named `test_optimization_files` which includes only `settings.json`
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
   - `knowntests.json` (Known Tests API response or minimal stub)
   - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `knowntests.module.<sanitized_module>.json` and placed alongside `knowntests.json`. See below for details.
   - `tmtests.json` (Test Management Tests API response or minimal stub)
-  - `context.json` (Non-secret CI/Git/OS/runtime tags for reuse at test runtime)
+  - `context.json` (Non-secret CI/Git/OS/runtime tags)
 
-Reference them with a single label:
+Reference settings with a single label:
 
 ```bzl
 @<repo_name>//:test_optimization_files
@@ -39,7 +39,7 @@ When Known Tests are enabled, the combined response `data.attributes.tests` is a
   - The module’s `knowntests.module.<sanitized_module>.json` (when present)
   - The module’s `tmtests.module.<sanitized_module>.json` (when present)
   - The global `settings.json`
-- All of the above files are also included in `:test_optimization_files`
+- These per-module files are not bundled into `:test_optimization_files`
 
 Sanitization rules for `<sanitized_module>`:
 
@@ -91,6 +91,15 @@ test_optimization_sync.test_optimization_sync(
 
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
+
+Additional helper files exported by the generated repository:
+
+- `go_module.bzl` with:
+  - `GO_MODULE_PATH`: detected Go module path (may be empty)
+  - `SANITIZED_GO_MODULE_PATH`: sanitized label fragment for `GO_MODULE_PATH`
+- `modules_index.bzl` with:
+  - `SANITIZED_MODULE_LABELS`: list of available per-module sanitized labels
+  - `SANITIZED_MODULE_SET`: dict-as-set for fast membership checks
 
 Then in any BUILD file:
 

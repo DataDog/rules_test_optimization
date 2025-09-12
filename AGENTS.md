@@ -25,9 +25,12 @@ There are two main building blocks:
   - Calls Datadog endpoints to download metadata (settings, known tests, test management), writing JSON outputs.
   - Produces `context.json` with a comprehensive, non-secret set of tags to reuse at runtime.
   - Emits public filegroups in the generated external repo:
-    - `test_optimization_files`: all downloaded JSON files (also includes per-module known-tests files)
+    - `test_optimization_files`: core group including only `settings.json`
     - `test_optimization_context`: the `context.json` file
     - One per-module group per module: `module_<sanitized_module>` (includes known tests and test management files, plus settings)
+  - Also exports helper .bzl files:
+    - `go_module.bzl` with `GO_MODULE_PATH` and `SANITIZED_GO_MODULE_PATH`
+    - `modules_index.bzl` with `SANITIZED_MODULE_LABELS` and `SANITIZED_MODULE_SET`
 
 - Outputs (file names fixed under `out_dir`):
   - `settings.json`
@@ -186,7 +189,6 @@ bazel test //... //tools:dd_upload_payloads \
   - Tests: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/api/v2/citestcycle` with `X-Datadog-EVP-Subdomain: citestcycle-intake`
   - Coverage: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/api/v2/citestcov` with `X-Datadog-EVP-Subdomain: citestcov-intake`
 - Requests include `Accept: application/json`. Test uploads set `Content-Type: application/json`.
-- Coverage uploads are multipart with two parts: `event` and `coveragex`.
 
 ### Convenience macro: dd_topt_go_test
 
@@ -199,14 +201,20 @@ Bzlmod:
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
+load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH", "SANITIZED_GO_MODULE_PATH")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
 
+# Optional: modules index for safe per-module selection
+load("@test_optimization_data//:modules_index.bzl", "SANITIZED_MODULE_SET")
+
 def dd_topt_go_test(name, go_test_rule, **kwargs):
+    # Compute include_per_module_files safely using available labels
+    include = bool(SANITIZED_MODULE_SET.get(SANITIZED_GO_MODULE_PATH))
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
         go_module_path = GO_MODULE_PATH,
+        include_per_module_files = include,
         **kwargs
     )
 ```
@@ -221,12 +229,6 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     go_test_rule = go_test,
-    # Optional overrides if you used a different repo name:
-    # context_label = "@test_optimization_data//:test_optimization_context",
-    # files_label = "@test_optimization_data//:test_optimization_files",
-    # quiescent_sec = 10,
-    # max_wait_sec = 1800,
-    # fail_on_error = False,
 )
 ```
 
@@ -234,14 +236,17 @@ WORKSPACE:
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
+load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH", "SANITIZED_GO_MODULE_PATH")
 load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
+load("@test_optimization_data//:modules_index.bzl", "SANITIZED_MODULE_SET")
 
 def dd_topt_go_test(name, go_test_rule, **kwargs):
+    include = bool(SANITIZED_MODULE_SET.get(SANITIZED_GO_MODULE_PATH))
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
         go_module_path = GO_MODULE_PATH,
+        include_per_module_files = include,
         **kwargs
     )
 ```

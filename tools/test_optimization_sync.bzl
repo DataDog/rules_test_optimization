@@ -1198,7 +1198,7 @@ def _impl(ctx):
         log_debug(debug, "Settings file is empty; cannot determine feature flags")
 
     # Always produce known tests and test-management files; write empty stubs when disabled
-    exports = [settings_file, knowntests_file, tmtests_file]
+    exports = [settings_file]
     module_specs_known = []
     module_specs_tm = []
     if known_tests_enabled:
@@ -1211,9 +1211,6 @@ def _impl(ctx):
         ctx.file(knowntests_file, '{"data": {"attributes": {"tests": {}}}}\n')
     # Split known tests by module into dedicated files (no-op if empty)
     module_specs_known = _split_known_tests_by_module(ctx, knowntests_file, debug)
-    for spec in module_specs_known:
-        exports.append(spec["file"])   # include per-module files in the main filegroup
-    
 
     if test_management_enabled:
         ctx.report_progress("test_optimization_sync: downloading test management tests")
@@ -1226,8 +1223,6 @@ def _impl(ctx):
 
     # Split tmtests by module into dedicated files (no-op if empty)
     module_specs_tm = _split_tmtests_by_module(ctx, tmtests_file, debug)
-    for spec in module_specs_tm:
-        exports.append(spec["file"])   # include per-module tmtests files in the main filegroup
 
     # Build and write context.json (non-secret metadata) in the same repo
     context_tags = _build_context_tags(ctx, env_data, debug)
