@@ -21,7 +21,9 @@ def _dd_sanitize_label_fragment(name):
     allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
     out = []
     last_us = False
-    for ch in s:
+    n_s = len(s)
+    for i in range(n_s):
+        ch = s[i]
         if ch in allowed:
             out.append(ch)
             last_us = (ch == "_")
