@@ -12,7 +12,7 @@
 # - Pass normal go_test attributes via **kwargs.
 # - Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
 
-load("@io_bazel_rules_go//go:def.bzl", "go_test")
+load("@rules_go//go:def.bzl", "go_test")
 load("@test_optimization_data//:go_module.bzl", "GO_MODULE_PATH")
 load("//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
 load("//tools:repositories.bzl", "dd_test_opt_repositories")
