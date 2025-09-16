@@ -307,7 +307,6 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
         name = name,
         go_test_rule = go_test_rule,
         go_module_path = modules["go"]["module_path"],
-        include_per_module_files = modules["go"]["module_included"],
         **kwargs
     )
 ```
@@ -343,7 +342,6 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
         name = name,
         go_test_rule = go_test_rule,
         go_module_path = modules["go"]["module_path"],
-        include_per_module_files = modules["go"]["module_included"],
         **kwargs
     )
 ```

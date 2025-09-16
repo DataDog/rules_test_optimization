@@ -69,7 +69,6 @@ def dd_topt_go_test(
         # You can override detection via module_importpath or go_module_path or module_label_override
         go_module_path = None,
         module_label_override = None,
-        include_per_module_files = None,
         # Pass the rules_go go_test rule symbol from your BUILD file (e.g., go_test_rule = go_test)
         go_test_rule = None,
         # Uploader knobs
@@ -90,7 +89,8 @@ def dd_topt_go_test(
       name: Test suite name users will run (the macro creates <name> target).
       sync_repo_name: External repo name where sync outputs live (used to form labels).
       topt_data_modules: The `modules` dict exported by the sync repo's export.bzl. When provided,
-        this macro derives defaults for sync_repo_name, go_module_path, and include_per_module_files.
+        this macro derives defaults for sync_repo_name and go_module_path, and will auto-compute
+        whether to include per-module files.
       payloads_dir/tests_subdir/coverage_subdir/quiescent_sec/max_wait_sec/fail_on_error/uploader_debug:
         Uploader rule configuration.
       uploader_tags: Extra tags applied to the uploader test.
@@ -111,6 +111,7 @@ def dd_topt_go_test(
     data = list(user_data)
 
     # If caller provided the exported modules dict, derive defaults
+    include_per_module_files = False
     if topt_data_modules != None and type(topt_data_modules) == type({}):
         # Derive repo name
         _rn = topt_data_modules.get("repo_name")
@@ -122,15 +123,11 @@ def dd_topt_go_test(
             _mp = _go.get("module_path")
             if _mp:
                 go_module_path = _mp
-        # Derive include_per_module_files when unset
-        if include_per_module_files == None and (type(_go) == type({})):
+        # Derive include_per_module_files from modules.go.module_included
+        if (type(_go) == type({})):
             _inc = _go.get("module_included")
             if _inc != None:
                 include_per_module_files = bool(_inc)
-
-    # Default include_per_module_files to True if still unset
-    if include_per_module_files == None:
-        include_per_module_files = True
 
     # Build labels for files/context based on (possibly derived) sync_repo_name
     files_label = "@%s//:test_optimization_files" % sync_repo_name
