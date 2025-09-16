@@ -63,8 +63,6 @@ def dd_topt_go_test(
         # MODULE.bazel extension as documented.
         auto_sync_repo = False,
         sync_repo_name = "test_optimization_data",
-        context_label = "@test_optimization_data//:test_optimization_context",
-        files_label = "@test_optimization_data//:test_optimization_files",
         # Auto-select per-module known-tests/tmtests group based on Go package import path
         # You can override detection via module_importpath or go_module_path or module_label_override
         go_module_path = None,
@@ -88,8 +86,7 @@ def dd_topt_go_test(
 
     Args:
       name: Test suite name users will run (the macro creates <name> target).
-      context_label: Label to context.json filegroup.
-      files_label: Label to all fetched JSONs filegroup.
+      sync_repo_name: External repo name where sync outputs live (used to form labels).
       payloads_dir/tests_subdir/coverage_subdir/quiescent_sec/max_wait_sec/fail_on_error/uploader_debug:
         Uploader rule configuration.
       uploader_tags: Extra tags applied to the uploader test.
@@ -108,6 +105,10 @@ def dd_topt_go_test(
     inner_name = name + "_go"
     user_data = kwargs.pop("data", [])
     data = list(user_data)
+
+    # Build labels for files/context based on sync_repo_name
+    files_label = "@%s//:test_optimization_files" % sync_repo_name
+    context_label = "@%s//:test_optimization_context" % sync_repo_name
 
     # Infer the Go package import path for the test's package
     # Precedence: go_test(importpath=...) > (go_module_path) + Bazel package > Bazel package

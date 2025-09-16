@@ -95,11 +95,13 @@ use_repo(test_optimization_sync, "test_optimization_data")
 Additional helper file exported by the generated repository:
 
 - `export.bzl` with a single dictionary `modules` containing:
-  - `go_module_path`: detected Go module path (may be empty)
-  - `sanitized_go_module_path`: sanitized label fragment for `go_module_path`
-  - `sanitized_module_labels`: list of available per-module sanitized labels
-  - `sanitized_module_set`: dict-as-set for fast membership checks
-  - `go_module_included`: boolean, true when the detected Go module has a matching per-module filegroup
+  - `repo_name`: external repository name created by the sync rule (e.g., `test_optimization_data`)
+  - `labels`: list of available per-module sanitized labels
+  - `set`: dict-as-set keyed by sanitized labels for fast membership checks
+  - `go`: nested object with:
+    - `module_path`: detected Go module path (may be empty)
+    - `sanitized_module_path`: sanitized label fragment for `module_path`
+    - `module_included`: boolean; true when the detected Go module has a matching per-module filegroup
 
 Then in any BUILD file:
 
@@ -291,7 +293,7 @@ Replace a `go_test` with a single label that runs the Go test and the uploader. 
 - `<name>_dd_upload_payloads`: uploader test
 - `<name>`: a `test_suite` that includes both
 
-Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data` via Bzlmod or WORKSPACE (see Installation above). If you used a different name, override `context_label` and `files_label`.
+Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data` via Bzlmod or WORKSPACE (see Installation above). If you used a different name, pass `sync_repo_name` to the macro.
 
 ### Bzlmod
 
@@ -304,8 +306,8 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go_module_path"],
-        include_per_module_files = modules["go_module_included"],
+        go_module_path = modules["go"]["module_path"],
+        include_per_module_files = modules["go"]["module_included"],
         **kwargs
     )
 ```
@@ -320,9 +322,8 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     go_test_rule = go_test,
-    # Optional overrides if you didn't use the default repo name:
-    # context_label = "@test_optimization_data//:test_optimization_context",
-    # files_label = "@test_optimization_data//:test_optimization_files",
+    # Optional: if your sync repo name is different
+    # sync_repo_name = "my_test_opt_data",
     # Uploader knobs:
     # quiescent_sec = 10,
     # max_wait_sec = 1800,
@@ -341,8 +342,8 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go_module_path"],
-        include_per_module_files = modules["go_module_included"],
+        go_module_path = modules["go"]["module_path"],
+        include_per_module_files = modules["go"]["module_included"],
         **kwargs
     )
 ```
@@ -357,9 +358,8 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     go_test_rule = go_test,
-    # Optional overrides if you didn't use the default repo name:
-    # context_label = "@test_optimization_data//:test_optimization_context",
-    # files_label = "@test_optimization_data//:test_optimization_files",
+    # Optional: if your sync repo name is different
+    # sync_repo_name = "my_test_opt_data",
 )
 ```
 

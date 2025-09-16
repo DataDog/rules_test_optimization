@@ -29,7 +29,14 @@ There are two main building blocks:
     - `test_optimization_context`: the `context.json` file
     - One per-module group per module: `module_<sanitized_module>` (includes known tests and test management files, plus settings)
   - Also exports a helper `.bzl` file:
-    - `export.bzl` with `modules` dict: `go_module_path`, `sanitized_go_module_path`, `sanitized_module_labels`, `sanitized_module_set`, `go_module_included`
+    - `export.bzl` with `modules` dict:
+      - `repo_name`: generated external repo name
+      - `labels`: list of sanitized per-module labels
+      - `set`: dict-as-set keyed by sanitized labels
+      - `go` object with:
+        - `module_path`: detected Go module path
+        - `sanitized_module_path`: sanitized label fragment for module path
+        - `module_included`: boolean flag when a per-module filegroup exists
 
 - Outputs (file names fixed under `out_dir`):
   - `settings.json`
@@ -207,8 +214,8 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go_module_path"],
-        include_per_module_files = modules["go_module_included"],
+        go_module_path = modules["go"]["module_path"],
+        include_per_module_files = modules["go"]["module_included"],
         **kwargs
     )
 ```
@@ -237,8 +244,8 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go_module_path"],
-        include_per_module_files = modules["go_module_included"],
+        go_module_path = modules["go"]["module_path"],
+        include_per_module_files = modules["go"]["module_included"],
         **kwargs
     )
 ```
