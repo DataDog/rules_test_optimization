@@ -22,6 +22,7 @@ def dd_test_opt_repositories(
     """
     test_optimization_sync(
         name = name,
+        apparent_repo_name = name,
         out_dir = out_dir,
         service = service,
         runtime_name = runtime_name,
