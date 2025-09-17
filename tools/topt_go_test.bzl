@@ -13,7 +13,7 @@
 # - Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
 
 load("//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
-load("//tools:repositories.bzl", "dd_test_opt_repositories")
+ 
 
 def _dd_sanitize_label_fragment(name):
     # Produce a safe suffix for Bazel target names from an arbitrary string.
@@ -57,20 +57,14 @@ def _dd_sanitize_label_fragment(name):
 
 def dd_topt_go_test(
         name,
-        # If you want this macro to auto-create the sync repo when missing,
-        # set auto_sync_repo=True. In WORKSPACE mode this will call the
-        # repository_rule; in Bzlmod it is a no-op and you should use the
-        # MODULE.bazel extension as documented.
-        auto_sync_repo = False,
-        sync_repo_name = "test_optimization_data",
-        # Optional: pass the exported `modules` dict from @<repo>//:export.bzl
-        topt_data_modules = None,
+        # Required: pass the exported `modules` dict from @<repo>//:export.bzl
+        topt_data,
+        # Required: pass the rules_go go_test rule symbol from your BUILD file (e.g., go_test_rule = go_test)
+        go_test_rule,
         # Auto-select per-module known-tests/tmtests group based on Go package import path
         # You can override detection via module_importpath or go_module_path or module_label_override
         go_module_path = None,
         module_label_override = None,
-        # Pass the rules_go go_test rule symbol from your BUILD file (e.g., go_test_rule = go_test)
-        go_test_rule = None,
         # Uploader knobs
         payloads_dir = None,
         tests_subdir = "tests",
@@ -87,10 +81,8 @@ def dd_topt_go_test(
 
     Args:
       name: Test suite name users will run (the macro creates <name> target).
-      sync_repo_name: External repo name where sync outputs live (used to form labels).
-      topt_data_modules: The `modules` dict exported by the sync repo's export.bzl. When provided,
-        this macro derives defaults for sync_repo_name and go_module_path, and will auto-compute
-        whether to include per-module files.
+      topt_data: The `modules` dict exported by the sync repo's export.bzl. Used to derive the
+        repo alias, go_module_path, and whether to include per-module files.
       payloads_dir/tests_subdir/coverage_subdir/quiescent_sec/max_wait_sec/fail_on_error/uploader_debug:
         Uploader rule configuration.
       uploader_tags: Extra tags applied to the uploader test.
@@ -98,12 +90,9 @@ def dd_topt_go_test(
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
-    # Optionally ensure the sync repository exists (WORKSPACE mode helper).
-    if auto_sync_repo:
-        # In WORKSPACE evaluation, this invokes the repository rule. In Bzlmod,
-        # repository macros are ignored; users should rely on the module
-        # extension instead.
-        dd_test_opt_repositories(name = sync_repo_name)
+    # Validate required topt_data
+    if topt_data == None or type(topt_data) != type({}):
+        fail("dd_topt_go_test: topt_data is required and must be the 'modules' dict from @<repo>//:export.bzl")
 
     # 1) Underlying go_test (include fetched JSONs in runfiles for optional consumption)
     inner_name = name + "_go"
@@ -112,22 +101,19 @@ def dd_topt_go_test(
 
     # If caller provided the exported modules dict, derive defaults
     include_per_module_files = False
-    if topt_data_modules != None and type(topt_data_modules) == type({}):
-        # Derive repo name
-        _rn = topt_data_modules.get("repo_name")
-        if _rn:
-            sync_repo_name = _rn
-        # Derive go module path
-        _go = topt_data_modules.get("go") or {}
-        if (go_module_path == None) and (type(_go) == type({})):
-            _mp = _go.get("module_path")
-            if _mp:
-                go_module_path = _mp
-        # Derive include_per_module_files from modules.go.module_included
-        if (type(_go) == type({})):
-            _inc = _go.get("module_included")
-            if _inc != None:
-                include_per_module_files = bool(_inc)
+    # Resolve sync repo name from modules
+    sync_repo_name = topt_data.get("repo_name") or "test_optimization_data"
+    # Derive go module path
+    _go = topt_data.get("go") or {}
+    if (go_module_path == None) and (type(_go) == type({})):
+        _mp = _go.get("module_path")
+        if _mp:
+            go_module_path = _mp
+    # Derive include_per_module_files from modules.go.module_included
+    if (type(_go) == type({})):
+        _inc = _go.get("module_included")
+        if _inc != None:
+            include_per_module_files = bool(_inc)
 
     # Build labels for files/context based on (possibly derived) sync_repo_name
     files_label = "@%s//:test_optimization_files" % sync_repo_name

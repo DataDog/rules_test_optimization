@@ -229,6 +229,8 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     go_test_rule = go_test,
+    # Optional: pass modules to derive repo name and per-module inclusion
+    # topt_data = modules,
 )
 ```
 
@@ -389,9 +391,6 @@ Tag constants reference:
 
 - `tools/topt_go_test.bzl`
   - `dd_topt_go_test` macro for Go: wraps `go_test` + uploader into a `test_suite`
-
-- `tools/repositories.bzl`
-  - WORKSPACE helper `dd_test_opt_repositories` to install the sync repo
 
 - `README.md`
   - Usage examples for both fetching and uploading flows
