@@ -1,4 +1,4 @@
-# RFC: Bazel Support for Datadog Test Optimization via Module Extension and Hermetic Uploader
+# RFC: Bazel Support for Datadog Test Optimization via Module Extension and Uploader
 
 Objective: Define and ratify an approach to integrate Datadog Test Optimization with Bazel using a module extension and repository rule to fetch metadata at module/repo resolution, combined with a hermetic runtime uploader to ship test and coverage payloads. This document motivates the design, enumerates current behavior and constraints, and proposes a path for adoption across services and languages.
 
