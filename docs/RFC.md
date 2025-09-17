@@ -6,6 +6,30 @@ Status: Draft
 
 This document outlines a proposed method for integrating Datadog Test Optimization with Bazel. The approach involves using a module extension and repository rule to gather metadata during module/repository resolution, and a runtime uploader to transmit test and coverage data back to the backend. The document details the rationale behind this design, current behaviors, limitations, and a strategy for widespread adoption across various services and programming languages.
 
+## Bazel 101
+
+This section provides a short overview of Bazel concepts that are relevant to the proposal. It is not intended as a full introduction to Bazel, but rather a quick reference for terms used throughout this document.
+
+### Hermetic Sandboxes
+
+Bazel executes builds and tests inside isolated sandboxes. Inputs are declared explicitly, network access is usually disabled, and outputs are cached deterministically. This ensures reproducibility but restricts ad-hoc network activity during test execution.
+
+### Cache
+
+Bazel caches outputs of build and test actions based on their declared inputs. If the inputs do not change, the cached outputs can be reused without re-execution. This is central to Bazel’s performance model, and why undeclared inputs such as live network calls break reproducibility and invalidate cache guarantees.
+
+### Repository Rules
+
+Repository rules run during repository resolution, before builds and tests. They can fetch external data or generate files, and their outputs are tracked by the cache. They are commonly used for dependency setup.
+
+### Environment Variables
+
+Bazel allows passing environment variables into repository rules (--repo\_env) and test actions (--test\_env). These are the primary mechanism for injecting configuration or secrets.
+
+### Sandbox Writable Paths
+
+By default, Bazel sandboxes are read-only. Specific directories can be marked writable via \--sandbox\_writable\_path, allowing tests to produce artifacts such as logs.
+
 ## Problem Statement
 
 Modern CI/CD pipelines benefit from Bazel's hermetic, reproducible builds and tests, which are enforced through sandboxing, deterministic inputs, and caching. Datadog Test Optimization enhances CI velocity and quality through service-level test settings, features like early flake detection, "known tests," and test management, as well as the collection of test and coverage results for analysis. However, the typical Test Optimization approach, which relies on runtime network access during tests directly conflicts with Bazel's hermetic test execution, where network access is frequently blocked.
@@ -25,10 +49,10 @@ This section describes what exists today prior to this proposal and the work in 
 
 ### How tests run today (pre‑proposal)
 
-- Language tracers initialize within each test process and perform live network calls to Datadog to retrieve:  
+- Language tracers initialize within each test process (depending on the implementation this may be done from a parent process) and perform live network calls to Datadog to retrieve:  
   - Service settings and feature flags.  
   - Known Tests and Test Management tests if the feature is enabled.  
-  - Optional CI/Git metadata inferred from environment variables.  
+- Also fetches CI/Git metadata inferred from environment variables or by running git commands directly if data is missing.  
 - Tests execute and the tracer records results. At test process completion, the tracer uploads test and coverage payloads directly to Datadog using either agentless (API key \+ site) or an EVP proxy URL.
 
 ### Where this collides with Bazel
@@ -54,11 +78,14 @@ We propose standardizing this approach across Bazel‑based services as the supp
 4) Upload payloads from a dedicated Bazel test that can be scheduled alongside the suite, enriches with non‑secret context, and supports both agentless and EVP proxy modes.  
 5) Provide thin language macros that compose these pieces for a smooth developer experience.
 
+The POC for this proposal can be found here: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)   
+There's also a repository to test the POC rules here: [https://github.com/DataDog/rules\_test\_optimization\_tests](https://github.com/DataDog/rules_test_optimization_tests) 
+
 ### Design Overview
 
 At a high level, the proposal moves all network‑dependent metadata fetching out of test actions and into Bazel’s module/repository resolution phase, then ships results from a dedicated uploader test. This preserves hermeticity for user tests while maintaining complete Test Optimization functionality.
 
-- Phase 1 — Sync at module/repo resolution:  
+- Phase 1 — [Sync at module/repo resolution](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_sync.bzl):  
     
   - A module extension instantiates a repository rule that performs the Datadog API calls for Settings (always), Known Tests (when enabled), and Test Management tests (when enabled).  
   - The rule writes deterministic JSON outputs under a fixed directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags.  
@@ -75,12 +102,12 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
   - Instrumented tests write payloads to a single shared writable directory (e.g., `.testoptimization/payloads/{tests,coverage}`) configured via `--sandbox_writable_path` and `DD_PAYLOADS_DIR`.
 
 
-- Phase 3 — Upload outside user tests:  
+- Phase 3 — [Upload outside user tests](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_uploader_test.bzl):  
     
   - A small uploader test target waits for the payload directory to become quiescent, enriches test payloads with `context.json` (if present), and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TRACE_AGENT_URL`).
 
 
-- Multi‑service monorepos:  
+- [Multi‑service monorepos](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_multi_sync.bzl):  
     
   - A higher‑level “multi‑sync” extension materializes one repository per service and an aggregator repository that re‑exports per‑service filegroups and a service mapping (`topt_data_by_service`). Macros can select services by key without hardcoding repo aliases.
 
@@ -172,7 +199,7 @@ Language Macros
   - Attach runfiles and env (`TEST_OPTIMIZATION_PAYLOADS_FILES`, `DD_PAYLOADS_DIR`).  
   - Add the uploader test target automatically.  
   - Surface reasonable defaults (e.g., inferred Go import paths) and allow overrides.  
-- The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.
+- [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](https://github.com/DataDog/rules_test_optimization/blob/main/tools/topt_go_test.bzl)
 
 Security Considerations
 
@@ -228,6 +255,7 @@ Platform and Tooling
 ## Future Work
 
 - Evaluate an opt‑in TIA approach that does not fight Bazel caching semantics (e.g., coarse‑grained TIA hints that do not land in the action cache key).  
+- Evaluate the inclusion of tracer telemetry data by modifying the tracer's telemetry transport and the inclusion of this type of payloads in the uploader.  
 - Provide first‑class macros for other languages and unify env wiring patterns.  
 - Evaluate the possibility to implement the uploader using the Bazel build event service.  
 - Add optional verification tests that assert `context.json` enrichment in CI.
