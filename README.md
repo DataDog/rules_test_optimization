@@ -6,7 +6,6 @@ The extension performs these HTTP POST transactions (via curl):
 
 - Settings: always executed. Parses feature flags from response.
 - Known Tests: executed only when `known_tests_enabled: true` in Settings.
-- Skippable Tests (ITR): executed only when `tests_skipping: true` in Settings.
 - Test Management Tests: executed only when `test_management.enabled: true` in Settings.
 
 All outputs are written under a configurable directory (default: `.testoptimization`) and are grouped under a single filegroup target.
@@ -15,17 +14,59 @@ All outputs are written under a configurable directory (default: `.testoptimizat
 
 Given an external repository name `<repo_name>` created by the extension, the generated BUILD inside the external repo contains:
 
-- A filegroup target named `test_optimization_files` which includes all produced JSON files
+- A core filegroup target named `test_optimization_files` which includes only `settings.json`
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
   - `knowntests.json` (Known Tests API response or minimal stub)
-  - `skippabletests.json` (Skippable Tests API response or minimal stub)
+  - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `knowntests.module.<sanitized_module>.json` and placed alongside `knowntests.json`. See below for details.
   - `tmtests.json` (Test Management Tests API response or minimal stub)
+  - `context.json` (Non-secret CI/Git/OS/runtime tags)
 
-Reference them with a single label:
+Reference settings with a single label:
 
 ```bzl
 @<repo_name>//:test_optimization_files
+```
+
+### Per-module Known Tests files and labels
+
+When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module. The same splitting is performed for Test Management tests (`tmtests.json`), keyed by module under `data.attributes.modules`:
+
+- Each module becomes files:
+  - `knowntests.module.<sanitized_module>.json`
+  - `tmtests.module.<sanitized_module>.json`
+- Each module also becomes a filegroup target: `:module_<sanitized_module>` that includes:
+  - The module’s `knowntests.module.<sanitized_module>.json` (when present)
+  - The module’s `tmtests.module.<sanitized_module>.json` (when present)
+  - The global `settings.json`
+- These per-module files are not bundled into `:test_optimization_files`
+
+Sanitization rules for `<sanitized_module>`:
+
+- For file names: lowercase; characters outside `[a-z0-9._-]` are replaced with `_`
+- For target names: lowercase; characters outside `[a-z0-9_]` are replaced with `_`
+- If collisions occur after sanitization, numeric suffixes like `_2`, `_3` are appended deterministically
+
+Example usage:
+
+```bzl
+# Consume only the module "pkg/foo" tests metadata
+filegroup(
+    name = "dd_known_tests_pkg_foo",
+    srcs = [
+        "@test_optimization_data//:module_pkg_foo",
+    ],
+)
+
+# Or depend directly on specific files (paths relative to the external repo root)
+filegroup(
+    name = "dd_known_tests_pkg_foo_file",
+    srcs = [
+        "@test_optimization_data//:.testoptimization/knowntests.module.pkg_foo.json",
+        "@test_optimization_data//:.testoptimization/tmtests.module.pkg_foo.json",
+        "@test_optimization_data//:.testoptimization/settings.json",
+    ],
+)
 ```
 
 ## Installation (Bzlmod)
@@ -33,7 +74,7 @@ Reference them with a single label:
 In your `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 
 # Optional: develop locally
 local_path_override(
@@ -51,12 +92,268 @@ test_optimization_sync.test_optimization_sync(
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
+Additional helper file exported by the generated repository:
+
+- `export.bzl` with a single dictionary `modules` containing:
+  - `repo_name`: external repository name created by the sync rule (e.g., `test_optimization_data`)
+  - `labels`: list of available per-module sanitized labels
+  - `set`: dict-as-set keyed by sanitized labels for fast membership checks
+  - `go`: nested object with:
+    - `module_path`: detected Go module path (may be empty)
+    - `sanitized_module_path`: sanitized label fragment for `module_path`
+    - `module_included`: boolean; true when the detected Go module has a matching per-module filegroup
+
 Then in any BUILD file:
 
 ```bzl
 filegroup(
     name = "dd_test_opt_files",
     srcs = ["@test_optimization_data//:test_optimization_files"],
+)
+
+# Access context.json separately (for the uploader test rule)
+filegroup(
+    name = "dd_test_opt_context",
+    srcs = ["@test_optimization_data//:test_optimization_context"],
+)
+```
+
+## Installation (WORKSPACE)
+
+If your project uses legacy WORKSPACE mode instead of Bzlmod, use the repository rule directly.
+
+### 1) Add this repository in `WORKSPACE`
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "datadog_rules_test_optimization",
+    # Pin to a release tarball; example:
+    # urls = ["https://github.com/DataDog/rules_test_optimization/archive/refs/tags/v1.0.0.tar.gz"],
+    # strip_prefix = "rules_test_optimization-1.0.0",
+    # sha256 = "<sha256>",
+)
+
+# Alternatively, for development:
+# load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+# git_repository(
+#     name = "datadog_rules_test_optimization",
+#     remote = "https://github.com/DataDog/rules_test_optimization.git",
+#     tag = "v1.0.0",
+# )
+# Or:
+# local_repository(
+#     name = "datadog_rules_test_optimization",
+#     path = "/absolute/path/to/rules_test_optimization",
+# )
+```
+
+### 2) Instantiate the repository rule in `WORKSPACE`
+
+```bzl
+load("@datadog_rules_test_optimization//tools:test_optimization_sync.bzl", "test_optimization_sync")
+
+test_optimization_sync(
+    name = "test_optimization_data",
+    # Optional:
+    # service = "my-service",
+    # runtime_name = "go",
+    # runtime_version = "go1.22",
+    # knowntests = True,
+    # test_management = True,
+)
+```
+
+### 3) Depend on the generated files in BUILD files
+
+```bzl
+filegroup(
+    name = "dd_test_opt_files",
+    srcs = ["@test_optimization_data//:test_optimization_files"],
+)
+
+filegroup(
+    name = "dd_test_opt_context",
+    srcs = ["@test_optimization_data//:test_optimization_context"],
+)
+```
+
+### 4) Add the uploader test target
+
+```bzl
+load("@datadog_rules_test_optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
+
+dd_payload_uploader_test(
+    name = "dd_upload_payloads",
+    # If omitted, the rule uses $DD_PAYLOADS_DIR (recommended with --sandbox_writable_path)
+    tests_subdir = "tests",
+    coverage_subdir = "coverage",
+    quiescent_sec = 10,
+    max_wait_sec = 1800,
+    fail_on_error = False,
+    # Provide context.json via runfiles so enrichment can occur
+    data = [":dd_test_opt_context"],
+)
+```
+
+### 5) Forward environment variables in `.bazelrc`
+
+```bash
+# Repository rule (module/repo phase) — affects refetch
+common --repo_env=DD_API_KEY
+common --repo_env=DD_SITE
+common --repo_env=DD_SERVICE
+common --repo_env=DD_ENV
+common --repo_env=DD_GIT_REPOSITORY_URL
+common --repo_env=DD_GIT_BRANCH
+common --repo_env=DD_GIT_COMMIT_SHA
+common --repo_env=DD_GIT_HEAD_COMMIT
+common --repo_env=DD_GIT_COMMIT_MESSAGE
+common --repo_env=DD_GIT_HEAD_MESSAGE
+# Optional TTL: common --repo_env=FETCH_SALT
+
+# Tests (runtime)
+test --test_env=DD_API_KEY
+test --test_env=DD_SITE
+test --test_env=DD_TRACE_AGENT_URL
+test --test_env=DD_PAYLOADS_DIR
+```
+
+## Uploading test and coverage payloads (same `bazel test` invocation)
+
+Use the provided test rule `dd_payload_uploader_test` to watch a shared writable directory for payloads, enrich test payloads with metadata from `context.json`, and upload them to Datadog during the same `bazel test` command.
+
+### Where to write payloads
+
+- Write payloads to a stable, non-sandboxed path made writable via `--sandbox_writable_path`.
+- Recommended layout:
+
+```
+<workspace>/.testoptimization/payloads/
+  tests/     # JSON payloads for CI Test Cycle intake
+  coverage/  # JSON payloads for Code Coverage intake
+```
+
+Expose the path to tests via `--test_env=DD_PAYLOADS_DIR=<abs path>`. Tests must write:
+- `$DD_PAYLOADS_DIR/tests/*.json`
+- `$DD_PAYLOADS_DIR/coverage/*.json`
+
+### Add the uploader test target
+
+In a BUILD file (e.g., `//tools`):
+
+```bzl
+load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
+
+dd_payload_uploader_test(
+    name = "dd_upload_payloads",
+    # If omitted, the rule uses $DD_PAYLOADS_DIR (recommended with --sandbox_writable_path)
+    tests_subdir = "tests",
+    coverage_subdir = "coverage",
+    quiescent_sec = 10,      # idle window before uploading starts
+    max_wait_sec = 1800,     # upper bound wait
+    fail_on_error = False,   # set True to fail the test on upload errors
+    # Provide context.json via runfiles so enrichment can occur
+    data = [":dd_test_opt_context"],
+    # timeout = "long",     # uncomment if your test phase can be long
+)
+```
+
+Run together with your tests:
+
+```bash
+bazel test //... //tools:dd_upload_payloads \
+  --sandbox_writable_path=$PWD/.testoptimization/payloads \
+  --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+```
+
+### Endpoints, headers, and behavior
+
+- Agentless (when `DD_TRACE_AGENT_URL` unset):
+  - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
+  - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
+  - Requires `DD_API_KEY`
+- EVP proxy (when `DD_TRACE_AGENT_URL` set):
+  - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
+  - Adds `X-Datadog-EVP-Subdomain` per endpoint
+- Test payloads are JSON (msgpack not available in Starlark). Coverage is multipart with `event` and `coveragex` parts.
+- Requests include `Accept: application/json`. Test uploads set `Content-Type: application/json`.
+
+### Metadata enrichment (context.json)
+
+- When `context.json` is present in runfiles (provided via the `data` attribute), the uploader enriches each test payload by merging all non-null keys from `context.json` into the payload under `metadata.*`.
+- If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
+- The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
+
+## Convenience macro: dd_topt_go_test
+
+Replace a `go_test` with a single label that runs the Go test and the uploader. This macro creates:
+- `<name>_go`: underlying `go_test`
+- `<name>_dd_upload_payloads`: uploader test
+- `<name>`: a `test_suite` that includes both
+
+Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data` via Bzlmod or WORKSPACE (see Installation above). Define a small wrapper that loads `modules` and passes it to the macro.
+
+### Bzlmod
+
+```bzl
+# tools/dd_topt_go_test_auto.bzl (in your repo)
+load("@test_optimization_data//:export.bzl", "topt_data")
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
+
+def dd_topt_go_test(name, go_test_rule, **kwargs):
+    _dd_topt_go_test(
+        name = name,
+        topt_data = topt_data,
+        go_test_rule = go_test_rule,
+        **kwargs
+    )
+```
+
+Usage in BUILD:
+
+```bzl
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:dd_topt_go_test_auto.bzl", "dd_topt_go_test")
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    go_test_rule = go_test,
+    # Uploader knobs:
+    # quiescent_sec = 10,
+    # max_wait_sec = 1800,
+    # fail_on_error = False,
+)
+```
+
+### WORKSPACE
+
+```bzl
+# tools/dd_topt_go_test_auto.bzl (in your repo)
+load("@test_optimization_data//:export.bzl", "topt_data")
+load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
+
+def dd_topt_go_test(name, go_test_rule, **kwargs):
+    _dd_topt_go_test(
+        name = name,
+        topt_data = topt_data,
+        go_test_rule = go_test_rule,
+        **kwargs
+    )
+```
+
+Usage in BUILD:
+
+```bzl
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:dd_topt_go_test_auto.bzl", "dd_topt_go_test")
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    go_test_rule = go_test,
 )
 ```
 
@@ -68,17 +365,12 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `name`: external repository name to create
 
 - Optional
-  - `out_dir` (string): base output directory. Defaults to `.testoptimization`
+  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `tmtests.json` under `out_dir`)
   - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
-  - `settings_file` (string): file name or path for settings; if a bare name, it is placed under `out_dir`. Default: `settings.json`
-  - `knowntests_file` (string): file name/path for known tests. Default: `knowntests.json`
-  - `skippables_file` (string): file name/path for skippable tests. Default: `skippabletests.json`
-  - `tmtests_file` (string): file name/path for test management tests. Default: `tmtests.json`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
   - `runtime_arch` (string): optional runtime architecture. Defaults to auto-detected `os.architecture` when not provided
   - `knowntests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
-  - `tests_skipping` (bool, default `True`): local kill-switch for Skippable Tests. When `False`, the Skippable Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `tests_skipping: false`.
   - `test_management` (bool, default `True`): local kill-switch for Test Management Tests. When `False`, the Test Management request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `test_management.enabled: false`.
   - `debug` (bool): default `False`. Enables verbose logging
 
@@ -92,13 +384,11 @@ The rule executes curl with timeouts and retries to these Datadog endpoints:
 
 - Settings: `https://api.<DD_SITE>/api/v2/libraries/tests/services/setting`
 - Known Tests: `https://api.<DD_SITE>/api/v2/ci/libraries/tests`
-- Skippable Tests: `https://api.<DD_SITE>/api/v2/ci/tests/skippable`
 - Test Management Tests: `https://api.<DD_SITE>/api/v2/test/libraries/test-management/tests`
 
 Settings response attributes determine which follow-up requests are sent:
 
 - `known_tests_enabled` → triggers Known Tests
-- `tests_skipping` → triggers Skippable Tests
 - `test_management.enabled` → triggers Test Management Tests
 
 If a feature is disabled, the rule still writes a minimal stub JSON for that output file so consumers can always depend on the filegroup.
@@ -110,7 +400,6 @@ test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
     # Force-disable features locally; settings.json will be updated accordingly
     knowntests = False,
-    tests_skipping = False,
     test_management = False,
 )
 ```
