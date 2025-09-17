@@ -1,0 +1,21 @@
+module(name = "example-single-service")
+
+bazel_dep(name = "rules_go", version = "0.46.0")
+bazel_dep(name = "gazelle", version = "0.35.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+test_optimization_sync = use_extension(
+  "@datadog-rules-test-optimization//tools:test_optimization_sync.bzl",
+  "test_optimization_sync_extension",
+)
+
+test_optimization_sync.test_optimization_sync(
+  name = "test_optimization_data",
+  service = "go-service",
+  runtime_name = "go",
+  runtime_version = "1.24",
+  debug = True,
+)
+
+use_repo(test_optimization_sync, "test_optimization_data")
+

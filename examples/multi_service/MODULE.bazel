@@ -1,0 +1,26 @@
+module(name = "example-multi-service")
+
+bazel_dep(name = "rules_go", version = "0.46.0")
+bazel_dep(name = "gazelle", version = "0.35.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+topt_multi = use_extension(
+  "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
+  "test_optimization_multi_sync_extension",
+)
+
+topt_multi.test_optimization_multi_sync(
+  name = "test_optimization_data",
+  services = ["go-service", "ruby-service"],
+  runtime_name = "go",
+  runtime_version = "1.24",
+  debug = True,
+)
+
+use_repo(
+  topt_multi,
+  "test_optimization_data",
+  "test_optimization_data_go_service",
+  "test_optimization_data_ruby_service",
+)
+
