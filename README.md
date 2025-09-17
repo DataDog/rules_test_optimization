@@ -293,7 +293,7 @@ Replace a `go_test` with a single label that runs the Go test and the uploader. 
 - `<name>_dd_upload_payloads`: uploader test
 - `<name>`: a `test_suite` that includes both
 
-Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data` via Bzlmod or WORKSPACE (see Installation above). The macro derives the repo name from `topt_data["repo_name"]` when provided.
+Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data` via Bzlmod or WORKSPACE (see Installation above). Define a small wrapper that loads `modules` and passes it to the macro.
 
 ### Bzlmod
 
@@ -305,8 +305,8 @@ load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_tes
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
+        topt_data = modules,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go"]["module_path"],
         **kwargs
     )
 ```
@@ -321,8 +321,6 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     go_test_rule = go_test,
-    # Optional: pass modules to derive repo name and per-module inclusion
-    # topt_data = modules,
     # Uploader knobs:
     # quiescent_sec = 10,
     # max_wait_sec = 1800,
@@ -340,8 +338,8 @@ load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_tes
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
+        topt_data = modules,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go"]["module_path"],
         **kwargs
     )
 ```
@@ -356,8 +354,6 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     go_test_rule = go_test,
-    # Optional: pass modules to derive repo name and per-module inclusion
-    # topt_data = modules,
 )
 ```
 

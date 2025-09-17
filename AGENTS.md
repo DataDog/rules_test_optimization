@@ -138,14 +138,6 @@ test_optimization_sync(
 )
 ```
 
-You can also use the helper to install with sensible defaults:
-
-```bzl
-load("@datadog_rules_test_optimization//tools:repositories.bzl", "dd_test_opt_repositories")
-
-dd_test_opt_repositories(name = "test_optimization_data")
-```
-
 ### 2) Configure a shared payloads directory and pass it to tests
 
 Tests should write JSON payloads to a real filesystem path outside the sandbox. Recommended:
@@ -213,8 +205,8 @@ load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_tes
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
+        topt_data = modules,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go"]["module_path"],
         **kwargs
     )
 ```
@@ -244,8 +236,8 @@ load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_tes
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
+        topt_data = modules,
         go_test_rule = go_test_rule,
-        go_module_path = modules["go"]["module_path"],
         **kwargs
     )
 ```
@@ -260,6 +252,8 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     go_test_rule = go_test,
+    # Optional: pass modules to derive repo name and per-module inclusion
+    # topt_data = modules,
 )
 ```
 
