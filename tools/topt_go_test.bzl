@@ -61,6 +61,9 @@ def dd_topt_go_test(
         topt_data,
         # Required: pass the rules_go go_test rule symbol from your BUILD file (e.g., go_test_rule = go_test)
         go_test_rule,
+        # Optional: when using the multi-service aggregator, select the service
+        # (raw or sanitized). Ignored when a single-service dict is passed.
+        topt_service = None,
         # Auto-select per-module known-tests/tmtests group based on Go package import path
         # You can override detection via module_importpath or go_module_path or module_label_override
         go_module_path = None,
@@ -81,8 +84,11 @@ def dd_topt_go_test(
 
     Args:
       name: Test suite name users will run (the macro creates <name> target).
-      topt_data: The `modules` dict exported by the sync repo's export.bzl. Used to derive the
-        repo alias, go_module_path, and whether to include per-module files.
+      topt_data: Either the single-service dict exported by @<repo>//:export.bzl, or the
+        aggregator mapping (topt_data_by_service) exported by the multi-service repo.
+        Used to derive the repo alias, go_module_path, and whether to include per-module files.
+      topt_service: Optional when passing the aggregator mapping; selects which service to use.
+        Accepts raw or sanitized service key (e.g., "go-service" or "go_service").
       payloads_dir/tests_subdir/coverage_subdir/quiescent_sec/max_wait_sec/fail_on_error/uploader_debug:
         Uploader rule configuration.
       uploader_tags: Extra tags applied to the uploader test.
@@ -92,19 +98,41 @@ def dd_topt_go_test(
 
     # Validate required topt_data
     if topt_data == None or type(topt_data) != type({}):
-        fail("dd_topt_go_test: topt_data is required and must be the 'modules' dict from @<repo>//:export.bzl")
+        fail("dd_topt_go_test: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
+
+    # Support both shapes:
+    # 1) Single-service dict with keys: repo_name, labels, set, go
+    # 2) Aggregator mapping dict: { <svc_key>: single-service dict, ... }
+    if topt_data.get("repo_name"):
+        _svc = topt_data
+    else:
+        # Aggregator mapping: select service
+        keys = [k for k in topt_data.keys()]
+        if topt_service == None:
+            if len(keys) == 1:
+                _svc = topt_data[keys[0]]
+            else:
+                fail("dd_topt_go_test: topt_data looks like a multi-service mapping; please pass topt_service (one of: %s)" % ", ".join(sorted(keys)))
+        else:
+            # Try sanitized then raw
+            sk = _dd_sanitize_label_fragment(topt_service)
+            _svc = topt_data.get(sk)
+            if _svc == None:
+                _svc = topt_data.get(topt_service)
+            if _svc == None:
+                fail("dd_topt_go_test: topt_service '%s' not found. Available: %s" % (topt_service, ", ".join(sorted(keys))))
 
     # 1) Underlying go_test (include fetched JSONs in runfiles for optional consumption)
     inner_name = name + "_go"
     user_data = kwargs.pop("data", [])
     data = list(user_data)
 
-    # If caller provided the exported modules dict, derive defaults
+    # If caller provided the exported service dict, derive defaults
     include_per_module_files = False
-    # Resolve sync repo name from modules
-    sync_repo_name = topt_data.get("repo_name") or "test_optimization_data"
+    # Resolve sync repo name from selected service
+    sync_repo_name = _svc.get("repo_name") or "test_optimization_data"
     # Derive go module path
-    _go = topt_data.get("go") or {}
+    _go = _svc.get("go") or {}
     if (go_module_path == None) and (type(_go) == type({})):
         _mp = _go.get("module_path")
         if _mp:
@@ -187,5 +215,3 @@ def dd_topt_go_test(
         tests = [":" + inner_name, ":" + uploader_name],
         tags = suite_tags,
     )
-
-

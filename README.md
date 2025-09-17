@@ -92,6 +92,48 @@ test_optimization_sync.test_optimization_sync(
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
+### Multi-service usage (Bzlmod)
+
+Fetch multiple services with one extension and select per-service data by label:
+
+```bzl
+# MODULE.bazel
+topt_multi = use_extension(
+    "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
+    "test_optimization_multi_sync_extension",
+)
+
+topt_multi.test_optimization_multi_sync(
+    name = "test_optimization_data",
+    services = ["go-service", "ruby-service"],
+    runtime_name = "go",
+    runtime_version = "1.24",
+    debug = True,
+)
+
+use_repo(
+    topt_multi,
+    # Aggregator repo
+    "test_optimization_data",
+    # Per-service repos (auto-created, names include sanitized service key)
+    "test_optimization_data_go_service",
+    "test_optimization_data_ruby_service",
+)
+
+# Consuming labels (aggregator):
+#  - All files for one service
+#    @test_optimization_data//:test_optimization_files_go_service
+#  - One module for one service (module label sanitized by the single-service repo)
+#    @test_optimization_data//:module_go_service_core
+
+# Macros that expect "topt_data" can use either:
+# 1) Select explicitly:
+#    load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+#    dd_topt_go_test(..., topt_data = topt_data_by_service["go_service"], go_test_rule = go_test)
+# 2) Pass the mapping and choose via topt_service (keeps BUILD simpler):
+#    dd_topt_go_test(..., topt_data = topt_data_by_service, topt_service = "go_service", go_test_rule = go_test)
+```
+
 Additional helper file exported by the generated repository:
 
 - `export.bzl` with a single dictionary `modules` containing:
@@ -311,7 +353,7 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
     )
 ```
 
-Usage in BUILD:
+Usage in BUILD (single-service):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_test")
@@ -344,15 +386,19 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
     )
 ```
 
-Usage in BUILD:
+Usage in BUILD (multi-service aggregator):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_test")
 load("//tools:dd_topt_go_test_auto.bzl", "dd_topt_go_test")
 
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
+    topt_data = topt_data_by_service,   # pass mapping
+    topt_service = "go_service",       # select service
     go_test_rule = go_test,
 )
 ```
@@ -559,4 +605,3 @@ DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
 
 - You can set a TTL via `FETCH_SALT_TTL`.
 - For debugging, set `debug = True` when calling the extension to get verbose logs, including request bodies and detected OS info.
-
