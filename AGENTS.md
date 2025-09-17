@@ -2,6 +2,12 @@
 
 This repository ships Bazel integrations that fetch Datadog Test Optimization metadata at module/repo resolution and reliably upload test/coverage payloads from hermetic builds.
 
+## Documentation
+- Overview: see `docs/Initial_documentation.md` for how the solution works (architecture, data flow, and operational notes).
+- Problem statement & proposal: see `docs/RFC.md` for the background problem this solves, rationale, and the detailed design.
+
+Agents: start with the Overview, then skim the RFC to understand constraints and goals before modifying code or rules.
+
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources:
   - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/settings.json`, per‑module files, and `.testoptimization/context.json`.
