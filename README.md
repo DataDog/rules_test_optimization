@@ -299,13 +299,13 @@ Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:export.bzl", "modules")
+load("@test_optimization_data//:export.bzl", "topt_data")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
 
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
-        topt_data = modules,
+        topt_data = topt_data,
         go_test_rule = go_test_rule,
         **kwargs
     )
@@ -332,13 +332,13 @@ dd_topt_go_test(
 
 ```bzl
 # tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:export.bzl", "modules")
+load("@test_optimization_data//:export.bzl", "topt_data")
 load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
 
 def dd_topt_go_test(name, go_test_rule, **kwargs):
     _dd_topt_go_test(
         name = name,
-        topt_data = modules,
+        topt_data = topt_data,
         go_test_rule = go_test_rule,
         **kwargs
     )
