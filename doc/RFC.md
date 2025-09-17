@@ -100,6 +100,40 @@ Why this solves the problem
 - Security: Secrets are not written to disk and are scoped to the uploader; test actions themselves do not require `DD_API_KEY`.
 - Simplicity: Consumers depend on stable labels and, where available, language macros that hide wiring details (env/runfiles/uploader).
 
+### Required Library Changes
+
+Goal: Under Bazel, tracing libraries must avoid all network calls for Test Optimization and operate entirely on files. Libraries detect Bazel mode via `TEST_OPTIMIZATION_PAYLOADS_FILES`, consume pre‑fetched JSONs from runfiles, and write test and coverage payloads to `$DD_PAYLOADS_DIR` for the uploader to send. Outside Bazel, libraries retain the same current behavior fetching and accessing the network directly.
+
+Common behavior (all languages)
+- Detection: If `TEST_OPTIMIZATION_PAYLOADS_FILES` is set and non‑empty, enter “Bazel mode”. Otherwise use existing network transport.
+- Inputs (read‑only):
+  - Parse `TEST_OPTIMIZATION_PAYLOADS_FILES` as a space‑separated list of runfiles paths. Resolve each path to a real file via standard Bazel runfiles resolution:
+    - If `RUNFILES_MANIFEST_FILE` exists, treat each token as a runfiles logical path and map it to a real path by scanning the manifest.
+    - Else, if `TEST_SRCDIR` or `RUNFILES_DIR` exists, join with the token and test for existence.
+    - Else, if a token is already an absolute path and exists, use it as‑is.
+  - From the resolved files, load:
+    - `settings.json`
+    - Any number of `knowntests*.json` files (combined known tests)
+    - Any number of `tmtests*.json` files (combined test management tests)
+  - Accept both “combined” shapes (e.g., `knowntests.json` with `data.attributes.tests`) and split per‑module shapes (e.g., `knowntests.module.<sanitized>.json`). Merge by unioning entries; empty stubs are valid and should be treated as “no data”.
+- Outputs (write‑only):
+  - Ensure `$DD_PAYLOADS_DIR/tests` and `$DD_PAYLOADS_DIR/coverage` exist (create if needed, handling concurrent processes safely).
+  - Serialize test payloads to `$DD_PAYLOADS_DIR/tests/*.json` (JSON only; do not use msgpack in Bazel mode).
+  - Serialize coverage payloads to `$DD_PAYLOADS_DIR/coverage/*.json` (one file per logical coverage unit; uploader will wrap as multipart with a generated `event.json`).
+  - Use unique, deterministic file names to avoid clashes across shards (e.g., include PID/TID/timestamp/random suffix). Flush and fsync where appropriate for durability.
+- Network: In Bazel mode, do not perform any HTTP calls (for metadata fetch or uploads). All remote interactions are delegated to the repository rule (metadata) and the uploader test (shipping).
+- Config precedence: Honor `settings.json` feature flags (e.g., known tests enabled, test management enabled). If missing, default to conservative behavior (features disabled) rather than reaching the network.
+- Logging: Emit a clear startup line noting “Bazel mode enabled via TEST_OPTIMIZATION_PAYLOADS_FILES” and list resolved files for troubleshooting.
+
+Test data contracts (minimum viable)
+- settings.json: full server response preferred; if absent, treat features as disabled and do not attempt network requests.
+- known tests: accept combined (`data.attributes.tests`) or per‑module files (`knowntests.module.*.json` → module key → test identifiers). Merge by union.
+- test management tests: accept combined (`data.attributes.modules`) or per‑module files (`tmtests.module.*.json` → module key → test states). Merge by union.
+- Forward compatibility: ignore unknown keys; fail closed (no network) on parse errors in Bazel mode.
+
+Backwards compatibility
+- Outside Bazel (no `TEST_OPTIMIZATION_PAYLOADS_FILES`), preserve current behavior: live metadata fetch (settings/known tests) and direct uploads according to existing environment variables.
+
 ### Detailed Design
 
 Repository Rule and Module Extension
@@ -179,22 +213,14 @@ Platform Nuances and Tooling
 Security
 - Secrets are injected via env and not written to disk; CI must still ensure secure handling and avoid log leakage.
 
-Alternatives Considered
+## Alternatives Considered
 - Runtime fetching in each test: violates hermeticity, increases flakiness, and explodes network calls.
 - Bazel spawn strategy wrappers or custom test runners: intrusive and language‑specific; increases maintenance burden.
 - BES (Build Event Service) post‑processing: could ship payloads, but does not solve the need for pre‑fetched metadata (known tests, settings) inside hermetic tests.
 - Repository rule without per‑module splitting: simpler, but causes wider cache invalidations across large monorepos.
 
-Rollout Plan
-1. Pilot the module extension and uploader in one or two services across macOS/Linux/Windows CI.
-2. Establish a standard `.bazelrc` snippet forwarding required `--repo_env` and `--test_env` and setting hermetic configs.
-3. Publish language‑specific macros (Java/Python/JS) mirroring `dd_topt_go_test`.
-4. Document multi‑service usage patterns and update service templates.
-5. Monitor telemetry (upload success rates, fetch times) and iterate on defaults (timeouts, retries).
-
-Open Questions / Future Work
+## Future Work
 - Evaluate an opt‑in TIA approach that does not fight Bazel caching semantics (e.g., coarse‑grained TIA hints that do not land in the action cache key).
 - Provide first‑class macros for other languages and unify env wiring patterns.
 - Add optional verification tests that assert `context.json` enrichment in CI.
-- Consider a pluggable persistence layer for organizations that require fetching via internal mirrors or pre‑baked artifacts.
  
