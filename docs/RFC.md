@@ -198,8 +198,13 @@ Language Macros
 - Provide macros per language to:  
   - Attach runfiles and env (`TEST_OPTIMIZATION_PAYLOADS_FILES`, `DD_PAYLOADS_DIR`).  
   - Add the uploader test target automatically.  
-  - Surface reasonable defaults (e.g., inferred Go import paths) and allow overrides.  
-- [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](https://github.com/DataDog/rules_test_optimization/blob/main/tools/topt_go_test.bzl)
+  - Surface reasonable defaults and allow overrides.  
+- Go importpath inference (new):  
+  - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
+  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_PAYLOADS_FILES` to `$(rlocationpaths :<selector>)`.  
+  - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
+  - The exported `topt_data["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
+- See `tools/topt_go_test.bzl` and `tools/topt_go_infer.bzl`. Other languages can adopt a similar pattern as needed.
 
 Security Considerations
 
@@ -251,6 +256,7 @@ Platform and Tooling
 - Bazel spawn strategy wrappers or custom test runners: intrusive and language‑specific; increases maintenance burden.  
 - BES (Build Event Service) post‑processing: could be implemented for the uploader but requires more research time.  
 - Repository rule without per‑module splitting: simpler, but causes wider cache invalidations across large monorepos.
+ - Macro‑only Go inference: macros cannot read providers in Bazel; a real rule + aspect is required to access `GoArchive.importpath` and follow `embed` dependencies during analysis while keeping BUILD usage simple.
 
 ## Future Work
 
@@ -259,4 +265,3 @@ Platform and Tooling
 - Provide first‑class macros for other languages and unify env wiring patterns.  
 - Evaluate the possibility to implement the uploader using the Bazel build event service.  
 - Add optional verification tests that assert `context.json` enrichment in CI.
-

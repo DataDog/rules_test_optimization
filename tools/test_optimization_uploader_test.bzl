@@ -25,6 +25,7 @@ def _render_template(template, substitutions):
     out = template
     for k, v in substitutions.items():
         out = out.replace("{" + k + "}", str(v))
+
     # Unescape '{{' and '}}' used to protect literal braces in the template
     out = out.replace("{{", "{").replace("}}", "}")
     return out
@@ -42,8 +43,8 @@ def _uploader_impl(ctx):
     log_info("Generating uploader scripts")
     log_debug(
         debug,
-        "Attributes → payloads_dir='%s', tests_subdir='%s', coverage_subdir='%s', quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s"
-        % (
+        "Attributes → payloads_dir='%s', tests_subdir='%s', coverage_subdir='%s', quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s" %
+        (
             (payloads_dir or "<unset>"),
             tests_subdir,
             coverage_subdir,
@@ -512,5 +513,3 @@ dd_payload_uploader_test = rule(
         "data": attr.label_list(allow_files = True),
     },
 )
-
-

@@ -13,6 +13,7 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
   - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/settings.json`, per‑module files, and `.testoptimization/context.json`.
   - `test_optimization_uploader_test.bzl` — runtime uploader test rule.
   - `topt_go_test.bzl` — macro wrapping `go_test` with the uploader.
+  - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
@@ -37,6 +38,8 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 ## Consumer Tips (bzlmod + Go)
 - In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)`, `use_extension("@datadog-rules-test-optimization//tools:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
 - In `BUILD.bazel`: `load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
+- Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go’s provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
+- Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
 - Tests can read `TEST_OPTIMIZATION_PAYLOADS_FILES` (space‑separated runfiles) to inspect synced payloads.
 
 ## Multi‑Service Usage

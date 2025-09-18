@@ -143,7 +143,7 @@ Additional helper file exported by the generated repository:
   - `go`: nested object with:
     - `module_path`: detected Go module path (may be empty)
     - `sanitized_module_path`: sanitized label fragment for `module_path`
-    - `module_included`: boolean; true when the detected Go module has a matching per-module filegroup
+    - `module_included`: boolean; true when the detected Go module has a matching per-module filegroup. The `dd_topt_go_test` macro uses this flag only when falling back to `<module_path>/<bazel package>`; it is ignored when `importpath` is inferred via `embed` or explicitly provided.
 
 Then in any BUILD file:
 
@@ -353,6 +353,39 @@ def dd_topt_go_test(name, go_test_rule, **kwargs):
     )
 ```
 
+### Import path inference
+
+The macro auto-selects the correct per-module payloads by inferring the Go package `importpath` using rules_go providers, mirroring how `go_test` computes it:
+
+- Precedence:
+  1) `importpath` explicitly set on your `go_test` invocation (if provided in kwargs)
+  2) Inference via `embed = [":<go_library>"]` by reading `GoArchive.importpath` from rules_go (recommended)
+  3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo’s exported `topt_data["go"]["module_path"]`
+
+- Per-module selection:
+  - When using inference (1 or 2), the macro always attempts per-module selection and falls back to the full bundle if no matching module group exists.
+  - When using the fallback (3), the macro consults `topt_data["go"]["module_included"]` as a coarse gate. If false, it skips per-module selection and uses the full bundle. If true, it attempts per-module selection with the computed fallback path.
+
+Recommended pattern for best results:
+
+```bzl
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+go_library(
+    name = "pkg_lib",
+    srcs = ["*.go"],
+)
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],    # enables provider-based inference
+    topt_data = topt_data,
+    go_test_rule = go_test,
+)
+```
 Usage in BUILD (single-service):
 
 ```bzl

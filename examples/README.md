@@ -16,16 +16,22 @@ test_optimization_sync.test_optimization_sync(name = "test_optimization_data")
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
-BUILD.bazel:
+BUILD.bazel (inference via embed):
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_test")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
+
+go_library(
+    name = "pkg_lib",
+    srcs = ["*.go"],
+)
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
+    embed = [":pkg_lib"],            # importpath inferred via rules_go provider
     topt_data = topt_data,        # single-service dict
     go_test_rule = go_test,
 )
@@ -54,36 +60,53 @@ use_repo(
 )
 ```
 
-BUILD.bazel — Option A (explicit selection):
+BUILD.bazel — Option A (explicit selection, inference via embed):
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_test")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+
+go_library(
+    name = "pkg_lib",
+    srcs = ["*.go"],
+)
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
     topt_data = topt_data_by_service["go_service"],  # sanitized key
     go_test_rule = go_test,
 )
 ```
 
-BUILD.bazel — Option B (mapping + key):
+BUILD.bazel — Option B (mapping + key, inference via embed):
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_test")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+
+go_library(
+    name = "pkg_lib",
+    srcs = ["*.go"],
+)
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
     topt_data = topt_data_by_service,
     topt_service = "go_service",                 # or raw "go-service"
     go_test_rule = go_test,
 )
 ```
+
+Notes on importpath inference:
+- Preferred: inference via `embed` above (reads rules_go provider).
+- Optional: explicit `importpath` on `go_test` takes precedence when set.
+- Fallback: if neither is available, the macro computes `<module_path>/<bazel package>` using the exported `topt_data["go"]["module_path"]` and the current Bazel package path.
 
 Per-module filegroup (aggregator):
 
