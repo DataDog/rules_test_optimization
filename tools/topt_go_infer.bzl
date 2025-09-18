@@ -8,7 +8,7 @@
 #   filegroup from the synced repository and expose those files as runfiles.
 #   The macro can then `rlocationpaths` this rule to set TEST_OPTIMIZATION_PAYLOADS_FILES.
 
-load("@rules_go//go/private:providers.bzl", "GoArchive")
+load("@rules_go//go/private:providers.bzl", "GoArchive", "GoLibrary")
 
 # Provider carrying the inferred importpath string
 ToptGoImportpathInfo = provider(fields = {"importpath": "Go package importpath"})
@@ -62,10 +62,21 @@ def _importpath_aspect_impl(target, ctx):
     - Else, traverse children via `embed` and propagate first discovered value.
     """
 
-    # Direct provider from rules_go
+    # Prefer GoLibrary provider when available
+    if GoLibrary in target:
+        lib = target[GoLibrary]
+        ip = getattr(lib, "importpath", None)
+        if ip:
+            return [ToptGoImportpathInfo(importpath = ip)]
+
+    # Fallback: GoArchive may carry importpath in some rules_go versions
     if GoArchive in target:
-        ipa = target[GoArchive]
-        ip = getattr(ipa, "importpath", None)
+        arch = target[GoArchive]
+        ip = getattr(arch, "importpath", None)
+
+        # Some versions nest importpath under a 'library' field
+        if (not ip) and hasattr(arch, "library"):
+            ip = getattr(arch.library, "importpath", None)
         if ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
