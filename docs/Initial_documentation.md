@@ -23,6 +23,21 @@ The steps are:
 4. **Language macros (optional)**:  
    Thin wrappers (e.g., for Go) compose tests with the uploader and wire the right runfiles/env so test code can read the synced files when needed.
 
+### Go macro and import path inference
+
+The `dd_topt_go_test` macro automatically selects the correct per‑module payloads by inferring the Go package `importpath` using `rules_go` providers, mirroring how `go_test` computes it.
+
+- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoLibrary` from `@rules_go//go/private:providers.bzl` via a Starlark aspect walking `embed`.
+- Precedence for determining importpath:
+  1) `importpath` explicitly set on the `go_test` invocation (if provided via kwargs)
+  2) Provider‑based inference via `embed`
+  3) Fallback to `<go module path>/<bazel package>`, where the module path is exported by the sync repo in `topt_data["go"]["module_path"]`
+- Per‑module selection:
+  - When using (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if the module isn’t present.
+  - When using (3), the macro consults `topt_data["go"]["module_included"]` as a coarse gate; if false, it uses the full bundle.
+
+Note: This repository declares a `bazel_dep("rules_go", "0.46.0")` to load provider definitions only. It does not configure any Go toolchains; consumers still set up `rules_go` and the Go SDK in their `MODULE.bazel`.
+
 ## Why a repository extension?
 
 - **Hermeticity**: Bazel sandboxes can be hermetic (isolated, with no network access). The extension lets us gather backend data ahead of time.  
