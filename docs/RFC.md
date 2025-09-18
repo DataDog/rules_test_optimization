@@ -22,6 +22,20 @@ Bazel caches outputs of build and test actions based on their declared inputs. I
 
 Repository rules run during repository resolution, before builds and tests. They can fetch external data or generate files, and their outputs are tracked by the cache. They are commonly used for dependency setup.
 
+### Rules vs Macros (what is a "real rule"?)
+
+In Bazel, macros are Starlark functions that expand to other rule calls at load time; they cannot inspect providers or traverse dependency edges. A "real rule" refers to a Starlark rule (declared with `rule(...)`) that runs during the analysis phase. Real rules can:
+
+- Access providers from their dependencies.
+- Participate in analysis-time traversals (e.g., via aspects).
+- Declare actions and outputs with proper dependency tracking and caching.
+
+When this RFC mentions "a real rule + aspect," it means we intentionally use an analysis-time rule (not just a macro) so we can read providers like rules_go’s `GoArchive.importpath` and make decisions that are visible to Bazel’s incremental analysis and cache.
+
+### Aspects
+
+Aspects are analysis-time traversals that attach to specific attributes (e.g., `deps`, `embed`) and collect providers across a portion of the graph without changing the targets themselves. They are ideal for computing metadata derived from dependencies (such as a Go package’s effective `importpath`) and feeding that information into a rule that selects inputs or produces outputs accordingly. Aspects preserve hermeticity and let us mirror how native/rules-go logic derives values used by build/test rules.
+
 ### Environment Variables
 
 Bazel allows passing environment variables into repository rules (--repo\_env) and test actions (--test\_env). These are the primary mechanism for injecting configuration or secrets.
@@ -29,6 +43,12 @@ Bazel allows passing environment variables into repository rules (--repo\_env) a
 ### Sandbox Writable Paths
 
 By default, Bazel sandboxes are read-only. Specific directories can be marked writable via \--sandbox\_writable\_path, allowing tests to produce artifacts such as logs.
+
+### BEP, BES, and BSP
+
+- BEP (Build Event Protocol): a structured stream of build/test events (targets, actions, test results, artifacts). Bazel can write BEP locally (e.g., `--build_event_json_file`/`--build_event_binary_file`) or send it to a remote backend.
+- BES (Build Event Service): a remote endpoint that receives BEP over gRPC (`--bes_backend=<addr>`). Consumers can process builds/tests out-of-band (e.g., post-processing uploads) without modifying test actions or breaking hermeticity.
+- BSP (Build Server Protocol): a language-agnostic protocol used by IDEs/tools to interact with build systems. Bazel BSP integrations translate Bazel’s graph and events (often via BEP) into BSP notifications and queries. While out of scope for the core rules here, BEP/BES/BSP awareness informs future integrations (e.g., uploader driven by BEP instead of running inside tests).
 
 ## Problem Statement
 
