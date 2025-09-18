@@ -206,7 +206,7 @@ Language Macros
   - The exported `topt_data["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
 - Module dependency: this repository declares a `bazel_dep("rules_go", <version>)` to make the provider load visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.
 
-- See `tools/topt_go_test.bzl` and `tools/topt_go_infer.bzl`. Other languages can adopt a similar pattern as needed.
+- [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](https://github.com/DataDog/rules_test_optimization/blob/main/tools/topt_go_test.bzl)
 
 Security Considerations
 
