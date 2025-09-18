@@ -11,9 +11,12 @@
 #   `@test_optimization_data//:test_optimization_*` labels exist.
 # - Pass normal go_test attributes via **kwargs.
 # - Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
+# - Import path inference mirrors rules_go behavior by walking `embed` via
+#   an aspect and reading the GoArchive provider; when unavailable, falls
+#   back to go_module_path + Bazel package path.
 
 load("//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
- 
+load("//tools:topt_go_infer.bzl", "topt_go_payloads_selector")
 
 def _dd_sanitize_label_fragment(name):
     # Produce a safe suffix for Bazel target names from an arbitrary string.
@@ -27,10 +30,10 @@ def _dd_sanitize_label_fragment(name):
         if ch in allowed:
             out.append(ch)
             last_us = (ch == "_")
-        else:
-            if not last_us:
-                out.append("_")
-                last_us = True
+        elif not last_us:
+            out.append("_")
+            last_us = True
+
     # Trim leading/trailing underscores
     n = len(out)
     start = 0
@@ -65,7 +68,7 @@ def dd_topt_go_test(
         # (raw or sanitized). Ignored when a single-service dict is passed.
         topt_service = None,
         # Auto-select per-module known-tests/tmtests group based on Go package import path
-        # You can override detection via module_importpath or go_module_path or module_label_override
+        # Deprecated: go_module_path (inference now uses a rules_go provider via aspect)
         go_module_path = None,
         module_label_override = None,
         # Uploader knobs
@@ -122,24 +125,30 @@ def dd_topt_go_test(
             if _svc == None:
                 fail("dd_topt_go_test: topt_service '%s' not found. Available: %s" % (topt_service, ", ".join(sorted(keys))))
 
-    # 1) Underlying go_test (include fetched JSONs in runfiles for optional consumption)
+    # 1) Underlying go_test
     inner_name = name + "_go"
     user_data = kwargs.pop("data", [])
     data = list(user_data)
 
+    # Extract hints for importpath detection
+    explicit_importpath = kwargs.get("importpath") if "importpath" in kwargs else None
+    embed_labels = (kwargs.get("embed", []) or [])
+
     # If caller provided the exported service dict, derive defaults
     include_per_module_files = False
+
     # Resolve sync repo name from selected service
     sync_repo_name = _svc.get("repo_name") or "test_optimization_data"
-    # Derive go module path
+
+    # Decide whether to include per-module files:
+    # - When inferring (explicit importpath or embed provided), always attempt per-module selection
+    # - When falling back to go.mod + Bazel package, gate by modules.go.module_included
     _go = _svc.get("go") or {}
-    if (go_module_path == None) and (type(_go) == type({})):
-        _mp = _go.get("module_path")
-        if _mp:
-            go_module_path = _mp
-    # Derive include_per_module_files from modules.go.module_included
-    if (type(_go) == type({})):
-        _inc = _go.get("module_included")
+    uses_inference = bool(explicit_importpath) or bool(embed_labels)
+    if uses_inference:
+        include_per_module_files = True
+    else:
+        _inc = _go.get("module_included") if (type(_go) == type({})) else None
         if _inc != None:
             include_per_module_files = bool(_inc)
 
@@ -147,40 +156,44 @@ def dd_topt_go_test(
     files_label = "@%s//:test_optimization_files" % sync_repo_name
     context_label = "@%s//:test_optimization_context" % sync_repo_name
 
-    # Infer the Go package import path for the test's package
-    # Precedence: go_test(importpath=...) > (go_module_path) + Bazel package > Bazel package
-    pkg_path = native.package_name()
-    inferred_importpath = None
-    if "importpath" in kwargs and kwargs.get("importpath"):
-        inferred_importpath = kwargs.get("importpath")
-    elif go_module_path:
-        base = go_module_path
-        # Normalize possible trailing slash
-        if base.endswith("/"):
-            base = base[:-1]
-        if pkg_path:
-            inferred_importpath = base + "/" + pkg_path
-        else:
-            inferred_importpath = base
-    else:
-        inferred_importpath = pkg_path
-
-    # Compute sanitized suffix for the per-module filegroup
-    module_suffix = module_label_override if module_label_override else _dd_sanitize_label_fragment(inferred_importpath)
-    per_module_group = "@%s//:module_%s" % (sync_repo_name, module_suffix)
-
-    if include_per_module_files:
-        data.append(per_module_group)
-    # Keep full files bundle as well for compatibility/convenience
-    data.append(files_label)
-    # Prepare env map: include runfiles-relative paths to the selected payload files
+    # Prepare env map using a selector rule that infers importpath via aspect
     user_env = kwargs.pop("env", {})
     env = dict(user_env)
-    if include_per_module_files:
-        env_value = "$(rlocationpaths %s)" % per_module_group
+
+    # Build the list of per-module groups once (if any were exported)
+    module_labels = []
+    _labels = _svc.get("labels") or []
+    for lab in _labels:
+        module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
+
+    # Fallback importpath when providers are unavailable: go_module_path + Bazel package
+    pkg_path = native.package_name()
+    fallback_importpath = None
+    if explicit_importpath:
+        fallback_importpath = explicit_importpath
     else:
-        env_value = "$(rlocationpaths %s)" % files_label
-    env["TEST_OPTIMIZATION_PAYLOADS_FILES"] = env_value
+        _mp = (_go.get("module_path") if type(_go) == type({}) else None) or None
+        if _mp:
+            base = _mp[:-1] if _mp.endswith("/") else _mp
+            fallback_importpath = (base + "/" + pkg_path) if pkg_path else base
+        else:
+            fallback_importpath = pkg_path
+
+    selector_name = name + "_topt_payloads"
+    topt_go_payloads_selector(
+        name = selector_name,
+        embeds = embed_labels,
+        explicit_importpath = explicit_importpath,
+        fallback_importpath = fallback_importpath,
+        full_files = files_label,
+        module_groups = module_labels,
+        include_per_module = include_per_module_files,
+        module_label_override = module_label_override,
+    )
+
+    # Data/env for the go test: depend only on the selector and use its runfiles
+    data.append(":" + selector_name)
+    env["TEST_OPTIMIZATION_PAYLOADS_FILES"] = "$(rlocationpaths :%s)" % selector_name
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
     _go_test = go_test_rule if go_test_rule != None else None

@@ -1,8 +1,8 @@
 # Datadog Test Optimization repository rule helpers and module extension
 #
 # This file defines:
-# - A repository_rule (`test_optimization_sync`) that performs one or more 
-#   authenticated HTTP POST requests to Datadog to retrieve Test Optimization 
+# - A repository_rule (`test_optimization_sync`) that performs one or more
+#   authenticated HTTP POST requests to Datadog to retrieve Test Optimization
 #   metadata.
 # - Reusable helpers for building curl commands, ensuring output directories
 #   exist, and parsing JSON in Starlark.
@@ -39,11 +39,16 @@ def _curl_base_args():
     # retry/backoff: basic robustness against transient failures
     return [
         "curl",
-        "-f", "-sS",
-        "--connect-timeout", "10",
-        "--max-time", "60",
-        "--retry", "3",
-        "--retry-delay", "2",
+        "-f",
+        "-sS",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "60",
+        "--retry",
+        "3",
+        "--retry-delay",
+        "2",
         "--retry-connrefused",
     ]
 
@@ -58,6 +63,7 @@ def _ensure_parent_directory(ctx, path, debug):
     # Starlark has no os.path utilities; use simple split/join.
     if not path:
         return
+
     # Normalize path segments and drop empty/"." parts
     segments = [s for s in path.split("/") if (s != "" and s != ".")]
     if len(segments) <= 1:
@@ -67,7 +73,10 @@ def _ensure_parent_directory(ctx, path, debug):
         # On Windows use PowerShell New-Item to create intermediate directories robustly
         win_dir = dirp.replace("/", "\\")
         ps_cmd = [
-            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
             "New-Item -ItemType Directory -Force -Path '%s' | Out-Null" % win_dir.replace("'", "''"),
         ]
         res = ctx.execute(ps_cmd)
@@ -93,10 +102,10 @@ def _sanitize_label_fragment(name):
         if ch in allowed:
             out.append(ch)
             last_us = (ch == "_")
-        else:
-            if not last_us:
-                out.append("_")
-                last_us = True
+        elif not last_us:
+            out.append("_")
+            last_us = True
+
     # Trim leading/trailing underscores without while loops
     n = len(out)
     start = 0
@@ -109,6 +118,7 @@ def _sanitize_label_fragment(name):
     if not found_start:
         start = n
     end = 0
+
     # Reverse scan without a negative-step range
     for k in range(n):
         j = n - 1 - k
@@ -135,6 +145,7 @@ def _sanitize_filename_fragment(name):
         ch = s[i]
         out.append(ch if ch in allowed else "_")
     result = "".join(out)
+
     # Avoid empty names
     if not result:
         result = "module"
@@ -156,7 +167,10 @@ def _try_read_abs_file(ctx, abs_path):
         return ""
     if _is_windows(ctx):
         cmd = [
-            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
             "$p = '%s'; if (Test-Path -LiteralPath $p) { Get-Content -Raw -LiteralPath $p }" % abs_path.replace("'", "''"),
         ]
         res = ctx.execute(cmd)
@@ -180,6 +194,7 @@ def _parse_go_module_path(go_mod_content):
             continue
         if s.startswith("module ") or s.startswith("module\t"):
             rest = s[len("module"):].strip()
+
             # Trim optional quotes
             if len(rest) >= 2 and ((rest[0] == '"' and rest[-1] == '"') or (rest[0] == "'" and rest[-1] == "'")):
                 rest = rest[1:-1]
@@ -194,6 +209,7 @@ def _detect_go_module_path(ctx, debug):
     if mod_env:
         log_debug(debug, "Using GO_MODULE_PATH from env")
         return mod_env
+
     # Candidate workspace roots
     candidates = []
     for k in [
@@ -215,6 +231,7 @@ def _detect_go_module_path(ctx, debug):
             if mp:
                 log_debug(debug, "Detected module path '%s' from %s" % (mp, go_mod_path))
                 return mp
+
     # Fallback: try using git to find toplevel go.mod
     top = ""
     if _is_windows(ctx):
@@ -245,6 +262,7 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
     content = ctx.read(kt_path)
     if not content or not content.strip():
         return specs
+
     # Decode and navigate to data.attributes.tests (map: module -> suites map)
     obj = json.decode(content)
     data_obj = obj.get("data") or {}
@@ -254,6 +272,7 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
         return specs
 
     base_dir = _dirname(knowntests_file)
+
     # Ensure deterministic ordering for reproducible BUILD content
     module_names = sorted([k for k in tests_obj.keys()])
 
@@ -263,9 +282,11 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
 
     for module_name in module_names:
         suites_map = tests_obj.get(module_name)
+
         # Guard against non-dict anomalies
         if type(suites_map) != "dict":
             continue
+
         # Compute unique, sanitized target name and filename fragments
         base_label = _sanitize_label_fragment(module_name)
         c = label_counts.get(base_label, 0) + 1
@@ -276,14 +297,14 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
         fc = file_counts.get(base_file, 0) + 1
         file_counts[base_file] = fc
         file_name = (
-            "knowntests.module.%s.json" % base_file if fc == 1 else
-            "knowntests.module.%s_%d.json" % (base_file, fc)
+            "knowntests.module.%s.json" % base_file if fc == 1 else "knowntests.module.%s_%d.json" % (base_file, fc)
         )
 
         out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
 
         # Build a minimal per-module JSON preserving top-level data fields when available
         mod_data = {"attributes": {"tests": {module_name: suites_map}}}
+
         # Preserve id/type if present
         did = data_obj.get("id")
         dty = data_obj.get("type")
@@ -314,6 +335,7 @@ def _split_tmtests_by_module(ctx, tmtests_file, debug):
     content = ctx.read(tm_path)
     if not content or not content.strip():
         return specs
+
     # Decode and navigate to data.attributes.modules (map: module -> module suites/tests object)
     obj = json.decode(content)
     data_obj = obj.get("data") or {}
@@ -343,8 +365,7 @@ def _split_tmtests_by_module(ctx, tmtests_file, debug):
         fc = file_counts.get(base_file, 0) + 1
         file_counts[base_file] = fc
         file_name = (
-            "tmtests.module.%s.json" % base_file if fc == 1 else
-            "tmtests.module.%s_%d.json" % (base_file, fc)
+            "tmtests.module.%s.json" % base_file if fc == 1 else "tmtests.module.%s_%d.json" % (base_file, fc)
         )
 
         out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
@@ -379,11 +400,12 @@ def _detect_os_info(ctx, debug):
 
     if _is_windows(ctx):
         platform = "windows"
+
         # Windows arch via environment variables
         arch = (
-            ctx.os.environ.get("PROCESSOR_ARCHITECTURE")
-            or ctx.os.environ.get("PROCESSOR_ARCHITEW6432")
-            or "unknown"
+            ctx.os.environ.get("PROCESSOR_ARCHITECTURE") or
+            ctx.os.environ.get("PROCESSOR_ARCHITEW6432") or
+            "unknown"
         )
         version = ctx.os.environ.get("OS") or ""
         log_debug(debug, "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
@@ -413,6 +435,7 @@ def _safe_json_string(value):
     # _safe_json_string: minimal JSON string escaping for simple values.
     if value == None:
         return ""
+
     # Only escape backslashes and double quotes; input values are expected
     # to be short ASCII tokens (service/env/branch/SHA/URL).
     s = str(value)
@@ -428,12 +451,13 @@ def _compute_dd_api_base(site_env):
     # - Rationale: users frequently set DD_SITE to app.*; Datadog APIs are under
     #   api.*. We normalize here for consistency.
     site = site_env or "datadoghq.com"
+
     # Branch: normalize app.* hostnames to api.* equivalents
     if site.startswith("app."):
         site = site[len("app."):]
     return "https://api.%s" % site
 
-def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, request_debug_payload=None):
+def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, request_debug_payload = None):
     # _http_request: executes an HTTP call and writes the response to `out_file`.
     # - On Windows: uses PowerShell Invoke-WebRequest for portability.
     # - On Linux/macOS: uses curl with retries.
@@ -458,10 +482,12 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, re
         lines.append("$Url = '%s'" % url.replace("'", "''"))
         lines.append("$OutFile = '%s'" % out_file.replace("'", "''"))
         lines.append("$Method = '%s'" % http_method)
+
         # Headers hashtable (PowerShell expects IDictionary-like; hashtable is safest)
-        lines.append("$Headers = @{}");
+        lines.append("$Headers = @{}")
         for hk, hv in headers.items():
             lines.append("$Headers['%s'] = '%s'" % (str(hk).replace("'", "''"), str(hv).replace("'", "''")))
+
         # Optional body file
         if data_file:
             lines.append("$BodyFile = '%s'" % data_file.replace("'", "''"))
@@ -472,6 +498,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, re
             lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -InFile $BodyFile -OutFile $OutFile -ContentType 'application/json' -TimeoutSec 60")
         else:
             lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -OutFile $OutFile -TimeoutSec 60")
+
         # Emulate curl -f: treat HTTP >= 400 as failure
         lines.append("    $code = if ($resp.StatusCode) { [int]$resp.StatusCode } else { 200 }")
         lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned for ' + $Url) -f $code; exit 1 }")
@@ -495,28 +522,32 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, re
 
     # Parse HTTP status code captured by tool stdout. On network errors it may be empty.
     http_status = (result.stdout or "").strip() or "000"
+
     # Branch: network error or tool failure
     if result.return_code != 0:
         fail(
             (
-                "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\n"
-                + "response_file=%s\n"
-                + ("request_body=%s" % request_debug_payload if request_debug_payload else "request_body=<none>")
-            )
-            % (
+                "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\n" +
+                "response_file=%s\n" +
+                ("request_body=%s" % request_debug_payload if request_debug_payload else "request_body=<none>")
+            ) %
+            (
                 http_status,
                 http_method,
                 url,
                 result.return_code,
                 (result.stderr or "").strip(),
                 out_file,
-            )
+            ),
         )
     else:
         # Branch: success path; try to emit a concise size summary
         if _is_windows(ctx):
             size_cmd = [
-                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
                 "$fi = Get-Item -LiteralPath '%s'; if ($fi) { Write-Output $fi.Length }" % out_file.replace("'", "''"),
             ]
             size_result = ctx.execute(size_cmd)
@@ -548,10 +579,12 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file=None, re
 def _http_post_json(ctx, url, headers, json_body_str, tmp_body_file, out_file, debug):
     # Write the request body to a temp file for curl --data-binary
     ctx.file(tmp_body_file, json_body_str)
+
     # Merge content headers with caller-provided headers
     merged_headers = {"Content-Type": "application/json", "Accept": "application/json"}
     for k, v in headers.items():
         merged_headers[k] = v
+
     # Delegate to generic HTTP execution helper
     return _http_request(
         ctx,
@@ -622,14 +655,15 @@ def _collect_env(ctx):
     elif ctx.os.environ.get("BITBUCKET_COMMIT"):
         provider = "bitbucket"
         env_data["repository_url"] = (
-            ctx.os.environ.get("BITBUCKET_GIT_HTTP_ORIGIN")
-            or ("https://bitbucket.org/%s.git" % (ctx.os.environ.get("BITBUCKET_REPO_SLUG") or ""))
+            ctx.os.environ.get("BITBUCKET_GIT_HTTP_ORIGIN") or
+            ("https://bitbucket.org/%s.git" % (ctx.os.environ.get("BITBUCKET_REPO_SLUG") or ""))
         )
         env_data["sha"] = ctx.os.environ.get("BITBUCKET_COMMIT") or ""
         env_data["branch"] = ctx.os.environ.get("BITBUCKET_BRANCH") or ""
     elif ctx.os.environ.get("BUDDY"):
         provider = "buddy"
         # Buddy variables vary; keep placeholders
+
     elif ctx.os.environ.get("BUILDKITE"):
         provider = "buildkite"
         env_data["repository_url"] = ctx.os.environ.get("BUILDKITE_REPO") or ""
@@ -685,6 +719,7 @@ def _collect_env(ctx):
     elif ctx.os.environ.get("CODEBUILD_INITIATOR"):
         provider = "awscodepipeline"
         # Limited extraction by default
+
     elif ctx.os.environ.get("DRONE"):
         provider = "drone"
         env_data["repository_url"] = ctx.os.environ.get("DRONE_GIT_HTTP_URL") or ""
@@ -727,14 +762,14 @@ def _build_configurations_json(ctx, debug):
     runtime_version = ctx.attr.runtime_version or "unknown"
     runtime_arch = ctx.attr.runtime_arch or osinfo["arch"]
     conf_json = (
-        "{"
-        + ' "os.platform": "%s",' % _safe_json_string(osinfo["platform"])
-        + ' "os.version": "%s",' % _safe_json_string(osinfo["version"])
-        + ' "os.architecture": "%s",' % _safe_json_string(osinfo["arch"])
-        + ' "runtime.name": "%s",' % _safe_json_string(runtime_name)
-        + ' "runtime.architecture": "%s",' % _safe_json_string(runtime_arch)
-        + ' "runtime.version": "%s"' % _safe_json_string(runtime_version)
-        + "}"
+        "{" +
+        ' "os.platform": "%s",' % _safe_json_string(osinfo["platform"]) +
+        ' "os.version": "%s",' % _safe_json_string(osinfo["version"]) +
+        ' "os.architecture": "%s",' % _safe_json_string(osinfo["arch"]) +
+        ' "runtime.name": "%s",' % _safe_json_string(runtime_name) +
+        ' "runtime.architecture": "%s",' % _safe_json_string(runtime_arch) +
+        ' "runtime.version": "%s"' % _safe_json_string(runtime_version) +
+        "}"
     )
     log_debug(debug, "Configurations JSON: %s" % conf_json)
     return conf_json
@@ -949,19 +984,19 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
 
     # Build minimal JSON body (configurations omitted for now)
     body = (
-        "{\n"
-        + "  \"data\": {\n"
-        + "    \"id\": \"%s\",\n" % _safe_json_string(req_id)
-        + "    \"type\": \"ci_app_test_service_libraries_settings\",\n"
-        + "    \"attributes\": {\n"
-        + "      \"service\": \"%s\",\n" % _safe_json_string(service)
-        + "      \"env\": \"%s\",\n" % _safe_json_string(environment)
-        + "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url)
-        + "      \"branch\": \"%s\",\n" % _safe_json_string(branch)
-        + "      \"sha\": \"%s\"\n" % _safe_json_string(sha)
-        + "    }\n"
-        + "  }\n"
-        + "}\n"
+        "{\n" +
+        "  \"data\": {\n" +
+        "    \"id\": \"%s\",\n" % _safe_json_string(req_id) +
+        "    \"type\": \"ci_app_test_service_libraries_settings\",\n" +
+        "    \"attributes\": {\n" +
+        "      \"service\": \"%s\",\n" % _safe_json_string(service) +
+        "      \"env\": \"%s\",\n" % _safe_json_string(environment) +
+        "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url) +
+        "      \"branch\": \"%s\",\n" % _safe_json_string(branch) +
+        "      \"sha\": \"%s\"\n" % _safe_json_string(sha) +
+        "    }\n" +
+        "  }\n" +
+        "}\n"
     )
 
     log_debug(debug, "Settings request body: %s" % body)
@@ -999,18 +1034,18 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
     repository_url = env_data.get("repository_url")
 
     body = (
-        "{\n"
-        + "  \"data\": {\n"
-        + "    \"id\": \"%s\",\n" % _safe_json_string(req_id)
-        + "    \"type\": \"ci_app_libraries_tests_request\",\n"
-        + "    \"attributes\": {\n"
-        + "      \"service\": \"%s\",\n" % _safe_json_string(service)
-        + "      \"env\": \"%s\",\n" % _safe_json_string(environment)
-        + "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url)
-        + "      \"configurations\": %s\n" % _build_configurations_json(ctx, debug)
-        + "    }\n"
-        + "  }\n"
-        + "}\n"
+        "{\n" +
+        "  \"data\": {\n" +
+        "    \"id\": \"%s\",\n" % _safe_json_string(req_id) +
+        "    \"type\": \"ci_app_libraries_tests_request\",\n" +
+        "    \"attributes\": {\n" +
+        "      \"service\": \"%s\",\n" % _safe_json_string(service) +
+        "      \"env\": \"%s\",\n" % _safe_json_string(environment) +
+        "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url) +
+        "      \"configurations\": %s\n" % _build_configurations_json(ctx, debug) +
+        "    }\n" +
+        "  }\n" +
+        "}\n"
     )
 
     # Log the request body for debugging when enabled
@@ -1030,8 +1065,6 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
         debug,
     )
 
-    
-
 def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_file, debug):
     # _perform_dd_test_management_tests_request: build and send the Test Management Tests request.
     # - Writes the JSON response body to `tmtests_file`.
@@ -1043,33 +1076,35 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_fi
 
     # Required attributes per API
     repository_url = env_data.get("repository_url")
+
     # Prefer head commit if present; else fall back
     sha = env_data.get("head_sha") or env_data.get("sha") or ""
+
     # Commit message: prefer head message then commit message; else empty
     commit_message = env_data.get("head_message") or env_data.get("commit_message") or ""
 
     # Build attributes JSON with optional module field only if set
     attrs = (
-        "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url)
-        + "      \"sha\": \"%s\",\n" % _safe_json_string(sha)
-        + "      \"commit_message\": \"%s\"\n" % _safe_json_string(commit_message)
+        "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url) +
+        "      \"sha\": \"%s\",\n" % _safe_json_string(sha) +
+        "      \"commit_message\": \"%s\"\n" % _safe_json_string(commit_message)
     )
 
     body = (
-        "{\n"
-        + "  \"data\": {\n"
-        + "    \"id\": \"%s\",\n" % _safe_json_string("1")
-        + "    \"type\": \"ci_app_libraries_tests_request\",\n"
-        + "    \"attributes\": {\n"
-        + attrs
-        + "    }\n"
-        + "  }\n"
-        + "}\n"
+        "{\n" +
+        "  \"data\": {\n" +
+        "    \"id\": \"%s\",\n" % _safe_json_string("1") +
+        "    \"type\": \"ci_app_libraries_tests_request\",\n" +
+        "    \"attributes\": {\n" +
+        attrs +
+        "    }\n" +
+        "  }\n" +
+        "}\n"
     )
 
     log_debug(debug, "TestManagementTests request body: %s" % body)
 
-    headers = { "DD-API-KEY": api_key }
+    headers = {"DD-API-KEY": api_key}
 
     return _http_post_json(
         ctx,
@@ -1097,7 +1132,7 @@ def _impl(ctx):
     debug = ctx.attr.debug
     log_info("Starting repository rule implementation")
     ctx.report_progress("test_optimization_sync: starting")
-    
+
     # Read the DD_API_KEY from the environment; fail if missing
     api_key = ctx.os.environ.get("DD_API_KEY")
     log_debug(debug, "DD_API_KEY present: %s" % bool(api_key))
@@ -1132,7 +1167,7 @@ def _impl(ctx):
     # Additionally, support local kill-switches exposed as rule attributes to force-disable
     # any of these features regardless of server-side configuration.
     known_tests_enabled = False
-    
+
     test_management_enabled = False
     settings_path = ctx.path(settings_file)
     settings_content = ctx.read(settings_path)
@@ -1142,11 +1177,11 @@ def _impl(ctx):
         attrs_obj = data_obj.get("attributes") or {}
         enabled_val = attrs_obj.get("known_tests_enabled")
         known_tests_enabled = (enabled_val == True)
-        
+
         tm_obj = attrs_obj.get("test_management") or {}
         test_management_enabled = (tm_obj.get("enabled") == True)
         log_debug(debug, "known_tests_enabled parsed as: %s" % known_tests_enabled)
-        
+
         log_debug(debug, "test_management.enabled parsed as: %s" % test_management_enabled)
 
         # ------------------------------------------------------------------
@@ -1163,6 +1198,7 @@ def _impl(ctx):
         # server-provided behavior when not explicitly set by the user.
         if hasattr(ctx.attr, "knowntests") and ctx.attr.knowntests == False:
             known_tests_enabled = False
+
             # Ensure attributes dict exists and update the flag
             if type(data_obj) != "dict":
                 settings_obj["data"] = {"attributes": {}}
@@ -1173,8 +1209,6 @@ def _impl(ctx):
                 attrs_obj = data_obj["attributes"]
             attrs_obj["known_tests_enabled"] = False
 
-        
-
         if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
             test_management_enabled = False
             if type(data_obj) != "dict":
@@ -1184,6 +1218,7 @@ def _impl(ctx):
             elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
                 data_obj["attributes"] = {}
                 attrs_obj = data_obj["attributes"]
+
             # Ensure nested test_management object exists and set enabled=false
             tm_mut = attrs_obj.get("test_management")
             if type(tm_mut) != "dict":
@@ -1207,8 +1242,10 @@ def _impl(ctx):
         ctx.report_progress("test_optimization_sync: known tests complete")
     else:
         log_debug(debug, "known_tests_enabled is false; writing empty known tests file")
+
         # Minimal valid JSON structure
         ctx.file(knowntests_file, '{"data": {"attributes": {"tests": {}}}}\n')
+
     # Split known tests by module into dedicated files (no-op if empty)
     module_specs_known = _split_known_tests_by_module(ctx, knowntests_file, debug)
 
@@ -1218,6 +1255,7 @@ def _impl(ctx):
         ctx.report_progress("test_optimization_sync: test management tests complete")
     else:
         log_debug(debug, "test_management.enabled is false; writing empty test management tests file")
+
         # Minimal valid JSON structure for test management tests
         ctx.file(tmtests_file, '{"data": {"attributes": {"modules": {}}}}\n')
 
@@ -1253,6 +1291,7 @@ def _impl(ctx):
     for _lab in labels:
         entries.append('"%s": True' % _lab)
     set_literal = "{" + (", ".join(entries)) + "}"
+
     # Compute whether the detected go module is included in the per-module set
     go_module_included = False
     if sanitized_go_module_path:
@@ -1263,17 +1302,17 @@ def _impl(ctx):
     # Prefer the apparent repo name passed by the extension/WORKSPACE helper; fallback to ctx.name
     repo_name = (getattr(ctx.attr, "repo_name", None) or ctx.name or "")
     export_bzl = (
-        "# Generated by test_optimization_sync; unified exports for test optimization info\n"
-        + "topt_data = {\n"
-        + "    \"repo_name\": \"%s\",\n" % repo_name
-        + "    \"labels\": %s,\n" % repr(labels)
-        + "    \"set\": %s,\n" % set_literal
-        + "    \"go\": {\n"
-        + "        \"module_path\": \"%s\",\n" % (go_module_path or "")
-        + "        \"sanitized_module_path\": \"%s\",\n" % sanitized_go_module_path
-        + "        \"module_included\": %s,\n" % ("True" if go_module_included else "False")
-        + "    },\n"
-        + "}\n"
+        "# Generated by test_optimization_sync; unified exports for test optimization info\n" +
+        "topt_data = {\n" +
+        "    \"repo_name\": \"%s\",\n" % repo_name +
+        "    \"labels\": %s,\n" % repr(labels) +
+        "    \"set\": %s,\n" % set_literal +
+        "    \"go\": {\n" +
+        "        \"module_path\": \"%s\",\n" % (go_module_path or "") +
+        "        \"sanitized_module_path\": \"%s\",\n" % sanitized_go_module_path +
+        "        \"module_included\": %s,\n" % ("True" if go_module_included else "False") +
+        "    },\n" +
+        "}\n"
     )
     ctx.file("export.bzl", export_bzl)
 
@@ -1282,18 +1321,19 @@ def _impl(ctx):
     # - test_optimization_context: the context.json (separate, so consumers can opt-in)
     exp = repr(exports)
     build_content = (
-        'filegroup(\n'
-        + '    name = "test_optimization_files",\n'
-        + ('    srcs = %s,\n' % exp)
-        + '    visibility = ["//visibility:public"],\n'
-        + ')\n\n'
-        + 'filegroup(\n'
-        + '    name = "test_optimization_context",\n'
-        + '    srcs = ["context.json"],\n'
-        + '    visibility = ["//visibility:public"],\n'
-        + ')\n'
-        + '\nexports_files(["export.bzl"])\n'
+        "filegroup(\n" +
+        '    name = "test_optimization_files",\n' +
+        ("    srcs = %s,\n" % exp) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n\n" +
+        "filegroup(\n" +
+        '    name = "test_optimization_context",\n' +
+        '    srcs = ["context.json"],\n' +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n" +
+        '\nexports_files(["export.bzl"])\n'
     )
+
     # Append one filegroup per module so consumers can depend on individual modules
     if module_specs_known or module_specs_tm:
         # Deterministic order by label without using set (not available in Starlark)
@@ -1310,6 +1350,7 @@ def _impl(ctx):
                 label_seen[lab] = True
                 labels.append(lab)
         labels = sorted(labels)
+
         # Aggregate files per label (include settings.json as requested)
         files_by_label = {}
         for s in module_specs_known:
@@ -1322,19 +1363,20 @@ def _impl(ctx):
             files_by_label[s["label"]] = arr
         for lab in labels:
             files = [settings_file] + sorted(files_by_label.get(lab) or [])
+
             # Format list for Starlark build content
             srcs_literal = repr(files)
             build_content += (
-                '\nfilegroup(\n'
-                + ('    name = "module_%s",\n' % lab)
-                + ('    srcs = %s,\n' % srcs_literal)
-                + '    visibility = ["//visibility:public"],\n'
-                + ')\n'
+                "\nfilegroup(\n" +
+                ('    name = "module_%s",\n' % lab) +
+                ("    srcs = %s,\n" % srcs_literal) +
+                '    visibility = ["//visibility:public"],\n' +
+                ")\n"
             )
     log_debug(debug, "Creating BUILD file with content: %s" % build_content)
     ctx.report_progress("test_optimization_sync: writing BUILD")
     ctx.file("BUILD", build_content)
-    
+
     log_info("Repository rule completed successfully")
     ctx.report_progress("test_optimization_sync: done")
 
@@ -1348,7 +1390,7 @@ def _impl(ctx):
 # - Downstream actions cache based on the fetched file's content hash
 
 test_optimization_sync = repository_rule(
-    implementation = _impl,                     # Points to the implementation function above
+    implementation = _impl,  # Points to the implementation function above
     attrs = {
         # Optional output directory; defaults to TEST_OPT_DIR (".testoptimization")
         "out_dir": attr.string(),
@@ -1367,70 +1409,147 @@ test_optimization_sync = repository_rule(
         #                    settings.data.attributes.test_management.enabled=false in the settings file.
         "knowntests": attr.bool(default = True),
         "test_management": attr.bool(default = True),
-        "debug": attr.bool(default = False),                # Toggle verbose debug logging
+        "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
-    environ = [                                 # Environment variables treated as rule inputs
-        "DD_API_KEY",                           # Required: Datadog API key for authentication
-        "DD_SITE",                              # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
-        "FETCH_SALT",                           # Optional: cache-busting salt to force re-fetch
-        "GIT_DIRTY",                            # Optional: working tree state; triggers refetch on change
+    environ = [
+        # Environment variables treated as rule inputs
+        "DD_API_KEY",  # Required: Datadog API key for authentication
+        "DD_SITE",  # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
+        "FETCH_SALT",  # Optional: cache-busting salt to force re-fetch
+        "GIT_DIRTY",  # Optional: working tree state; triggers refetch on change
         # Host OS hints used for cross-platform behavior and request configuration
-        "OS",                                   # Windows OS marker (used in _is_windows and _detect_os_info)
-        "ComSpec",                              # Windows command processor path
-        "COMSPEC",                              # Alternate casing for Windows command processor
-        "PROCESSOR_ARCHITECTURE",               # Windows arch detection
-        "PROCESSOR_ARCHITEW6432",               # Windows WOW64 arch detection
-        "DD_ENV",                               # Optional: settings payload attribute "env"
-        "DD_SERVICE",                           # Optional: settings payload attribute "service"
+        "OS",  # Windows OS marker (used in _is_windows and _detect_os_info)
+        "ComSpec",  # Windows command processor path
+        "COMSPEC",  # Alternate casing for Windows command processor
+        "PROCESSOR_ARCHITECTURE",  # Windows arch detection
+        "PROCESSOR_ARCHITEW6432",  # Windows WOW64 arch detection
+        "DD_ENV",  # Optional: settings payload attribute "env"
+        "DD_SERVICE",  # Optional: settings payload attribute "service"
         # If the following are unset, they will be inferred via git in the workspace
-        "DD_GIT_REPOSITORY_URL",                # Optional: settings payload "repository_url" (fallback: git remote.origin.url)
-        "DD_GIT_BRANCH",                        # Optional: settings payload "branch" (fallback: git rev-parse --abbrev-ref HEAD)
-        "DD_GIT_COMMIT_SHA",                    # Optional: settings payload "sha" (fallback: git rev-parse HEAD)
+        "DD_GIT_REPOSITORY_URL",  # Optional: settings payload "repository_url" (fallback: git remote.origin.url)
+        "DD_GIT_BRANCH",  # Optional: settings payload "branch" (fallback: git rev-parse --abbrev-ref HEAD)
+        "DD_GIT_COMMIT_SHA",  # Optional: settings payload "sha" (fallback: git rev-parse HEAD)
         # Additional optional context used by requests (test management prefers head values)
-        "DD_GIT_HEAD_COMMIT",                    # Optional: preferred head commit SHA
-        "DD_GIT_COMMIT_MESSAGE",                 # Optional: commit message
-        "DD_GIT_HEAD_MESSAGE",                   # Optional: preferred head commit message
+        "DD_GIT_HEAD_COMMIT",  # Optional: preferred head commit SHA
+        "DD_GIT_COMMIT_MESSAGE",  # Optional: commit message
+        "DD_GIT_HEAD_MESSAGE",  # Optional: preferred head commit message
         # Extended git tags used for context.json (non-secret)
         "DD_GIT_TAG",
-        "DD_GIT_COMMIT_AUTHOR_NAME", "DD_GIT_COMMIT_AUTHOR_EMAIL", "DD_GIT_COMMIT_AUTHOR_DATE",
-        "DD_GIT_COMMIT_COMMITTER_NAME", "DD_GIT_COMMIT_COMMITTER_EMAIL", "DD_GIT_COMMIT_COMMITTER_DATE",
-        "DD_GIT_HEAD_AUTHOR_NAME", "DD_GIT_HEAD_AUTHOR_EMAIL", "DD_GIT_HEAD_AUTHOR_DATE",
-        "DD_GIT_HEAD_COMMITTER_NAME", "DD_GIT_HEAD_COMMITTER_EMAIL", "DD_GIT_HEAD_COMMITTER_DATE",
-        "DD_GIT_PR_BASE_BRANCH", "DD_GIT_PR_BASE_BRANCH_SHA", "DD_GIT_PR_BASE_BRANCH_HEAD_SHA",
+        "DD_GIT_COMMIT_AUTHOR_NAME",
+        "DD_GIT_COMMIT_AUTHOR_EMAIL",
+        "DD_GIT_COMMIT_AUTHOR_DATE",
+        "DD_GIT_COMMIT_COMMITTER_NAME",
+        "DD_GIT_COMMIT_COMMITTER_EMAIL",
+        "DD_GIT_COMMIT_COMMITTER_DATE",
+        "DD_GIT_HEAD_AUTHOR_NAME",
+        "DD_GIT_HEAD_AUTHOR_EMAIL",
+        "DD_GIT_HEAD_AUTHOR_DATE",
+        "DD_GIT_HEAD_COMMITTER_NAME",
+        "DD_GIT_HEAD_COMMITTER_EMAIL",
+        "DD_GIT_HEAD_COMMITTER_DATE",
+        "DD_GIT_PR_BASE_BRANCH",
+        "DD_GIT_PR_BASE_BRANCH_SHA",
+        "DD_GIT_PR_BASE_BRANCH_HEAD_SHA",
         "DD_PR_NUMBER",
         # CI provider detection envs (adds robustness to repo rule caching)
-        "APPVEYOR", "APPVEYOR_REPO_NAME", "APPVEYOR_REPO_PROVIDER", "APPVEYOR_REPO_BRANCH", "APPVEYOR_REPO_COMMIT",
-        "TF_BUILD", "BUILD_REPOSITORY_URI", "BUILD_SOURCEVERSION", "BUILD_SOURCEBRANCH", "BUILD_SOURCEVERSIONMESSAGE",
-        "BITBUCKET_COMMIT", "BITBUCKET_REPO_SLUG", "BITBUCKET_BRANCH", "BITBUCKET_GIT_HTTP_ORIGIN",
+        "APPVEYOR",
+        "APPVEYOR_REPO_NAME",
+        "APPVEYOR_REPO_PROVIDER",
+        "APPVEYOR_REPO_BRANCH",
+        "APPVEYOR_REPO_COMMIT",
+        "TF_BUILD",
+        "BUILD_REPOSITORY_URI",
+        "BUILD_SOURCEVERSION",
+        "BUILD_SOURCEBRANCH",
+        "BUILD_SOURCEVERSIONMESSAGE",
+        "BITBUCKET_COMMIT",
+        "BITBUCKET_REPO_SLUG",
+        "BITBUCKET_BRANCH",
+        "BITBUCKET_GIT_HTTP_ORIGIN",
         "BUDDY",
-        "BUILDKITE", "BUILDKITE_REPO", "BUILDKITE_COMMIT", "BUILDKITE_BRANCH", "BUILDKITE_MESSAGE",
-        "CIRCLECI", "CIRCLE_REPOSITORY_URL", "CIRCLE_SHA1", "CIRCLE_BRANCH",
-        "GITHUB_SHA", "GITHUB_REPOSITORY", "GITHUB_SERVER_URL", "GITHUB_REF",
-        "GITLAB_CI", "CI_REPOSITORY_URL", "CI_COMMIT_SHA", "CI_COMMIT_BRANCH", "CI_COMMIT_MESSAGE", "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA",
-        "JENKINS_URL", "GIT_URL", "GIT_URL_1", "GIT_COMMIT", "GIT_BRANCH",
+        "BUILDKITE",
+        "BUILDKITE_REPO",
+        "BUILDKITE_COMMIT",
+        "BUILDKITE_BRANCH",
+        "BUILDKITE_MESSAGE",
+        "CIRCLECI",
+        "CIRCLE_REPOSITORY_URL",
+        "CIRCLE_SHA1",
+        "CIRCLE_BRANCH",
+        "GITHUB_SHA",
+        "GITHUB_REPOSITORY",
+        "GITHUB_SERVER_URL",
+        "GITHUB_REF",
+        "GITLAB_CI",
+        "CI_REPOSITORY_URL",
+        "CI_COMMIT_SHA",
+        "CI_COMMIT_BRANCH",
+        "CI_COMMIT_MESSAGE",
+        "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA",
+        "JENKINS_URL",
+        "GIT_URL",
+        "GIT_URL_1",
+        "GIT_COMMIT",
+        "GIT_BRANCH",
         "TEAMCITY_VERSION",
-        "TRAVIS", "TRAVIS_REPO_SLUG", "TRAVIS_COMMIT", "TRAVIS_PULL_REQUEST_BRANCH", "TRAVIS_BRANCH", "TRAVIS_COMMIT_MESSAGE",
-        "BITRISE_BUILD_SLUG", "BITRISE_GIT_REPOSITORY_URL", "BITRISE_GIT_COMMIT", "BITRISE_GIT_BRANCH",
-        "CF_BUILD_ID", "CF_BRANCH",
+        "TRAVIS",
+        "TRAVIS_REPO_SLUG",
+        "TRAVIS_COMMIT",
+        "TRAVIS_PULL_REQUEST_BRANCH",
+        "TRAVIS_BRANCH",
+        "TRAVIS_COMMIT_MESSAGE",
+        "BITRISE_BUILD_SLUG",
+        "BITRISE_GIT_REPOSITORY_URL",
+        "BITRISE_GIT_COMMIT",
+        "BITRISE_GIT_BRANCH",
+        "CF_BUILD_ID",
+        "CF_BRANCH",
         "CODEBUILD_INITIATOR",
-        "DRONE", "DRONE_GIT_HTTP_URL", "DRONE_COMMIT_SHA", "DRONE_BRANCH", "DRONE_COMMIT_MESSAGE",
+        "DRONE",
+        "DRONE_GIT_HTTP_URL",
+        "DRONE_COMMIT_SHA",
+        "DRONE_BRANCH",
+        "DRONE_COMMIT_MESSAGE",
         # Additional CI and workspace envs used in context.json
-        "CI_PROJECT_DIR", "GITHUB_WORKSPACE", "WORKSPACE", "BUILDKITE_BUILD_CHECKOUT_PATH", "TRAVIS_BUILD_DIR",
-        "CI_PIPELINE_ID", "GITHUB_RUN_ID", "TRAVIS_BUILD_ID", "BUILDKITE_BUILD_ID", "BUILD_BUILDID", "CIRCLE_WORKFLOW_ID",
-        "CI_PIPELINE_IID", "GITHUB_RUN_NUMBER", "TRAVIS_BUILD_NUMBER", "BUILDKITE_BUILD_NUMBER", "BUILD_BUILDNUMBER",
-        "CI_PIPELINE_URL", "TRAVIS_BUILD_WEB_URL", "CIRCLE_BUILD_URL", "BUILDKITE_BUILD_URL", "BUILD_BUILDURI",
-        "CI_JOB_ID", "BUILD_ID", "TRAVIS_JOB_ID",
-        "CI_JOB_NAME", "GITHUB_JOB", "JOB_NAME",
+        "CI_PROJECT_DIR",
+        "GITHUB_WORKSPACE",
+        "WORKSPACE",
+        "BUILDKITE_BUILD_CHECKOUT_PATH",
+        "TRAVIS_BUILD_DIR",
+        "CI_PIPELINE_ID",
+        "GITHUB_RUN_ID",
+        "TRAVIS_BUILD_ID",
+        "BUILDKITE_BUILD_ID",
+        "BUILD_BUILDID",
+        "CIRCLE_WORKFLOW_ID",
+        "CI_PIPELINE_IID",
+        "GITHUB_RUN_NUMBER",
+        "TRAVIS_BUILD_NUMBER",
+        "BUILDKITE_BUILD_NUMBER",
+        "BUILD_BUILDNUMBER",
+        "CI_PIPELINE_URL",
+        "TRAVIS_BUILD_WEB_URL",
+        "CIRCLE_BUILD_URL",
+        "BUILDKITE_BUILD_URL",
+        "BUILD_BUILDURI",
+        "CI_JOB_ID",
+        "BUILD_ID",
+        "TRAVIS_JOB_ID",
+        "CI_JOB_NAME",
+        "GITHUB_JOB",
+        "JOB_NAME",
         "CI_JOB_URL",
         "CI_JOB_STAGE",
-        "NODE_NAME", "NODE_LABELS",
+        "NODE_NAME",
+        "NODE_LABELS",
     ],
-    local = True,                               # Always run this rule locally, bypassing repository cache
+    local = True,  # Always run this rule locally, bypassing repository cache
 )
 
 # Module extension implementation for Bazel 6+ MODULE.bazel system
 def _test_optimization_sync_extension_impl(module_ctx):
     """Implementation of the test_optimization_sync module extension."""
+
     # Determine if any tag has debug enabled to gate high-level logging
     extension_debug = False
     for _mod in module_ctx.modules:
@@ -1443,25 +1562,26 @@ def _test_optimization_sync_extension_impl(module_ctx):
 
     log_debug(extension_debug, "test_optimization_sync_extension: Starting module extension implementation")
     log_debug(extension_debug, "test_optimization_sync_extension: Number of modules: %d" % len(module_ctx.modules))
-    
+
     for mod in module_ctx.modules:
         log_debug(extension_debug, "test_optimization_sync_extension: Processing module: %s" % mod.name)
         log_debug(extension_debug, "test_optimization_sync_extension: Module is_root: %s" % mod.is_root)
         log_debug(extension_debug, "test_optimization_sync_extension: Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
-        
+
         for test_optimization_call in mod.tags.test_optimization_sync:
             call_debug = hasattr(test_optimization_call, "debug") and test_optimization_call.debug
             log_debug(call_debug, "test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
-            log_debug(call_debug,
-                "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s"
-                % (
+            log_debug(
+                call_debug,
+                "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s" %
+                (
                     test_optimization_call.name,
                     (test_optimization_call.out_dir or "<default>"),
                     (test_optimization_call.service or "<env/DD_SERVICE>"),
                     call_debug,
-                )
+                ),
             )
-            
+
             test_optimization_sync(
                 name = test_optimization_call.name,
                 repo_name = test_optimization_call.name,
