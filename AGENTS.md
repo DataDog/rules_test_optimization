@@ -42,6 +42,8 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
 - Tests can read `TEST_OPTIMIZATION_PAYLOADS_FILES` (space‑separated runfiles) to inspect synced payloads.
 
+Note: This repository declares a `bazel_dep` on `rules_go` to load provider definitions for Go importpath inference. It does not configure Go toolchains; consumers must still configure `rules_go` (SDK, toolchains) in their own `MODULE.bazel`.
+
 ## Multi‑Service Usage
 - Use `test_optimization_multi_sync_extension` (`@...//tools:test_optimization_multi_sync.bzl`) with `services = ["<svc1>", "<svc2>"]` to fetch multiple services at once.
 - Aggregator repo exposes per‑service labels:

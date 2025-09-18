@@ -204,6 +204,8 @@ Language Macros
   - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_PAYLOADS_FILES` to `$(rlocationpaths :<selector>)`.  
   - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
   - The exported `topt_data["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
+- Module dependency: this repository declares a `bazel_dep("rules_go", <version>)` to make the provider load visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.
+
 - See `tools/topt_go_test.bzl` and `tools/topt_go_infer.bzl`. Other languages can adopt a similar pattern as needed.
 
 Security Considerations

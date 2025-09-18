@@ -92,6 +92,8 @@ test_optimization_sync.test_optimization_sync(
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
+Note: This module declares a dependency on `rules_go` solely to load provider definitions for Go importpath inference. It does not configure any Go toolchains. Consumers still need to set up `rules_go` and the Go SDK as usual to build and run Go targets.
+
 ### Multi-service usage (Bzlmod)
 
 Fetch multiple services with one extension and select per-service data by label:
