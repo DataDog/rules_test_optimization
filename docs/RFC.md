@@ -219,7 +219,7 @@ Language Macros
   - Attach runfiles and env (`TEST_OPTIMIZATION_PAYLOADS_FILES`, `DD_PAYLOADS_DIR`).  
   - Add the uploader test target automatically.  
   - Surface reasonable defaults and allow overrides.  
-- Go importpath inference (new):  
+- Go importpath inference:  
   - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
   - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_PAYLOADS_FILES` to `$(rlocationpaths :<selector>)`.  
   - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
