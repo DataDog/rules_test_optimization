@@ -1101,9 +1101,9 @@ def _impl(ctx):
 
         tm_obj = attrs_obj.get("test_management") or {}
         test_management_enabled = (tm_obj.get("enabled") == True)
-        log_debug(debug, "known_tests_enabled parsed as: %s" % known_tests_enabled)
+        log_debug(debug, "settings", "known_tests_enabled parsed as: %s" % known_tests_enabled)
 
-        log_debug(debug, "test_management.enabled parsed as: %s" % test_management_enabled)
+        log_debug(debug, "settings", "test_management.enabled parsed as: %s" % test_management_enabled)
 
         # ------------------------------------------------------------------
         # Kill-switch overrides
@@ -1151,7 +1151,7 @@ def _impl(ctx):
         # overridden disablement is reflected to later phases.
         ctx.file(settings_file, json.encode(settings_obj) + "\n")
     else:
-        log_debug(debug, "Settings file is empty; cannot determine feature flags")
+        log_debug(debug, "settings", "Settings file is empty; cannot determine feature flags")
 
     # Always produce known tests and test-management files; write empty stubs when disabled
     # Write manifest version (v1) to manifest.txt for change tracking
@@ -1165,7 +1165,7 @@ def _impl(ctx):
         _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, debug)
         ctx.report_progress("test_optimization_sync: known tests complete")
     else:
-        log_debug(debug, "known_tests_enabled is false; writing empty known tests file")
+        log_debug(debug, "known_tests", "known_tests_enabled is false; writing empty known tests file")
 
         # Minimal valid JSON structure
         ctx.file(known_tests_file, '{"data": {"attributes": {"tests": {}}}}\n')
@@ -1178,7 +1178,7 @@ def _impl(ctx):
         _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug)
         ctx.report_progress("test_optimization_sync: test management tests complete")
     else:
-        log_debug(debug, "test_management.enabled is false; writing empty test management tests file")
+        log_debug(debug, "test_management", "test_management.enabled is false; writing empty test management tests file")
 
         # Minimal valid JSON structure for test management tests
         ctx.file(test_management_file, '{"data": {"attributes": {"modules": {}}}}\n')
@@ -1335,7 +1335,7 @@ def _impl(ctx):
                 (('    test_management = "%s",\n' % tm_by_label.get(lab)) if tm_by_label.get(lab) else "") +
                 '    visibility = ["//visibility:public"],\n' +
                 ")\n")
-    log_debug(debug, "Creating BUILD file with content: %s" % build_content)
+    log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)
     ctx.report_progress("test_optimization_sync: writing BUILD")
     ctx.file("BUILD", build_content)
 
@@ -1522,20 +1522,21 @@ def _test_optimization_sync_extension_impl(module_ctx):
         if extension_debug:
             break
 
-    log_debug(extension_debug, "test_optimization_sync_extension: Starting module extension implementation")
-    log_debug(extension_debug, "test_optimization_sync_extension: Number of modules: %d" % len(module_ctx.modules))
+    log_debug(extension_debug, "extension", "Starting module extension implementation")
+    log_debug(extension_debug, "extension", "Number of modules: %d" % len(module_ctx.modules))
 
     for mod in module_ctx.modules:
-        log_debug(extension_debug, "test_optimization_sync_extension: Processing module: %s" % mod.name)
-        log_debug(extension_debug, "test_optimization_sync_extension: Module is_root: %s" % mod.is_root)
-        log_debug(extension_debug, "test_optimization_sync_extension: Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
+        log_debug(extension_debug, "extension", "Processing module: %s" % mod.name)
+        log_debug(extension_debug, "extension", "Module is_root: %s" % mod.is_root)
+        log_debug(extension_debug, "extension", "Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
 
         for test_optimization_call in mod.tags.test_optimization_sync:
             call_debug = hasattr(test_optimization_call, "debug") and test_optimization_call.debug
-            log_debug(call_debug, "test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
+            log_debug(call_debug, "extension", "Processing test_optimization_sync call: %s" % test_optimization_call.name)
             log_debug(
                 call_debug,
-                "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s" %
+                "extension",
+                "Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s" %
                 (
                     test_optimization_call.name,
                     (test_optimization_call.out_dir or "<default>"),
