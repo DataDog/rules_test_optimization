@@ -17,6 +17,7 @@ Given an external repository name `<repo_name>` created by the extension, the ge
 - A core filegroup target named `test_optimization_files` which includes only `settings.json`
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
+  - `manifest.txt` (Payload manifest; version marker for change tracking, currently `version=1`)
   - `known_tests.json` (Known Tests API response or minimal stub)
   - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `known_tests.module.<sanitized_module>.json` and placed alongside `known_tests.json`. See below for details.
   - `test_management.json` (Test Management Tests API response or minimal stub)

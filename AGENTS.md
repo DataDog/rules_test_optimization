@@ -28,7 +28,7 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.
 - Public labels are stable — do not rename `test_optimization_files`, `test_optimization_context`, or `module_<sanitized>`.
-- Outputs under `.testoptimization/` are fixed: `settings.json`, `known_tests.json`, `known_tests.module.*.json`, `test_management.json`, `test_management.module.*.json`, `context.json`.
+- Outputs under `.testoptimization/` are fixed: `settings.json`, `manifest.txt`, `known_tests.json`, `known_tests.module.*.json`, `test_management.json`, `test_management.module.*.json`, `context.json`.
 
 ## Testing Guidelines
 - Prefer `./bazelw test //...`; the uploader rule runs as a normal test.

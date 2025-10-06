@@ -108,7 +108,7 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 - Phase 1 — [Sync at module/repo resolution](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_sync.bzl):  
     
   - A module extension instantiates a repository rule that performs the Datadog API calls for Settings (always), Known Tests (when enabled), and Test Management tests (when enabled).  
-  - The rule writes deterministic JSON outputs under a fixed directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags.  
+  - The rule writes deterministic JSON outputs under a fixed directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags. It also writes a `manifest.txt` with a version marker (currently `version=1`) to track payload format changes.  
   - It generates a BUILD file exposing stable public filegroups:  
     - `@<repo>//:test_optimization_files` (core bundle with `settings.json`),  
     - `@<repo>//:test_optimization_context` (`context.json` only),  
@@ -190,7 +190,7 @@ Repository Rule and Module Extension
   3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `test_management.json` and split by module (`test_management.module.<sanitized>.json`).  
   4. `context.json`: built locally from CI/git/OS/runtime information — non‑secret and safe to ship as runfiles.  
   5. A generated `BUILD` file that exposes:  
-     - `:test_optimization_files` → only `settings.json` (stable bundle for most uses).  
+     - `:test_optimization_files` → includes `settings.json` and `manifest.txt` (stable bundle for most uses).  
      - `:test_optimization_context` → `context.json` (opt‑in for enrichment).  
      - `:module_<sanitized>` → per‑module bundle of settings \+ module‑specific JSONs.  
   6. An `export.bzl` with `topt_data` describing labels and language‑specific hints (e.g., Go module path inclusion).  

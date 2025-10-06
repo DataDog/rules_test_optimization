@@ -1152,9 +1152,11 @@ def _impl(ctx):
     settings_file = "%s/%s" % (out_dir, "settings.json")
     knowntests_file = "%s/%s" % (out_dir, "known_tests.json")
     tmtests_file = "%s/%s" % (out_dir, "test_management.json")
+    manifest_file = "%s/%s" % (out_dir, "manifest.txt")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, knowntests_file, debug)
     _ensure_parent_directory(ctx, tmtests_file, debug)
+    _ensure_parent_directory(ctx, manifest_file, debug)
 
     log_info("Settings file: %s" % settings_file)
     ctx.report_progress("test_optimization_sync: downloading")
@@ -1233,7 +1235,10 @@ def _impl(ctx):
         log_debug(debug, "Settings file is empty; cannot determine feature flags")
 
     # Always produce known tests and test-management files; write empty stubs when disabled
-    exports = [settings_file]
+    # Write manifest version (v1) to manifest.txt for change tracking
+    ctx.file(manifest_file, "version=1\n")
+
+    exports = [settings_file, manifest_file]
     module_specs_known = []
     module_specs_tm = []
     if known_tests_enabled:
