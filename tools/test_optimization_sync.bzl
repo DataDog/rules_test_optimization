@@ -296,23 +296,26 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug):
         base_file = _sanitize_filename_fragment(module_name)
         fc = file_counts.get(base_file, 0) + 1
         file_counts[base_file] = fc
-        file_name = (
-            "known_tests.module.%s.json" % base_file if fc == 1 else "known_tests.module.%s_%d.json" % (base_file, fc)
-        )
 
-        out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
+        # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
+        per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
+        out_file = per_module_dir + "/known_tests.json"
 
-        # Build a minimal per-module JSON preserving top-level data fields when available
-        mod_data = {"attributes": {"tests": {module_name: suites_map}}}
-
-        # Preserve id/type if present
-        did = data_obj.get("id")
-        dty = data_obj.get("type")
-        if did != None:
-            mod_data["id"] = did
-        if dty != None:
-            mod_data["type"] = dty
-        mod_obj = {"data": mod_data}
+        # Build a per-module JSON that preserves the full original shape
+        # and only narrows data.attributes.tests to the single module.
+        new_obj = {}
+        for _k in obj.keys():
+            new_obj[_k] = obj.get(_k)
+        data_obj2 = new_obj.get("data")
+        if type(data_obj2) != "dict":
+            data_obj2 = {}
+            new_obj["data"] = data_obj2
+        attrs_obj2 = data_obj2.get("attributes")
+        if type(attrs_obj2) != "dict":
+            attrs_obj2 = {}
+            data_obj2["attributes"] = attrs_obj2
+        attrs_obj2["tests"] = {module_name: suites_map}
+        mod_obj = new_obj
 
         _ensure_parent_directory(ctx, out_file, debug)
         ctx.file(out_file, json.encode(mod_obj) + "\n")
@@ -364,20 +367,26 @@ def _split_test_management_by_module(ctx, test_management_file, debug):
         base_file = _sanitize_filename_fragment(module_name)
         fc = file_counts.get(base_file, 0) + 1
         file_counts[base_file] = fc
-        file_name = (
-            "test_management.module.%s.json" % base_file if fc == 1 else "test_management.module.%s_%d.json" % (base_file, fc)
-        )
 
-        out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
+        # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
+        per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
+        out_file = per_module_dir + "/test_management.json"
 
-        mod_data = {"attributes": {"modules": {module_name: module_content}}}
-        did = data_obj.get("id")
-        dty = data_obj.get("type")
-        if did != None:
-            mod_data["id"] = did
-        if dty != None:
-            mod_data["type"] = dty
-        mod_obj = {"data": mod_data}
+        # Build a per-module JSON that preserves the full original shape
+        # and only narrows data.attributes.modules to the single module.
+        new_obj = {}
+        for _k in obj.keys():
+            new_obj[_k] = obj.get(_k)
+        data_obj2 = new_obj.get("data")
+        if type(data_obj2) != "dict":
+            data_obj2 = {}
+            new_obj["data"] = data_obj2
+        attrs_obj2 = data_obj2.get("attributes")
+        if type(attrs_obj2) != "dict":
+            attrs_obj2 = {}
+            data_obj2["attributes"] = attrs_obj2
+        attrs_obj2["modules"] = {module_name: module_content}
+        mod_obj = new_obj
 
         _ensure_parent_directory(ctx, out_file, debug)
         ctx.file(out_file, json.encode(mod_obj) + "\n")
@@ -1321,11 +1330,38 @@ def _impl(ctx):
     )
     ctx.file("export.bzl", export_bzl)
 
+    # Rule to present per-module files with canonical runfile names via symlinks
+    module_runfiles_bzl = (
+        "def _topt_module_files_impl(ctx):\n" +
+        "    syms = {}\n" +
+        "    syms[\".testoptimization/settings.json\"] = ctx.file.settings\n" +
+        "    syms[\".testoptimization/manifest.txt\"] = ctx.file.manifest\n" +
+        "    kt = getattr(ctx.file, \"known_tests\", None)\n" +
+        "    if kt:\n" +
+        "        syms[\".testoptimization/known_tests.json\"] = kt\n" +
+        "    tm = getattr(ctx.file, \"test_management\", None)\n" +
+        "    if tm:\n" +
+        "        syms[\".testoptimization/test_management.json\"] = tm\n" +
+        "    return DefaultInfo(runfiles = ctx.runfiles(symlinks = syms))\n" +
+        "\n" +
+        "topt_module_files = rule(\n" +
+        "    implementation = _topt_module_files_impl,\n" +
+        "    attrs = {\n" +
+        "        \"settings\": attr.label(allow_single_file = True, mandatory = True),\n" +
+        "        \"manifest\": attr.label(allow_single_file = True, mandatory = True),\n" +
+        "        \"known_tests\": attr.label(allow_single_file = True),\n" +
+        "        \"test_management\": attr.label(allow_single_file = True),\n" +
+        "    },\n" +
+        ")\n"
+    )
+    ctx.file("module_runfiles.bzl", module_runfiles_bzl)
+
     # 6. Create a BUILD file with two public filegroup targets.
     # - test_optimization_files: the JSONs returned or stubbed from HTTP (existing)
     # - test_optimization_context: the context.json (separate, so consumers can opt-in)
     exp = repr(exports)
     build_content = (
+        'load(":module_runfiles.bzl", "topt_module_files")\n' +
         "filegroup(\n" +
         '    name = "test_optimization_files",\n' +
         ("    srcs = %s,\n" % exp) +
@@ -1356,28 +1392,39 @@ def _impl(ctx):
                 labels.append(lab)
         labels = sorted(labels)
 
-        # Aggregate files per label (include settings.json as requested)
-        files_by_label = {}
+        # Map module labels to their per-module files
+        known_by_label = {}
         for s in module_specs_known:
-            arr = files_by_label.get(s["label"]) or []
-            arr.append(s["file"])
-            files_by_label[s["label"]] = arr
+            known_by_label[s["label"]] = s["file"]
+        tm_by_label = {}
         for s in module_specs_tm:
-            arr = files_by_label.get(s["label"]) or []
-            arr.append(s["file"])
-            files_by_label[s["label"]] = arr
-        for lab in labels:
-            files = [settings_file] + sorted(files_by_label.get(lab) or [])
+            tm_by_label[s["label"]] = s["file"]
 
-            # Format list for Starlark build content
-            srcs_literal = repr(files)
-            build_content += (
-                "\nfilegroup(\n" +
+        # Ensure per-module stubs exist for the missing side so consumers always
+        # see both canonical filenames in the per-module runfiles
+        for lab in labels:
+            if not known_by_label.get(lab):
+                per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
+                kfile = per_dir + "/known_tests.json"
+                _ensure_parent_directory(ctx, kfile, debug)
+                ctx.file(kfile, '{"data": {"attributes": {"tests": {}}}}\n')
+                known_by_label[lab] = kfile
+            if not tm_by_label.get(lab):
+                per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
+                tfile = per_dir + "/test_management.json"
+                _ensure_parent_directory(ctx, tfile, debug)
+                ctx.file(tfile, '{"data": {"attributes": {"modules": {}}}}\n')
+                tm_by_label[lab] = tfile
+
+        for lab in labels:
+            build_content += ("\ntopt_module_files(\n" +
                 ('    name = "module_%s",\n' % lab) +
-                ("    srcs = %s,\n" % srcs_literal) +
+                ('    settings = "%s",\n' % settings_file) +
+                ('    manifest = "%s",\n' % manifest_file) +
+                (('    known_tests = "%s",\n' % known_by_label.get(lab)) if known_by_label.get(lab) else "") +
+                (('    test_management = "%s",\n' % tm_by_label.get(lab)) if tm_by_label.get(lab) else "") +
                 '    visibility = ["//visibility:public"],\n' +
-                ")\n"
-            )
+                ")\n")
     log_debug(debug, "Creating BUILD file with content: %s" % build_content)
     ctx.report_progress("test_optimization_sync: writing BUILD")
     ctx.file("BUILD", build_content)
