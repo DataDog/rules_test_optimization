@@ -1,62 +1,24 @@
-# Macro: dd_topt_go_test
-#
-# Wraps a rules_go `go_test` together with the Datadog payload uploader so you
-# can run a single label. The macro creates three targets:
-# - <name>_go: the underlying go_test
-# - <name>_dd_upload_payloads: the uploader test
-# - <name>: a test_suite including both of the above
-#
-# Notes
-# - You must set up the sync repo once (via MODULE.bazel or WORKSPACE) so that
-#   `@test_optimization_data//:test_optimization_*` labels exist.
-# - Pass normal go_test attributes via **kwargs.
-# - Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
-# - Import path inference mirrors rules_go behavior by walking `embed` via
-#   an aspect and reading the GoArchive provider; when unavailable, falls
-#   back to go_module_path + Bazel package path.
+"""Macro: dd_topt_go_test.
+
+Wraps a rules_go `go_test` together with the Datadog payload uploader so you
+can run a single label. The macro creates three targets:
+- <name>_go: the underlying go_test
+- <name>_dd_upload_payloads: the uploader test
+- <name>: a test_suite including both of the above
+
+Notes:
+- You must set up the sync repo once (via MODULE.bazel or WORKSPACE) so that
+  `@test_optimization_data//:test_optimization_*` labels exist.
+- Pass normal go_test attributes via **kwargs.
+- Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
+- Import path inference mirrors rules_go behavior by walking `embed` via
+  an aspect and reading the GoArchive provider; when unavailable, falls
+  back to go_module_path + Bazel package path.
+"""
 
 load("//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
 load("//tools:topt_go_infer.bzl", "topt_go_payloads_selector")
-
-def _dd_sanitize_label_fragment(name):
-    # Produce a safe suffix for Bazel target names from an arbitrary string.
-    s = (name or "").lower()
-    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
-    out = []
-    last_us = False
-    n_s = len(s)
-    for i in range(n_s):
-        ch = s[i]
-        if ch in allowed:
-            out.append(ch)
-            last_us = (ch == "_")
-        elif not last_us:
-            out.append("_")
-            last_us = True
-
-    # Trim leading/trailing underscores
-    n = len(out)
-    start = 0
-    found = False
-    for i in range(n):
-        if out[i] != "_":
-            start = i
-            found = True
-            break
-    if not found:
-        start = n
-    end = 0
-    for k in range(n):
-        j = n - 1 - k
-        if j < 0:
-            break
-        if out[j] != "_":
-            end = j + 1
-            break
-    res = "".join(out[start:end])
-    if not res:
-        res = "module"
-    return res
+load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
 def dd_topt_go_test(
         name,
@@ -68,8 +30,6 @@ def dd_topt_go_test(
         # (raw or sanitized). Ignored when a single-service dict is passed.
         topt_service = None,
         # Auto-select per-module known_tests/test_management group based on Go package import path
-        # Deprecated: go_module_path (inference now uses a rules_go provider via aspect)
-        go_module_path = None,
         module_label_override = None,
         # Uploader knobs
         payloads_dir = None,
@@ -90,12 +50,22 @@ def dd_topt_go_test(
       topt_data: Either the single-service dict exported by @<repo>//:export.bzl, or the
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
         Used to derive the repo alias, go_module_path, and whether to include per-module files.
+      go_test_rule: The rules_go go_test rule symbol (e.g., go_test from @rules_go//go:def.bzl).
+        Required to avoid repo visibility issues.
       topt_service: Optional when passing the aggregator mapping; selects which service to use.
         Accepts raw or sanitized service key (e.g., "go-service" or "go_service").
-      payloads_dir/tests_subdir/coverage_subdir/quiescent_sec/max_wait_sec/fail_on_error/uploader_debug:
-        Uploader rule configuration.
-      uploader_tags: Extra tags applied to the uploader test.
-      suite_tags: Tags applied to the generated test_suite.
+      module_label_override: Optional override for the sanitized module label suffix when the
+        automatic detection doesn't match the expected module name.
+      payloads_dir: Optional absolute path to the payloads directory. If not set, uses
+        DD_PAYLOADS_DIR environment variable. Should match --sandbox_writable_path.
+      tests_subdir: Subdirectory under payloads_dir for test payloads (default: "tests").
+      coverage_subdir: Subdirectory under payloads_dir for coverage payloads (default: "coverage").
+      quiescent_sec: Seconds to wait for directory quiescence before uploading (default: 10).
+      max_wait_sec: Maximum seconds to wait before forcing upload (default: 1800).
+      fail_on_error: Whether the uploader test should fail on upload errors (default: False).
+      uploader_debug: Enable debug logging in the uploader test (default: False).
+      uploader_tags: Extra tags applied to the uploader test target.
+      suite_tags: Tags applied to the generated test_suite target.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
@@ -118,7 +88,7 @@ def dd_topt_go_test(
                 fail("dd_topt_go_test: topt_data looks like a multi-service mapping; please pass topt_service (one of: %s)" % ", ".join(sorted(keys)))
         else:
             # Try sanitized then raw
-            sk = _dd_sanitize_label_fragment(topt_service)
+            sk = sanitize_label_fragment(topt_service)
             _svc = topt_data.get(sk)
             if _svc == None:
                 _svc = topt_data.get(topt_service)

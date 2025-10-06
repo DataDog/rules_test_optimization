@@ -433,6 +433,224 @@ dd_topt_go_test(
 )
 ```
 
+## Troubleshooting
+
+### Repository rule not fetching data
+
+**Symptom**: Build succeeds but test optimization files are empty or stale.
+
+**Solutions**:
+
+1. **Verify DD_API_KEY is set**:
+   ```bash
+   bazel info --repo_env | grep DD_API_KEY
+   ```
+   If not set, add to `.bazelrc`:
+   ```
+   common --repo_env=DD_API_KEY
+   ```
+
+2. **Force refetch** with a cache-busting salt:
+   ```bash
+   bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s)
+   ```
+
+3. **Check repository cache** to see if the rule ran:
+   ```bash
+   # Find the external repository directory
+   bazel info output_base
+   # Repository contents at: $(bazel info output_base)/external/test_optimization_data
+   ls -la $(bazel info output_base)/external/test_optimization_data/.testoptimization/
+   ```
+
+4. **Enable debug logging** in your `MODULE.bazel`:
+   ```bzl
+   test_optimization_sync.test_optimization_sync(
+       name = "test_optimization_data",
+       debug = True,  # Verbose logging
+   )
+   ```
+
+### Service name validation errors
+
+**Symptom**: Error message about invalid or empty service name.
+
+**Solution**: Ensure service name is provided via one of:
+1. The `service` attribute:
+   ```bzl
+   test_optimization_sync.test_optimization_sync(
+       name = "test_optimization_data",
+       service = "my-service",
+   )
+   ```
+
+2. Or via environment variable in `.bazelrc`:
+   ```
+   common --repo_env=DD_SERVICE=my-service
+   ```
+
+### Network errors during fetch
+
+**Symptom**: `curl` errors or timeout during repository resolution.
+
+**Solutions**:
+
+1. **Verify DD_SITE** is correct (defaults to `datadoghq.com`):
+   ```
+   common --repo_env=DD_SITE=datadoghq.eu  # for EU region
+   ```
+
+2. **Check firewall/proxy** allows HTTPS to:
+   - `https://api.datadoghq.com` (or your DD_SITE)
+
+3. **Verify API key permissions**: The API key needs read access to:
+   - CI Visibility Settings API
+   - Libraries Tests API (for Known Tests)
+   - Test Management API (for Test Management)
+
+### Tests not uploading
+
+**Symptom**: Tests run but no data appears in Datadog UI.
+
+**Solutions**:
+
+1. **Verify uploader test ran**:
+   ```bash
+   bazel test //... //tools:dd_upload_payloads --test_output=all
+   ```
+   Look for `[dd-uploader]` log lines.
+
+2. **Check payload directory is writable**:
+   ```bash
+   # Must match your --test_env=DD_PAYLOADS_DIR
+   ls -la $PWD/.testoptimization/payloads/tests/
+   ls -la $PWD/.testoptimization/payloads/coverage/
+   ```
+
+3. **Ensure --sandbox_writable_path is set**:
+   ```bash
+   bazel test //... //tools:dd_upload_payloads \
+     --sandbox_writable_path=$PWD/.testoptimization/payloads \
+     --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+   ```
+
+4. **Verify environment variables** for upload:
+   - Agentless mode requires: `DD_API_KEY`, `DD_SITE`
+   - EVP proxy mode requires: `DD_TRACE_AGENT_URL`
+
+### Per-module files not found
+
+**Symptom**: `dd_topt_go_test` fails with "module_X not found" or falls back to full bundle.
+
+**Solutions**:
+
+1. **List available modules**:
+   ```bash
+   bazel query 'kind(".*", @test_optimization_data//...)' | grep module_
+   ```
+
+2. **Check Go module path detection**:
+   ```bash
+   # Enable debug to see detected module path
+   # Look for logs like: "Detected module path 'github.com/myorg/repo'"
+   ```
+
+3. **Verify importpath inference** (if using `embed`):
+   - Ensure `go_library` target exists
+   - Check that `embed = [":library_target"]` is set on your test
+
+4. **Override module label** explicitly (as workaround):
+   ```bzl
+   dd_topt_go_test(
+       name = "my_test",
+       module_label_override = "my_expected_module",  # Matches :module_my_expected_module
+       ...
+   )
+   ```
+
+### Cache invalidation happening too often
+
+**Symptom**: Repository refetches on every build.
+
+**Causes & Solutions**:
+
+1. **Changing Git state**: `GIT_DIRTY`, `DD_GIT_*` variables are in `environ` list.
+   - Remove `GIT_DIRTY` from your `.bazelrc` if you don't want dirty-tree sensitivity.
+
+2. **FETCH_SALT with TTL**: If using `FETCH_SALT_TTL` in `bazelw`, each TTL expiry triggers refetch.
+   - Increase TTL or remove FETCH_SALT for stable builds.
+
+3. **Datadog backend changes**: Settings or test lists changing upstream invalidate cache.
+   - Expected behavior; use per-module files to limit blast radius.
+   - Consider kill-switches for Known Tests if too noisy:
+     ```bzl
+     test_optimization_sync.test_optimization_sync(
+         name = "test_optimization_data",
+         known_tests = False,  # Disable Known Tests locally
+     )
+     ```
+
+### Windows-specific issues
+
+**Symptom**: PowerShell errors or `bazelw` not found.
+
+**Solutions**:
+
+1. **Use PowerShell for bazelw equivalent**:
+   ```powershell
+   # Set environment variables directly before bazel commands
+   $env:DD_GIT_REPOSITORY_URL = "https://github.com/myorg/repo.git"
+   bazel build //...
+   ```
+
+2. **Verify PowerShell execution policy**:
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   ```
+
+3. **Check paths use forward slashes** in Starlark/Bazel contexts (backward slashes are auto-converted).
+
+### Debugging tips
+
+1. **View HTTP request bodies** (when `debug = True`):
+   - Look for lines like: `[http] Settings request body: {...}`
+
+2. **Inspect generated files**:
+   ```bash
+   # Settings
+   cat $(bazel info output_base)/external/test_optimization_data/.testoptimization/settings.json | jq .
+   
+   # Per-module known tests
+   cat $(bazel info output_base)/external/test_optimization_data/.testoptimization/module_*/known_tests.json | jq .
+   ```
+
+3. **Check BUILD file generation**:
+   ```bash
+   cat $(bazel info output_base)/external/test_optimization_data/BUILD
+   ```
+
+4. **Verify export.bzl contents**:
+   ```bash
+   cat $(bazel info output_base)/external/test_optimization_data/export.bzl
+   ```
+
+### Getting help
+
+If issues persist:
+
+1. **Enable debug mode** and capture full output:
+   ```bash
+   bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s) 2>&1 | tee debug.log
+   ```
+
+2. **Collect diagnostic info**:
+   - Bazel version: `bazel version`
+   - OS: `uname -a` (Linux/macOS) or `systeminfo` (Windows)
+   - Repository rule outputs (as shown above)
+   - Sanitized logs (remove API keys before sharing)
+
+3. **File an issue** at: https://github.com/DataDog/rules_test_optimization/issues
+
 ## Configuration and attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`

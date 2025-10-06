@@ -1,69 +1,23 @@
-# Multi-service Datadog Test Optimization module extension
-#
-# Provides a higher-level module extension that instantiates the existing
-# `test_optimization_sync` repository rule once per service, and also creates
-# an aggregator repository that exposes service-suffixed labels so consumers
-# can select a single service's data.
+"""Multi-service Datadog Test Optimization module extension.
+
+Provides a higher-level module extension that instantiates the existing
+`test_optimization_sync` repository rule once per service, and also creates
+an aggregator repository that exposes service-suffixed labels so consumers
+can select a single service's data.
+"""
 
 load("//tools:test_optimization_sync.bzl", "test_optimization_sync")
-
-# ---------------------------------------------------------------------------
-# Helpers (local)
-# ---------------------------------------------------------------------------
-
-def _sanitize_label_fragment(name):
-    s = (name or "").lower()
-    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
-    out = []
-    last_us = False
-    for ch in s:
-        if ch in allowed:
-            out.append(ch)
-            last_us = (ch == "_")
-        elif not last_us:
-            out.append("_")
-            last_us = True
-
-    # trim leading/trailing '_'
-    # find first non-underscore
-    n = len(out)
-    start = 0
-    found = False
-    for i in range(n):
-        if out[i] != "_":
-            start = i
-            found = True
-            break
-    if not found:
-        return "service"
-    end = start
-    for k in range(n):
-        j = n - 1 - k
-        if j < 0:
-            break
-        if out[j] != "_":
-            end = j + 1
-            break
-    frag = "".join(out[start:end])
-    return frag or "service"
-
-def _dedup_keys(keys):
-    # Ensure sanitized keys are unique by appending numeric suffixes if needed
-    seen = {}
-    out = []
-    for k in keys:
-        c = seen.get(k, 0) + 1
-        seen[k] = c
-        out.append(k if c == 1 else ("%s_%d" % (k, c)))
-    return out
+load(
+    "//tools:common_utils.bzl",
+    "dedup_keys",
+    "sanitize_label_fragment",
+)
 
 # ---------------------------------------------------------------------------
 # Aggregator repository rule
 # ---------------------------------------------------------------------------
 
 def _multi_aggregate_impl(ctx):
-    debug = ctx.attr.debug
-
     keys = list(ctx.attr.service_keys)
     repos = list(ctx.attr.repo_names)
     if len(keys) != len(repos):
@@ -155,8 +109,8 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                 fail("test_optimization_multi_sync: 'services' must be a non-empty list")
 
             # Compute sanitized keys and dedup
-            raw_keys = [_sanitize_label_fragment(s) for s in services]
-            keys = _dedup_keys(raw_keys)
+            raw_keys = [sanitize_label_fragment(s) for s in services]
+            keys = dedup_keys(raw_keys)
 
             per_repo_names = []
             for i in range(len(services)):
