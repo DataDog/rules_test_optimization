@@ -341,7 +341,7 @@ def _detect_os_info(ctx, debug):
             "unknown"
         )
         version = ctx.os.environ.get("OS") or ""
-        log_debug(debug, "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
+        log_debug(debug, "os", "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
         return {"platform": platform, "version": version, "arch": arch}
 
     raw_platform = _run(["uname", "-s"]) or ""
@@ -493,6 +493,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             if try_body != None:
                 log_debug(
                     debug,
+                    "http",
                     "HTTP response body (%s %s): %s" % (http_method, url, try_body),
                 )
 
