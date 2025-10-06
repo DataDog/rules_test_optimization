@@ -14,7 +14,7 @@ All outputs are written under a configurable directory (default: `.testoptimizat
 
 Given an external repository name `<repo_name>` created by the extension, the generated BUILD inside the external repo contains:
 
-- A core filegroup target named `test_optimization_files` which includes only `settings.json`
+- A core filegroup target named `test_optimization_files` which includes `settings.json` and `manifest.txt`
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
   - `manifest.txt` (Payload manifest; version marker for change tracking, currently `version=1`)

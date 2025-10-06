@@ -67,7 +67,7 @@ def dd_topt_go_test(
         # Optional: when using the multi-service aggregator, select the service
         # (raw or sanitized). Ignored when a single-service dict is passed.
         topt_service = None,
-        # Auto-select per-module known-tests/tmtests group based on Go package import path
+        # Auto-select per-module known_tests/test_management group based on Go package import path
         # Deprecated: go_module_path (inference now uses a rules_go provider via aspect)
         go_module_path = None,
         module_label_override = None,

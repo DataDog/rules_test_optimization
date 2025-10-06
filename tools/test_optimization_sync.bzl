@@ -9,7 +9,7 @@
 # - A first request to the Settings API which always runs and writes
 #   `settings_file`.
 # - An optional second request to the Known Tests API when the settings say
-#   `known_tests_enabled = true`, writing `knowntests_file`. If disabled, an
+#   `known_tests_enabled = true`, writing `known_tests_file`. If disabled, an
 #   empty JSON stub for known tests is still written so downstream consumers
 #   can always depend on the declared outputs.
 
@@ -253,12 +253,12 @@ def _detect_go_module_path(ctx, debug):
     log_debug(debug, "Go module path not detected; returning empty")
     return ""
 
-def _split_known_tests_by_module(ctx, knowntests_file, debug):
-    # _split_known_tests_by_module: from the combined knowntests JSON, produce
-    # one JSON file per module under the same directory as `knowntests_file`.
+def _split_known_tests_by_module(ctx, known_tests_file, debug):
+    # _split_known_tests_by_module: from the combined known_tests JSON, produce
+    # one JSON file per module under the same directory as `known_tests_file`.
     # Returns a list of dicts with keys: module, label, file
     specs = []
-    kt_path = ctx.path(knowntests_file)
+    kt_path = ctx.path(known_tests_file)
     content = ctx.read(kt_path)
     if not content or not content.strip():
         return specs
@@ -271,7 +271,7 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
     if type(tests_obj) != "dict":
         return specs
 
-    base_dir = _dirname(knowntests_file)
+    base_dir = _dirname(known_tests_file)
 
     # Ensure deterministic ordering for reproducible BUILD content
     module_names = sorted([k for k in tests_obj.keys()])
@@ -326,12 +326,12 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
 
     return specs
 
-def _split_tmtests_by_module(ctx, tmtests_file, debug):
-    # _split_tmtests_by_module: from the combined tmtests JSON, produce
-    # one JSON file per module under the same directory as `tmtests_file`.
+def _split_test_management_by_module(ctx, test_management_file, debug):
+    # _split_test_management_by_module: from the combined test_management JSON, produce
+    # one JSON file per module under the same directory as `test_management_file`.
     # Returns a list of dicts with keys: module, label, file
     specs = []
-    tm_path = ctx.path(tmtests_file)
+    tm_path = ctx.path(test_management_file)
     content = ctx.read(tm_path)
     if not content or not content.strip():
         return specs
@@ -344,7 +344,7 @@ def _split_tmtests_by_module(ctx, tmtests_file, debug):
     if type(modules_obj) != "dict":
         return specs
 
-    base_dir = _dirname(tmtests_file)
+    base_dir = _dirname(test_management_file)
     module_names = sorted([k for k in modules_obj.keys()])
 
     # Counters to create deterministic de-dup suffixed names without while loops (local scope)
@@ -381,7 +381,7 @@ def _split_tmtests_by_module(ctx, tmtests_file, debug):
 
         _ensure_parent_directory(ctx, out_file, debug)
         ctx.file(out_file, json.encode(mod_obj) + "\n")
-        log_debug(debug, "Wrote per-module tmtests file '%s' for module '%s'" % (out_file, module_name))
+        log_debug(debug, "Wrote per-module test_management file '%s' for module '%s'" % (out_file, module_name))
 
         specs.append({
             "module": module_name,
@@ -1060,14 +1060,14 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
         url,
         headers,
         body,
-        "knowntests.request.json",
+        "known_tests.request.json",
         known_tests_file,
         debug,
     )
 
-def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_file, debug):
+def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug):
     # _perform_dd_test_management_tests_request: build and send the Test Management Tests request.
-    # - Writes the JSON response body to `tmtests_file`.
+    # - Writes the JSON response body to `test_management_file`.
     # Datadog Test Management Tests endpoint
     # Path: api/v2/test/libraries/test-management/tests
     # Type: ci_app_libraries_tests_request
@@ -1111,8 +1111,8 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_fi
         url,
         headers,
         body,
-        "tmtests.request.json",
-        tmtests_file,
+        "test_management.request.json",
+        test_management_file,
         debug,
     )
 
@@ -1127,7 +1127,7 @@ def _impl(ctx):
     # 2) Ensure parent directories exist for declared outputs
     # 3) POST Settings and write `settings_file`
     # 4) Parse settings to read data.attributes.known_tests_enabled
-    # 5) If enabled, POST Known Tests and write `knowntests_file` (known_tests.json); else write an empty stub
+    # 5) If enabled, POST Known Tests and write `known_tests_file` (known_tests.json); else write an empty stub
     # 6) Emit a BUILD file exporting both outputs
     debug = ctx.attr.debug
     log_info("Starting repository rule implementation")
@@ -1150,12 +1150,12 @@ def _impl(ctx):
     # Perform the settings request (compute and ensure directories exist for outputs)
     out_dir = ctx.attr.out_dir or TEST_OPT_DIR
     settings_file = "%s/%s" % (out_dir, "settings.json")
-    knowntests_file = "%s/%s" % (out_dir, "known_tests.json")
-    tmtests_file = "%s/%s" % (out_dir, "test_management.json")
+    known_tests_file = "%s/%s" % (out_dir, "known_tests.json")
+    test_management_file = "%s/%s" % (out_dir, "test_management.json")
     manifest_file = "%s/%s" % (out_dir, "manifest.txt")
     _ensure_parent_directory(ctx, settings_file, debug)
-    _ensure_parent_directory(ctx, knowntests_file, debug)
-    _ensure_parent_directory(ctx, tmtests_file, debug)
+    _ensure_parent_directory(ctx, known_tests_file, debug)
+    _ensure_parent_directory(ctx, test_management_file, debug)
     _ensure_parent_directory(ctx, manifest_file, debug)
 
     log_info("Settings file: %s" % settings_file)
@@ -1243,29 +1243,29 @@ def _impl(ctx):
     module_specs_tm = []
     if known_tests_enabled:
         ctx.report_progress("test_optimization_sync: downloading known tests")
-        _perform_dd_known_tests_request(ctx, api_key, env_data, knowntests_file, debug)
+        _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, debug)
         ctx.report_progress("test_optimization_sync: known tests complete")
     else:
         log_debug(debug, "known_tests_enabled is false; writing empty known tests file")
 
         # Minimal valid JSON structure
-        ctx.file(knowntests_file, '{"data": {"attributes": {"tests": {}}}}\n')
+        ctx.file(known_tests_file, '{"data": {"attributes": {"tests": {}}}}\n')
 
     # Split known tests by module into dedicated files (no-op if empty)
-    module_specs_known = _split_known_tests_by_module(ctx, knowntests_file, debug)
+    module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug)
 
     if test_management_enabled:
         ctx.report_progress("test_optimization_sync: downloading test management tests")
-        _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_file, debug)
+        _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug)
         ctx.report_progress("test_optimization_sync: test management tests complete")
     else:
         log_debug(debug, "test_management.enabled is false; writing empty test management tests file")
 
         # Minimal valid JSON structure for test management tests
-        ctx.file(tmtests_file, '{"data": {"attributes": {"modules": {}}}}\n')
+        ctx.file(test_management_file, '{"data": {"attributes": {"modules": {}}}}\n')
 
-    # Split tmtests by module into dedicated files (no-op if empty)
-    module_specs_tm = _split_tmtests_by_module(ctx, tmtests_file, debug)
+    # Split test_management by module into dedicated files (no-op if empty)
+    module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug)
 
     # Build and write context.json (non-secret metadata) in the same repo
     context_tags = _build_context_tags(ctx, env_data, debug)
