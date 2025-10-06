@@ -17,9 +17,9 @@ Given an external repository name `<repo_name>` created by the extension, the ge
 - A core filegroup target named `test_optimization_files` which includes only `settings.json`
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
-  - `knowntests.json` (Known Tests API response or minimal stub)
-  - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `knowntests.module.<sanitized_module>.json` and placed alongside `knowntests.json`. See below for details.
-  - `tmtests.json` (Test Management Tests API response or minimal stub)
+  - `known_tests.json` (Known Tests API response or minimal stub)
+  - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `known_tests.module.<sanitized_module>.json` and placed alongside `known_tests.json`. See below for details.
+  - `test_management.json` (Test Management Tests API response or minimal stub)
   - `context.json` (Non-secret CI/Git/OS/runtime tags)
 
 Reference settings with a single label:
@@ -30,14 +30,14 @@ Reference settings with a single label:
 
 ### Per-module Known Tests files and labels
 
-When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module. The same splitting is performed for Test Management tests (`tmtests.json`), keyed by module under `data.attributes.modules`:
+When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`:
 
 - Each module becomes files:
-  - `knowntests.module.<sanitized_module>.json`
-  - `tmtests.module.<sanitized_module>.json`
+  - `known_tests.module.<sanitized_module>.json`
+  - `test_management.module.<sanitized_module>.json`
 - Each module also becomes a filegroup target: `:module_<sanitized_module>` that includes:
-  - The module’s `knowntests.module.<sanitized_module>.json` (when present)
-  - The module’s `tmtests.module.<sanitized_module>.json` (when present)
+  - The module’s `known_tests.module.<sanitized_module>.json` (when present)
+  - The module’s `test_management.module.<sanitized_module>.json` (when present)
   - The global `settings.json`
 - These per-module files are not bundled into `:test_optimization_files`
 
@@ -62,8 +62,8 @@ filegroup(
 filegroup(
     name = "dd_known_tests_pkg_foo_file",
     srcs = [
-        "@test_optimization_data//:.testoptimization/knowntests.module.pkg_foo.json",
-        "@test_optimization_data//:.testoptimization/tmtests.module.pkg_foo.json",
+        "@test_optimization_data//:.testoptimization/known_tests.module.pkg_foo.json",
+        "@test_optimization_data//:.testoptimization/test_management.module.pkg_foo.json",
         "@test_optimization_data//:.testoptimization/settings.json",
     ],
 )
@@ -204,7 +204,7 @@ test_optimization_sync(
     # service = "my-service",
     # runtime_name = "go",
     # runtime_version = "go1.22",
-    # knowntests = True,
+    # known_tests = True,
     # test_management = True,
 )
 ```
@@ -446,12 +446,12 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `name`: external repository name to create
 
 - Optional
-  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `tmtests.json` under `out_dir`)
+  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `test_management.json` under `out_dir`)
   - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
   - `runtime_arch` (string): optional runtime architecture. Defaults to auto-detected `os.architecture` when not provided
-  - `knowntests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
+  - `known_tests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
   - `test_management` (bool, default `True`): local kill-switch for Test Management Tests. When `False`, the Test Management request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `test_management.enabled: false`.
   - `debug` (bool): default `False`. Enables verbose logging
 
@@ -480,7 +480,7 @@ You can also disable features locally regardless of the server response using th
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
     # Force-disable features locally; settings.json will be updated accordingly
-    knowntests = False,
+    known_tests = False,
     test_management = False,
 )
 ```

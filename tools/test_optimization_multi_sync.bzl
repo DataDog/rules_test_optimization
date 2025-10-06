@@ -172,7 +172,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                     runtime_name = call.runtime_name,
                     runtime_version = call.runtime_version,
                     runtime_arch = call.runtime_arch,
-                    knowntests = call.knowntests,
+                    known_tests = call.known_tests,
                     test_management = call.test_management,
                     debug = call.debug,
                 )
@@ -198,7 +198,7 @@ test_optimization_multi_sync_extension = module_extension(
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
             # Kill-switches propagated to each per-service repo
-            "knowntests": attr.bool(default = True),
+            "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "debug": attr.bool(default = False),
         }),

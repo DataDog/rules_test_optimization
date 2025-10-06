@@ -297,7 +297,7 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
         fc = file_counts.get(base_file, 0) + 1
         file_counts[base_file] = fc
         file_name = (
-            "knowntests.module.%s.json" % base_file if fc == 1 else "knowntests.module.%s_%d.json" % (base_file, fc)
+            "known_tests.module.%s.json" % base_file if fc == 1 else "known_tests.module.%s_%d.json" % (base_file, fc)
         )
 
         out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
@@ -365,7 +365,7 @@ def _split_tmtests_by_module(ctx, tmtests_file, debug):
         fc = file_counts.get(base_file, 0) + 1
         file_counts[base_file] = fc
         file_name = (
-            "tmtests.module.%s.json" % base_file if fc == 1 else "tmtests.module.%s_%d.json" % (base_file, fc)
+            "test_management.module.%s.json" % base_file if fc == 1 else "test_management.module.%s_%d.json" % (base_file, fc)
         )
 
         out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
@@ -1127,7 +1127,7 @@ def _impl(ctx):
     # 2) Ensure parent directories exist for declared outputs
     # 3) POST Settings and write `settings_file`
     # 4) Parse settings to read data.attributes.known_tests_enabled
-    # 5) If enabled, POST Known Tests and write `knowntests_file`; else write an empty stub
+    # 5) If enabled, POST Known Tests and write `knowntests_file` (known_tests.json); else write an empty stub
     # 6) Emit a BUILD file exporting both outputs
     debug = ctx.attr.debug
     log_info("Starting repository rule implementation")
@@ -1150,8 +1150,8 @@ def _impl(ctx):
     # Perform the settings request (compute and ensure directories exist for outputs)
     out_dir = ctx.attr.out_dir or TEST_OPT_DIR
     settings_file = "%s/%s" % (out_dir, "settings.json")
-    knowntests_file = "%s/%s" % (out_dir, "knowntests.json")
-    tmtests_file = "%s/%s" % (out_dir, "tmtests.json")
+    knowntests_file = "%s/%s" % (out_dir, "known_tests.json")
+    tmtests_file = "%s/%s" % (out_dir, "test_management.json")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, knowntests_file, debug)
     _ensure_parent_directory(ctx, tmtests_file, debug)
@@ -1196,7 +1196,7 @@ def _impl(ctx):
         #
         # All three kill-switch attributes default to True, which preserves the
         # server-provided behavior when not explicitly set by the user.
-        if hasattr(ctx.attr, "knowntests") and ctx.attr.knowntests == False:
+        if hasattr(ctx.attr, "known_tests") and ctx.attr.known_tests == False:
             known_tests_enabled = False
 
             # Ensure attributes dict exists and update the flag
@@ -1403,11 +1403,11 @@ test_optimization_sync = repository_rule(
         "runtime_version": attr.string(),
         "runtime_arch": attr.string(),
         # Kill-switches for feature requests
-        # - knowntests: when False, do not request Known Tests and write a minimal stub; also set
+        # - known_tests: when False, do not request Known Tests and write a minimal stub; also set
         #               settings.data.attributes.known_tests_enabled=false in the settings file.
         # - test_management: when False, do not request Test Management Tests and write a minimal stub; also set
         #                    settings.data.attributes.test_management.enabled=false in the settings file.
-        "knowntests": attr.bool(default = True),
+        "known_tests": attr.bool(default = True),
         "test_management": attr.bool(default = True),
         "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
@@ -1590,7 +1590,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
-                knowntests = test_optimization_call.knowntests,
+                known_tests = test_optimization_call.known_tests,
                 test_management = test_optimization_call.test_management,
                 debug = call_debug,
             )
@@ -1610,7 +1610,7 @@ test_optimization_sync_extension = module_extension(
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
             # Optional kill-switches (default True keeps server behavior; False disables feature locally)
-            "knowntests": attr.bool(default = True),
+            "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "debug": attr.bool(default = False),
         }),
