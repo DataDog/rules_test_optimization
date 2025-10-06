@@ -1,57 +1,21 @@
-# Starlark helpers to infer Go importpath via rules_go providers and select
-# the appropriate per-module Test Optimization files.
+"""Starlark helpers to infer Go importpath via rules_go providers.
 
-# This file defines:
-# - An aspect that walks the `embed` attribute to find a go_library's
-#   computed importpath (matching rules_go's logic).
-# - A rule that uses that aspect result to choose the correct per-module
-#   filegroup from the synced repository and expose those files as runfiles.
-#   The macro can then `rlocationpaths` this rule to set TEST_OPTIMIZATION_PAYLOADS_FILES.
+This file provides:
+- An aspect that walks the `embed` attribute to find a go_library's
+  computed importpath (matching rules_go's logic).
+- A rule that uses that aspect result to choose the correct per-module
+  filegroup from the synced repository and expose those files as runfiles.
+  The macro can then `rlocationpaths` this rule to set TEST_OPTIMIZATION_PAYLOADS_FILES.
+"""
 
 load("@rules_go//go/private:providers.bzl", "GoArchive", "GoLibrary")
+load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
 # Provider carrying the inferred importpath string
-ToptGoImportpathInfo = provider(fields = {"importpath": "Go package importpath"})
-
-def _sanitize_label_fragment(name):
-    # Produce a safe suffix for Bazel target names from an arbitrary string.
-    s = (name or "").lower()
-    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
-    out = []
-    last_us = False
-    n_s = len(s)
-    for i in range(n_s):
-        ch = s[i]
-        if ch in allowed:
-            out.append(ch)
-            last_us = (ch == "_")
-        elif not last_us:
-            out.append("_")
-            last_us = True
-
-    # Trim leading/trailing underscores
-    n = len(out)
-    start = 0
-    found = False
-    for i in range(n):
-        if out[i] != "_":
-            start = i
-            found = True
-            break
-    if not found:
-        start = n
-    end = 0
-    for k in range(n):
-        j = n - 1 - k
-        if j < 0:
-            break
-        if out[j] != "_":
-            end = j + 1
-            break
-    res = "".join(out[start:end])
-    if not res:
-        res = "module"
-    return res
+ToptGoImportpathInfo = provider(
+    doc = "Provider carrying the inferred Go package importpath from rules_go.",
+    fields = {"importpath": "Go package importpath"},
+)
 
 def _importpath_aspect_impl(target, ctx):
     """Aspect to discover the Go importpath.
@@ -117,7 +81,7 @@ def _topt_go_payloads_selector_impl(ctx):
     if ctx.attr.module_label_override:
         sanitized = ctx.attr.module_label_override
     else:
-        sanitized = _sanitize_label_fragment(ip)
+        sanitized = sanitize_label_fragment(ip)
 
     chosen = None
     if ctx.attr.include_per_module and sanitized:

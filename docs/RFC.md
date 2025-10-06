@@ -108,7 +108,7 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 - Phase 1 — [Sync at module/repo resolution](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_sync.bzl):  
     
   - A module extension instantiates a repository rule that performs the Datadog API calls for Settings (always), Known Tests (when enabled), and Test Management tests (when enabled).  
-  - The rule writes deterministic JSON outputs under a fixed directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags.  
+  - The rule writes deterministic JSON outputs under a fixed directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags. It also writes a `manifest.txt` with a version marker (currently `version=1`) to track payload format changes.  
   - It generates a BUILD file exposing stable public filegroups:  
     - `@<repo>//:test_optimization_files` (core bundle with `settings.json`),  
     - `@<repo>//:test_optimization_context` (`context.json` only),  
@@ -152,9 +152,9 @@ Common behavior:
     - Else, if a token is already an absolute path and exists, use it as‑is.  
   - From the resolved files, load:  
     - `settings.json`  
-    - Any number of `knowntests*.json` files (combined known tests)  
-    - Any number of `tmtests*.json` files (combined test management tests)  
-  - Accept both “combined” shapes (e.g., `knowntests.json` with `data.attributes.tests`) and split per‑module shapes (e.g., `knowntests.module.<sanitized>.json`). Merge by unioning entries; empty stubs are valid and should be treated as “no data”.  
+    - Any number of `known_tests*.json` files (combined known tests)  
+    - Any number of `test_management*.json` files (combined test management tests)  
+  - Accept both “combined” shapes (e.g., `known_tests.json` with `data.attributes.tests`) and per‑module shapes, exposed under canonical file names via per‑module targets. Merge by unioning entries; empty stubs are valid and should be treated as “no data”.  
 - Outputs (write‑only):  
   - Ensure `$DD_PAYLOADS_DIR/tests` and `$DD_PAYLOADS_DIR/coverage` exist (create if needed, handling concurrent processes safely).  
   - Serialize test payloads to `$DD_PAYLOADS_DIR/tests/*.json` (JSON only; do not use msgpack in Bazel mode).  
@@ -167,8 +167,8 @@ Common behavior:
 Test data contracts (minimum viable)
 
 - settings.json: full server response preferred; if absent, treat features as disabled and do not attempt network requests.  
-- known tests: accept combined (`data.attributes.tests`) or per‑module files (`knowntests.module.*.json` → module key → test identifiers). Merge by union.  
-- test management tests: accept combined (`data.attributes.modules`) or per‑module files (`tmtests.module.*.json` → module key → test states). Merge by union.  
+- known tests: accept combined (`data.attributes.tests`) or per‑module canonical files (`known_tests.json` scoped per target) → module key → test identifiers. Merge by union.  
+- test management tests: accept combined (`data.attributes.modules`) or per‑module canonical files (`test_management.json` scoped per target) → module key → test states. Merge by union.  
 - Forward compatibility: ignore unknown keys; fail closed (no network) on parse errors in Bazel mode.
 
 Backwards compatibility
@@ -182,15 +182,15 @@ Repository Rule and Module Extension
 - The `test_optimization_sync_extension` tag is declared in `MODULE.bazel`. It instantiates `test_optimization_sync` with optional attributes:  
   - `service`: explicit override for service name (else derived from `DD_SERVICE`).  
   - `runtime_name`, `runtime_version`, `runtime_arch`: enrich `configurations` and `context.json`.  
-  - `knowntests`, `test_management`: local kill‑switches to skip specific feature requests and emit minimal stubs while adjusting `settings.json` accordingly.  
+  - `known_tests`, `test_management`: local kill‑switches to skip specific feature requests and emit minimal stubs while adjusting `settings.json` accordingly.  
   - `debug`: increases logging verbosity and writes additional artifacts (e.g., request JSONs) for troubleshooting.  
 - The repository rule performs:  
   1. Settings request: always issued; response persisted to `settings.json`.  
-  2. Known Tests request: gated by settings and `knowntests` attribute; persisted to `knowntests.json` and split by module (`knowntests.module.<sanitized>.json`).  
-  3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `tmtests.json` and split by module.  
+  2. Known Tests request: gated by settings and `known_tests` attribute; persisted to `known_tests.json` and split by module (canonical per‑module files exposed by targets).  
+  3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `test_management.json` and split by module (canonical per‑module files exposed by targets).  
   4. `context.json`: built locally from CI/git/OS/runtime information — non‑secret and safe to ship as runfiles.  
   5. A generated `BUILD` file that exposes:  
-     - `:test_optimization_files` → only `settings.json` (stable bundle for most uses).  
+     - `:test_optimization_files` → includes `settings.json` and `manifest.txt` (stable bundle for most uses).  
      - `:test_optimization_context` → `context.json` (opt‑in for enrichment).  
      - `:module_<sanitized>` → per‑module bundle of settings \+ module‑specific JSONs.  
   6. An `export.bzl` with `topt_data` describing labels and language‑specific hints (e.g., Go module path inclusion).  

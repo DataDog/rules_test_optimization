@@ -10,7 +10,9 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources:
+  - `common_utils.bzl` — shared utilities for logging, sanitization, validation, and deduplication used across multiple rule files.
   - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/settings.json`, per‑module files, and `.testoptimization/context.json`.
+  - `test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
   - `test_optimization_uploader_test.bzl` — runtime uploader test rule.
   - `topt_go_test.bzl` — macro wrapping `go_test` with the uploader.
   - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
@@ -28,7 +30,7 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.
 - Public labels are stable — do not rename `test_optimization_files`, `test_optimization_context`, or `module_<sanitized>`.
-- Outputs under `.testoptimization/` are fixed: `settings.json`, `knowntests*.json`, `tmtests*.json`, `context.json`.
+- Outputs under `.testoptimization/` are fixed: `settings.json`, `manifest.txt`, `known_tests.json`, `test_management.json`, per‑module canonical files exposed via `:module_<sanitized>` targets (runfiles under `.testoptimization/`), and `context.json`.
 
 ## Testing Guidelines
 - Prefer `./bazelw test //...`; the uploader rule runs as a normal test.

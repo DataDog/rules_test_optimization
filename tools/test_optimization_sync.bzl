@@ -1,32 +1,35 @@
-# Datadog Test Optimization repository rule helpers and module extension
-#
-# This file defines:
-# - A repository_rule (`test_optimization_sync`) that performs one or more
-#   authenticated HTTP POST requests to Datadog to retrieve Test Optimization
-#   metadata.
-# - Reusable helpers for building curl commands, ensuring output directories
-#   exist, and parsing JSON in Starlark.
-# - A first request to the Settings API which always runs and writes
-#   `settings_file`.
-# - An optional second request to the Known Tests API when the settings say
-#   `known_tests_enabled = true`, writing `knowntests_file`. If disabled, an
-#   empty JSON stub for known tests is still written so downstream consumers
-#   can always depend on the declared outputs.
+"""Datadog Test Optimization repository rule helpers and module extension.
+
+This file defines:
+- A repository_rule (`test_optimization_sync`) that performs one or more
+  authenticated HTTP POST requests to Datadog to retrieve Test Optimization
+  metadata.
+- Reusable helpers for building curl commands, ensuring output directories
+  exist, and parsing JSON in Starlark.
+- A first request to the Settings API which always runs and writes
+  `settings_file`.
+- An optional second request to the Known Tests API when the settings say
+  `known_tests_enabled = true`, writing `known_tests_file`. If disabled, an
+  empty JSON stub for known tests is still written so downstream consumers
+  can always depend on the declared outputs.
+"""
+
+load(
+    "//tools:common_utils.bzl",
+    "dedup_keys",
+    "log_debug",
+    "log_info",
+    "sanitize_label_fragment",
+    "validate_api_key",
+    "validate_runtime_version",
+    "validate_service_name",
+)
 
 # ##########################################################################
-# Constants and logging
+# Constants
 # ##########################################################################
 
 TEST_OPT_DIR = ".testoptimization"
-
-def log_info(message):
-    # log_info: user-facing progress messages
-    print("test_optimization_sync: %s" % message)
-
-def log_debug(debug_enabled, message):
-    # log_debug: gated by the rule/tag `debug` attribute; useful for verbose traces
-    if debug_enabled:
-        print("test_optimization_sync: %s" % message)
 
 # ##########################################################################
 # Tools functions
@@ -82,74 +85,9 @@ def _ensure_parent_directory(ctx, path, debug):
         res = ctx.execute(ps_cmd)
     else:
         res = ctx.execute(["mkdir", "-p", dirp])
-    log_debug(debug, "Ensured directory '%s' for output '%s' (rc=%d)" % (dirp, path, res.return_code))
+    log_debug(debug, "filesystem", "Ensured directory '%s' for output '%s' (rc=%d)" % (dirp, path, res.return_code))
     if res.return_code != 0:
         fail("Failed creating directory %s for output %s: %s" % (dirp, path, (res.stderr or "").strip()))
-
-def _sanitize_label_fragment(name):
-    # _sanitize_label_fragment: produce a safe Bazel target name fragment derived from an arbitrary string.
-    # - Lowercase
-    # - Allowed characters: [a-z0-9_]
-    # - All other characters become '_'
-    # - Collapse multiple consecutive '_'
-    s = (name or "").lower()
-    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
-    out = []
-    last_us = False
-    n_s = len(s)
-    for i in range(n_s):
-        ch = s[i]
-        if ch in allowed:
-            out.append(ch)
-            last_us = (ch == "_")
-        elif not last_us:
-            out.append("_")
-            last_us = True
-
-    # Trim leading/trailing underscores without while loops
-    n = len(out)
-    start = 0
-    found_start = False
-    for i in range(n):
-        if out[i] != "_":
-            start = i
-            found_start = True
-            break
-    if not found_start:
-        start = n
-    end = 0
-
-    # Reverse scan without a negative-step range
-    for k in range(n):
-        j = n - 1 - k
-        if j < 0:
-            break
-        if out[j] != "_":
-            end = j + 1
-            break
-    result = "".join(out[start:end])
-    if not result:
-        result = "module"
-    return result
-
-def _sanitize_filename_fragment(name):
-    # _sanitize_filename_fragment: safe filename fragment for JSON files
-    # - Lowercase
-    # - Allowed characters: [a-z0-9._-]
-    # - Others → '_'
-    s = (name or "").lower()
-    allowed = "abcdefghijklmnopqrstuvwxyz0123456789._-"
-    out = []
-    n_s = len(s)
-    for i in range(n_s):
-        ch = s[i]
-        out.append(ch if ch in allowed else "_")
-    result = "".join(out)
-
-    # Avoid empty names
-    if not result:
-        result = "module"
-    return result
 
 def _dirname(path):
     # _dirname: return parent directory component of a path using simple split
@@ -205,9 +143,9 @@ def _detect_go_module_path(ctx, debug):
     # _detect_go_module_path: best-effort detection of Go module path.
     # Precedence: GO_MODULE_PATH env > discover go.mod under known workspace envs > git toplevel go.mod
     mod_env = ctx.os.environ.get("GO_MODULE_PATH") or ""
-    log_debug(debug, "GO_MODULE_PATH env: %s" % (mod_env or "<unset>"))
+    log_debug(debug, "go", "GO_MODULE_PATH env: %s" % (mod_env or "<unset>"))
     if mod_env:
-        log_debug(debug, "Using GO_MODULE_PATH from env")
+        log_debug(debug, "go", "Using GO_MODULE_PATH from env")
         return mod_env
 
     # Candidate workspace roots
@@ -224,12 +162,12 @@ def _detect_go_module_path(ctx, debug):
             candidates.append(v)
     for root in candidates:
         go_mod_path = root.rstrip("/") + "/go.mod"
-        log_debug(debug, "Checking go.mod at: %s" % go_mod_path)
+        log_debug(debug, "go", "Checking go.mod at: %s" % go_mod_path)
         content = _try_read_abs_file(ctx, go_mod_path)
         if content:
             mp = _parse_go_module_path(content)
             if mp:
-                log_debug(debug, "Detected module path '%s' from %s" % (mp, go_mod_path))
+                log_debug(debug, "go", "Detected module path '%s' from %s" % (mp, go_mod_path))
                 return mp
 
     # Fallback: try using git to find toplevel go.mod
@@ -240,25 +178,25 @@ def _detect_go_module_path(ctx, debug):
         r = ctx.execute(["bash", "-c", "git rev-parse --show-toplevel"], timeout = 10)
     if r.return_code == 0 and r.stdout:
         top = r.stdout.strip()
-    log_debug(debug, "git toplevel: %s" % (top or "<unset>"))
+    log_debug(debug, "go", "git toplevel: %s" % (top or "<unset>"))
     if top:
         go_mod_path = top.rstrip("/") + "/go.mod"
-        log_debug(debug, "Checking go.mod at: %s" % go_mod_path)
+        log_debug(debug, "go", "Checking go.mod at: %s" % go_mod_path)
         content = _try_read_abs_file(ctx, go_mod_path)
         if content:
             mp = _parse_go_module_path(content)
             if mp:
-                log_debug(debug, "Detected module path '%s' from %s" % (mp, go_mod_path))
+                log_debug(debug, "go", "Detected module path '%s' from %s" % (mp, go_mod_path))
                 return mp
-    log_debug(debug, "Go module path not detected; returning empty")
+    log_debug(debug, "go", "Go module path not detected; returning empty")
     return ""
 
-def _split_known_tests_by_module(ctx, knowntests_file, debug):
-    # _split_known_tests_by_module: from the combined knowntests JSON, produce
-    # one JSON file per module under the same directory as `knowntests_file`.
+def _split_known_tests_by_module(ctx, known_tests_file, debug):
+    # _split_known_tests_by_module: from the combined known_tests JSON, produce
+    # one JSON file per module under the same directory as `known_tests_file`.
     # Returns a list of dicts with keys: module, label, file
     specs = []
-    kt_path = ctx.path(knowntests_file)
+    kt_path = ctx.path(known_tests_file)
     content = ctx.read(kt_path)
     if not content or not content.strip():
         return specs
@@ -271,52 +209,47 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
     if type(tests_obj) != "dict":
         return specs
 
-    base_dir = _dirname(knowntests_file)
+    base_dir = _dirname(known_tests_file)
 
     # Ensure deterministic ordering for reproducible BUILD content
     module_names = sorted([k for k in tests_obj.keys()])
 
-    # Counters to create deterministic de-dup suffixed names without while loops
-    label_counts = {}
-    file_counts = {}
+    # Compute sanitized labels and deduplicate
+    raw_labels = [sanitize_label_fragment(m) for m in module_names]
+    deduped_labels = dedup_keys(raw_labels)
 
-    for module_name in module_names:
+    for i in range(len(module_names)):
+        module_name = module_names[i]
+        label = deduped_labels[i]
         suites_map = tests_obj.get(module_name)
 
         # Guard against non-dict anomalies
         if type(suites_map) != "dict":
             continue
 
-        # Compute unique, sanitized target name and filename fragments
-        base_label = _sanitize_label_fragment(module_name)
-        c = label_counts.get(base_label, 0) + 1
-        label_counts[base_label] = c
-        label = base_label if c == 1 else ("%s_%d" % (base_label, c))
+        # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
+        per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
+        out_file = per_module_dir + "/known_tests.json"
 
-        base_file = _sanitize_filename_fragment(module_name)
-        fc = file_counts.get(base_file, 0) + 1
-        file_counts[base_file] = fc
-        file_name = (
-            "knowntests.module.%s.json" % base_file if fc == 1 else "knowntests.module.%s_%d.json" % (base_file, fc)
-        )
-
-        out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
-
-        # Build a minimal per-module JSON preserving top-level data fields when available
-        mod_data = {"attributes": {"tests": {module_name: suites_map}}}
-
-        # Preserve id/type if present
-        did = data_obj.get("id")
-        dty = data_obj.get("type")
-        if did != None:
-            mod_data["id"] = did
-        if dty != None:
-            mod_data["type"] = dty
-        mod_obj = {"data": mod_data}
+        # Build a per-module JSON that preserves the full original shape
+        # and only narrows data.attributes.tests to the single module.
+        new_obj = {}
+        for _k in obj.keys():
+            new_obj[_k] = obj.get(_k)
+        data_obj2 = new_obj.get("data")
+        if type(data_obj2) != "dict":
+            data_obj2 = {}
+            new_obj["data"] = data_obj2
+        attrs_obj2 = data_obj2.get("attributes")
+        if type(attrs_obj2) != "dict":
+            attrs_obj2 = {}
+            data_obj2["attributes"] = attrs_obj2
+        attrs_obj2["tests"] = {module_name: suites_map}
+        mod_obj = new_obj
 
         _ensure_parent_directory(ctx, out_file, debug)
         ctx.file(out_file, json.encode(mod_obj) + "\n")
-        log_debug(debug, "Wrote per-module known tests file '%s' for module '%s'" % (out_file, module_name))
+        log_debug(debug, "module", "Wrote per-module known tests file '%s' for module '%s'" % (out_file, module_name))
 
         specs.append({
             "module": module_name,
@@ -326,12 +259,12 @@ def _split_known_tests_by_module(ctx, knowntests_file, debug):
 
     return specs
 
-def _split_tmtests_by_module(ctx, tmtests_file, debug):
-    # _split_tmtests_by_module: from the combined tmtests JSON, produce
-    # one JSON file per module under the same directory as `tmtests_file`.
+def _split_test_management_by_module(ctx, test_management_file, debug):
+    # _split_test_management_by_module: from the combined test_management JSON, produce
+    # one JSON file per module under the same directory as `test_management_file`.
     # Returns a list of dicts with keys: module, label, file
     specs = []
-    tm_path = ctx.path(tmtests_file)
+    tm_path = ctx.path(test_management_file)
     content = ctx.read(tm_path)
     if not content or not content.strip():
         return specs
@@ -344,44 +277,44 @@ def _split_tmtests_by_module(ctx, tmtests_file, debug):
     if type(modules_obj) != "dict":
         return specs
 
-    base_dir = _dirname(tmtests_file)
+    base_dir = _dirname(test_management_file)
     module_names = sorted([k for k in modules_obj.keys()])
 
-    # Counters to create deterministic de-dup suffixed names without while loops (local scope)
-    label_counts = {}
-    file_counts = {}
+    # Compute sanitized labels and deduplicate
+    raw_labels = [sanitize_label_fragment(m) for m in module_names]
+    deduped_labels = dedup_keys(raw_labels)
 
-    for module_name in module_names:
+    for i in range(len(module_names)):
+        module_name = module_names[i]
+        label = deduped_labels[i]
         module_content = modules_obj.get(module_name)
+        
         if type(module_content) != "dict":
             continue
 
-        base_label = _sanitize_label_fragment(module_name)
-        c = label_counts.get(base_label, 0) + 1
-        label_counts[base_label] = c
-        label = base_label if c == 1 else ("%s_%d" % (base_label, c))
+        # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
+        per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
+        out_file = per_module_dir + "/test_management.json"
 
-        base_file = _sanitize_filename_fragment(module_name)
-        fc = file_counts.get(base_file, 0) + 1
-        file_counts[base_file] = fc
-        file_name = (
-            "tmtests.module.%s.json" % base_file if fc == 1 else "tmtests.module.%s_%d.json" % (base_file, fc)
-        )
-
-        out_file = ("%s/%s" % (base_dir, file_name)) if base_dir else file_name
-
-        mod_data = {"attributes": {"modules": {module_name: module_content}}}
-        did = data_obj.get("id")
-        dty = data_obj.get("type")
-        if did != None:
-            mod_data["id"] = did
-        if dty != None:
-            mod_data["type"] = dty
-        mod_obj = {"data": mod_data}
+        # Build a per-module JSON that preserves the full original shape
+        # and only narrows data.attributes.modules to the single module.
+        new_obj = {}
+        for _k in obj.keys():
+            new_obj[_k] = obj.get(_k)
+        data_obj2 = new_obj.get("data")
+        if type(data_obj2) != "dict":
+            data_obj2 = {}
+            new_obj["data"] = data_obj2
+        attrs_obj2 = data_obj2.get("attributes")
+        if type(attrs_obj2) != "dict":
+            attrs_obj2 = {}
+            data_obj2["attributes"] = attrs_obj2
+        attrs_obj2["modules"] = {module_name: module_content}
+        mod_obj = new_obj
 
         _ensure_parent_directory(ctx, out_file, debug)
         ctx.file(out_file, json.encode(mod_obj) + "\n")
-        log_debug(debug, "Wrote per-module tmtests file '%s' for module '%s'" % (out_file, module_name))
+        log_debug(debug, "module", "Wrote per-module test_management file '%s' for module '%s'" % (out_file, module_name))
 
         specs.append({
             "module": module_name,
@@ -408,7 +341,7 @@ def _detect_os_info(ctx, debug):
             "unknown"
         )
         version = ctx.os.environ.get("OS") or ""
-        log_debug(debug, "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
+        log_debug(debug, "os", "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
         return {"platform": platform, "version": version, "arch": arch}
 
     raw_platform = _run(["uname", "-s"]) or ""
@@ -428,19 +361,8 @@ def _detect_os_info(ctx, debug):
     arch = raw_arch or "unknown"
     version = raw_version or ""
 
-    log_debug(debug, "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
+    log_debug(debug, "os", "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
     return {"platform": platform, "version": version, "arch": arch}
-
-def _safe_json_string(value):
-    # _safe_json_string: minimal JSON string escaping for simple values.
-    if value == None:
-        return ""
-
-    # Only escape backslashes and double quotes; input values are expected
-    # to be short ASCII tokens (service/env/branch/SHA/URL).
-    s = str(value)
-    s = s.replace("\\", "\\\\").replace('"', '\\"')
-    return s
 
 def _compute_dd_api_base(site_env):
     # _compute_dd_api_base: compute the base Datadog API URL from a site value.
@@ -571,6 +493,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             if try_body != None:
                 log_debug(
                     debug,
+                    "http",
                     "HTTP response body (%s %s): %s" % (http_method, url, try_body),
                 )
 
@@ -758,20 +681,21 @@ def _build_configurations_json(ctx, debug):
     # _build_configurations_json: builds a testConfigurations structure with
     # auto-detected os.* fields plus simple runtime fields.
     osinfo = _detect_os_info(ctx, debug)
-    runtime_name = ctx.attr.runtime_name or "unknown"
-    runtime_version = ctx.attr.runtime_version or "unknown"
+    runtime_name = validate_runtime_version(ctx.attr.runtime_name, debug) or "unknown"
+    runtime_version = validate_runtime_version(ctx.attr.runtime_version, debug) or "unknown"
     runtime_arch = ctx.attr.runtime_arch or osinfo["arch"]
-    conf_json = (
-        "{" +
-        ' "os.platform": "%s",' % _safe_json_string(osinfo["platform"]) +
-        ' "os.version": "%s",' % _safe_json_string(osinfo["version"]) +
-        ' "os.architecture": "%s",' % _safe_json_string(osinfo["arch"]) +
-        ' "runtime.name": "%s",' % _safe_json_string(runtime_name) +
-        ' "runtime.architecture": "%s",' % _safe_json_string(runtime_arch) +
-        ' "runtime.version": "%s"' % _safe_json_string(runtime_version) +
-        "}"
-    )
-    log_debug(debug, "Configurations JSON: %s" % conf_json)
+    
+    # Build configuration object using json.encode for proper escaping
+    conf = {
+        "os.platform": osinfo["platform"],
+        "os.version": osinfo["version"],
+        "os.architecture": osinfo["arch"],
+        "runtime.name": runtime_name,
+        "runtime.architecture": runtime_arch,
+        "runtime.version": runtime_version,
+    }
+    conf_json = json.encode(conf)
+    log_debug(debug, "config", "Configurations JSON: %s" % conf_json)
     return conf_json
 
 def _build_context_tags(ctx, env_data, debug):
@@ -940,7 +864,7 @@ def _build_context_tags(ctx, env_data, debug):
     if node_labels:
         tags["ci.node.labels"] = node_labels
 
-    log_debug(debug, "context.json tags: %s" % json.encode(tags))
+    log_debug(debug, "context", "context.json tags: %s" % json.encode(tags))
     return tags
 
 # ##########################################################################
@@ -957,13 +881,7 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
     base = _compute_dd_api_base(env_data.get("dd_site"))
     url = "%s/%s" % (base, "api/v2/libraries/tests/services/setting")
 
-    # Correlation id is arbitrary
-    req_id = "1"
-
-    # Gather request attributes from environment; keep minimal and optional
-    # Service and environment defaults
-    # - service: DD_SERVICE or "unnamed-service"
-    # - env: DD_ENV or "CI"
+    # Gather request attributes from environment
     service = env_data.get("service")
     environment = env_data.get("environment")
     repository_url = env_data.get("repository_url")
@@ -973,6 +891,7 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
     # Debug print of the resolved attributes for traceability
     log_debug(
         debug,
+        "http",
         "Settings attributes → service='%s', env='%s', repo='%s', branch='%s', sha='%s'" % (
             service,
             environment,
@@ -982,24 +901,23 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
         ),
     )
 
-    # Build minimal JSON body (configurations omitted for now)
-    body = (
-        "{\n" +
-        "  \"data\": {\n" +
-        "    \"id\": \"%s\",\n" % _safe_json_string(req_id) +
-        "    \"type\": \"ci_app_test_service_libraries_settings\",\n" +
-        "    \"attributes\": {\n" +
-        "      \"service\": \"%s\",\n" % _safe_json_string(service) +
-        "      \"env\": \"%s\",\n" % _safe_json_string(environment) +
-        "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url) +
-        "      \"branch\": \"%s\",\n" % _safe_json_string(branch) +
-        "      \"sha\": \"%s\"\n" % _safe_json_string(sha) +
-        "    }\n" +
-        "  }\n" +
-        "}\n"
-    )
+    # Build request payload using json.encode for proper escaping
+    payload = {
+        "data": {
+            "id": "1",
+            "type": "ci_app_test_service_libraries_settings",
+            "attributes": {
+                "service": service,
+                "env": environment,
+                "repository_url": repository_url,
+                "branch": branch,
+                "sha": sha,
+            },
+        },
+    }
+    body = json.encode(payload)
 
-    log_debug(debug, "Settings request body: %s" % body)
+    log_debug(debug, "http", "Settings request body: %s" % body)
 
     headers = {
         "DD-API-KEY": api_key,
@@ -1026,30 +944,32 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
     base = _compute_dd_api_base(env_data.get("dd_site"))
     url = "%s/%s" % (base, "api/v2/ci/libraries/tests")
 
-    req_id = "1"
-
     # Same attributes as settings request
     service = env_data.get("service")
     environment = env_data.get("environment")
     repository_url = env_data.get("repository_url")
+    
+    # Configurations is a JSON object, decode it to embed properly
+    configurations_json = _build_configurations_json(ctx, debug)
+    configurations = json.decode(configurations_json)
 
-    body = (
-        "{\n" +
-        "  \"data\": {\n" +
-        "    \"id\": \"%s\",\n" % _safe_json_string(req_id) +
-        "    \"type\": \"ci_app_libraries_tests_request\",\n" +
-        "    \"attributes\": {\n" +
-        "      \"service\": \"%s\",\n" % _safe_json_string(service) +
-        "      \"env\": \"%s\",\n" % _safe_json_string(environment) +
-        "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url) +
-        "      \"configurations\": %s\n" % _build_configurations_json(ctx, debug) +
-        "    }\n" +
-        "  }\n" +
-        "}\n"
-    )
+    # Build request payload using json.encode for proper escaping
+    payload = {
+        "data": {
+            "id": "1",
+            "type": "ci_app_libraries_tests_request",
+            "attributes": {
+                "service": service,
+                "env": environment,
+                "repository_url": repository_url,
+                "configurations": configurations,
+            },
+        },
+    }
+    body = json.encode(payload)
 
     # Log the request body for debugging when enabled
-    log_debug(debug, "KnownTests request body: %s" % body)
+    log_debug(debug, "http", "KnownTests request body: %s" % body)
 
     headers = {
         "DD-API-KEY": api_key,
@@ -1060,14 +980,14 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
         url,
         headers,
         body,
-        "knowntests.request.json",
+        "known_tests.request.json",
         known_tests_file,
         debug,
     )
 
-def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_file, debug):
+def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug):
     # _perform_dd_test_management_tests_request: build and send the Test Management Tests request.
-    # - Writes the JSON response body to `tmtests_file`.
+    # - Writes the JSON response body to `test_management_file`.
     # Datadog Test Management Tests endpoint
     # Path: api/v2/test/libraries/test-management/tests
     # Type: ci_app_libraries_tests_request
@@ -1083,26 +1003,21 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_fi
     # Commit message: prefer head message then commit message; else empty
     commit_message = env_data.get("head_message") or env_data.get("commit_message") or ""
 
-    # Build attributes JSON with optional module field only if set
-    attrs = (
-        "      \"repository_url\": \"%s\",\n" % _safe_json_string(repository_url) +
-        "      \"sha\": \"%s\",\n" % _safe_json_string(sha) +
-        "      \"commit_message\": \"%s\"\n" % _safe_json_string(commit_message)
-    )
+    # Build request payload using json.encode for proper escaping
+    payload = {
+        "data": {
+            "id": "1",
+            "type": "ci_app_libraries_tests_request",
+            "attributes": {
+                "repository_url": repository_url,
+                "sha": sha,
+                "commit_message": commit_message,
+            },
+        },
+    }
+    body = json.encode(payload)
 
-    body = (
-        "{\n" +
-        "  \"data\": {\n" +
-        "    \"id\": \"%s\",\n" % _safe_json_string("1") +
-        "    \"type\": \"ci_app_libraries_tests_request\",\n" +
-        "    \"attributes\": {\n" +
-        attrs +
-        "    }\n" +
-        "  }\n" +
-        "}\n"
-    )
-
-    log_debug(debug, "TestManagementTests request body: %s" % body)
+    log_debug(debug, "http", "TestManagementTests request body: %s" % body)
 
     headers = {"DD-API-KEY": api_key}
 
@@ -1111,8 +1026,8 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_fi
         url,
         headers,
         body,
-        "tmtests.request.json",
-        tmtests_file,
+        "test_management.request.json",
+        test_management_file,
         debug,
     )
 
@@ -1127,17 +1042,16 @@ def _impl(ctx):
     # 2) Ensure parent directories exist for declared outputs
     # 3) POST Settings and write `settings_file`
     # 4) Parse settings to read data.attributes.known_tests_enabled
-    # 5) If enabled, POST Known Tests and write `knowntests_file`; else write an empty stub
+    # 5) If enabled, POST Known Tests and write `known_tests_file` (known_tests.json); else write an empty stub
     # 6) Emit a BUILD file exporting both outputs
     debug = ctx.attr.debug
     log_info("Starting repository rule implementation")
     ctx.report_progress("test_optimization_sync: starting")
 
-    # Read the DD_API_KEY from the environment; fail if missing
+    # Validate DD_API_KEY from the environment; fail with helpful message if missing
     api_key = ctx.os.environ.get("DD_API_KEY")
-    log_debug(debug, "DD_API_KEY present: %s" % bool(api_key))
-    if not api_key:
-        fail("fetch_data: environment variable DD_API_KEY is not set")
+    log_debug(debug, "validation", "DD_API_KEY present: %s" % bool(api_key))
+    validate_api_key(api_key)
 
     # Emit salt info if present to trace cache-busting input
     salt = ctx.os.environ.get("FETCH_SALT")
@@ -1150,16 +1064,24 @@ def _impl(ctx):
     # Perform the settings request (compute and ensure directories exist for outputs)
     out_dir = ctx.attr.out_dir or TEST_OPT_DIR
     settings_file = "%s/%s" % (out_dir, "settings.json")
-    knowntests_file = "%s/%s" % (out_dir, "knowntests.json")
-    tmtests_file = "%s/%s" % (out_dir, "tmtests.json")
+    known_tests_file = "%s/%s" % (out_dir, "known_tests.json")
+    test_management_file = "%s/%s" % (out_dir, "test_management.json")
+    manifest_file = "%s/%s" % (out_dir, "manifest.txt")
     _ensure_parent_directory(ctx, settings_file, debug)
-    _ensure_parent_directory(ctx, knowntests_file, debug)
-    _ensure_parent_directory(ctx, tmtests_file, debug)
+    _ensure_parent_directory(ctx, known_tests_file, debug)
+    _ensure_parent_directory(ctx, test_management_file, debug)
+    _ensure_parent_directory(ctx, manifest_file, debug)
 
     log_info("Settings file: %s" % settings_file)
     ctx.report_progress("test_optimization_sync: downloading")
     env_data = _collect_env(ctx)
-    log_debug(debug, "Env data: %s" % env_data)
+    
+    # Validate and normalize service name
+    raw_service = env_data.get("service")
+    validated_service = validate_service_name(raw_service, debug)
+    env_data["service"] = validated_service
+    
+    log_debug(debug, "validation", "Env data collected and validated")
     _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug)
     ctx.report_progress("test_optimization_sync: download complete")
 
@@ -1180,9 +1102,9 @@ def _impl(ctx):
 
         tm_obj = attrs_obj.get("test_management") or {}
         test_management_enabled = (tm_obj.get("enabled") == True)
-        log_debug(debug, "known_tests_enabled parsed as: %s" % known_tests_enabled)
+        log_debug(debug, "settings", "known_tests_enabled parsed as: %s" % known_tests_enabled)
 
-        log_debug(debug, "test_management.enabled parsed as: %s" % test_management_enabled)
+        log_debug(debug, "settings", "test_management.enabled parsed as: %s" % test_management_enabled)
 
         # ------------------------------------------------------------------
         # Kill-switch overrides
@@ -1196,7 +1118,7 @@ def _impl(ctx):
         #
         # All three kill-switch attributes default to True, which preserves the
         # server-provided behavior when not explicitly set by the user.
-        if hasattr(ctx.attr, "knowntests") and ctx.attr.knowntests == False:
+        if hasattr(ctx.attr, "known_tests") and ctx.attr.known_tests == False:
             known_tests_enabled = False
 
             # Ensure attributes dict exists and update the flag
@@ -1230,37 +1152,46 @@ def _impl(ctx):
         # overridden disablement is reflected to later phases.
         ctx.file(settings_file, json.encode(settings_obj) + "\n")
     else:
-        log_debug(debug, "Settings file is empty; cannot determine feature flags")
+        log_debug(debug, "settings", "Settings file is empty; cannot determine feature flags")
 
     # Always produce known tests and test-management files; write empty stubs when disabled
-    exports = [settings_file]
+    # Write manifest version (v1) to manifest.txt for change tracking
+    ctx.file(manifest_file, "version=1\n")
+
+    exports = [settings_file, manifest_file]
     module_specs_known = []
     module_specs_tm = []
     if known_tests_enabled:
         ctx.report_progress("test_optimization_sync: downloading known tests")
-        _perform_dd_known_tests_request(ctx, api_key, env_data, knowntests_file, debug)
+        _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, debug)
         ctx.report_progress("test_optimization_sync: known tests complete")
     else:
-        log_debug(debug, "known_tests_enabled is false; writing empty known tests file")
+        log_debug(debug, "known_tests", "known_tests_enabled is false; writing empty known tests file")
 
         # Minimal valid JSON structure
-        ctx.file(knowntests_file, '{"data": {"attributes": {"tests": {}}}}\n')
+        ctx.file(known_tests_file, '{"data": {"attributes": {"tests": {}}}}\n')
+
+    # Always add known_tests.json to exports (either real data or stub)
+    exports.append(known_tests_file)
 
     # Split known tests by module into dedicated files (no-op if empty)
-    module_specs_known = _split_known_tests_by_module(ctx, knowntests_file, debug)
+    module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug)
 
     if test_management_enabled:
         ctx.report_progress("test_optimization_sync: downloading test management tests")
-        _perform_dd_test_management_tests_request(ctx, api_key, env_data, tmtests_file, debug)
+        _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug)
         ctx.report_progress("test_optimization_sync: test management tests complete")
     else:
-        log_debug(debug, "test_management.enabled is false; writing empty test management tests file")
+        log_debug(debug, "test_management", "test_management.enabled is false; writing empty test management tests file")
 
         # Minimal valid JSON structure for test management tests
-        ctx.file(tmtests_file, '{"data": {"attributes": {"modules": {}}}}\n')
+        ctx.file(test_management_file, '{"data": {"attributes": {"modules": {}}}}\n')
 
-    # Split tmtests by module into dedicated files (no-op if empty)
-    module_specs_tm = _split_tmtests_by_module(ctx, tmtests_file, debug)
+    # Always add test_management.json to exports (either real data or stub)
+    exports.append(test_management_file)
+
+    # Split test_management by module into dedicated files (no-op if empty)
+    module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug)
 
     # Build and write context.json (non-secret metadata) in the same repo
     context_tags = _build_context_tags(ctx, env_data, debug)
@@ -1268,10 +1199,10 @@ def _impl(ctx):
 
     # Emit a small helper .bzl with detected Go module path (if any) for downstream macros
     go_module_path = _detect_go_module_path(ctx, debug)
-    sanitized_go_module_path = _sanitize_label_fragment(go_module_path) if go_module_path else ""
+    sanitized_go_module_path = sanitize_label_fragment(go_module_path) if go_module_path else ""
 
     # Build a modules index for per-module filegroups (labels are sanitized suffixes)
-    # Collect unique labels from both known-tests and tm-tests
+    # Collect unique labels from both known_tests and test_management
     label_seen = {}
     labels = []
     for _s in module_specs_known:
@@ -1316,11 +1247,38 @@ def _impl(ctx):
     )
     ctx.file("export.bzl", export_bzl)
 
+    # Rule to present per-module files with canonical runfile names via symlinks
+    module_runfiles_bzl = (
+        "def _topt_module_files_impl(ctx):\n" +
+        "    syms = {}\n" +
+        "    syms[\".testoptimization/settings.json\"] = ctx.file.settings\n" +
+        "    syms[\".testoptimization/manifest.txt\"] = ctx.file.manifest\n" +
+        "    kt = getattr(ctx.file, \"known_tests\", None)\n" +
+        "    if kt:\n" +
+        "        syms[\".testoptimization/known_tests.json\"] = kt\n" +
+        "    tm = getattr(ctx.file, \"test_management\", None)\n" +
+        "    if tm:\n" +
+        "        syms[\".testoptimization/test_management.json\"] = tm\n" +
+        "    return DefaultInfo(runfiles = ctx.runfiles(symlinks = syms))\n" +
+        "\n" +
+        "topt_module_files = rule(\n" +
+        "    implementation = _topt_module_files_impl,\n" +
+        "    attrs = {\n" +
+        "        \"settings\": attr.label(allow_single_file = True, mandatory = True),\n" +
+        "        \"manifest\": attr.label(allow_single_file = True, mandatory = True),\n" +
+        "        \"known_tests\": attr.label(allow_single_file = True),\n" +
+        "        \"test_management\": attr.label(allow_single_file = True),\n" +
+        "    },\n" +
+        ")\n"
+    )
+    ctx.file("module_runfiles.bzl", module_runfiles_bzl)
+
     # 6. Create a BUILD file with two public filegroup targets.
     # - test_optimization_files: the JSONs returned or stubbed from HTTP (existing)
     # - test_optimization_context: the context.json (separate, so consumers can opt-in)
     exp = repr(exports)
     build_content = (
+        'load(":module_runfiles.bzl", "topt_module_files")\n' +
         "filegroup(\n" +
         '    name = "test_optimization_files",\n' +
         ("    srcs = %s,\n" % exp) +
@@ -1351,29 +1309,40 @@ def _impl(ctx):
                 labels.append(lab)
         labels = sorted(labels)
 
-        # Aggregate files per label (include settings.json as requested)
-        files_by_label = {}
+        # Map module labels to their per-module files
+        known_by_label = {}
         for s in module_specs_known:
-            arr = files_by_label.get(s["label"]) or []
-            arr.append(s["file"])
-            files_by_label[s["label"]] = arr
+            known_by_label[s["label"]] = s["file"]
+        tm_by_label = {}
         for s in module_specs_tm:
-            arr = files_by_label.get(s["label"]) or []
-            arr.append(s["file"])
-            files_by_label[s["label"]] = arr
-        for lab in labels:
-            files = [settings_file] + sorted(files_by_label.get(lab) or [])
+            tm_by_label[s["label"]] = s["file"]
 
-            # Format list for Starlark build content
-            srcs_literal = repr(files)
-            build_content += (
-                "\nfilegroup(\n" +
+        # Ensure per-module stubs exist for the missing side so consumers always
+        # see both canonical filenames in the per-module runfiles
+        for lab in labels:
+            if not known_by_label.get(lab):
+                per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
+                kfile = per_dir + "/known_tests.json"
+                _ensure_parent_directory(ctx, kfile, debug)
+                ctx.file(kfile, '{"data": {"attributes": {"tests": {}}}}\n')
+                known_by_label[lab] = kfile
+            if not tm_by_label.get(lab):
+                per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
+                tfile = per_dir + "/test_management.json"
+                _ensure_parent_directory(ctx, tfile, debug)
+                ctx.file(tfile, '{"data": {"attributes": {"modules": {}}}}\n')
+                tm_by_label[lab] = tfile
+
+        for lab in labels:
+            build_content += ("\ntopt_module_files(\n" +
                 ('    name = "module_%s",\n' % lab) +
-                ("    srcs = %s,\n" % srcs_literal) +
+                ('    settings = "%s",\n' % settings_file) +
+                ('    manifest = "%s",\n' % manifest_file) +
+                (('    known_tests = "%s",\n' % known_by_label.get(lab)) if known_by_label.get(lab) else "") +
+                (('    test_management = "%s",\n' % tm_by_label.get(lab)) if tm_by_label.get(lab) else "") +
                 '    visibility = ["//visibility:public"],\n' +
-                ")\n"
-            )
-    log_debug(debug, "Creating BUILD file with content: %s" % build_content)
+                ")\n")
+    log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)
     ctx.report_progress("test_optimization_sync: writing BUILD")
     ctx.file("BUILD", build_content)
 
@@ -1403,11 +1372,11 @@ test_optimization_sync = repository_rule(
         "runtime_version": attr.string(),
         "runtime_arch": attr.string(),
         # Kill-switches for feature requests
-        # - knowntests: when False, do not request Known Tests and write a minimal stub; also set
+        # - known_tests: when False, do not request Known Tests and write a minimal stub; also set
         #               settings.data.attributes.known_tests_enabled=false in the settings file.
         # - test_management: when False, do not request Test Management Tests and write a minimal stub; also set
         #                    settings.data.attributes.test_management.enabled=false in the settings file.
-        "knowntests": attr.bool(default = True),
+        "known_tests": attr.bool(default = True),
         "test_management": attr.bool(default = True),
         "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
@@ -1560,20 +1529,21 @@ def _test_optimization_sync_extension_impl(module_ctx):
         if extension_debug:
             break
 
-    log_debug(extension_debug, "test_optimization_sync_extension: Starting module extension implementation")
-    log_debug(extension_debug, "test_optimization_sync_extension: Number of modules: %d" % len(module_ctx.modules))
+    log_debug(extension_debug, "extension", "Starting module extension implementation")
+    log_debug(extension_debug, "extension", "Number of modules: %d" % len(module_ctx.modules))
 
     for mod in module_ctx.modules:
-        log_debug(extension_debug, "test_optimization_sync_extension: Processing module: %s" % mod.name)
-        log_debug(extension_debug, "test_optimization_sync_extension: Module is_root: %s" % mod.is_root)
-        log_debug(extension_debug, "test_optimization_sync_extension: Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
+        log_debug(extension_debug, "extension", "Processing module: %s" % mod.name)
+        log_debug(extension_debug, "extension", "Module is_root: %s" % mod.is_root)
+        log_debug(extension_debug, "extension", "Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
 
         for test_optimization_call in mod.tags.test_optimization_sync:
             call_debug = hasattr(test_optimization_call, "debug") and test_optimization_call.debug
-            log_debug(call_debug, "test_optimization_sync_extension: Processing test_optimization_sync call: %s" % test_optimization_call.name)
+            log_debug(call_debug, "extension", "Processing test_optimization_sync call: %s" % test_optimization_call.name)
             log_debug(
                 call_debug,
-                "test_optimization_sync_extension: Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s" %
+                "extension",
+                "Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s" %
                 (
                     test_optimization_call.name,
                     (test_optimization_call.out_dir or "<default>"),
@@ -1590,7 +1560,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
-                knowntests = test_optimization_call.knowntests,
+                known_tests = test_optimization_call.known_tests,
                 test_management = test_optimization_call.test_management,
                 debug = call_debug,
             )
@@ -1610,7 +1580,7 @@ test_optimization_sync_extension = module_extension(
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
             # Optional kill-switches (default True keeps server behavior; False disables feature locally)
-            "knowntests": attr.bool(default = True),
+            "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "debug": attr.bool(default = False),
         }),

@@ -111,7 +111,7 @@ flowchart TD
     A2 -->|POST Settings| D1[Datadog Settings API]
     A2 -->|POST Known Tests (if enabled)| D2[Known Tests API]
     A2 -->|POST Test Mgmt (if enabled)| D3[Test Management Tests API]
-    A2 --> A3[.testoptimization/\n settings.json\n knowntests.json\n knowntests.module.*.json\n tmtests.json\n tmtests.module.*.json\n context.json]
+    A2 --> A3[.testoptimization/\n settings.json\n manifest.txt\n known_tests.json\n (per-module targets expose canonical files)\n test_management.json\n (per-module targets expose canonical files)\n context.json]
     A2 --> A4[export.bzl + BUILD\n filegroups per module]
   end
 
@@ -160,8 +160,9 @@ Module/Repo Resolution
             |                v
             |        .testoptimization/
             |          - settings.json
-            |          - knowntests.json (+ per-module)
-            |          - tmtests.json (+ per-module)
+            |          - manifest.txt
+            |          - known_tests.json (+ per-module)
+            |          - test_management.json (+ per-module)
             |          - context.json
             |        export.bzl + BUILD (filegroups)
             v

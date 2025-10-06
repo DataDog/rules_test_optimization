@@ -14,12 +14,13 @@ All outputs are written under a configurable directory (default: `.testoptimizat
 
 Given an external repository name `<repo_name>` created by the extension, the generated BUILD inside the external repo contains:
 
-- A core filegroup target named `test_optimization_files` which includes only `settings.json`
+- A core filegroup target named `test_optimization_files` which includes `settings.json` and `manifest.txt`
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
   - `settings.json` (Settings API response)
-  - `knowntests.json` (Known Tests API response or minimal stub)
-  - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `knowntests.module.<sanitized_module>.json` and placed alongside `knowntests.json`. See below for details.
-  - `tmtests.json` (Test Management Tests API response or minimal stub)
+  - `manifest.txt` (Payload manifest; version marker for change tracking, currently `version=1`)
+  - `known_tests.json` (Known Tests API response or minimal stub)
+  - Per-module Known Tests/Test Management (via filegroups): each module has a target exposing canonical runfiles under `.testoptimization/` with `known_tests.json` and `test_management.json`, scoped to that module. Physical files are stored under `.testoptimization/module_<sanitized>/known_tests.json` and `.testoptimization/module_<sanitized>/test_management.json`.
+  - `test_management.json` (Test Management Tests API response or minimal stub)
   - `context.json` (Non-secret CI/Git/OS/runtime tags)
 
 Reference settings with a single label:
@@ -28,17 +29,18 @@ Reference settings with a single label:
 @<repo_name>//:test_optimization_files
 ```
 
-### Per-module Known Tests files and labels
+### Per-module files and labels
 
-When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module. The same splitting is performed for Test Management tests (`tmtests.json`), keyed by module under `data.attributes.modules`:
+When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public target per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`:
 
-- Each module becomes files:
-  - `knowntests.module.<sanitized_module>.json`
-  - `tmtests.module.<sanitized_module>.json`
-- Each module also becomes a filegroup target: `:module_<sanitized_module>` that includes:
-  - The module’s `knowntests.module.<sanitized_module>.json` (when present)
-  - The module’s `tmtests.module.<sanitized_module>.json` (when present)
-  - The global `settings.json`
+- Each module target exposes canonical runfiles:
+  - `.testoptimization/known_tests.json` (module-scoped; same shape as combined)
+  - `.testoptimization/test_management.json` (module-scoped; same shape as combined)
+- Each module also becomes a public target: `:module_<sanitized_module>` that includes:
+  - `.testoptimization/settings.json`
+  - `.testoptimization/manifest.txt`
+  - `.testoptimization/known_tests.json` (always present; stub when empty)
+  - `.testoptimization/test_management.json` (always present; stub when empty)
 - These per-module files are not bundled into `:test_optimization_files`
 
 Sanitization rules for `<sanitized_module>`:
@@ -58,15 +60,8 @@ filegroup(
     ],
 )
 
-# Or depend directly on specific files (paths relative to the external repo root)
-filegroup(
-    name = "dd_known_tests_pkg_foo_file",
-    srcs = [
-        "@test_optimization_data//:.testoptimization/knowntests.module.pkg_foo.json",
-        "@test_optimization_data//:.testoptimization/tmtests.module.pkg_foo.json",
-        "@test_optimization_data//:.testoptimization/settings.json",
-    ],
-)
+# If you need file paths at test time, use rlocationpaths on the selector target
+# provided by the dd_topt_go_test macro (see tools/topt_go_test.bzl).
 ```
 
 ## Installation (Bzlmod)
@@ -204,7 +199,7 @@ test_optimization_sync(
     # service = "my-service",
     # runtime_name = "go",
     # runtime_version = "go1.22",
-    # knowntests = True,
+    # known_tests = True,
     # test_management = True,
 )
 ```
@@ -438,6 +433,224 @@ dd_topt_go_test(
 )
 ```
 
+## Troubleshooting
+
+### Repository rule not fetching data
+
+**Symptom**: Build succeeds but test optimization files are empty or stale.
+
+**Solutions**:
+
+1. **Verify DD_API_KEY is set**:
+   ```bash
+   bazel info --repo_env | grep DD_API_KEY
+   ```
+   If not set, add to `.bazelrc`:
+   ```
+   common --repo_env=DD_API_KEY
+   ```
+
+2. **Force refetch** with a cache-busting salt:
+   ```bash
+   bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s)
+   ```
+
+3. **Check repository cache** to see if the rule ran:
+   ```bash
+   # Find the external repository directory
+   bazel info output_base
+   # Repository contents at: $(bazel info output_base)/external/test_optimization_data
+   ls -la $(bazel info output_base)/external/test_optimization_data/.testoptimization/
+   ```
+
+4. **Enable debug logging** in your `MODULE.bazel`:
+   ```bzl
+   test_optimization_sync.test_optimization_sync(
+       name = "test_optimization_data",
+       debug = True,  # Verbose logging
+   )
+   ```
+
+### Service name validation errors
+
+**Symptom**: Error message about invalid or empty service name.
+
+**Solution**: Ensure service name is provided via one of:
+1. The `service` attribute:
+   ```bzl
+   test_optimization_sync.test_optimization_sync(
+       name = "test_optimization_data",
+       service = "my-service",
+   )
+   ```
+
+2. Or via environment variable in `.bazelrc`:
+   ```
+   common --repo_env=DD_SERVICE=my-service
+   ```
+
+### Network errors during fetch
+
+**Symptom**: `curl` errors or timeout during repository resolution.
+
+**Solutions**:
+
+1. **Verify DD_SITE** is correct (defaults to `datadoghq.com`):
+   ```
+   common --repo_env=DD_SITE=datadoghq.eu  # for EU region
+   ```
+
+2. **Check firewall/proxy** allows HTTPS to:
+   - `https://api.datadoghq.com` (or your DD_SITE)
+
+3. **Verify API key permissions**: The API key needs read access to:
+   - CI Visibility Settings API
+   - Libraries Tests API (for Known Tests)
+   - Test Management API (for Test Management)
+
+### Tests not uploading
+
+**Symptom**: Tests run but no data appears in Datadog UI.
+
+**Solutions**:
+
+1. **Verify uploader test ran**:
+   ```bash
+   bazel test //... //tools:dd_upload_payloads --test_output=all
+   ```
+   Look for `[dd-uploader]` log lines.
+
+2. **Check payload directory is writable**:
+   ```bash
+   # Must match your --test_env=DD_PAYLOADS_DIR
+   ls -la $PWD/.testoptimization/payloads/tests/
+   ls -la $PWD/.testoptimization/payloads/coverage/
+   ```
+
+3. **Ensure --sandbox_writable_path is set**:
+   ```bash
+   bazel test //... //tools:dd_upload_payloads \
+     --sandbox_writable_path=$PWD/.testoptimization/payloads \
+     --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+   ```
+
+4. **Verify environment variables** for upload:
+   - Agentless mode requires: `DD_API_KEY`, `DD_SITE`
+   - EVP proxy mode requires: `DD_TRACE_AGENT_URL`
+
+### Per-module files not found
+
+**Symptom**: `dd_topt_go_test` fails with "module_X not found" or falls back to full bundle.
+
+**Solutions**:
+
+1. **List available modules**:
+   ```bash
+   bazel query 'kind(".*", @test_optimization_data//...)' | grep module_
+   ```
+
+2. **Check Go module path detection**:
+   ```bash
+   # Enable debug to see detected module path
+   # Look for logs like: "Detected module path 'github.com/myorg/repo'"
+   ```
+
+3. **Verify importpath inference** (if using `embed`):
+   - Ensure `go_library` target exists
+   - Check that `embed = [":library_target"]` is set on your test
+
+4. **Override module label** explicitly (as workaround):
+   ```bzl
+   dd_topt_go_test(
+       name = "my_test",
+       module_label_override = "my_expected_module",  # Matches :module_my_expected_module
+       ...
+   )
+   ```
+
+### Cache invalidation happening too often
+
+**Symptom**: Repository refetches on every build.
+
+**Causes & Solutions**:
+
+1. **Changing Git state**: `GIT_DIRTY`, `DD_GIT_*` variables are in `environ` list.
+   - Remove `GIT_DIRTY` from your `.bazelrc` if you don't want dirty-tree sensitivity.
+
+2. **FETCH_SALT with TTL**: If using `FETCH_SALT_TTL` in `bazelw`, each TTL expiry triggers refetch.
+   - Increase TTL or remove FETCH_SALT for stable builds.
+
+3. **Datadog backend changes**: Settings or test lists changing upstream invalidate cache.
+   - Expected behavior; use per-module files to limit blast radius.
+   - Consider kill-switches for Known Tests if too noisy:
+     ```bzl
+     test_optimization_sync.test_optimization_sync(
+         name = "test_optimization_data",
+         known_tests = False,  # Disable Known Tests locally
+     )
+     ```
+
+### Windows-specific issues
+
+**Symptom**: PowerShell errors or `bazelw` not found.
+
+**Solutions**:
+
+1. **Use PowerShell for bazelw equivalent**:
+   ```powershell
+   # Set environment variables directly before bazel commands
+   $env:DD_GIT_REPOSITORY_URL = "https://github.com/myorg/repo.git"
+   bazel build //...
+   ```
+
+2. **Verify PowerShell execution policy**:
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+   ```
+
+3. **Check paths use forward slashes** in Starlark/Bazel contexts (backward slashes are auto-converted).
+
+### Debugging tips
+
+1. **View HTTP request bodies** (when `debug = True`):
+   - Look for lines like: `[http] Settings request body: {...}`
+
+2. **Inspect generated files**:
+   ```bash
+   # Settings
+   cat $(bazel info output_base)/external/test_optimization_data/.testoptimization/settings.json | jq .
+   
+   # Per-module known tests
+   cat $(bazel info output_base)/external/test_optimization_data/.testoptimization/module_*/known_tests.json | jq .
+   ```
+
+3. **Check BUILD file generation**:
+   ```bash
+   cat $(bazel info output_base)/external/test_optimization_data/BUILD
+   ```
+
+4. **Verify export.bzl contents**:
+   ```bash
+   cat $(bazel info output_base)/external/test_optimization_data/export.bzl
+   ```
+
+### Getting help
+
+If issues persist:
+
+1. **Enable debug mode** and capture full output:
+   ```bash
+   bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s) 2>&1 | tee debug.log
+   ```
+
+2. **Collect diagnostic info**:
+   - Bazel version: `bazel version`
+   - OS: `uname -a` (Linux/macOS) or `systeminfo` (Windows)
+   - Repository rule outputs (as shown above)
+   - Sanitized logs (remove API keys before sharing)
+
+3. **File an issue** at: https://github.com/DataDog/rules_test_optimization/issues
+
 ## Configuration and attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`
@@ -446,12 +659,12 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `name`: external repository name to create
 
 - Optional
-  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `tmtests.json` under `out_dir`)
+  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `test_management.json` under `out_dir`)
   - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
   - `runtime_arch` (string): optional runtime architecture. Defaults to auto-detected `os.architecture` when not provided
-  - `knowntests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
+  - `known_tests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
   - `test_management` (bool, default `True`): local kill-switch for Test Management Tests. When `False`, the Test Management request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `test_management.enabled: false`.
   - `debug` (bool): default `False`. Enables verbose logging
 
@@ -480,7 +693,7 @@ You can also disable features locally regardless of the server response using th
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
     # Force-disable features locally; settings.json will be updated accordingly
-    knowntests = False,
+    known_tests = False,
     test_management = False,
 )
 ```
