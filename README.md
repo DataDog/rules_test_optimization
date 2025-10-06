@@ -19,7 +19,7 @@ Given an external repository name `<repo_name>` created by the extension, the ge
   - `settings.json` (Settings API response)
   - `manifest.txt` (Payload manifest; version marker for change tracking, currently `version=1`)
   - `known_tests.json` (Known Tests API response or minimal stub)
-  - Per-module Known Tests files: one JSON per module key from `data.attributes.tests`, named `known_tests.module.<sanitized_module>.json` and placed alongside `known_tests.json`. See below for details.
+  - Per-module Known Tests/Test Management (via filegroups): each module has a target exposing canonical runfiles under `.testoptimization/` with `known_tests.json` and `test_management.json`, scoped to that module. Physical files are stored under `.testoptimization/module_<sanitized>/known_tests.json` and `.testoptimization/module_<sanitized>/test_management.json`.
   - `test_management.json` (Test Management Tests API response or minimal stub)
   - `context.json` (Non-secret CI/Git/OS/runtime tags)
 
@@ -29,17 +29,18 @@ Reference settings with a single label:
 @<repo_name>//:test_optimization_files
 ```
 
-### Per-module Known Tests files and labels
+### Per-module files and labels
 
-When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public filegroup per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`:
+When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public target per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`:
 
-- Each module becomes files:
-  - `known_tests.module.<sanitized_module>.json`
-  - `test_management.module.<sanitized_module>.json`
-- Each module also becomes a filegroup target: `:module_<sanitized_module>` that includes:
-  - The module’s `known_tests.module.<sanitized_module>.json` (when present)
-  - The module’s `test_management.module.<sanitized_module>.json` (when present)
-  - The global `settings.json`
+- Each module target exposes canonical runfiles:
+  - `.testoptimization/known_tests.json` (module-scoped; same shape as combined)
+  - `.testoptimization/test_management.json` (module-scoped; same shape as combined)
+- Each module also becomes a public target: `:module_<sanitized_module>` that includes:
+  - `.testoptimization/settings.json`
+  - `.testoptimization/manifest.txt`
+  - `.testoptimization/known_tests.json` (always present; stub when empty)
+  - `.testoptimization/test_management.json` (always present; stub when empty)
 - These per-module files are not bundled into `:test_optimization_files`
 
 Sanitization rules for `<sanitized_module>`:
@@ -59,15 +60,8 @@ filegroup(
     ],
 )
 
-# Or depend directly on specific files (paths relative to the external repo root)
-filegroup(
-    name = "dd_known_tests_pkg_foo_file",
-    srcs = [
-        "@test_optimization_data//:.testoptimization/known_tests.module.pkg_foo.json",
-        "@test_optimization_data//:.testoptimization/test_management.module.pkg_foo.json",
-        "@test_optimization_data//:.testoptimization/settings.json",
-    ],
-)
+# If you need file paths at test time, use rlocationpaths on the selector target
+# provided by the dd_topt_go_test macro (see tools/topt_go_test.bzl).
 ```
 
 ## Installation (Bzlmod)

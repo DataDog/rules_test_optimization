@@ -154,7 +154,7 @@ Common behavior:
     - `settings.json`  
     - Any number of `known_tests*.json` files (combined known tests)  
     - Any number of `test_management*.json` files (combined test management tests)  
-  - Accept both “combined” shapes (e.g., `known_tests.json` with `data.attributes.tests`) and split per‑module shapes (e.g., `known_tests.module.<sanitized>.json`). Merge by unioning entries; empty stubs are valid and should be treated as “no data”.  
+  - Accept both “combined” shapes (e.g., `known_tests.json` with `data.attributes.tests`) and per‑module shapes, exposed under canonical file names via per‑module targets. Merge by unioning entries; empty stubs are valid and should be treated as “no data”.  
 - Outputs (write‑only):  
   - Ensure `$DD_PAYLOADS_DIR/tests` and `$DD_PAYLOADS_DIR/coverage` exist (create if needed, handling concurrent processes safely).  
   - Serialize test payloads to `$DD_PAYLOADS_DIR/tests/*.json` (JSON only; do not use msgpack in Bazel mode).  
@@ -167,8 +167,8 @@ Common behavior:
 Test data contracts (minimum viable)
 
 - settings.json: full server response preferred; if absent, treat features as disabled and do not attempt network requests.  
-- known tests: accept combined (`data.attributes.tests`) or per‑module files (`known_tests.module.*.json` → module key → test identifiers). Merge by union.  
-- test management tests: accept combined (`data.attributes.modules`) or per‑module files (`test_management.module.*.json` → module key → test states). Merge by union.  
+- known tests: accept combined (`data.attributes.tests`) or per‑module canonical files (`known_tests.json` scoped per target) → module key → test identifiers. Merge by union.  
+- test management tests: accept combined (`data.attributes.modules`) or per‑module canonical files (`test_management.json` scoped per target) → module key → test states. Merge by union.  
 - Forward compatibility: ignore unknown keys; fail closed (no network) on parse errors in Bazel mode.
 
 Backwards compatibility
@@ -186,8 +186,8 @@ Repository Rule and Module Extension
   - `debug`: increases logging verbosity and writes additional artifacts (e.g., request JSONs) for troubleshooting.  
 - The repository rule performs:  
   1. Settings request: always issued; response persisted to `settings.json`.  
-  2. Known Tests request: gated by settings and `known_tests` attribute; persisted to `known_tests.json` and split by module (`known_tests.module.<sanitized>.json`).  
-  3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `test_management.json` and split by module (`test_management.module.<sanitized>.json`).  
+  2. Known Tests request: gated by settings and `known_tests` attribute; persisted to `known_tests.json` and split by module (canonical per‑module files exposed by targets).  
+  3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `test_management.json` and split by module (canonical per‑module files exposed by targets).  
   4. `context.json`: built locally from CI/git/OS/runtime information — non‑secret and safe to ship as runfiles.  
   5. A generated `BUILD` file that exposes:  
      - `:test_optimization_files` → includes `settings.json` and `manifest.txt` (stable bundle for most uses).  
