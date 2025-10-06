@@ -1171,6 +1171,9 @@ def _impl(ctx):
         # Minimal valid JSON structure
         ctx.file(known_tests_file, '{"data": {"attributes": {"tests": {}}}}\n')
 
+    # Always add known_tests.json to exports (either real data or stub)
+    exports.append(known_tests_file)
+
     # Split known tests by module into dedicated files (no-op if empty)
     module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug)
 
@@ -1183,6 +1186,9 @@ def _impl(ctx):
 
         # Minimal valid JSON structure for test management tests
         ctx.file(test_management_file, '{"data": {"attributes": {"modules": {}}}}\n')
+
+    # Always add test_management.json to exports (either real data or stub)
+    exports.append(test_management_file)
 
     # Split test_management by module into dedicated files (no-op if empty)
     module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug)
