@@ -10,7 +10,9 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources:
+  - `common_utils.bzl` — shared utilities for logging, sanitization, validation, and deduplication used across multiple rule files.
   - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/settings.json`, per‑module files, and `.testoptimization/context.json`.
+  - `test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
   - `test_optimization_uploader_test.bzl` — runtime uploader test rule.
   - `topt_go_test.bzl` — macro wrapping `go_test` with the uploader.
   - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
