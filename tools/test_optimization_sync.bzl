@@ -1285,7 +1285,7 @@ def _impl(ctx):
     sanitized_go_module_path = _sanitize_label_fragment(go_module_path) if go_module_path else ""
 
     # Build a modules index for per-module filegroups (labels are sanitized suffixes)
-    # Collect unique labels from both known-tests and tm-tests
+    # Collect unique labels from both known_tests and test_management
     label_seen = {}
     labels = []
     for _s in module_specs_known:
