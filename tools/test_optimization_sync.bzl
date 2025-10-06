@@ -1192,7 +1192,7 @@ def _impl(ctx):
 
     # Emit a small helper .bzl with detected Go module path (if any) for downstream macros
     go_module_path = _detect_go_module_path(ctx, debug)
-    sanitized_go_module_path = _sanitize_label_fragment(go_module_path) if go_module_path else ""
+    sanitized_go_module_path = sanitize_label_fragment(go_module_path) if go_module_path else ""
 
     # Build a modules index for per-module filegroups (labels are sanitized suffixes)
     # Collect unique labels from both known_tests and test_management
