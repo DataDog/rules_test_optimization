@@ -8,7 +8,9 @@ This file provides:
   The macro can then `rlocationpaths` this rule to set TEST_OPTIMIZATION_PAYLOADS_FILES.
 """
 
-load("@rules_go//go/private:providers.bzl", "GoArchive", "GoLibrary")
+# In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
+# GoArchive still exists separately.
+load("@rules_go//go/private:providers.bzl", "GoArchive", "GoInfo")
 load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
 # Provider carrying the inferred importpath string
@@ -21,26 +23,27 @@ def _importpath_aspect_impl(target, ctx):
     """Aspect to discover the Go importpath.
 
     Strategy:
-    - If this target provides GoArchive, read its importpath.
+    - If this target provides GoInfo (formerly GoLibrary), read its importpath.
+    - Else, if this target provides GoArchive, read its importpath.
     - Else, if rule has an explicit importpath attribute, use it.
     - Else, traverse children via `embed` and propagate first discovered value.
     """
 
-    # Prefer GoLibrary provider when available
-    if GoLibrary in target:
-        lib = target[GoLibrary]
-        ip = getattr(lib, "importpath", None)
+    # Prefer GoInfo provider (rules_go v0.51+, replaces GoLibrary)
+    if GoInfo in target:
+        info = target[GoInfo]
+        ip = getattr(info, "importpath", None)
         if ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
-    # Fallback: GoArchive may carry importpath in some rules_go versions
+    # Fallback: GoArchive may carry importpath
     if GoArchive in target:
         arch = target[GoArchive]
         ip = getattr(arch, "importpath", None)
 
-        # Some versions nest importpath under a 'library' field
-        if (not ip) and hasattr(arch, "library"):
-            ip = getattr(arch.library, "importpath", None)
+        # Some versions nest importpath under a 'source' or 'library' field
+        if (not ip) and hasattr(arch, "source"):
+            ip = getattr(arch.source, "importpath", None)
         if ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
