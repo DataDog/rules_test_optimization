@@ -1289,7 +1289,7 @@ def _impl(ctx):
         '    srcs = ["context.json"],\n' +
         '    visibility = ["//visibility:public"],\n' +
         ")\n" +
-        '\nexports_files(["export.bzl"])\n'
+        '\nexports_files(["export.bzl", ".testoptimization/manifest.txt"])\n'
     )
 
     # Append one filegroup per module so consumers can depend on individual modules
