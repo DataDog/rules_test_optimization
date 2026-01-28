@@ -168,6 +168,7 @@ def dd_topt_go_test(
     # Add manifest file reference for deriving the working directory
     # Library can resolve this path and call filepath.Dir() to get the .testoptimization directory
     manifest_label = "@%s//:.testoptimization/manifest.txt" % sync_repo_name
+    data.append(manifest_label)
     env["TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
