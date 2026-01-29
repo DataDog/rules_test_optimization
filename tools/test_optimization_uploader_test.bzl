@@ -305,6 +305,11 @@ Dbg "PayloadsDir='$PayloadsDir'"
 Dbg "TestsSubdir='$TestsSubdir' CoverageSubdir='$CoverageSubdir'"
 Dbg "QuiescentSec=$QuiescentSec MaxWaitSec=$MaxWaitSec FailOnError=$FailOnError"
 
+if ([string]::IsNullOrEmpty($PayloadsDir)) {{
+  Log "payloads dir not configured (nothing to upload)"
+  Dbg "Skipping because PayloadsDir is empty"
+  exit 0
+}}
 if (-not (Test-Path -LiteralPath $PayloadsDir)) {{
   Log "payloads dir not found: $PayloadsDir (nothing to upload)"
   Dbg "Skipping because directory does not exist"
