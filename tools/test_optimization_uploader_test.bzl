@@ -491,29 +491,12 @@ Log "done"
     ctx.actions.write(output = bash_file, content = bash_script, is_executable = True)
     ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
     ctx.actions.write(output = ps_file, content = ps_script, is_executable = False)
-
-    # Create a batch file wrapper for native Windows (calls PowerShell)
-    bat_template = """@echo off
-setlocal
-set "SCRIPT_DIR=%~dp0"
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%SCRIPT_DIR%{ps_name}"
-exit /b %ERRORLEVEL%
-"""
-    bat_script = bat_template.replace("{ps_name}", ps_file.basename)
-    bat_file = ctx.actions.declare_file(ctx.label.name + ".bat")
-    ctx.actions.write(output = bat_file, content = bat_script, is_executable = True)
-    log_debug(debug, "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
+    log_debug(debug, "Declared outputs → bash='%s', ps='%s'" % (bash_file.basename, ps_file.basename))
 
     # Include optional data files (e.g., context.json) in runfiles so scripts can locate them via TEST_SRCDIR
-    # Include both the PowerShell and batch files in runfiles for cross-platform support
-    runfiles = ctx.runfiles(files = [ps_file, bat_file] + ctx.files.data)
-    log_debug(debug, "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
-
-    # Use select-like behavior based on platform constraint
-    # On Windows, Bazel will use the .bat file; on Unix, it uses the .sh file
-    is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
-    executable = bat_file if is_windows else bash_file
-    return [DefaultInfo(executable = executable, runfiles = runfiles)]
+    runfiles = ctx.runfiles(files = [ps_file] + ctx.files.data)
+    log_debug(debug, "Runfiles include %d data file(s) plus PowerShell script" % len(ctx.files.data))
+    return [DefaultInfo(executable = bash_file, runfiles = runfiles)]
 
 dd_payload_uploader_test = rule(
     implementation = _uploader_impl,
@@ -528,7 +511,5 @@ dd_payload_uploader_test = rule(
         "debug": attr.bool(default = False),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True),
-        # Private attribute to detect Windows platform
-        "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
 )
