@@ -14,8 +14,8 @@ The steps are:
    The sync also emits an `export.bzl` helper describing available module labels and detected runtime/module hints for consumers.  
    POC: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
 
-2. **Test instrumentation**:  
-   Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (e.g., through `TEST_OPTIMIZATION_PAYLOADS_FILES`) and write test/coverage payloads to a writable path.
+2. **Test instrumentation**:
+   Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (e.g., through `TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to a writable path.
 
 3. **Payload reporting**:  
    A dedicated uploader runs as a normal Bazel test, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`,`DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).

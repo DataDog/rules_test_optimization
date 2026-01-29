@@ -163,7 +163,6 @@ def dd_topt_go_test(
 
     # Data/env for the go test: depend only on the selector and use its runfiles
     data.append(":" + selector_name)
-    env["TEST_OPTIMIZATION_PAYLOADS_FILES"] = "$(rlocationpaths :%s)" % selector_name
 
     # Add manifest file reference for deriving the working directory
     # Library can resolve this path and call filepath.Dir() to get the .testoptimization directory

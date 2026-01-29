@@ -118,7 +118,7 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 
 - Phase 2 — Hermetic test execution:  
     
-  - Tests run without network and can optionally read the synced JSONs from runfiles (e.g., via `TEST_OPTIMIZATION_PAYLOADS_FILES`).  
+  - Tests run without network and can optionally read the synced JSONs from runfiles (e.g., via `TEST_OPTIMIZATION_MANIFEST_FILE`).  
   - Instrumented tests write payloads to a single shared writable directory (e.g., `.testoptimization/payloads/{tests,coverage}`) configured via `--sandbox_writable_path` and `DD_PAYLOADS_DIR`.
 
 
@@ -140,17 +140,18 @@ Why this solves the problem
 
 ### Required Library Changes
 
-Under Bazel, tracing libraries must avoid all network calls for Test Optimization and operate entirely on files. Libraries detect Bazel mode via `TEST_OPTIMIZATION_PAYLOADS_FILES`, consume pre‑fetched JSONs from runfiles, and write test and coverage payloads to `$DD_PAYLOADS_DIR` for the uploader to send. Outside Bazel, libraries retain the same current behavior, fetching and accessing the network directly.
+Under Bazel, tracing libraries must avoid all network calls for Test Optimization and operate entirely on files. Libraries detect Bazel mode via `TEST_OPTIMIZATION_MANIFEST_FILE`, consume pre‑fetched JSONs from runfiles, and write test and coverage payloads to `$DD_PAYLOADS_DIR` for the uploader to send. Outside Bazel, libraries retain the same current behavior, fetching and accessing the network directly.
 
 Common behavior:
 
-- Detection: If `TEST_OPTIMIZATION_PAYLOADS_FILES` is set and non‑empty, enter “Bazel mode”. Otherwise use existing network transport.  
-- Inputs (read‑only):  
-  - Parse `TEST_OPTIMIZATION_PAYLOADS_FILES` as a space‑separated list of runfiles paths. Resolve each path to a real file via standard Bazel runfiles resolution:  
-    - If `RUNFILES_MANIFEST_FILE` exists, treat each token as a runfiles logical path and map it to a real path by scanning the manifest.  
-    - Else, if `TEST_SRCDIR` or `RUNFILES_DIR` exists, join with the token and test for existence.  
-    - Else, if a token is already an absolute path and exists, use it as‑is.  
-  - From the resolved files, load:  
+- Detection: If `TEST_OPTIMIZATION_MANIFEST_FILE` is set and non‑empty, enter “Bazel mode”. Otherwise use existing network transport.  
+- Inputs (read‑only):
+  - Resolve `TEST_OPTIMIZATION_MANIFEST_FILE` to a real file path via standard Bazel runfiles resolution:
+    - If `RUNFILES_MANIFEST_FILE` exists, scan it to map the logical path to a real path.
+    - Else, if `TEST_SRCDIR` or `RUNFILES_DIR` exists, join with the manifest path and test for existence.
+    - Else, if the value is already an absolute path and exists, use it as‑is.
+  - Call `filepath.Dir()` (or equivalent) on the resolved manifest path to get the `.testoptimization` directory.
+  - From that directory, load:  
     - `settings.json`  
     - Any number of `known_tests*.json` files (combined known tests)  
     - Any number of `test_management*.json` files (combined test management tests)  
@@ -162,7 +163,7 @@ Common behavior:
   - Use unique, deterministic file names to avoid clashes across shards (e.g., include PID/TID/timestamp/random suffix). Flush and fsync where appropriate for durability.  
 - Network: In Bazel mode, do not perform any HTTP calls (for metadata fetch or uploads). All remote interactions are delegated to the repository rule (metadata) and the uploader test (shipping).  
 - Config precedence: Honor `settings.json` feature flags (e.g., known tests enabled, test management enabled). If missing, default to conservative behavior (features disabled) rather than reaching the network.  
-- Logging: Emit a clear startup line noting “Bazel mode enabled via TEST\_OPTIMIZATION\_PAYLOADS\_FILES” and list resolved files for troubleshooting.
+- Logging: Emit a clear startup line noting "Bazel mode enabled via TEST\_OPTIMIZATION\_MANIFEST\_FILE" and list resolved directory for troubleshooting.
 
 Test data contracts (minimum viable)
 
@@ -173,7 +174,7 @@ Test data contracts (minimum viable)
 
 Backwards compatibility
 
-- Outside Bazel (no `TEST_OPTIMIZATION_PAYLOADS_FILES`), preserve current behavior: live metadata fetch (settings/known tests) and direct uploads according to existing environment variables.
+- Outside Bazel (no `TEST_OPTIMIZATION_MANIFEST_FILE`), preserve current behavior: live metadata fetch (settings/known tests) and direct uploads according to existing environment variables.
 
 ### Detailed Design
 
@@ -216,12 +217,12 @@ Runtime Uploader
 Language Macros
 
 - Provide macros per language to:  
-  - Attach runfiles and env (`TEST_OPTIMIZATION_PAYLOADS_FILES`, `DD_PAYLOADS_DIR`).  
+  - Attach runfiles and env (`TEST_OPTIMIZATION_MANIFEST_FILE`, `DD_PAYLOADS_DIR`).  
   - Add the uploader test target automatically.  
   - Surface reasonable defaults and allow overrides.  
 - Go importpath inference:  
   - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
-  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_PAYLOADS_FILES` to `$(rlocationpaths :<selector>)`.  
+  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_label>)` for the `manifest.txt` file.  
   - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
   - The exported `topt_data["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
 - Module dependency: this repository declares a `bazel_dep("rules_go", <version>)` to make the provider load visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.

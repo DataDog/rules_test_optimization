@@ -336,8 +336,7 @@ bazel test //... //tools:dd_upload_payloads \
 
 The macro sets the following environment variables for instrumented tests:
 
-- `TEST_OPTIMIZATION_PAYLOADS_FILES`: Space-separated list of runfile paths to synced payload JSON files (settings, known tests, etc.). Tests resolve these via standard Bazel runfiles resolution.
-- `TEST_OPTIMIZATION_MANIFEST_FILE`: Path to `manifest.txt` in the synced repo. Libraries can call `filepath.Dir()` on this path to derive the `.testoptimization` directory for additional file access.
+- `TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the `.testoptimization` directory containing all synced payload files (settings, known tests, etc.).
 - `DD_PAYLOADS_DIR`: Directory where tests write output payloads (`tests/*.json`, `coverage/*.json`). Must be writable via `--sandbox_writable_path`.
 
 ## Convenience macro: dd_topt_go_test

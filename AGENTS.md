@@ -42,7 +42,7 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 - In `BUILD.bazel`: `load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
 - Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go’s provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
-- Tests can read `TEST_OPTIMIZATION_PAYLOADS_FILES` (space‑separated runfiles) to inspect synced payloads.
+- Tests can read `TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the `.testoptimization` directory (via `filepath.Dir()`) and access synced payloads.
 
 Note: This repository declares a `bazel_dep` on `rules_go` to load provider definitions for Go importpath inference. It does not configure Go toolchains; consumers must still configure `rules_go` (SDK, toolchains) in their own `MODULE.bazel`.
 

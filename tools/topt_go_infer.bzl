@@ -5,7 +5,6 @@ This file provides:
   computed importpath (matching rules_go's logic).
 - A rule that uses that aspect result to choose the correct per-module
   filegroup from the synced repository and expose those files as runfiles.
-  The macro can then `rlocationpaths` this rule to set TEST_OPTIMIZATION_PAYLOADS_FILES.
 """
 
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
