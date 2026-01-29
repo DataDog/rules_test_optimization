@@ -14,6 +14,14 @@ import (
 
 // Demonstrates reading test optimization files using TEST_OPTIMIZATION_MANIFEST_FILE
 func TestMain(m *testing.M) {
+	// Print all environment variables for debugging
+	fmt.Println("=== ENVIRONMENT VARIABLES ===")
+	for _, env := range os.Environ() {
+		fmt.Println(env)
+	}
+	fmt.Println("=== END ENVIRONMENT VARIABLES ===")
+	fmt.Println()
+
 	// Get the manifest file path and derive the working directory
 	manifestRloc := os.Getenv("TEST_OPTIMIZATION_MANIFEST_FILE")
 	if manifestRloc == "" {
