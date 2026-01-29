@@ -363,8 +363,8 @@ Dbg "headers prepared (agentless=$Agentless)"
 
 # Load context.json from runfiles if present (added via data deps)
 $ContextJson = $null
-Dbg "TEST_SRCDIR: $([string]::IsNullOrEmpty($env:TEST_SRCDIR) ? '<unset>' : $env:TEST_SRCDIR)"
-Dbg "RUNFILES_MANIFEST_FILE: $([string]::IsNullOrEmpty($env:RUNFILES_MANIFEST_FILE) ? '<unset>' : $env:RUNFILES_MANIFEST_FILE)"
+Dbg "TEST_SRCDIR: $(if ([string]::IsNullOrEmpty($env:TEST_SRCDIR)) {{ '<unset>' }} else {{ $env:TEST_SRCDIR }})"
+Dbg "RUNFILES_MANIFEST_FILE: $(if ([string]::IsNullOrEmpty($env:RUNFILES_MANIFEST_FILE)) {{ '<unset>' }} else {{ $env:RUNFILES_MANIFEST_FILE }})"
 if (-not [string]::IsNullOrEmpty($env:TEST_SRCDIR)) {{
   try {{
     $ctxFile = Get-ChildItem -LiteralPath $env:TEST_SRCDIR -Recurse -File -Filter 'context.json' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -384,7 +384,7 @@ if (-not $ContextJson -and -not [string]::IsNullOrEmpty($env:RUNFILES_MANIFEST_F
     }}
   }} catch {{}}
 }}
-Dbg "context.json: $([string]::IsNullOrEmpty($ContextJson) ? '<none>' : $ContextJson)"
+Dbg "context.json: $(if ([string]::IsNullOrEmpty($ContextJson)) {{ '<none>' }} else {{ $ContextJson }})"
 
 function Merge-With-Context([string]$infile, [string]$outfile) {{
   if (-not $ContextJson -or -not (Test-Path -LiteralPath $ContextJson)) {{
