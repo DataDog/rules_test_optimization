@@ -319,11 +319,26 @@ bazel test //... //tools:dd_upload_payloads \
 - Test payloads are JSON (msgpack not available in Starlark). Coverage is multipart with `event` and `coveragex` parts.
 - Requests include `Accept: application/json`. Test uploads set `Content-Type: application/json`.
 
+### Reliability
+
+- HTTP requests use a 60-second timeout
+- Failed requests are retried up to 3 times with a 2-second delay between attempts
+- Both transient errors (connection issues) and HTTP errors (4xx/5xx) trigger retries
+- Behavior is consistent across Linux/macOS (bash/curl) and Windows (PowerShell)
+
 ### Metadata enrichment (context.json)
 
 - When `context.json` is present in runfiles (provided via the `data` attribute), the uploader enriches each test payload by merging all non-null keys from `context.json` into the payload under `metadata.*`.
 - If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
 - The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
+
+### Test-time environment variables
+
+The macro sets the following environment variables for instrumented tests:
+
+- `TEST_OPTIMIZATION_PAYLOADS_FILES`: Space-separated list of runfile paths to synced payload JSON files (settings, known tests, etc.). Tests resolve these via standard Bazel runfiles resolution.
+- `TEST_OPTIMIZATION_MANIFEST_FILE`: Path to `manifest.txt` in the synced repo. Libraries can call `filepath.Dir()` on this path to derive the `.testoptimization` directory for additional file access.
+- `DD_PAYLOADS_DIR`: Directory where tests write output payloads (`tests/*.json`, `coverage/*.json`). Must be writable via `--sandbox_writable_path`.
 
 ## Convenience macro: dd_topt_go_test
 
