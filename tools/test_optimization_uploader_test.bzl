@@ -11,6 +11,9 @@
 #   test_suite or add to the same invocation). It runs outside the sandbox and
 #   uploads after the directory is quiescent.
 
+# Version identifier sent in Datadog-Meta-Tracer-Version header
+UPLOADER_VERSION = "1.0.0"
+
 def log_info(message):
     print("dd_payload_uploader_test: %s" % message)
 
@@ -85,6 +88,10 @@ if [[ "$(uname -s | tr 'A-Z' 'a-z')" == *mingw* || "$(uname -s | tr 'A-Z' 'a-z')
   exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps_path"
 fi
 
+if [[ -z "$PAYLOADS_DIR" ]]; then
+  log "payloads dir not configured (nothing to upload)"
+  exit 0
+fi
 if [[ ! -d "$PAYLOADS_DIR" ]]; then
   log "payloads dir not found: $PAYLOADS_DIR (nothing to upload)"
   exit 0
@@ -158,7 +165,7 @@ hdrs=(
   -H "Datadog-Meta-Lang: bazel-starlark"
   -H "Datadog-Meta-Lang-Version: n/a"
   -H "Datadog-Meta-Lang-Interpreter: bazel-test"
-  -H "Datadog-Meta-Tracer-Version: 1.0.0"
+  -H "Datadog-Meta-Tracer-Version: {uploader_version}"
   -H "Accept: application/json"
 )
 if (( AGENTLESS == 1 )); then
@@ -217,18 +224,22 @@ upload_tests() {{
     enrich_with_context "$f" "$body"
     dbg "upload_tests: posting '$f' (body '$body')"
     if (( AGENTLESS == 1 )); then
-      curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused \
-        -X POST "${TEST_URL}" "${hdrs[@]}" -H "Content-Type: application/json" --data-binary @"${body}" -o /dev/null -w "%{http_code}" >/dev/null || {{
-          if (( FAIL_ON_ERROR )); then log "upload failed: $f"; exit 1; else log "upload failed (ignored): $f"; fi
-        }}
+      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
+        -X POST "${TEST_URL}" "${hdrs[@]}" -H "Content-Type: application/json" --data-binary @"${body}" -o /dev/null -w "%{http_code}" >/dev/null; then
+        log "uploaded test payload: $f"
+        ((++count))
+      else
+        if (( FAIL_ON_ERROR )); then log "upload failed: $f"; exit 1; else log "upload failed (ignored): $f"; fi
+      fi
     else
-      curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused \
-        -X POST "${TEST_URL}" "${hdrs[@]}" "${TEST_EVP[@]}" -H "Content-Type: application/json" --data-binary @"${body}" -o /dev/null -w "%{http_code}" >/dev/null || {{
-          if (( FAIL_ON_ERROR )); then log "upload failed: $f"; exit 1; else log "upload failed (ignored): $f"; fi
-        }}
+      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
+        -X POST "${TEST_URL}" "${hdrs[@]}" "${TEST_EVP[@]}" -H "Content-Type: application/json" --data-binary @"${body}" -o /dev/null -w "%{http_code}" >/dev/null; then
+        log "uploaded test payload: $f"
+        ((++count))
+      else
+        if (( FAIL_ON_ERROR )); then log "upload failed: $f"; exit 1; else log "upload failed (ignored): $f"; fi
+      fi
     fi
-    log "uploaded test payload: $f"
-    ((count++))
   done
   dbg "upload_tests: uploaded $count files"
 }}
@@ -238,6 +249,8 @@ upload_coverage() {{
   [[ -d "$d" ]] || return 0
   local eventjson
   eventjson="${d}/event.json"
+  # The CI Visibility coverage intake API requires a multipart 'event' field.
+  # Since coverage payloads are self-contained, we send a minimal placeholder.
   echo '{{"dummy":true}}' > "$eventjson"
   dbg "upload_coverage: wrote event file '$eventjson'"
   shopt -s nullglob
@@ -249,21 +262,24 @@ upload_coverage() {{
     fi
     dbg "upload_coverage: posting '$f'"
     if (( AGENTLESS == 1 )); then
-      curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused \
+      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
         -X POST "${COV_URL}" "${hdrs[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${f};type=application/json;filename=filecoveragex.json" -o /dev/null -w "%{http_code}" >/dev/null || {{
-          if (( FAIL_ON_ERROR )); then log "coverage upload failed: $f"; exit 1; else log "coverage upload failed (ignored): $f"; fi
-        }}
+        -F "coveragex=@${f};type=application/json;filename=filecoveragex.json" -o /dev/null -w "%{http_code}" >/dev/null; then
+        log "uploaded coverage payload: $f"
+      else
+        if (( FAIL_ON_ERROR )); then log "coverage upload failed: $f"; exit 1; else log "coverage upload failed (ignored): $f"; fi
+      fi
     else
-      curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused \
+      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \
         -X POST "${COV_URL}" "${hdrs[@]}" "${COV_EVP[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${f};type=application/json;filename=filecoveragex.json" -o /dev/null -w "%{http_code}" >/dev/null || {{
-          if (( FAIL_ON_ERROR )); then log "coverage upload failed: $f"; exit 1; else log "coverage upload failed (ignored): $f"; fi
-        }}
+        -F "coveragex=@${f};type=application/json;filename=filecoveragex.json" -o /dev/null -w "%{http_code}" >/dev/null; then
+        log "uploaded coverage payload: $f"
+      else
+        if (( FAIL_ON_ERROR )); then log "coverage upload failed: $f"; exit 1; else log "coverage upload failed (ignored): $f"; fi
+      fi
     fi
-    log "uploaded coverage payload: $f"
   done
 }}
 
@@ -282,6 +298,7 @@ log "done"
             "max_wait_sec": max_wait_sec,
             "fail_on_error": 1 if fail_on_error else 0,
             "debug": 1 if debug else 0,
+            "uploader_version": UPLOADER_VERSION,
         },
     )
     log_debug(debug, "Bash script rendered (bytes=%d)" % len(bash_script))
@@ -354,7 +371,7 @@ $CommonHeaders = @{{
   'Datadog-Meta-Lang' = 'bazel-starlark'
   'Datadog-Meta-Lang-Version' = 'n/a'
   'Datadog-Meta-Lang-Interpreter' = 'bazel-test'
-  'Datadog-Meta-Tracer-Version' = '1.0.0'
+  'Datadog-Meta-Tracer-Version' = '{uploader_version}'
   'Accept' = 'application/json'
 }}
 if ($Agentless) {{
@@ -414,22 +431,44 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
 }}
 
 function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
-  $client = New-Object System.Net.Http.HttpClient
-  foreach ($k in $headers.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$headers[$k]) }}
-  Dbg "Send-PostJson: POST $url (file '$file'; header keys=$($headers.Keys -join ','))"
-  $content = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($file))
-  $content.Headers.ContentType = 'application/json'
-  $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
-  if (-not $resp.IsSuccessStatusCode) {{
-    $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-    if ($FailOnError) {{ throw "HTTP $([int]$resp.StatusCode): $body" }} else {{ Log "upload failed (ignored): HTTP $([int]$resp.StatusCode) $body" }}
-  }} else {{ Log "uploaded" }}
+  $maxRetries = 3
+  $retryDelay = 2
+  for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {{
+    $client = $null
+    try {{
+      $client = New-Object System.Net.Http.HttpClient
+      $client.Timeout = [TimeSpan]::FromSeconds(60)
+      foreach ($k in $headers.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$headers[$k]) }}
+      Dbg "Send-PostJson: POST $url (file '$file'; attempt $attempt/$maxRetries)"
+      $content = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8))
+      $content.Headers.ContentType = 'application/json'
+      $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
+      if ($resp.IsSuccessStatusCode) {{
+        return $true
+      }} else {{
+        $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        Dbg "Send-PostJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
+        if ($attempt -eq $maxRetries) {{
+          if ($FailOnError) {{ throw "HTTP $([int]$resp.StatusCode): $body" }} else {{ Log "upload failed (ignored): HTTP $([int]$resp.StatusCode) $body"; return $false }}
+        }}
+      }}
+    }} catch {{
+      Dbg "Send-PostJson: Exception on attempt $attempt - $_"
+      if ($attempt -eq $maxRetries) {{
+        if ($FailOnError) {{ throw }} else {{ Log "upload failed (ignored): $_"; return $false }}
+      }}
+    }} finally {{
+      if ($client) {{ $client.Dispose() }}
+    }}
+    Start-Sleep -Seconds $retryDelay
+  }}
+  return $false
 }}
 
 # Upload tests
 $testDir = Join-Path $PayloadsDir $TestsSubdir
 if (Test-Path -LiteralPath $testDir) {{
-  $testFiles = Get-ChildItem -LiteralPath $testDir -Filter *.json -File -ErrorAction SilentlyContinue
+  $testFiles = @(Get-ChildItem -LiteralPath $testDir -Filter *.json -File -ErrorAction SilentlyContinue)
   Dbg "upload_tests: found $($testFiles.Count) files in '$testDir'"
   $testFiles | ForEach-Object {{
     $f = $_.FullName
@@ -438,38 +477,69 @@ if (Test-Path -LiteralPath $testDir) {{
     $hdrs = $CommonHeaders.Clone()
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
     Dbg "upload_tests: posting '$f' (body '$body')"
-    Send-PostJson $TestUrl $hdrs $body
-    Log "uploaded test payload: $f"
+    if (Send-PostJson $TestUrl $hdrs $body) {{
+      Log "uploaded test payload: $f"
+    }}
   }}
 }}
 
 # Upload coverage (multipart)
 $covDir = Join-Path $PayloadsDir $CoverageSubdir
 if (Test-Path -LiteralPath $covDir) {{
-  $client = New-Object System.Net.Http.HttpClient
-  foreach ($k in $CommonHeaders.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$CommonHeaders[$k]) }}
-  if (-not $Agentless) {{ $client.DefaultRequestHeaders.Add('X-Datadog-EVP-Subdomain','citestcov-intake') }}
-  $eventFile = Join-Path $covDir 'event.json'
-  Set-Content -LiteralPath $eventFile -Value '{"dummy":true}' -Encoding UTF8
-  $covFiles = Get-ChildItem -LiteralPath $covDir -Filter *.json -File -ErrorAction SilentlyContinue
-  Dbg "upload_coverage: found $($covFiles.Count) files in '$covDir'"
-  $covFiles | ForEach-Object {{
-    $f = $_.FullName
-    if ($f -eq $eventFile) {{ return }}
-    $content = New-Object System.Net.Http.MultipartFormDataContent
-    $eventContent = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($eventFile))
-    $eventContent.Headers.ContentType = 'application/json'
-    $content.Add($eventContent, 'event', 'fileevent.json')
-    $fs = [System.IO.File]::OpenRead($f)
-    $covContent = New-Object System.Net.Http.StreamContent($fs)
-    $covContent.Headers.ContentType = 'application/json'
-    $content.Add($covContent, 'coveragex', 'filecoveragex.json')
-    Dbg "upload_coverage: posting '$f'"
-    $resp = $client.PostAsync($CovUrl, $content).GetAwaiter().GetResult()
-    if (-not $resp.IsSuccessStatusCode) {{
-      $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-      if ($FailOnError) {{ throw "HTTP $([int]$resp.StatusCode): $body" }} else {{ Log "coverage upload failed (ignored): HTTP $([int]$resp.StatusCode) $body" }}
-    }} else {{ Log "uploaded coverage payload: $f" }}
+  $client = $null
+  try {{
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(60)
+    foreach ($k in $CommonHeaders.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$CommonHeaders[$k]) }}
+    if (-not $Agentless) {{ $client.DefaultRequestHeaders.Add('X-Datadog-EVP-Subdomain','citestcov-intake') }}
+    $eventFile = Join-Path $covDir 'event.json'
+    # The CI Visibility coverage intake API requires a multipart 'event' field.
+    # Since coverage payloads are self-contained, we send a minimal placeholder.
+    Set-Content -LiteralPath $eventFile -Value '{"dummy":true}' -Encoding UTF8
+    $covFiles = @(Get-ChildItem -LiteralPath $covDir -Filter *.json -File -ErrorAction SilentlyContinue)
+    Dbg "upload_coverage: found $($covFiles.Count) files in '$covDir'"
+    $covFiles | ForEach-Object {{
+      $f = $_.FullName
+      if ($f -eq $eventFile) {{ return }}
+      $maxRetries = 3
+      $retryDelay = 2
+      $uploaded = $false
+      for ($attempt = 1; $attempt -le $maxRetries -and -not $uploaded; $attempt++) {{
+        $fs = $null
+        try {{
+          $content = New-Object System.Net.Http.MultipartFormDataContent
+          $eventContent = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($eventFile, [System.Text.Encoding]::UTF8))
+          $eventContent.Headers.ContentType = 'application/json'
+          $content.Add($eventContent, 'event', 'fileevent.json')
+          $fs = [System.IO.File]::OpenRead($f)
+          $covContent = New-Object System.Net.Http.StreamContent($fs)
+          $covContent.Headers.ContentType = 'application/json'
+          $content.Add($covContent, 'coveragex', 'filecoveragex.json')
+          Dbg "upload_coverage: posting '$f' (attempt $attempt/$maxRetries)"
+          $resp = $client.PostAsync($CovUrl, $content).GetAwaiter().GetResult()
+          if ($resp.IsSuccessStatusCode) {{
+            Log "uploaded coverage payload: $f"
+            $uploaded = $true
+          }} else {{
+            $respBody = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            Dbg "upload_coverage: HTTP $([int]$resp.StatusCode) on attempt $attempt"
+            if ($attempt -eq $maxRetries) {{
+              if ($FailOnError) {{ throw "HTTP $([int]$resp.StatusCode): $respBody" }} else {{ Log "coverage upload failed (ignored): HTTP $([int]$resp.StatusCode) $respBody" }}
+            }}
+          }}
+        }} catch {{
+          Dbg "upload_coverage: Exception on attempt $attempt - $_"
+          if ($attempt -eq $maxRetries) {{
+            if ($FailOnError) {{ throw }} else {{ Log "coverage upload failed (ignored): $_" }}
+          }}
+        }} finally {{
+          if ($fs) {{ $fs.Dispose() }}
+        }}
+        if (-not $uploaded -and $attempt -lt $maxRetries) {{ Start-Sleep -Seconds $retryDelay }}
+      }}
+    }}
+  }} finally {{
+    if ($client) {{ $client.Dispose() }}
   }}
 }}
 
@@ -487,6 +557,7 @@ Log "done"
             "max_wait_sec": max_wait_sec,
             "fail_on_error": "$true" if fail_on_error else "$false",
             "debug": "$true" if debug else "$false",
+            "uploader_version": UPLOADER_VERSION,
         },
     )
     log_debug(debug, "PowerShell script rendered (bytes=%d)" % len(ps_script))
