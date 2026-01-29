@@ -6,7 +6,7 @@
 # Usage pattern for best results:
 # - Configure tests to write payloads under an external writable directory
 #   exposed via `--sandbox_writable_path` and made available to tests via
-#   `--test_env=DD_PAYLOADS_DIR=/abs/path/.testoptimization/payloads`.
+#   `--test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=/abs/path/.testoptimization/payloads`.
 # - Invoke this test target together with your tests (e.g., include in a
 #   test_suite or add to the same invocation). It runs outside the sandbox and
 #   uploads after the directory is quiescent.
@@ -67,7 +67,7 @@ def _uploader_impl(ctx):
 #!/usr/bin/env bash
 set -euo pipefail
 
-PAYLOADS_DIR="${{DD_PAYLOADS_DIR:-{payloads_dir}}}"
+PAYLOADS_DIR="${{TEST_OPTIMIZATION_PAYLOADS_DIR:-{payloads_dir}}}"
 TESTS_SUBDIR="{tests_subdir}"
 COVERAGE_SUBDIR="{coverage_subdir}"
 QUIESCENT_SEC={quiescent_sec}
@@ -308,7 +308,7 @@ log "done"
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$PayloadsDir = if (-not [string]::IsNullOrEmpty($env:DD_PAYLOADS_DIR)) {{ $env:DD_PAYLOADS_DIR }} else {{ '{payloads_dir}' }}
+$PayloadsDir = if (-not [string]::IsNullOrEmpty($env:TEST_OPTIMIZATION_PAYLOADS_DIR)) {{ $env:TEST_OPTIMIZATION_PAYLOADS_DIR }} else {{ '{payloads_dir}' }}
 $TestsSubdir = '{tests_subdir}'
 $CoverageSubdir = '{coverage_subdir}'
 $QuiescentSec = {quiescent_sec}

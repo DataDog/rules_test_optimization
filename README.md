@@ -225,7 +225,7 @@ load("@datadog_rules_test_optimization//tools:test_optimization_uploader_test.bz
 
 dd_payload_uploader_test(
     name = "dd_upload_payloads",
-    # If omitted, the rule uses $DD_PAYLOADS_DIR (recommended with --sandbox_writable_path)
+    # If omitted, the rule uses $TEST_OPTIMIZATION_PAYLOADS_DIR (recommended with --sandbox_writable_path)
     tests_subdir = "tests",
     coverage_subdir = "coverage",
     quiescent_sec = 10,
@@ -256,7 +256,7 @@ common --repo_env=DD_GIT_HEAD_MESSAGE
 test --test_env=DD_API_KEY
 test --test_env=DD_SITE
 test --test_env=DD_TRACE_AGENT_URL
-test --test_env=DD_PAYLOADS_DIR
+test --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR
 ```
 
 ## Uploading test and coverage payloads (same `bazel test` invocation)
@@ -274,9 +274,9 @@ Use the provided test rule `dd_payload_uploader_test` to watch a shared writable
   coverage/  # JSON payloads for Code Coverage intake
 ```
 
-Expose the path to tests via `--test_env=DD_PAYLOADS_DIR=<abs path>`. Tests must write:
-- `$DD_PAYLOADS_DIR/tests/*.json`
-- `$DD_PAYLOADS_DIR/coverage/*.json`
+Expose the path to tests via `--test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=<abs path>`. Tests must write:
+- `$TEST_OPTIMIZATION_PAYLOADS_DIR/tests/*.json`
+- `$TEST_OPTIMIZATION_PAYLOADS_DIR/coverage/*.json`
 
 ### Add the uploader test target
 
@@ -287,7 +287,7 @@ load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bz
 
 dd_payload_uploader_test(
     name = "dd_upload_payloads",
-    # If omitted, the rule uses $DD_PAYLOADS_DIR (recommended with --sandbox_writable_path)
+    # If omitted, the rule uses $TEST_OPTIMIZATION_PAYLOADS_DIR (recommended with --sandbox_writable_path)
     tests_subdir = "tests",
     coverage_subdir = "coverage",
     quiescent_sec = 10,      # idle window before uploading starts
@@ -304,7 +304,7 @@ Run together with your tests:
 ```bash
 bazel test //... //tools:dd_upload_payloads \
   --sandbox_writable_path=$PWD/.testoptimization/payloads \
-  --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+  --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=$PWD/.testoptimization/payloads
 ```
 
 ### Endpoints, headers, and behavior
@@ -337,7 +337,11 @@ bazel test //... //tools:dd_upload_payloads \
 The macro sets the following environment variables for instrumented tests:
 
 - `TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the `.testoptimization` directory containing all synced payload files (settings, known tests, etc.).
-- `DD_PAYLOADS_DIR`: Directory where tests write output payloads (`tests/*.json`, `coverage/*.json`). Must be writable via `--sandbox_writable_path`.
+- `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`: Set to `"true"` when `payloads_dir` is configured in the macro. Signals to the library that payloads should be written to files instead of sent over the network.
+
+The following variable must be passed via CLI (not set by the macro to avoid cache invalidation):
+
+- `TEST_OPTIMIZATION_PAYLOADS_DIR`: Directory where tests write output payloads (`tests/*.json`, `coverage/*.json`). Pass via `--test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=<path>` and make writable via `--sandbox_writable_path=<path>`.
 
 ## Convenience macro: dd_topt_go_test
 
@@ -536,7 +540,7 @@ dd_topt_go_test(
 
 2. **Check payload directory is writable**:
    ```bash
-   # Must match your --test_env=DD_PAYLOADS_DIR
+   # Must match your --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR
    ls -la $PWD/.testoptimization/payloads/tests/
    ls -la $PWD/.testoptimization/payloads/coverage/
    ```
@@ -545,7 +549,7 @@ dd_topt_go_test(
    ```bash
    bazel test //... //tools:dd_upload_payloads \
      --sandbox_writable_path=$PWD/.testoptimization/payloads \
-     --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+     --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=$PWD/.testoptimization/payloads
    ```
 
 4. **Verify environment variables** for upload:

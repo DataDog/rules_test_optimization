@@ -10,7 +10,7 @@ Notes:
 - You must set up the sync repo once (via MODULE.bazel or WORKSPACE) so that
   `@test_optimization_data//:test_optimization_*` labels exist.
 - Pass normal go_test attributes via **kwargs.
-- Use --sandbox_writable_path and --test_env=DD_PAYLOADS_DIR on the CLI.
+- Use --sandbox_writable_path and --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR on the CLI.
 - Import path inference mirrors rules_go behavior by walking `embed` via
   an aspect and reading the GoArchive provider; when unavailable, falls
   back to go_module_path + Bazel package path.
@@ -57,7 +57,7 @@ def dd_topt_go_test(
       module_label_override: Optional override for the sanitized module label suffix when the
         automatic detection doesn't match the expected module name.
       payloads_dir: Optional absolute path to the payloads directory. If not set, uses
-        DD_PAYLOADS_DIR environment variable. Should match --sandbox_writable_path.
+        TEST_OPTIMIZATION_PAYLOADS_DIR environment variable. Should match --sandbox_writable_path.
       tests_subdir: Subdirectory under payloads_dir for test payloads (default: "tests").
       coverage_subdir: Subdirectory under payloads_dir for coverage payloads (default: "coverage").
       quiescent_sec: Seconds to wait for directory quiescence before uploading (default: 10).
@@ -169,6 +169,11 @@ def dd_topt_go_test(
     manifest_label = "@%s//:.testoptimization/manifest.txt" % sync_repo_name
     data.append(manifest_label)
     env["TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
+
+    # Signal to the library that payloads should be written to files (not network)
+    # Only set when payloads_dir is configured, meaning the user has set up file-based payloads
+    if payloads_dir:
+        env["TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
     _go_test = go_test_rule if go_test_rule != None else None

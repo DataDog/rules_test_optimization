@@ -405,7 +405,7 @@ After implementing fixes, test on:
 Test scenarios:
 - [ ] Empty payloads directory (nothing to upload)
 - [ ] Missing payloads directory
-- [ ] Empty `DD_PAYLOADS_DIR` environment variable
+- [ ] Empty `TEST_OPTIMIZATION_PAYLOADS_DIR` environment variable
 - [ ] Payloads directory with test files
 - [ ] Payloads directory with coverage files
 - [ ] Upload failure with `FAIL_ON_ERROR=0` (verify correct logging)

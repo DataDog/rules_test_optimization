@@ -24,7 +24,7 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 - Run tests + uploader:
   `./bazelw test //... //tools:dd_upload_payloads \
    --sandbox_writable_path=$PWD/.testoptimization/payloads \
-   --test_env=DD_PAYLOADS_DIR=$PWD/.testoptimization/payloads`
+   --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=$PWD/.testoptimization/payloads`
 - Typical workflow: edit Starlark, then `./bazelw test //tools/...`.
 
 ## Coding Style & Naming Conventions
@@ -34,7 +34,7 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 
 ## Testing Guidelines
 - Prefer `./bazelw test //...`; the uploader rule runs as a normal test.
-- To exercise uploads, write payloads to `$DD_PAYLOADS_DIR/{tests,coverage}` and pass a writable path via `--sandbox_writable_path`.
+- To exercise uploads, write payloads to `$TEST_OPTIMIZATION_PAYLOADS_DIR/{tests,coverage}` and pass a writable path via `--sandbox_writable_path`.
 - For Go, use `dd_topt_go_test` to bundle the uploader with `go_test`.
 
 ## Consumer Tips (bzlmod + Go)
