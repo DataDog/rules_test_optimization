@@ -5,6 +5,7 @@ This repository ships Bazel integrations that fetch Datadog Test Optimization me
 ## Documentation
 - Overview: see `docs/Initial_documentation.md` for how the solution works (architecture, data flow, and operational notes).
 - Problem statement & proposal: see `docs/RFC.md` for the background problem this solves, rationale, and the detailed design.
+- Implementation plan: see `docs/option2_implementation_plan.md` for the TEST_UNDECLARED_OUTPUTS_DIR approach.
 
 Agents: start with the Overview, then skim the RFC to understand constraints and goals before modifying code or rules.
 
@@ -13,18 +14,25 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
   - `common_utils.bzl` — shared utilities for logging, sanitization, validation, and deduplication used across multiple rule files.
   - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/settings.json`, per‑module files, and `.testoptimization/context.json`.
   - `test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
-  - `test_optimization_uploader_test.bzl` — runtime uploader test rule.
-  - `topt_go_test.bzl` — macro wrapping `go_test` with the uploader.
+  - `test_optimization_uploader.bzl` — workspace-level uploader rule (normal rule, not test; runs via `bazel run`).
+  - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
   - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
 ## Build, Test, and Development Commands
 - Build all: `./bazelw build //...` — compiles and validates Starlark targets.
-- Run tests + uploader:
-  `./bazelw test //... //tools:dd_upload_payloads \
-   --sandbox_writable_path=$PWD/.testoptimization/payloads \
-   --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=$PWD/.testoptimization/payloads`
+- Run tests then upload payloads:
+  ```bash
+  # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
+  # Bazel collects them to bazel-testlogs/<target>/test.outputs/
+  ./bazelw test //...
+
+  # Then upload via bazel run (preserving test exit code)
+  ./bazelw test //... || test_status=$?; test_status=${test_status:-0}
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+  exit $test_status
+  ```
 - Typical workflow: edit Starlark, then `./bazelw test //tools/...`.
 
 ## Coding Style & Naming Conventions
@@ -33,14 +41,26 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 - Outputs under `.testoptimization/` are fixed: `settings.json`, `manifest.txt`, `known_tests.json`, `test_management.json`, per‑module canonical files exposed via `:module_<sanitized>` targets (runfiles under `.testoptimization/`), and `context.json`.
 
 ## Testing Guidelines
-- Prefer `./bazelw test //...`; the uploader rule runs as a normal test.
-- To exercise uploads, write payloads to `$TEST_OPTIMIZATION_PAYLOADS_DIR/{tests,coverage}` and pass a writable path via `--sandbox_writable_path`.
-- For Go, use `dd_topt_go_test` to bundle the uploader with `go_test`.
+- Prefer `./bazelw test //...` for running tests.
+- Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/{tests,coverage}` (Bazel's built-in writable directory).
+- Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
+- Use `bazel run //:dd_upload_payloads` after tests complete to upload payloads.
+- For Go, use `dd_topt_go_test` to set up the test with correct environment variables.
+- Create ONE uploader target per workspace at the root BUILD.bazel.
 
 ## Consumer Tips (bzlmod + Go)
 - In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)`, `use_extension("@datadog-rules-test-optimization//tools:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
-- In `BUILD.bazel`: `load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
-- Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go’s provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
+- In root `BUILD.bazel`: create the workspace-level uploader:
+  ```bzl
+  load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+  dd_payload_uploader(
+      name = "dd_upload_payloads",
+      data = ["@test_optimization_data//:test_optimization_context"],
+  )
+  ```
+- In test `BUILD.bazel` files: `load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
+- Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
 - Tests can read `TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the `.testoptimization` directory (via `filepath.Dir()`) and access synced payloads.
 
@@ -56,6 +76,7 @@ Note: This repository declares a `bazel_dep` on `rules_go` to load provider defi
 ## Hermetic Config
 - Use `--config=hermetic` to enable sandboxing, stable locale, and network blocking (see `.bazelrc` pattern in the consumer repo).
 - Network: prefer `--sandbox_default_allow_network=false`; alternatively add `--modify_execution_info=TestRunner=+block-network`.
+- No `--sandbox_writable_path` needed — tests use `TEST_UNDECLARED_OUTPUTS_DIR` which is always writable.
 - Windows: consider `--enable_runfiles`; if sandboxing is unavailable, fall back to local strategies for tests.
 
 ## Commit & Pull Request Guidelines
@@ -64,6 +85,7 @@ Note: This repository declares a `bazel_dep` on `rules_go` to load provider defi
 - CI must pass on Linux/macOS/Windows; avoid OS‑specific regressions.
 
 ## Security & Configuration Tips
-- Never write secrets to disk. Pass `DD_API_KEY`, `DD_SITE`, `DD_TRACE_AGENT_URL` via `--repo_env`/`--test_env`.
-- `context.json` is non‑secret; include it via `@<repo>//:test_optimization_context`.
-- Agentless uploads require `DD_API_KEY`; EVP proxy requires `DD_TRACE_AGENT_URL` (EVP headers handled by the rule).
+- Never write secrets to disk. Pass `DD_API_KEY`, `DD_SITE` via environment when running the uploader.
+- `context.json` is non‑secret; include it via `@<repo>//:test_optimization_context` in the uploader's data.
+- Agentless uploads require `DD_API_KEY` and `DD_SITE`; EVP proxy requires `DD_TRACE_AGENT_URL` (EVP headers handled by the rule).
+- Uploader credentials are passed at runtime: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads`

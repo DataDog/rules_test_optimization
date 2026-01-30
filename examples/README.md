@@ -37,6 +37,26 @@ dd_topt_go_test(
 )
 ```
 
+Root BUILD.bazel (ONE uploader per workspace):
+
+```bzl
+load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
+```
+
+Running tests and uploading payloads:
+
+```bash
+# Run tests (preserving exit code) then upload payloads
+bazel test //... || test_status=$?; test_status=${test_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+exit $test_status
+```
+
 ## Multi-service (aggregator)
 
 MODULE.bazel:

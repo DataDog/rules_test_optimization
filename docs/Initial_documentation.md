@@ -2,7 +2,7 @@
 
 ## Approach Overview
 
-The integration uses a Bazel module extension and repository rule to fetch Datadog Test Optimization metadata during module/repo resolution, and a small uploader test to ship payloads from hermetic test runs.
+The integration uses a Bazel module extension and repository rule to fetch Datadog Test Optimization metadata during module/repo resolution, and a workspace-level uploader (via `bazel run`) to ship payloads from hermetic test runs.
 
 The steps are:
 
@@ -17,11 +17,12 @@ The steps are:
 2. **Test instrumentation**:
    Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (e.g., through `TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to a writable path.
 
-3. **Payload reporting**:  
-   A dedicated uploader runs as a normal Bazel test, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`,`DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).
+3. **Payload reporting**:
+   A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`,`DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).
+   Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status`
 
-4. **Language macros (optional)**:  
-   Thin wrappers (e.g., for Go) compose tests with the uploader and wire the right runfiles/env so test code can read the synced files when needed.
+4. **Language macros (optional)**:
+   Thin wrappers (e.g., for Go) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
 
 ### Go macro and import path inference
 
@@ -91,11 +92,13 @@ It also exports a mapping so macros can select a service by key without consumer
 
 ## Runtime uploads and hermetic tests
 
-Tests remain hermetic with network blocked. They write payloads under a shared writable directory (e.g., `.testoptimization/payloads/{tests,coverage}`). A small uploader test target then:
+Tests remain hermetic with network blocked. They write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. A single workspace-level uploader (via `bazel run`) then:
 
-- Waits for the directory to become quiescent,  
-- Enriches test payloads with `context.json` when present,  
-- Uploads to Datadog using either `DD_API_KEY`/`DD_SITE` (agentless) or `DD_TRACE_AGENT_URL` (EVP proxy).
+- Discovers all `test.outputs/` directories in `bazel-testlogs/`,
+- Waits for filesystem quiescence,
+- Enriches test payloads with `context.json` when present,
+- Uploads to Datadog using either `DD_API_KEY`/`DD_SITE` (agentless) or `DD_TRACE_AGENT_URL` (EVP proxy),
+- Deletes successfully uploaded payloads.
 
 No secrets are written to disk; all credentials are passed via environment variables.
 
@@ -128,14 +131,14 @@ flowchart TD
   %% Test execution: hermetic, offline
   subgraph T[Test Execution (Hermetic)]
     T1[Tests (instrumented)]
-    P1[.testoptimization/payloads/\n  tests/*.json\n  coverage/*.json]
+    P1[bazel-testlogs/.../test.outputs/\n  tests/*.json\n  coverage/*.json]
     T1 -->|read runfiles| A3
-    T1 -->|write payloads| P1
+    T1 -->|write to TEST_UNDECLARED_OUTPUTS_DIR| P1
   end
 
-  %% Upload step: separate test target
-  subgraph U[Upload]
-    U1[Uploader test]\n
+  %% Upload step: bazel run after tests
+  subgraph U[Upload via bazel run]
+    U1[Uploader rule]\n
     U1 -->|enrich with| A3
     U1 -->|upload tests| G1{Agentless?\n DD_API_KEY}
     U1 -->|upload coverage| G1
@@ -173,10 +176,10 @@ Build Graph
 
 Test Execution (Hermetic)
   [tests (instrumented)] --read runfiles--> synced JSONs
-                         --write payloads--> .testoptimization/payloads/{tests,coverage}
+                         --write payloads--> TEST_UNDECLARED_OUTPUTS_DIR (-> bazel-testlogs/.../test.outputs/)
 
-Upload
-  [uploader test] --enrich--> context.json
+Upload (via bazel run)
+  [uploader rule] --enrich--> context.json
        |-- agentless (DD_API_KEY, DD_SITE) --> citestcycle/citestcov intake
        |-- EVP proxy (DD_TRACE_AGENT_URL) -> /evp_proxy/... endpoints
 
@@ -189,4 +192,4 @@ Optional: Multi-service aggregator
 
 ## Summary
 
-The repository extension approach enables Bazel support for Test Optimization in a hermetic, cache‑friendly way. Metadata is fetched once during module/repo resolution, exposed as filegroups, and consumed by tests via runfiles. Per‑module outputs limit cache impact to relevant targets. Runtime uploads happen as a standard test, preserving hermetic execution for the rest of the suite. Settings and Test Management remain valuable even with occasional invalidations; Known Tests and any future TIA integration should be opt‑in to avoid disrupting established Bazel workflows.
+The repository extension approach enables Bazel support for Test Optimization in a hermetic, cache‑friendly way. Metadata is fetched once during module/repo resolution, exposed as filegroups, and consumed by tests via runfiles. Per‑module outputs limit cache impact to relevant targets. Runtime uploads happen via a workspace-level uploader (`bazel run`), preserving hermetic execution for tests. Settings and Test Management remain valuable even with occasional invalidations; Known Tests and any future TIA integration should be opt‑in to avoid disrupting established Bazel workflows.
