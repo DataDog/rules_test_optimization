@@ -358,9 +358,9 @@ dbg "Uploader start time: $start_ts"
 # Detect if tests actually ran by looking for test.log or test.xml files
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 tests_executed() {{
-    local count
-    count=$(find "$TESTLOGS_DIR" \\( -name "test.log" -o -name "test.xml" \\) -type f 2>/dev/null | head -1 | wc -l)
-    (( count > 0 ))
+    local found
+    found=$(find "$TESTLOGS_DIR" \\( -name "test.log" -o -name "test.xml" \\) -type f -print -quit 2>/dev/null)
+    [[ -n "$found" ]]
 }}
 
 # Wait for quiescence (filesystem to settle)
@@ -380,26 +380,30 @@ while true; do
     now=$(date +%s)
     elapsed=$((now - start_ts))
 
-    if (( elapsed > MAX_WAIT_SEC )); then
-        log "max wait exceeded ($MAX_WAIT_SEC s); proceeding to upload"
-        break
-    fi
-
     total_files=$(count_payload_files)
 
     if (( total_files == 0 )); then
-        if tests_executed; then
-            log "warning: tests ran but no payload files found"
-            log "hint: ensure dd-trace-go >= X.Y.Z (minimum version) is installed"
-            log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
-            if [[ "$FAIL_ON_ERROR" == "1" ]]; then
-                log "error: FAIL_ON_ERROR is set; failing due to missing payloads"
-                exit 1
+        if (( elapsed > MAX_WAIT_SEC )); then
+            if tests_executed; then
+                log "warning: tests ran but no payload files found"
+                log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                if [[ "$FAIL_ON_ERROR" == "1" ]]; then
+                    log "error: FAIL_ON_ERROR is set; failing due to missing payloads"
+                    exit 1
+                fi
+            else
+                log "no payload files found and no test execution detected; nothing to upload"
             fi
-        else
-            log "no payload files found and no test execution detected; nothing to upload"
+            exit 0
         fi
-        exit 0
+        dbg "no payload files yet; waiting"
+        sleep 2
+        continue
+    fi
+
+    if (( elapsed > MAX_WAIT_SEC )); then
+        log "max wait exceeded ($MAX_WAIT_SEC s); proceeding to upload"
+        break
     fi
 
     # Check if files have been stable for QUIESCENT_SEC
@@ -923,28 +927,32 @@ Update-TestOutputsCache
 while ($true) {{
     $elapsed = ((Get-Date) - $start).TotalSeconds
 
-    if ($elapsed -gt $MaxWaitSec) {{
-        Log "max wait exceeded ($MaxWaitSec s); proceeding to upload"
-        break
-    }}
-
     $totalFiles = Count-PayloadFiles
 
     if ($totalFiles -eq 0) {{
-        if (Test-ExecutedTests) {{
-            Log "warning: tests ran but no payload files found"
-            Log "hint: ensure dd-trace-go >= X.Y.Z (minimum version) is installed"
-            Log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
-            if ($FailOnError) {{
-                Log "error: FailOnError is set; failing due to missing payloads"
-                Release-Lock
-                exit 1
+        if ($elapsed -gt $MaxWaitSec) {{
+            if (Test-ExecutedTests) {{
+                Log "warning: tests ran but no payload files found"
+                Log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                if ($FailOnError) {{
+                    Log "error: FailOnError is set; failing due to missing payloads"
+                    Release-Lock
+                    exit 1
+                }}
+            }} else {{
+                Log "no payload files found and no test execution detected; nothing to upload"
             }}
-        }} else {{
-            Log "no payload files found and no test execution detected; nothing to upload"
+            Release-Lock
+            exit 0
         }}
-        Release-Lock
-        exit 0
+        Dbg "no payload files yet; waiting"
+        Start-Sleep -Seconds 2
+        continue
+    }}
+
+    if ($elapsed -gt $MaxWaitSec) {{
+        Log "max wait exceeded ($MaxWaitSec s); proceeding to upload"
+        break
     }}
 
     # Check if files have been stable for QuiescentSec
