@@ -1,4 +1,24 @@
-load("//tools/tests:test_sync_utils.bzl", "dd_site_normalization_test", "module_label_map_collision_test")
+load(
+    "//tools/tests:test_common_utils.bzl",
+    "dedup_keys_test",
+    "sanitize_label_fragment_test",
+    "validate_runtime_version_test",
+    "validate_service_name_test",
+)
+load(
+    "//tools/tests:test_sync_utils.bzl",
+    "dd_site_normalization_test",
+    "dirname_test",
+    "module_label_map_collision_test",
+    "normalize_ref_test",
+    "parse_go_module_path_test",
+)
+load(
+    "//tools/tests:test_uploader_utils.bzl",
+    "render_template_missing_placeholder_test",
+    "render_template_substitution_test",
+    "render_template_unescape_only_test",
+)
 
 dd_site_normalization_test(
     name = "dd_site_normalization_test",
@@ -12,10 +32,80 @@ module_label_map_collision_test(
     timeout = "short",
 )
 
+normalize_ref_test(
+    name = "normalize_ref_test",
+    size = "small",
+    timeout = "short",
+)
+
+parse_go_module_path_test(
+    name = "parse_go_module_path_test",
+    size = "small",
+    timeout = "short",
+)
+
+dirname_test(
+    name = "dirname_test",
+    size = "small",
+    timeout = "short",
+)
+
+sanitize_label_fragment_test(
+    name = "sanitize_label_fragment_test",
+    size = "small",
+    timeout = "short",
+)
+
+dedup_keys_test(
+    name = "dedup_keys_test",
+    size = "small",
+    timeout = "short",
+)
+
+validate_service_name_test(
+    name = "validate_service_name_test",
+    size = "small",
+    timeout = "short",
+)
+
+validate_runtime_version_test(
+    name = "validate_runtime_version_test",
+    size = "small",
+    timeout = "short",
+)
+
+render_template_substitution_test(
+    name = "render_template_substitution_test",
+    size = "small",
+    timeout = "short",
+)
+
+render_template_unescape_only_test(
+    name = "render_template_unescape_only_test",
+    size = "small",
+    timeout = "short",
+)
+
+render_template_missing_placeholder_test(
+    name = "render_template_missing_placeholder_test",
+    size = "small",
+    timeout = "short",
+)
+
 test_suite(
     name = "tests",
     tests = [
         ":dd_site_normalization_test",
         ":module_label_map_collision_test",
+        ":normalize_ref_test",
+        ":parse_go_module_path_test",
+        ":dirname_test",
+        ":sanitize_label_fragment_test",
+        ":dedup_keys_test",
+        ":validate_service_name_test",
+        ":validate_runtime_version_test",
+        ":render_template_substitution_test",
+        ":render_template_unescape_only_test",
+        ":render_template_missing_placeholder_test",
     ],
 )

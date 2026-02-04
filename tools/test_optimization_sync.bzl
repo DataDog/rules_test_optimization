@@ -455,8 +455,6 @@ def _build_module_label_map(known_modules, test_management_modules):
     return label_map
 
 # Public aliases for tests (avoid importing private symbols)
-compute_dd_api_base_for_tests = _compute_dd_api_base
-build_module_label_map_for_tests = _build_module_label_map
 
 def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, request_debug_payload = None):
     # _http_request: executes an HTTP call and writes the response to `out_file`.
@@ -616,6 +614,13 @@ def _normalize_ref(name):
         if name.startswith(p):
             name = name[len(p):]
     return name
+
+# Public aliases for tests (avoid importing private symbols)
+compute_dd_api_base_for_tests = _compute_dd_api_base
+build_module_label_map_for_tests = _build_module_label_map
+normalize_ref_for_tests = _normalize_ref
+parse_go_module_path_for_tests = _parse_go_module_path
+dirname_for_tests = _dirname
 
 # ##########################################################################
 # CI environment detection

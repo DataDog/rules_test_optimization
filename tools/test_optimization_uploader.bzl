@@ -41,6 +41,9 @@ def _render_template(template, substitutions):
     out = out.replace("{{", "{").replace("}}", "}")
     return out
 
+# Public alias for tests (avoid importing private symbols)
+render_template_for_tests = _render_template
+
 def _uploader_impl(ctx):
     quiescent_sec = ctx.attr.quiescent_sec
     max_wait_sec = ctx.attr.max_wait_sec
