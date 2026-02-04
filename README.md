@@ -6,6 +6,7 @@ This repository provides a Bazel module extension and repository rule that fetch
 
 - **Bazel 5.0+** - Required for `TEST_UNDECLARED_OUTPUTS_DIR` support used by payload collection
 - **dd-trace-go v1.72.0+** (or equivalent tracer version) - Required for file-based payload output via `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
+- **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; normalized to `https://api.<site>`
 - **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
   - **Linux**: `bash`, `curl`, `find`, `stat` (GNU), `awk`, and one of `md5sum` or `shasum`
   - **macOS**: `bash` (3.2+), `curl`, `find`, `stat` (BSD), `awk`, and one of `md5` or `shasum`
@@ -60,6 +61,8 @@ Sanitization rules for `<sanitized_module>`:
 - For file names: lowercase; characters outside `[a-z0-9._-]` are replaced with `_`
 - For target names: lowercase; characters outside `[a-z0-9_]` are replaced with `_`
 - If collisions occur after sanitization, numeric suffixes like `_2`, `_3` are appended deterministically
+
+Labels are computed from the union of module names across known tests and test management so a `module_<sanitized>` target always refers to a single module (avoids cross-feature collisions).
 
 Example usage:
 

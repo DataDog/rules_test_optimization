@@ -191,7 +191,7 @@ def _detect_go_module_path(ctx, debug):
     log_debug(debug, "go", "Go module path not detected; returning empty")
     return ""
 
-def _split_known_tests_by_module(ctx, known_tests_file, debug):
+def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None):
     # _split_known_tests_by_module: from the combined known_tests JSON, produce
     # one JSON file per module under the same directory as `known_tests_file`.
     # Returns a list of dicts with keys: module, label, file
@@ -214,9 +214,12 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug):
     # Ensure deterministic ordering for reproducible BUILD content
     module_names = sorted([k for k in tests_obj.keys()])
 
-    # Compute sanitized labels and deduplicate
-    raw_labels = [sanitize_label_fragment(m) for m in module_names]
-    deduped_labels = dedup_keys(raw_labels)
+    # Compute sanitized labels and deduplicate (or use provided mapping)
+    if label_map:
+        deduped_labels = [label_map.get(m) or sanitize_label_fragment(m) for m in module_names]
+    else:
+        raw_labels = [sanitize_label_fragment(m) for m in module_names]
+        deduped_labels = dedup_keys(raw_labels)
 
     for i in range(len(module_names)):
         module_name = module_names[i]
@@ -259,7 +262,7 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug):
 
     return specs
 
-def _split_test_management_by_module(ctx, test_management_file, debug):
+def _split_test_management_by_module(ctx, test_management_file, debug, label_map = None):
     # _split_test_management_by_module: from the combined test_management JSON, produce
     # one JSON file per module under the same directory as `test_management_file`.
     # Returns a list of dicts with keys: module, label, file
@@ -280,9 +283,12 @@ def _split_test_management_by_module(ctx, test_management_file, debug):
     base_dir = _dirname(test_management_file)
     module_names = sorted([k for k in modules_obj.keys()])
 
-    # Compute sanitized labels and deduplicate
-    raw_labels = [sanitize_label_fragment(m) for m in module_names]
-    deduped_labels = dedup_keys(raw_labels)
+    # Compute sanitized labels and deduplicate (or use provided mapping)
+    if label_map:
+        deduped_labels = [label_map.get(m) or sanitize_label_fragment(m) for m in module_names]
+    else:
+        raw_labels = [sanitize_label_fragment(m) for m in module_names]
+        deduped_labels = dedup_keys(raw_labels)
 
     for i in range(len(module_names)):
         module_name = module_names[i]
@@ -372,12 +378,85 @@ def _compute_dd_api_base(site_env):
     #   site_env = None/""               -> returns https://api.datadoghq.com
     # - Rationale: users frequently set DD_SITE to app.*; Datadog APIs are under
     #   api.*. We normalize here for consistency.
-    site = site_env or "datadoghq.com"
+    site = (site_env or "datadoghq.com").strip()
 
-    # Branch: normalize app.* hostnames to api.* equivalents
+    # Strip scheme if present (e.g., https://app.datadoghq.com)
+    if "://" in site:
+        site = site.split("://", 1)[1]
+
+    # Strip any path/query fragments
+    if "/" in site:
+        site = site.split("/", 1)[0]
+
+    # Normalize common prefixes
     if site.startswith("app."):
         site = site[len("app."):]
+    if site.startswith("api."):
+        site = site[len("api."):]
+
+    if not site:
+        site = "datadoghq.com"
     return "https://api.%s" % site
+
+def _collect_known_tests_modules(ctx, known_tests_file):
+    # _collect_known_tests_modules: list module names from known_tests.json
+    kt_path = ctx.path(known_tests_file)
+    content = ctx.read(kt_path)
+    if not content or not content.strip():
+        return []
+    obj = json.decode(content)
+    data_obj = obj.get("data") or {}
+    attrs_obj = data_obj.get("attributes") or {}
+    tests_obj = attrs_obj.get("tests") or {}
+    if type(tests_obj) != "dict":
+        return []
+    modules = []
+    for k in tests_obj.keys():
+        if type(tests_obj.get(k)) == "dict":
+            modules.append(k)
+    return sorted(modules)
+
+def _collect_test_management_modules(ctx, test_management_file):
+    # _collect_test_management_modules: list module names from test_management.json
+    tm_path = ctx.path(test_management_file)
+    content = ctx.read(tm_path)
+    if not content or not content.strip():
+        return []
+    obj = json.decode(content)
+    data_obj = obj.get("data") or {}
+    attrs_obj = data_obj.get("attributes") or {}
+    modules_obj = attrs_obj.get("modules") or {}
+    if type(modules_obj) != "dict":
+        return []
+    modules = []
+    for k in modules_obj.keys():
+        if type(modules_obj.get(k)) == "dict":
+            modules.append(k)
+    return sorted(modules)
+
+def _build_module_label_map(known_modules, test_management_modules):
+    # _build_module_label_map: build a stable module->label mapping across the union.
+    seen = {}
+    all_modules = []
+    for m in (known_modules or []):
+        if not seen.get(m):
+            seen[m] = True
+            all_modules.append(m)
+    for m in (test_management_modules or []):
+        if not seen.get(m):
+            seen[m] = True
+            all_modules.append(m)
+    all_modules = sorted(all_modules)
+    raw_labels = [sanitize_label_fragment(m) for m in all_modules]
+    deduped = dedup_keys(raw_labels)
+    label_map = {}
+    for i in range(len(all_modules)):
+        label_map[all_modules[i]] = deduped[i]
+    return label_map
+
+# Public aliases for tests (avoid importing private symbols)
+compute_dd_api_base_for_tests = _compute_dd_api_base
+build_module_label_map_for_tests = _build_module_label_map
 
 def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, request_debug_payload = None):
     # _http_request: executes an HTTP call and writes the response to `out_file`.
@@ -1174,9 +1253,6 @@ def _impl(ctx):
     # Always add known_tests.json to exports (either real data or stub)
     exports.append(known_tests_file)
 
-    # Split known tests by module into dedicated files (no-op if empty)
-    module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug)
-
     if test_management_enabled:
         ctx.report_progress("test_optimization_sync: downloading test management tests")
         _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug)
@@ -1190,8 +1266,14 @@ def _impl(ctx):
     # Always add test_management.json to exports (either real data or stub)
     exports.append(test_management_file)
 
-    # Split test_management by module into dedicated files (no-op if empty)
-    module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug)
+    # Build unified module label mapping to avoid cross-feature collisions
+    known_modules = _collect_known_tests_modules(ctx, known_tests_file)
+    tm_modules = _collect_test_management_modules(ctx, test_management_file)
+    label_map = _build_module_label_map(known_modules, tm_modules)
+
+    # Split known tests and test management by module into dedicated files
+    module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = label_map)
+    module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug, label_map = label_map)
 
     # Build and write context.json (non-secret metadata) in the same repo
     context_tags = _build_context_tags(ctx, env_data, debug)
@@ -1202,20 +1284,10 @@ def _impl(ctx):
     sanitized_go_module_path = sanitize_label_fragment(go_module_path) if go_module_path else ""
 
     # Build a modules index for per-module filegroups (labels are sanitized suffixes)
-    # Collect unique labels from both known_tests and test_management
+    labels = sorted([v for v in label_map.values()]) if label_map else []
     label_seen = {}
-    labels = []
-    for _s in module_specs_known:
-        _lab = _s.get("label")
-        if _lab and not label_seen.get(_lab):
-            label_seen[_lab] = True
-            labels.append(_lab)
-    for _s in module_specs_tm:
-        _lab = _s.get("label")
-        if _lab and not label_seen.get(_lab):
-            label_seen[_lab] = True
-            labels.append(_lab)
-    labels = sorted(labels)
+    for _lab in labels:
+        label_seen[_lab] = True
 
     # Emit modules_index.bzl with both a list and a set-like dict for membership checks
     entries = []
@@ -1294,20 +1366,22 @@ def _impl(ctx):
 
     # Append one filegroup per module so consumers can depend on individual modules
     if module_specs_known or module_specs_tm:
-        # Deterministic order by label without using set (not available in Starlark)
-        label_seen = {}
-        labels = []
-        for s in module_specs_known:
-            lab = s["label"]
-            if not label_seen.get(lab):
-                label_seen[lab] = True
-                labels.append(lab)
-        for s in module_specs_tm:
-            lab = s["label"]
-            if not label_seen.get(lab):
-                label_seen[lab] = True
-                labels.append(lab)
-        labels = sorted(labels)
+        labels_for_modules = labels
+        if not labels_for_modules:
+            # Fallback: derive labels from specs if mapping is unavailable
+            label_seen = {}
+            labels_for_modules = []
+            for s in module_specs_known:
+                lab = s["label"]
+                if not label_seen.get(lab):
+                    label_seen[lab] = True
+                    labels_for_modules.append(lab)
+            for s in module_specs_tm:
+                lab = s["label"]
+                if not label_seen.get(lab):
+                    label_seen[lab] = True
+                    labels_for_modules.append(lab)
+            labels_for_modules = sorted(labels_for_modules)
 
         # Map module labels to their per-module files
         known_by_label = {}
@@ -1319,7 +1393,7 @@ def _impl(ctx):
 
         # Ensure per-module stubs exist for the missing side so consumers always
         # see both canonical filenames in the per-module runfiles
-        for lab in labels:
+        for lab in labels_for_modules:
             if not known_by_label.get(lab):
                 per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
                 kfile = per_dir + "/known_tests.json"
@@ -1333,7 +1407,7 @@ def _impl(ctx):
                 ctx.file(tfile, '{"data": {"attributes": {"modules": {}}}}\n')
                 tm_by_label[lab] = tfile
 
-        for lab in labels:
+        for lab in labels_for_modules:
             build_content += ("\ntopt_module_files(\n" +
                 ('    name = "module_%s",\n' % lab) +
                 ('    settings = "%s",\n' % settings_file) +

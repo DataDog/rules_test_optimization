@@ -1,0 +1,21 @@
+load("//tools/tests:test_sync_utils.bzl", "dd_site_normalization_test", "module_label_map_collision_test")
+
+dd_site_normalization_test(
+    name = "dd_site_normalization_test",
+    size = "small",
+    timeout = "short",
+)
+
+module_label_map_collision_test(
+    name = "module_label_map_collision_test",
+    size = "small",
+    timeout = "short",
+)
+
+test_suite(
+    name = "tests",
+    tests = [
+        ":dd_site_normalization_test",
+        ":module_label_map_collision_test",
+    ],
+)

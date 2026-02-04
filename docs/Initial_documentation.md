@@ -12,6 +12,9 @@ The steps are:
    - `@<repo>//:test_optimization_context` (the `context.json` only)
    - `@<repo>//:module_<sanitized>` (per‑module bundle: `settings.json` + that module’s known/test‑management files)
    The sync also emits an `export.bzl` helper describing available module labels and detected runtime/module hints for consumers.  
+   Notes:
+   - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; it is normalized to `https://api.<site>`.
+   - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
    POC: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
 
 2. **Test instrumentation**:
