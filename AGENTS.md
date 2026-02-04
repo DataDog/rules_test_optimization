@@ -2,6 +2,12 @@
 
 This repository ships Bazel integrations that fetch Datadog Test Optimization metadata at module/repo resolution and reliably upload test/coverage payloads from hermetic builds.
 
+## Project Overview
+The solution separates concerns into three phases:
+1. **Fetch phase (module/repo resolution)**: repository rule fetches metadata from Datadog APIs.
+2. **Execute phase (test runtime)**: tests run hermetically, consume pre-fetched metadata via runfiles, and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
+3. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //:dd_upload_payloads`) discovers and uploads payloads from `bazel-testlogs/<target>/test.outputs/`.
+
 ## Documentation
 - Overview: see `docs/Initial_documentation.md` for how the solution works (architecture, data flow, and operational notes).
 - Problem statement & proposal: see `docs/RFC.md` for the background problem this solves, rationale, and the detailed design.
@@ -20,6 +26,19 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
+## Generated Repository Structure
+The sync rule creates `@test_optimization_data//` containing:
+- `BUILD` with public filegroups (`:test_optimization_files`, `:test_optimization_context`, `:module_<sanitized>`).
+- `export.bzl` exporting the `topt_data` dict for macros.
+- `.testoptimization/settings.json`, `known_tests.json`, `test_management.json`, `manifest.txt`, `context.json`.
+- `.testoptimization/module_<sanitized>/` per-module splits for cache efficiency.
+
+## Key Design Patterns
+- **Per-module splitting**: known tests and test management data are split by module to reduce cache invalidation.
+- **Sanitization**: module names are converted into Bazel-safe labels using `sanitize_label_fragment()` (lowercase, `[a-z0-9_]` only, deterministic suffixes).
+- **Go importpath inference**: `topt_go_payloads_selector` mirrors rules_go importpath logic (explicit `importpath` > `embed` provider > fallback `<module>/<package>`).
+- **Cross-platform uploader**: Unix uses Bash/curl; Windows uses PowerShell and .NET `HttpClient`.
+
 ## Build, Test, and Development Commands
 - Build all: `./bazelw build //...` — compiles and validates Starlark targets.
 - Run tests then upload payloads:
@@ -32,6 +51,16 @@ Agents: start with the Overview, then skim the RFC to understand constraints and
   ./bazelw test //... || test_status=$?; test_status=${test_status:-0}
   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
   exit $test_status
+  ```
+- Force refetch of test optimization data:
+  ```bash
+  bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s)
+  ```
+- Inspect generated repo files:
+  ```bash
+  ls -la $(bazel info output_base)/external/test_optimization_data/.testoptimization/
+  cat $(bazel info output_base)/external/test_optimization_data/BUILD
+  cat $(bazel info output_base)/external/test_optimization_data/export.bzl
   ```
 - Typical workflow: edit Starlark, then `./bazelw test //tools/...`.
 

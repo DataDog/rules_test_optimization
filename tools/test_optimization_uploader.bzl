@@ -380,6 +380,8 @@ while true; do
     now=$(date +%s)
     elapsed=$((now - start_ts))
 
+    # Refresh cache in case new test.outputs dirs appeared (e.g., remote downloads)
+    cache_test_outputs
     total_files=$(count_payload_files)
 
     if (( total_files == 0 )); then
@@ -927,6 +929,8 @@ Update-TestOutputsCache
 while ($true) {{
     $elapsed = ((Get-Date) - $start).TotalSeconds
 
+    # Refresh cache in case new test.outputs dirs appeared (e.g., remote downloads)
+    Update-TestOutputsCache
     $totalFiles = Count-PayloadFiles
 
     if ($totalFiles -eq 0) {{

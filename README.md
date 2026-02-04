@@ -6,6 +6,13 @@ This repository provides a Bazel module extension and repository rule that fetch
 
 - **Bazel 5.0+** - Required for `TEST_UNDECLARED_OUTPUTS_DIR` support used by payload collection
 - **dd-trace-go v1.72.0+** (or equivalent tracer version) - Required for file-based payload output via `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
+- **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
+  - **Linux**: `bash`, `curl`, `find`, `stat` (GNU), `awk`, and one of `md5sum` or `shasum`
+  - **macOS**: `bash` (3.2+), `curl`, `find`, `stat` (BSD), `awk`, and one of `md5` or `shasum`
+  - **Windows**: `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+); the uploader uses .NET `HttpClient`
+
+Optional tooling:
+- **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
 
 The extension performs these HTTP POST transactions (via curl):
 
