@@ -247,6 +247,7 @@ snapshot_dir = os.environ["SNAPSHOT_DIR"]
 update = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 
 def parse_multipart(body, content_type):
+    # Extract multipart parts (event + coverage) from the upload body.
     if "boundary=" not in content_type:
         return {}
     header = f"Content-Type: {content_type}\r\n\r\n".encode("utf-8")

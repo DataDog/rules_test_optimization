@@ -395,6 +395,7 @@ def _compute_dd_api_base(site_env):
         site = site[len("api."):]
 
     if not site:
+        # If input was empty or became empty after normalization, fall back to default.
         site = "datadoghq.com"
     return "https://api.%s" % site
 

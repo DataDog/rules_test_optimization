@@ -622,6 +622,7 @@ upload_all_tests() {{
     local total=0
     local failed=0
     local skipped=0
+    # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
         local tests_dir="$outputs_dir/tests"
@@ -659,6 +660,7 @@ upload_all_coverage() {{
     local total=0
     local failed=0
     local skipped=0
+    # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
         local cov_dir="$outputs_dir/coverage"
