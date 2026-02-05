@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import json
 import os
 import sys
@@ -23,12 +24,13 @@ class _ServerState:
         self.log_path = log_path
         self.log_lock = threading.Lock()
 
-    def log_request(self, path, method, headers, body_len):
+    def log_request(self, path, method, headers, body):
         record = {
             "path": path,
             "method": method,
             "headers": headers,
-            "body_len": body_len,
+            "body_len": len(body or b""),
+            "body_b64": base64.b64encode(body or b"").decode("ascii"),
         }
         line = json.dumps(record, sort_keys=True)
         with self.log_lock:
@@ -101,7 +103,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _log_and_validate(self, path, body):
         headers = _normalize_headers(self.headers)
-        self.server.state.log_request(path, self.command, headers, len(body))
+        self.server.state.log_request(path, self.command, headers, body)
 
     def _validate_settings(self, body):
         if not _require_header(self.headers, "DD-API-KEY"):

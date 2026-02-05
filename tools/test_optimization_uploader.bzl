@@ -100,26 +100,37 @@ dbg() {{ if [[ "${{DEBUG:-0}}" == "1" ]]; then echo "[dd-uploader][dbg] $1" >&2;
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 resolve_runfile() {{
     local rloc="$1"
-    # Try RUNFILES_DIR first (Unix default)
-    if [[ -n "${{RUNFILES_DIR:-}}" && -f "$RUNFILES_DIR/$rloc" ]]; then
-        echo "$RUNFILES_DIR/$rloc"
-        return
+    # Normalize relative prefixes that can appear in bzlmod runfile paths
+    rloc="${rloc#./}"
+    while [[ "$rloc" == ../* ]]; do
+        rloc="${rloc#../}"
+    done
+    local candidates=("$rloc")
+    if [[ "$rloc" == external/* ]]; then
+        candidates+=("${rloc#external/}")
     fi
-    # Try $0.runfiles fallback
-    if [[ -f "$0.runfiles/$rloc" ]]; then
-        echo "$0.runfiles/$rloc"
-        return
-    fi
-    # Try RUNFILES_MANIFEST_FILE (Windows/manifest-only)
-    if [[ -n "${{RUNFILES_MANIFEST_FILE:-}}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
-        local path
-        # Use awk with substr() for regex-free extraction (handles metacharacters in paths)
-        path=$(awk -v key="$rloc" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$RUNFILES_MANIFEST_FILE")
-        if [[ -n "$path" && -f "$path" ]]; then
-            echo "$path"
+    for cand in "${{candidates[@]}}"; do
+        # Try RUNFILES_DIR first (Unix default)
+        if [[ -n "${{RUNFILES_DIR:-}}" && -f "$RUNFILES_DIR/$cand" ]]; then
+            echo "$RUNFILES_DIR/$cand"
             return
         fi
-    fi
+        # Try $0.runfiles fallback
+        if [[ -f "$0.runfiles/$cand" ]]; then
+            echo "$0.runfiles/$cand"
+            return
+        fi
+        # Try RUNFILES_MANIFEST_FILE (Windows/manifest-only)
+        if [[ -n "${{RUNFILES_MANIFEST_FILE:-}}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
+            local path
+            # Use awk with substr() for regex-free extraction (handles metacharacters in paths)
+            path=$(awk -v key="$cand" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$RUNFILES_MANIFEST_FILE")
+            if [[ -n "$path" && -f "$path" ]]; then
+                echo "$path"
+                return
+            fi
+        fi
+    done
     echo ""  # Not found
 }}
 
@@ -708,23 +719,34 @@ $ProgressPreference = 'SilentlyContinue'
 function Resolve-Runfile {{
     param([string]$Rloc)
 
-    # Try RUNFILES_DIR first
-    if ($env:RUNFILES_DIR) {{
-        $candidate = Join-Path $env:RUNFILES_DIR $Rloc
-        if (Test-Path $candidate) {{ return $candidate }}
+    # Normalize relative prefixes that can appear in bzlmod runfile paths
+    if ($Rloc.StartsWith("./")) {{ $Rloc = $Rloc.Substring(2) }}
+    while ($Rloc.StartsWith("../")) {{ $Rloc = $Rloc.Substring(3) }}
+
+    $candidates = @($Rloc)
+    if ($Rloc.StartsWith("external/")) {{
+        $candidates += $Rloc.Substring(9)
     }}
 
-    # Try $PSScriptRoot.runfiles fallback
-    $candidate = Join-Path "$PSScriptRoot.runfiles" $Rloc
-    if (Test-Path $candidate) {{ return $candidate }}
+    foreach ($cand in $candidates) {{
+        # Try RUNFILES_DIR first
+        if ($env:RUNFILES_DIR) {{
+            $candidate = Join-Path $env:RUNFILES_DIR $cand
+            if (Test-Path $candidate) {{ return $candidate }}
+        }}
 
-    # Try RUNFILES_MANIFEST_FILE (Windows default)
-    if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path $env:RUNFILES_MANIFEST_FILE)) {{
-        $manifest = Get-Content $env:RUNFILES_MANIFEST_FILE
-        foreach ($line in $manifest) {{
-            if ($line.StartsWith("$Rloc ")) {{
-                $path = $line.Substring($Rloc.Length + 1)
-                if (Test-Path $path) {{ return $path }}
+        # Try $PSScriptRoot.runfiles fallback
+        $candidate = Join-Path "$PSScriptRoot.runfiles" $cand
+        if (Test-Path $candidate) {{ return $candidate }}
+
+        # Try RUNFILES_MANIFEST_FILE (Windows default)
+        if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path $env:RUNFILES_MANIFEST_FILE)) {{
+            $manifest = Get-Content $env:RUNFILES_MANIFEST_FILE
+            foreach ($line in $manifest) {{
+                if ($line.StartsWith("$cand ")) {{
+                    $path = $line.Substring($cand.Length + 1)
+                    if (Test-Path $path) {{ return $path }}
+                }}
             }}
         }}
     }}
