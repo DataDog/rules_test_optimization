@@ -254,6 +254,7 @@ dd_payload_uploader(
 # Repository rule (module/repo phase) — affects refetch
 common --repo_env=DD_API_KEY
 common --repo_env=DD_SITE
+common --repo_env=DD_TOPT_API_BASE  # Optional override for Datadog API base URL (test/dev)
 common --repo_env=DD_SERVICE
 common --repo_env=DD_ENV
 common --repo_env=DD_GIT_REPOSITORY_URL
@@ -267,6 +268,13 @@ common --repo_env=DD_GIT_HEAD_MESSAGE
 # Uploader (bazel run, pass credentials inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
 #   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+
+# Tests (runtime)
+test --test_env=DD_API_KEY
+test --test_env=DD_SITE
+test --test_env=DD_TRACE_AGENT_URL
+test --test_env=DD_TOPT_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
+test --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR
 ```
 
 ## Uploading test and coverage payloads
@@ -358,6 +366,7 @@ bazel run //:dd_upload_payloads
   - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
   - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
   - Requires `DD_API_KEY`
+  - Test/dev override: set `DD_TOPT_INTAKE_BASE` to use a custom base URL (agentless only)
 - EVP proxy (when `DD_TRACE_AGENT_URL` set):
   - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
   - Adds `X-Datadog-EVP-Subdomain` per endpoint
@@ -700,3 +709,21 @@ DD_GIT_BRANCH=main \
 DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
 ./bazelw test //...
 ```
+
+## Integration tests (mock server)
+
+For a full end-to-end flow (sync + uploader) without hitting Datadog, run:
+
+```sh
+tools/tests/integration/run_mock_server_tests.sh
+```
+
+This starts a local mock HTTP server and uses the following test-only overrides:
+
+- `DD_TOPT_API_BASE` to redirect sync requests
+- `DD_TOPT_INTAKE_BASE` to redirect uploader requests (agentless only)
+
+## Tips
+
+- You can set a TTL via `FETCH_SALT_TTL`.
+- For debugging, set `debug = True` when calling the extension to get verbose logs, including request bodies and detected OS info.

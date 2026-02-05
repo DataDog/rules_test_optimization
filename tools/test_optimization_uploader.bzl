@@ -426,14 +426,25 @@ done
 
 # Build endpoints
 DD_SITE="${{DD_SITE:-datadoghq.com}}"
+INTAKE_BASE="${{DD_TOPT_INTAKE_BASE:-}}"
 if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
   AGENTLESS=1
-  TEST_URL="https://citestcycle-intake.${{DD_SITE}}/api/v2/citestcycle"
-  COV_URL="https://citestcov-intake.${{DD_SITE}}/api/v2/citestcov"
+  if [[ -n "$INTAKE_BASE" ]]; then
+    BASE="${{INTAKE_BASE%/}}"
+    TEST_URL="${{BASE}}/api/v2/citestcycle"
+    COV_URL="${{BASE}}/api/v2/citestcov"
+    dbg "DD_TOPT_INTAKE_BASE override active: $BASE"
+  else
+    TEST_URL="https://citestcycle-intake.${{DD_SITE}}/api/v2/citestcycle"
+    COV_URL="https://citestcov-intake.${{DD_SITE}}/api/v2/citestcov"
+  fi
 else
   AGENTLESS=0
   TEST_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcycle"
   COV_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcov"
+  if [[ -n "$INTAKE_BASE" ]]; then
+    dbg "DD_TOPT_INTAKE_BASE ignored in EVP mode"
+  fi
 fi
 dbg "mode: AGENTLESS=$AGENTLESS DD_SITE=$DD_SITE"
 dbg "endpoints: TEST_URL=$TEST_URL COV_URL=$COV_URL"
@@ -978,12 +989,21 @@ while ($true) {{
 # Build endpoints
 $Agentless = [string]::IsNullOrEmpty($env:DD_TRACE_AGENT_URL)
 $DD_Site = if ([string]::IsNullOrEmpty($env:DD_SITE)) {{ 'datadoghq.com' }} else {{ $env:DD_SITE }}
+$IntakeBase = $env:DD_TOPT_INTAKE_BASE
 if ($Agentless) {{
-  $TestUrl = "https://citestcycle-intake.$DD_Site/api/v2/citestcycle"
-  $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
+  if (-not [string]::IsNullOrEmpty($IntakeBase)) {{
+    $Base = $IntakeBase.TrimEnd('/')
+    $TestUrl = "$Base/api/v2/citestcycle"
+    $CovUrl = "$Base/api/v2/citestcov"
+    Dbg "DD_TOPT_INTAKE_BASE override active: $Base"
+  }} else {{
+    $TestUrl = "https://citestcycle-intake.$DD_Site/api/v2/citestcycle"
+    $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
+  }}
 }} else {{
   $TestUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcycle"
   $CovUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcov"
+  if (-not [string]::IsNullOrEmpty($IntakeBase)) {{ Dbg "DD_TOPT_INTAKE_BASE ignored in EVP mode" }}
 }}
 Dbg "mode: Agentless=$Agentless Site=$DD_Site"
 Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl"
@@ -1321,6 +1341,7 @@ Required environment variables for upload:
 
 Optional environment variables:
     TESTLOGS_DIR - Override testlogs directory (for non-standard setups)
+    DD_TOPT_INTAKE_BASE - Override intake base URL (agentless only, test/dev)
     DD_TOPT_KEEP_PAYLOADS=1 - Retain payloads after upload
     DD_TOPT_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json
     DD_TOPT_MAX_WAIT_SEC - Override max wait time

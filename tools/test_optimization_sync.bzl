@@ -398,6 +398,23 @@ def _compute_dd_api_base(site_env):
         site = "datadoghq.com"
     return "https://api.%s" % site
 
+def _resolve_dd_api_base(env_data, debug):
+    # _resolve_dd_api_base: resolve API base URL from overrides or DD_SITE.
+    override = env_data.get("dd_api_base") or ""
+    if override:
+        base = override.rstrip("/")
+        log_debug(debug, "http", "DD_TOPT_API_BASE override set: %s" % base)
+        return base
+    return _compute_dd_api_base(env_data.get("dd_site"))
+
+def _resolve_dd_api_base_for_tests(dd_site, dd_api_base):
+    # Test helper to validate override behavior deterministically.
+    env_data = {
+        "dd_site": dd_site or "",
+        "dd_api_base": dd_api_base or "",
+    }
+    return _resolve_dd_api_base(env_data, False)
+
 def _collect_known_tests_modules(ctx, known_tests_file):
     # _collect_known_tests_modules: list module names from known_tests.json
     kt_path = ctx.path(known_tests_file)
@@ -617,6 +634,7 @@ def _normalize_ref(name):
 
 # Public aliases for tests (avoid importing private symbols)
 compute_dd_api_base_for_tests = _compute_dd_api_base
+resolve_dd_api_base_for_tests = _resolve_dd_api_base_for_tests
 build_module_label_map_for_tests = _build_module_label_map
 normalize_ref_for_tests = _normalize_ref
 parse_go_module_path_for_tests = _parse_go_module_path
@@ -631,6 +649,7 @@ def _collect_env(ctx):
     # by request helpers. Detection order mirrors Datadog's providers list.
     env_data = {
         "dd_site": ctx.os.environ.get("DD_SITE") or "",
+        "dd_api_base": ctx.os.environ.get("DD_TOPT_API_BASE") or "",
         # Service can be provided via attr first, then DD_SERVICE, else default
         "service": (getattr(ctx.attr, "service", None) or ctx.os.environ.get("DD_SERVICE") or "unnamed-service"),
         "environment": ctx.os.environ.get("DD_ENV") or "CI",
@@ -962,7 +981,7 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
     # Datadog CI Visibility settings endpoint
     # Path: api/v2/libraries/tests/services/setting
     # Type: ci_app_test_service_libraries_settings
-    base = _compute_dd_api_base(env_data.get("dd_site"))
+    base = _resolve_dd_api_base(env_data, debug)
     url = "%s/%s" % (base, "api/v2/libraries/tests/services/setting")
 
     # Gather request attributes from environment
@@ -1025,7 +1044,7 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
     # Datadog Known Tests endpoint
     # Path: api/v2/ci/libraries/tests
     # Type: ci_app_libraries_tests_request
-    base = _compute_dd_api_base(env_data.get("dd_site"))
+    base = _resolve_dd_api_base(env_data, debug)
     url = "%s/%s" % (base, "api/v2/ci/libraries/tests")
 
     # Same attributes as settings request
@@ -1075,7 +1094,7 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_manag
     # Datadog Test Management Tests endpoint
     # Path: api/v2/test/libraries/test-management/tests
     # Type: ci_app_libraries_tests_request
-    base = _compute_dd_api_base(env_data.get("dd_site"))
+    base = _resolve_dd_api_base(env_data, debug)
     url = "%s/%s" % (base, "api/v2/test/libraries/test-management/tests")
 
     # Required attributes per API
@@ -1463,6 +1482,7 @@ test_optimization_sync = repository_rule(
         # Environment variables treated as rule inputs
         "DD_API_KEY",  # Required: Datadog API key for authentication
         "DD_SITE",  # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
+        "DD_TOPT_API_BASE",  # Optional: override Datadog API base URL (test/dev)
         "FETCH_SALT",  # Optional: cache-busting salt to force re-fetch
         "GIT_DIRTY",  # Optional: working tree state; triggers refetch on change
         # Host OS hints used for cross-platform behavior and request configuration

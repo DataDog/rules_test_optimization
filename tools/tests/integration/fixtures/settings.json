@@ -1,0 +1,12 @@
+{
+  "data": {
+    "id": "1",
+    "type": "ci_app_test_service_libraries_settings",
+    "attributes": {
+      "known_tests_enabled": true,
+      "test_management": {
+        "enabled": true
+      }
+    }
+  }
+}

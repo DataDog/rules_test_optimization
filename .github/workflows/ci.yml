@@ -16,3 +16,6 @@ jobs:
 
       - name: Run Bazel tests
         run: ./bazelw test //tools/...
+
+      - name: Run mock server integration tests
+        run: tools/tests/integration/run_mock_server_tests.sh

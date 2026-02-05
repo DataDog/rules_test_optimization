@@ -6,6 +6,7 @@ load(
     "dirname_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
+    "resolve_dd_api_base_for_tests",
 )
 
 def _dd_site_normalization_test(ctx):
@@ -19,6 +20,30 @@ def _dd_site_normalization_test(ctx):
     asserts.equals(env, "https://api.datadoghq.com", compute_dd_api_base_for_tests("   "))
     asserts.equals(env, "https://api.datadoghq.com", compute_dd_api_base_for_tests("https://api.datadoghq.com/path"))
     asserts.equals(env, "https://api.datadoghq.eu", compute_dd_api_base_for_tests("http://app.datadoghq.eu/foo"))
+    return unittest.end(env)
+
+def _resolve_dd_api_base_test(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "https://api.datadoghq.com",
+        resolve_dd_api_base_for_tests("datadoghq.com", ""),
+    )
+    asserts.equals(
+        env,
+        "https://api.datadoghq.com",
+        resolve_dd_api_base_for_tests("app.datadoghq.com", None),
+    )
+    asserts.equals(
+        env,
+        "https://example.com",
+        resolve_dd_api_base_for_tests("datadoghq.com", "https://example.com"),
+    )
+    asserts.equals(
+        env,
+        "https://example.com",
+        resolve_dd_api_base_for_tests("datadoghq.com", "https://example.com/"),
+    )
     return unittest.end(env)
 
 def _module_label_map_collision_test(ctx):
@@ -73,6 +98,7 @@ def _dirname_test(ctx):
     return unittest.end(env)
 
 dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
+resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
 normalize_ref_test = unittest.make(_normalize_ref_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
