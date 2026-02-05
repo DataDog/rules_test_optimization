@@ -452,6 +452,7 @@ INTAKE_BASE="${{DD_TOPT_INTAKE_BASE:-}}"
 if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
   AGENTLESS=1
   if [[ -n "$INTAKE_BASE" ]]; then
+    # Allow tests/dev to override intake base without changing DD_SITE.
     BASE="${{INTAKE_BASE%/}}"
     TEST_URL="${{BASE}}/api/v2/citestcycle"
     COV_URL="${{BASE}}/api/v2/citestcov"
@@ -528,6 +529,7 @@ matches_filter() {{
 cleanup_file() {{
     local file="$1"
     if [[ "$KEEP_PAYLOADS" != "1" ]]; then
+        # Some runfiles can be read-only; best-effort cleanup keeps uploads resilient.
         if ! rm -f "$file" 2>/dev/null; then
             chmod u+w "$file" 2>/dev/null || true
             rm -f "$file" 2>/dev/null || true
@@ -543,6 +545,7 @@ UPLOAD_FAILURES=0
 upload_single_test() {{
     local file="$1"
     local body
+    # Use a temp file to avoid collisions when multiple uploads run in parallel.
     body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$body" ]]; then
         dbg "upload_single_test: failed to create temp file"
@@ -575,6 +578,7 @@ upload_single_coverage() {{
     local file="$1"
     # Create event.json for multipart
     local eventjson
+    # Use a temp file for multipart metadata to avoid leaking into runfiles.
     eventjson="$(mktemp "$TMP_PAYLOAD_DIR/coverage_event.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$eventjson" ]]; then
         dbg "upload_single_coverage: failed to create temp file"
@@ -1046,6 +1050,7 @@ while ($true) {{
 # Build endpoints
 $Agentless = [string]::IsNullOrEmpty($env:DD_TRACE_AGENT_URL)
 $DD_Site = if ([string]::IsNullOrEmpty($env:DD_SITE)) {{ 'datadoghq.com' }} else {{ $env:DD_SITE }}
+# Allow tests/dev to override intake base without changing DD_SITE.
 $IntakeBase = $env:DD_TOPT_INTAKE_BASE
 if ($Agentless) {{
   if (-not [string]::IsNullOrEmpty($IntakeBase)) {{

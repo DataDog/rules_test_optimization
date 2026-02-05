@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TMP_WS="$(mktemp -d)"
+# Store server logs + request bodies outside the repo tree for easy cleanup.
 LOG_FILE="$TMP_WS/mock.log"
 SERVER_OUT="$TMP_WS/server.out"
 SNAPSHOT_DIR="$REPO_ROOT/tools/tests/integration/snapshots"
@@ -26,12 +27,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Start a mock Datadog API server with fixture responses and request logging.
 python3 -u "$REPO_ROOT/tools/tests/integration/mock_dd_server.py" \
   --fixtures "$REPO_ROOT/tools/tests/integration/fixtures" \
   --log "$LOG_FILE" \
   --port 0 >"$SERVER_OUT" 2>&1 &
 SERVER_PID=$!
 
+# Wait for the server to bind to a random port and emit it.
 PORT=""
 for _ in $(seq 1 50); do
   if grep -q "^PORT=" "$SERVER_OUT"; then
@@ -52,10 +55,12 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# Create a throwaway Bazel workspace to exercise the rules as a consumer.
 WORKSPACE="$TMP_WS/ws"
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 
+# JSON-escape REPO_ROOT for safe insertion into MODULE.bazel.
 ESCAPED_REPO_ROOT=$(python3 - <<'PY'
 import json
 import os
@@ -63,6 +68,9 @@ print(json.dumps(os.environ["REPO_ROOT"]))
 PY
 )
 
+# Build a throwaway Bazel workspace in a temp dir so we exercise the rules
+# like a real consumer (bzlmod deps + BUILD targets), without adding files
+# to this repo.
 cat > MODULE.bazel <<MODULE_EOF
 module(name = "topt-integration", version = "0.0.0")
 
@@ -121,6 +129,7 @@ BAZEL="$REPO_ROOT/bazelw"
 OUT_BASE="$TMP_WS/.bazel_out"
 BAZEL_FLAGS=(--output_base="$OUT_BASE")
 
+# Provide deterministic repo metadata for fixtures + payload enrichment.
 REPO_ENVS=(
   --repo_env=DD_API_KEY=mock
   --repo_env=DD_TOPT_API_BASE=http://127.0.0.1:$PORT
@@ -140,6 +149,7 @@ REPO_ENVS=(
 CQUERY_OUT=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_files --output=files \
   "${REPO_ENVS[@]}")
 
+# Resolve settings.json location from cquery output for validation.
 SETTINGS_PATH=$(echo "$CQUERY_OUT" | grep '/.testoptimization/settings.json$' | head -n1 || true)
 if [[ -z "$SETTINGS_PATH" ]]; then
   echo "error: failed to resolve settings.json path"
@@ -180,6 +190,7 @@ unset DD_TRACE_AGENT_URL
 "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test \
   "${REPO_ENVS[@]}"
 
+# Use Bazel's testlogs location to find payloads for the uploader.
 TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
 
 TESTLOGS_DIR="$TESTLOGS_DIR" \

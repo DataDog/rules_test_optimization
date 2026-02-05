@@ -27,6 +27,7 @@ dd_site_normalization_test(
     timeout = "short",
 )
 
+# Validate DD_TOPT_API_BASE override behavior.
 resolve_dd_api_base_test(
     name = "resolve_dd_api_base_test",
     size = "small",

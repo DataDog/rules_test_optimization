@@ -25,6 +25,7 @@ class _ServerState:
         self.log_lock = threading.Lock()
 
     def log_request(self, path, method, headers, body):
+        # Persist request bodies in base64 so multipart uploads can be snapshotted.
         record = {
             "path": path,
             "method": method,
@@ -43,6 +44,7 @@ def _normalize_headers(headers):
     out = {}
     for key, value in headers.items():
         if key.lower() == "dd-api-key":
+            # Never log API keys in plaintext.
             out[key] = "<redacted>"
         else:
             out[key] = value
@@ -102,6 +104,7 @@ class _Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     def _log_and_validate(self, path, body):
+        # Capture requests for snapshot tests and assertions.
         headers = _normalize_headers(self.headers)
         self.server.state.log_request(path, self.command, headers, body)
 

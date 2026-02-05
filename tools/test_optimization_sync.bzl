@@ -649,6 +649,7 @@ def _collect_env(ctx):
     # by request helpers. Detection order mirrors Datadog's providers list.
     env_data = {
         "dd_site": ctx.os.environ.get("DD_SITE") or "",
+        # Optional override to point API calls at a mock server (tests/dev).
         "dd_api_base": ctx.os.environ.get("DD_TOPT_API_BASE") or "",
         # Service can be provided via attr first, then DD_SERVICE, else default
         "service": (getattr(ctx.attr, "service", None) or ctx.os.environ.get("DD_SERVICE") or "unnamed-service"),

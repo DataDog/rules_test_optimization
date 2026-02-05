@@ -24,6 +24,7 @@ def _dd_site_normalization_test(ctx):
 
 def _resolve_dd_api_base_test(ctx):
     env = unittest.begin(ctx)
+    # Ensure overrides take precedence over DD_SITE-derived defaults.
     asserts.equals(
         env,
         "https://api.datadoghq.com",
