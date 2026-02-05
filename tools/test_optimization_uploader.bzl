@@ -41,6 +41,10 @@ def _render_template(template, substitutions):
     out = out.replace("{{", "{").replace("}}", "}")
     return out
 
+# Helper to keep template booleans consistent across bash/PowerShell.
+def _bool_to_str(value):
+    return "True" if value else "False"
+
 # Public alias for tests (avoid importing private symbols)
 render_template_for_tests = _render_template
 
@@ -706,10 +710,10 @@ fi
         {
             "quiescent_sec": quiescent_sec,
             "max_wait_sec": max_wait_sec,
-            "fail_on_error": "True" if fail_on_error else "False",
-            "debug": "True" if debug else "False",
-            "keep_payloads": "True" if keep_payloads else "False",
-            "filter_prefix": "True" if filter_prefix else "False",
+            "fail_on_error": _bool_to_str(fail_on_error),
+            "debug": _bool_to_str(debug),
+            "keep_payloads": _bool_to_str(keep_payloads),
+            "filter_prefix": _bool_to_str(filter_prefix),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
         },
@@ -1325,10 +1329,10 @@ try {{
         {
             "quiescent_sec": quiescent_sec,
             "max_wait_sec": max_wait_sec,
-            "fail_on_error": "True" if fail_on_error else "False",
-            "debug": "True" if debug else "False",
-            "keep_payloads": "True" if keep_payloads else "False",
-            "filter_prefix": "True" if filter_prefix else "False",
+            "fail_on_error": _bool_to_str(fail_on_error),
+            "debug": _bool_to_str(debug),
+            "keep_payloads": _bool_to_str(keep_payloads),
+            "filter_prefix": _bool_to_str(filter_prefix),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
         },
@@ -1368,7 +1372,7 @@ dd_payload_uploader = rule(
     executable = True,  # Makes it runnable via `bazel run`
     attrs = {
         "quiescent_sec": attr.int(default = 10, doc = "Seconds to wait for filesystem to settle before uploading (env: DD_TOPT_QUIESCENT_SEC)"),
-        "max_wait_sec": attr.int(default = 300, doc = "Maximum seconds to wait for payloads (env: DD_TOPT_MAX_WAIT_SEC). Reduced from 1800s since uploader runs after tests complete."),
+        "max_wait_sec": attr.int(default = 300, doc = "Maximum seconds to wait for payloads (env: DD_TOPT_MAX_WAIT_SEC). Default is sufficient since uploader runs after tests complete."),
         "fail_on_error": attr.bool(default = False, doc = "Exit with error if no payloads found when tests ran"),
         "debug": attr.bool(default = False, doc = "Enable debug logging"),
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TOPT_KEEP_PAYLOADS)"),

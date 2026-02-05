@@ -230,6 +230,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(404, _json_error("unknown path"))
 
     def log_message(self, fmt, *args):
+        """Suppress default HTTP request logging to keep test output clean."""
         return
 
 

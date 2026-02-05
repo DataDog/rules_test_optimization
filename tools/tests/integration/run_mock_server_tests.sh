@@ -36,7 +36,7 @@ SERVER_PID=$!
 
 # Wait for the server to bind to a random port and emit it.
 PORT=""
-for _ in $(seq 1 50); do
+for ((i = 1; i <= 50; i++)); do
   if grep -q "^PORT=" "$SERVER_OUT"; then
     PORT="$(grep '^PORT=' "$SERVER_OUT" | head -n1 | cut -d= -f2)"
     break

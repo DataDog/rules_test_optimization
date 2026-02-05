@@ -378,7 +378,7 @@ def _compute_dd_api_base(site_env):
     #   site_env = None/""               -> returns https://api.datadoghq.com
     # - Rationale: users frequently set DD_SITE to app.*; Datadog APIs are under
     #   api.*. We normalize here for consistency.
-    site = (site_env or "datadoghq.com").strip()
+    site = (site_env or "").strip()
 
     # Strip scheme if present (e.g., https://app.datadoghq.com)
     if "://" in site:

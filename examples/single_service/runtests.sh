@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+test_status=0
+
 echo "--- non-hermetic run"
 bazel test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug || test_status=$?
-test_status=${test_status:-0}
 
 echo "--- hermetic run"
 bazel test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic || test_status=$?
-test_status=${test_status:-0}
 
 echo "--- uploading payloads"
 # Requires DD_API_KEY and DD_SITE environment variables
