@@ -110,7 +110,7 @@ class _Handler(BaseHTTPRequestHandler):
         headers = _normalize_headers(self.headers)
         self.server.state.log_request(path, self.command, headers, body)
 
-def _validate_settings(self, body):
+    def _validate_settings(self, body):
         # Validate the sync "settings" request payload and required headers.
         if not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
@@ -126,7 +126,7 @@ def _validate_settings(self, body):
             return err
         return None
 
-def _validate_known_tests(self, body):
+    def _validate_known_tests(self, body):
         # Validate the "known tests" request payload and required headers.
         if not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
@@ -145,7 +145,7 @@ def _validate_known_tests(self, body):
             return "configurations must be an object"
         return None
 
-def _validate_test_management(self, body):
+    def _validate_test_management(self, body):
         # Validate the test management request payload and required headers.
         if not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
