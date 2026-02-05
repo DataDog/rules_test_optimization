@@ -67,6 +67,7 @@ cat > MODULE.bazel <<MODULE_EOF
 module(name = "topt-integration", version = "0.0.0")
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "rules_shell", version = "0.6.1")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",
@@ -89,7 +90,7 @@ use_repo(test_optimization_sync, "test_optimization_data")
 MODULE_EOF
 
 cat > BUILD.bazel <<BUILD_EOF
-load("@bazel_tools//tools/build_defs:test/sh_test.bzl", "sh_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 sh_test(
