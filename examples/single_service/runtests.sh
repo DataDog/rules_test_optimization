@@ -13,4 +13,5 @@ echo "--- uploading payloads"
 # Requires DD_API_KEY and DD_SITE environment variables
 DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" bazel run //:dd_upload_payloads || true
 
+# Preserve the test exit code even if uploads fail.
 exit $test_status

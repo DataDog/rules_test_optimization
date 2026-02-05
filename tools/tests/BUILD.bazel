@@ -21,6 +21,7 @@ load(
     "render_template_unescape_only_test",
 )
 
+# Starlark unit tests for core helpers (sync, uploader, common utils).
 dd_site_normalization_test(
     name = "dd_site_normalization_test",
     size = "small",

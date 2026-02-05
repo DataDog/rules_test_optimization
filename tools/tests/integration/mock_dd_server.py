@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 
 def _read_json(path):
+    """Load fixture JSON used to respond to sync endpoints."""
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
 
@@ -19,6 +20,7 @@ def _json_error(message):
 
 
 class _ServerState:
+    """Shared server state: fixtures and a thread-safe request log."""
     def __init__(self, fixtures, log_path):
         self.fixtures = fixtures
         self.log_path = log_path

@@ -243,6 +243,7 @@ from email.policy import default
 
 log_path = os.environ["LOG_FILE"]
 snapshot_dir = os.environ["SNAPSHOT_DIR"]
+# When set, snapshot files are rewritten instead of compared.
 update = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 
 def parse_multipart(body, content_type):
@@ -258,6 +259,7 @@ def parse_multipart(body, content_type):
     return parts
 
 def normalize_citestcycle(payload):
+    # Drop volatile fields (os.*, ci.*) so snapshots are stable across hosts.
     if not isinstance(payload, dict):
         return payload
     md = payload.get("metadata") or {}
@@ -283,6 +285,7 @@ def write_snap(path, data):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, sort_keys=True)
 
+# Load request log entries emitted by the mock server.
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:

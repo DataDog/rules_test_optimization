@@ -1,3 +1,4 @@
+# Unit tests for common_utils helpers (sanitization, deduping, validation).
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load("//tools:common_utils.bzl", "dedup_keys", "sanitize_label_fragment", "validate_runtime_version", "validate_service_name")
 

@@ -402,6 +402,7 @@ def _resolve_dd_api_base(env_data, debug):
     # _resolve_dd_api_base: resolve API base URL from overrides or DD_SITE.
     override = env_data.get("dd_api_base") or ""
     if override:
+        # Allow tests/dev to point sync requests at a mock server without changing DD_SITE.
         base = override.rstrip("/")
         log_debug(debug, "http", "DD_TOPT_API_BASE override set: %s" % base)
         return base
@@ -453,6 +454,7 @@ def _collect_test_management_modules(ctx, test_management_file):
 
 def _build_module_label_map(known_modules, test_management_modules):
     # _build_module_label_map: build a stable module->label mapping across the union.
+    # This prevents cross-feature label collisions when modules sanitize to the same label.
     seen = {}
     all_modules = []
     for m in (known_modules or []):

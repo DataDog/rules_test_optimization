@@ -1,3 +1,4 @@
+# Unit tests for sync utilities (DD_SITE normalization + module label mapping).
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tools:test_optimization_sync.bzl",

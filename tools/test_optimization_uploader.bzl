@@ -109,6 +109,7 @@ resolve_runfile() {{
     if [[ "$rloc" == external/* ]]; then
         candidates+=("${rloc#external/}")
     else
+        # Try the external/ prefix when short_path omits it under bzlmod.
         candidates+=("external/$rloc")
     fi
     for cand in "${{candidates[@]}}"; do
@@ -733,6 +734,7 @@ function Resolve-Runfile {{
     if ($Rloc.StartsWith("external/")) {{
         $candidates += $Rloc.Substring(9)
     }} else {{
+        # Try the external/ prefix when short_path omits it under bzlmod.
         $candidates += "external/$Rloc"
     }}
 
