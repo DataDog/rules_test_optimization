@@ -313,9 +313,11 @@ check_depth_warning() {{
 }}
 
 # Detect stat flavor (BSD vs GNU) to choose correct flags
-STAT_FLAVOR="gnu"
-if stat -f %m / >/dev/null 2>&1; then
-    STAT_FLAVOR="bsd"
+# GNU stat supports: stat -c %Y / (returns numeric mtime)
+# BSD stat supports: stat -f %m / (returns numeric mtime)
+STAT_FLAVOR="bsd"
+if stat -c %Y / >/dev/null 2>&1; then
+    STAT_FLAVOR="gnu"
 fi
 dbg "stat detection: STAT_FLAVOR=$STAT_FLAVOR (uname=$(uname -s))"
 
