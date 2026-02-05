@@ -108,6 +108,8 @@ resolve_runfile() {{
     local candidates=("$rloc")
     if [[ "$rloc" == external/* ]]; then
         candidates+=("${rloc#external/}")
+    else
+        candidates+=("external/$rloc")
     fi
     for cand in "${{candidates[@]}}"; do
         # Try RUNFILES_DIR first (Unix default)
@@ -730,6 +732,8 @@ function Resolve-Runfile {{
     $candidates = @($Rloc)
     if ($Rloc.StartsWith("external/")) {{
         $candidates += $Rloc.Substring(9)
+    }} else {{
+        $candidates += "external/$Rloc"
     }}
 
     foreach ($cand in $candidates) {{
