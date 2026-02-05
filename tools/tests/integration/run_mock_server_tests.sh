@@ -9,11 +9,16 @@ SERVER_OUT="$TMP_WS/server.out"
 export REPO_ROOT
 export LOG_FILE
 
+if [[ "${KEEP_TMP:-0}" == "1" ]]; then
+  echo "KEEP_TMP=1: temp workspace at $TMP_WS"
+fi
+
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
   fi
   if [[ -n "${TMP_WS:-}" && -d "$TMP_WS" && "${KEEP_TMP:-0}" != "1" ]]; then
+    chmod -R u+w "$TMP_WS" 2>/dev/null || true
     rm -rf "$TMP_WS"
   fi
 }
@@ -156,8 +161,13 @@ unset DD_TRACE_AGENT_URL
   --repo_env=DD_API_KEY=mock \
   --repo_env=DD_TOPT_API_BASE=http://127.0.0.1:$PORT
 
+TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
+
+TESTLOGS_DIR="$TESTLOGS_DIR" \
 DD_API_KEY=mock \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
 "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
   --repo_env=DD_API_KEY=mock \

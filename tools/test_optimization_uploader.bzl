@@ -230,9 +230,18 @@ if ! acquire_lock; then
     exit 2
 fi
 
+# Temporary working directory for enriched payloads / multipart event files
+TMP_PAYLOAD_DIR="$(mktemp -d "${{TMPDIR:-/tmp}}/dd_topt_payloads.XXXXXX" 2>/dev/null || true)"
+if [[ -z "$TMP_PAYLOAD_DIR" || ! -d "$TMP_PAYLOAD_DIR" ]]; then
+    log "error: failed to create temp directory for payload uploads"
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    exit 2
+fi
+
 # Cleanup lock on exit
 cleanup() {{
     rm -rf "$LOCK_DIR" 2>/dev/null || true
+    rm -rf "$TMP_PAYLOAD_DIR" 2>/dev/null || true
 }}
 trap cleanup EXIT
 
@@ -303,12 +312,12 @@ check_depth_warning() {{
     fi
 }}
 
-# Detect OS for stat command differences
-IS_MACOS=0
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    IS_MACOS=1
+# Detect stat flavor (BSD vs GNU) to choose correct flags
+STAT_FLAVOR="gnu"
+if stat -f %m / >/dev/null 2>&1; then
+    STAT_FLAVOR="bsd"
 fi
-dbg "OS detection: IS_MACOS=$IS_MACOS (uname=$(uname -s))"
+dbg "stat detection: STAT_FLAVOR=$STAT_FLAVOR (uname=$(uname -s))"
 
 # Get latest mtime across tests/ and coverage/ subdirs in all test.outputs directories
 # Note: Only scans payload directories, not all files under test.outputs
@@ -320,7 +329,7 @@ latest_mtime_all() {{
             local dir="$outputs_dir/$subdir"
             [[ -d "$dir" ]] || continue
             local mt
-            if (( IS_MACOS == 1 )); then
+            if [[ "$STAT_FLAVOR" == "bsd" ]]; then
                 mt=$(find "$dir" -type f -name "*.json" -exec stat -f '%m' {{}} + 2>/dev/null | sort -nr | head -1 || echo 0)
             else
                 mt=$(find "$dir" -type f -name "*.json" -exec stat -c '%Y' {{}} + 2>/dev/null | sort -nr | head -1 || echo 0)
@@ -506,7 +515,10 @@ matches_filter() {{
 cleanup_file() {{
     local file="$1"
     if [[ "$KEEP_PAYLOADS" != "1" ]]; then
-        rm -f "$file"
+        if ! rm -f "$file" 2>/dev/null; then
+            chmod u+w "$file" 2>/dev/null || true
+            rm -f "$file" 2>/dev/null || true
+        fi
     else
         dbg "keeping payload (KEEP_PAYLOADS=1): $file"
     fi
@@ -518,7 +530,11 @@ UPLOAD_FAILURES=0
 upload_single_test() {{
     local file="$1"
     local body
-    body="${{file}}.enriched.json"
+    body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+        dbg "upload_single_test: failed to create temp file"
+        return 1
+    fi
     enrich_with_context "$file" "$body"
     dbg "upload_single_test: posting '$file' (body '$body')"
     if (( AGENTLESS == 1 )); then
@@ -546,7 +562,11 @@ upload_single_coverage() {{
     local file="$1"
     # Create event.json for multipart
     local eventjson
-    eventjson="${{file}}.event.json"
+    eventjson="$(mktemp "$TMP_PAYLOAD_DIR/coverage_event.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$eventjson" ]]; then
+        dbg "upload_single_coverage: failed to create temp file"
+        return 1
+    fi
     echo '{{"dummy":true}}' > "$eventjson"
     dbg "upload_single_coverage: posting '$file'"
     if (( AGENTLESS == 1 )); then
@@ -801,12 +821,25 @@ if (-not (Acquire-Lock)) {{
     exit 2
 }}
 
+# Temp directory for enriched payloads / event files
+$script:TmpPayloadDir = Join-Path $env:TEMP ("dd_topt_payloads_" + [System.Guid]::NewGuid().ToString("N"))
+try {{
+    New-Item -ItemType Directory -Path $script:TmpPayloadDir -Force | Out-Null
+}} catch {{
+    Log "error: failed to create temp directory for payload uploads: $script:TmpPayloadDir"
+    Release-Lock
+    exit 2
+}}
+
 # Cleanup function for lock release
 function Release-Lock {{
     if ($script:LockStream) {{
         $script:LockStream.Close()
         $script:LockStream = $null
         Remove-Item -Path $LockFile -Force -ErrorAction SilentlyContinue
+    }}
+    if ($script:TmpPayloadDir -and (Test-Path -LiteralPath $script:TmpPayloadDir)) {{
+        Remove-Item -LiteralPath $script:TmpPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
     }}
 }}
 
@@ -1110,7 +1143,7 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
 }}
 
 function Upload-SingleTest([string]$FilePath) {{
-    $body = "$FilePath.enriched.json"
+    $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
     $hdrs = $CommonHeaders.Clone()
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
@@ -1121,7 +1154,7 @@ function Upload-SingleTest([string]$FilePath) {{
 }}
 
 function Upload-SingleCoverage([string]$FilePath) {{
-    $eventFile = "$FilePath.event.json"
+    $eventFile = Join-Path $script:TmpPayloadDir ("coverage_event_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Set-Content -LiteralPath $eventFile -Value '{{"dummy":true}}' -Encoding UTF8
 
     $client = $null
