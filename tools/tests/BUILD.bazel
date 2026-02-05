@@ -12,6 +12,7 @@ load(
     "module_label_map_collision_test",
     "normalize_ref_test",
     "parse_go_module_path_test",
+    "resolve_dd_api_base_test",
 )
 load(
     "//tools/tests:test_uploader_utils.bzl",
@@ -22,6 +23,13 @@ load(
 
 dd_site_normalization_test(
     name = "dd_site_normalization_test",
+    size = "small",
+    timeout = "short",
+)
+
+# Validate DD_TOPT_API_BASE override behavior.
+resolve_dd_api_base_test(
+    name = "resolve_dd_api_base_test",
     size = "small",
     timeout = "short",
 )
@@ -96,6 +104,7 @@ test_suite(
     name = "tests",
     tests = [
         ":dd_site_normalization_test",
+        ":resolve_dd_api_base_test",
         ":module_label_map_collision_test",
         ":normalize_ref_test",
         ":parse_go_module_path_test",

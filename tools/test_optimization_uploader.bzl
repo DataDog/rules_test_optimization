@@ -100,26 +100,37 @@ dbg() {{ if [[ "${{DEBUG:-0}}" == "1" ]]; then echo "[dd-uploader][dbg] $1" >&2;
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 resolve_runfile() {{
     local rloc="$1"
-    # Try RUNFILES_DIR first (Unix default)
-    if [[ -n "${{RUNFILES_DIR:-}}" && -f "$RUNFILES_DIR/$rloc" ]]; then
-        echo "$RUNFILES_DIR/$rloc"
-        return
+    # Normalize relative prefixes that can appear in bzlmod runfile paths
+    rloc="${rloc#./}"
+    while [[ "$rloc" == ../* ]]; do
+        rloc="${rloc#../}"
+    done
+    local candidates=("$rloc")
+    if [[ "$rloc" == external/* ]]; then
+        candidates+=("${rloc#external/}")
     fi
-    # Try $0.runfiles fallback
-    if [[ -f "$0.runfiles/$rloc" ]]; then
-        echo "$0.runfiles/$rloc"
-        return
-    fi
-    # Try RUNFILES_MANIFEST_FILE (Windows/manifest-only)
-    if [[ -n "${{RUNFILES_MANIFEST_FILE:-}}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
-        local path
-        # Use awk with substr() for regex-free extraction (handles metacharacters in paths)
-        path=$(awk -v key="$rloc" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$RUNFILES_MANIFEST_FILE")
-        if [[ -n "$path" && -f "$path" ]]; then
-            echo "$path"
+    for cand in "${{candidates[@]}}"; do
+        # Try RUNFILES_DIR first (Unix default)
+        if [[ -n "${{RUNFILES_DIR:-}}" && -f "$RUNFILES_DIR/$cand" ]]; then
+            echo "$RUNFILES_DIR/$cand"
             return
         fi
-    fi
+        # Try $0.runfiles fallback
+        if [[ -f "$0.runfiles/$cand" ]]; then
+            echo "$0.runfiles/$cand"
+            return
+        fi
+        # Try RUNFILES_MANIFEST_FILE (Windows/manifest-only)
+        if [[ -n "${{RUNFILES_MANIFEST_FILE:-}}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
+            local path
+            # Use awk with substr() for regex-free extraction (handles metacharacters in paths)
+            path=$(awk -v key="$cand" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$RUNFILES_MANIFEST_FILE")
+            if [[ -n "$path" && -f "$path" ]]; then
+                echo "$path"
+                return
+            fi
+        fi
+    done
     echo ""  # Not found
 }}
 
@@ -230,9 +241,18 @@ if ! acquire_lock; then
     exit 2
 fi
 
+# Temporary working directory for enriched payloads / multipart event files
+TMP_PAYLOAD_DIR="$(mktemp -d "${{TMPDIR:-/tmp}}/dd_topt_payloads.XXXXXX" 2>/dev/null || true)"
+if [[ -z "$TMP_PAYLOAD_DIR" || ! -d "$TMP_PAYLOAD_DIR" ]]; then
+    log "error: failed to create temp directory for payload uploads"
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    exit 2
+fi
+
 # Cleanup lock on exit
 cleanup() {{
     rm -rf "$LOCK_DIR" 2>/dev/null || true
+    rm -rf "$TMP_PAYLOAD_DIR" 2>/dev/null || true
 }}
 trap cleanup EXIT
 
@@ -303,12 +323,14 @@ check_depth_warning() {{
     fi
 }}
 
-# Detect OS for stat command differences
-IS_MACOS=0
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    IS_MACOS=1
+# Detect stat flavor (BSD vs GNU) to choose correct flags
+# GNU stat supports: stat -c %Y / (returns numeric mtime)
+# BSD stat supports: stat -f %m / (returns numeric mtime)
+STAT_FLAVOR="bsd"
+if stat -c %Y / >/dev/null 2>&1; then
+    STAT_FLAVOR="gnu"
 fi
-dbg "OS detection: IS_MACOS=$IS_MACOS (uname=$(uname -s))"
+dbg "stat detection: STAT_FLAVOR=$STAT_FLAVOR (uname=$(uname -s))"
 
 # Get latest mtime across tests/ and coverage/ subdirs in all test.outputs directories
 # Note: Only scans payload directories, not all files under test.outputs
@@ -320,7 +342,7 @@ latest_mtime_all() {{
             local dir="$outputs_dir/$subdir"
             [[ -d "$dir" ]] || continue
             local mt
-            if (( IS_MACOS == 1 )); then
+            if [[ "$STAT_FLAVOR" == "bsd" ]]; then
                 mt=$(find "$dir" -type f -name "*.json" -exec stat -f '%m' {{}} + 2>/dev/null | sort -nr | head -1 || echo 0)
             else
                 mt=$(find "$dir" -type f -name "*.json" -exec stat -c '%Y' {{}} + 2>/dev/null | sort -nr | head -1 || echo 0)
@@ -426,14 +448,26 @@ done
 
 # Build endpoints
 DD_SITE="${{DD_SITE:-datadoghq.com}}"
+INTAKE_BASE="${{DD_TOPT_INTAKE_BASE:-}}"
 if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
   AGENTLESS=1
-  TEST_URL="https://citestcycle-intake.${{DD_SITE}}/api/v2/citestcycle"
-  COV_URL="https://citestcov-intake.${{DD_SITE}}/api/v2/citestcov"
+  if [[ -n "$INTAKE_BASE" ]]; then
+    # Allow tests/dev to override intake base without changing DD_SITE.
+    BASE="${{INTAKE_BASE%/}}"
+    TEST_URL="${{BASE}}/api/v2/citestcycle"
+    COV_URL="${{BASE}}/api/v2/citestcov"
+    dbg "DD_TOPT_INTAKE_BASE override active: $BASE"
+  else
+    TEST_URL="https://citestcycle-intake.${{DD_SITE}}/api/v2/citestcycle"
+    COV_URL="https://citestcov-intake.${{DD_SITE}}/api/v2/citestcov"
+  fi
 else
   AGENTLESS=0
   TEST_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcycle"
   COV_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcov"
+  if [[ -n "$INTAKE_BASE" ]]; then
+    dbg "DD_TOPT_INTAKE_BASE ignored in EVP mode"
+  fi
 fi
 dbg "mode: AGENTLESS=$AGENTLESS DD_SITE=$DD_SITE"
 dbg "endpoints: TEST_URL=$TEST_URL COV_URL=$COV_URL"
@@ -495,7 +529,11 @@ matches_filter() {{
 cleanup_file() {{
     local file="$1"
     if [[ "$KEEP_PAYLOADS" != "1" ]]; then
-        rm -f "$file"
+        # Some runfiles can be read-only; best-effort cleanup keeps uploads resilient.
+        if ! rm -f "$file" 2>/dev/null; then
+            chmod u+w "$file" 2>/dev/null || true
+            rm -f "$file" 2>/dev/null || true
+        fi
     else
         dbg "keeping payload (KEEP_PAYLOADS=1): $file"
     fi
@@ -507,7 +545,12 @@ UPLOAD_FAILURES=0
 upload_single_test() {{
     local file="$1"
     local body
-    body="${{file}}.enriched.json"
+    # Use a temp file to avoid collisions when multiple uploads run in parallel.
+    body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+        dbg "upload_single_test: failed to create temp file"
+        return 1
+    fi
     enrich_with_context "$file" "$body"
     dbg "upload_single_test: posting '$file' (body '$body')"
     if (( AGENTLESS == 1 )); then
@@ -535,7 +578,12 @@ upload_single_coverage() {{
     local file="$1"
     # Create event.json for multipart
     local eventjson
-    eventjson="${{file}}.event.json"
+    # Use a temp file for multipart metadata to avoid leaking into runfiles.
+    eventjson="$(mktemp "$TMP_PAYLOAD_DIR/coverage_event.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$eventjson" ]]; then
+        dbg "upload_single_coverage: failed to create temp file"
+        return 1
+    fi
     echo '{{"dummy":true}}' > "$eventjson"
     dbg "upload_single_coverage: posting '$file'"
     if (( AGENTLESS == 1 )); then
@@ -675,23 +723,34 @@ $ProgressPreference = 'SilentlyContinue'
 function Resolve-Runfile {{
     param([string]$Rloc)
 
-    # Try RUNFILES_DIR first
-    if ($env:RUNFILES_DIR) {{
-        $candidate = Join-Path $env:RUNFILES_DIR $Rloc
-        if (Test-Path $candidate) {{ return $candidate }}
+    # Normalize relative prefixes that can appear in bzlmod runfile paths
+    if ($Rloc.StartsWith("./")) {{ $Rloc = $Rloc.Substring(2) }}
+    while ($Rloc.StartsWith("../")) {{ $Rloc = $Rloc.Substring(3) }}
+
+    $candidates = @($Rloc)
+    if ($Rloc.StartsWith("external/")) {{
+        $candidates += $Rloc.Substring(9)
     }}
 
-    # Try $PSScriptRoot.runfiles fallback
-    $candidate = Join-Path "$PSScriptRoot.runfiles" $Rloc
-    if (Test-Path $candidate) {{ return $candidate }}
+    foreach ($cand in $candidates) {{
+        # Try RUNFILES_DIR first
+        if ($env:RUNFILES_DIR) {{
+            $candidate = Join-Path $env:RUNFILES_DIR $cand
+            if (Test-Path $candidate) {{ return $candidate }}
+        }}
 
-    # Try RUNFILES_MANIFEST_FILE (Windows default)
-    if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path $env:RUNFILES_MANIFEST_FILE)) {{
-        $manifest = Get-Content $env:RUNFILES_MANIFEST_FILE
-        foreach ($line in $manifest) {{
-            if ($line.StartsWith("$Rloc ")) {{
-                $path = $line.Substring($Rloc.Length + 1)
-                if (Test-Path $path) {{ return $path }}
+        # Try $PSScriptRoot.runfiles fallback
+        $candidate = Join-Path "$PSScriptRoot.runfiles" $cand
+        if (Test-Path $candidate) {{ return $candidate }}
+
+        # Try RUNFILES_MANIFEST_FILE (Windows default)
+        if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path $env:RUNFILES_MANIFEST_FILE)) {{
+            $manifest = Get-Content $env:RUNFILES_MANIFEST_FILE
+            foreach ($line in $manifest) {{
+                if ($line.StartsWith("$cand ")) {{
+                    $path = $line.Substring($cand.Length + 1)
+                    if (Test-Path $path) {{ return $path }}
+                }}
             }}
         }}
     }}
@@ -790,12 +849,25 @@ if (-not (Acquire-Lock)) {{
     exit 2
 }}
 
+# Temp directory for enriched payloads / event files
+$script:TmpPayloadDir = Join-Path $env:TEMP ("dd_topt_payloads_" + [System.Guid]::NewGuid().ToString("N"))
+try {{
+    New-Item -ItemType Directory -Path $script:TmpPayloadDir -Force | Out-Null
+}} catch {{
+    Log "error: failed to create temp directory for payload uploads: $script:TmpPayloadDir"
+    Release-Lock
+    exit 2
+}}
+
 # Cleanup function for lock release
 function Release-Lock {{
     if ($script:LockStream) {{
         $script:LockStream.Close()
         $script:LockStream = $null
         Remove-Item -Path $LockFile -Force -ErrorAction SilentlyContinue
+    }}
+    if ($script:TmpPayloadDir -and (Test-Path -LiteralPath $script:TmpPayloadDir)) {{
+        Remove-Item -LiteralPath $script:TmpPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
     }}
 }}
 
@@ -978,12 +1050,22 @@ while ($true) {{
 # Build endpoints
 $Agentless = [string]::IsNullOrEmpty($env:DD_TRACE_AGENT_URL)
 $DD_Site = if ([string]::IsNullOrEmpty($env:DD_SITE)) {{ 'datadoghq.com' }} else {{ $env:DD_SITE }}
+# Allow tests/dev to override intake base without changing DD_SITE.
+$IntakeBase = $env:DD_TOPT_INTAKE_BASE
 if ($Agentless) {{
-  $TestUrl = "https://citestcycle-intake.$DD_Site/api/v2/citestcycle"
-  $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
+  if (-not [string]::IsNullOrEmpty($IntakeBase)) {{
+    $Base = $IntakeBase.TrimEnd('/')
+    $TestUrl = "$Base/api/v2/citestcycle"
+    $CovUrl = "$Base/api/v2/citestcov"
+    Dbg "DD_TOPT_INTAKE_BASE override active: $Base"
+  }} else {{
+    $TestUrl = "https://citestcycle-intake.$DD_Site/api/v2/citestcycle"
+    $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
+  }}
 }} else {{
   $TestUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcycle"
   $CovUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcov"
+  if (-not [string]::IsNullOrEmpty($IntakeBase)) {{ Dbg "DD_TOPT_INTAKE_BASE ignored in EVP mode" }}
 }}
 Dbg "mode: Agentless=$Agentless Site=$DD_Site"
 Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl"
@@ -1090,7 +1172,7 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
 }}
 
 function Upload-SingleTest([string]$FilePath) {{
-    $body = "$FilePath.enriched.json"
+    $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
     $hdrs = $CommonHeaders.Clone()
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
@@ -1101,7 +1183,7 @@ function Upload-SingleTest([string]$FilePath) {{
 }}
 
 function Upload-SingleCoverage([string]$FilePath) {{
-    $eventFile = "$FilePath.event.json"
+    $eventFile = Join-Path $script:TmpPayloadDir ("coverage_event_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Set-Content -LiteralPath $eventFile -Value '{{"dummy":true}}' -Encoding UTF8
 
     $client = $null
@@ -1321,6 +1403,7 @@ Required environment variables for upload:
 
 Optional environment variables:
     TESTLOGS_DIR - Override testlogs directory (for non-standard setups)
+    DD_TOPT_INTAKE_BASE - Override intake base URL (agentless only, test/dev)
     DD_TOPT_KEEP_PAYLOADS=1 - Retain payloads after upload
     DD_TOPT_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json
     DD_TOPT_MAX_WAIT_SEC - Override max wait time

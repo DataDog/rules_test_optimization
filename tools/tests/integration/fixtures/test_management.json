@@ -1,0 +1,16 @@
+{
+  "data": {
+    "id": "1",
+    "type": "ci_app_libraries_tests",
+    "attributes": {
+      "modules": {
+        "moduleA": {
+          "tests": {}
+        },
+        "module_c": {
+          "tests": {}
+        }
+      }
+    }
+  }
+}
