@@ -89,7 +89,7 @@ use_repo(test_optimization_sync, "test_optimization_data")
 MODULE_EOF
 
 cat > BUILD.bazel <<BUILD_EOF
-load("@bazel_tools//tools/build_defs/test:sh_test.bzl", "sh_test")
+load("@bazel_tools//tools/build_defs:test/sh_test.bzl", "sh_test")
 load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 sh_test(
