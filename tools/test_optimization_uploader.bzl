@@ -181,7 +181,7 @@ MAX_WAIT_SEC=${{DD_TOPT_MAX_WAIT_SEC:-{max_wait_sec}}}
 FAIL_ON_ERROR=$(normalize_bool "{fail_on_error}")
 KEEP_PAYLOADS=$(normalize_bool "${{DD_TOPT_KEEP_PAYLOADS:-{keep_payloads}}}")
 FILTER_PREFIX=$(normalize_bool "${{DD_TOPT_FILTER_PREFIX:-{filter_prefix}}}")
-DEBUG=$(normalize_bool "{debug}")
+DEBUG=$(normalize_bool "${{DD_TOPT_DEBUG:-{debug}}}")
 
 # Validate numeric environment variables
 validate_numeric "QUIESCENT_SEC" "$QUIESCENT_SEC"
@@ -840,7 +840,7 @@ $MaxDepth = [int]$MaxDepth
 $FailOnError = Normalize-Bool "{fail_on_error}"
 $KeepPayloads = if ($env:DD_TOPT_KEEP_PAYLOADS) {{ Normalize-Bool $env:DD_TOPT_KEEP_PAYLOADS }} else {{ Normalize-Bool "{keep_payloads}" }}
 $FilterPrefix = if ($env:DD_TOPT_FILTER_PREFIX) {{ Normalize-Bool $env:DD_TOPT_FILTER_PREFIX }} else {{ Normalize-Bool "{filter_prefix}" }}
-$Debug = Normalize-Bool "{debug}"
+$Debug = if ($env:DD_TOPT_DEBUG) { Normalize-Bool $env:DD_TOPT_DEBUG } else { Normalize-Bool "{debug}" }
 
 # Now that $Debug is set, update the script-level debug mode for Dbg function
 $script:DebugMode = $Debug
