@@ -573,6 +573,11 @@ upload_single_test() {{
     fi
     enrich_with_context "$file" "$body"
     dbg "upload_single_test: posting '$file' (body '$body')"
+    if [[ "$DEBUG" == "1" ]]; then
+        echo "[dd-uploader][dbg] payload content (enriched) for '$file':" >&2
+        cat "$body" >&2
+        echo "" >&2
+    fi
     if (( AGENTLESS == 1 )); then
       if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
         -X POST "${{TEST_URL}}" "${{hdrs[@]}}" -H "Content-Type: application/json" --data-binary @"${{body}}" -o /dev/null -w "%{{http_code}}" >/dev/null; then
@@ -1217,6 +1222,10 @@ function Upload-SingleTest([string]$FilePath) {{
     $hdrs = $CommonHeaders.Clone()
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
     Dbg "Upload-SingleTest: posting '$FilePath' (body '$body')"
+    if ($script:DebugMode) {{
+        Write-Output "[dd-uploader][dbg] payload content (enriched) for '$FilePath':"
+        Write-Output (Get-Content -LiteralPath $body -Raw)
+    }}
     $result = Send-PostJson $TestUrl $hdrs $body
     Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
     return $result
