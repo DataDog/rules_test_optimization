@@ -417,6 +417,19 @@ while true; do
     total_files=$(count_payload_files)
 
     if (( total_files == 0 )); then
+        if (( MAX_WAIT_SEC == 0 )); then
+            if tests_executed; then
+                log "warning: tests ran but no payload files found"
+                log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                if [[ "$FAIL_ON_ERROR" == "1" ]]; then
+                    log "error: FAIL_ON_ERROR is set; failing due to missing payloads"
+                    exit 1
+                fi
+            else
+                log "no payload files found and no test execution detected; nothing to upload"
+            fi
+            exit 0
+        fi
         if (( elapsed > MAX_WAIT_SEC )); then
             if tests_executed; then
                 log "warning: tests ran but no payload files found"
@@ -1021,6 +1034,21 @@ while ($true) {{
     $totalFiles = Count-PayloadFiles
 
     if ($totalFiles -eq 0) {{
+        if ($MaxWaitSec -eq 0) {{
+            if (Test-ExecutedTests) {{
+                Log "warning: tests ran but no payload files found"
+                Log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                if ($FailOnError) {{
+                    Log "error: FailOnError is set; failing due to missing payloads"
+                    Release-Lock
+                    exit 1
+                }}
+            }} else {{
+                Log "no payload files found and no test execution detected; nothing to upload"
+            }}
+            Release-Lock
+            exit 0
+        }}
         if ($elapsed -gt $MaxWaitSec) {{
             if (Test-ExecutedTests) {{
                 Log "warning: tests ran but no payload files found"
@@ -1374,7 +1402,7 @@ dd_payload_uploader = rule(
     executable = True,  # Makes it runnable via `bazel run`
     attrs = {
         "quiescent_sec": attr.int(default = 10, doc = "Seconds to wait for filesystem to settle before uploading (env: DD_TOPT_QUIESCENT_SEC)"),
-        "max_wait_sec": attr.int(default = 300, doc = "Maximum seconds to wait for payloads (env: DD_TOPT_MAX_WAIT_SEC). Default is sufficient since uploader runs after tests complete."),
+        "max_wait_sec": attr.int(default = 300, doc = "Maximum seconds to wait for payloads (env: DD_TOPT_MAX_WAIT_SEC). Set to 0 to skip waiting when no payloads are present."),
         "fail_on_error": attr.bool(default = False, doc = "Exit with error if no payloads found when tests ran"),
         "debug": attr.bool(default = False, doc = "Enable debug logging"),
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TOPT_KEEP_PAYLOADS)"),
@@ -1418,7 +1446,7 @@ Optional environment variables:
     DD_TOPT_INTAKE_BASE - Override intake base URL (agentless only, test/dev)
     DD_TOPT_KEEP_PAYLOADS=1 - Retain payloads after upload
     DD_TOPT_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json
-    DD_TOPT_MAX_WAIT_SEC - Override max wait time
+    DD_TOPT_MAX_WAIT_SEC - Override max wait time (0 skips waiting when no payloads are present)
     DD_TOPT_QUIESCENT_SEC - Override quiescence wait time
     DD_TOPT_MAX_DEPTH - Limit find depth for large testlogs trees
 """,
