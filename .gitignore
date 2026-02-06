@@ -8,6 +8,8 @@ MODULE.bazel.lock
 /bazel-bin/
 /bazel-out/
 /bazel-testlogs/
+/.bazel_output/
+/.bazel_root/
 
 # OS generated files
 .DS_Store

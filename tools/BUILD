@@ -5,7 +5,7 @@ exports_files([
     "common_utils.bzl",
     "test_optimization_sync.bzl",
     "test_optimization_multi_sync.bzl",
-    "test_optimization_uploader_test.bzl",
+    "test_optimization_uploader.bzl",
     "topt_go_test.bzl",
     "topt_go_infer.bzl",
 ])

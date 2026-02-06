@@ -1,0 +1,18 @@
+{
+  "metadata": {
+    "*": {
+      "env": "ci",
+      "git.branch": "main",
+      "git.commit.head.message": "Test_head",
+      "git.commit.head.sha": "1111111",
+      "git.commit.message": "Test_commit",
+      "git.commit.sha": "1111111",
+      "git.repository_url": "https://example.com/repo.git",
+      "git.tag": "v1.0.0",
+      "runtime.name": "go",
+      "runtime.version": "1.2.3",
+      "service.name": "mock-service"
+    }
+  },
+  "test": true
+}

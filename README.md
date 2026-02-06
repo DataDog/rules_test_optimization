@@ -2,6 +2,19 @@
 
 This repository provides a Bazel module extension and repository rule that fetch Datadog Test Optimization metadata during the module resolution phase and materialize JSON files for use in your build. It also generates a public filegroup so you can conveniently depend on all produced files with a single label.
 
+## Requirements
+
+- **Bazel 5.0+** - Required for `TEST_UNDECLARED_OUTPUTS_DIR` support used by payload collection
+- **dd-trace-go v1.72.0+** (or equivalent tracer version) - Required for file-based payload output via `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
+- **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; normalized to `https://api.<site>`
+- **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
+  - **Linux**: `bash`, `curl`, `find`, `stat` (GNU), `awk`, and one of `md5sum` or `shasum`
+  - **macOS**: `bash` (3.2+), `curl`, `find`, `stat` (BSD), `awk`, and one of `md5` or `shasum`
+  - **Windows**: `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+); the uploader uses .NET `HttpClient`
+
+Optional tooling:
+- **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
+
 The extension performs these HTTP POST transactions (via curl):
 
 - Settings: always executed. Parses feature flags from response.
@@ -48,6 +61,8 @@ Sanitization rules for `<sanitized_module>`:
 - For file names: lowercase; characters outside `[a-z0-9._-]` are replaced with `_`
 - For target names: lowercase; characters outside `[a-z0-9_]` are replaced with `_`
 - If collisions occur after sanitization, numeric suffixes like `_2`, `_3` are appended deterministically
+
+Labels are computed from the union of module names across known tests and test management so a `module_<sanitized>` target always refers to a single module (avoids cross-feature collisions).
 
 Example usage:
 
@@ -150,7 +165,7 @@ filegroup(
     srcs = ["@test_optimization_data//:test_optimization_files"],
 )
 
-# Access context.json separately (for the uploader test rule)
+# Access context.json separately (for the uploader)
 filegroup(
     name = "dd_test_opt_context",
     srcs = ["@test_optimization_data//:test_optimization_context"],
@@ -218,21 +233,18 @@ filegroup(
 )
 ```
 
-### 4) Add the uploader test target
+### 4) Add the uploader target (ONE per workspace)
+
+Create a single uploader target at your workspace root:
 
 ```bzl
-load("@datadog_rules_test_optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
+# In root BUILD.bazel
+load("@datadog_rules_test_optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
 
-dd_payload_uploader_test(
+dd_payload_uploader(
     name = "dd_upload_payloads",
-    # If omitted, the rule uses $TEST_OPTIMIZATION_PAYLOADS_DIR (recommended with --sandbox_writable_path)
-    tests_subdir = "tests",
-    coverage_subdir = "coverage",
-    quiescent_sec = 10,
-    max_wait_sec = 1800,
-    fail_on_error = False,
     # Provide context.json via runfiles so enrichment can occur
-    data = [":dd_test_opt_context"],
+    data = ["@test_optimization_data//:test_optimization_context"],
 )
 ```
 
@@ -242,6 +254,7 @@ dd_payload_uploader_test(
 # Repository rule (module/repo phase) — affects refetch
 common --repo_env=DD_API_KEY
 common --repo_env=DD_SITE
+common --repo_env=DD_TOPT_API_BASE  # Optional override for Datadog API base URL (test/dev)
 common --repo_env=DD_SERVICE
 common --repo_env=DD_ENV
 common --repo_env=DD_GIT_REPOSITORY_URL
@@ -252,72 +265,112 @@ common --repo_env=DD_GIT_COMMIT_MESSAGE
 common --repo_env=DD_GIT_HEAD_MESSAGE
 # Optional TTL: common --repo_env=FETCH_SALT
 
+# Uploader (bazel run, pass credentials inline or export before run)
+# DD_API_KEY and DD_SITE are passed when running the uploader:
+#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+
 # Tests (runtime)
 test --test_env=DD_API_KEY
 test --test_env=DD_SITE
 test --test_env=DD_TRACE_AGENT_URL
+test --test_env=DD_TOPT_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
 test --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR
 ```
 
-## Uploading test and coverage payloads (same `bazel test` invocation)
+## Uploading test and coverage payloads
 
-Use the provided test rule `dd_payload_uploader_test` to watch a shared writable directory for payloads, enrich test payloads with metadata from `context.json`, and upload them to Datadog during the same `bazel test` command.
+The uploader is a normal Bazel rule (not a test) that runs via `bazel run` after your tests complete. It discovers all test payloads written to `TEST_UNDECLARED_OUTPUTS_DIR` (Bazel's built-in directory for undeclared test outputs) and uploads them to Datadog.
 
-### Where to write payloads
+### How it works
 
-- Write payloads to a stable, non-sandboxed path made writable via `--sandbox_writable_path`.
-- Recommended layout:
+1. Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/tests/*.json` and `$TEST_UNDECLARED_OUTPUTS_DIR/coverage/*.json`
+2. Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`
+3. After tests complete, run the uploader via `bazel run`
+4. The uploader discovers all `test.outputs/` directories, waits for quiescence, uploads, and deletes files
 
+### Basic usage
+
+```bash
+# RECOMMENDED: Run tests, then upload payloads (preserves test exit code)
+bazel test //... || test_status=$?; test_status=${test_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+exit $test_status
+
+# Or as a one-liner:
+bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
+
+# REMOTE EXECUTION (RBE) - add flag to download outputs:
+bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 ```
-<workspace>/.testoptimization/payloads/
-  tests/     # JSON payloads for CI Test Cycle intake
-  coverage/  # JSON payloads for Code Coverage intake
-```
 
-Expose the path to tests via `--test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=<abs path>`. Tests must write:
-- `$TEST_OPTIMIZATION_PAYLOADS_DIR/tests/*.json`
-- `$TEST_OPTIMIZATION_PAYLOADS_DIR/coverage/*.json`
+**IMPORTANT**: Always preserve the test exit code! Using plain `;` causes CI to report success even when tests fail.
 
-### Add the uploader test target
-
-In a BUILD file (e.g., `//tools`):
+### Add the uploader target
 
 ```bzl
-load("@datadog-rules-test-optimization//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
+# In BUILD.bazel at workspace root
+load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
 
-dd_payload_uploader_test(
+dd_payload_uploader(
     name = "dd_upload_payloads",
-    # If omitted, the rule uses $TEST_OPTIMIZATION_PAYLOADS_DIR (recommended with --sandbox_writable_path)
-    tests_subdir = "tests",
-    coverage_subdir = "coverage",
-    quiescent_sec = 10,      # idle window before uploading starts
-    max_wait_sec = 1800,     # upper bound wait
-    fail_on_error = False,   # set True to fail the test on upload errors
     # Provide context.json via runfiles so enrichment can occur
-    data = [":dd_test_opt_context"],
-    # timeout = "long",     # uncomment if your test phase can be long
+    data = ["@test_optimization_data//:test_optimization_context"],
+    # Optional settings:
+    # quiescent_sec = 10,      # Wait for filesystem to settle (default: 10)
+    # max_wait_sec = 300,      # Max wait before proceeding (default: 300)
+    # fail_on_error = False,   # Fail if no payloads found when tests ran
+    # debug = False,           # Enable debug logging
 )
 ```
 
-Run together with your tests:
+### Upload modes
+
+- **Agentless mode (default):** Requires `DD_API_KEY` and `DD_SITE`; uploads directly to Datadog intake
+- **Agent/EVP mode:** Requires `DD_TRACE_AGENT_URL`; uploads via local agent or EVP proxy
+
+### Passing credentials
 
 ```bash
-bazel test //... //tools:dd_upload_payloads \
-  --sandbox_writable_path=$PWD/.testoptimization/payloads \
-  --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=$PWD/.testoptimization/payloads
+# Option 1: Agentless mode - Inline (recommended for CI)
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+
+# Option 2: Agent/EVP mode
+DD_TRACE_AGENT_URL="http://localhost:8126" bazel run //:dd_upload_payloads
+
+# Option 3: Export before run
+export DD_API_KEY="your-api-key"
+export DD_SITE="datadoghq.com"
+bazel run //:dd_upload_payloads
 ```
 
-### Endpoints, headers, and behavior
+### Exit codes
+
+- `0` - All payloads uploaded successfully (or no payloads found)
+- `1` - One or more uploads failed (partial success: successfully uploaded files are still deleted)
+- `2` - Configuration error (invalid TESTLOGS_DIR, missing credentials, etc.)
+
+### Optional environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DD_TOPT_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
+| `DD_TOPT_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
+| `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
+| `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
+| `DD_TOPT_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
+| `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
+
+### Endpoints and headers
 
 - Agentless (when `DD_TRACE_AGENT_URL` unset):
   - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
   - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
   - Requires `DD_API_KEY`
+  - Test/dev override: set `DD_TOPT_INTAKE_BASE` to use a custom base URL (agentless only)
 - EVP proxy (when `DD_TRACE_AGENT_URL` set):
   - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
   - Adds `X-Datadog-EVP-Subdomain` per endpoint
 - Test payloads are JSON (msgpack not available in Starlark). Coverage is multipart with `event` and `coveragex` parts.
-- Requests include `Accept: application/json`. Test uploads set `Content-Type: application/json`.
 
 ### Reliability
 
@@ -337,51 +390,20 @@ bazel test //... //tools:dd_upload_payloads \
 The macro sets the following environment variables for instrumented tests:
 
 - `TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the `.testoptimization` directory containing all synced payload files (settings, known tests, etc.).
-- `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`: Set to `"true"` when `payloads_dir` is configured in the macro. Signals to the library that payloads should be written to files instead of sent over the network.
+- `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`: Always set to `"true"`. Signals to the library that payloads should be written to `TEST_UNDECLARED_OUTPUTS_DIR`.
 
-The following variable must be passed via CLI (not set by the macro to avoid cache invalidation):
+### Critical requirements
 
-- `TEST_OPTIMIZATION_PAYLOADS_DIR`: Directory where tests write output payloads (`tests/*.json`, `coverage/*.json`). Pass via `--test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=<path>` and make writable via `--sandbox_writable_path=<path>`.
+1. **Use `bazel run` (not `bazel test`)** - The uploader is a normal rule, not a test
+2. **Use a SINGLE uploader target per workspace** - Do NOT run multiple uploaders concurrently (enforced via lock file)
+3. **Tests must run locally OR use `--remote_download_outputs=all`** - Remote execution without downloading outputs leaves `bazel-testlogs/` empty
+4. **Same workspace/machine requirement** - The uploader MUST run on the same machine and workspace where tests executed
 
 ## Convenience macro: dd_topt_go_test
 
-Replace a `go_test` with a single label that runs the Go test and the uploader. This macro creates:
-- `<name>_go`: underlying `go_test`
-- `<name>_dd_upload_payloads`: uploader test
-- `<name>`: a `test_suite` that includes both
+The `dd_topt_go_test` macro simplifies setting up Go tests with Datadog Test Optimization. It creates a go_test target with the necessary environment variables and data dependencies.
 
-Prerequisite (one-time): ensure the sync repo exists as `@test_optimization_data` via Bzlmod or WORKSPACE (see Installation above). Define a small wrapper that loads `modules` and passes it to the macro.
-
-### Bzlmod
-
-```bzl
-# tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:export.bzl", "topt_data")
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
-
-def dd_topt_go_test(name, go_test_rule, **kwargs):
-    _dd_topt_go_test(
-        name = name,
-        topt_data = topt_data,
-        go_test_rule = go_test_rule,
-        **kwargs
-    )
-```
-
-### Import path inference
-
-The macro auto-selects the correct per-module payloads by inferring the Go package `importpath` using rules_go providers, mirroring how `go_test` computes it:
-
-- Precedence:
-  1) `importpath` explicitly set on your `go_test` invocation (if provided in kwargs)
-  2) Inference via `embed = [":<go_library>"]` by reading `GoArchive.importpath` from rules_go (recommended)
-  3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo’s exported `topt_data["go"]["module_path"]`
-
-- Per-module selection:
-  - When using inference (1 or 2), the macro always attempts per-module selection and falls back to the full bundle if no matching module group exists.
-  - When using the fallback (3), the macro consults `topt_data["go"]["module_included"]` as a coarse gate. If false, it skips per-module selection and uses the full bundle. If true, it attempts per-module selection with the computed fallback path.
-
-Recommended pattern for best results:
+### Basic usage
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
@@ -396,57 +418,41 @@ go_library(
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
-    embed = [":pkg_lib"],    # enables provider-based inference
+    embed = [":pkg_lib"],    # enables provider-based importpath inference
     topt_data = topt_data,
     go_test_rule = go_test,
 )
 ```
-Usage in BUILD (single-service):
+
+Then run tests and upload:
+
+```bash
+bazel test //... || test_status=$?; test_status=${test_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+exit $test_status
+```
+
+### Import path inference
+
+The macro auto-selects the correct per-module payloads by inferring the Go package `importpath` using rules_go providers, mirroring how `go_test` computes it:
+
+- Precedence:
+  1) `importpath` explicitly set on your `go_test` invocation (if provided in kwargs)
+  2) Inference via `embed = [":<go_library>"]` by reading `GoArchive.importpath` from rules_go (recommended)
+  3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo's exported `topt_data["go"]["module_path"]`
+
+### Multi-service usage
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_test")
-load("//tools:dd_topt_go_test_auto.bzl", "dd_topt_go_test")
-
-dd_topt_go_test(
-    name = "pkg_go_test",
-    srcs = ["*_test.go"],
-    go_test_rule = go_test,
-    # Uploader knobs:
-    # quiescent_sec = 10,
-    # max_wait_sec = 1800,
-    # fail_on_error = False,
-)
-```
-
-### WORKSPACE
-
-```bzl
-# tools/dd_topt_go_test_auto.bzl (in your repo)
-load("@test_optimization_data//:export.bzl", "topt_data")
-load("@datadog_rules_test_optimization//tools:topt_go_test.bzl", "dd_topt_go_test as _dd_topt_go_test")
-
-def dd_topt_go_test(name, go_test_rule, **kwargs):
-    _dd_topt_go_test(
-        name = name,
-        topt_data = topt_data,
-        go_test_rule = go_test_rule,
-        **kwargs
-    )
-```
-
-Usage in BUILD (multi-service aggregator):
-
-```bzl
-load("@rules_go//go:def.bzl", "go_test")
-load("//tools:dd_topt_go_test_auto.bzl", "dd_topt_go_test")
-
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     topt_data = topt_data_by_service,   # pass mapping
-    topt_service = "go_service",       # select service
+    topt_service = "go_service",        # select service
     go_test_rule = go_test,
 )
 ```
@@ -489,72 +495,69 @@ dd_topt_go_test(
    )
    ```
 
-### Service name validation errors
+### Uploader not finding payloads
 
-**Symptom**: Error message about invalid or empty service name.
-
-**Solution**: Ensure service name is provided via one of:
-1. The `service` attribute:
-   ```bzl
-   test_optimization_sync.test_optimization_sync(
-       name = "test_optimization_data",
-       service = "my-service",
-   )
-   ```
-
-2. Or via environment variable in `.bazelrc`:
-   ```
-   common --repo_env=DD_SERVICE=my-service
-   ```
-
-### Network errors during fetch
-
-**Symptom**: `curl` errors or timeout during repository resolution.
+**Symptom**: Uploader runs but says "no payload files found".
 
 **Solutions**:
 
-1. **Verify DD_SITE** is correct (defaults to `datadoghq.com`):
+1. **Check if tests wrote payloads**:
+   ```bash
+   find bazel-testlogs -name "test.outputs" -type d
+   ls bazel-testlogs/*/test.outputs/tests/
    ```
-   common --repo_env=DD_SITE=datadoghq.eu  # for EU region
+
+2. **Verify dd-trace-go version**: Ensure you're using dd-trace-go v1.72.0+ (see [Requirements](#requirements))
+
+3. **Check TEST_OPTIMIZATION_PAYLOADS_IN_FILES**: The macro should set this to "true". Verify your test's environment:
+   ```bash
+   bazel test //your:test --test_output=all 2>&1 | grep TEST_OPTIMIZATION
    ```
+
+4. **For RBE users**: Add `--remote_download_outputs=all` to download test outputs locally
+
+### Non-standard bazel-testlogs location
+
+**Symptom**: Uploader can't find `bazel-testlogs` directory.
+
+**Solution**: Set `TESTLOGS_DIR` explicitly using the same Bazel flags:
+
+```bash
+# Bash - use array for multiple flags
+BAZEL_FLAGS=("--output_base=/custom/base")
+TESTLOGS_DIR=$(bazel "${BAZEL_FLAGS[@]}" info bazel-testlogs) bazel "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads
+```
+
+```powershell
+# PowerShell
+$BazelFlags = @("--output_base=/custom/base")
+$env:TESTLOGS_DIR = (bazel @BazelFlags info bazel-testlogs)
+bazel @BazelFlags run //:dd_upload_payloads
+```
+
+### Tests not uploading (network errors)
+
+**Symptom**: Uploader fails with network errors.
+
+**Solutions**:
+
+1. **Verify credentials**:
+   - Agentless mode requires: `DD_API_KEY`, `DD_SITE`
+   - Agent mode requires: `DD_TRACE_AGENT_URL`
 
 2. **Check firewall/proxy** allows HTTPS to:
-   - `https://api.datadoghq.com` (or your DD_SITE)
+   - `https://citestcycle-intake.datadoghq.com`
+   - `https://citestcov-intake.datadoghq.com`
+   (or equivalent for your DD_SITE)
 
-3. **Verify API key permissions**: The API key needs read access to:
-   - CI Visibility Settings API
-   - Libraries Tests API (for Known Tests)
-   - Test Management API (for Test Management)
-
-### Tests not uploading
-
-**Symptom**: Tests run but no data appears in Datadog UI.
-
-**Solutions**:
-
-1. **Verify uploader test ran**:
-   ```bash
-   bazel test //... //tools:dd_upload_payloads --test_output=all
+3. **Enable debug logging**:
+   ```bzl
+   dd_payload_uploader(
+       name = "dd_upload_payloads",
+       debug = True,
+       ...
+   )
    ```
-   Look for `[dd-uploader]` log lines.
-
-2. **Check payload directory is writable**:
-   ```bash
-   # Must match your --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR
-   ls -la $PWD/.testoptimization/payloads/tests/
-   ls -la $PWD/.testoptimization/payloads/coverage/
-   ```
-
-3. **Ensure --sandbox_writable_path is set**:
-   ```bash
-   bazel test //... //tools:dd_upload_payloads \
-     --sandbox_writable_path=$PWD/.testoptimization/payloads \
-     --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR=$PWD/.testoptimization/payloads
-   ```
-
-4. **Verify environment variables** for upload:
-   - Agentless mode requires: `DD_API_KEY`, `DD_SITE`
-   - EVP proxy mode requires: `DD_TRACE_AGENT_URL`
 
 ### Per-module files not found
 
@@ -567,17 +570,7 @@ dd_topt_go_test(
    bazel query 'kind(".*", @test_optimization_data//...)' | grep module_
    ```
 
-2. **Check Go module path detection**:
-   ```bash
-   # Enable debug to see detected module path
-   # Look for logs like: "Detected module path 'github.com/myorg/repo'"
-   ```
-
-3. **Verify importpath inference** (if using `embed`):
-   - Ensure `go_library` target exists
-   - Check that `embed = [":library_target"]` is set on your test
-
-4. **Override module label** explicitly (as workaround):
+2. **Override module label** explicitly (as workaround):
    ```bzl
    dd_topt_go_test(
        name = "my_test",
@@ -586,71 +579,18 @@ dd_topt_go_test(
    )
    ```
 
-### Cache invalidation happening too often
-
-**Symptom**: Repository refetches on every build.
-
-**Causes & Solutions**:
-
-1. **Changing Git state**: `GIT_DIRTY`, `DD_GIT_*` variables are in `environ` list.
-   - Remove `GIT_DIRTY` from your `.bazelrc` if you don't want dirty-tree sensitivity.
-
-2. **FETCH_SALT with TTL**: If using `FETCH_SALT_TTL` in `bazelw`, each TTL expiry triggers refetch.
-   - Increase TTL or remove FETCH_SALT for stable builds.
-
-3. **Datadog backend changes**: Settings or test lists changing upstream invalidate cache.
-   - Expected behavior; use per-module files to limit blast radius.
-   - Consider kill-switches for Known Tests if too noisy:
-     ```bzl
-     test_optimization_sync.test_optimization_sync(
-         name = "test_optimization_data",
-         known_tests = False,  # Disable Known Tests locally
-     )
-     ```
-
 ### Windows-specific issues
 
-**Symptom**: PowerShell errors or `bazelw` not found.
+**Symptom**: PowerShell errors or path issues.
 
 **Solutions**:
 
-1. **Use PowerShell for bazelw equivalent**:
-   ```powershell
-   # Set environment variables directly before bazel commands
-   $env:DD_GIT_REPOSITORY_URL = "https://github.com/myorg/repo.git"
-   bazel build //...
-   ```
-
-2. **Verify PowerShell execution policy**:
+1. **Verify PowerShell execution policy**:
    ```powershell
    Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
    ```
 
-3. **Check paths use forward slashes** in Starlark/Bazel contexts (backward slashes are auto-converted).
-
-### Debugging tips
-
-1. **View HTTP request bodies** (when `debug = True`):
-   - Look for lines like: `[http] Settings request body: {...}`
-
-2. **Inspect generated files**:
-   ```bash
-   # Settings
-   cat $(bazel info output_base)/external/test_optimization_data/.testoptimization/settings.json | jq .
-   
-   # Per-module known tests
-   cat $(bazel info output_base)/external/test_optimization_data/.testoptimization/module_*/known_tests.json | jq .
-   ```
-
-3. **Check BUILD file generation**:
-   ```bash
-   cat $(bazel info output_base)/external/test_optimization_data/BUILD
-   ```
-
-4. **Verify export.bzl contents**:
-   ```bash
-   cat $(bazel info output_base)/external/test_optimization_data/export.bzl
-   ```
+2. **Check paths use forward slashes** in Starlark/Bazel contexts (backward slashes are auto-converted).
 
 ### Getting help
 
@@ -690,6 +630,21 @@ Notes:
 - If optional file attributes are omitted, defaults are used under `out_dir` and do not affect the repository rule cache key.
 - Parent directories are created automatically for all output paths.
 
+## Uploader attributes
+
+Rule: `dd_payload_uploader(...)`
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | required | Target name |
+| `quiescent_sec` | int | `10` | Seconds to wait for filesystem to settle before uploading |
+| `max_wait_sec` | int | `300` | Maximum seconds to wait for payloads |
+| `fail_on_error` | bool | `False` | Exit with error if no payloads found when tests ran |
+| `debug` | bool | `False` | Enable debug logging |
+| `keep_payloads` | bool | `False` | Keep payload files after successful upload |
+| `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
+| `data` | label_list | `[]` | Data files to include (e.g., context.json for enrichment) |
+
 ## How data is fetched
 
 The rule executes curl with timeouts and retries to these Datadog endpoints:
@@ -705,40 +660,6 @@ Settings response attributes determine which follow-up requests are sent:
 
 If a feature is disabled, the rule still writes a minimal stub JSON for that output file so consumers can always depend on the filegroup.
 
-You can also disable features locally regardless of the server response using the kill-switch attributes:
-
-```bzl
-test_optimization_sync.test_optimization_sync(
-    name = "test_optimization_data",
-    # Force-disable features locally; settings.json will be updated accordingly
-    known_tests = False,
-    test_management = False,
-)
-```
-
-## OS and runtime configuration
-
-- OS fields (auto-detected):
-  - `os.platform`, `os.version`, `os.architecture` are detected from the host (via `uname`).
-- Runtime fields (configurable):
-  - `runtime.name`, `runtime.version`, `runtime.architecture`
-  - If `runtime_arch` is not provided, it defaults to `os.architecture`.
-
-## Service and environment
-
-- Service precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
-- Environment (`env` attribute in payload): `DD_ENV` env or default `"CI"`
-
-## Caching semantics
-
-The repository rule re-executes (fetches) when:
-
-- Any provided attribute changes (e.g., `out_dir`, `service`, runtime_*), or
-- Any environment variable listed in `environ` changes, or
-- The rule’s Starlark implementation changes.
-
-Outputs are content-addressed for downstream actions, but the repository fetch is keyed only by the repository rule inputs above (attrs + `environ`).
-
 ## Environment variables
 
 The rule uses the following environment variables (they are declared in `environ`, and thus affect the repository rule cache key). The extension auto-detects CI providers and maps their environment variables to unified fields (repository URL, branch, SHA, etc.). Datadog-specific `DD_*` variables override provider-derived values.
@@ -748,7 +669,6 @@ The rule uses the following environment variables (they are declared in `environ
 - `DD_API_KEY` (required): Datadog API key
 - `DD_SITE` (optional): site domain (e.g., `datadoghq.com`, `datadoghq.eu`). If a value like `app.datadoghq.com` is provided, it is normalized to use `api.<site>`
 - `FETCH_SALT` (optional): use to force re-fetch, e.g., `--repo_env=FETCH_SALT=$(date +%s)`
-- `GIT_DIRTY` (optional): only for cache-key shaping, not sent to Datadog
 
 ### Datadog Git overrides (highest precedence)
 
@@ -759,113 +679,49 @@ The rule uses the following environment variables (they are declared in `environ
 - `DD_GIT_COMMIT_MESSAGE`
 - `DD_GIT_HEAD_MESSAGE`
 
-### CI provider detection (examples of fields used)
+### CI provider detection
 
-Below is a summary of detection keys and mapped fields. If multiple are available, Datadog-specific overrides (`DD_GIT_*`) take precedence.
+The extension auto-detects these CI providers and maps their environment variables:
 
-- AppVeyor (detect by `APPVEYOR`)
-  - repo: `APPVEYOR_REPO_NAME` (if provider=github → `https://github.com/<name>.git`)
-  - sha: `APPVEYOR_REPO_COMMIT`
-  - branch: `APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH` or `APPVEYOR_REPO_BRANCH`
+- GitHub Actions, GitLab CI, Jenkins, CircleCI, Azure Pipelines, Buildkite, Travis CI, Bitbucket, AppVeyor, TeamCity, Bitrise, Codefresh, AWS CodeBuild, Drone
 
-- Azure Pipelines (detect by `TF_BUILD`)
-  - repo: `BUILD_REPOSITORY_URI`
-  - sha: `BUILD_SOURCEVERSION`
-  - branch: `BUILD_SOURCEBRANCH`
-  - message: `BUILD_SOURCEVERSIONMESSAGE`
-
-- Bitbucket (detect by `BITBUCKET_COMMIT`)
-  - repo: `BITBUCKET_GIT_HTTP_ORIGIN` or `https://bitbucket.org/<slug>.git`
-  - sha: `BITBUCKET_COMMIT`
-  - branch: `BITBUCKET_BRANCH`
-
-- Buildkite (detect by `BUILDKITE`)
-  - repo: `BUILDKITE_REPO`
-  - sha: `BUILDKITE_COMMIT`
-  - branch: `BUILDKITE_BRANCH`
-  - message: `BUILDKITE_MESSAGE`
-
-- CircleCI (detect by `CIRCLECI`)
-  - repo: `CIRCLE_REPOSITORY_URL`
-  - sha: `CIRCLE_SHA1`
-  - branch: `CIRCLE_BRANCH`
-
-- GitHub Actions (detect by `GITHUB_SHA`)
-  - repo: `GITHUB_SERVER_URL` + `GITHUB_REPOSITORY` + `.git`
-  - sha: `GITHUB_SHA`
-  - ref → branch: normalized from `GITHUB_REF`
-
-- GitLab (detect by `GITLAB_CI`)
-  - repo: `CI_REPOSITORY_URL`
-  - sha: `CI_COMMIT_SHA`
-  - branch: `CI_COMMIT_BRANCH`
-  - message: `CI_COMMIT_MESSAGE`
-  - head sha (MR): `CI_MERGE_REQUEST_SOURCE_BRANCH_SHA`
-
-- Jenkins (detect by `JENKINS_URL`)
-  - repo: `GIT_URL` or `GIT_URL_1`
-  - sha: `GIT_COMMIT`
-  - branch: `GIT_BRANCH`
-
-- TeamCity (detect by `TEAMCITY_VERSION`)
-  - repo: `GIT_URL`
-  - sha: `GIT_COMMIT`
-  - branch: `GIT_BRANCH`
-
-- Travis CI (detect by `TRAVIS`)
-  - repo: `TRAVIS_REPO_SLUG` → `https://github.com/<slug>.git`
-  - sha: `TRAVIS_COMMIT`
-  - branch: `TRAVIS_PULL_REQUEST_BRANCH` or `TRAVIS_BRANCH`
-  - message: `TRAVIS_COMMIT_MESSAGE`
-
-- Bitrise (detect by `BITRISE_BUILD_SLUG`)
-  - repo: `BITRISE_GIT_REPOSITORY_URL`
-  - sha: `BITRISE_GIT_COMMIT`
-  - branch: `BITRISE_GIT_BRANCH`
-
-- Codefresh (detect by `CF_BUILD_ID`)
-  - branch: `CF_BRANCH`
-
-- AWS CodeBuild/CodePipeline (detect by `CODEBUILD_INITIATOR`)
-  - limited extraction by default
-
-- Drone (detect by `DRONE`)
-  - repo: `DRONE_GIT_HTTP_URL`
-  - sha: `DRONE_COMMIT_SHA`
-  - branch: `DRONE_BRANCH`
-  - message: `DRONE_COMMIT_MESSAGE`
-
-All above detection variables are also declared in `environ` to ensure changes re-run the repository rule.
+All detection variables are declared in `environ` to ensure changes re-run the repository rule.
 
 ## Wrapper script (bazelw)
 
 This repo provides a `bazelw` wrapper to simplify running with the right `--repo_env` variables:
 
-- Computes Git metadata when a Git repo is present and forwards via `--repo_env`:
-  - `GIT_DIRTY`: `clean|dirty`
-  - `DD_GIT_REPOSITORY_URL`: from `git config --get remote.origin.url`
-  - `DD_GIT_BRANCH`: from `git symbolic-ref --short -q HEAD` (falls back to `rev-parse --abbrev-ref`); defaults to `auto:git-detached-head` on detached HEAD
-  - `DD_GIT_COMMIT_SHA`: from `git rev-parse HEAD`
-  - `DD_GIT_HEAD_COMMIT`: same as `DD_GIT_COMMIT_SHA`
-  - `DD_GIT_COMMIT_MESSAGE`: one-line subject of the HEAD commit
-  - `DD_GIT_HEAD_MESSAGE`: same as `DD_GIT_COMMIT_MESSAGE`
-- Precedence: if you export any `DD_GIT_*` variables in your shell, they override the computed ones.
+- Computes Git metadata when a Git repo is present and forwards via `--repo_env`
+- Precedence: if you export any `DD_GIT_*` variables in your shell, they override the computed ones
 
 Examples:
 
 ```sh
-# Refresh only on git environmnet variables
+# Refresh only on git environment variables
 ./bazelw build //...
 
 # Refresh on an hourly TTL
 FETCH_SALT_TTL=3600 ./bazelw build //...
 
-# Override computed Git metadata (useful in CI or custom scenarios)
+# Override computed Git metadata
 DD_GIT_REPOSITORY_URL=https://github.com/acme/api.git \
 DD_GIT_BRANCH=main \
 DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
 ./bazelw test //...
 ```
+
+## Integration tests (mock server)
+
+For a full end-to-end flow (sync + uploader) without hitting Datadog, run:
+
+```sh
+tools/tests/integration/run_mock_server_tests.sh
+```
+
+This starts a local mock HTTP server and uses the following test-only overrides:
+
+- `DD_TOPT_API_BASE` to redirect sync requests
+- `DD_TOPT_INTAKE_BASE` to redirect uploader requests (agentless only)
 
 ## Tips
 

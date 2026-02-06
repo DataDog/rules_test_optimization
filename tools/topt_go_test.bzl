@@ -1,22 +1,22 @@
 """Macro: dd_topt_go_test.
 
-Wraps a rules_go `go_test` together with the Datadog payload uploader so you
-can run a single label. The macro creates three targets:
-- <name>_go: the underlying go_test
-- <name>_dd_upload_payloads: the uploader test
-- <name>: a test_suite including both of the above
+Wraps a rules_go `go_test` with Datadog Test Optimization support. The macro
+creates a single go_test target with the necessary environment variables and
+data dependencies for test optimization.
 
 Notes:
 - You must set up the sync repo once (via MODULE.bazel or WORKSPACE) so that
   `@test_optimization_data//:test_optimization_*` labels exist.
 - Pass normal go_test attributes via **kwargs.
-- Use --sandbox_writable_path and --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR on the CLI.
+- Payloads are written to TEST_UNDECLARED_OUTPUTS_DIR automatically.
+- RBE users: ensure --remote_download_outputs=all is set.
 - Import path inference mirrors rules_go behavior by walking `embed` via
   an aspect and reading the GoArchive provider; when unavailable, falls
   back to go_module_path + Bazel package path.
+- Create ONE uploader target per workspace (see dd_payload_uploader in
+  test_optimization_uploader.bzl) and run it via `bazel run` after tests.
 """
 
-load("//tools:test_optimization_uploader_test.bzl", "dd_payload_uploader_test")
 load("//tools:topt_go_infer.bzl", "topt_go_payloads_selector")
 load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
@@ -31,22 +31,19 @@ def dd_topt_go_test(
         topt_service = None,
         # Auto-select per-module known_tests/test_management group based on Go package import path
         module_label_override = None,
-        # Uploader knobs
-        payloads_dir = None,
-        tests_subdir = "tests",
-        coverage_subdir = "coverage",
-        quiescent_sec = 10,
-        max_wait_sec = 1800,
-        fail_on_error = False,
-        uploader_debug = False,
-        uploader_tags = [],
-        # Optional: tags attached to the suite target
-        suite_tags = [],
         **kwargs):
-    """Define a Go test bundled with the Datadog payload uploader.
+    """Define a Go test with Datadog Test Optimization support.
+
+    This macro creates a single go_test target with the necessary environment
+    variables for test optimization. Payloads are written to Bazel's
+    TEST_UNDECLARED_OUTPUTS_DIR and collected in bazel-testlogs/<target>/test.outputs/.
+
+    After running tests, use a single workspace-level uploader target to upload
+    all payloads:
+        bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
 
     Args:
-      name: Test suite name users will run (the macro creates <name> target).
+      name: Test target name.
       topt_data: Either the single-service dict exported by @<repo>//:export.bzl, or the
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
         Used to derive the repo alias, go_module_path, and whether to include per-module files.
@@ -56,16 +53,6 @@ def dd_topt_go_test(
         Accepts raw or sanitized service key (e.g., "go-service" or "go_service").
       module_label_override: Optional override for the sanitized module label suffix when the
         automatic detection doesn't match the expected module name.
-      payloads_dir: Optional absolute path to the payloads directory. If not set, uses
-        TEST_OPTIMIZATION_PAYLOADS_DIR environment variable. Should match --sandbox_writable_path.
-      tests_subdir: Subdirectory under payloads_dir for test payloads (default: "tests").
-      coverage_subdir: Subdirectory under payloads_dir for coverage payloads (default: "coverage").
-      quiescent_sec: Seconds to wait for directory quiescence before uploading (default: 10).
-      max_wait_sec: Maximum seconds to wait before forcing upload (default: 1800).
-      fail_on_error: Whether the uploader test should fail on upload errors (default: False).
-      uploader_debug: Enable debug logging in the uploader test (default: False).
-      uploader_tags: Extra tags applied to the uploader test target.
-      suite_tags: Tags applied to the generated test_suite target.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
@@ -95,8 +82,7 @@ def dd_topt_go_test(
             if _svc == None:
                 fail("dd_topt_go_test: topt_service '%s' not found. Available: %s" % (topt_service, ", ".join(sorted(keys))))
 
-    # 1) Underlying go_test
-    inner_name = name + "_go"
+    # Prepare data dependencies
     user_data = kwargs.pop("data", [])
     data = list(user_data)
 
@@ -124,7 +110,6 @@ def dd_topt_go_test(
 
     # Build labels for files/context based on (possibly derived) sync_repo_name
     files_label = "@%s//:test_optimization_files" % sync_repo_name
-    context_label = "@%s//:test_optimization_context" % sync_repo_name
 
     # Prepare env map using a selector rule that infers importpath via aspect
     user_env = kwargs.pop("env", {})
@@ -170,41 +155,20 @@ def dd_topt_go_test(
     data.append(manifest_label)
     env["TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
 
-    # Signal to the library that payloads should be written to files (not network)
-    # Only set when payloads_dir is configured, meaning the user has set up file-based payloads
-    if payloads_dir:
-        env["TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
+    # Signal to the library that payloads should be written to files (TEST_UNDECLARED_OUTPUTS_DIR)
+    # Always set - the library will write to TEST_UNDECLARED_OUTPUTS_DIR when this is true
+    env["TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
     _go_test = go_test_rule if go_test_rule != None else None
     if _go_test == None:
         fail("dd_topt_go_test: you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
 
+    # Create ONLY the go_test - NO uploader, NO test_suite
+    # Users must create ONE uploader target per workspace and run it via `bazel run`
     _go_test(
-        name = inner_name,
+        name = name,
         data = data,
         env = env,
         **kwargs
-    )
-
-    # 2) Uploader test (adds context.json to runfiles for enrichment)
-    uploader_name = name + "_dd_upload_payloads"
-    dd_payload_uploader_test(
-        name = uploader_name,
-        payloads_dir = payloads_dir,
-        tests_subdir = tests_subdir,
-        coverage_subdir = coverage_subdir,
-        quiescent_sec = quiescent_sec,
-        max_wait_sec = max_wait_sec,
-        fail_on_error = fail_on_error,
-        debug = uploader_debug,
-        data = [context_label],
-        tags = uploader_tags,
-    )
-
-    # 3) Suite aggregating both
-    native.test_suite(
-        name = name,
-        tests = [":" + inner_name, ":" + uploader_name],
-        tags = suite_tags,
     )

@@ -4,8 +4,11 @@ module(
 )
 
 # Platforms is needed for cross-platform test execution detection
-bazel_dep(name = "platforms", version = "0.0.10")
+bazel_dep(name = "platforms", version = "1.0.0")
 
 # Optional dependency needed to load rules_go providers for Go importpath inference.
 # Consumers typically already depend on rules_go; Bzlmod will select a single version.
 bazel_dep(name = "rules_go", version = "0.59.0")
+
+# Test utilities for Starlark unit tests
+bazel_dep(name = "bazel_skylib", version = "1.8.2")

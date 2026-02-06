@@ -94,8 +94,8 @@ We propose standardizing this approach across Bazel‑based services as the supp
 
 1) Fetch metadata during module/repo resolution via a repository rule.  
 2) Consume metadata via public filegroups and per‑module labels to minimize cache invalidations.  
-3) Keep tests hermetic; write payloads to a shared writable directory configured via `--sandbox_writable_path` and `TEST_OPTIMIZATION_PAYLOADS_DIR`.  
-4) Upload payloads from a dedicated Bazel test that can be scheduled alongside the suite, enriches with non‑secret context, and supports both agentless and EVP proxy modes.  
+3) Keep tests hermetic; write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR` (automatically collected to `bazel-testlogs/<target>/test.outputs/`).
+4) Upload payloads from a dedicated workspace-level uploader (normal rule, not test) via `bazel run` after tests complete, enriching with non‑secret context, supporting both agentless and EVP proxy modes.  
 5) Provide thin language macros that compose these pieces for a smooth developer experience.
 
 The POC for this proposal can be found here: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)   
@@ -103,7 +103,7 @@ There's also a repository to test the POC rules here: [https://github.com/DataDo
 
 ### Design Overview
 
-At a high level, the proposal moves all network‑dependent metadata fetching out of test actions and into Bazel’s module/repository resolution phase, then ships results from a dedicated uploader test. This preserves hermeticity for user tests while maintaining complete Test Optimization functionality.
+At a high level, the proposal moves all network‑dependent metadata fetching out of test actions and into Bazel's module/repository resolution phase, then ships results from a dedicated workspace-level uploader (via `bazel run`). This preserves hermeticity for user tests while maintaining complete Test Optimization functionality.
 
 - Phase 1 — [Sync at module/repo resolution](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_sync.bzl):  
     
@@ -116,15 +116,17 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
   - It emits `export.bzl` with a structured `topt_data` object describing the available per‑module labels and language hints (e.g., Go module path inclusion).
 
 
-- Phase 2 — Hermetic test execution:  
-    
-  - Tests run without network and can optionally read the synced JSONs from runfiles (e.g., via `TEST_OPTIMIZATION_MANIFEST_FILE`).  
-  - Instrumented tests write payloads to a single shared writable directory (e.g., `.testoptimization/payloads/{tests,coverage}`) configured via `--sandbox_writable_path` and `TEST_OPTIMIZATION_PAYLOADS_DIR`.
+- Phase 2 — Hermetic test execution:
+
+  - Tests run without network and can optionally read the synced JSONs from runfiles (e.g., via `TEST_OPTIMIZATION_MANIFEST_FILE`).
+  - Instrumented tests write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. No `--sandbox_writable_path` or custom environment variables needed.
 
 
-- Phase 3 — [Upload outside user tests](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_uploader_test.bzl):  
-    
-  - A small uploader test target waits for the payload directory to become quiescent, enriches test payloads with `context.json` (if present), and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TRACE_AGENT_URL`).
+- Phase 3 — [Upload outside user tests](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_uploader.bzl):
+
+  - A single workspace-level uploader target (normal rule, not test) runs via `bazel run` after tests complete.
+  - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TRACE_AGENT_URL`), and deletes successfully uploaded files.
+  - Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status`
 
 
 - [Multi‑service monorepos](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_multi_sync.bzl):  
@@ -133,39 +135,41 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 
 Why this solves the problem
 
-- Hermeticity: User tests run offline; only the repository rule (during resolution) and the uploader test (at the end) require network.  
+- Hermeticity: User tests run offline; only the repository rule (during resolution) and the uploader (via `bazel run` at the end) require network.  
 - Caching: Metadata is captured as declared repository outputs; tests depend on stable filegroups, and per‑module bundles narrow cache invalidations to relevant targets.  
 - Security: Secrets are not written to disk and are scoped to the uploader; test actions themselves do not require `DD_API_KEY`.  
 - Simplicity: Consumers depend on stable labels and, where available, language macros that hide wiring details (env/runfiles/uploader).
 
 ### Required Library Changes
 
-Under Bazel, tracing libraries must avoid all network calls for Test Optimization and operate entirely on files. Libraries detect Bazel mode via `TEST_OPTIMIZATION_MANIFEST_FILE`, consume pre‑fetched JSONs from runfiles, and write test and coverage payloads to `$TEST_OPTIMIZATION_PAYLOADS_DIR` for the uploader to send. Outside Bazel, libraries retain the same current behavior, fetching and accessing the network directly.
+Under Bazel, tracing libraries must avoid all network calls for Test Optimization and operate entirely on files. Libraries detect Bazel mode via `TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`, consume pre‑fetched JSONs from runfiles (resolved via `TEST_OPTIMIZATION_MANIFEST_FILE`), and write test and coverage payloads to `$TEST_UNDECLARED_OUTPUTS_DIR` for the uploader to send. Outside Bazel, libraries retain the same current behavior, fetching and accessing the network directly.
 
 Common behavior:
 
 - Detection:
   - If `TEST_OPTIMIZATION_MANIFEST_FILE` is set and non‑empty, read optimization data from files (Bazel mode for inputs).
-  - If `TEST_OPTIMIZATION_PAYLOADS_IN_FILES` is set to `"true"`, write payloads to files instead of network (Bazel mode for outputs).
-  - Both are typically set together, but can be independent.
+  - If `TEST_OPTIMIZATION_PAYLOADS_IN_FILES` is set to `"true"`, write payloads to `TEST_UNDECLARED_OUTPUTS_DIR` instead of network (Bazel mode for outputs).
+  - Both are typically set together by the `dd_topt_go_test` macro.
 - Inputs (read‑only):
   - Resolve `TEST_OPTIMIZATION_MANIFEST_FILE` to a real file path via standard Bazel runfiles resolution:
     - If `RUNFILES_MANIFEST_FILE` exists, scan it to map the logical path to a real path.
     - Else, if `TEST_SRCDIR` or `RUNFILES_DIR` exists, join with the manifest path and test for existence.
     - Else, if the value is already an absolute path and exists, use it as‑is.
   - Call `filepath.Dir()` (or equivalent) on the resolved manifest path to get the `.testoptimization` directory.
-  - From that directory, load:  
-    - `settings.json`  
-    - Any number of `known_tests*.json` files (combined known tests)  
-    - Any number of `test_management*.json` files (combined test management tests)  
-  - Accept both “combined” shapes (e.g., `known_tests.json` with `data.attributes.tests`) and per‑module shapes, exposed under canonical file names via per‑module targets. Merge by unioning entries; empty stubs are valid and should be treated as “no data”.  
+  - From that directory, load:
+    - `settings.json`
+    - Any number of `known_tests*.json` files (combined known tests)
+    - Any number of `test_management*.json` files (combined test management tests)
+  - Accept both "combined" shapes (e.g., `known_tests.json` with `data.attributes.tests`) and per‑module shapes, exposed under canonical file names via per‑module targets. Merge by unioning entries; empty stubs are valid and should be treated as "no data".
 - Outputs (write‑only, when `TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`):
-  - Ensure `$TEST_OPTIMIZATION_PAYLOADS_DIR/tests` and `$TEST_OPTIMIZATION_PAYLOADS_DIR/coverage` exist (create if needed, handling concurrent processes safely).  
-  - Serialize test payloads to `$TEST_OPTIMIZATION_PAYLOADS_DIR/tests/*.json` (JSON only; do not use msgpack in Bazel mode).  
-  - Serialize coverage payloads to `$TEST_OPTIMIZATION_PAYLOADS_DIR/coverage/*.json` (one file per logical coverage unit; uploader will wrap as multipart with a generated `event.json`).  
-  - Use unique, deterministic file names to avoid clashes across shards (e.g., include PID/TID/timestamp/random suffix). Flush and fsync where appropriate for durability.  
-- Network: In Bazel mode, do not perform any HTTP calls (for metadata fetch or uploads). All remote interactions are delegated to the repository rule (metadata) and the uploader test (shipping).  
-- Config precedence: Honor `settings.json` feature flags (e.g., known tests enabled, test management enabled). If missing, default to conservative behavior (features disabled) rather than reaching the network.  
+  - Use `TEST_UNDECLARED_OUTPUTS_DIR` (Bazel's built-in writable directory for undeclared test outputs).
+  - Ensure `$TEST_UNDECLARED_OUTPUTS_DIR/tests` and `$TEST_UNDECLARED_OUTPUTS_DIR/coverage` exist (create if needed, handling concurrent processes safely).
+  - Serialize test payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/tests/*.json` (JSON only; do not use msgpack in Bazel mode).
+  - Serialize coverage payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/coverage/*.json` (one file per logical coverage unit; uploader will wrap as multipart with a generated `event.json`).
+  - Use unique, deterministic file names to avoid clashes across shards (e.g., include PID/TID/timestamp/random suffix). Flush and fsync where appropriate for durability.
+  - Bazel automatically collects these outputs to `bazel-testlogs/<package>/<target>/test.outputs/` after the test completes.
+- Network: In Bazel mode, do not perform any HTTP calls (for metadata fetch or uploads). All remote interactions are delegated to the repository rule (metadata) and the uploader (shipping via `bazel run`).
+- Config precedence: Honor `settings.json` feature flags (e.g., known tests enabled, test management enabled). If missing, default to conservative behavior (features disabled) rather than reaching the network.
 - Logging: Emit a clear startup line noting "Bazel mode enabled via TEST\_OPTIMIZATION\_MANIFEST\_FILE" and list resolved directory for troubleshooting.
 
 Test data contracts (minimum viable)
@@ -211,18 +215,24 @@ Multi‑Service Aggregation
 
 Runtime Uploader
 
-- `dd_payload_uploader_test` watches `$TEST_OPTIMIZATION_PAYLOADS_DIR`, waits for quiescence (`quiescent_sec`), then performs uploads within the same `bazel test` invocation. It supports:  
-  - Agentless mode (`DD_API_KEY`, `DD_SITE`) posting to `https://citestcycle-intake.<site>/api/v2/citestcycle` and `https://citestcov-intake.<site>/api/v2/citestcov`.  
-  - EVP proxy mode (`DD_TRACE_AGENT_URL`) posting to `/evp_proxy/v2/...` with subdomain routing headers.  
-- When `context.json` is present in runfiles (supplied via a data dependency on `@<repo>//:test_optimization_context`), test payloads are enriched by merging context keys.  
-- The uploader intentionally performs no network for tests themselves; only the uploader test talks to the network, and only at the end of the test phase when payloads quiesce.
+- `dd_payload_uploader` is a normal Bazel rule (not a test) that runs via `bazel run` after tests complete. It discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for quiescence, then uploads and deletes payloads. It supports:
+  - Agentless mode (`DD_API_KEY`, `DD_SITE`) posting to `https://citestcycle-intake.<site>/api/v2/citestcycle` and `https://citestcov-intake.<site>/api/v2/citestcov`.
+  - EVP proxy mode (`DD_TRACE_AGENT_URL`) posting to `/evp_proxy/v2/...` with subdomain routing headers.
+- A single uploader target per workspace is required (enforced via lock file to prevent concurrent uploaders).
+- When `context.json` is present in runfiles (supplied via a data dependency on `@<repo>//:test_optimization_context`), test payloads are enriched by merging context keys.
+- Since `bazel run` executes locally with full host access, no sandbox workarounds are needed. The uploader runs after all tests complete, discovering payloads that Bazel collected from `TEST_UNDECLARED_OUTPUTS_DIR`.
+- Recommended invocation preserves test exit code:
+  ```bash
+  bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
+  ```
 
 Language Macros
 
-- Provide macros per language to:  
-  - Attach runfiles and env (`TEST_OPTIMIZATION_MANIFEST_FILE`, `TEST_OPTIMIZATION_PAYLOADS_DIR`).  
-  - Add the uploader test target automatically.  
-  - Surface reasonable defaults and allow overrides.  
+- Provide macros per language to:
+  - Attach runfiles and env (`TEST_OPTIMIZATION_MANIFEST_FILE`, `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`).
+  - Configure payloads to write to `TEST_UNDECLARED_OUTPUTS_DIR` automatically.
+  - Surface reasonable defaults and allow overrides.
+- Note: Macros no longer create per-test uploaders. Users create ONE uploader target per workspace.  
 - Go importpath inference:  
   - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
   - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_label>)` for the `manifest.txt` file.  
@@ -252,13 +262,13 @@ Backwards Compatibility and Adoption
 
 - Public labels are stable: `:test_optimization_files`, `:test_optimization_context`, `:module_<sanitized>`.  
 - Consumers on WORKSPACE can instantiate the repository rule directly; Bzlmod users rely on `use_extension` \+ `use_repo`.  
-- A gradual rollout plan can start by adopting the uploader test and filegroup dependencies, then moving to language macros for deeper integration.
+- A gradual rollout plan can start by adopting the uploader rule and filegroup dependencies, then moving to language macros for deeper integration.
 
 ## Limitations of the Proposal
 
 Hermetic and Network Boundaries
 
-- Tests remain hermetic with network disabled, but the repository rule and uploader test still require network during repository resolution and the final upload step. For environments that mandate zero network everywhere, organizations must seed artifacts from trusted mirrors and route uploads through internal proxies. We could potentially overcome this by implementing the uploader at BEP watcher level (Build Event Protocol) but we need more research time to have a clear picture on how it might be implemented.
+- Tests remain hermetic with network disabled, but the repository rule and uploader (via `bazel run`) still require network during repository resolution and the final upload step. For environments that mandate zero network everywhere, organizations must seed artifacts from trusted mirrors and route uploads through internal proxies. We could potentially overcome this by implementing the uploader at BEP watcher level (Build Event Protocol) but we need more research time to have a clear picture on how it might be implemented.
 
 Test Impact Analysis (TIA)
 
