@@ -550,7 +550,8 @@ log_start_time_stats() {{
     return 0
   fi
   local times
-  times=$(jq -r '.. | objects | .startTime? | select(type=="number")' "$file" 2>/dev/null || true)
+  # Prefer startTime; fall back to start if startTime is absent
+  times=$(jq -r '.. | objects | (.startTime? // .start?) | select(type=="number")' "$file" 2>/dev/null || true)
   if [[ -z "$times" ]]; then
     dbg "startTime stats: no startTime fields found in $file"
     return 0
@@ -559,7 +560,7 @@ log_start_time_stats() {{
   read min max < <(echo "$times" | awk 'NR==1{{min=$1;max=$1}} {{if($1<min)min=$1;if($1>max)max=$1}} END{{print min,max}}')
   local now_ms
   now_ms=$(( $(date +%s) * 1000 ))
-  dbg "startTime(ms) range for $file: min=$min max=$max now=$now_ms"
+  dbg "startTime/ms range for $file: min=$min max=$max now=$now_ms"
 }}
 
 # Check if file matches prefix filter (when enabled)
@@ -869,12 +870,17 @@ function Dbg([string]$msg) {{ if ($script:DebugMode) {{ Write-Output "[dd-upload
 function Get-StartTimes($obj, [ref]$acc) {{
     if ($null -eq $obj) {{ return }}
     if ($obj -is [System.Collections.IDictionary]) {{
-        if ($obj.Contains("startTime")) {{
-            $v = $obj["startTime"]
-            if ($v -is [int] -or $v -is [long] -or $v -is [double]) {{
-                $acc.Value += [double]$v
-            }}
+    if ($obj.Contains("startTime")) {{
+        $v = $obj["startTime"]
+        if ($v -is [int] -or $v -is [long] -or $v -is [double]) {{
+            $acc.Value += [double]$v
         }}
+    }} elseif ($obj.Contains("start")) {{
+        $v = $obj["start"]
+        if ($v -is [int] -or $v -is [long] -or $v -is [double]) {{
+            $acc.Value += [double]$v
+        }}
+    }}
         foreach ($val in $obj.Values) {{ Get-StartTimes $val ([ref]$acc) }}
         return
     }}
@@ -895,7 +901,7 @@ function Log-StartTimeStats([string]$FilePath) {{
         $min = ($times | Measure-Object -Minimum).Minimum
         $max = ($times | Measure-Object -Maximum).Maximum
         $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        Dbg "startTime(ms) range for $FilePath: min=$min max=$max now=$nowMs"
+        Dbg "startTime/ms range for $FilePath: min=$min max=$max now=$nowMs"
     }} catch {{
         Dbg "startTime stats failed for $FilePath: $_"
     }}
