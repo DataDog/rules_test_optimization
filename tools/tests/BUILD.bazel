@@ -9,6 +9,7 @@ load(
     "//tools/tests:test_sync_utils.bzl",
     "dd_site_normalization_test",
     "dirname_test",
+    "export_bzl_manifest_path_test",
     "module_label_map_collision_test",
     "normalize_ref_test",
     "parse_go_module_path_test",
@@ -55,6 +56,12 @@ parse_go_module_path_test(
 
 dirname_test(
     name = "dirname_test",
+    size = "small",
+    timeout = "short",
+)
+
+export_bzl_manifest_path_test(
+    name = "export_bzl_manifest_path_test",
     size = "small",
     timeout = "short",
 )
@@ -110,6 +117,7 @@ test_suite(
         ":normalize_ref_test",
         ":parse_go_module_path_test",
         ":dirname_test",
+        ":export_bzl_manifest_path_test",
         ":sanitize_label_fragment_test",
         ":dedup_keys_test",
         ":validate_service_name_test",

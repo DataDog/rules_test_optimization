@@ -108,12 +108,12 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 - Phase 1 — [Sync at module/repo resolution](https://github.com/DataDog/rules_test_optimization/blob/main/tools/test_optimization_sync.bzl):  
     
   - A module extension instantiates a repository rule that performs the Datadog API calls for Settings (always), Known Tests (when enabled), and Test Management tests (when enabled).  
-  - The rule writes deterministic JSON outputs under a fixed directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags. It also writes a `manifest.txt` with a version marker (currently `version=1`) to track payload format changes.  
+- The rule writes deterministic JSON outputs under a configurable directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags. It also writes a `manifest.txt` with a version marker (currently `version=1`) to track payload format changes.  
   - It generates a BUILD file exposing stable public filegroups:  
     - `@<repo>//:test_optimization_files` (core bundle with `settings.json`),  
     - `@<repo>//:test_optimization_context` (`context.json` only),  
     - `@<repo>//:module_<sanitized>` (per‑module bundles with `settings.json` \+ that module’s known/test‑management files).  
-  - It emits `export.bzl` with a structured `topt_data` object describing the available per‑module labels and language hints (e.g., Go module path inclusion).
+  - It emits `export.bzl` with a structured `topt_data` object describing the available per‑module labels, the resolved `manifest_path`, and language hints (e.g., Go module path inclusion).
 
 
 - Phase 2 — Hermetic test execution:
@@ -201,7 +201,8 @@ Repository Rule and Module Extension
      - `:test_optimization_files` → includes `settings.json` and `manifest.txt` (stable bundle for most uses).  
      - `:test_optimization_context` → `context.json` (opt‑in for enrichment).  
      - `:module_<sanitized>` → per‑module bundle of settings \+ module‑specific JSONs.  
-  6. An `export.bzl` with `topt_data` describing labels and language‑specific hints (e.g., Go module path inclusion).  
+     - Per‑module targets expose canonical runfile names under `.testoptimization/` regardless of the physical `out_dir`.  
+  6. An `export.bzl` with `topt_data` describing labels, the resolved `manifest_path`, and language‑specific hints (e.g., Go module path inclusion).  
 - HTTP behavior uses `curl` with fail‑fast and retries; `DD_SITE` is normalized; Windows and non‑Windows paths are handled. The rule declares all relevant env vars in `environ` so changes lead to re‑execution and fresh outputs.
 
 Per‑Module Labels and Sanitization
@@ -235,7 +236,7 @@ Language Macros
 - Note: Macros no longer create per-test uploaders. Users create ONE uploader target per workspace.  
 - Go importpath inference:  
   - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
-  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_label>)` for the `manifest.txt` file.  
+  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_path>)` using `topt_data["manifest_path"]`, so custom `out_dir` values are supported.  
   - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
   - The exported `topt_data["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
 - Module dependency: this repository declares a `bazel_dep("rules_go", <version>)` to make the provider load visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.

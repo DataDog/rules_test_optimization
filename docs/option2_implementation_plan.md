@@ -130,7 +130,7 @@ Migrate from the current `--sandbox_writable_path` + `TEST_OPTIMIZATION_PAYLOADS
 
 | Variable | Set By | Purpose | Required? |
 |----------|--------|---------|-----------|
-| `TEST_OPTIMIZATION_MANIFEST_FILE` | Macro | Path to manifest.txt for reading optimization data | Yes |
+| `TEST_OPTIMIZATION_MANIFEST_FILE` | Macro | Runfiles path to `manifest.txt` (from `topt_data["manifest_path"]`) | Yes |
 | `TEST_OPTIMIZATION_PAYLOADS_IN_FILES` | Macro (when payloads_dir set) | Signal to write payloads to files | Conditional |
 | `TEST_OPTIMIZATION_PAYLOADS_DIR` | CLI (`--test_env`) | Absolute path where payloads are written | Yes (for file mode) |
 
@@ -172,7 +172,7 @@ Use Bazel's `TEST_UNDECLARED_OUTPUTS_DIR` which is:
 
 | Variable | Set By | Purpose | Required? |
 |----------|--------|---------|-----------|
-| `TEST_OPTIMIZATION_MANIFEST_FILE` | Macro | Path to manifest.txt for reading optimization data | Yes |
+| `TEST_OPTIMIZATION_MANIFEST_FILE` | Macro | Runfiles path to `manifest.txt` (from `topt_data["manifest_path"]`) | Yes |
 | `TEST_OPTIMIZATION_PAYLOADS_IN_FILES` | Macro | Set to `"true"` to signal file-based output mode | Yes |
 
 **Removed:**
@@ -344,6 +344,9 @@ def dd_topt_go_test(
 ):
     # Build env map
     env = dict(kwargs.pop("env", {}))
+    repo_name = topt_data.get("repo_name") or "test_optimization_data"
+    manifest_path = topt_data.get("manifest_path") or ".testoptimization/manifest.txt"
+    manifest_label = "@%s//:%s" % (repo_name, manifest_path)
     env["TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
     env["TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
 
@@ -656,7 +659,7 @@ bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${
 
 | Variable | Set By | Value | Purpose |
 |----------|--------|-------|---------|
-| `TEST_OPTIMIZATION_MANIFEST_FILE` | Macro | Runfiles path | Read optimization data |
+| `TEST_OPTIMIZATION_MANIFEST_FILE` | Macro | Runfiles path to `manifest.txt` (from `topt_data["manifest_path"]`) | Read optimization data |
 | `TEST_OPTIMIZATION_PAYLOADS_IN_FILES` | Macro | `"true"` | Signal to write payloads to `TEST_UNDECLARED_OUTPUTS_DIR` |
 
 ### Bazel-Provided Variables (test time - used by library)

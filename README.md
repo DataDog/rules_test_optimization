@@ -21,7 +21,7 @@ The extension performs these HTTP POST transactions (via curl):
 - Known Tests: executed only when `known_tests_enabled: true` in Settings.
 - Test Management Tests: executed only when `test_management.enabled: true` in Settings.
 
-All outputs are written under a configurable directory (default: `.testoptimization`) and are grouped under a single filegroup target.
+All outputs are written under a configurable directory (default: `.testoptimization`) and are grouped under a single filegroup target. The exact manifest path is exported via `topt_data["manifest_path"]`.
 
 ## What gets created
 
@@ -32,7 +32,7 @@ Given an external repository name `<repo_name>` created by the extension, the ge
   - `settings.json` (Settings API response)
   - `manifest.txt` (Payload manifest; version marker for change tracking, currently `version=1`)
   - `known_tests.json` (Known Tests API response or minimal stub)
-  - Per-module Known Tests/Test Management (via filegroups): each module has a target exposing canonical runfiles under `.testoptimization/` with `known_tests.json` and `test_management.json`, scoped to that module. Physical files are stored under `.testoptimization/module_<sanitized>/known_tests.json` and `.testoptimization/module_<sanitized>/test_management.json`.
+  - Per-module Known Tests/Test Management (via filegroups): each module has a target exposing canonical runfiles under `.testoptimization/` with `known_tests.json` and `test_management.json`, scoped to that module. Physical files are stored under `<out_dir>/module_<sanitized>/known_tests.json` and `<out_dir>/module_<sanitized>/test_management.json` (default `<out_dir>` is `.testoptimization`).
   - `test_management.json` (Test Management Tests API response or minimal stub)
   - `context.json` (Non-secret CI/Git/OS/runtime tags)
 
@@ -46,7 +46,7 @@ Reference settings with a single label:
 
 When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public target per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`:
 
-- Each module target exposes canonical runfiles:
+- Each module target exposes canonical runfiles (stable names, regardless of `out_dir`):
   - `.testoptimization/known_tests.json` (module-scoped; same shape as combined)
   - `.testoptimization/test_management.json` (module-scoped; same shape as combined)
 - Each module also becomes a public target: `:module_<sanitized_module>` that includes:
@@ -148,8 +148,9 @@ use_repo(
 
 Additional helper file exported by the generated repository:
 
-- `export.bzl` with a single dictionary `modules` containing:
+- `export.bzl` with a single dictionary `topt_data` containing:
   - `repo_name`: external repository name created by the sync rule (e.g., `test_optimization_data`)
+  - `manifest_path`: path to `manifest.txt` inside the generated repo (defaults to `.testoptimization/manifest.txt`, respects `out_dir`)
   - `labels`: list of available per-module sanitized labels
   - `set`: dict-as-set keyed by sanitized labels for fast membership checks
   - `go`: nested object with:
@@ -263,6 +264,8 @@ common --repo_env=DD_GIT_COMMIT_SHA
 common --repo_env=DD_GIT_HEAD_COMMIT
 common --repo_env=DD_GIT_COMMIT_MESSAGE
 common --repo_env=DD_GIT_HEAD_MESSAGE
+# Optional: override detected Go module path for export.bzl
+common --repo_env=GO_MODULE_PATH
 # Optional TTL: common --repo_env=FETCH_SALT
 
 # Uploader (bazel run, pass credentials inline or export before run)
@@ -389,7 +392,7 @@ bazel run //:dd_upload_payloads
 
 The macro sets the following environment variables for instrumented tests:
 
-- `TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the `.testoptimization` directory containing all synced payload files (settings, known tests, etc.).
+- `TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. The macro uses `topt_data["manifest_path"]` so custom `out_dir` values are supported. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the directory containing all synced payload files (settings, known tests, etc.).
 - `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`: Always set to `"true"`. Signals to the library that payloads should be written to `TEST_UNDECLARED_OUTPUTS_DIR`.
 
 ### Critical requirements
@@ -617,7 +620,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `name`: external repository name to create
 
 - Optional
-  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `test_management.json` under `out_dir`)
+  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `test_management.json` under `out_dir`). The actual manifest path is exported via `topt_data["manifest_path"]`.
   - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
@@ -669,6 +672,7 @@ The rule uses the following environment variables (they are declared in `environ
 - `DD_API_KEY` (required): Datadog API key
 - `DD_SITE` (optional): site domain (e.g., `datadoghq.com`, `datadoghq.eu`). If a value like `app.datadoghq.com` is provided, it is normalized to use `api.<site>`
 - `FETCH_SALT` (optional): use to force re-fetch, e.g., `--repo_env=FETCH_SALT=$(date +%s)`
+- `GO_MODULE_PATH` (optional): explicit Go module path override used when emitting `export.bzl`
 
 ### Datadog Git overrides (highest precedence)
 
@@ -685,7 +689,7 @@ The extension auto-detects these CI providers and maps their environment variabl
 
 - GitHub Actions, GitLab CI, Jenkins, CircleCI, Azure Pipelines, Buildkite, Travis CI, Bitbucket, AppVeyor, TeamCity, Bitrise, Codefresh, AWS CodeBuild, Drone
 
-All detection variables are declared in `environ` to ensure changes re-run the repository rule.
+All detection variables are declared in `environ` to ensure changes re-run the repository rule. Extra CI metadata inputs include `APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH`, `CI_PROJECT_PATH`, `GITHUB_WORKFLOW`, `TRAVIS_JOB_WEB_URL`, and `BUILD_URL`.
 
 ## Wrapper script (bazelw)
 

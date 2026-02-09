@@ -7,11 +7,11 @@ The integration uses a Bazel module extension and repository rule to fetch Datad
 The steps are:
 
 1. **Module/repository sync**:  
-   A module extension instantiates a repository rule that performs authenticated HTTP requests to Datadog (settings, known tests, and test‑management tests when enabled). It materializes JSON outputs under `.testoptimization/`, writes a non‑secret `context.json`, and exposes public filegroups:
+   A module extension instantiates a repository rule that performs authenticated HTTP requests to Datadog (settings, known tests, and test‑management tests when enabled). It materializes JSON outputs under a configurable directory (default: `.testoptimization/`), writes a non‑secret `context.json`, and exposes public filegroups:
    - `@<repo>//:test_optimization_files` (core bundle, includes `settings.json`)
    - `@<repo>//:test_optimization_context` (the `context.json` only)
    - `@<repo>//:module_<sanitized>` (per‑module bundle: `settings.json` + that module’s known/test‑management files)
-   The sync also emits an `export.bzl` helper describing available module labels and detected runtime/module hints for consumers.  
+   The sync also emits an `export.bzl` helper describing available module labels, the resolved `manifest_path`, and detected runtime/module hints for consumers. Per‑module targets expose canonical runfile names under `.testoptimization/` regardless of the physical `out_dir`.  
    Notes:
    - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; it is normalized to `https://api.<site>`.
    - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
@@ -117,7 +117,7 @@ flowchart TD
     A2 -->|POST Settings| D1[Datadog Settings API]
     A2 -->|POST Known Tests (if enabled)| D2[Known Tests API]
     A2 -->|POST Test Mgmt (if enabled)| D3[Test Management Tests API]
-    A2 --> A3[.testoptimization/\n settings.json\n manifest.txt\n known_tests.json\n (per-module targets expose canonical files)\n test_management.json\n (per-module targets expose canonical files)\n context.json]
+    A2 --> A3[.testoptimization (default)\n settings.json\n manifest.txt\n known_tests.json\n (per-module targets expose canonical files)\n test_management.json\n (per-module targets expose canonical files)\n context.json]
     A2 --> A4[export.bzl + BUILD\n filegroups per module]
   end
 
@@ -164,7 +164,7 @@ Module/Repo Resolution
             |                |-- POST Known Tests (if enabled) --> (Known Tests API)
             |                |-- POST Test Mgmt (if enabled) --> (Test Mgmt Tests API)
             |                v
-            |        .testoptimization/
+            |        .testoptimization/ (default out_dir)
             |          - settings.json
             |          - manifest.txt
             |          - known_tests.json (+ per-module)

@@ -151,7 +151,8 @@ def dd_topt_go_test(
 
     # Add manifest file reference for deriving the working directory
     # Library can resolve this path and call filepath.Dir() to get the .testoptimization directory
-    manifest_label = "@%s//:.testoptimization/manifest.txt" % sync_repo_name
+    manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
+    manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
     data.append(manifest_label)
     env["TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
 
