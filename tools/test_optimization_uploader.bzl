@@ -55,6 +55,7 @@ def _uploader_impl(ctx):
     debug = ctx.attr.debug
     keep_payloads = ctx.attr.keep_payloads
     filter_prefix = ctx.attr.filter_prefix
+    gzip_payloads = ctx.attr.gzip_payloads
 
     # Find context.json in data files (supports any repo alias)
     context_json_rloc = ""
@@ -67,7 +68,7 @@ def _uploader_impl(ctx):
     log_info("Generating uploader scripts (Option 2: TEST_UNDECLARED_OUTPUTS_DIR)")
     log_debug(
         debug,
-        "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefix=%s" %
+        "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefix=%s, gzip_payloads=%s" %
         (
             quiescent_sec,
             max_wait_sec,
@@ -75,6 +76,7 @@ def _uploader_impl(ctx):
             debug,
             keep_payloads,
             filter_prefix,
+            gzip_payloads,
         ),
     )
     if context_json_rloc:
@@ -182,6 +184,7 @@ FAIL_ON_ERROR=$(normalize_bool "{fail_on_error}")
 KEEP_PAYLOADS=$(normalize_bool "${{DD_TOPT_KEEP_PAYLOADS:-{keep_payloads}}}")
 FILTER_PREFIX=$(normalize_bool "${{DD_TOPT_FILTER_PREFIX:-{filter_prefix}}}")
 DEBUG=$(normalize_bool "${{DD_TOPT_DEBUG:-{debug}}}")
+GZIP_PAYLOADS=$(normalize_bool "${{DD_TOPT_GZIP:-{gzip_payloads}}}")
 
 # Validate numeric environment variables
 validate_numeric "QUIESCENT_SEC" "$QUIESCENT_SEC"
@@ -189,6 +192,13 @@ validate_numeric "MAX_WAIT_SEC" "$MAX_WAIT_SEC"
 if [[ -n "${{DD_TOPT_MAX_DEPTH:-}}" ]]; then
     validate_numeric "DD_TOPT_MAX_DEPTH" "$DD_TOPT_MAX_DEPTH"
 fi
+if [[ "$GZIP_PAYLOADS" == "1" ]]; then
+    if ! command -v gzip >/dev/null 2>&1; then
+        log "warning: DD_TOPT_GZIP=1 but gzip not found; disabling gzip"
+        GZIP_PAYLOADS=0
+    fi
+fi
+dbg "gzip enabled: $GZIP_PAYLOADS"
 
 # Windows detection - delegate to PowerShell if needed
 if [[ "$(uname -s | tr 'A-Z' 'a-z')" == *mingw* || "$(uname -s | tr 'A-Z' 'a-z')" == *msys* || "$(uname -s | tr 'A-Z' 'a-z')" == *cygwin* ]]; then
@@ -532,6 +542,26 @@ enrich_with_context() {{
   ' "$infile" > "$tmpfile"
 }}
 
+# Emit basic startTime statistics (ms) for debugging when jq is available.
+log_start_time_stats() {{
+  local file="$1"
+  if (( JQ_AVAILABLE == 0 )); then
+    dbg "startTime stats skipped: jq not available"
+    return 0
+  fi
+  local times
+  times=$(jq -r '.. | objects | .startTime? | select(type=="number")' "$file" 2>/dev/null || true)
+  if [[ -z "$times" ]]; then
+    dbg "startTime stats: no startTime fields found in $file"
+    return 0
+  fi
+  local min max
+  read min max < <(echo "$times" | awk 'NR==1{{min=$1;max=$1}} {{if($1<min)min=$1;if($1>max)max=$1}} END{{print min,max}}')
+  local now_ms
+  now_ms=$(( $(date +%s) * 1000 ))
+  dbg "startTime(ms) range for $file: min=$min max=$max now=$now_ms"
+}}
+
 # Check if file matches prefix filter (when enabled)
 matches_filter() {{
     local file="$1"
@@ -564,7 +594,7 @@ UPLOAD_FAILURES=0
 
 upload_single_test() {{
     local file="$1"
-    local body
+    local body resp payload_file gz http rc
     # Use a temp file to avoid collisions when multiple uploads run in parallel.
     body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$body" ]]; then
@@ -574,35 +604,65 @@ upload_single_test() {{
     enrich_with_context "$file" "$body"
     dbg "upload_single_test: posting '$file' (body '$body')"
     if [[ "$DEBUG" == "1" ]]; then
+        local gzip_note=""
+        if [[ "$GZIP_PAYLOADS" == "1" ]]; then
+            gzip_note="; Content-Encoding=gzip"
+        fi
         echo "[dd-uploader][dbg] payload content (enriched) for '$file':" >&2
         cat "$body" >&2
         echo "" >&2
+        log_start_time_stats "$body"
+        dbg "headers: Content-Type=application/json${gzip_note}"
+    fi
+
+    payload_file="$body"
+    gz=""
+    if [[ "$GZIP_PAYLOADS" == "1" ]]; then
+        gz="$body.gz"
+        if gzip -c "$body" > "$gz"; then
+            payload_file="$gz"
+        else
+            log "warning: gzip failed; sending uncompressed payload"
+            gz=""
+        fi
+    fi
+
+    resp="$(mktemp "$TMP_PAYLOAD_DIR/test_resp.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$resp" ]]; then
+        dbg "upload_single_test: failed to create response temp file"
+        rm -f "$body" "$gz" 2>/dev/null || true
+        return 1
+    fi
+    local ce_hdr=()
+    if [[ "$payload_file" != "$body" ]]; then
+        ce_hdr=(-H "Content-Encoding: gzip")
     fi
     if (( AGENTLESS == 1 )); then
-      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" -H "Content-Type: application/json" --data-binary @"${{body}}" -o /dev/null -w "%{{http_code}}" >/dev/null; then
-        rm -f "$body"
-        return 0
-      else
-        rm -f "$body"
-        return 1
-      fi
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" "${{ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     else
-      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" "${{TEST_EVP[@]}}" -H "Content-Type: application/json" --data-binary @"${{body}}" -o /dev/null -w "%{{http_code}}" >/dev/null; then
-        rm -f "$body"
-        return 0
-      else
-        rm -f "$body"
-        return 1
-      fi
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" "${{TEST_EVP[@]}}" "${{ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     fi
+    rc=$?
+    http="${{http:-000}}"
+    if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        dbg "upload_single_test: HTTP $http (rc=$rc)"
+        if [[ -s "$resp" ]]; then
+            dbg "upload_single_test response: $(head -c 2000 "$resp")"
+        fi
+    fi
+    rm -f "$resp" "$body" "$gz" 2>/dev/null || true
+    if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        return 1
+    fi
+    return 0
 }}
 
 upload_single_coverage() {{
     local file="$1"
     # Create event.json for multipart
-    local eventjson
+    local eventjson resp http rc
     # Use a temp file for multipart metadata to avoid leaking into runfiles.
     eventjson="$(mktemp "$TMP_PAYLOAD_DIR/coverage_event.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$eventjson" ]]; then
@@ -611,29 +671,39 @@ upload_single_coverage() {{
     fi
     echo '{{"dummy":true}}' > "$eventjson"
     dbg "upload_single_coverage: posting '$file'"
+    resp="$(mktemp "$TMP_PAYLOAD_DIR/coverage_resp.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$resp" ]]; then
+        dbg "upload_single_coverage: failed to create response temp file"
+        rm -f "$eventjson" 2>/dev/null || true
+        return 1
+    fi
+    if [[ "$DEBUG" == "1" ]]; then
+        dbg "headers: multipart/form-data (event + coveragex)"
+    fi
     if (( AGENTLESS == 1 )); then
-      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
         -X POST "${{COV_URL}}" "${{hdrs[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
-        -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o /dev/null -w "%{{http_code}}" >/dev/null; then
-        rm -f "$eventjson"
-        return 0
-      else
-        rm -f "$eventjson"
-        return 1
-      fi
+        -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     else
-      if curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
         -X POST "${{COV_URL}}" "${{hdrs[@]}}" "${{COV_EVP[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
-        -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o /dev/null -w "%{{http_code}}" >/dev/null; then
-        rm -f "$eventjson"
-        return 0
-      else
-        rm -f "$eventjson"
-        return 1
-      fi
+        -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     fi
+    rc=$?
+    http="${{http:-000}}"
+    if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        dbg "upload_single_coverage: HTTP $http (rc=$rc)"
+        if [[ -s "$resp" ]]; then
+            dbg "upload_single_coverage response: $(head -c 2000 "$resp")"
+        fi
+    fi
+    rm -f "$resp" "$eventjson" 2>/dev/null || true
+    if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        return 1
+    fi
+    return 0
 }}
 
 upload_all_tests() {{
@@ -734,6 +804,7 @@ fi
             "debug": _bool_to_str(debug),
             "keep_payloads": _bool_to_str(keep_payloads),
             "filter_prefix": _bool_to_str(filter_prefix),
+            "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
         },
@@ -794,6 +865,42 @@ $script:DebugMode = $false  # Will be set properly after Normalize-Bool is defin
 function Log([string]$msg) {{ Write-Output "[dd-uploader] $msg" }}
 function Dbg([string]$msg) {{ if ($script:DebugMode) {{ Write-Output "[dd-uploader][dbg] $msg" }} }}
 
+# Emit basic startTime statistics (ms) for debugging.
+function Get-StartTimes($obj, [ref]$acc) {{
+    if ($null -eq $obj) {{ return }}
+    if ($obj -is [System.Collections.IDictionary]) {{
+        if ($obj.Contains("startTime")) {{
+            $v = $obj["startTime"]
+            if ($v -is [int] -or $v -is [long] -or $v -is [double]) {{
+                $acc.Value += [double]$v
+            }}
+        }}
+        foreach ($val in $obj.Values) {{ Get-StartTimes $val ([ref]$acc) }}
+        return
+    }}
+    if ($obj -is [System.Collections.IEnumerable] -and -not ($obj -is [string])) {{
+        foreach ($item in $obj) {{ Get-StartTimes $item ([ref]$acc) }}
+    }}
+}}
+
+function Log-StartTimeStats([string]$FilePath) {{
+    try {{
+        $payload = Get-Content -LiteralPath $FilePath -Raw | ConvertFrom-Json -ErrorAction Stop
+        $times = @()
+        Get-StartTimes $payload ([ref]$times)
+        if ($times.Count -eq 0) {{
+            Dbg "startTime stats: no startTime fields found in $FilePath"
+            return
+        }}
+        $min = ($times | Measure-Object -Minimum).Minimum
+        $max = ($times | Measure-Object -Maximum).Maximum
+        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        Dbg "startTime(ms) range for $FilePath: min=$min max=$max now=$nowMs"
+    }} catch {{
+        Dbg "startTime stats failed for $FilePath: $_"
+    }}
+}}
+
 # Resolve context.json path (used by upload functions for payload enrichment)
 # Path is determined at rule implementation time from data files
 $ContextJsonRloc = "{context_json_rloc}"
@@ -841,9 +948,12 @@ $FailOnError = Normalize-Bool "{fail_on_error}"
 $KeepPayloads = if ($env:DD_TOPT_KEEP_PAYLOADS) {{ Normalize-Bool $env:DD_TOPT_KEEP_PAYLOADS }} else {{ Normalize-Bool "{keep_payloads}" }}
 $FilterPrefix = if ($env:DD_TOPT_FILTER_PREFIX) {{ Normalize-Bool $env:DD_TOPT_FILTER_PREFIX }} else {{ Normalize-Bool "{filter_prefix}" }}
 $Debug = if ($env:DD_TOPT_DEBUG) { Normalize-Bool $env:DD_TOPT_DEBUG } else { Normalize-Bool "{debug}" }
+$GzipPayloads = if ($env:DD_TOPT_GZIP) {{ Normalize-Bool $env:DD_TOPT_GZIP }} else {{ Normalize-Bool "{gzip_payloads}" }}
 
 # Now that $Debug is set, update the script-level debug mode for Dbg function
 $script:DebugMode = $Debug
+$script:GzipPayloads = $GzipPayloads
+Dbg "gzip enabled: $GzipPayloads"
 
 # Acquire exclusive lock to prevent concurrent uploaders
 # Lock is scoped to workspace to allow parallel uploads in different workspaces
@@ -1189,10 +1299,28 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
       $client.Timeout = [TimeSpan]::FromSeconds(60)
       foreach ($k in $headers.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$headers[$k]) }}
       Dbg "Send-PostJson: POST $url (file '$file'; attempt $attempt/$maxRetries)"
-      $content = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8))
-      $content.Headers.ContentType = 'application/json'
+      if ($script:GzipPayloads) {{
+        $bytes = [IO.File]::ReadAllBytes($file)
+        $ms = New-Object System.IO.MemoryStream
+        $gz = New-Object System.IO.Compression.GzipStream($ms, [System.IO.Compression.CompressionMode]::Compress)
+        $gz.Write($bytes, 0, $bytes.Length)
+        $gz.Close()
+        $compressed = $ms.ToArray()
+        $content = New-Object System.Net.Http.ByteArrayContent($compressed)
+        $content.Headers.ContentType = 'application/json'
+        $content.Headers.ContentEncoding.Add('gzip')
+        Dbg "Send-PostJson: Content-Type=application/json; Content-Encoding=gzip (bytes=$($compressed.Length))"
+      }} else {{
+        $content = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8))
+        $content.Headers.ContentType = 'application/json'
+        Dbg "Send-PostJson: Content-Type=application/json"
+      }}
       $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
       if ($resp.IsSuccessStatusCode) {{
+        if ($script:DebugMode) {{
+          $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+          if ($body) {{ Dbg "Send-PostJson response: $body" }}
+        }}
         return $true
       }} else {{
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
@@ -1225,6 +1353,7 @@ function Upload-SingleTest([string]$FilePath) {{
     if ($script:DebugMode) {{
         Write-Output "[dd-uploader][dbg] payload content (enriched) for '$FilePath':"
         Write-Output (Get-Content -LiteralPath $body -Raw)
+        Log-StartTimeStats $body
     }}
     $result = Send-PostJson $TestUrl $hdrs $body
     Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
@@ -1257,10 +1386,14 @@ function Upload-SingleCoverage([string]$FilePath) {{
                 $covContent = New-Object System.Net.Http.StreamContent($fs)
                 $covContent.Headers.ContentType = 'application/json'
                 $content.Add($covContent, 'coveragex', 'filecoveragex.json')
-                Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries)"
+                Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries; Content-Type=multipart/form-data)"
                 $resp = $client.PostAsync($CovUrl, $content).GetAwaiter().GetResult()
                 if ($resp.IsSuccessStatusCode) {{
                     $uploaded = $true
+                    if ($script:DebugMode) {{
+                        $respBody = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                        if ($respBody) {{ Dbg "Upload-SingleCoverage response: $respBody" }}
+                    }}
                 }} else {{
                     $respBody = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
                     Dbg "Upload-SingleCoverage: HTTP $([int]$resp.StatusCode) on attempt $attempt"
@@ -1372,6 +1505,7 @@ try {{
             "debug": _bool_to_str(debug),
             "keep_payloads": _bool_to_str(keep_payloads),
             "filter_prefix": _bool_to_str(filter_prefix),
+            "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
         },
@@ -1416,6 +1550,7 @@ dd_payload_uploader = rule(
         "debug": attr.bool(default = False, doc = "Enable debug logging"),
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TOPT_KEEP_PAYLOADS)"),
         "filter_prefix": attr.bool(default = False, doc = "Only upload files matching span_events_*.json or coverage_*.json (env: DD_TOPT_FILTER_PREFIX)"),
+        "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TOPT_GZIP)"),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
         # Private attribute to detect Windows platform

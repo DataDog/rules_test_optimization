@@ -323,6 +323,7 @@ dd_payload_uploader(
     # max_wait_sec = 300,      # Max wait before proceeding (default: 300)
     # fail_on_error = False,   # Fail if no payloads found when tests ran
     # debug = False,           # Enable debug logging
+    # gzip_payloads = False,   # Gzip test payloads before upload
 )
 ```
 
@@ -358,6 +359,8 @@ bazel run //:dd_upload_payloads
 |----------|---------|---------|
 | `DD_TOPT_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
 | `DD_TOPT_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
+| `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats) |
+| `DD_TOPT_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
 | `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
 | `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TOPT_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
@@ -646,6 +649,7 @@ Rule: `dd_payload_uploader(...)`
 | `debug` | bool | `False` | Enable debug logging |
 | `keep_payloads` | bool | `False` | Keep payload files after successful upload |
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
+| `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
 | `data` | label_list | `[]` | Data files to include (e.g., context.json for enrichment) |
 
 ## How data is fetched

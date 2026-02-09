@@ -100,6 +100,8 @@ bazel run //:dd_upload_payloads
 |----------|---------|---------|
 | `DD_TOPT_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
 | `DD_TOPT_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
+| `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats) |
+| `DD_TOPT_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
 | `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
 | `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TOPT_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees (0=unlimited, see note below) |
@@ -548,7 +550,7 @@ Since the uploader runs via `bazel run` after tests complete, all payloads are a
 
 - Normal rule (not test rule) - invoked via `bazel run`, not `bazel test`
 - No `local = True` or `tags = ["no-sandbox"]` needed - `bazel run` runs locally with full host access
-- Attributes: `quiescent_sec`, `max_wait_sec`, `fail_on_error`, `debug`, `data`, `keep_payloads`, `filter_prefix`
+- Attributes: `quiescent_sec`, `max_wait_sec`, `fail_on_error`, `debug`, `data`, `keep_payloads`, `filter_prefix`, `gzip_payloads`
 
 ```python
 dd_payload_uploader = rule(
@@ -561,6 +563,7 @@ dd_payload_uploader = rule(
         "debug": attr.bool(default = False),
         "keep_payloads": attr.bool(default = False),  # Keep payloads after upload for debugging (env: DD_TOPT_KEEP_PAYLOADS)
         "filter_prefix": attr.bool(default = False),  # Only upload span_events_*.json and coverage_*.json (env: DD_TOPT_FILTER_PREFIX)
+        "gzip_payloads": attr.bool(default = False),  # Gzip test payloads before upload (env: DD_TOPT_GZIP)
         "data": attr.label_list(allow_files = True),
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
