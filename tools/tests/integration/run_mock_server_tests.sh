@@ -271,6 +271,8 @@ def normalize_citestcycle(payload):
     for k, v in star.items():
         if k.startswith("os.") or k.startswith("ci."):
             continue
+        if k == "runtime-id":
+            continue
         filtered[k] = v
     out = {"metadata": {"*": filtered}}
     if "test" in payload:

@@ -61,6 +61,36 @@ def _is_windows(ctx):
     comspec = (ctx.os.environ.get("ComSpec") or ctx.os.environ.get("COMSPEC") or "").lower()
     return ("windows" in os_env) or comspec.endswith("cmd.exe")
 
+_FINGERPRINT_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
+
+def _fnv1a_32(value):
+    # FNV-1a style 32-bit hash for stable fingerprinting (non-cryptographic).
+    # Starlark lacks ord()/bytes, so map characters via a fixed alphabet.
+    h = 2166136261
+    vlen = len(value)
+    for i in range(vlen):
+        ch = value[i]
+        idx = _FINGERPRINT_ALPHABET.find(ch)
+        if idx < 0:
+            idx = 0
+        h = h ^ idx
+        h = (h * 16777619) & 0xffffffff
+    return h
+
+def _hex32(value):
+    digits = "0123456789abcdef"
+    out = ""
+    v = value
+    for _ in range(8):
+        out = digits[v & 0xf] + out
+        v = v >> 4
+    return out
+
+def _api_key_fingerprint(api_key):
+    if not api_key:
+        return ""
+    return _hex32(_fnv1a_32(api_key))
+
 def _ensure_parent_directory(ctx, path, debug):
     # Create parent directory for a given file path if needed.
     # Starlark has no os.path utilities; use simple split/join.
@@ -821,7 +851,7 @@ def _build_configurations_json(ctx, debug):
     log_debug(debug, "config", "Configurations JSON: %s" % conf_json)
     return conf_json
 
-def _build_context_tags(ctx, env_data, debug):
+def _build_context_tags(ctx, env_data, api_key, debug):
     # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
     tags = {}
 
@@ -986,6 +1016,12 @@ def _build_context_tags(ctx, env_data, debug):
     node_labels = ctx.os.environ.get("NODE_LABELS")
     if node_labels:
         tags["ci.node.labels"] = node_labels
+
+    # Embed a non-reversible fingerprint to validate uploader key parity.
+    fingerprint = _api_key_fingerprint(api_key)
+    if fingerprint:
+        tags["topt.api_key_fingerprint"] = fingerprint
+        log_debug(debug, "context", "api key fingerprint enabled")
 
     log_debug(debug, "context", "context.json tags: %s" % json.encode(tags))
     return tags
@@ -1320,7 +1356,7 @@ def _impl(ctx):
     module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug, label_map = label_map)
 
     # Build and write context.json (non-secret metadata) in the same repo
-    context_tags = _build_context_tags(ctx, env_data, debug)
+    context_tags = _build_context_tags(ctx, env_data, api_key, debug)
     ctx.file("context.json", json.encode(context_tags) + "\n")
 
     # Emit a small helper .bzl with detected Go module path (if any) for downstream macros
