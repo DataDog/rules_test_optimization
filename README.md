@@ -14,6 +14,7 @@ This repository provides a Bazel module extension and repository rule that fetch
 
 Optional tooling:
 - **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
+- **python3** - Used for uploader payload schema validation. If missing, uploads proceed without schema validation.
 
 The extension performs these HTTP POST transactions (via curl):
 
@@ -400,6 +401,12 @@ bazel run //:dd_upload_payloads
 - If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
 - The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
 - Bazel rule identity is included as stable tags: `test.bazel.rule_name` and `test.bazel.rule_version`.
+
+### Payload schema validation (best effort)
+
+- Test payload schema validation runs only when all of the following are available in runfiles/environment: the bundled schema JSON, the validator script, and `python3`.
+- If any validation dependency is unavailable, validation is skipped and uploads continue.
+- If validation runs and fails, the uploader logs a warning and continues uploading.
 
 ### Test-time environment variables
 
