@@ -165,6 +165,11 @@ def dd_topt_go_test(
     if _go_test == None:
         fail("dd_topt_go_test: you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
 
+    # Use the package directory as the default runtime working directory when
+    # callers do not specify one. This keeps relative fixture paths stable.
+    if "rundir" not in kwargs:
+        kwargs["rundir"] = native.package_name()
+
     # Create ONLY the go_test - NO uploader, NO test_suite
     # Users must create ONE uploader target per workspace and run it via `bazel run`
     _go_test(
