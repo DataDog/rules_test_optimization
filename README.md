@@ -740,6 +740,26 @@ This starts a local mock HTTP server and uses the following test-only overrides:
 - `DD_TOPT_API_BASE` to redirect sync requests
 - `DD_TOPT_INTAKE_BASE` to redirect uploader requests (agentless only)
 
+## Schema sync helper
+
+The source of truth for the uploader payload schema is:
+
+- `tools/schemas/agentless-schema.yaml`
+
+Regenerate the runtime JSON schema after YAML edits:
+
+```sh
+python3 tools/schemas/sync_agentless_schema.py
+```
+
+Check whether both files are in sync (CI/pre-commit friendly):
+
+```sh
+python3 tools/schemas/sync_agentless_schema.py --check
+```
+
+The helper uses PyYAML when available and falls back to Ruby's built-in YAML parser.
+
 ## Tips
 
 - You can set a TTL via `FETCH_SALT_TTL`.

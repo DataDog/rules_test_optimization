@@ -160,9 +160,6 @@
                                 },
                                 "metrics": {
                                   "$ref": "#/$defs/metrics"
-                                },
-                                "itr_correlation_id": {
-                                  "type": "string"
                                 }
                               },
                               "required": [
@@ -240,7 +237,7 @@
                                   "$ref": "#/$defs/metrics"
                                 },
                                 "itr_correlation_id": {
-                                  "type": "string"
+                                  "$ref": "#/$defs/itr_correlation_id"
                                 }
                               },
                               "required": [
@@ -346,9 +343,6 @@
                           },
                           "metrics": {
                             "$ref": "#/$defs/metrics"
-                          },
-                          "itr_correlation_id": {
-                            "type": "string"
                           }
                         },
                         "required": [
@@ -429,9 +423,6 @@
                           },
                           "metrics": {
                             "$ref": "#/$defs/metrics"
-                          },
-                          "itr_correlation_id": {
-                            "type": "string"
                           }
                         },
                         "required": [
@@ -519,7 +510,7 @@
                             "$ref": "#/$defs/metrics"
                           },
                           "itr_correlation_id": {
-                            "type": "string"
+                            "$ref": "#/$defs/itr_correlation_id"
                           }
                         },
                         "required": [
@@ -620,9 +611,6 @@
                           },
                           "metrics": {
                             "$ref": "#/$defs/metrics"
-                          },
-                          "itr_correlation_id": {
-                            "type": "string"
                           }
                         },
                         "required": [
@@ -730,6 +718,10 @@
           ]
         }
       }
+    },
+    "itr_correlation_id": {
+      "type": "string",
+      "description": "The ITR correlation ID is a unique identifier for a call to the skippable tests endpoint. It is passed so that the backend can augment the test results with reasons about why the test was skipped or run."
     }
   }
 }
