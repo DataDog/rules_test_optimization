@@ -133,6 +133,7 @@ resolve_runfile() {{
     if [[ "$rloc" != _main/* ]]; then
         candidates+=("_main/$rloc")
     fi
+    local manifest_file="${{RUNFILES_MANIFEST_FILE:-}}"
     for cand in "${{candidates[@]}}"; do
         # Try RUNFILES_DIR first (Unix default)
         if [[ -n "${{RUNFILES_DIR:-}}" && -f "$RUNFILES_DIR/$cand" ]]; then
@@ -145,10 +146,28 @@ resolve_runfile() {{
             return
         fi
         # Try RUNFILES_MANIFEST_FILE (Windows/manifest-only)
-        if [[ -n "${{RUNFILES_MANIFEST_FILE:-}}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
+        if [[ -n "$manifest_file" && -f "$manifest_file" ]]; then
             local path
             # Use awk with substr() for regex-free extraction (handles metacharacters in paths)
-            path=$(awk -v key="$cand" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$RUNFILES_MANIFEST_FILE")
+            path=$(awk -v key="$cand" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$manifest_file")
+            if [[ -n "$path" && -f "$path" ]]; then
+                echo "$path"
+                return
+            fi
+            # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
+            # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
+            path=$(awk -v key="$cand" '
+                {{
+                    k = $1
+                    if (length(k) > length(key) && substr(k, length(k) - length(key) + 1) == key) {{
+                        sep = substr(k, length(k) - length(key), 1)
+                        if (sep == "/" || sep == "\\\\") {{
+                            print substr($0, length(k) + 2)
+                            exit
+                        }}
+                    }}
+                }}
+            ' "$manifest_file")
             if [[ -n "$path" && -f "$path" ]]; then
                 echo "$path"
                 return
@@ -1120,6 +1139,11 @@ function Resolve-Runfile {{
         $candidates += "_main/$Rloc"
     }}
 
+    $manifest = $null
+    if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path $env:RUNFILES_MANIFEST_FILE)) {{
+        $manifest = Get-Content $env:RUNFILES_MANIFEST_FILE
+    }}
+
     foreach ($cand in $candidates) {{
         # Try RUNFILES_DIR first
         if ($env:RUNFILES_DIR) {{
@@ -1132,11 +1156,22 @@ function Resolve-Runfile {{
         if (Test-Path $candidate) {{ return $candidate }}
 
         # Try RUNFILES_MANIFEST_FILE (Windows default)
-        if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path $env:RUNFILES_MANIFEST_FILE)) {{
-            $manifest = Get-Content $env:RUNFILES_MANIFEST_FILE
+        if ($manifest) {{
             foreach ($line in $manifest) {{
                 if ($line.StartsWith("$cand ")) {{
                     $path = $line.Substring($cand.Length + 1)
+                    if (Test-Path $path) {{ return $path }}
+                }}
+            }}
+            # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
+            # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
+            foreach ($line in $manifest) {{
+                $i = $line.IndexOf(' ')
+                if ($i -le 0) {{ continue }}
+                $key = $line.Substring(0, $i)
+                if ($key.Length -le $cand.Length) {{ continue }}
+                if ($key.EndsWith("/$cand") -or $key.EndsWith("\\$cand")) {{
+                    $path = $line.Substring($i + 1)
                     if (Test-Path $path) {{ return $path }}
                 }}
             }}
