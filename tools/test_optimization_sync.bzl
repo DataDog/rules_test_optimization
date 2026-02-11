@@ -549,8 +549,18 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
 
         # Headers hashtable (PowerShell expects IDictionary-like; hashtable is safest)
         lines.append("$Headers = @{}")
+        ps_env = {}
         for hk, hv in headers.items():
-            lines.append("$Headers['%s'] = '%s'" % (str(hk).replace("'", "''"), str(hv).replace("'", "''")))
+            header_key = str(hk)
+            header_value = str(hv)
+            if header_key.lower() == "dd-api-key":
+                # Keep API keys out of generated script files; inject at execute-time only.
+                ps_env["DD_TOPT_API_KEY"] = header_value
+                lines.append("$apiKey = $env:DD_TOPT_API_KEY")
+                lines.append("if ([string]::IsNullOrEmpty($apiKey)) { Write-Error 'missing DD_TOPT_API_KEY for DD-API-KEY header'; exit 2 }")
+                lines.append("$Headers['%s'] = $apiKey" % header_key.replace("'", "''"))
+            else:
+                lines.append("$Headers['%s'] = '%s'" % (header_key.replace("'", "''"), header_value.replace("'", "''")))
 
         # Optional body file
         if data_file:
@@ -572,7 +582,13 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         lines.append("}")
         script_content = "\n".join(lines) + "\n"
         ctx.file(script_name, script_content)
-        result = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name])
+        if ps_env:
+            result = ctx.execute(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name],
+                environment = ps_env,
+            )
+        else:
+            result = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name])
     else:
         args = [] + _curl_base_args()
         if http_method and http_method != "GET":

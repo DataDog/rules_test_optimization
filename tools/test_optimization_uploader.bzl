@@ -243,15 +243,29 @@ fnv1a_32() {{
         echo ""
         return
     fi
+    local alphabet='0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+'
     local hash=2166136261
-    local byte
-    local -a bytes=()
-    while read -r -a bytes; do
-        for byte in "${{bytes[@]-}}"; do
-            hash=$((hash ^ byte))
-            hash=$(( (hash * 16777619) & 0xffffffff ))
+    local input_len="${{#input}}"
+    local alpha_len="${{#alphabet}}"
+    local i j idx found ch ach
+    for ((i = 0; i < input_len; i++)); do
+        ch="${{input:i:1}}"
+        idx=0
+        found=0
+        for ((j = 0; j < alpha_len; j++)); do
+            ach="${{alphabet:j:1}}"
+            if [[ "$ach" == "$ch" ]]; then
+                idx=$j
+                found=1
+                break
+            fi
         done
-    done < <(printf '%s' "$input" | LC_ALL=C od -An -tu1)
+        if (( found == 0 )); then
+            idx=0
+        fi
+        hash=$((hash ^ idx))
+        hash=$(( (hash * 16777619) & 0xffffffff ))
+    done
     printf '%08x' "$hash"
 }}
 
@@ -1228,10 +1242,12 @@ function Validate-Numeric([string]$name, [string]$val) {{
 # Compute FNV-1a 32-bit hex fingerprint (non-cryptographic, for parity checks only)
 function Get-Fnv1a32Hex([string]$value) {{
     if ([string]::IsNullOrEmpty($value)) {{ return "" }}
+    $alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
     [uint32]$hash = 2166136261
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($value)
-    foreach ($b in $bytes) {{
-        $hash = $hash -bxor $b
+    foreach ($ch in $value.ToCharArray()) {{
+        $idx = $alphabet.IndexOf([string]$ch)
+        if ($idx -lt 0) {{ $idx = 0 }}
+        $hash = $hash -bxor ([uint32]$idx)
         $hash = [uint32](($hash * 16777619) -band 0xffffffff)
     }}
     return ("{0:x8}" -f $hash)

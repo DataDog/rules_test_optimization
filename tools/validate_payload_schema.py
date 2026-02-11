@@ -88,7 +88,20 @@ def _resolve_ref(root: Dict[str, Any], ref: str) -> Dict[str, Any]:
     cur: Any = root
     for part in parts:
         part = part.replace("~1", "/").replace("~0", "~")
-        cur = cur[part]
+        if isinstance(cur, dict):
+            if part not in cur:
+                raise ValueError(f"ref segment not found: {part!r} in {ref}")
+            cur = cur[part]
+            continue
+        if isinstance(cur, list):
+            if not part.isdigit():
+                raise ValueError(f"ref segment is not a list index: {part!r} in {ref}")
+            idx = int(part)
+            if idx < 0 or idx >= len(cur):
+                raise ValueError(f"ref index out of bounds: {part!r} in {ref}")
+            cur = cur[idx]
+            continue
+        raise ValueError(f"ref traversal hit non-container at segment {part!r} in {ref}")
     if not isinstance(cur, dict):
         raise ValueError(f"ref did not resolve to an object: {ref}")
     return cur
@@ -107,7 +120,11 @@ def _validate(value: Any, schema: Dict[str, Any], root: Dict[str, Any], path: st
         return
 
     if "$ref" in schema:
-        ref_schema = _resolve_ref(root, schema["$ref"])
+        try:
+            ref_schema = _resolve_ref(root, schema["$ref"])
+        except ValueError as exc:
+            errors.append(f"{path}: {exc}")
+            return
         _validate(value, ref_schema, root, path, errors)
         return
 
