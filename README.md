@@ -399,6 +399,7 @@ bazel run //:dd_upload_payloads
 - When `context.json` is present in runfiles (provided via the `data` attribute), the uploader enriches each test payload by merging all non-null keys from `context.json` into the payload under `metadata.*`.
 - If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
 - The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
+- Bazel rule identity is included as stable tags: `test.bazel.rule_name` and `test.bazel.rule_version`.
 
 ### Test-time environment variables
 

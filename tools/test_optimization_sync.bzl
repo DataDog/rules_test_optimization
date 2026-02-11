@@ -30,6 +30,8 @@ load(
 # ##########################################################################
 
 TEST_OPT_DIR = ".testoptimization"
+TEST_BAZEL_RULE_NAME = "datadog-rules-test-optimization"
+TEST_BAZEL_RULE_VERSION = "1.0.0"
 
 # ##########################################################################
 # Tools functions
@@ -887,6 +889,10 @@ def _build_context_tags(ctx, env_data, api_key, debug):
         tags["runtime.version"] = ctx.attr.runtime_version
     if ctx.attr.runtime_arch:
         tags["runtime.architecture"] = ctx.attr.runtime_arch
+
+    # Bazel rules identity tags (stable constants for this ruleset).
+    tags["test.bazel.rule_name"] = TEST_BAZEL_RULE_NAME
+    tags["test.bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
 
     # Git tags (base)
     if env_data.get("repository_url"):
