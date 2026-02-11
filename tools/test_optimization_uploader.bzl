@@ -1165,7 +1165,7 @@ function Dbg-Headers([string]$label, $headers) {{
     if (-not $script:DebugMode) {{ return }}
     foreach ($k in $headers.Keys) {{
         $v = Redact-HeaderValue $k ($headers[$k].ToString())
-        Dbg "header[$label]: $k: $v"
+        Dbg "header[$label]: ${{k}}: $v"
     }}
 }}
 
@@ -1204,9 +1204,9 @@ function Log-StartTimeStats([string]$FilePath) {{
         $min = ($times | Measure-Object -Minimum).Minimum
         $max = ($times | Measure-Object -Maximum).Maximum
         $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        Dbg "startTime/ms range for $FilePath: min=$min max=$max now=$nowMs"
+        Dbg "startTime/ms range for ${{FilePath}}: min=$min max=$max now=$nowMs"
     }} catch {{
-        Dbg "startTime stats failed for $FilePath: $_"
+        Dbg "startTime stats failed for ${{FilePath}}: $_"
     }}
 }}
 
