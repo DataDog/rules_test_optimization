@@ -14,6 +14,7 @@ This repository provides a Bazel module extension and repository rule that fetch
 
 Optional tooling:
 - **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
+- **python3** - Used for uploader payload schema validation. If missing, uploads proceed without schema validation.
 
 The extension performs these HTTP POST transactions (via curl):
 
@@ -180,29 +181,38 @@ If your project uses legacy WORKSPACE mode instead of Bzlmod, use the repository
 ### 1) Add this repository in `WORKSPACE`
 
 ```bzl
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
-http_archive(
+git_repository(
     name = "datadog_rules_test_optimization",
-    # Pin to a release tarball; example:
-    # urls = ["https://github.com/DataDog/rules_test_optimization/archive/refs/tags/v1.0.0.tar.gz"],
-    # strip_prefix = "rules_test_optimization-1.0.0",
-    # sha256 = "<sha256>",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "3107bb94a9adbc6523cfe90901824ca2e7b6a6d2",
 )
 
-# Alternatively, for development:
-# load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-# git_repository(
-#     name = "datadog_rules_test_optimization",
-#     remote = "https://github.com/DataDog/rules_test_optimization.git",
-#     tag = "v1.0.0",
-# )
 # Or:
 # local_repository(
 #     name = "datadog_rules_test_optimization",
 #     path = "/absolute/path/to/rules_test_optimization",
 # )
 ```
+
+If your environment requires `http_archive`, use an internal mirror and pin all three
+values (`urls`, `strip_prefix`, and `sha256`). Example format:
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "datadog_rules_test_optimization",
+    urls = [
+        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/3107bb94a9adbc6523cfe90901824ca2e7b6a6d2.tar.gz",
+    ],
+    strip_prefix = "rules_test_optimization-3107bb94a9adbc6523cfe90901824ca2e7b6a6d2",
+    sha256 = "<internal-mirror-sha256>",
+)
+```
+
+If your mirror repackages archives, adjust `strip_prefix` to the archive's actual top-level directory.
 
 ### 2) Instantiate the repository rule in `WORKSPACE`
 
@@ -390,6 +400,13 @@ bazel run //:dd_upload_payloads
 - When `context.json` is present in runfiles (provided via the `data` attribute), the uploader enriches each test payload by merging all non-null keys from `context.json` into the payload under `metadata.*`.
 - If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
 - The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
+- Bazel rule identity is included as stable tags: `test.bazel.rule_name` and `test.bazel.rule_version`.
+
+### Payload schema validation (best effort)
+
+- Test payload schema validation runs only when all of the following are available in runfiles/environment: the bundled schema JSON, the validator script, and `python3`.
+- If any validation dependency is unavailable, validation is skipped and uploads continue.
+- If validation runs and fails, the uploader logs a warning and continues uploading.
 
 ### Test-time environment variables
 
@@ -730,6 +747,26 @@ This starts a local mock HTTP server and uses the following test-only overrides:
 
 - `DD_TOPT_API_BASE` to redirect sync requests
 - `DD_TOPT_INTAKE_BASE` to redirect uploader requests (agentless only)
+
+## Schema sync helper
+
+The source of truth for the uploader payload schema is:
+
+- `tools/schemas/agentless-schema.yaml`
+
+Regenerate the runtime JSON schema after YAML edits:
+
+```sh
+python3 tools/schemas/sync_agentless_schema.py
+```
+
+Check whether both files are in sync (CI/pre-commit friendly):
+
+```sh
+python3 tools/schemas/sync_agentless_schema.py --check
+```
+
+The helper uses PyYAML when available and falls back to Ruby's built-in YAML parser.
 
 ## Tips
 

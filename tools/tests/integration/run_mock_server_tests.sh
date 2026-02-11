@@ -193,14 +193,25 @@ unset DD_TRACE_AGENT_URL
 # Use Bazel's testlogs location to find payloads for the uploader.
 TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
 
-TESTLOGS_DIR="$TESTLOGS_DIR" \
+UPLOADER_LOG="$TMP_WS/uploader.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 DD_API_KEY=mock \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
 DD_TOPT_MAX_WAIT_SEC=30 \
 DD_TOPT_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
 "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
-  "${REPO_ENVS[@]}"
+  "${REPO_ENVS[@]}" >"$UPLOADER_LOG" 2>&1; then
+  echo "error: uploader command failed"
+  cat "$UPLOADER_LOG" || true
+  exit 1
+fi
+
+if grep -q "warning: DD_API_KEY mismatch between fetch and uploader" "$UPLOADER_LOG"; then
+  echo "error: unexpected DD_API_KEY mismatch warning with matching credentials"
+  cat "$UPLOADER_LOG" || true
+  exit 1
+fi
 
 python3 - <<'PY'
 import json
@@ -271,6 +282,8 @@ def normalize_citestcycle(payload):
     for k, v in star.items():
         if k.startswith("os.") or k.startswith("ci."):
             continue
+        if k == "runtime-id":
+            continue
         filtered[k] = v
     out = {"metadata": {"*": filtered}}
     if "test" in payload:
@@ -338,5 +351,58 @@ for name, data in snapshots.items():
         print(json.dumps(existing, indent=2, sort_keys=True))
         print("got:")
         print(json.dumps(data, indent=2, sort_keys=True))
+        sys.exit(1)
+PY
+
+python3 - <<'PY'
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+repo_root = os.environ["REPO_ROOT"]
+validator = os.path.join(repo_root, "tools", "validate_payload_schema.py")
+if not os.path.exists(validator):
+    print(f"error: schema validator not found: {validator}")
+    sys.exit(1)
+
+schema = {
+    "$defs": {
+        "variants": [
+            {
+                "type": "object",
+                "required": ["ok"],
+                "properties": {
+                    "ok": {"type": "boolean"},
+                },
+            },
+        ],
+    },
+    "$ref": "#/$defs/variants/0",
+}
+payload = {"ok": True}
+
+with tempfile.TemporaryDirectory() as td:
+    schema_path = os.path.join(td, "schema.json")
+    payload_path = os.path.join(td, "payload.json")
+    with open(schema_path, "w", encoding="utf-8") as f:
+        json.dump(schema, f)
+    with open(payload_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+    proc = subprocess.run(
+        [sys.executable, validator, schema_path, payload_path],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        print("error: schema validator failed array-index $ref regression check")
+        if proc.stdout:
+            print("stdout:")
+            print(proc.stdout)
+        if proc.stderr:
+            print("stderr:")
+            print(proc.stderr)
         sys.exit(1)
 PY

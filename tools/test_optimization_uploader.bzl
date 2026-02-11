@@ -21,6 +21,8 @@
 
 # Version identifier sent in Datadog-Meta-Tracer-Version header
 UPLOADER_VERSION = "2.0.0"
+# Rules version used for payload metadata defaults
+RULES_VERSION = "1.0.0"
 
 def log_info(message):
     print("dd_payload_uploader: %s" % message)
@@ -63,6 +65,8 @@ def _uploader_impl(ctx):
         if f.basename == "context.json":
             context_json_rloc = f.short_path
             break
+    schema_json_rloc = ctx.file._schema.short_path if ctx.file._schema else ""
+    schema_validator_rloc = ctx.file._schema_validator.short_path if ctx.file._schema_validator else ""
 
     # High-level debug of rule inputs
     log_info("Generating uploader scripts (Option 2: TEST_UNDECLARED_OUTPUTS_DIR)")
@@ -83,6 +87,14 @@ def _uploader_impl(ctx):
         log_debug(debug, "context.json found at: %s" % context_json_rloc)
     else:
         log_debug(debug, "context.json not found in data files; enrichment disabled")
+    if schema_json_rloc:
+        log_debug(debug, "schema found at: %s" % schema_json_rloc)
+    else:
+        log_debug(debug, "schema not found in data files; validation disabled")
+    if schema_validator_rloc:
+        log_debug(debug, "schema validator found at: %s" % schema_validator_rloc)
+    else:
+        log_debug(debug, "schema validator not found in data files; validation disabled")
     if ctx.files.data:
         log_debug(debug, "Data files count: %d" % len(ctx.files.data))
         for f in ctx.files.data:
@@ -117,6 +129,9 @@ resolve_runfile() {{
     else
         # Try the external/ prefix when short_path omits it under bzlmod.
         candidates+=("external/$rloc")
+    fi
+    if [[ "$rloc" != _main/* ]]; then
+        candidates+=("_main/$rloc")
     fi
     for cand in "${{candidates[@]}}"; do
         # Try RUNFILES_DIR first (Unix default)
@@ -156,6 +171,28 @@ else
     dbg "context.json not configured in data files; enrichment disabled"
 fi
 
+# Resolve schema and validator paths (used for payload validation)
+SCHEMA_JSON_RLOC="{schema_json_rloc}"
+SCHEMA_VALIDATOR_RLOC="{schema_validator_rloc}"
+if [[ -n "$SCHEMA_JSON_RLOC" ]]; then
+    SCHEMA_JSON=$(resolve_runfile "$SCHEMA_JSON_RLOC")
+    if [[ -z "$SCHEMA_JSON" ]]; then
+        log "warning: schema not found in runfiles; validation disabled"
+    fi
+else
+    SCHEMA_JSON=""
+    dbg "schema not configured in data files; validation disabled"
+fi
+if [[ -n "$SCHEMA_VALIDATOR_RLOC" ]]; then
+    SCHEMA_VALIDATOR=$(resolve_runfile "$SCHEMA_VALIDATOR_RLOC")
+    if [[ -z "$SCHEMA_VALIDATOR" ]]; then
+        log "warning: schema validator not found in runfiles; validation disabled"
+    fi
+else
+    SCHEMA_VALIDATOR=""
+    dbg "schema validator not configured in data files; validation disabled"
+fi
+
 # Normalize boolean value (handles True/False from Starlark, 1/0, true/false)
 # Uses tr for POSIX compatibility (macOS ships with Bash 3.2 which lacks ${{var,,}})
 normalize_bool() {{
@@ -177,6 +214,61 @@ validate_numeric() {{
     fi
 }}
 
+# Generate UUID (best effort). Uses uuidgen, python3, or /dev/urandom.
+generate_uuid() {{
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+        return
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - <<'PY'
+import uuid
+print(str(uuid.uuid4()))
+PY
+        return
+    fi
+    if [[ -r /dev/urandom ]]; then
+        local hex
+        hex=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+        echo "${{hex:0:8}}-${{hex:8:4}}-${{hex:12:4}}-${{hex:16:4}}-${{hex:20:12}}"
+        return
+    fi
+    echo "00000000-0000-0000-0000-000000000000"
+}}
+
+# Compute FNV-1a 32-bit hex fingerprint (non-cryptographic, for parity checks only)
+fnv1a_32() {{
+    local input="$1"
+    if [[ -z "$input" ]]; then
+        echo ""
+        return
+    fi
+    local alphabet='0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+'
+    local hash=2166136261
+    local input_len="${{#input}}"
+    local alpha_len="${{#alphabet}}"
+    local i j idx found ch ach
+    for ((i = 0; i < input_len; i++)); do
+        ch="${{input:i:1}}"
+        idx=0
+        found=0
+        for ((j = 0; j < alpha_len; j++)); do
+            ach="${{alphabet:j:1}}"
+            if [[ "$ach" == "$ch" ]]; then
+                idx=$j
+                found=1
+                break
+            fi
+        done
+        if (( found == 0 )); then
+            idx=0
+        fi
+        hash=$((hash ^ idx))
+        hash=$(( (hash * 16777619) & 0xffffffff ))
+    done
+    printf '%08x' "$hash"
+}}
+
 # Rule attributes (can be overridden via environment variables)
 QUIESCENT_SEC=${{DD_TOPT_QUIESCENT_SEC:-{quiescent_sec}}}
 MAX_WAIT_SEC=${{DD_TOPT_MAX_WAIT_SEC:-{max_wait_sec}}}
@@ -185,6 +277,8 @@ KEEP_PAYLOADS=$(normalize_bool "${{DD_TOPT_KEEP_PAYLOADS:-{keep_payloads}}}")
 FILTER_PREFIX=$(normalize_bool "${{DD_TOPT_FILTER_PREFIX:-{filter_prefix}}}")
 DEBUG=$(normalize_bool "${{DD_TOPT_DEBUG:-{debug}}}")
 GZIP_PAYLOADS=$(normalize_bool "${{DD_TOPT_GZIP:-{gzip_payloads}}}")
+RULES_VERSION="{rules_version}"
+RUNTIME_ID=$(generate_uuid)
 
 # Validate numeric environment variables
 validate_numeric "QUIESCENT_SEC" "$QUIESCENT_SEC"
@@ -502,26 +596,54 @@ fi
 dbg "mode: AGENTLESS=$AGENTLESS DD_SITE=$DD_SITE"
 dbg "endpoints: TEST_URL=$TEST_URL COV_URL=$COV_URL"
 
-hdrs=(
-  -H "Datadog-Meta-Lang: bazel-starlark"
-  -H "Datadog-Meta-Lang-Version: n/a"
-  -H "Datadog-Meta-Lang-Interpreter: bazel-run"
-  -H "Datadog-Meta-Tracer-Version: {uploader_version}"
-  -H "Accept: application/json"
-)
+HEADER_LANG_DEFAULT="bazel-starlark"
+HEADER_LANG_VERSION_DEFAULT="n/a"
+HEADER_LANG_INTERPRETER_DEFAULT="bazel-run"
+HEADER_TRACER_VERSION_DEFAULT="{uploader_version}"
 if (( AGENTLESS == 1 )); then
   if [[ -z "${{DD_API_KEY:-}}" ]]; then
     log "error: DD_API_KEY required for agentless uploads"
     log "hint: pass credentials via environment: DD_API_KEY=... DD_SITE=... bazel run //:dd_upload_payloads"
     exit 2  # Configuration error
   fi
-  hdrs+=( -H "DD-API-KEY: $DD_API_KEY" )
 else
   # EVP subdomain headers per endpoint
   TEST_EVP=( -H "X-Datadog-EVP-Subdomain: citestcycle-intake" )
   COV_EVP=( -H "X-Datadog-EVP-Subdomain: citestcov-intake" )
 fi
-dbg "headers prepared (agentless=$AGENTLESS)"
+dbg "headers prepared (agentless=$AGENTLESS; test headers can be derived from metadata)"
+
+# Redact sensitive header values (keep last 4 chars for DD-API-KEY)
+redact_header() {{
+  local h="$1"
+  local name="${{h%%:*}}"
+  if [[ "$name" == "DD-API-KEY" ]]; then
+    local val="${{h#*:}}"
+    val="${{val# }}"; val="${{val% }}"; val="${{val%%$'\\r'}}"
+    if (( ${{#val}} > 4 )); then
+      echo "DD-API-KEY: ****${{val: -4}}"
+    else
+      echo "DD-API-KEY: $val"
+    fi
+  else
+    echo "$h"
+  fi
+}}
+
+dbg_headers() {{
+  local label="$1"; shift
+  local arr=("$@")
+  local i=0
+  while (( i < ${{#arr[@]}} )); do
+    if [[ "${{arr[$i]}}" == "-H" && $((i+1)) -lt ${{#arr[@]}} ]]; then
+      dbg "header[$label]: $(redact_header "${{arr[$((i+1))]}}")"
+      i=$((i+2))
+      continue
+    fi
+    dbg "header[$label]: ${{arr[$i]}}"
+    i=$((i+1))
+  done
+}}
 
 # Load context.json for enrichment
 JQ_AVAILABLE=0
@@ -529,17 +651,136 @@ if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 dbg "jq available: $JQ_AVAILABLE"
 dbg "context.json: ${{CONTEXT_JSON:-<none>}}"
 
+# Build common Datadog headers, optionally deriving values from payload metadata["*"].
+build_common_headers() {{
+  local payload_file="${{1:-}}"
+  local lang="$HEADER_LANG_DEFAULT"
+  local lang_version="$HEADER_LANG_VERSION_DEFAULT"
+  local lang_interpreter="$HEADER_LANG_INTERPRETER_DEFAULT"
+  local tracer_version="$HEADER_TRACER_VERSION_DEFAULT"
+
+  if (( JQ_AVAILABLE == 1 )) && [[ -n "$payload_file" && -f "$payload_file" ]]; then
+    local meta_values meta_lang meta_tracer meta_lang_version meta_lang_interpreter
+    meta_values=$(jq -r '
+      [
+        .metadata["*"]["language"] // "",
+        .metadata["*"]["library_version"] // "",
+        (.metadata["*"]["language_version"] // .metadata["*"]["runtime_version"] // ""),
+        (.metadata["*"]["language_interpreter"] // .metadata["*"]["runtime_name"] // "")
+      ] | @tsv
+    ' "$payload_file" 2>/dev/null || true)
+    if [[ -n "$meta_values" ]]; then
+      IFS=$'\t' read -r meta_lang meta_tracer meta_lang_version meta_lang_interpreter <<< "$meta_values"
+      [[ -n "$meta_lang" ]] && lang="$meta_lang"
+      [[ -n "$meta_tracer" ]] && tracer_version="$meta_tracer"
+      [[ -n "$meta_lang_version" ]] && lang_version="$meta_lang_version"
+      [[ -n "$meta_lang_interpreter" ]] && lang_interpreter="$meta_lang_interpreter"
+    fi
+  fi
+
+  COMMON_HDRS=(
+    -H "Datadog-Meta-Lang: $lang"
+    -H "Datadog-Meta-Lang-Version: $lang_version"
+    -H "Datadog-Meta-Lang-Interpreter: $lang_interpreter"
+    -H "Datadog-Meta-Tracer-Version: $tracer_version"
+    -H "Accept: application/json"
+  )
+  if (( AGENTLESS == 1 )); then
+    COMMON_HDRS+=( -H "DD-API-KEY: $DD_API_KEY" )
+  fi
+}}
+
+# Optional check: verify fetch-time API key fingerprint matches uploader API key.
+API_KEY_FINGERPRINT=""
+if (( JQ_AVAILABLE == 1 )) && [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" ]]; then
+  API_KEY_FINGERPRINT=$(jq -r '."topt.api_key_fingerprint" // empty' "$CONTEXT_JSON" 2>/dev/null || true)
+fi
+if [[ -n "$API_KEY_FINGERPRINT" ]]; then
+  if (( AGENTLESS == 1 )); then
+    local_fp=$(fnv1a_32 "$DD_API_KEY")
+    if [[ -n "$local_fp" && "$local_fp" != "$API_KEY_FINGERPRINT" ]]; then
+      log "warning: DD_API_KEY mismatch between fetch and uploader"
+    else
+      dbg "DD_API_KEY fingerprint match"
+    fi
+  else
+    log "warning: DD_API_KEY fingerprint present but uploader running in EVP mode; check skipped"
+  fi
+elif [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" && "$JQ_AVAILABLE" != "1" ]]; then
+  dbg "api key fingerprint check skipped: jq not available"
+fi
+
 enrich_with_context() {{
   local infile="$1"; local tmpfile="$2"
   dbg "enrich_with_context: infile='$infile' outfile='$tmpfile' ctx='${{CONTEXT_JSON:-<none>}}' jq=$JQ_AVAILABLE"
-  if (( JQ_AVAILABLE == 0 )) || [[ -z "$CONTEXT_JSON" ]] || [[ ! -f "$CONTEXT_JSON" ]]; then
+  if (( JQ_AVAILABLE == 0 )); then
     cp "$infile" "$tmpfile"
     return 0
   fi
-  jq --slurpfile ctx "$CONTEXT_JSON" '
-    (.metadata |= (. // {{}}))
-    | (.metadata["*"] |= ((. // {{}}) + ($ctx[0] | with_entries(select(.value != null)))))
+  local ctx_file="$CONTEXT_JSON"
+  local cleanup_ctx=""
+  if [[ -z "$ctx_file" || ! -f "$ctx_file" ]]; then
+    ctx_file="$(mktemp "$TMP_PAYLOAD_DIR/context.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$ctx_file" ]]; then
+      cp "$infile" "$tmpfile"
+      return 0
+    fi
+    echo '{}' > "$ctx_file"
+    cleanup_ctx=1
+  fi
+  jq --slurpfile ctx "$ctx_file" \
+    --arg runtime_id "$RUNTIME_ID" \
+    --arg rules_version "$RULES_VERSION" \
+    --arg language_fallback "bazel" '
+    def ctx_val($k): $ctx[0][$k];
+    def ctx_str($k): (ctx_val($k) | if type=="string" and length>0 then . else null end);
+    def ctx_runtime_id: (ctx_str("runtime-id") // ctx_str("runtime.id") // ctx_str("runtime_id"));
+    def ctx_language: (ctx_str("language") // ctx_str("runtime.name") // ctx_str("runtime_name"));
+    def ctx_env: ctx_str("env");
+    def ctx_filtered: ($ctx[0] | with_entries(select(.key != "topt.api_key_fingerprint")));
+    def meta_star: (.metadata["*"] | if type=="object" then . else {} end);
+    def runtime_id: (meta_star["runtime-id"] // ctx_runtime_id // $runtime_id);
+    def language: (meta_star["language"] // ctx_language // $language_fallback);
+    def library_version: (meta_star["library_version"] // $rules_version);
+    def env: (meta_star["env"] // ctx_env);
+    .metadata = (.metadata // {})
+    | .metadata["*"] = (
+        { "runtime-id": runtime_id, "language": language, "library_version": library_version }
+        + (if (env|type) == "string" then { "env": env } else {} end)
+      )
+    | .metadata = (
+        { "*": .metadata["*"] }
+        + (if (.metadata["test"]? != null) then { "test": .metadata["test"] } else {} end)
+        + (if (.metadata["test_suite_end"]? != null) then { "test_suite_end": .metadata["test_suite_end"] } else {} end)
+        + (if (.metadata["test_module_end"]? != null) then { "test_module_end": .metadata["test_module_end"] } else {} end)
+        + (if (.metadata["test_session_end"]? != null) then { "test_session_end": .metadata["test_session_end"] } else {} end)
+      )
+    | (if .events then
+        .events |= map(
+          if (.type? == "span") then .
+          else
+            (
+              .content = (.content // {})
+              | .content.meta = (if (.content.meta|type) == "object" then .content.meta else {} end)
+              | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
+              | reduce (ctx_filtered | to_entries[]) as $e (.;
+                  if ($e.value|type) == "number" then
+                    .content.metrics[$e.key] = $e.value
+                  elif ($e.value|type) == "string" then
+                    .content.meta[$e.key] = $e.value
+                  else
+                    .content.meta[$e.key] = ($e.value|tostring)
+                  end
+                )
+            )
+          end
+        )
+      else .
+      end)
   ' "$infile" > "$tmpfile"
+  if [[ -n "$cleanup_ctx" ]]; then
+    rm -f "$ctx_file" 2>/dev/null || true
+  fi
 }}
 
 # Emit basic startTime statistics (ms) for debugging when jq is available.
@@ -590,6 +831,27 @@ cleanup_file() {{
     fi
 }}
 
+validate_payload() {{
+    local file="$1"
+    if [[ -z "$SCHEMA_JSON" || ! -f "$SCHEMA_JSON" ]]; then
+        dbg "schema validation skipped: schema not available"
+        return 0
+    fi
+    if [[ -z "$SCHEMA_VALIDATOR" || ! -f "$SCHEMA_VALIDATOR" ]]; then
+        dbg "schema validation skipped: validator not available"
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        dbg "schema validation skipped: python3 not available"
+        return 0
+    fi
+    dbg "schema validate: python3 $SCHEMA_VALIDATOR $SCHEMA_JSON $file"
+    if ! python3 "$SCHEMA_VALIDATOR" "$SCHEMA_JSON" "$file"; then
+        log "warning: schema validation failed for payload: $file"
+    fi
+    return 0
+}}
+
 # Track upload failures globally
 UPLOAD_FAILURES=0
 
@@ -603,6 +865,8 @@ upload_single_test() {{
         return 1
     fi
     enrich_with_context "$file" "$body"
+    validate_payload "$body"
+    build_common_headers "$body"
     dbg "upload_single_test: posting '$file' (body '$body')"
     if [[ "$DEBUG" == "1" ]]; then
         local gzip_note=""
@@ -638,12 +902,22 @@ upload_single_test() {{
     if [[ "$payload_file" != "$body" ]]; then
         ce_hdr=(-H "Content-Encoding: gzip")
     fi
+    if [[ "$DEBUG" == "1" ]]; then
+        dbg "request: POST $TEST_URL"
+        dbg_headers "common" "${COMMON_HDRS[@]}"
+        if (( AGENTLESS == 0 )); then
+            dbg_headers "evp" "${TEST_EVP[@]}"
+        fi
+        if [[ "$payload_file" != "$body" ]]; then
+            dbg "header[content-encoding]: Content-Encoding: gzip"
+        fi
+    fi
     if (( AGENTLESS == 1 )); then
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" "${{ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
+        -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     else
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" "${{TEST_EVP[@]}}" "${{ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
+        -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{TEST_EVP[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     fi
     rc=$?
     http="${{http:-000}}"
@@ -671,6 +945,7 @@ upload_single_coverage() {{
         return 1
     fi
     echo '{{"dummy":true}}' > "$eventjson"
+    build_common_headers ""
     dbg "upload_single_coverage: posting '$file'"
     resp="$(mktemp "$TMP_PAYLOAD_DIR/coverage_resp.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$resp" ]]; then
@@ -679,16 +954,21 @@ upload_single_coverage() {{
         return 1
     fi
     if [[ "$DEBUG" == "1" ]]; then
+        dbg "request: POST $COV_URL"
+        dbg_headers "common" "${COMMON_HDRS[@]}"
+        if (( AGENTLESS == 0 )); then
+            dbg_headers "evp" "${COV_EVP[@]}"
+        fi
         dbg "headers: multipart/form-data (event + coveragex)"
     fi
     if (( AGENTLESS == 1 )); then
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{COV_URL}}" "${{hdrs[@]}}" \\
+        -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     else
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{COV_URL}}" "${{hdrs[@]}}" "${{COV_EVP[@]}}" \\
+        -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" "${{COV_EVP[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     fi
@@ -808,6 +1088,9 @@ fi
             "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
+            "schema_json_rloc": schema_json_rloc,
+            "schema_validator_rloc": schema_validator_rloc,
+            "rules_version": RULES_VERSION,
         },
     )
     log_debug(debug, "Bash script rendered (bytes=%d)" % len(bash_script))
@@ -832,6 +1115,9 @@ function Resolve-Runfile {{
     }} else {{
         # Try the external/ prefix when short_path omits it under bzlmod.
         $candidates += "external/$Rloc"
+    }}
+    if (-not $Rloc.StartsWith("_main/")) {{
+        $candidates += "_main/$Rloc"
     }}
 
     foreach ($cand in $candidates) {{
@@ -865,6 +1151,23 @@ function Resolve-Runfile {{
 $script:DebugMode = $false  # Will be set properly after Normalize-Bool is defined
 function Log([string]$msg) {{ Write-Output "[dd-uploader] $msg" }}
 function Dbg([string]$msg) {{ if ($script:DebugMode) {{ Write-Output "[dd-uploader][dbg] $msg" }} }}
+
+function Redact-HeaderValue([string]$name, [string]$value) {{
+    if ($name -ne 'DD-API-KEY') {{ return $value }}
+    if ([string]::IsNullOrEmpty($value)) {{ return $value }}
+    if ($value.Length -gt 4) {{
+        return ("****" + $value.Substring($value.Length - 4))
+    }}
+    return $value
+}}
+
+function Dbg-Headers([string]$label, $headers) {{
+    if (-not $script:DebugMode) {{ return }}
+    foreach ($k in $headers.Keys) {{
+        $v = Redact-HeaderValue $k ($headers[$k].ToString())
+        Dbg "header[$label]: $k: $v"
+    }}
+}}
 
 # Emit basic startTime statistics (ms) for debugging.
 function Get-StartTimes($obj, [ref]$acc) {{
@@ -920,6 +1223,43 @@ if ($ContextJsonRloc) {{
     Dbg "context.json not configured in data files; enrichment disabled"
 }}
 
+# Resolve schema + validator paths (used for payload validation)
+$SchemaJsonRloc = "{schema_json_rloc}"
+if ($SchemaJsonRloc) {{
+    $script:SchemaJson = Resolve-Runfile $SchemaJsonRloc
+    if (-not $script:SchemaJson) {{
+        Log "warning: schema not found in runfiles; validation disabled"
+    }}
+}} else {{
+    $script:SchemaJson = $null
+    Dbg "schema not configured in data files; validation disabled"
+}}
+
+$SchemaValidatorRloc = "{schema_validator_rloc}"
+if ($SchemaValidatorRloc) {{
+    $script:SchemaValidator = Resolve-Runfile $SchemaValidatorRloc
+    if (-not $script:SchemaValidator) {{
+        Log "warning: schema validator not found in runfiles; validation disabled"
+    }}
+}} else {{
+    $script:SchemaValidator = $null
+    Dbg "schema validator not configured in data files; validation disabled"
+}}
+
+# Parse context.json once (best effort)
+$script:ContextObj = $null
+if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {{
+    try {{
+        $script:ContextObj = Get-Content -LiteralPath $script:ContextJson -Raw | ConvertFrom-Json -ErrorAction Stop
+    }} catch {{
+        $script:ContextObj = $null
+    }}
+}}
+
+# Runtime defaults
+$script:RulesVersion = "{rules_version}"
+$script:RuntimeId = [guid]::NewGuid().ToString()
+
 # Normalize boolean value (handles True/False from Starlark, 1/0, true/false)
 function Normalize-Bool([string]$val) {{
     switch ($val.ToLower()) {{
@@ -934,6 +1274,20 @@ function Validate-Numeric([string]$name, [string]$val) {{
         Log "error: $name must be a non-negative integer, got: '$val'"
         exit 2  # Configuration error
     }}
+}}
+
+# Compute FNV-1a 32-bit hex fingerprint (non-cryptographic, for parity checks only)
+function Get-Fnv1a32Hex([string]$value) {{
+    if ([string]::IsNullOrEmpty($value)) {{ return "" }}
+    $alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
+    [uint32]$hash = 2166136261
+    foreach ($ch in $value.ToCharArray()) {{
+        $idx = $alphabet.IndexOf([string]$ch)
+        if ($idx -lt 0) {{ $idx = 0 }}
+        $hash = $hash -bxor ([uint32]$idx)
+        $hash = [uint32](($hash * 16777619) -band 0xffffffff)
+    }}
+    return ("{0:x8}" -f $hash)
 }}
 
 # Rule attributes (can be overridden via environment variables)
@@ -1231,13 +1585,10 @@ if ($Agentless) {{
 Dbg "mode: Agentless=$Agentless Site=$DD_Site"
 Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl"
 
-$CommonHeaders = @{{
-  'Datadog-Meta-Lang' = 'bazel-starlark'
-  'Datadog-Meta-Lang-Version' = 'n/a'
-  'Datadog-Meta-Lang-Interpreter' = 'bazel-run'
-  'Datadog-Meta-Tracer-Version' = '{uploader_version}'
-  'Accept' = 'application/json'
-}}
+$script:HeaderLangDefault = 'bazel-starlark'
+$script:HeaderLangVersionDefault = 'n/a'
+$script:HeaderLangInterpreterDefault = 'bazel-run'
+$script:HeaderTracerVersionDefault = '{uploader_version}'
 if ($Agentless) {{
   if ([string]::IsNullOrEmpty($env:DD_API_KEY)) {{
     Log "error: DD_API_KEY required for agentless uploads"
@@ -1245,35 +1596,180 @@ if ($Agentless) {{
     Release-Lock
     exit 2  # Configuration error
   }}
-  $CommonHeaders['DD-API-KEY'] = $env:DD_API_KEY
 }} else {{
   $TestEvp = @{{ 'X-Datadog-EVP-Subdomain' = 'citestcycle-intake' }}
   $CovEvp  = @{{ 'X-Datadog-EVP-Subdomain' = 'citestcov-intake' }}
 }}
-Dbg "headers prepared (agentless=$Agentless)"
+Dbg "headers prepared (agentless=$Agentless; test headers can be derived from metadata)"
 
 Dbg "context.json: $(if ([string]::IsNullOrEmpty($script:ContextJson)) {{ '<none>' }} else {{ $script:ContextJson }})"
 
-function Merge-With-Context([string]$infile, [string]$outfile) {{
-  if (-not $script:ContextJson -or -not (Test-Path -LiteralPath $script:ContextJson)) {{
-    Dbg "Merge-With-Context: no context; copying '$infile' to '$outfile'"
-    Copy-Item -LiteralPath $infile -Destination $outfile -Force; return
+# Optional check: verify fetch-time API key fingerprint matches uploader API key.
+$ContextFingerprint = $null
+if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {{
+  try {{
+    $ctxForCheck = Get-Content -LiteralPath $script:ContextJson -Raw | ConvertFrom-Json -ErrorAction Stop
+    $ContextFingerprint = $ctxForCheck.'topt.api_key_fingerprint'
+  }} catch {{
+    $ContextFingerprint = $null
   }}
-  try {{
-    $payload = Get-Content -LiteralPath $infile -Raw | ConvertFrom-Json -ErrorAction Stop
-  }} catch {{ Copy-Item -LiteralPath $infile -Destination $outfile -Force; return }}
-  try {{
-    $ctx = Get-Content -LiteralPath $script:ContextJson -Raw | ConvertFrom-Json -ErrorAction Stop
-  }} catch {{ $ctx = $null }}
-  if (-not $payload.metadata) {{ $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{{}} }}
-  if (-not $payload.metadata.'*') {{ $payload.metadata.'*' = @{{}} }}
-  if ($ctx) {{
-    foreach ($prop in $ctx.PSObject.Properties) {{
-      if ($prop.Value -ne $null) {{ $payload.metadata.'*'.($prop.Name) = $prop.Value }}
+}}
+if ($ContextFingerprint) {{
+  if ($Agentless) {{
+    $LocalFp = Get-Fnv1a32Hex $env:DD_API_KEY
+    if ($LocalFp -and ($LocalFp -ne $ContextFingerprint)) {{
+      Log "warning: DD_API_KEY mismatch between fetch and uploader"
+    }} else {{
+      Dbg "DD_API_KEY fingerprint match"
+    }}
+  }} else {{
+    Log "warning: DD_API_KEY fingerprint present but uploader running in EVP mode; check skipped"
+  }}
+}}
+
+function Get-CommonHeaders([string]$PayloadPath) {{
+  $lang = $script:HeaderLangDefault
+  $langVersion = $script:HeaderLangVersionDefault
+  $langInterpreter = $script:HeaderLangInterpreterDefault
+  $tracerVersion = $script:HeaderTracerVersionDefault
+
+  if (-not [string]::IsNullOrEmpty($PayloadPath) -and (Test-Path -LiteralPath $PayloadPath)) {{
+    try {{
+      $payloadObj = Get-Content -LiteralPath $PayloadPath -Raw | ConvertFrom-Json -ErrorAction Stop
+      $metaStar = $null
+      if ($payloadObj.metadata) {{ $metaStar = $payloadObj.metadata.'*' }}
+      if ($metaStar) {{
+        $metaLang = $metaStar.language
+        if (-not [string]::IsNullOrEmpty($metaLang)) {{ $lang = [string]$metaLang }}
+
+        $metaTracerVersion = $metaStar.library_version
+        if (-not [string]::IsNullOrEmpty($metaTracerVersion)) {{ $tracerVersion = [string]$metaTracerVersion }}
+
+        $metaLangVersion = $metaStar.language_version
+        if ([string]::IsNullOrEmpty($metaLangVersion)) {{ $metaLangVersion = $metaStar.runtime_version }}
+        if (-not [string]::IsNullOrEmpty($metaLangVersion)) {{ $langVersion = [string]$metaLangVersion }}
+
+        $metaLangInterpreter = $metaStar.language_interpreter
+        if ([string]::IsNullOrEmpty($metaLangInterpreter)) {{ $metaLangInterpreter = $metaStar.runtime_name }}
+        if (-not [string]::IsNullOrEmpty($metaLangInterpreter)) {{ $langInterpreter = [string]$metaLangInterpreter }}
+      }}
+    }} catch {{
+      Dbg "Get-CommonHeaders: failed to parse payload metadata from '$PayloadPath' ($_)"
     }}
   }}
+
+  $headers = @{{
+    'Datadog-Meta-Lang' = $lang
+    'Datadog-Meta-Lang-Version' = $langVersion
+    'Datadog-Meta-Lang-Interpreter' = $langInterpreter
+    'Datadog-Meta-Tracer-Version' = $tracerVersion
+    'Accept' = 'application/json'
+  }}
+  if ($Agentless) {{ $headers['DD-API-KEY'] = $env:DD_API_KEY }}
+  return $headers
+}}
+
+function Merge-With-Context([string]$infile, [string]$outfile) {{
+  try {{
+    $payload = Get-Content -LiteralPath $infile -Raw | ConvertFrom-Json -ErrorAction Stop
+  }} catch {{
+    Copy-Item -LiteralPath $infile -Destination $outfile -Force
+    return
+  }}
+
+  if (-not $payload.metadata) {{ $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{{}} }}
+  $meta = $payload.metadata
+  $star = if ($meta.'*' -and ($meta.'*' -is [System.Collections.IDictionary])) {{ $meta.'*' }} else {{ @{{}} }}
+
+  # Compute runtime-id, language, library_version, env (fill missing only)
+  $runtimeId = $star.'runtime-id'
+  if ([string]::IsNullOrEmpty($runtimeId)) {{
+    if ($script:ContextObj) {{
+      $runtimeId = $script:ContextObj.'runtime-id'
+      if ([string]::IsNullOrEmpty($runtimeId)) {{ $runtimeId = $script:ContextObj.'runtime.id' }}
+      if ([string]::IsNullOrEmpty($runtimeId)) {{ $runtimeId = $script:ContextObj.'runtime_id' }}
+    }}
+    if ([string]::IsNullOrEmpty($runtimeId)) {{ $runtimeId = $script:RuntimeId }}
+  }}
+
+  $language = $star.language
+  if ([string]::IsNullOrEmpty($language)) {{
+    if ($script:ContextObj) {{
+      $language = $script:ContextObj.language
+      if ([string]::IsNullOrEmpty($language)) {{ $language = $script:ContextObj.'runtime.name' }}
+      if ([string]::IsNullOrEmpty($language)) {{ $language = $script:ContextObj.'runtime_name' }}
+    }}
+    if ([string]::IsNullOrEmpty($language)) {{ $language = 'bazel' }}
+  }}
+
+  $libraryVersion = $star.library_version
+  if ([string]::IsNullOrEmpty($libraryVersion)) {{ $libraryVersion = $script:RulesVersion }}
+
+  $envVal = $star.env
+  if ([string]::IsNullOrEmpty($envVal) -and $script:ContextObj) {{ $envVal = $script:ContextObj.env }}
+
+  $newStar = @{{ 'runtime-id' = $runtimeId; 'language' = $language; 'library_version' = $libraryVersion }}
+  if (-not [string]::IsNullOrEmpty($envVal)) {{ $newStar['env'] = $envVal }}
+
+  # Prune top-level metadata keys
+  $newMeta = @{{ '*' = $newStar }}
+  foreach ($k in @('test', 'test_suite_end', 'test_module_end', 'test_session_end')) {{
+    if ($meta.PSObject.Properties.Name -contains $k) {{ $newMeta[$k] = $meta.$k }}
+  }}
+  $payload.metadata = $newMeta
+
+  # Copy context tags into event meta/metrics (skip spans)
+  if ($payload.events -and $script:ContextObj) {{
+    foreach ($evt in $payload.events) {{
+      if ($evt.type -eq 'span') {{ continue }}
+      if (-not $evt.content) {{ $evt | Add-Member -NotePropertyName content -NotePropertyValue @{{}} -Force }}
+      if (-not ($evt.content.meta -is [System.Collections.IDictionary])) {{ $evt.content | Add-Member -NotePropertyName meta -NotePropertyValue @{{}} -Force }}
+      if (-not ($evt.content.metrics -is [System.Collections.IDictionary])) {{ $evt.content | Add-Member -NotePropertyName metrics -NotePropertyValue @{{}} -Force }}
+      foreach ($prop in $script:ContextObj.PSObject.Properties) {{
+        if ($prop.Name -eq 'topt.api_key_fingerprint') {{ continue }}
+        $val = $prop.Value
+        if ($val -is [string]) {{
+          $evt.content.meta[$prop.Name] = $val
+        }} elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {{
+          $evt.content.metrics[$prop.Name] = [double]$val
+        }} else {{
+          try {{
+            $evt.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 20)
+          }} catch {{
+            $evt.content.meta[$prop.Name] = $val.ToString()
+          }}
+        }}
+      }}
+    }}
+  }}
+
   Dbg "Merge-With-Context: wrote enriched '$outfile'"
   $payload | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $outfile -Encoding UTF8
+}}
+
+function Validate-Payload([string]$FilePath) {{
+    if (-not $script:SchemaJson -or -not (Test-Path -LiteralPath $script:SchemaJson)) {{
+        Dbg "schema validation skipped: schema not available"
+        return
+    }}
+    if (-not $script:SchemaValidator -or -not (Test-Path -LiteralPath $script:SchemaValidator)) {{
+        Dbg "schema validation skipped: validator not available"
+        return
+    }}
+    $py = Get-Command python3 -ErrorAction SilentlyContinue
+    if (-not $py) {{
+        Dbg "schema validation skipped: python3 not available"
+        return
+    }}
+    Dbg "schema validate: python3 $script:SchemaValidator $script:SchemaJson $FilePath"
+    try {{
+        & $py.Source $script:SchemaValidator $script:SchemaJson $FilePath | Out-Null
+        if ($LASTEXITCODE -ne 0) {{
+            Log "warning: schema validation failed for payload: $FilePath"
+        }}
+    }} catch {{
+        Log "warning: schema validation failed for payload: $FilePath"
+    }}
 }}
 
 # Check if file matches prefix filter (when enabled)
@@ -1353,12 +1849,15 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
 function Upload-SingleTest([string]$FilePath) {{
     $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
-    $hdrs = $CommonHeaders.Clone()
+    Validate-Payload $body
+    $hdrs = Get-CommonHeaders $body
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
     Dbg "Upload-SingleTest: posting '$FilePath' (body '$body')"
     if ($script:DebugMode) {{
         Write-Output "[dd-uploader][dbg] payload content (enriched) for '$FilePath':"
         Write-Output (Get-Content -LiteralPath $body -Raw)
+        Dbg "request: POST $TestUrl"
+        Dbg-Headers "common" $hdrs
         Log-StartTimeStats $body
     }}
     $result = Send-PostJson $TestUrl $hdrs $body
@@ -1377,10 +1876,16 @@ function Upload-SingleCoverage([string]$FilePath) {{
     $uploaded = $false
 
     try {{
+        $covHeaders = Get-CommonHeaders $null
         $client = New-Object System.Net.Http.HttpClient
         $client.Timeout = [TimeSpan]::FromSeconds(60)
-        foreach ($k in $CommonHeaders.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$CommonHeaders[$k]) }}
+        foreach ($k in $covHeaders.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$covHeaders[$k]) }}
         if (-not $Agentless) {{ $client.DefaultRequestHeaders.Add('X-Datadog-EVP-Subdomain','citestcov-intake') }}
+        if ($script:DebugMode) {{
+            Dbg "request: POST $CovUrl"
+            Dbg-Headers "common" $covHeaders
+            if (-not $Agentless) {{ Dbg "header[evp]: X-Datadog-EVP-Subdomain: citestcov-intake" }}
+        }}
 
         for ($attempt = 1; $attempt -le $maxRetries -and -not $uploaded; $attempt++) {{
             try {{
@@ -1514,6 +2019,9 @@ try {{
             "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
+            "schema_json_rloc": schema_json_rloc,
+            "schema_validator_rloc": schema_validator_rloc,
+            "rules_version": RULES_VERSION,
         },
     )
     log_debug(debug, "PowerShell script rendered (bytes=%d)" % len(ps_script))
@@ -1538,7 +2046,12 @@ exit /b %ERRORLEVEL%
 
     # Include optional data files (e.g., context.json) in runfiles so scripts can locate them
     # Include both the PowerShell and batch files in runfiles for cross-platform support
-    runfiles = ctx.runfiles(files = [ps_file, bat_file] + ctx.files.data)
+    extra_files = []
+    if ctx.file._schema:
+        extra_files.append(ctx.file._schema)
+    if ctx.file._schema_validator:
+        extra_files.append(ctx.file._schema_validator)
+    runfiles = ctx.runfiles(files = [ps_file, bat_file] + ctx.files.data + extra_files)
     log_debug(debug, "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
     # Use platform detection to return .bat on Windows, .sh on Unix
@@ -1559,6 +2072,9 @@ dd_payload_uploader = rule(
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TOPT_GZIP)"),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
+        # Schema + validator bundled for best-effort payload validation
+        "_schema": attr.label(default = "//tools:schemas/agentless-schema.json", allow_single_file = True),
+        "_schema_validator": attr.label(default = "//tools:validate_payload_schema.py", allow_single_file = True),
         # Private attribute to detect Windows platform
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },

@@ -162,19 +162,30 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
     def _validate_uploader_test(self, body):
+        lang_hdr = _require_header(self.headers, "Datadog-Meta-Lang")
+        tracer_hdr = _require_header(self.headers, "Datadog-Meta-Tracer-Version")
         if not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
-        if not _require_header(self.headers, "Datadog-Meta-Lang"):
+        if not lang_hdr:
             return "missing Datadog-Meta-Lang"
-        if not _require_header(self.headers, "Datadog-Meta-Tracer-Version"):
+        if not tracer_hdr:
             return "missing Datadog-Meta-Tracer-Version"
         content_type = _require_header(self.headers, "Content-Type") or ""
         if "application/json" not in content_type:
             return "expected Content-Type application/json"
         try:
-            json.loads(body.decode("utf-8"))
+            payload = json.loads(body.decode("utf-8"))
         except Exception:
             return "invalid JSON body"
+        metadata = payload.get("metadata") if isinstance(payload, dict) else None
+        star = metadata.get("*") if isinstance(metadata, dict) else None
+        if isinstance(star, dict):
+            expected_lang = star.get("language")
+            if expected_lang and lang_hdr != expected_lang:
+                return "Datadog-Meta-Lang does not match metadata.*.language"
+            expected_tracer = star.get("library_version")
+            if expected_tracer and tracer_hdr != expected_tracer:
+                return "Datadog-Meta-Tracer-Version does not match metadata.*.library_version"
         return None
 
     def _validate_uploader_cov(self):

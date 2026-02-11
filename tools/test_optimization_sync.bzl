@@ -30,6 +30,8 @@ load(
 # ##########################################################################
 
 TEST_OPT_DIR = ".testoptimization"
+TEST_BAZEL_RULE_NAME = "datadog-rules-test-optimization"
+TEST_BAZEL_RULE_VERSION = "1.0.0"
 
 # ##########################################################################
 # Tools functions
@@ -60,6 +62,36 @@ def _is_windows(ctx):
     os_env = (ctx.os.environ.get("OS") or "").lower()
     comspec = (ctx.os.environ.get("ComSpec") or ctx.os.environ.get("COMSPEC") or "").lower()
     return ("windows" in os_env) or comspec.endswith("cmd.exe")
+
+_FINGERPRINT_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
+
+def _fnv1a_32(value):
+    # FNV-1a style 32-bit hash for stable fingerprinting (non-cryptographic).
+    # Starlark lacks ord()/bytes, so map characters via a fixed alphabet.
+    h = 2166136261
+    vlen = len(value)
+    for i in range(vlen):
+        ch = value[i]
+        idx = _FINGERPRINT_ALPHABET.find(ch)
+        if idx < 0:
+            idx = 0
+        h = h ^ idx
+        h = (h * 16777619) & 0xffffffff
+    return h
+
+def _hex32(value):
+    digits = "0123456789abcdef"
+    out = ""
+    v = value
+    for _ in range(8):
+        out = digits[v & 0xf] + out
+        v = v >> 4
+    return out
+
+def _api_key_fingerprint(api_key):
+    if not api_key:
+        return ""
+    return _hex32(_fnv1a_32(api_key))
 
 def _ensure_parent_directory(ctx, path, debug):
     # Create parent directory for a given file path if needed.
@@ -519,8 +551,18 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
 
         # Headers hashtable (PowerShell expects IDictionary-like; hashtable is safest)
         lines.append("$Headers = @{}")
+        ps_env = {}
         for hk, hv in headers.items():
-            lines.append("$Headers['%s'] = '%s'" % (str(hk).replace("'", "''"), str(hv).replace("'", "''")))
+            header_key = str(hk)
+            header_value = str(hv)
+            if header_key.lower() == "dd-api-key":
+                # Keep API keys out of generated script files; inject at execute-time only.
+                ps_env["DD_TOPT_API_KEY"] = header_value
+                lines.append("$apiKey = $env:DD_TOPT_API_KEY")
+                lines.append("if ([string]::IsNullOrEmpty($apiKey)) { Write-Error 'missing DD_TOPT_API_KEY for DD-API-KEY header'; exit 2 }")
+                lines.append("$Headers['%s'] = $apiKey" % header_key.replace("'", "''"))
+            else:
+                lines.append("$Headers['%s'] = '%s'" % (header_key.replace("'", "''"), header_value.replace("'", "''")))
 
         # Optional body file
         if data_file:
@@ -542,7 +584,13 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         lines.append("}")
         script_content = "\n".join(lines) + "\n"
         ctx.file(script_name, script_content)
-        result = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name])
+        if ps_env:
+            result = ctx.execute(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name],
+                environment = ps_env,
+            )
+        else:
+            result = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name])
     else:
         args = [] + _curl_base_args()
         if http_method and http_method != "GET":
@@ -821,7 +869,7 @@ def _build_configurations_json(ctx, debug):
     log_debug(debug, "config", "Configurations JSON: %s" % conf_json)
     return conf_json
 
-def _build_context_tags(ctx, env_data, debug):
+def _build_context_tags(ctx, env_data, api_key, debug):
     # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
     tags = {}
 
@@ -841,6 +889,10 @@ def _build_context_tags(ctx, env_data, debug):
         tags["runtime.version"] = ctx.attr.runtime_version
     if ctx.attr.runtime_arch:
         tags["runtime.architecture"] = ctx.attr.runtime_arch
+
+    # Bazel rules identity tags (stable constants for this ruleset).
+    tags["test.bazel.rule_name"] = TEST_BAZEL_RULE_NAME
+    tags["test.bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
 
     # Git tags (base)
     if env_data.get("repository_url"):
@@ -986,6 +1038,12 @@ def _build_context_tags(ctx, env_data, debug):
     node_labels = ctx.os.environ.get("NODE_LABELS")
     if node_labels:
         tags["ci.node.labels"] = node_labels
+
+    # Embed a non-reversible fingerprint to validate uploader key parity.
+    fingerprint = _api_key_fingerprint(api_key)
+    if fingerprint:
+        tags["topt.api_key_fingerprint"] = fingerprint
+        log_debug(debug, "context", "api key fingerprint enabled")
 
     log_debug(debug, "context", "context.json tags: %s" % json.encode(tags))
     return tags
@@ -1320,7 +1378,7 @@ def _impl(ctx):
     module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug, label_map = label_map)
 
     # Build and write context.json (non-secret metadata) in the same repo
-    context_tags = _build_context_tags(ctx, env_data, debug)
+    context_tags = _build_context_tags(ctx, env_data, api_key, debug)
     ctx.file("context.json", json.encode(context_tags) + "\n")
 
     # Emit a small helper .bzl with detected Go module path (if any) for downstream macros
