@@ -86,13 +86,6 @@ def dd_topt_go_test(
     user_data = kwargs.pop("data", [])
     data = list(user_data)
 
-    # Include package-local testdata files by default so tests that read fixtures
-    # from `testdata/` work consistently across platforms (including Windows).
-    auto_testdata = native.glob(["testdata/**"], allow_empty = True)
-    for f in auto_testdata:
-        if f not in data:
-            data.append(f)
-
     # Extract hints for importpath detection
     explicit_importpath = kwargs.get("importpath") if "importpath" in kwargs else None
     embed_labels = (kwargs.get("embed", []) or [])
