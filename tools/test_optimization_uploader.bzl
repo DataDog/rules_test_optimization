@@ -596,26 +596,22 @@ fi
 dbg "mode: AGENTLESS=$AGENTLESS DD_SITE=$DD_SITE"
 dbg "endpoints: TEST_URL=$TEST_URL COV_URL=$COV_URL"
 
-hdrs=(
-  -H "Datadog-Meta-Lang: bazel-starlark"
-  -H "Datadog-Meta-Lang-Version: n/a"
-  -H "Datadog-Meta-Lang-Interpreter: bazel-run"
-  -H "Datadog-Meta-Tracer-Version: {uploader_version}"
-  -H "Accept: application/json"
-)
+HEADER_LANG_DEFAULT="bazel-starlark"
+HEADER_LANG_VERSION_DEFAULT="n/a"
+HEADER_LANG_INTERPRETER_DEFAULT="bazel-run"
+HEADER_TRACER_VERSION_DEFAULT="{uploader_version}"
 if (( AGENTLESS == 1 )); then
   if [[ -z "${{DD_API_KEY:-}}" ]]; then
     log "error: DD_API_KEY required for agentless uploads"
     log "hint: pass credentials via environment: DD_API_KEY=... DD_SITE=... bazel run //:dd_upload_payloads"
     exit 2  # Configuration error
   fi
-  hdrs+=( -H "DD-API-KEY: $DD_API_KEY" )
 else
   # EVP subdomain headers per endpoint
   TEST_EVP=( -H "X-Datadog-EVP-Subdomain: citestcycle-intake" )
   COV_EVP=( -H "X-Datadog-EVP-Subdomain: citestcov-intake" )
 fi
-dbg "headers prepared (agentless=$AGENTLESS)"
+dbg "headers prepared (agentless=$AGENTLESS; test headers can be derived from metadata)"
 
 # Redact sensitive header values (keep last 4 chars for DD-API-KEY)
 redact_header() {{
@@ -654,6 +650,45 @@ JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 dbg "jq available: $JQ_AVAILABLE"
 dbg "context.json: ${{CONTEXT_JSON:-<none>}}"
+
+# Build common Datadog headers, optionally deriving values from payload metadata["*"].
+build_common_headers() {{
+  local payload_file="${{1:-}}"
+  local lang="$HEADER_LANG_DEFAULT"
+  local lang_version="$HEADER_LANG_VERSION_DEFAULT"
+  local lang_interpreter="$HEADER_LANG_INTERPRETER_DEFAULT"
+  local tracer_version="$HEADER_TRACER_VERSION_DEFAULT"
+
+  if (( JQ_AVAILABLE == 1 )) && [[ -n "$payload_file" && -f "$payload_file" ]]; then
+    local meta_values meta_lang meta_tracer meta_lang_version meta_lang_interpreter
+    meta_values=$(jq -r '
+      [
+        .metadata["*"]["language"] // "",
+        .metadata["*"]["library_version"] // "",
+        (.metadata["*"]["language_version"] // .metadata["*"]["runtime_version"] // ""),
+        (.metadata["*"]["language_interpreter"] // .metadata["*"]["runtime_name"] // "")
+      ] | @tsv
+    ' "$payload_file" 2>/dev/null || true)
+    if [[ -n "$meta_values" ]]; then
+      IFS=$'\t' read -r meta_lang meta_tracer meta_lang_version meta_lang_interpreter <<< "$meta_values"
+      [[ -n "$meta_lang" ]] && lang="$meta_lang"
+      [[ -n "$meta_tracer" ]] && tracer_version="$meta_tracer"
+      [[ -n "$meta_lang_version" ]] && lang_version="$meta_lang_version"
+      [[ -n "$meta_lang_interpreter" ]] && lang_interpreter="$meta_lang_interpreter"
+    fi
+  fi
+
+  COMMON_HDRS=(
+    -H "Datadog-Meta-Lang: $lang"
+    -H "Datadog-Meta-Lang-Version: $lang_version"
+    -H "Datadog-Meta-Lang-Interpreter: $lang_interpreter"
+    -H "Datadog-Meta-Tracer-Version: $tracer_version"
+    -H "Accept: application/json"
+  )
+  if (( AGENTLESS == 1 )); then
+    COMMON_HDRS+=( -H "DD-API-KEY: $DD_API_KEY" )
+  fi
+}}
 
 # Optional check: verify fetch-time API key fingerprint matches uploader API key.
 API_KEY_FINGERPRINT=""
@@ -831,6 +866,7 @@ upload_single_test() {{
     fi
     enrich_with_context "$file" "$body"
     validate_payload "$body"
+    build_common_headers "$body"
     dbg "upload_single_test: posting '$file' (body '$body')"
     if [[ "$DEBUG" == "1" ]]; then
         local gzip_note=""
@@ -868,7 +904,7 @@ upload_single_test() {{
     fi
     if [[ "$DEBUG" == "1" ]]; then
         dbg "request: POST $TEST_URL"
-        dbg_headers "common" "${hdrs[@]}"
+        dbg_headers "common" "${COMMON_HDRS[@]}"
         if (( AGENTLESS == 0 )); then
             dbg_headers "evp" "${TEST_EVP[@]}"
         fi
@@ -878,10 +914,10 @@ upload_single_test() {{
     fi
     if (( AGENTLESS == 1 )); then
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
+        -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     else
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{TEST_URL}}" "${{hdrs[@]}}" "${{TEST_EVP[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
+        -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{TEST_EVP[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     fi
     rc=$?
     http="${{http:-000}}"
@@ -909,6 +945,7 @@ upload_single_coverage() {{
         return 1
     fi
     echo '{{"dummy":true}}' > "$eventjson"
+    build_common_headers ""
     dbg "upload_single_coverage: posting '$file'"
     resp="$(mktemp "$TMP_PAYLOAD_DIR/coverage_resp.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$resp" ]]; then
@@ -918,7 +955,7 @@ upload_single_coverage() {{
     fi
     if [[ "$DEBUG" == "1" ]]; then
         dbg "request: POST $COV_URL"
-        dbg_headers "common" "${hdrs[@]}"
+        dbg_headers "common" "${COMMON_HDRS[@]}"
         if (( AGENTLESS == 0 )); then
             dbg_headers "evp" "${COV_EVP[@]}"
         fi
@@ -926,12 +963,12 @@ upload_single_coverage() {{
     fi
     if (( AGENTLESS == 1 )); then
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{COV_URL}}" "${{hdrs[@]}}" \\
+        -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     else
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
-        -X POST "${{COV_URL}}" "${{hdrs[@]}}" "${{COV_EVP[@]}}" \\
+        -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" "${{COV_EVP[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     fi
@@ -1548,13 +1585,10 @@ if ($Agentless) {{
 Dbg "mode: Agentless=$Agentless Site=$DD_Site"
 Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl"
 
-$CommonHeaders = @{{
-  'Datadog-Meta-Lang' = 'bazel-starlark'
-  'Datadog-Meta-Lang-Version' = 'n/a'
-  'Datadog-Meta-Lang-Interpreter' = 'bazel-run'
-  'Datadog-Meta-Tracer-Version' = '{uploader_version}'
-  'Accept' = 'application/json'
-}}
+$script:HeaderLangDefault = 'bazel-starlark'
+$script:HeaderLangVersionDefault = 'n/a'
+$script:HeaderLangInterpreterDefault = 'bazel-run'
+$script:HeaderTracerVersionDefault = '{uploader_version}'
 if ($Agentless) {{
   if ([string]::IsNullOrEmpty($env:DD_API_KEY)) {{
     Log "error: DD_API_KEY required for agentless uploads"
@@ -1562,12 +1596,11 @@ if ($Agentless) {{
     Release-Lock
     exit 2  # Configuration error
   }}
-  $CommonHeaders['DD-API-KEY'] = $env:DD_API_KEY
 }} else {{
   $TestEvp = @{{ 'X-Datadog-EVP-Subdomain' = 'citestcycle-intake' }}
   $CovEvp  = @{{ 'X-Datadog-EVP-Subdomain' = 'citestcov-intake' }}
 }}
-Dbg "headers prepared (agentless=$Agentless)"
+Dbg "headers prepared (agentless=$Agentless; test headers can be derived from metadata)"
 
 Dbg "context.json: $(if ([string]::IsNullOrEmpty($script:ContextJson)) {{ '<none>' }} else {{ $script:ContextJson }})"
 
@@ -1592,6 +1625,48 @@ if ($ContextFingerprint) {{
   }} else {{
     Log "warning: DD_API_KEY fingerprint present but uploader running in EVP mode; check skipped"
   }}
+}}
+
+function Get-CommonHeaders([string]$PayloadPath) {{
+  $lang = $script:HeaderLangDefault
+  $langVersion = $script:HeaderLangVersionDefault
+  $langInterpreter = $script:HeaderLangInterpreterDefault
+  $tracerVersion = $script:HeaderTracerVersionDefault
+
+  if (-not [string]::IsNullOrEmpty($PayloadPath) -and (Test-Path -LiteralPath $PayloadPath)) {{
+    try {{
+      $payloadObj = Get-Content -LiteralPath $PayloadPath -Raw | ConvertFrom-Json -ErrorAction Stop
+      $metaStar = $null
+      if ($payloadObj.metadata) {{ $metaStar = $payloadObj.metadata.'*' }}
+      if ($metaStar) {{
+        $metaLang = $metaStar.language
+        if (-not [string]::IsNullOrEmpty($metaLang)) {{ $lang = [string]$metaLang }}
+
+        $metaTracerVersion = $metaStar.library_version
+        if (-not [string]::IsNullOrEmpty($metaTracerVersion)) {{ $tracerVersion = [string]$metaTracerVersion }}
+
+        $metaLangVersion = $metaStar.language_version
+        if ([string]::IsNullOrEmpty($metaLangVersion)) {{ $metaLangVersion = $metaStar.runtime_version }}
+        if (-not [string]::IsNullOrEmpty($metaLangVersion)) {{ $langVersion = [string]$metaLangVersion }}
+
+        $metaLangInterpreter = $metaStar.language_interpreter
+        if ([string]::IsNullOrEmpty($metaLangInterpreter)) {{ $metaLangInterpreter = $metaStar.runtime_name }}
+        if (-not [string]::IsNullOrEmpty($metaLangInterpreter)) {{ $langInterpreter = [string]$metaLangInterpreter }}
+      }}
+    }} catch {{
+      Dbg "Get-CommonHeaders: failed to parse payload metadata from '$PayloadPath' ($_)"
+    }}
+  }}
+
+  $headers = @{{
+    'Datadog-Meta-Lang' = $lang
+    'Datadog-Meta-Lang-Version' = $langVersion
+    'Datadog-Meta-Lang-Interpreter' = $langInterpreter
+    'Datadog-Meta-Tracer-Version' = $tracerVersion
+    'Accept' = 'application/json'
+  }}
+  if ($Agentless) {{ $headers['DD-API-KEY'] = $env:DD_API_KEY }}
+  return $headers
 }}
 
 function Merge-With-Context([string]$infile, [string]$outfile) {{
@@ -1775,7 +1850,7 @@ function Upload-SingleTest([string]$FilePath) {{
     $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
     Validate-Payload $body
-    $hdrs = $CommonHeaders.Clone()
+    $hdrs = Get-CommonHeaders $body
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
     Dbg "Upload-SingleTest: posting '$FilePath' (body '$body')"
     if ($script:DebugMode) {{
@@ -1801,13 +1876,14 @@ function Upload-SingleCoverage([string]$FilePath) {{
     $uploaded = $false
 
     try {{
+        $covHeaders = Get-CommonHeaders $null
         $client = New-Object System.Net.Http.HttpClient
         $client.Timeout = [TimeSpan]::FromSeconds(60)
-        foreach ($k in $CommonHeaders.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$CommonHeaders[$k]) }}
+        foreach ($k in $covHeaders.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$covHeaders[$k]) }}
         if (-not $Agentless) {{ $client.DefaultRequestHeaders.Add('X-Datadog-EVP-Subdomain','citestcov-intake') }}
         if ($script:DebugMode) {{
             Dbg "request: POST $CovUrl"
-            Dbg-Headers "common" $CommonHeaders
+            Dbg-Headers "common" $covHeaders
             if (-not $Agentless) {{ Dbg "header[evp]: X-Datadog-EVP-Subdomain: citestcov-intake" }}
         }}
 
