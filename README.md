@@ -426,6 +426,10 @@ The macro sets the following environment variables for instrumented tests:
 
 The `dd_topt_go_test` macro simplifies setting up Go tests with Datadog Test Optimization. It creates a go_test target with the necessary environment variables and data dependencies.
 
+By default, the macro also:
+- Includes package-local `testdata/**` files in test runfiles (if present)
+- Sets `rundir` to the current Bazel package when not explicitly provided
+
 ### Basic usage
 
 ```bzl

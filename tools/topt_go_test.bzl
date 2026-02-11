@@ -86,6 +86,13 @@ def dd_topt_go_test(
     user_data = kwargs.pop("data", [])
     data = list(user_data)
 
+    # Include package-local testdata files by default so tests that read fixtures
+    # from `testdata/` work consistently across platforms (including Windows).
+    auto_testdata = native.glob(["testdata/**"], allow_empty = True)
+    for f in auto_testdata:
+        if f not in data:
+            data.append(f)
+
     # Extract hints for importpath detection
     explicit_importpath = kwargs.get("importpath") if "importpath" in kwargs else None
     embed_labels = (kwargs.get("embed", []) or [])
@@ -164,6 +171,11 @@ def dd_topt_go_test(
     _go_test = go_test_rule if go_test_rule != None else None
     if _go_test == None:
         fail("dd_topt_go_test: you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
+
+    # Use the package directory as the default runtime working directory when
+    # callers do not specify one. This keeps relative fixture paths stable.
+    if "rundir" not in kwargs:
+        kwargs["rundir"] = native.package_name()
 
     # Create ONLY the go_test - NO uploader, NO test_suite
     # Users must create ONE uploader target per workspace and run it via `bazel run`
