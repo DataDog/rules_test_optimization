@@ -1355,6 +1355,28 @@ if ($env:DD_TOPT_DEBUG) {{
 }}
 function Log([string]$msg) {{ Write-Output "[dd-uploader] $msg" }}
 function Dbg([string]$msg) {{ if ($script:DebugMode) {{ Write-Host "[dd-uploader][dbg] $msg" }} }}
+function Write-Utf8NoBomFile([string]$Path, [string]$Content) {{
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}}
+$script:HttpAssemblyReady = $false
+function Ensure-HttpClientTypes {{
+    if ($script:HttpAssemblyReady) {{ return $true }}
+    try {{
+        if (-not ("System.Net.Http.HttpClient" -as [type])) {{
+            Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+        }}
+        if (-not ("System.Net.Http.HttpClient" -as [type])) {{
+            Dbg "System.Net.Http.HttpClient type unavailable after Add-Type"
+            return $false
+        }}
+        $script:HttpAssemblyReady = $true
+        return $true
+    }} catch {{
+        Dbg "failed to load System.Net.Http assembly: $_"
+        return $false
+    }}
+}}
 Dbg "startup runfiles env: RUNFILES_DIR='$(if ($env:RUNFILES_DIR) {{ $env:RUNFILES_DIR }} else {{ '<unset>' }})' RUNFILES_MANIFEST_FILE='$(if ($env:RUNFILES_MANIFEST_FILE) {{ $env:RUNFILES_MANIFEST_FILE }} else {{ '<unset>' }})' PSScriptRoot='$PSScriptRoot'"
 
 function Redact-HeaderValue([string]$name, [string]$value) {{
@@ -1972,7 +1994,8 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
   }}
 
   Dbg "Merge-With-Context: wrote enriched '$outfile'"
-  $payload | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $outfile -Encoding UTF8
+  $jsonPayload = $payload | ConvertTo-Json -Depth 100
+  Write-Utf8NoBomFile -Path $outfile -Content $jsonPayload
 }}
 
 function Validate-Payload([string]$FilePath) {{
@@ -2022,6 +2045,10 @@ $script:UploadFailures = 0
 function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
   $maxRetries = 3
   $retryDelay = 2
+  if (-not (Ensure-HttpClientTypes)) {{
+    Log "upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
+    return $false
+  }}
   for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {{
     $client = $null
     try {{
@@ -2082,8 +2109,8 @@ function Upload-SingleTest([string]$FilePath) {{
     if (-not $Agentless) {{ $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }}
     Dbg "Upload-SingleTest: posting '$FilePath' (body '$body')"
     if ($script:DebugMode) {{
-        Write-Output "[dd-uploader][dbg] payload content (enriched) for '$FilePath':"
-        Write-Output (Get-Content -LiteralPath $body -Raw)
+        Write-Host "[dd-uploader][dbg] payload content (enriched) for '$FilePath':"
+        Write-Host (Get-Content -LiteralPath $body -Raw)
         Dbg "request: POST $TestUrl"
         Dbg-Headers "common" $hdrs
         Log-StartTimeStats $body
@@ -2095,7 +2122,7 @@ function Upload-SingleTest([string]$FilePath) {{
 
 function Upload-SingleCoverage([string]$FilePath) {{
     $eventFile = Join-Path $script:TmpPayloadDir ("coverage_event_" + [System.Guid]::NewGuid().ToString("N") + ".json")
-    Set-Content -LiteralPath $eventFile -Value '{{"dummy":true}}' -Encoding UTF8
+    Write-Utf8NoBomFile -Path $eventFile -Content '{{"dummy":true}}'
 
     $client = $null
     $fs = $null
@@ -2104,6 +2131,10 @@ function Upload-SingleCoverage([string]$FilePath) {{
     $uploaded = $false
 
     try {{
+        if (-not (Ensure-HttpClientTypes)) {{
+            Log "coverage upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
+            return $false
+        }}
         $covHeaders = Get-CommonHeaders $null
         $client = New-Object System.Net.Http.HttpClient
         $client.Timeout = [TimeSpan]::FromSeconds(60)
