@@ -228,13 +228,42 @@ resolve_runfile() {{
     echo ""  # Not found
 }}
 
+# Resolve execroot-relative artifact path (File.path).
+# Bazel commonly provides paths like "external/<repo>/..." relative to execroot.
+resolve_artifact_path() {{
+    local input_path="$1"
+    if [[ -z "$input_path" ]]; then
+        echo ""
+        return
+    fi
+    dbg "resolve_artifact_path: input='$input_path'"
+    if [[ -f "$input_path" ]]; then
+        dbg "resolve_artifact_path: hit direct -> '$input_path'"
+        echo "$input_path"
+        return
+    fi
+    local script_dir execroot candidate
+    script_dir=$(cd "$(dirname "$0")" && pwd -P)
+    execroot=$(cd "$script_dir/../../.." 2>/dev/null && pwd -P || true)
+    if [[ -n "$execroot" ]]; then
+        candidate="$execroot/$input_path"
+        if [[ -f "$candidate" ]]; then
+            dbg "resolve_artifact_path: hit execroot-relative -> '$candidate'"
+            echo "$candidate"
+            return
+        fi
+    fi
+    dbg "resolve_artifact_path: miss for input '$input_path'"
+    echo ""
+}}
+
 # Resolve context.json path (used by upload functions for payload enrichment)
 # Path is determined at rule implementation time from data files
 CONTEXT_JSON_RLOC="{context_json_rloc}"
 CONTEXT_JSON_PATH="{context_json_path}"
 dbg "context.json resolution inputs: path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC'"
-if [[ -n "$CONTEXT_JSON_PATH" && -f "$CONTEXT_JSON_PATH" ]]; then
-    CONTEXT_JSON="$CONTEXT_JSON_PATH"
+CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")
+if [[ -n "$CONTEXT_JSON" ]]; then
     dbg "context.json resolved via direct path: '$CONTEXT_JSON'"
 elif [[ -n "$CONTEXT_JSON_RLOC" ]]; then
     CONTEXT_JSON=$(resolve_runfile "$CONTEXT_JSON_RLOC")
@@ -254,8 +283,8 @@ SCHEMA_JSON_PATH="{schema_json_path}"
 SCHEMA_VALIDATOR_RLOC="{schema_validator_rloc}"
 SCHEMA_VALIDATOR_PATH="{schema_validator_path}"
 dbg "schema resolution inputs: schema_path='$SCHEMA_JSON_PATH' schema_rloc='$SCHEMA_JSON_RLOC' validator_path='$SCHEMA_VALIDATOR_PATH' validator_rloc='$SCHEMA_VALIDATOR_RLOC'"
-if [[ -n "$SCHEMA_JSON_PATH" && -f "$SCHEMA_JSON_PATH" ]]; then
-    SCHEMA_JSON="$SCHEMA_JSON_PATH"
+SCHEMA_JSON=$(resolve_artifact_path "$SCHEMA_JSON_PATH")
+if [[ -n "$SCHEMA_JSON" ]]; then
     dbg "schema resolved via direct path: '$SCHEMA_JSON'"
 elif [[ -n "$SCHEMA_JSON_RLOC" ]]; then
     SCHEMA_JSON=$(resolve_runfile "$SCHEMA_JSON_RLOC")
@@ -268,8 +297,8 @@ else
     SCHEMA_JSON=""
     dbg "schema not configured in data files; validation disabled"
 fi
-if [[ -n "$SCHEMA_VALIDATOR_PATH" && -f "$SCHEMA_VALIDATOR_PATH" ]]; then
-    SCHEMA_VALIDATOR="$SCHEMA_VALIDATOR_PATH"
+SCHEMA_VALIDATOR=$(resolve_artifact_path "$SCHEMA_VALIDATOR_PATH")
+if [[ -n "$SCHEMA_VALIDATOR" ]]; then
     dbg "schema validator resolved via direct path: '$SCHEMA_VALIDATOR'"
 elif [[ -n "$SCHEMA_VALIDATOR_RLOC" ]]; then
     SCHEMA_VALIDATOR=$(resolve_runfile "$SCHEMA_VALIDATOR_RLOC")
@@ -1287,6 +1316,35 @@ function Resolve-Runfile {{
     return $null  # Not found
 }}
 
+function Resolve-ArtifactPath {{
+    param([string]$InputPath)
+
+    if (-not $InputPath) {{ return $null }}
+    Dbg "Resolve-ArtifactPath input='$InputPath'"
+
+    if (Test-Path -LiteralPath $InputPath -PathType Leaf) {{
+        Dbg "Resolve-ArtifactPath hit direct -> '$InputPath'"
+        return $InputPath
+    }}
+
+    $execRoot = $null
+    try {{
+        $execRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\\..\\.."))
+    }} catch {{
+        $execRoot = $null
+    }}
+    if ($execRoot) {{
+        $candidate = Join-Path $execRoot $InputPath
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {{
+            Dbg "Resolve-ArtifactPath hit execroot-relative -> '$candidate'"
+            return $candidate
+        }}
+    }}
+
+    Dbg "Resolve-ArtifactPath miss for input '$InputPath'"
+    return $null
+}}
+
 # Logging functions (defined early so other functions can use them)
 # Note: $Debug is set later, so Dbg checks the variable at runtime
 $script:DebugMode = $false  # Will be set properly after Normalize-Bool is defined
@@ -1296,7 +1354,7 @@ if ($env:DD_TOPT_DEBUG) {{
     }}
 }}
 function Log([string]$msg) {{ Write-Output "[dd-uploader] $msg" }}
-function Dbg([string]$msg) {{ if ($script:DebugMode) {{ Write-Output "[dd-uploader][dbg] $msg" }} }}
+function Dbg([string]$msg) {{ if ($script:DebugMode) {{ Write-Host "[dd-uploader][dbg] $msg" }} }}
 Dbg "startup runfiles env: RUNFILES_DIR='$(if ($env:RUNFILES_DIR) {{ $env:RUNFILES_DIR }} else {{ '<unset>' }})' RUNFILES_MANIFEST_FILE='$(if ($env:RUNFILES_MANIFEST_FILE) {{ $env:RUNFILES_MANIFEST_FILE }} else {{ '<unset>' }})' PSScriptRoot='$PSScriptRoot'"
 
 function Redact-HeaderValue([string]$name, [string]$value) {{
@@ -1362,8 +1420,8 @@ function Log-StartTimeStats([string]$FilePath) {{
 $ContextJsonRloc = "{context_json_rloc}"
 $ContextJsonPath = "{context_json_path}"
 Dbg "context.json resolution inputs: path='$ContextJsonPath' rloc='$ContextJsonRloc'"
-if ($ContextJsonPath -and (Test-Path -LiteralPath $ContextJsonPath)) {{
-    $script:ContextJson = $ContextJsonPath
+$script:ContextJson = Resolve-ArtifactPath $ContextJsonPath
+if ($script:ContextJson) {{
     Dbg "context.json resolved via direct path: '$script:ContextJson'"
 }} elseif ($ContextJsonRloc) {{
     $script:ContextJson = Resolve-Runfile $ContextJsonRloc
@@ -1381,8 +1439,8 @@ if ($ContextJsonPath -and (Test-Path -LiteralPath $ContextJsonPath)) {{
 $SchemaJsonRloc = "{schema_json_rloc}"
 $SchemaJsonPath = "{schema_json_path}"
 Dbg "schema resolution inputs: schema_path='$SchemaJsonPath' schema_rloc='$SchemaJsonRloc'"
-if ($SchemaJsonPath -and (Test-Path -LiteralPath $SchemaJsonPath)) {{
-    $script:SchemaJson = $SchemaJsonPath
+$script:SchemaJson = Resolve-ArtifactPath $SchemaJsonPath
+if ($script:SchemaJson) {{
     Dbg "schema resolved via direct path: '$script:SchemaJson'"
 }} elseif ($SchemaJsonRloc) {{
     $script:SchemaJson = Resolve-Runfile $SchemaJsonRloc
@@ -1399,8 +1457,8 @@ if ($SchemaJsonPath -and (Test-Path -LiteralPath $SchemaJsonPath)) {{
 $SchemaValidatorRloc = "{schema_validator_rloc}"
 $SchemaValidatorPath = "{schema_validator_path}"
 Dbg "schema validator resolution inputs: validator_path='$SchemaValidatorPath' validator_rloc='$SchemaValidatorRloc'"
-if ($SchemaValidatorPath -and (Test-Path -LiteralPath $SchemaValidatorPath)) {{
-    $script:SchemaValidator = $SchemaValidatorPath
+$script:SchemaValidator = Resolve-ArtifactPath $SchemaValidatorPath
+if ($script:SchemaValidator) {{
     Dbg "schema validator resolved via direct path: '$script:SchemaValidator'"
 }} elseif ($SchemaValidatorRloc) {{
     $script:SchemaValidator = Resolve-Runfile $SchemaValidatorRloc
