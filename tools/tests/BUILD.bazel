@@ -17,13 +17,22 @@ load(
 )
 load(
     "//tools/tests:test_uploader_utils.bzl",
+    "codeowners_compile_regex_edge_cases_test",
     "codeowners_compile_regex_test",
+    "codeowners_derived_candidate_filter_test",
+    "codeowners_glob_to_regex_edge_cases_test",
     "codeowners_glob_to_regex_test",
     "codeowners_lookup_order_empty_script_dir_test",
     "codeowners_lookup_order_test",
+    "codeowners_section_header_powershell_parity_test",
+    "codeowners_section_header_classification_test",
+    "runfile_manifest_bash_resolution_test",
+    "runfile_manifest_parser_parity_test",
+    "runfile_manifest_powershell_resolution_test",
     "render_template_missing_placeholder_test",
     "render_template_substitution_test",
     "render_template_unescape_only_test",
+    "strip_workspace_prefix_powershell_windows_test",
 )
 
 # Starlark unit tests for core helpers (sync, uploader, common utils).
@@ -118,8 +127,62 @@ codeowners_glob_to_regex_test(
     timeout = "short",
 )
 
+codeowners_glob_to_regex_edge_cases_test(
+    name = "codeowners_glob_to_regex_edge_cases_test",
+    size = "small",
+    timeout = "short",
+)
+
 codeowners_compile_regex_test(
     name = "codeowners_compile_regex_test",
+    size = "small",
+    timeout = "short",
+)
+
+codeowners_compile_regex_edge_cases_test(
+    name = "codeowners_compile_regex_edge_cases_test",
+    size = "small",
+    timeout = "short",
+)
+
+codeowners_section_header_classification_test(
+    name = "codeowners_section_header_classification_test",
+    size = "small",
+    timeout = "short",
+)
+
+codeowners_section_header_powershell_parity_test(
+    name = "codeowners_section_header_powershell_parity_test",
+    size = "small",
+    timeout = "short",
+)
+
+codeowners_derived_candidate_filter_test(
+    name = "codeowners_derived_candidate_filter_test",
+    size = "small",
+    timeout = "short",
+)
+
+strip_workspace_prefix_powershell_windows_test(
+    name = "strip_workspace_prefix_powershell_windows_test",
+    size = "small",
+    timeout = "short",
+)
+
+runfile_manifest_bash_resolution_test(
+    name = "runfile_manifest_bash_resolution_test",
+    size = "small",
+    timeout = "short",
+)
+
+runfile_manifest_powershell_resolution_test(
+    name = "runfile_manifest_powershell_resolution_test",
+    size = "small",
+    timeout = "short",
+)
+
+runfile_manifest_parser_parity_test(
+    name = "runfile_manifest_parser_parity_test",
     size = "small",
     timeout = "short",
 )
@@ -154,7 +217,16 @@ test_suite(
         ":render_template_unescape_only_test",
         ":render_template_missing_placeholder_test",
         ":codeowners_glob_to_regex_test",
+        ":codeowners_glob_to_regex_edge_cases_test",
         ":codeowners_compile_regex_test",
+        ":codeowners_compile_regex_edge_cases_test",
+        ":codeowners_section_header_classification_test",
+        ":codeowners_section_header_powershell_parity_test",
+        ":codeowners_derived_candidate_filter_test",
+        ":strip_workspace_prefix_powershell_windows_test",
+        ":runfile_manifest_bash_resolution_test",
+        ":runfile_manifest_powershell_resolution_test",
+        ":runfile_manifest_parser_parity_test",
         ":codeowners_lookup_order_test",
         ":codeowners_lookup_order_empty_script_dir_test",
     ],

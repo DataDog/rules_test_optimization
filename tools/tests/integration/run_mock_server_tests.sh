@@ -757,12 +757,29 @@ cat > "$WORKSPACE/CODEOWNERS" <<'CODEOWNERS_EOF'
 * @org/default
 [xy] @org/class-owner
 [abc] @org/class-owner-abc
+[A1B2C3] @org/class-owner-alnum-long
+[ABCD] @org/class-owner-upper-long
+[ABC] @org/class-owner-upper
+[Abc] @org/class-owner-mixed
 [Backend] @org/section-default
 /manual/owned.cs @org/owned
 /manual/unowned.cs
 /manual/comment_only.cs # explicit empty-owner rule via inline comment
 /manual/hash_owner.cs @org/team#chat
 /manual/space\ owner.cs @org/space-owner
+/manual/dir/ @org/dir-owner
+/manual/literal\*.cs @org/literal-star
+/manual/literal\?.cs @org/literal-question
+/manual/literal\[ab\].cs @org/literal-brackets
+/manual/duplicate_owners.cs @org/dedupe @org/dedupe @org/extra
+/manual/last_match.cs @org/first
+/manual/last_match.cs @org/second
+/manual/override_empty.cs @org/will-be-overridden
+/manual/override_empty.cs
+/manual/file_scheme.cs @org/file-scheme
+/manual/percent_slash.cs @org/percent-slash
+/manual/dotnorm.cs @org/dotnorm
+/external/local/file.cs @org/repo-external
 # Intentionally malformed range class. This line exercises "best effort"
 # behavior: parser/matcher must ignore invalid regex outputs and still allow
 # later processing/fallback ownership resolution for unrelated files.
@@ -849,6 +866,150 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
     {
       "type": "test",
       "content": {
+        "resource": "Manual.DirectoryRule",
+        "meta": {
+          "test.source.file": "manual/dir/sub/file.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.LiteralStar",
+        "meta": {
+          "test.source.file": "manual/literal*.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.LiteralQuestion",
+        "meta": {
+          "test.source.file": "manual/literal?.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.LiteralBrackets",
+        "meta": {
+          "test.source.file": "manual/literal[ab].cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.DuplicateOwners",
+        "meta": {
+          "test.source.file": "manual/duplicate_owners.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.LastMatchWins",
+        "meta": {
+          "test.source.file": "manual/last_match.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.OverrideEmpty",
+        "meta": {
+          "test.source.file": "manual/override_empty.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.FileScheme",
+        "meta": {
+          "test.source.file": "file://manual/file_scheme.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.PercentSlash",
+        "meta": {
+          "test.source.file": "manual%2Fpercent_slash.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.DotNormalization",
+        "meta": {
+          "test.source.file": "./manual/sub/../dotnorm.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.PathTraversalRejected",
+        "meta": {
+          "test.source.file": "../manual/owned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.NullEscapeNoDecode",
+        "meta": {
+          "test.source.file": "manual%00owned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.MalformedPercent",
+        "meta": {
+          "test.source.file": "manual%2Gbad.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.RunfilesMain",
+        "meta": {
+          "test.source.file": "/tmp/mock.runfiles/_main/manual/owned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.RunfilesExternal",
+        "meta": {
+          "test.source.file": "/tmp/mock.runfiles/_main/external/rules_go/pkg/file.go"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.ExecrootMain",
+        "meta": {
+          "test.source.file": "/tmp/execroot/mock_ws/_main/manual/owned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
         "resource": "Manual.TabOwner",
         "meta": {
           "test.source.file": "manual/tab_sep.cs"
@@ -870,6 +1031,42 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
         "resource": "Manual.CharClassLong",
         "meta": {
           "test.source.file": "a"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.CharClassUpper",
+        "meta": {
+          "test.source.file": "B"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.CharClassUpperLong",
+        "meta": {
+          "test.source.file": "D"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.CharClassAlnumLong",
+        "meta": {
+          "test.source.file": "2"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.CharClassMixed",
+        "meta": {
+          "test.source.file": "b"
         }
       }
     },
@@ -906,6 +1103,73 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
         "resource": "Manual.ExternalAbsolutePath",
         "meta": {
           "test.source.file": "/tmp/not-in-workspace/manual_external.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.ExecrootExternalPath",
+        "meta": {
+          "test.source.file": "/tmp/execroot/mock_ws/external/rules_go/pkg/file.go"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.RepoRelativeExternalPath",
+        "meta": {
+          "test.source.file": "external/local/file.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.PreservedExisting",
+        "meta": {
+          "test.source.file": "manual/owned.cs",
+          "test.codeowners": "[\"@org/preexisting\"]"
+        }
+      }
+    },
+    {
+      "type": "test_suite_end",
+      "content": {
+        "resource": "Manual.PreservedSuiteEnd",
+        "meta": {
+          "test.source.file": "manual/owned.cs",
+          "test.codeowners": "[\"@org/preexisting-suite\"]"
+        }
+      }
+    },
+    {
+      "type": "test_module_end",
+      "content": {
+        "resource": "Manual.PreservedModuleEnd",
+        "meta": {
+          "test.source.file": "manual/owned.cs",
+          "test.codeowners": "[\"@org/preexisting-module\"]"
+        }
+      }
+    },
+    {
+      "type": "test_session_end",
+      "content": {
+        "resource": "Manual.PreservedSessionEnd",
+        "meta": {
+          "test.source.file": "manual/owned.cs",
+          "test.codeowners": "[\"@org/preexisting-session\"]"
+        }
+      }
+    },
+    {
+      "type": "span",
+      "content": {
+        "resource": "Manual.SpanSkipped",
+        "meta": {
+          "test.source.file": "manual/owned.cs"
         }
       }
     },
@@ -1011,6 +1275,54 @@ if owners_for("Manual.HashOwner") != ["@org/team#chat"]:
 if owners_for("Manual.SpaceOwner") != ["@org/space-owner"]:
     print("error: Manual.SpaceOwner should resolve escaped-space CODEOWNERS pattern")
     sys.exit(1)
+if owners_for("Manual.DirectoryRule") != ["@org/dir-owner"]:
+    print("error: Manual.DirectoryRule should resolve trailing-slash directory CODEOWNERS rule")
+    sys.exit(1)
+if owners_for("Manual.LiteralStar") != ["@org/literal-star"]:
+    print("error: Manual.LiteralStar should resolve escaped '*' CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.LiteralQuestion") != ["@org/literal-question"]:
+    print("error: Manual.LiteralQuestion should resolve escaped '?' CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.LiteralBrackets") != ["@org/literal-brackets"]:
+    print("error: Manual.LiteralBrackets should resolve escaped bracket CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.DuplicateOwners") != ["@org/dedupe", "@org/extra"]:
+    print("error: Manual.DuplicateOwners should dedupe owners while preserving order")
+    sys.exit(1)
+if owners_for("Manual.LastMatchWins") != ["@org/second"]:
+    print("error: Manual.LastMatchWins should honor last matching CODEOWNERS rule")
+    sys.exit(1)
+if owners_for("Manual.OverrideEmpty") is not None:
+    print("error: Manual.OverrideEmpty should not set owners when final matching rule has no owners")
+    sys.exit(1)
+if owners_for("Manual.FileScheme") != ["@org/file-scheme"]:
+    print("error: Manual.FileScheme should resolve file:// source paths")
+    sys.exit(1)
+if owners_for("Manual.PercentSlash") != ["@org/percent-slash"]:
+    print("error: Manual.PercentSlash should decode %2F before matching")
+    sys.exit(1)
+if owners_for("Manual.DotNormalization") != ["@org/dotnorm"]:
+    print("error: Manual.DotNormalization should normalize dot-segment source paths")
+    sys.exit(1)
+if owners_for("Manual.PathTraversalRejected") is not None:
+    print("error: Manual.PathTraversalRejected should ignore source paths escaping repository root")
+    sys.exit(1)
+if owners_for("Manual.NullEscapeNoDecode") != ["@org/default"]:
+    print("error: Manual.NullEscapeNoDecode should avoid decoding %00 and fall back safely")
+    sys.exit(1)
+if owners_for("Manual.MalformedPercent") != ["@org/default"]:
+    print("error: Manual.MalformedPercent should keep malformed percent encoding and fall back safely")
+    sys.exit(1)
+if owners_for("Manual.RunfilesMain") != ["@org/owned"]:
+    print("error: Manual.RunfilesMain should resolve runfiles _main source paths")
+    sys.exit(1)
+if owners_for("Manual.RunfilesExternal") is not None:
+    print("error: Manual.RunfilesExternal should not inherit repo owners for runfiles external dependency paths")
+    sys.exit(1)
+if owners_for("Manual.ExecrootMain") != ["@org/owned"]:
+    print("error: Manual.ExecrootMain should resolve execroot _main source paths")
+    sys.exit(1)
 if owners_for("Manual.TabOwner") != ["@org/tab-owner"]:
     print("error: Manual.TabOwner should resolve tab-separated CODEOWNERS owner list")
     sys.exit(1)
@@ -1019,6 +1331,18 @@ if owners_for("Manual.CharClass") != ["@org/class-owner"]:
     sys.exit(1)
 if owners_for("Manual.CharClassLong") != ["@org/class-owner-abc"]:
     print("error: Manual.CharClassLong should resolve longer bracket-only class CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.CharClassUpper") != ["@org/class-owner-upper"]:
+    print("error: Manual.CharClassUpper should resolve uppercase bracket-only class CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.CharClassUpperLong") != ["@org/class-owner-upper-long"]:
+    print("error: Manual.CharClassUpperLong should resolve long uppercase bracket-only class CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.CharClassAlnumLong") != ["@org/class-owner-alnum-long"]:
+    print("error: Manual.CharClassAlnumLong should resolve long uppercase-alnum bracket-only class CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.CharClassMixed") != ["@org/class-owner-mixed"]:
+    print("error: Manual.CharClassMixed should resolve mixed-case bracket-only class CODEOWNERS pattern")
     sys.exit(1)
 if owners_for("Manual.SectionHeaderWithSpaceIgnored") != ["@org/default"]:
     print("error: Manual.SectionHeaderWithSpaceIgnored should ignore spaced GitLab section headers")
@@ -1032,6 +1356,27 @@ if owners_for("Manual.EncodedBackslash") != ["@org/owned"]:
 if owners_for("Manual.ExternalAbsolutePath") is not None:
     print("error: Manual.ExternalAbsolutePath should not inherit repo CODEOWNERS from absolute non-repo paths")
     sys.exit(1)
+if owners_for("Manual.ExecrootExternalPath") is not None:
+    print("error: Manual.ExecrootExternalPath should not inherit repo CODEOWNERS from execroot external dependency paths")
+    sys.exit(1)
+if owners_for("Manual.RepoRelativeExternalPath") != ["@org/repo-external"]:
+    print("error: Manual.RepoRelativeExternalPath should still resolve repository-owned external/ paths")
+    sys.exit(1)
+if owners_for("Manual.PreservedExisting") != ["@org/preexisting"]:
+    print("error: Manual.PreservedExisting should keep producer-provided test.codeowners value")
+    sys.exit(1)
+if owners_for("Manual.PreservedSuiteEnd") != ["@org/preexisting-suite"]:
+    print("error: Manual.PreservedSuiteEnd should preserve producer-provided owners on test_suite_end events")
+    sys.exit(1)
+if owners_for("Manual.PreservedModuleEnd") != ["@org/preexisting-module"]:
+    print("error: Manual.PreservedModuleEnd should preserve producer-provided owners on test_module_end events")
+    sys.exit(1)
+if owners_for("Manual.PreservedSessionEnd") != ["@org/preexisting-session"]:
+    print("error: Manual.PreservedSessionEnd should preserve producer-provided owners on test_session_end events")
+    sys.exit(1)
+if owners_for("Manual.SpanSkipped") is not None:
+    print("error: Manual.SpanSkipped should not enrich span events")
+    sys.exit(1)
 if owners_for("Manual.ModuleEndOwned") != ["@org/owned"]:
     print("error: Manual.ModuleEndOwned should enrich test_module_end events when source path resolves")
     sys.exit(1)
@@ -1044,6 +1389,236 @@ if owners_for("Manual.SourceFallback") != ["@org/owned"]:
 if owners_for("Manual.Default") != ["@org/default"]:
     print("error: Manual.Default should resolve fallback '*' rule")
     sys.exit(1)
+PY
+
+# Scenario: force context.json resolution through RUNFILES_MANIFEST_FILE only.
+# This validates BOM/tab exact-key matching and suffix-key fallback end-to-end.
+UPLOADER_CQUERY=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:dd_upload_payloads_with_context --output=files \
+  "${REPO_ENVS[@]}")
+UPLOADER_SCRIPT_PATH=$(echo "$UPLOADER_CQUERY" | awk 'NF { print; exit }')
+if [[ -z "$UPLOADER_SCRIPT_PATH" ]]; then
+  echo "error: failed to resolve dd_upload_payloads script path"
+  echo "$UPLOADER_CQUERY"
+  exit 1
+fi
+if [[ "$UPLOADER_SCRIPT_PATH" != /* && ! "$UPLOADER_SCRIPT_PATH" =~ ^[A-Za-z]:[\\/] ]]; then
+  for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
+    [[ -z "$base" ]] && continue
+    if [[ -f "$base/$UPLOADER_SCRIPT_PATH" ]]; then
+      UPLOADER_SCRIPT_PATH="$base/$UPLOADER_SCRIPT_PATH"
+      break
+    fi
+  done
+fi
+if [[ ! -f "$UPLOADER_SCRIPT_PATH" ]]; then
+  echo "error: resolved uploader script does not exist: $UPLOADER_SCRIPT_PATH"
+  exit 1
+fi
+
+MANIFEST_UPLOADER="$TMP_WS/manifest_uploader.sh"
+cp "$UPLOADER_SCRIPT_PATH" "$MANIFEST_UPLOADER"
+chmod u+w,ugo+x "$MANIFEST_UPLOADER"
+
+# Patch copied script so direct artifact resolution always misses and runfile
+# manifest lookup is required for context/schema files.
+MANIFEST_UPLOADER_PATH="$MANIFEST_UPLOADER" "$PYTHON" - <<'PY'
+import os
+import re
+import sys
+
+path = os.environ["MANIFEST_UPLOADER_PATH"]
+with open(path, "r", encoding="utf-8") as handle:
+    content = handle.read()
+for key in ("CONTEXT_JSON_PATH", "SCHEMA_JSON_PATH", "SCHEMA_VALIDATOR_PATH"):
+    content, count = re.subn(
+        rf'^{key}="[^"]*"$',
+        f'{key}="__FORCE_RUNFILE_FALLBACK__"',
+        content,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        print(f"error: failed to patch {key} in copied uploader script")
+        sys.exit(1)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(content)
+PY
+
+CONTEXT_JSON_RLOC_MANIFEST=$(MANIFEST_UPLOADER_PATH="$MANIFEST_UPLOADER" "$PYTHON" - <<'PY'
+import os
+import re
+import sys
+
+path = os.environ["MANIFEST_UPLOADER_PATH"]
+with open(path, "r", encoding="utf-8") as handle:
+    content = handle.read()
+match = re.search(r'^CONTEXT_JSON_RLOC="([^"]*)"$', content, flags=re.MULTILINE)
+if not match:
+    print("error: failed to locate CONTEXT_JSON_RLOC in copied uploader script")
+    sys.exit(1)
+print(match.group(1))
+PY
+)
+if [[ -z "$CONTEXT_JSON_RLOC_MANIFEST" ]]; then
+  echo "error: CONTEXT_JSON_RLOC from copied uploader is empty"
+  exit 1
+fi
+
+CONTEXT_CQUERY=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_context --output=files \
+  "${REPO_ENVS[@]}")
+CONTEXT_JSON_REAL_PATH=$(echo "$CONTEXT_CQUERY" | awk 'NF { print; exit }')
+if [[ -z "$CONTEXT_JSON_REAL_PATH" ]]; then
+  echo "error: failed to resolve context.json path from cquery"
+  echo "$CONTEXT_CQUERY"
+  exit 1
+fi
+if [[ "$CONTEXT_JSON_REAL_PATH" != /* && ! "$CONTEXT_JSON_REAL_PATH" =~ ^[A-Za-z]:[\\/] ]]; then
+  for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
+    [[ -z "$base" ]] && continue
+    if [[ -f "$base/$CONTEXT_JSON_REAL_PATH" ]]; then
+      CONTEXT_JSON_REAL_PATH="$base/$CONTEXT_JSON_REAL_PATH"
+      break
+    fi
+  done
+fi
+if [[ ! -f "$CONTEXT_JSON_REAL_PATH" ]]; then
+  echo "error: context.json not found for manifest fallback checks: $CONTEXT_JSON_REAL_PATH"
+  echo "$CONTEXT_CQUERY"
+  exit 1
+fi
+
+write_manifest_payload() {
+  local outputs_dir="$1"
+  local resource_name="$2"
+  mkdir -p "$outputs_dir/tests" "$outputs_dir/coverage"
+  cat > "$outputs_dir/tests/${resource_name}.json" <<JSON_EOF
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.0.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "$resource_name",
+        "meta": {
+          "test.source.file": "manual/owned.cs"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+  echo '{}' > "$outputs_dir/coverage/${resource_name}_cov.json"
+}
+
+MANIFEST_EXACT="$TMP_WS/runfiles_exact.manifest"
+BOM=$'\xef\xbb\xbf'
+printf '%s%s\t%s\n' "$BOM" "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH" > "$MANIFEST_EXACT"
+MANIFEST_EXACT_OUT="$TESTLOGS_DIR/manual_manifest_exact/test.outputs"
+write_manifest_payload "$MANIFEST_EXACT_OUT" "Manual.ManifestExactTabBom"
+
+UPLOADER_MANIFEST_EXACT_LOG="$TMP_WS/uploader_manifest_exact.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+RUNFILES_MANIFEST_FILE="$MANIFEST_EXACT" \
+RUNFILES_DIR= \
+DD_API_KEY=mock \
+DD_TOPT_KEEP_PAYLOADS=0 \
+DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$MANIFEST_UPLOADER" >"$UPLOADER_MANIFEST_EXACT_LOG" 2>&1; then
+  echo "error: manifest exact-key uploader run failed"
+  cat "$UPLOADER_MANIFEST_EXACT_LOG" || true
+  exit 1
+fi
+
+MANIFEST_SUFFIX="$TMP_WS/runfiles_suffix.manifest"
+printf 'repo-prefix/%s %s\n' "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH" > "$MANIFEST_SUFFIX"
+MANIFEST_SUFFIX_OUT="$TESTLOGS_DIR/manual_manifest_suffix/test.outputs"
+write_manifest_payload "$MANIFEST_SUFFIX_OUT" "Manual.ManifestSuffixKey"
+
+UPLOADER_MANIFEST_SUFFIX_LOG="$TMP_WS/uploader_manifest_suffix.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+RUNFILES_MANIFEST_FILE="$MANIFEST_SUFFIX" \
+RUNFILES_DIR= \
+DD_API_KEY=mock \
+DD_TOPT_KEEP_PAYLOADS=0 \
+DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$MANIFEST_UPLOADER" >"$UPLOADER_MANIFEST_SUFFIX_LOG" 2>&1; then
+  echo "error: manifest suffix-key uploader run failed"
+  cat "$UPLOADER_MANIFEST_SUFFIX_LOG" || true
+  exit 1
+fi
+
+"$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+def owners_for(meta):
+    raw = meta.get("test.codeowners")
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return "__invalid__"
+
+def assert_manifest_resource(resource):
+    payload = None
+    for rec in reversed(records):
+        if rec.get("path") != "/api/v2/citestcycle":
+            continue
+        try:
+            obj = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+        except Exception:
+            continue
+        for evt in obj.get("events", []):
+            content = evt.get("content") or {}
+            if content.get("resource") == resource:
+                payload = obj
+                break
+        if payload is not None:
+            break
+    if payload is None:
+        print(f"error: missing manifest resolution upload for {resource}")
+        sys.exit(1)
+    target = None
+    for evt in payload.get("events", []):
+        if (evt.get("content") or {}).get("resource") == resource:
+            target = evt
+            break
+    if target is None:
+        print(f"error: missing event payload for {resource}")
+        sys.exit(1)
+    meta = ((target.get("content") or {}).get("meta") or {})
+    for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
+        if key not in meta:
+            print(f"error: manifest fallback run missing context tag {key} for {resource}")
+            sys.exit(1)
+    if owners_for(meta) != ["@org/owned"]:
+        print(f"error: manifest fallback run missing expected CODEOWNERS for {resource}")
+        sys.exit(1)
+
+assert_manifest_resource("Manual.ManifestExactTabBom")
+assert_manifest_resource("Manual.ManifestSuffixKey")
 PY
 
 mv "$ORIG_CODEOWNERS" "$WORKSPACE/CODEOWNERS"

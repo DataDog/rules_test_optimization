@@ -162,9 +162,261 @@ def _build_codeowners_lookup_order_for_tests(context_workspace, workspace_root, 
     candidates.append((script_dir + "/CODEOWNERS") if script_dir else "CODEOWNERS")
     return candidates
 
+def _is_ascii_whitespace_for_tests(ch):
+    return ch in [" ", "\t", "\n", "\r", "\f", "\v"]
+
+def _is_alnum_for_tests(ch):
+    return (ch in "abcdefghijklmnopqrstuvwxyz") or (ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") or (ch in "0123456789")
+
+def _is_lower_or_digit_for_tests(ch):
+    return (ch in "abcdefghijklmnopqrstuvwxyz") or (ch in "0123456789")
+
+def _is_gitlab_section_header_pattern_for_tests(pattern):
+    if not pattern or not pattern.startswith("[") or not pattern.endswith("]"):
+        return False
+    inner = pattern[1:-1]
+    if not inner or ("[" in inner) or ("]" in inner):
+        return False
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if _is_ascii_whitespace_for_tests(ch):
+            return True
+    if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
+        return False
+    # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+    all_upper_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not ((ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") or (ch in "0123456789")):
+            all_upper_or_digit = False
+            break
+    if all_upper_or_digit:
+        return False
+    # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
+    if len(inner) <= 3:
+        all_alnum = True
+        for i in range(len(inner)):
+            ch = inner[i:i + 1]
+            if not _is_alnum_for_tests(ch):
+                all_alnum = False
+                break
+        if all_alnum:
+            return False
+    # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
+    all_lower_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not _is_lower_or_digit_for_tests(ch):
+            all_lower_or_digit = False
+            break
+    if all_lower_or_digit:
+        return False
+    return True
+
+def _is_gitlab_section_header_line_for_tests(line):
+    if not line or not line.startswith("["):
+        return False
+    close_idx = line.find("]")
+    if close_idx <= 0:
+        return False
+    pattern = line[:close_idx + 1]
+    rest = line[close_idx + 1:]
+    if rest and not _is_ascii_whitespace_for_tests(rest[0]):
+        return False
+    return _is_gitlab_section_header_pattern_for_tests(pattern)
+
+def _skip_derived_source_candidate_for_tests(candidate):
+    if not candidate:
+        return False
+    main_external_prefix = "_main/" + "external/"
+    return candidate.startswith("external/") or candidate.startswith(main_external_prefix)
+
+def _is_gitlab_section_header_pattern_powershell_for_tests(pattern):
+    if not pattern or not pattern.startswith("[") or not pattern.endswith("]"):
+        return False
+    inner = pattern[1:-1]
+    if not inner or ("[" in inner) or ("]" in inner):
+        return False
+    # Keep PowerShell behavior aligned with script implementation: section
+    # headers are detected via space/tab within bracket content.
+    if (" " in inner) or ("\t" in inner):
+        return True
+    if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
+        return False
+    # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+    all_upper_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not ((ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") or (ch in "0123456789")):
+            all_upper_or_digit = False
+            break
+    if all_upper_or_digit:
+        return False
+    if len(inner) <= 3:
+        all_alnum = True
+        for i in range(len(inner)):
+            ch = inner[i:i + 1]
+            if not _is_alnum_for_tests(ch):
+                all_alnum = False
+                break
+        if all_alnum:
+            return False
+    all_lower_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not _is_lower_or_digit_for_tests(ch):
+            all_lower_or_digit = False
+            break
+    if all_lower_or_digit:
+        return False
+    return True
+
+def _strip_workspace_prefix_bash_for_tests(path_norm, root_norm):
+    if not path_norm or not root_norm:
+        return None
+    if path_norm == root_norm:
+        return ""
+    prefix = root_norm + "/"
+    if path_norm.startswith(prefix):
+        return path_norm[len(prefix):]
+    return None
+
+def _strip_workspace_prefix_powershell_for_tests(path_norm, root_norm, is_windows):
+    if not path_norm or not root_norm:
+        return None
+    path_cmp = path_norm.lower() if is_windows else path_norm
+    root_cmp = root_norm.lower() if is_windows else root_norm
+    if path_cmp == root_cmp:
+        return ""
+    root_prefix = root_cmp + "/"
+    if path_cmp.startswith(root_prefix):
+        return path_norm[len(root_norm) + 1:]
+    return None
+
+def _first_ascii_whitespace_index_for_tests(value):
+    for i in range(len(value)):
+        if _is_ascii_whitespace_for_tests(value[i:i + 1]):
+            return i
+    return -1
+
+def _first_space_or_tab_index_for_tests(value):
+    for i in range(len(value)):
+        ch = value[i:i + 1]
+        if ch == " " or ch == "\t":
+            return i
+    return -1
+
+def _list_contains_for_tests(items, value):
+    for item in items:
+        if item == value:
+            return True
+    return False
+
+def _trim_ascii_whitespace_for_tests(value):
+    if not value:
+        return ""
+    start = 0
+    found_start = False
+    for i in range(len(value)):
+        if not _is_ascii_whitespace_for_tests(value[i:i + 1]):
+            start = i
+            found_start = True
+            break
+    if not found_start:
+        return ""
+    end = len(value)
+    for i in range(len(value)):
+        idx = len(value) - 1 - i
+        if not _is_ascii_whitespace_for_tests(value[idx:idx + 1]):
+            end = idx + 1
+            break
+    if end <= start:
+        return ""
+    return value[start:end]
+
+def _strip_bom_prefix_for_tests(value):
+    # Tests use an ASCII marker to represent UTF-8 BOM-prefixed manifest keys.
+    bom_marker = "\\ufeff"
+    if value.startswith(bom_marker):
+        return value[len(bom_marker):]
+    return value
+
+def _resolve_runfile_manifest_bash_for_tests(manifest_lines, key, existing_paths):
+    for idx in range(len(manifest_lines)):
+        line = manifest_lines[idx]
+        sep_idx = _first_ascii_whitespace_index_for_tests(line)
+        if sep_idx <= 0:
+            continue
+        line_key = line[:sep_idx]
+        if idx == 0:
+            line_key = _strip_bom_prefix_for_tests(line_key)
+        if line_key != key:
+            continue
+        path = line[sep_idx + 1:]
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+
+    for idx in range(len(manifest_lines)):
+        line = manifest_lines[idx]
+        sep_idx = _first_ascii_whitespace_index_for_tests(line)
+        if sep_idx <= 0:
+            continue
+        line_key = line[:sep_idx]
+        if idx == 0:
+            line_key = _strip_bom_prefix_for_tests(line_key)
+        if len(line_key) <= len(key):
+            continue
+        if not line_key.endswith(key):
+            continue
+        sep_pos = len(line_key) - len(key) - 1
+        sep = line_key[sep_pos:sep_pos + 1]
+        if sep != "/" and sep != "\\":
+            continue
+        path = line[sep_idx + 1:]
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+    return ""
+
+def _resolve_runfile_manifest_powershell_for_tests(manifest_lines, key, existing_paths):
+    for line in manifest_lines:
+        line_norm = _strip_bom_prefix_for_tests(line)
+        if len(line_norm) <= len(key):
+            continue
+        if not line_norm.startswith(key):
+            continue
+        sep = line_norm[len(key):len(key) + 1]
+        if sep != " " and sep != "\t":
+            continue
+        path = _trim_ascii_whitespace_for_tests(line_norm[len(key) + 1:])
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+
+    for line in manifest_lines:
+        line_norm = _strip_bom_prefix_for_tests(line)
+        split_idx = _first_space_or_tab_index_for_tests(line_norm)
+        if split_idx <= 0:
+            continue
+        line_key = line_norm[:split_idx]
+        if len(line_key) <= len(key):
+            continue
+        if not line_key.endswith("/" + key) and not line_key.endswith("\\" + key):
+            continue
+        path = _trim_ascii_whitespace_for_tests(line_norm[split_idx + 1:])
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+    return ""
+
 glob_to_regex_for_tests = _codeowners_glob_to_regex_for_tests
 compile_codeowners_regex_for_tests = _compile_codeowners_regex_for_tests
 build_codeowners_lookup_order_for_tests = _build_codeowners_lookup_order_for_tests
+is_gitlab_section_header_pattern_for_tests = _is_gitlab_section_header_pattern_for_tests
+is_gitlab_section_header_line_for_tests = _is_gitlab_section_header_line_for_tests
+skip_derived_source_candidate_for_tests = _skip_derived_source_candidate_for_tests
+is_gitlab_section_header_pattern_powershell_for_tests = _is_gitlab_section_header_pattern_powershell_for_tests
+strip_workspace_prefix_bash_for_tests = _strip_workspace_prefix_bash_for_tests
+strip_workspace_prefix_powershell_for_tests = _strip_workspace_prefix_powershell_for_tests
+resolve_runfile_manifest_bash_for_tests = _resolve_runfile_manifest_bash_for_tests
+resolve_runfile_manifest_powershell_for_tests = _resolve_runfile_manifest_powershell_for_tests
 
 def _uploader_impl(ctx):
     quiescent_sec = ctx.attr.quiescent_sec
@@ -1118,6 +1370,17 @@ add_path_candidate() {{
   CODEOWNERS_SOURCE_CANDIDATES+=("$normalized")
 }}
 
+add_derived_source_candidate() {{
+  local candidate="$1"
+  if [[ "$candidate" == external/* || "$candidate" == _main/external/* ]]; then
+    # Execroot/runfiles derived external paths belong to fetched dependencies,
+    # not repository-owned source files. Skip to avoid false owner attribution.
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip external source candidate '$candidate'"
+    return
+  fi
+  add_path_candidate "$candidate"
+}}
+
 strip_workspace_prefix() {{
   local path_value="$1"
   local root_value="$2"
@@ -1148,16 +1411,16 @@ build_source_candidates() {{
   [[ -n "$stripped" ]] && add_path_candidate "$stripped"
 
   if [[ "$normalized_source" =~ /execroot/[^/]+/_main/(.+)$ ]]; then
-    add_path_candidate "${{BASH_REMATCH[1]}}"
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
   fi
   if [[ "$normalized_source" =~ /execroot/[^/]+/(.+)$ ]]; then
-    add_path_candidate "${{BASH_REMATCH[1]}}"
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
   fi
   if [[ "$normalized_source" =~ \\.runfiles/_main/(.+)$ ]]; then
-    add_path_candidate "${{BASH_REMATCH[1]}}"
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
   fi
   if [[ "$normalized_source" =~ \\.runfiles/[^/]+/(.+)$ ]]; then
-    add_path_candidate "${{BASH_REMATCH[1]}}"
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
   fi
   # Keep only repository-relative fallback candidates. Absolute paths that are
   # not under known repo roots can incorrectly inherit broad CODEOWNERS rules.
@@ -1393,7 +1656,12 @@ is_gitlab_section_header_pattern() {{
   if [[ "$inner" == *"-"* || "$inner" == *"!"* || "$inner" == *"^"* || "$inner" == *"\\\\"* ]]; then
     return 1
   fi
-  if (( ${{#inner}} <= 2 )); then
+  # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+  if [[ "$inner" =~ ^[A-Z0-9]+$ ]]; then
+    return 1
+  fi
+  # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
+  if (( ${{#inner}} <= 3 )) && [[ "$inner" =~ ^[A-Za-z0-9]+$ ]]; then
     return 1
   fi
   # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
@@ -2993,13 +3261,26 @@ function Add-PathCandidate([System.Collections.Generic.List[string]]$Candidates,
   if (-not $Candidates.Contains($normalized)) {{ $Candidates.Add($normalized) | Out-Null }}
 }}
 
+function Add-DerivedPathCandidate([System.Collections.Generic.List[string]]$Candidates, [string]$Candidate) {{
+  if ([string]::IsNullOrEmpty($Candidate)) {{ return }}
+  if ($Candidate.StartsWith("external/") -or $Candidate.StartsWith("_main/external/")) {{
+    # Execroot/runfiles derived external paths belong to fetched dependencies,
+    # not repository-owned source files. Skip to avoid false owner attribution.
+    if ($script:DebugMode) {{ Dbg "codeowners: skip external source candidate '$Candidate'" }}
+    return
+  }}
+  Add-PathCandidate $Candidates $Candidate
+}}
+
 function Strip-WorkspacePrefix([string]$PathValue, [string]$WorkspaceRoot) {{
   if ([string]::IsNullOrEmpty($PathValue) -or [string]::IsNullOrEmpty($WorkspaceRoot)) {{ return $null }}
   $pathNorm = Normalize-PathLike $PathValue
   $rootNorm = Normalize-PathLike $WorkspaceRoot
   if ([string]::IsNullOrEmpty($pathNorm) -or [string]::IsNullOrEmpty($rootNorm)) {{ return $null }}
-  if ($pathNorm -ceq $rootNorm) {{ return "" }}
-  if ($pathNorm.StartsWith("$rootNorm/", [System.StringComparison]::Ordinal)) {{
+  # Windows paths are case-insensitive; honor that when stripping repo roots.
+  $pathComparison = if ($env:OS -eq 'Windows_NT') {{ [System.StringComparison]::OrdinalIgnoreCase }} else {{ [System.StringComparison]::Ordinal }}
+  if ([string]::Equals($pathNorm, $rootNorm, $pathComparison)) {{ return "" }}
+  if ($pathNorm.StartsWith("$rootNorm/", $pathComparison)) {{
     return $pathNorm.Substring($rootNorm.Length + 1)
   }}
   return $null
@@ -3031,16 +3312,16 @@ function Get-PathCandidates([string]$SourcePath) {{
   }}
 
   if ($normalized -match '/execroot/[^/]+/_main/(.+)$') {{
-    Add-PathCandidate $candidates $Matches[1]
+    Add-DerivedPathCandidate $candidates $Matches[1]
   }}
   if ($normalized -match '/execroot/[^/]+/(.+)$') {{
-    Add-PathCandidate $candidates $Matches[1]
+    Add-DerivedPathCandidate $candidates $Matches[1]
   }}
   if ($normalized -match '\\.runfiles/_main/(.+)$') {{
-    Add-PathCandidate $candidates $Matches[1]
+    Add-DerivedPathCandidate $candidates $Matches[1]
   }}
   if ($normalized -match '\\.runfiles/[^/]+/(.+)$') {{
-    Add-PathCandidate $candidates $Matches[1]
+    Add-DerivedPathCandidate $candidates $Matches[1]
   }}
   # Keep only repository-relative fallback candidates. Absolute paths that are
   # not under known repo roots can incorrectly inherit broad CODEOWNERS rules.
@@ -3229,7 +3510,10 @@ function Test-IsGitLabSectionHeaderPattern([string]$Pattern) {{
   if ($inner.Contains('-') -or $inner.Contains('!') -or $inner.Contains('^') -or $inner.Contains('\')) {{
     return $false
   }}
-  if ($inner.Length -le 2) {{ return $false }}
+  # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+  if ($inner -cmatch '^[A-Z0-9]+$') {{ return $false }}
+  # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
+  if ($inner.Length -le 3 -and $inner -cmatch '^[A-Za-z0-9]+$') {{ return $false }}
   # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
   if ($inner -cmatch '^[a-z0-9]+$') {{ return $false }}
   return $true
