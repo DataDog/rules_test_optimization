@@ -2,11 +2,20 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-TMP_WS="$(mktemp -d)"
+TMP_WS="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_test.XXXXXX")"
 # Store server logs + request bodies outside the repo tree for easy cleanup.
 LOG_FILE="$TMP_WS/mock.log"
 SERVER_OUT="$TMP_WS/server.out"
 SNAPSHOT_DIR="$REPO_ROOT/tools/tests/integration/snapshots"
+PYTHON="${PYTHON:-python3}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  if command -v python >/dev/null 2>&1; then
+    PYTHON=python
+  else
+    echo "error: python interpreter not found (tried '$PYTHON' and 'python')"
+    exit 1
+  fi
+fi
 
 export REPO_ROOT
 export LOG_FILE
@@ -28,7 +37,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Start a mock Datadog API server with fixture responses and request logging.
-python3 -u "$REPO_ROOT/tools/tests/integration/mock_dd_server.py" \
+"$PYTHON" -u "$REPO_ROOT/tools/tests/integration/mock_dd_server.py" \
   --fixtures "$REPO_ROOT/tools/tests/integration/fixtures" \
   --log "$LOG_FILE" \
   --port 0 >"$SERVER_OUT" 2>&1 &
@@ -36,7 +45,14 @@ SERVER_PID=$!
 
 # Wait for the server to bind to a random port and emit it.
 PORT=""
-for ((i = 1; i <= 50; i++)); do
+# Keep this tunable because slower CI workers can need extra startup time.
+MAX_WAIT_LOOPS="${MOCK_SERVER_MAX_WAIT_LOOPS:-200}"
+for ((i = 1; i <= MAX_WAIT_LOOPS; i++)); do
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "error: mock server process died before binding"
+    cat "$SERVER_OUT" || true
+    exit 1
+  fi
   if grep -q "^PORT=" "$SERVER_OUT"; then
     PORT="$(grep '^PORT=' "$SERVER_OUT" | head -n1 | cut -d= -f2)"
     break
@@ -61,7 +77,7 @@ mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 
 # JSON-escape REPO_ROOT for safe insertion into MODULE.bazel.
-ESCAPED_REPO_ROOT=$(python3 - <<'PY'
+ESCAPED_REPO_ROOT=$("$PYTHON" - <<'PY'
 import json
 import os
 print(json.dumps(os.environ["REPO_ROOT"]))
@@ -104,15 +120,27 @@ load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "
 sh_test(
     name = "write_payloads_test",
     srcs = ["payload_writer.sh"],
+    data = ["citestcycle_template.json"],
     size = "small",
     timeout = "short",
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
+)
+
+dd_payload_uploader(
+    name = "dd_upload_payloads_with_context",
     data = ["@test_optimization_data//:test_optimization_context"],
 )
 BUILD_EOF
+
+cp "$REPO_ROOT/tools/tests/integration/snapshots/citestcycle.json" "$WORKSPACE/citestcycle_template.json"
+
+cat > CODEOWNERS <<'CODEOWNERS_EOF'
+* @org/default
+/tracer/test/test-applications/integrations/Samples.XUnitTests/[Tt]estSuite.cs @DataDog/ci-app-libraries-dotnet
+CODEOWNERS_EOF
 
 cat > payload_writer.sh <<'PAYLOAD_EOF'
 #!/usr/bin/env bash
@@ -120,7 +148,42 @@ set -euo pipefail
 
 out="${TEST_UNDECLARED_OUTPUTS_DIR:?}"
 mkdir -p "$out/tests" "$out/coverage"
-echo '{"test":true}' > "$out/tests/test1.json"
+template=""
+if [[ -n "${TEST_SRCDIR:-}" ]]; then
+  for ws in "${TEST_WORKSPACE:-}" "_main"; do
+    [[ -z "$ws" ]] && continue
+    candidate="$TEST_SRCDIR/$ws/citestcycle_template.json"
+    if [[ -f "$candidate" ]]; then
+      template="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$template" ]]; then
+    candidate="$TEST_SRCDIR/citestcycle_template.json"
+    [[ -f "$candidate" ]] && template="$candidate"
+  fi
+fi
+if [[ -z "$template" || ! -f "$template" ]]; then
+  template="$(dirname "$0")/citestcycle_template.json"
+fi
+if [[ ! -f "$template" ]]; then
+  echo "error: fixture template not found: $template" >&2
+  exit 1
+fi
+
+jq '
+  .events |= map(
+    if (
+      (.type == "test" and ((.content.resource // "") == "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"))
+      or
+      (.type == "test_suite_end" and ((.content.resource // "") == "Samples.XUnitTests.TestSuite"))
+    ) then
+      .content.meta |= (if type == "object" then del(."test.codeowners") else . end)
+    else
+      .
+    end
+  )
+' "$template" > "$out/tests/test1.json"
 echo '{}' > "$out/coverage/cov1.json"
 PAYLOAD_EOF
 chmod +x payload_writer.sh
@@ -148,21 +211,26 @@ REPO_ENVS=(
 
 CQUERY_OUT=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_files --output=files \
   "${REPO_ENVS[@]}")
+EXECROOT="$("$BAZEL" "${BAZEL_FLAGS[@]}" info execution_root "${REPO_ENVS[@]}" 2>/dev/null || true)"
 
 # Resolve settings.json location from cquery output for validation.
-SETTINGS_PATH=$(echo "$CQUERY_OUT" | grep '/.testoptimization/settings.json$' | head -n1 || true)
+# Depending on Bazel output mode/platform, the cquery path can be relative to
+# output_base, execution_root, or workspace. Probe each base in order.
+SETTINGS_PATH=$(echo "$CQUERY_OUT" | grep -E '[\\/]\.testoptimization[\\/]settings\.json$' | head -n1 || true)
 if [[ -z "$SETTINGS_PATH" ]]; then
   echo "error: failed to resolve settings.json path"
   echo "$CQUERY_OUT"
   exit 1
 fi
 
-if [[ "$SETTINGS_PATH" != /* ]]; then
-  if [[ -f "$OUT_BASE/$SETTINGS_PATH" ]]; then
-    SETTINGS_PATH="$OUT_BASE/$SETTINGS_PATH"
-  elif [[ -f "$WORKSPACE/$SETTINGS_PATH" ]]; then
-    SETTINGS_PATH="$WORKSPACE/$SETTINGS_PATH"
-  fi
+if [[ "$SETTINGS_PATH" != /* && ! "$SETTINGS_PATH" =~ ^[A-Za-z]:[\\/] ]]; then
+  for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
+    [[ -z "$base" ]] && continue
+    if [[ -f "$base/$SETTINGS_PATH" ]]; then
+      SETTINGS_PATH="$base/$SETTINGS_PATH"
+      break
+    fi
+  done
 fi
 
 if [[ ! -f "$SETTINGS_PATH" ]]; then
@@ -196,6 +264,7 @@ TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
 UPLOADER_LOG="$TMP_WS/uploader.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 DD_API_KEY=mock \
+DD_TOPT_KEEP_PAYLOADS=1 \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
 DD_TOPT_MAX_WAIT_SEC=30 \
 DD_TOPT_QUIESCENT_SEC=1 \
@@ -207,18 +276,20 @@ DD_TRACE_AGENT_URL= \
   exit 1
 fi
 
-if grep -q "warning: DD_API_KEY mismatch between fetch and uploader" "$UPLOADER_LOG"; then
+if grep -qiE "DD_API_KEY mismatch|API[ _-]?key mismatch" "$UPLOADER_LOG"; then
   echo "error: unexpected DD_API_KEY mismatch warning with matching credentials"
   cat "$UPLOADER_LOG" || true
   exit 1
 fi
 
-python3 - <<'PY'
+"$PYTHON" - <<'PY'
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+# Endpoint coverage check: this validates the uploader hit every expected
+# Datadog endpoint at least once during the integration scenario.
 required = {
     "/api/v2/libraries/tests/services/setting",
     "/api/v2/ci/libraries/tests",
@@ -244,7 +315,7 @@ if missing:
     sys.exit(1)
 PY
 
-python3 - <<'PY'
+"$PYTHON" - <<'PY'
 import base64
 import json
 import os
@@ -271,24 +342,8 @@ def parse_multipart(body, content_type):
     return parts
 
 def normalize_citestcycle(payload):
-    # Drop volatile fields (os.*, ci.*) so snapshots are stable across hosts.
-    if not isinstance(payload, dict):
-        return payload
-    md = payload.get("metadata") or {}
-    star = md.get("*") or {}
-    if not isinstance(star, dict):
-        star = {}
-    filtered = {}
-    for k, v in star.items():
-        if k.startswith("os.") or k.startswith("ci."):
-            continue
-        if k == "runtime-id":
-            continue
-        filtered[k] = v
-    out = {"metadata": {"*": filtered}}
-    if "test" in payload:
-        out["test"] = payload["test"]
-    return out
+    # Keep full payload shape; the fixture snapshot already uses stable values.
+    return payload
 
 def load_snap(path):
     with open(path, "r", encoding="utf-8") as handle:
@@ -300,6 +355,7 @@ def write_snap(path, data):
         json.dump(data, handle, indent=2, sort_keys=True)
 
 # Load request log entries emitted by the mock server.
+# Keep all records so later checks can inspect both first and subsequent runs.
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:
@@ -324,9 +380,67 @@ cycle_body = base64.b64decode(cycle.get("body_b64", ""))
 cycle_json = json.loads(cycle_body.decode("utf-8"))
 cycle_norm = normalize_citestcycle(cycle_json)
 
+def find_event(event_type, resource = None):
+    for evt in reversed(cycle_json.get("events", [])):
+        if evt.get("type") != event_type:
+            continue
+        content = evt.get("content") or {}
+        if resource is not None and content.get("resource") != resource:
+            continue
+        return evt
+    return None
+
+def event_codeowners(event_type, resource):
+    evt = find_event(event_type, resource)
+    if not evt:
+        return None
+    content = evt.get("content") or {}
+    meta = content.get("meta") or {}
+    return meta.get("test.codeowners")
+
+# Integration assertions for CODEOWNERS behavior:
+# - missing tag gets added
+# - existing tag is preserved
+# - events without source fields are not force-tagged
+def parse_owners(value):
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except Exception:
+        return "__invalid__"
+
+if parse_owners(event_codeowners("test", "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest")) != ["@DataDog/ci-app-libraries-dotnet"]:
+    print("error: expected codeowners re-injection for test event")
+    sys.exit(1)
+if parse_owners(event_codeowners("test_suite_end", "Samples.XUnitTests.TestSuite")) != ["@DataDog/ci-app-libraries-dotnet"]:
+    print("error: expected codeowners re-injection for test_suite_end event")
+    sys.exit(1)
+if parse_owners(event_codeowners("test", "Samples.XUnitTests.UnSkippableSuite.UnskippableTest")) != ["@DataDog/ci-app-libraries-dotnet"]:
+    print("error: expected existing codeowners to be preserved for test event")
+    sys.exit(1)
+
+session_evt = find_event("test_session_end")
+if not session_evt:
+    print("error: expected test_session_end event")
+    sys.exit(1)
+session_meta = ((session_evt.get("content") or {}).get("meta") or {})
+if "test.codeowners" in session_meta:
+    print("error: test_session_end unexpectedly contains codeowners")
+    sys.exit(1)
+
 cov_body = base64.b64decode(cov.get("body_b64", ""))
-cov_ct = (cov.get("headers") or {}).get("Content-Type", "")
+cov_headers = (cov.get("headers") or {})
+cov_ct = ""
+for key, value in cov_headers.items():
+    if str(key).lower() == "content-type":
+        cov_ct = value
+        break
 parts = parse_multipart(cov_body, cov_ct)
+missing_parts = {"event", "coveragex"} - set(parts.keys())
+if missing_parts:
+    print(f"error: coverage multipart missing expected parts: {sorted(missing_parts)}")
+    sys.exit(1)
 event_json = json.loads(parts.get("event", b"{}").decode("utf-8"))
 coverage_json = json.loads(parts.get("coveragex", b"{}").decode("utf-8"))
 
@@ -354,7 +468,7 @@ for name, data in snapshots.items():
         sys.exit(1)
 PY
 
-python3 - <<'PY'
+"$PYTHON" - <<'PY'
 import json
 import os
 import subprocess
@@ -405,4 +519,426 @@ with tempfile.TemporaryDirectory() as td:
             print("stderr:")
             print(proc.stderr)
         sys.exit(1)
+
+    # Negative regression check: invalid payload must be rejected.
+    with open(payload_path, "w", encoding="utf-8") as f:
+        json.dump({"invalid": "missing ok"}, f)
+    proc_invalid = subprocess.run(
+        [sys.executable, validator, schema_path, payload_path],
+        capture_output=True,
+        text=True,
+    )
+    if proc_invalid.returncode == 0:
+        print("error: schema validator unexpectedly accepted invalid payload")
+        if proc_invalid.stdout:
+            print("stdout:")
+            print(proc_invalid.stdout)
+        if proc_invalid.stderr:
+            print("stderr:")
+            print(proc_invalid.stderr)
+        sys.exit(1)
 PY
+
+CYCLE_COUNT_BEFORE_CONTEXT=$("$PYTHON" - <<'PY'
+import json
+import os
+
+log_path = os.environ["LOG_FILE"]
+count = 0
+try:
+    with open(log_path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("path") == "/api/v2/citestcycle":
+                count += 1
+except FileNotFoundError:
+    pass
+print(count)
+PY
+)
+
+# Capture current cycle count so we can isolate uploads produced specifically
+# by the context-enriched uploader run below.
+UPLOADER_CONTEXT_LOG="$TMP_WS/uploader_with_context.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+DD_API_KEY=mock \
+DD_TOPT_KEEP_PAYLOADS=1 \
+DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_CONTEXT_LOG" 2>&1; then
+  echo "error: uploader command with context failed"
+  cat "$UPLOADER_CONTEXT_LOG" || true
+  exit 1
+fi
+
+export CYCLE_COUNT_BEFORE_CONTEXT
+
+"$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_count = int(os.environ.get("CYCLE_COUNT_BEFORE_CONTEXT", "0") or "0")
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+cycle_records = [rec for rec in records if rec.get("path") == "/api/v2/citestcycle"]
+new_cycle_records = cycle_records[start_count:]
+if len(new_cycle_records) < 1:
+    print("error: expected at least one new /api/v2/citestcycle upload for context-enriched run")
+    sys.exit(1)
+cycle = None
+for rec in reversed(new_cycle_records):
+    try:
+        obj = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except Exception:
+        continue
+    found_context_tag = False
+    for evt in obj.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        meta = ((evt.get("content") or {}).get("meta") or {})
+        if "test.bazel.rule_name" in meta and "test.bazel.rule_version" in meta:
+            found_context_tag = True
+            break
+    if found_context_tag:
+        cycle = rec
+        break
+if cycle is None:
+    cycle = new_cycle_records[-1]
+if not cycle:
+    print("error: missing /api/v2/citestcycle upload after context run")
+    sys.exit(1)
+
+cycle_payload = json.loads(base64.b64decode(cycle.get("body_b64", "")).decode("utf-8"))
+target_evt = None
+for evt in cycle_payload.get("events", []):
+    if evt.get("type") != "test":
+        continue
+    content = evt.get("content") or {}
+    if content.get("resource") == "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest":
+        target_evt = evt
+        break
+if not target_evt:
+    print("error: could not find target test event in context-enriched payload")
+    sys.exit(1)
+
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+owners_raw = meta.get("test.codeowners")
+try:
+    owners = json.loads(owners_raw) if owners_raw is not None else None
+except Exception:
+    owners = "__invalid__"
+if owners != ["@DataDog/ci-app-libraries-dotnet"]:
+    print("error: expected CODEOWNERS value missing in context-enriched payload")
+    sys.exit(1)
+for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
+    if key not in meta:
+        print(f"error: expected context tag missing in context-enriched payload: {key}")
+        sys.exit(1)
+PY
+
+ORIG_CODEOWNERS="$WORKSPACE/CODEOWNERS.orig"
+cp "$WORKSPACE/CODEOWNERS" "$ORIG_CODEOWNERS"
+
+# Scenario: missing CODEOWNERS file must not fail uploads and must not inject new owners.
+mv "$WORKSPACE/CODEOWNERS" "$WORKSPACE/CODEOWNERS.bak"
+MANUAL_NO_CO="$TESTLOGS_DIR/manual_no_codeowners/test.outputs"
+mkdir -p "$MANUAL_NO_CO/tests" "$MANUAL_NO_CO/coverage"
+cat > "$MANUAL_NO_CO/tests/manual_no_codeowners.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.0.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.NoCodeowners",
+        "meta": {
+          "test.source.file": "manual/no_codeowners.cs"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+echo '{}' > "$MANUAL_NO_CO/coverage/manual_no_codeowners_cov.json"
+
+UPLOADER_NO_CO_LOG="$TMP_WS/uploader_no_codeowners.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+DD_API_KEY=mock \
+DD_TOPT_KEEP_PAYLOADS=1 \
+DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_NO_CO_LOG" 2>&1; then
+  echo "error: uploader command without CODEOWNERS failed"
+  cat "$UPLOADER_NO_CO_LOG" || true
+  exit 1
+fi
+
+"$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+target = "Manual.NoCodeowners"
+payload = None
+
+with open(log_path, "r", encoding="utf-8") as handle:
+    rows = []
+    for line in handle:
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+
+for rec in reversed(rows):
+    if rec.get("path") != "/api/v2/citestcycle":
+        continue
+    try:
+        body = base64.b64decode(rec.get("body_b64", ""))
+        obj = json.loads(body.decode("utf-8"))
+    except Exception:
+        continue
+    for evt in obj.get("events", []):
+        content = evt.get("content") or {}
+        if content.get("resource") == target:
+            payload = obj
+            break
+    if payload is not None:
+        break
+
+if payload is None:
+    print("error: missing Manual.NoCodeowners upload")
+    sys.exit(1)
+
+target_evt = None
+for evt in payload.get("events", []):
+    if (evt.get("content") or {}).get("resource") == target:
+        target_evt = evt
+        break
+if target_evt is None:
+    print("error: Manual.NoCodeowners event not found")
+    sys.exit(1)
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+if "test.codeowners" in meta:
+    print("error: test.codeowners unexpectedly injected when CODEOWNERS file is missing")
+    sys.exit(1)
+PY
+
+mv "$WORKSPACE/CODEOWNERS.bak" "$WORKSPACE/CODEOWNERS"
+
+# Scenario: empty-owner rule should not set test.codeowners while preserving fallback/source-key behavior.
+cat > "$WORKSPACE/CODEOWNERS" <<'CODEOWNERS_EOF'
+[CoreTeam]
+[Core Team] @org/section-space
+* @org/default
+[Backend] @org/section-default
+/manual/owned.cs @org/owned
+/manual/unowned.cs
+/manual/comment_only.cs # explicit empty-owner rule via inline comment
+/manual/hash_owner.cs @org/team#chat
+/manual/space\ owner.cs @org/space-owner
+CODEOWNERS_EOF
+
+MANUAL_EMPTY_OWNER="$TESTLOGS_DIR/manual_empty_owner/test.outputs"
+mkdir -p "$MANUAL_EMPTY_OWNER/tests" "$MANUAL_EMPTY_OWNER/coverage"
+cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.0.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.Owned",
+        "meta": {
+          "test.source.file": "manual/owned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.Unowned",
+        "meta": {
+          "test.source.path": "manual/unowned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.SourceFallback",
+        "source": {
+          "path": "manual/owned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.Default",
+        "meta": {
+          "source.file": "manual/default.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.CommentOnly",
+        "meta": {
+          "test.source.file": "manual/comment_only.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.HashOwner",
+        "meta": {
+          "test.source.file": "manual/hash_owner.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.SpaceOwner",
+        "meta": {
+          "test.source.file": "manual/space owner.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.SectionHeaderIgnored",
+        "meta": {
+          "test.source.file": "manual/b/file.cs"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+echo '{}' > "$MANUAL_EMPTY_OWNER/coverage/manual_empty_owner_cov.json"
+
+UPLOADER_EMPTY_OWNER_LOG="$TMP_WS/uploader_empty_owner.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+DD_API_KEY=mock \
+DD_TOPT_KEEP_PAYLOADS=1 \
+DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_EMPTY_OWNER_LOG" 2>&1; then
+  echo "error: uploader command for empty-owner scenario failed"
+  cat "$UPLOADER_EMPTY_OWNER_LOG" || true
+  exit 1
+fi
+
+"$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+target_resource = "Manual.Unowned"
+payload = None
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
+        continue
+    try:
+        obj = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except Exception:
+        continue
+    for evt in obj.get("events", []):
+        if (evt.get("content") or {}).get("resource") == target_resource:
+            payload = obj
+            break
+    if payload is not None:
+        break
+
+if payload is None:
+    print("error: missing empty-owner scenario upload")
+    sys.exit(1)
+
+def owners_for(resource):
+    for evt in payload.get("events", []):
+        if (evt.get("content") or {}).get("resource") != resource:
+            continue
+        meta = ((evt.get("content") or {}).get("meta") or {})
+        raw = meta.get("test.codeowners")
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return "__invalid__"
+    return None
+
+if owners_for("Manual.Owned") != ["@org/owned"]:
+    print("error: Manual.Owned should resolve explicit owner rule")
+    sys.exit(1)
+if owners_for("Manual.Unowned") is not None:
+    print("error: Manual.Unowned should not set test.codeowners when no owners resolve")
+    sys.exit(1)
+if owners_for("Manual.CommentOnly") is not None:
+    print("error: Manual.CommentOnly should not set test.codeowners when owner segment is comment-only")
+    sys.exit(1)
+if owners_for("Manual.HashOwner") != ["@org/team#chat"]:
+    print("error: Manual.HashOwner should preserve '#' inside owner token")
+    sys.exit(1)
+if owners_for("Manual.SpaceOwner") != ["@org/space-owner"]:
+    print("error: Manual.SpaceOwner should resolve escaped-space CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.SectionHeaderIgnored") != ["@org/default"]:
+    print("error: Manual.SectionHeaderIgnored should ignore GitLab section-owner headers")
+    sys.exit(1)
+if owners_for("Manual.SourceFallback") != ["@org/owned"]:
+    print("error: Manual.SourceFallback should resolve through content.source.path fallback")
+    sys.exit(1)
+if owners_for("Manual.Default") != ["@org/default"]:
+    print("error: Manual.Default should resolve fallback '*' rule")
+    sys.exit(1)
+PY
+
+mv "$ORIG_CODEOWNERS" "$WORKSPACE/CODEOWNERS"

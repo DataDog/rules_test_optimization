@@ -17,6 +17,10 @@ load(
 )
 load(
     "//tools/tests:test_uploader_utils.bzl",
+    "codeowners_compile_regex_test",
+    "codeowners_glob_to_regex_test",
+    "codeowners_lookup_order_empty_script_dir_test",
+    "codeowners_lookup_order_test",
     "render_template_missing_placeholder_test",
     "render_template_substitution_test",
     "render_template_unescape_only_test",
@@ -108,6 +112,30 @@ render_template_missing_placeholder_test(
     timeout = "short",
 )
 
+codeowners_glob_to_regex_test(
+    name = "codeowners_glob_to_regex_test",
+    size = "small",
+    timeout = "short",
+)
+
+codeowners_compile_regex_test(
+    name = "codeowners_compile_regex_test",
+    size = "small",
+    timeout = "short",
+)
+
+codeowners_lookup_order_test(
+    name = "codeowners_lookup_order_test",
+    size = "small",
+    timeout = "short",
+)
+
+codeowners_lookup_order_empty_script_dir_test(
+    name = "codeowners_lookup_order_empty_script_dir_test",
+    size = "small",
+    timeout = "short",
+)
+
 test_suite(
     name = "tests",
     tests = [
@@ -125,5 +153,9 @@ test_suite(
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",
         ":render_template_missing_placeholder_test",
+        ":codeowners_glob_to_regex_test",
+        ":codeowners_compile_regex_test",
+        ":codeowners_lookup_order_test",
+        ":codeowners_lookup_order_empty_script_dir_test",
     ],
 )

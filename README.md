@@ -401,6 +401,10 @@ bazel run //:dd_upload_payloads
 - If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
 - The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
 - Bazel rule identity is included as stable tags: `test.bazel.rule_name` and `test.bazel.rule_version`.
+- `test`, `test_suite_end`, `test_module_end`, and `test_session_end` events are also enriched with `test.codeowners` when a source file can be resolved, owners are found, and the field is not already present.
+- CODEOWNERS lookup order is: `<ci.workspace_path>/CODEOWNERS`, `<ci.workspace_path>/.github/CODEOWNERS`, `<ci.workspace_path>/.gitlab/CODEOWNERS`, `<ci.workspace_path>/.docs/CODEOWNERS`, then `<workspace>/...` equivalents, then `./CODEOWNERS`, and finally `<script_dir>/CODEOWNERS`.
+- Matching uses GitHub-style glob semantics with "last matching rule wins". The stored value is a JSON-array string (for example: `["@team/a","@team/b"]` as string content in `test.codeowners`).
+- CODEOWNERS enrichment is best-effort: parse/lookup failures and misses do not fail uploads; debug mode logs counters and skip reasons.
 
 ### Payload schema validation (best effort)
 
