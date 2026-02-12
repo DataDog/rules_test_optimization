@@ -231,7 +231,7 @@ def main() -> int:
     _debug(f"max errors: {MAX_ERRORS}")
 
     try:
-        with open(schema_path, "r", encoding="utf-8") as f:
+        with open(schema_path, "r", encoding="utf-8-sig") as f:
             schema = json.load(f)
     except Exception as exc:
         print(f"error: failed to read schema: {exc}", file=sys.stderr)
@@ -248,7 +248,7 @@ def main() -> int:
             _debug(f"schema required count: {len(schema.get('required', []))}")
 
     try:
-        with open(payload_path, "r", encoding="utf-8") as f:
+        with open(payload_path, "r", encoding="utf-8-sig") as f:
             payload = json.load(f)
     except Exception as exc:
         print(f"error: failed to read payload JSON: {exc}", file=sys.stderr)
