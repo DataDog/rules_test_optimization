@@ -1344,6 +1344,13 @@ parse_codeowners_file() {{
     fi
     regex=$(compile_codeowners_regex "$pattern" || true)
     [[ -z "$regex" ]] && continue
+    # Some character-class patterns can produce invalid POSIX ERE fragments
+    # (for example "[z-a]"). Validate here so malformed rules are skipped once
+    # at parse time instead of repeatedly triggering regex-eval errors later.
+    if ! codeowners_regex_is_valid "$regex"; then
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skipping invalid regex '$regex' from pattern '$pattern'"
+      continue
+    fi
     CODEOWNERS_RULE_REGEX+=("$regex")
     if (( ${{#owner_tokens[@]}} == 0 )); then
       CODEOWNERS_RULE_OWNERS+=("")
@@ -1360,6 +1367,25 @@ parse_codeowners_file() {{
       dbg "codeowners: parsed rule pattern='$pattern' regex='$regex' owners='$owners_dbg'"
     fi
   done < "$file_path"
+}}
+
+codeowners_regex_is_valid() {{
+  local regex="$1"
+  local status=0
+  # Run the probe inside `if` so set -e does not abort on a normal no-match.
+  if ( [[ "" =~ $regex ]] ) 2>/dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+  # Bash returns:
+  #   0 => matched
+  #   1 => valid regex, no match
+  #   2 => invalid regex syntax
+  if (( status == 0 || status == 1 )); then
+    return 0
+  fi
+  return 1
 }}
 
 split_codeowners_pattern_and_owners() {{
@@ -1380,7 +1406,10 @@ split_codeowners_pattern_and_owners() {{
       escaped=1
       continue
     fi
-    if [[ "$ch" == $' ' || "$ch" == $'\\t' ]]; then
+    # Split on the first unescaped whitespace character.
+    # We intentionally use a character-class check (instead of only " " and
+    # tab) to match CODEOWNERS behavior for any ASCII whitespace separator.
+    if [[ "$ch" =~ [[:space:]] ]]; then
       rest="${{line:i}}"
       rest="${{rest#"${{rest%%[![:space:]]*}}"}}"
       CODEOWNERS_SPLIT_PATTERN="$pattern"
@@ -3204,6 +3233,15 @@ function Initialize-CodeOwnersRules {{
     }}
     $regex = Convert-CodeOwnersPatternToRegex $pattern
     if ([string]::IsNullOrEmpty($regex)) {{ continue }}
+    # Best-effort hardening: malformed character classes can produce invalid
+    # .NET regexes (for example "[z-a]"). Skip those rules here so one bad
+    # line cannot force all candidate evaluations into catch paths.
+    try {{
+      [void][System.Text.RegularExpressions.Regex]::new($regex)
+    }} catch {{
+      Dbg "codeowners: skipping invalid regex '$regex' from pattern '$pattern'"
+      continue
+    }}
     $script:CodeOwnersRules += [PSCustomObject]@{{
       Regex = $regex
       Owners = $ownerTokens

@@ -761,7 +761,14 @@ cat > "$WORKSPACE/CODEOWNERS" <<'CODEOWNERS_EOF'
 /manual/comment_only.cs # explicit empty-owner rule via inline comment
 /manual/hash_owner.cs @org/team#chat
 /manual/space\ owner.cs @org/space-owner
+# Intentionally malformed range class. This line exercises "best effort"
+# behavior: parser/matcher must ignore invalid regex outputs and still allow
+# later processing/fallback ownership resolution for unrelated files.
+/manual/[z-a].cs @org/invalid-range
 CODEOWNERS_EOF
+# Validate first-unescaped-whitespace splitting with a TAB separator too.
+# This catches parser regressions where "\t" delimiters are ignored.
+printf '/manual/tab_sep.cs\t@org/tab-owner\n' >> "$WORKSPACE/CODEOWNERS"
 
 MANUAL_EMPTY_OWNER="$TESTLOGS_DIR/manual_empty_owner/test.outputs"
 mkdir -p "$MANUAL_EMPTY_OWNER/tests" "$MANUAL_EMPTY_OWNER/coverage"
@@ -834,6 +841,24 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
         "resource": "Manual.SpaceOwner",
         "meta": {
           "test.source.file": "manual/space owner.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.TabOwner",
+        "meta": {
+          "test.source.file": "manual/tab_sep.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.InvalidRange",
+        "meta": {
+          "test.source.file": "manual/invalid_range.cs"
         }
       }
     },
@@ -929,6 +954,12 @@ if owners_for("Manual.HashOwner") != ["@org/team#chat"]:
     sys.exit(1)
 if owners_for("Manual.SpaceOwner") != ["@org/space-owner"]:
     print("error: Manual.SpaceOwner should resolve escaped-space CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.TabOwner") != ["@org/tab-owner"]:
+    print("error: Manual.TabOwner should resolve tab-separated CODEOWNERS owner list")
+    sys.exit(1)
+if owners_for("Manual.InvalidRange") != ["@org/default"]:
+    print("error: Manual.InvalidRange should ignore malformed regex rule and keep fallback owner")
     sys.exit(1)
 if owners_for("Manual.SectionHeaderIgnored") != ["@org/default"]:
     print("error: Manual.SectionHeaderIgnored should ignore GitLab section-owner headers")
