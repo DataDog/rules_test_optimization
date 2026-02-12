@@ -147,6 +147,7 @@ def _build_codeowners_lookup_order_for_tests(context_workspace, workspace_root, 
             context_workspace + "/CODEOWNERS",
             context_workspace + "/.github/CODEOWNERS",
             context_workspace + "/.gitlab/CODEOWNERS",
+            context_workspace + "/docs/CODEOWNERS",
             context_workspace + "/.docs/CODEOWNERS",
         ])
     if workspace_root:
@@ -154,6 +155,7 @@ def _build_codeowners_lookup_order_for_tests(context_workspace, workspace_root, 
             workspace_root + "/CODEOWNERS",
             workspace_root + "/.github/CODEOWNERS",
             workspace_root + "/.gitlab/CODEOWNERS",
+            workspace_root + "/docs/CODEOWNERS",
             workspace_root + "/.docs/CODEOWNERS",
         ])
     candidates.append("./CODEOWNERS")
@@ -1026,11 +1028,13 @@ decode_percent_path() {{
 
 normalize_path_like() {{
   local raw="$1"
-  raw="${{raw//\\\\//}}"
   if [[ "$raw" == file://* ]]; then
     raw="${{raw#file://}}"
   fi
   raw=$(decode_percent_path "$raw")
+  # Decode can re-introduce backslashes (for example %5C on Windows paths).
+  # Normalize after decoding so slash-based matching stays consistent.
+  raw="${{raw//\\\\//}}"
   # Collapse duplicated separators to improve matching stability.
   while [[ "$raw" == *"//"* ]]; do
     raw=$(echo "$raw" | sed -E 's#/{2,}#/#g')
@@ -1318,15 +1322,12 @@ parse_codeowners_file() {{
     line="${{line%$'\\r'}}"
     line="${{line#"${{line%%[![:space:]]*}}"}}"
     [[ -z "$line" || "${{line:0:1}}" == "#" ]] && continue
-    # Ignore GitLab section headers (for example: [Core Team] or [Core Team] @owner).
-    if [[ "$line" =~ ^\\[[^][]+\\]([[:space:]]+.*)?$ ]]; then
-      continue
-    fi
     split_codeowners_pattern_and_owners "$line"
     pattern="$CODEOWNERS_SPLIT_PATTERN"
     rest="$CODEOWNERS_SPLIT_OWNERS_RAW"
-    # Ignore GitLab section headers (for example: [Section] or [Section] @owner).
-    if [[ "$pattern" =~ ^\\[[^][]+\\]$ ]]; then
+    # Ignore GitLab section headers while preserving bracket-class glob rules.
+    # This keeps patterns like "[xy] @team/owners" valid CODEOWNERS entries.
+    if is_gitlab_section_header_pattern "$pattern"; then
       continue
     fi
     # Strip comments in owner segments while preserving '#' inside owner tokens.
@@ -1367,6 +1368,21 @@ parse_codeowners_file() {{
       dbg "codeowners: parsed rule pattern='$pattern' regex='$regex' owners='$owners_dbg'"
     fi
   done < "$file_path"
+}}
+
+is_gitlab_section_header_pattern() {{
+  local pattern="$1"
+  [[ "$pattern" =~ ^\\[[^][]+\\]$ ]] || return 1
+  local inner="${{pattern:1:${{#pattern}}-2}}"
+  # Heuristic to avoid class-only glob false positives:
+  # keep short/range-like bracket classes (for example [xy], [A-Z]) as patterns.
+  if [[ "$inner" == *"-"* || "$inner" == *"!"* || "$inner" == *"^"* || "$inner" == *"\\\\"* ]]; then
+    return 1
+  fi
+  if (( ${{#inner}} <= 2 )); then
+    return 1
+  fi
+  return 0
 }}
 
 codeowners_regex_is_valid() {{
@@ -1450,6 +1466,7 @@ init_codeowners() {{
       "$CODEOWNERS_CONTEXT_WORKSPACE/CODEOWNERS"
       "$CODEOWNERS_CONTEXT_WORKSPACE/.github/CODEOWNERS"
       "$CODEOWNERS_CONTEXT_WORKSPACE/.gitlab/CODEOWNERS"
+      "$CODEOWNERS_CONTEXT_WORKSPACE/docs/CODEOWNERS"
       "$CODEOWNERS_CONTEXT_WORKSPACE/.docs/CODEOWNERS"
     )
   fi
@@ -1458,6 +1475,7 @@ init_codeowners() {{
       "$CODEOWNERS_WORKSPACE_ROOT/CODEOWNERS"
       "$CODEOWNERS_WORKSPACE_ROOT/.github/CODEOWNERS"
       "$CODEOWNERS_WORKSPACE_ROOT/.gitlab/CODEOWNERS"
+      "$CODEOWNERS_WORKSPACE_ROOT/docs/CODEOWNERS"
       "$CODEOWNERS_WORKSPACE_ROOT/.docs/CODEOWNERS"
     )
   fi
@@ -2893,7 +2911,7 @@ $script:CodeOwnersStats = @{{
 
 function Normalize-PathLike([string]$PathValue) {{
   if ([string]::IsNullOrEmpty($PathValue)) {{ return $null }}
-  $v = $PathValue.Replace('\', '/')
+  $v = $PathValue
   if ($v.StartsWith("file://")) {{ $v = $v.Substring(7) }}
   if ($v.Contains('%')) {{
     # Keep behavior aligned with Bash: avoid decoding NUL (%00) into paths.
@@ -2903,6 +2921,9 @@ function Normalize-PathLike([string]$PathValue) {{
       try {{ $v = [Uri]::UnescapeDataString($v) }} catch {{}}
     }}
   }}
+  # Decode can re-introduce backslashes (for example %5C on Windows paths).
+  # Normalize after decoding so slash-based matching stays consistent.
+  $v = $v.Replace('\', '/')
   # Normalize duplicate separators and leading "./" fragments first.
   while ($v.Contains("//")) {{ $v = $v.Replace("//", "/") }}
   while ($v.StartsWith("./")) {{ $v = $v.Substring(2) }}
@@ -3162,6 +3183,19 @@ function Split-CodeOwnersLine([string]$Line) {{
   return [PSCustomObject]@{{ Pattern = $sb.ToString(); OwnersRaw = "" }}
 }}
 
+function Test-IsGitLabSectionHeaderPattern([string]$Pattern) {{
+  if ([string]::IsNullOrEmpty($Pattern)) {{ return $false }}
+  if ($Pattern -notmatch '^\\[[^\\[\\]]+\\]$') {{ return $false }}
+  $inner = $Pattern.Substring(1, $Pattern.Length - 2)
+  # Heuristic to avoid class-only glob false positives:
+  # keep short/range-like bracket classes (for example [xy], [A-Z]) as patterns.
+  if ($inner.Contains('-') -or $inner.Contains('!') -or $inner.Contains('^') -or $inner.Contains('\')) {{
+    return $false
+  }}
+  if ($inner.Length -le 2) {{ return $false }}
+  return $true
+}}
+
 function Initialize-CodeOwnersRules {{
   if ($script:CodeOwnersInitialized) {{ return }}
   $script:CodeOwnersInitialized = $true
@@ -3180,10 +3214,12 @@ function Initialize-CodeOwnersRules {{
     $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "CODEOWNERS" }} else {{ $null }}),
     $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".github/CODEOWNERS" }} else {{ $null }}),
     $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".gitlab/CODEOWNERS" }} else {{ $null }}),
+    $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "docs/CODEOWNERS" }} else {{ $null }}),
     $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".docs/CODEOWNERS" }} else {{ $null }}),
     (Join-Path $workspace "CODEOWNERS"),
     (Join-Path $workspace ".github/CODEOWNERS"),
     (Join-Path $workspace ".gitlab/CODEOWNERS"),
+    (Join-Path $workspace "docs/CODEOWNERS"),
     (Join-Path $workspace ".docs/CODEOWNERS"),
     (Join-Path (Get-Location).Path "CODEOWNERS"),
     (Join-Path $PSScriptRoot "CODEOWNERS")
@@ -3211,13 +3247,12 @@ function Initialize-CodeOwnersRules {{
   foreach ($line in $lines) {{
     $trimmed = $line.Trim()
     if ([string]::IsNullOrEmpty($trimmed) -or $trimmed.StartsWith("#")) {{ continue }}
-    # Ignore GitLab-style CODEOWNERS section headers.
-    if ($trimmed -match '^\\[[^\\[\\]]+\\](?:\\s+.*)?$') {{ continue }}
     $split = Split-CodeOwnersLine $trimmed
     $pattern = [string]$split.Pattern
     if ([string]::IsNullOrEmpty($pattern)) {{ continue }}
     $ownersRaw = [string]$split.OwnersRaw
-    if ($pattern -match '^\\[[^\\[\\]]+\\]$') {{
+    # Ignore GitLab-style section headers while preserving bracket-class globs.
+    if (Test-IsGitLabSectionHeaderPattern $pattern) {{
       continue
     }}
     $ownersRaw = $ownersRaw.Trim()

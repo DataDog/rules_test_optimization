@@ -755,6 +755,7 @@ cat > "$WORKSPACE/CODEOWNERS" <<'CODEOWNERS_EOF'
 [CoreTeam]
 [Core Team] @org/section-space
 * @org/default
+[xy] @org/class-owner
 [Backend] @org/section-default
 /manual/owned.cs @org/owned
 /manual/unowned.cs
@@ -856,9 +857,27 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
     {
       "type": "test",
       "content": {
+        "resource": "Manual.CharClass",
+        "meta": {
+          "test.source.file": "x"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
         "resource": "Manual.InvalidRange",
         "meta": {
           "test.source.file": "manual/invalid_range.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.EncodedBackslash",
+        "meta": {
+          "test.source.file": "manual%5Cowned.cs"
         }
       }
     },
@@ -958,8 +977,14 @@ if owners_for("Manual.SpaceOwner") != ["@org/space-owner"]:
 if owners_for("Manual.TabOwner") != ["@org/tab-owner"]:
     print("error: Manual.TabOwner should resolve tab-separated CODEOWNERS owner list")
     sys.exit(1)
+if owners_for("Manual.CharClass") != ["@org/class-owner"]:
+    print("error: Manual.CharClass should resolve bracket-only class CODEOWNERS pattern")
+    sys.exit(1)
 if owners_for("Manual.InvalidRange") != ["@org/default"]:
     print("error: Manual.InvalidRange should ignore malformed regex rule and keep fallback owner")
+    sys.exit(1)
+if owners_for("Manual.EncodedBackslash") != ["@org/owned"]:
+    print("error: Manual.EncodedBackslash should normalize %5C separators before matching")
     sys.exit(1)
 if owners_for("Manual.SectionHeaderIgnored") != ["@org/default"]:
     print("error: Manual.SectionHeaderIgnored should ignore GitLab section-owner headers")

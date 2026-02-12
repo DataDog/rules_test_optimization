@@ -60,6 +60,8 @@ def _codeowners_compile_regex_test(ctx):
     asserts.equals(env, "^(.*/)?foo\\.cs($|/.*)", compile_codeowners_regex_for_tests("**/foo.cs"))
     asserts.equals(env, "(^|.*/)literal\\*\\.cs($|/.*)", compile_codeowners_regex_for_tests("literal\\*.cs"))
     asserts.equals(env, "^manual/space owner\\.cs($|/.*)", compile_codeowners_regex_for_tests("manual/space\\ owner.cs"))
+    # Bracket-only character classes are valid CODEOWNERS patterns.
+    asserts.equals(env, "(^|.*/)[xy]($|/.*)", compile_codeowners_regex_for_tests("[xy]"))
     asserts.equals(env, "(^|.*/).*($|/.*)", compile_codeowners_regex_for_tests("**"))
     # Root-only slash is not a valid CODEOWNERS rule.
     asserts.equals(env, "", compile_codeowners_regex_for_tests("/"))
@@ -74,10 +76,12 @@ def _codeowners_lookup_order_test(ctx):
             "/ctx/ws/CODEOWNERS",
             "/ctx/ws/.github/CODEOWNERS",
             "/ctx/ws/.gitlab/CODEOWNERS",
+            "/ctx/ws/docs/CODEOWNERS",
             "/ctx/ws/.docs/CODEOWNERS",
             "/repo/ws/CODEOWNERS",
             "/repo/ws/.github/CODEOWNERS",
             "/repo/ws/.gitlab/CODEOWNERS",
+            "/repo/ws/docs/CODEOWNERS",
             "/repo/ws/.docs/CODEOWNERS",
             "./CODEOWNERS",
             "/script/CODEOWNERS",
@@ -92,6 +96,7 @@ def _codeowners_lookup_order_test(ctx):
             "/repo/ws/CODEOWNERS",
             "/repo/ws/.github/CODEOWNERS",
             "/repo/ws/.gitlab/CODEOWNERS",
+            "/repo/ws/docs/CODEOWNERS",
             "/repo/ws/.docs/CODEOWNERS",
             "./CODEOWNERS",
             "/script/CODEOWNERS",
@@ -109,6 +114,7 @@ def _codeowners_lookup_order_empty_script_dir_test(ctx):
             "/repo/ws/CODEOWNERS",
             "/repo/ws/.github/CODEOWNERS",
             "/repo/ws/.gitlab/CODEOWNERS",
+            "/repo/ws/docs/CODEOWNERS",
             "/repo/ws/.docs/CODEOWNERS",
             "./CODEOWNERS",
             "CODEOWNERS",
