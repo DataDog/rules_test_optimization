@@ -1511,7 +1511,9 @@ function Get-Fnv1a32Hex([string]$value) {{
         $idx = $alphabet.IndexOf([string]$ch)
         if ($idx -lt 0) {{ $idx = 0 }}
         $hash = $hash -bxor ([uint32]$idx)
-        $hash = [uint32](($hash * 16777619) -band 0xffffffff)
+        # Keep arithmetic in uint64 and wrap to 32 bits explicitly.
+        # This avoids signed-mask behavior differences on PowerShell.
+        $hash = [uint32](([uint64]$hash * [uint64]16777619) % [uint64]4294967296)
     }}
     return ("{0:x8}" -f $hash)
 }}
