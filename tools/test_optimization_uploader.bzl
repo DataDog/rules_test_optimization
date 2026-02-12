@@ -61,12 +61,16 @@ def _uploader_impl(ctx):
 
     # Find context.json in data files (supports any repo alias)
     context_json_rloc = ""
+    context_json_path = ""
     for f in ctx.files.data:
         if f.basename == "context.json":
             context_json_rloc = f.short_path
+            context_json_path = f.path
             break
     schema_json_rloc = ctx.file._schema.short_path if ctx.file._schema else ""
+    schema_json_path = ctx.file._schema.path if ctx.file._schema else ""
     schema_validator_rloc = ctx.file._schema_validator.short_path if ctx.file._schema_validator else ""
+    schema_validator_path = ctx.file._schema_validator.path if ctx.file._schema_validator else ""
 
     # High-level debug of rule inputs
     log_info("Generating uploader scripts (Option 2: TEST_UNDECLARED_OUTPUTS_DIR)")
@@ -85,14 +89,17 @@ def _uploader_impl(ctx):
     )
     if context_json_rloc:
         log_debug(debug, "context.json found at: %s" % context_json_rloc)
+        log_debug(debug, "context.json artifact path: %s" % context_json_path)
     else:
         log_debug(debug, "context.json not found in data files; enrichment disabled")
     if schema_json_rloc:
         log_debug(debug, "schema found at: %s" % schema_json_rloc)
+        log_debug(debug, "schema artifact path: %s" % schema_json_path)
     else:
         log_debug(debug, "schema not found in data files; validation disabled")
     if schema_validator_rloc:
         log_debug(debug, "schema validator found at: %s" % schema_validator_rloc)
+        log_debug(debug, "schema validator artifact path: %s" % schema_validator_path)
     else:
         log_debug(debug, "schema validator not found in data files; validation disabled")
     if ctx.files.data:
@@ -112,12 +119,21 @@ set -euo pipefail
 # Logging functions (defined first so other functions can use them)
 # DEBUG is set later, so we use a function that checks the variable at runtime
 log() {{ echo "[dd-uploader] $1"; }}
-dbg() {{ if [[ "${{DEBUG:-0}}" == "1" ]]; then echo "[dd-uploader][dbg] $1" >&2; fi }}
+DEBUG_BOOTSTRAP=$(echo "${{DD_TOPT_DEBUG:-0}}" | tr '[:upper:]' '[:lower:]')
+dbg() {{
+    local dbg_val="${{DEBUG:-$DEBUG_BOOTSTRAP}}"
+    dbg_val=$(echo "$dbg_val" | tr '[:upper:]' '[:lower:]')
+    if [[ "$dbg_val" == "1" || "$dbg_val" == "true" || "$dbg_val" == "yes" ]]; then
+        echo "[dd-uploader][dbg] $1" >&2
+    fi
+}}
+dbg "startup runfiles env: RUNFILES_DIR='${{RUNFILES_DIR:-<unset>}}' RUNFILES_MANIFEST_FILE='${{RUNFILES_MANIFEST_FILE:-<unset>}}' script='$0'"
 
 # Resolve runfile path for context.json lookup
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 resolve_runfile() {{
-    local rloc="$1"
+    local input_rloc="$1"
+    local rloc="$input_rloc"
     # Normalize relative prefixes that can appear in bzlmod runfile paths
     rloc="${rloc#./}"
     while [[ "$rloc" == ../* ]]; do
@@ -134,14 +150,40 @@ resolve_runfile() {{
         candidates+=("_main/$rloc")
     fi
     local manifest_file="${{RUNFILES_MANIFEST_FILE:-}}"
+    dbg "resolve_runfile: input='$input_rloc' normalized='$rloc' candidates='${{candidates[*]}}'"
+    if [[ -n "${{RUNFILES_DIR:-}}" ]]; then
+        local rf_state="missing"
+        if [[ -d "$RUNFILES_DIR" ]]; then
+            rf_state="dir"
+        elif [[ -e "$RUNFILES_DIR" ]]; then
+            rf_state="exists_non_dir"
+        fi
+        dbg "resolve_runfile: RUNFILES_DIR='$RUNFILES_DIR' state=$rf_state"
+    else
+        dbg "resolve_runfile: RUNFILES_DIR=<unset>"
+    fi
+    if [[ -n "$manifest_file" ]]; then
+        local mf_state="missing"
+        if [[ -f "$manifest_file" ]]; then
+            mf_state="file"
+        elif [[ -e "$manifest_file" ]]; then
+            mf_state="exists_non_file"
+        fi
+        dbg "resolve_runfile: RUNFILES_MANIFEST_FILE='$manifest_file' state=$mf_state"
+    else
+        dbg "resolve_runfile: RUNFILES_MANIFEST_FILE=<unset>"
+    fi
     for cand in "${{candidates[@]}}"; do
+        dbg "resolve_runfile: trying candidate '$cand'"
         # Try RUNFILES_DIR first (Unix default)
         if [[ -n "${{RUNFILES_DIR:-}}" && -f "$RUNFILES_DIR/$cand" ]]; then
+            dbg "resolve_runfile: hit RUNFILES_DIR -> '$RUNFILES_DIR/$cand'"
             echo "$RUNFILES_DIR/$cand"
             return
         fi
         # Try $0.runfiles fallback
         if [[ -f "$0.runfiles/$cand" ]]; then
+            dbg "resolve_runfile: hit script runfiles -> '$0.runfiles/$cand'"
             echo "$0.runfiles/$cand"
             return
         fi
@@ -150,9 +192,13 @@ resolve_runfile() {{
             local path
             # Use awk with substr() for regex-free extraction (handles metacharacters in paths)
             path=$(awk -v key="$cand" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$manifest_file")
-            if [[ -n "$path" && -f "$path" ]]; then
-                echo "$path"
-                return
+            if [[ -n "$path" ]]; then
+                if [[ -f "$path" ]]; then
+                    dbg "resolve_runfile: hit manifest exact key '$cand' -> '$path'"
+                    echo "$path"
+                    return
+                fi
+                dbg "resolve_runfile: manifest exact key '$cand' -> '$path' (not a file)"
             fi
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
             # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
@@ -168,22 +214,34 @@ resolve_runfile() {{
                     }}
                 }}
             ' "$manifest_file")
-            if [[ -n "$path" && -f "$path" ]]; then
-                echo "$path"
-                return
+            if [[ -n "$path" ]]; then
+                if [[ -f "$path" ]]; then
+                    dbg "resolve_runfile: hit manifest suffix key '$cand' -> '$path'"
+                    echo "$path"
+                    return
+                fi
+                dbg "resolve_runfile: manifest suffix key '$cand' -> '$path' (not a file)"
             fi
         fi
     done
+    dbg "resolve_runfile: miss for input '$input_rloc'"
     echo ""  # Not found
 }}
 
 # Resolve context.json path (used by upload functions for payload enrichment)
 # Path is determined at rule implementation time from data files
 CONTEXT_JSON_RLOC="{context_json_rloc}"
-if [[ -n "$CONTEXT_JSON_RLOC" ]]; then
+CONTEXT_JSON_PATH="{context_json_path}"
+dbg "context.json resolution inputs: path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC'"
+if [[ -n "$CONTEXT_JSON_PATH" && -f "$CONTEXT_JSON_PATH" ]]; then
+    CONTEXT_JSON="$CONTEXT_JSON_PATH"
+    dbg "context.json resolved via direct path: '$CONTEXT_JSON'"
+elif [[ -n "$CONTEXT_JSON_RLOC" ]]; then
     CONTEXT_JSON=$(resolve_runfile "$CONTEXT_JSON_RLOC")
     if [[ -z "$CONTEXT_JSON" ]]; then
         log "warning: context.json not found in runfiles; payloads will not be enriched"
+    else
+        dbg "context.json resolved via runfiles: '$CONTEXT_JSON'"
     fi
 else
     CONTEXT_JSON=""
@@ -192,20 +250,33 @@ fi
 
 # Resolve schema and validator paths (used for payload validation)
 SCHEMA_JSON_RLOC="{schema_json_rloc}"
+SCHEMA_JSON_PATH="{schema_json_path}"
 SCHEMA_VALIDATOR_RLOC="{schema_validator_rloc}"
-if [[ -n "$SCHEMA_JSON_RLOC" ]]; then
+SCHEMA_VALIDATOR_PATH="{schema_validator_path}"
+dbg "schema resolution inputs: schema_path='$SCHEMA_JSON_PATH' schema_rloc='$SCHEMA_JSON_RLOC' validator_path='$SCHEMA_VALIDATOR_PATH' validator_rloc='$SCHEMA_VALIDATOR_RLOC'"
+if [[ -n "$SCHEMA_JSON_PATH" && -f "$SCHEMA_JSON_PATH" ]]; then
+    SCHEMA_JSON="$SCHEMA_JSON_PATH"
+    dbg "schema resolved via direct path: '$SCHEMA_JSON'"
+elif [[ -n "$SCHEMA_JSON_RLOC" ]]; then
     SCHEMA_JSON=$(resolve_runfile "$SCHEMA_JSON_RLOC")
     if [[ -z "$SCHEMA_JSON" ]]; then
         log "warning: schema not found in runfiles; validation disabled"
+    else
+        dbg "schema resolved via runfiles: '$SCHEMA_JSON'"
     fi
 else
     SCHEMA_JSON=""
     dbg "schema not configured in data files; validation disabled"
 fi
-if [[ -n "$SCHEMA_VALIDATOR_RLOC" ]]; then
+if [[ -n "$SCHEMA_VALIDATOR_PATH" && -f "$SCHEMA_VALIDATOR_PATH" ]]; then
+    SCHEMA_VALIDATOR="$SCHEMA_VALIDATOR_PATH"
+    dbg "schema validator resolved via direct path: '$SCHEMA_VALIDATOR'"
+elif [[ -n "$SCHEMA_VALIDATOR_RLOC" ]]; then
     SCHEMA_VALIDATOR=$(resolve_runfile "$SCHEMA_VALIDATOR_RLOC")
     if [[ -z "$SCHEMA_VALIDATOR" ]]; then
         log "warning: schema validator not found in runfiles; validation disabled"
+    else
+        dbg "schema validator resolved via runfiles: '$SCHEMA_VALIDATOR'"
     fi
 else
     SCHEMA_VALIDATOR=""
@@ -1107,8 +1178,11 @@ fi
             "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
+            "context_json_path": context_json_path,
             "schema_json_rloc": schema_json_rloc,
+            "schema_json_path": schema_json_path,
             "schema_validator_rloc": schema_validator_rloc,
+            "schema_validator_path": schema_validator_path,
             "rules_version": RULES_VERSION,
         },
     )
@@ -1122,8 +1196,9 @@ $ProgressPreference = 'SilentlyContinue'
 # Resolve runfile path for context.json lookup
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 function Resolve-Runfile {{
-    param([string]$Rloc)
+    param([string]$InputRloc)
 
+    $Rloc = $InputRloc
     # Normalize relative prefixes that can appear in bzlmod runfile paths
     if ($Rloc.StartsWith("./")) {{ $Rloc = $Rloc.Substring(2) }}
     while ($Rloc.StartsWith("../")) {{ $Rloc = $Rloc.Substring(3) }}
@@ -1138,29 +1213,55 @@ function Resolve-Runfile {{
     if (-not $Rloc.StartsWith("_main/")) {{
         $candidates += "_main/$Rloc"
     }}
+    Dbg "Resolve-Runfile input='$InputRloc' normalized='$Rloc' candidates='$($candidates -join ',')'"
+
+    if ($env:RUNFILES_DIR) {{
+        $rfExists = Test-Path -LiteralPath $env:RUNFILES_DIR
+        Dbg "Resolve-Runfile RUNFILES_DIR='$($env:RUNFILES_DIR)' exists=$rfExists"
+    }} else {{
+        Dbg "Resolve-Runfile RUNFILES_DIR=<unset>"
+    }}
 
     $manifest = $null
-    if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path $env:RUNFILES_MANIFEST_FILE)) {{
-        $manifest = Get-Content $env:RUNFILES_MANIFEST_FILE
+    if ($env:RUNFILES_MANIFEST_FILE) {{
+        $mfExists = Test-Path -LiteralPath $env:RUNFILES_MANIFEST_FILE
+        Dbg "Resolve-Runfile RUNFILES_MANIFEST_FILE='$($env:RUNFILES_MANIFEST_FILE)' exists=$mfExists"
+        if ($mfExists) {{
+            $manifest = Get-Content -LiteralPath $env:RUNFILES_MANIFEST_FILE
+            Dbg "Resolve-Runfile manifest entries loaded=$($manifest.Count)"
+        }}
+    }} else {{
+        Dbg "Resolve-Runfile RUNFILES_MANIFEST_FILE=<unset>"
     }}
 
     foreach ($cand in $candidates) {{
+        Dbg "Resolve-Runfile trying candidate '$cand'"
         # Try RUNFILES_DIR first
         if ($env:RUNFILES_DIR) {{
             $candidate = Join-Path $env:RUNFILES_DIR $cand
-            if (Test-Path $candidate) {{ return $candidate }}
+            if (Test-Path -LiteralPath $candidate) {{
+                Dbg "Resolve-Runfile hit RUNFILES_DIR -> '$candidate'"
+                return $candidate
+            }}
         }}
 
         # Try $PSScriptRoot.runfiles fallback
         $candidate = Join-Path "$PSScriptRoot.runfiles" $cand
-        if (Test-Path $candidate) {{ return $candidate }}
+        if (Test-Path -LiteralPath $candidate) {{
+            Dbg "Resolve-Runfile hit script runfiles -> '$candidate'"
+            return $candidate
+        }}
 
         # Try RUNFILES_MANIFEST_FILE (Windows default)
         if ($manifest) {{
             foreach ($line in $manifest) {{
                 if ($line.StartsWith("$cand ")) {{
                     $path = $line.Substring($cand.Length + 1)
-                    if (Test-Path $path) {{ return $path }}
+                    if (Test-Path -LiteralPath $path) {{
+                        Dbg "Resolve-Runfile hit manifest exact key '$cand' -> '$path'"
+                        return $path
+                    }}
+                    Dbg "Resolve-Runfile manifest exact key '$cand' -> '$path' (not a file)"
                 }}
             }}
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
@@ -1172,20 +1273,31 @@ function Resolve-Runfile {{
                 if ($key.Length -le $cand.Length) {{ continue }}
                 if ($key.EndsWith("/$cand") -or $key.EndsWith("\\$cand")) {{
                     $path = $line.Substring($i + 1)
-                    if (Test-Path $path) {{ return $path }}
+                    if (Test-Path -LiteralPath $path) {{
+                        Dbg "Resolve-Runfile hit manifest suffix key '$cand' -> '$path'"
+                        return $path
+                    }}
+                    Dbg "Resolve-Runfile manifest suffix key '$cand' -> '$path' (not a file)"
                 }}
             }}
         }}
     }}
 
+    Dbg "Resolve-Runfile miss for input '$InputRloc'"
     return $null  # Not found
 }}
 
 # Logging functions (defined early so other functions can use them)
 # Note: $Debug is set later, so Dbg checks the variable at runtime
 $script:DebugMode = $false  # Will be set properly after Normalize-Bool is defined
+if ($env:DD_TOPT_DEBUG) {{
+    switch ($env:DD_TOPT_DEBUG.ToLower()) {{
+        {{ $_ -in '1', 'true', 'yes' }} {{ $script:DebugMode = $true }}
+    }}
+}}
 function Log([string]$msg) {{ Write-Output "[dd-uploader] $msg" }}
 function Dbg([string]$msg) {{ if ($script:DebugMode) {{ Write-Output "[dd-uploader][dbg] $msg" }} }}
+Dbg "startup runfiles env: RUNFILES_DIR='$(if ($env:RUNFILES_DIR) {{ $env:RUNFILES_DIR }} else {{ '<unset>' }})' RUNFILES_MANIFEST_FILE='$(if ($env:RUNFILES_MANIFEST_FILE) {{ $env:RUNFILES_MANIFEST_FILE }} else {{ '<unset>' }})' PSScriptRoot='$PSScriptRoot'"
 
 function Redact-HeaderValue([string]$name, [string]$value) {{
     if ($name -ne 'DD-API-KEY') {{ return $value }}
@@ -1248,10 +1360,17 @@ function Log-StartTimeStats([string]$FilePath) {{
 # Resolve context.json path (used by upload functions for payload enrichment)
 # Path is determined at rule implementation time from data files
 $ContextJsonRloc = "{context_json_rloc}"
-if ($ContextJsonRloc) {{
+$ContextJsonPath = "{context_json_path}"
+Dbg "context.json resolution inputs: path='$ContextJsonPath' rloc='$ContextJsonRloc'"
+if ($ContextJsonPath -and (Test-Path -LiteralPath $ContextJsonPath)) {{
+    $script:ContextJson = $ContextJsonPath
+    Dbg "context.json resolved via direct path: '$script:ContextJson'"
+}} elseif ($ContextJsonRloc) {{
     $script:ContextJson = Resolve-Runfile $ContextJsonRloc
     if (-not $script:ContextJson) {{
         Log "warning: context.json not found in runfiles; payloads will not be enriched"
+    }} else {{
+        Dbg "context.json resolved via runfiles: '$script:ContextJson'"
     }}
 }} else {{
     $script:ContextJson = $null
@@ -1260,10 +1379,17 @@ if ($ContextJsonRloc) {{
 
 # Resolve schema + validator paths (used for payload validation)
 $SchemaJsonRloc = "{schema_json_rloc}"
-if ($SchemaJsonRloc) {{
+$SchemaJsonPath = "{schema_json_path}"
+Dbg "schema resolution inputs: schema_path='$SchemaJsonPath' schema_rloc='$SchemaJsonRloc'"
+if ($SchemaJsonPath -and (Test-Path -LiteralPath $SchemaJsonPath)) {{
+    $script:SchemaJson = $SchemaJsonPath
+    Dbg "schema resolved via direct path: '$script:SchemaJson'"
+}} elseif ($SchemaJsonRloc) {{
     $script:SchemaJson = Resolve-Runfile $SchemaJsonRloc
     if (-not $script:SchemaJson) {{
         Log "warning: schema not found in runfiles; validation disabled"
+    }} else {{
+        Dbg "schema resolved via runfiles: '$script:SchemaJson'"
     }}
 }} else {{
     $script:SchemaJson = $null
@@ -1271,10 +1397,17 @@ if ($SchemaJsonRloc) {{
 }}
 
 $SchemaValidatorRloc = "{schema_validator_rloc}"
-if ($SchemaValidatorRloc) {{
+$SchemaValidatorPath = "{schema_validator_path}"
+Dbg "schema validator resolution inputs: validator_path='$SchemaValidatorPath' validator_rloc='$SchemaValidatorRloc'"
+if ($SchemaValidatorPath -and (Test-Path -LiteralPath $SchemaValidatorPath)) {{
+    $script:SchemaValidator = $SchemaValidatorPath
+    Dbg "schema validator resolved via direct path: '$script:SchemaValidator'"
+}} elseif ($SchemaValidatorRloc) {{
     $script:SchemaValidator = Resolve-Runfile $SchemaValidatorRloc
     if (-not $script:SchemaValidator) {{
         Log "warning: schema validator not found in runfiles; validation disabled"
+    }} else {{
+        Dbg "schema validator resolved via runfiles: '$script:SchemaValidator'"
     }}
 }} else {{
     $script:SchemaValidator = $null
@@ -2054,8 +2187,11 @@ try {{
             "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
+            "context_json_path": context_json_path,
             "schema_json_rloc": schema_json_rloc,
+            "schema_json_path": schema_json_path,
             "schema_validator_rloc": schema_validator_rloc,
+            "schema_validator_path": schema_validator_path,
             "rules_version": RULES_VERSION,
         },
     )
