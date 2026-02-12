@@ -756,6 +756,7 @@ cat > "$WORKSPACE/CODEOWNERS" <<'CODEOWNERS_EOF'
 [Core Team] @org/section-space
 * @org/default
 [xy] @org/class-owner
+[abc] @org/class-owner-abc
 [Backend] @org/section-default
 /manual/owned.cs @org/owned
 /manual/unowned.cs
@@ -866,6 +867,24 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
     {
       "type": "test",
       "content": {
+        "resource": "Manual.CharClassLong",
+        "meta": {
+          "test.source.file": "a"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.SectionHeaderWithSpaceIgnored",
+        "meta": {
+          "test.source.file": "[Core"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
         "resource": "Manual.InvalidRange",
         "meta": {
           "test.source.file": "manual/invalid_range.cs"
@@ -884,9 +903,27 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
     {
       "type": "test",
       "content": {
+        "resource": "Manual.ExternalAbsolutePath",
+        "meta": {
+          "test.source.file": "/tmp/not-in-workspace/manual_external.cs"
+        }
+      }
+    },
+    {
+      "type": "test_module_end",
+      "content": {
+        "resource": "Manual.ModuleEndOwned",
+        "meta": {
+          "test.source.file": "manual/owned.cs"
+        }
+      }
+    },
+    {
+      "type": "test",
+      "content": {
         "resource": "Manual.SectionHeaderIgnored",
         "meta": {
-          "test.source.file": "manual/b/file.cs"
+          "test.source.file": "manual/z/file.cs"
         }
       }
     }
@@ -980,11 +1017,23 @@ if owners_for("Manual.TabOwner") != ["@org/tab-owner"]:
 if owners_for("Manual.CharClass") != ["@org/class-owner"]:
     print("error: Manual.CharClass should resolve bracket-only class CODEOWNERS pattern")
     sys.exit(1)
+if owners_for("Manual.CharClassLong") != ["@org/class-owner-abc"]:
+    print("error: Manual.CharClassLong should resolve longer bracket-only class CODEOWNERS pattern")
+    sys.exit(1)
+if owners_for("Manual.SectionHeaderWithSpaceIgnored") != ["@org/default"]:
+    print("error: Manual.SectionHeaderWithSpaceIgnored should ignore spaced GitLab section headers")
+    sys.exit(1)
 if owners_for("Manual.InvalidRange") != ["@org/default"]:
     print("error: Manual.InvalidRange should ignore malformed regex rule and keep fallback owner")
     sys.exit(1)
 if owners_for("Manual.EncodedBackslash") != ["@org/owned"]:
     print("error: Manual.EncodedBackslash should normalize %5C separators before matching")
+    sys.exit(1)
+if owners_for("Manual.ExternalAbsolutePath") is not None:
+    print("error: Manual.ExternalAbsolutePath should not inherit repo CODEOWNERS from absolute non-repo paths")
+    sys.exit(1)
+if owners_for("Manual.ModuleEndOwned") != ["@org/owned"]:
+    print("error: Manual.ModuleEndOwned should enrich test_module_end events when source path resolves")
     sys.exit(1)
 if owners_for("Manual.SectionHeaderIgnored") != ["@org/default"]:
     print("error: Manual.SectionHeaderIgnored should ignore GitLab section-owner headers")

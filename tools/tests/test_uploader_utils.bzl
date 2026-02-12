@@ -62,6 +62,7 @@ def _codeowners_compile_regex_test(ctx):
     asserts.equals(env, "^manual/space owner\\.cs($|/.*)", compile_codeowners_regex_for_tests("manual/space\\ owner.cs"))
     # Bracket-only character classes are valid CODEOWNERS patterns.
     asserts.equals(env, "(^|.*/)[xy]($|/.*)", compile_codeowners_regex_for_tests("[xy]"))
+    asserts.equals(env, "(^|.*/)[abc]($|/.*)", compile_codeowners_regex_for_tests("[abc]"))
     asserts.equals(env, "(^|.*/).*($|/.*)", compile_codeowners_regex_for_tests("**"))
     # Root-only slash is not a valid CODEOWNERS rule.
     asserts.equals(env, "", compile_codeowners_regex_for_tests("/"))

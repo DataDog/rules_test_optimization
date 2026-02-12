@@ -1159,8 +1159,13 @@ build_source_candidates() {{
   if [[ "$normalized_source" =~ \\.runfiles/[^/]+/(.+)$ ]]; then
     add_path_candidate "${{BASH_REMATCH[1]}}"
   fi
-  # Keep absolute normalized path as last-resort fallback.
-  add_path_candidate "$normalized_source"
+  # Keep only repository-relative fallback candidates. Absolute paths that are
+  # not under known repo roots can incorrectly inherit broad CODEOWNERS rules.
+  if [[ "$normalized_source" != /* && ! "$normalized_source" =~ ^[A-Za-z]:/ ]]; then
+    add_path_candidate "$normalized_source"
+  elif [[ "$DEBUG" == "1" ]]; then
+    dbg "codeowners: skip absolute source fallback candidate '$normalized_source'"
+  fi
 }}
 
 glob_to_regex() {{
@@ -1322,6 +1327,11 @@ parse_codeowners_file() {{
     line="${{line%$'\\r'}}"
     line="${{line#"${{line%%[![:space:]]*}}"}}"
     [[ -z "$line" || "${{line:0:1}}" == "#" ]] && continue
+    # Section headers may include spaces (for example "[Core Team] @org/team").
+    # Detect them from the full raw line before splitting on whitespace.
+    if is_gitlab_section_header_line "$line"; then
+      continue
+    fi
     split_codeowners_pattern_and_owners "$line"
     pattern="$CODEOWNERS_SPLIT_PATTERN"
     rest="$CODEOWNERS_SPLIT_OWNERS_RAW"
@@ -1374,15 +1384,32 @@ is_gitlab_section_header_pattern() {{
   local pattern="$1"
   [[ "$pattern" =~ ^\\[[^][]+\\]$ ]] || return 1
   local inner="${{pattern:1:${{#pattern}}-2}}"
+  # GitLab section headers can include whitespace (for example [Core Team]).
+  if [[ "$inner" == *[[:space:]]* ]]; then
+    return 0
+  fi
   # Heuristic to avoid class-only glob false positives:
-  # keep short/range-like bracket classes (for example [xy], [A-Z]) as patterns.
+  # keep range-like and short bracket classes (for example [xy], [A-Z]).
   if [[ "$inner" == *"-"* || "$inner" == *"!"* || "$inner" == *"^"* || "$inner" == *"\\\\"* ]]; then
     return 1
   fi
   if (( ${{#inner}} <= 2 )); then
     return 1
   fi
+  # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
+  if [[ "$inner" =~ ^[a-z0-9]+$ ]]; then
+    return 1
+  fi
   return 0
+}}
+
+is_gitlab_section_header_line() {{
+  local line="$1"
+  if [[ "$line" =~ ^(\\[[^][]+\\])([[:space:]]+.*)?$ ]]; then
+    is_gitlab_section_header_pattern "${{BASH_REMATCH[1]}}"
+    return $?
+  fi
+  return 1
 }}
 
 codeowners_regex_is_valid() {{
@@ -3015,7 +3042,13 @@ function Get-PathCandidates([string]$SourcePath) {{
   if ($normalized -match '\\.runfiles/[^/]+/(.+)$') {{
     Add-PathCandidate $candidates $Matches[1]
   }}
-  Add-PathCandidate $candidates $normalized
+  # Keep only repository-relative fallback candidates. Absolute paths that are
+  # not under known repo roots can incorrectly inherit broad CODEOWNERS rules.
+  if (-not $normalized.StartsWith("/") -and -not ($normalized -match '^[A-Za-z]:/')) {{
+    Add-PathCandidate $candidates $normalized
+  }} elseif ($script:DebugMode) {{
+    Dbg "codeowners: skip absolute source fallback candidate '$normalized'"
+  }}
   return $candidates
 }}
 
@@ -3187,13 +3220,25 @@ function Test-IsGitLabSectionHeaderPattern([string]$Pattern) {{
   if ([string]::IsNullOrEmpty($Pattern)) {{ return $false }}
   if ($Pattern -notmatch '^\\[[^\\[\\]]+\\]$') {{ return $false }}
   $inner = $Pattern.Substring(1, $Pattern.Length - 2)
+  # GitLab section headers can include whitespace (for example [Core Team]).
+  if ($inner.Contains(" ") -or $inner.Contains("`t")) {{
+    return $true
+  }}
   # Heuristic to avoid class-only glob false positives:
-  # keep short/range-like bracket classes (for example [xy], [A-Z]) as patterns.
+  # keep range-like and short bracket classes (for example [xy], [A-Z]).
   if ($inner.Contains('-') -or $inner.Contains('!') -or $inner.Contains('^') -or $inner.Contains('\')) {{
     return $false
   }}
   if ($inner.Length -le 2) {{ return $false }}
+  # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
+  if ($inner -cmatch '^[a-z0-9]+$') {{ return $false }}
   return $true
+}}
+
+function Test-IsGitLabSectionHeaderLine([string]$Line) {{
+  if ([string]::IsNullOrEmpty($Line)) {{ return $false }}
+  if ($Line -notmatch '^(\\[[^\\[\\]]+\\])(?:\\s+.*)?$') {{ return $false }}
+  return (Test-IsGitLabSectionHeaderPattern $Matches[1])
 }}
 
 function Initialize-CodeOwnersRules {{
@@ -3247,6 +3292,11 @@ function Initialize-CodeOwnersRules {{
   foreach ($line in $lines) {{
     $trimmed = $line.Trim()
     if ([string]::IsNullOrEmpty($trimmed) -or $trimmed.StartsWith("#")) {{ continue }}
+    # Section headers may include spaces (for example "[Core Team] @org/team").
+    # Detect them from the full raw line before splitting on whitespace.
+    if (Test-IsGitLabSectionHeaderLine $trimmed) {{
+      continue
+    }}
     $split = Split-CodeOwnersLine $trimmed
     $pattern = [string]$split.Pattern
     if ([string]::IsNullOrEmpty($pattern)) {{ continue }}
