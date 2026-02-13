@@ -5,6 +5,7 @@ load(
     "build_module_label_map_for_tests",
     "compute_dd_api_base_for_tests",
     "dirname_for_tests",
+    "http_execute_timeout_seconds_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
     "render_export_bzl_for_tests",
@@ -114,6 +115,12 @@ def _export_bzl_manifest_path_test(ctx):
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
     return unittest.end(env)
 
+def _http_execute_timeout_seconds_test(ctx):
+    env = unittest.begin(ctx)
+    # Keep this aligned with curl/Invoke-WebRequest max-time plus startup overhead.
+    asserts.equals(env, 120, http_execute_timeout_seconds_for_tests)
+    return unittest.end(env)
+
 dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
 resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
@@ -121,3 +128,4 @@ normalize_ref_test = unittest.make(_normalize_ref_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
+http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)

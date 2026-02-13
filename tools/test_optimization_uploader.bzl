@@ -65,8 +65,13 @@ def _render_template(template, substitutions):
 def _bool_to_str(value):
     return "True" if value else "False"
 
+def _bash_curl_retry_flags_for_tests():
+    # Keep the baseline retry behavior compatible with older curl releases.
+    return ["--retry", "3", "--retry-delay", "2", "--retry-connrefused"]
+
 # Public alias for tests (avoid importing private symbols)
 render_template_for_tests = _render_template
+bash_curl_retry_flags_for_tests = _bash_curl_retry_flags_for_tests
 
 def _codeowners_glob_to_regex_for_tests(pattern):
     out = []
@@ -847,6 +852,14 @@ if [[ "$GZIP_PAYLOADS" == "1" ]]; then
     fi
 fi
 dbg "gzip enabled: $GZIP_PAYLOADS"
+
+# Baseline curl retry flags. We append --retry-all-errors only when supported
+# by the installed curl binary (introduced in curl 7.85.0).
+CURL_RETRY_FLAGS=({curl_retry_flags})
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+    CURL_RETRY_FLAGS+=(--retry-all-errors)
+fi
+dbg "curl retry flags: ${{CURL_RETRY_FLAGS[*]}}"
 
 # Windows detection - delegate to PowerShell if needed
 if [[ "$(uname -s | tr 'A-Z' 'a-z')" == *mingw* || "$(uname -s | tr 'A-Z' 'a-z')" == *msys* || "$(uname -s | tr 'A-Z' 'a-z')" == *cygwin* ]]; then
@@ -2274,10 +2287,10 @@ upload_single_test() {{
         fi
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{TEST_EVP[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     fi
     rc=$?
@@ -2323,12 +2336,12 @@ upload_single_coverage() {{
         dbg "headers: multipart/form-data (event + coveragex)"
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" "${{COV_EVP[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
@@ -2455,6 +2468,7 @@ fi
             "schema_validator_rloc": schema_validator_rloc,
             "schema_validator_path": schema_validator_path,
             "rules_version": RULES_VERSION,
+            "curl_retry_flags": " ".join(_bash_curl_retry_flags_for_tests()),
         },
     )
     log_debug(debug, "Bash script rendered (bytes=%d)" % len(bash_script))

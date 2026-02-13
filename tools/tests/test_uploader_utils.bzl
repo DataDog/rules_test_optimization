@@ -2,6 +2,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tools:test_optimization_uploader.bzl",
+    "bash_curl_retry_flags_for_tests",
     "build_codeowners_lookup_order_for_tests",
     "compile_codeowners_regex_for_tests",
     "glob_to_regex_for_tests",
@@ -15,6 +16,16 @@ load(
     "strip_workspace_prefix_bash_for_tests",
     "strip_workspace_prefix_powershell_for_tests",
 )
+
+def _bash_curl_retry_flags_test(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        ["--retry", "3", "--retry-delay", "2", "--retry-connrefused"],
+        bash_curl_retry_flags_for_tests(),
+    )
+    asserts.false(env, "--retry-all-errors" in bash_curl_retry_flags_for_tests())
+    return unittest.end(env)
 
 def _render_template_substitution_test(ctx):
     env = unittest.begin(ctx)
@@ -368,6 +379,7 @@ def _codeowners_lookup_order_empty_script_dir_test(ctx):
     )
     return unittest.end(env)
 
+bash_curl_retry_flags_test = unittest.make(_bash_curl_retry_flags_test)
 render_template_substitution_test = unittest.make(_render_template_substitution_test)
 render_template_unescape_only_test = unittest.make(_render_template_unescape_only_test)
 render_template_missing_placeholder_test = unittest.make(_render_template_missing_placeholder_test)

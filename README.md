@@ -13,6 +13,7 @@ This repository provides Bazel integrations that fetch Datadog Test Optimization
 
 - **Bazel 5.0+** - Required for `TEST_UNDECLARED_OUTPUTS_DIR` support used by payload collection
 - **dd-trace-go v1.72.0+** (or equivalent tracer version) - Required for file-based payload output via `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
+- **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
 - **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; normalized to `https://api.<site>`
 - **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
   - **Linux**: `bash`, `curl`, `find`, `stat` (GNU), `awk`, and one of `md5sum` or `shasum`
@@ -64,10 +65,11 @@ When Known Tests are enabled, the combined response `data.attributes.tests` is a
   - `.testoptimization/test_management.json` (always present; stub when empty)
 - These per-module files are not bundled into `:test_optimization_files`
 
-Sanitization rules for `<sanitized_module>`:
+Sanitization rules for `<sanitized_module>` (file paths and target labels):
 
-- For file names: lowercase; characters outside `[a-z0-9._-]` are replaced with `_`
-- For target names: lowercase; characters outside `[a-z0-9_]` are replaced with `_`
+- Lowercase input
+- Characters outside `[a-z0-9_]` are replaced with `_`
+- Consecutive underscores are collapsed, then leading/trailing underscores are trimmed
 - If collisions occur after sanitization, numeric suffixes like `_2`, `_3` are appended deterministically
 
 Labels are computed from the union of module names across known tests and test management so a `module_<sanitized>` target always refers to a single module (avoids cross-feature collisions).
@@ -152,6 +154,8 @@ use_repo(
 #    dd_topt_go_test(..., topt_data = topt_data_by_service["go_service"], go_test_rule = go_test)
 # 2) Pass the mapping and choose via topt_service (keeps BUILD simpler):
 #    dd_topt_go_test(..., topt_data = topt_data_by_service, topt_service = "go_service", go_test_rule = go_test)
+#    When service names sanitize to the same key, pass the deduped key shown in
+#    the available list (for example "go_service_2").
 ```
 
 Additional helper file exported by the generated repository:
@@ -202,6 +206,8 @@ git_repository(
 #     path = "/absolute/path/to/rules_test_optimization",
 # )
 ```
+
+Use a commit or release tag that exists in this repository and keep it up to date with your dependency policy.
 
 If your environment requires `http_archive`, use an internal mirror and pin all three
 values (`urls`, `strip_prefix`, and `sha256`). Example format:
@@ -295,6 +301,9 @@ test --test_env=DD_SITE
 test --test_env=DD_TRACE_AGENT_URL
 test --test_env=DD_TOPT_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
 ```
+
+Security note: keep secret *values* out of `.bazelrc`. Forward variable names with
+`--repo_env=DD_API_KEY` and provide values via your shell/CI secret store at runtime.
 
 ## Uploading test and coverage payloads
 

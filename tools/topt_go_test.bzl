@@ -35,6 +35,38 @@ Maintenance notes:
 load("//tools:topt_go_infer.bzl", "topt_go_payloads_selector")
 load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
+def _is_dict(value):
+    return type(value) == type({})
+
+def _service_mapping_entries(topt_data):
+    entries = {}
+    for key, value in topt_data.items():
+        if _is_dict(value) and value.get("repo_name"):
+            entries[key] = value
+    return entries
+
+def _resolve_topt_service_key(service_entries, topt_service):
+    keys = sorted(service_entries.keys())
+    if topt_service == None:
+        if len(keys) == 1:
+            return keys[0]
+        fail("dd_topt_go_test: topt_data looks like a multi-service mapping; please pass topt_service (one of: %s)" % ", ".join(keys))
+
+    # Prefer exact key match first, then sanitized fallback.
+    # This allows callers to pass explicit deduped keys such as "go_service_2".
+    if service_entries.get(topt_service) != None:
+        return topt_service
+
+    sk = sanitize_label_fragment(topt_service)
+    if service_entries.get(sk) != None:
+        return sk
+
+    fail("dd_topt_go_test: topt_service '%s' not found. Available: %s" % (topt_service, ", ".join(keys)))
+
+# Public aliases for unit tests.
+service_mapping_entries_for_tests = _service_mapping_entries
+resolve_topt_service_key_for_tests = _resolve_topt_service_key
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
@@ -66,13 +98,14 @@ def dd_topt_go_test(
         Required to avoid repo visibility issues.
       topt_service: Optional when passing the aggregator mapping; selects which service to use.
         Accepts raw or sanitized service key (e.g., "go-service" or "go_service").
+        If sanitization collisions exist, pass the deduped key (for example "go_service_2").
       module_label_override: Optional override for the sanitized module label suffix when the
         automatic detection doesn't match the expected module name.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
     # Validate required topt_data early so failures surface at loading time.
-    if topt_data == None or type(topt_data) != type({}):
+    if topt_data == None or not _is_dict(topt_data):
         fail("dd_topt_go_test: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
 
     # Support both shapes:
@@ -81,21 +114,12 @@ def dd_topt_go_test(
     if topt_data.get("repo_name"):
         _svc = topt_data
     else:
-        # Aggregator mapping: select service
-        keys = [k for k in topt_data.keys()]
-        if topt_service == None:
-            if len(keys) == 1:
-                _svc = topt_data[keys[0]]
-            else:
-                fail("dd_topt_go_test: topt_data looks like a multi-service mapping; please pass topt_service (one of: %s)" % ", ".join(sorted(keys)))
-        else:
-            # Try sanitized then raw
-            sk = sanitize_label_fragment(topt_service)
-            _svc = topt_data.get(sk)
-            if _svc == None:
-                _svc = topt_data.get(topt_service)
-            if _svc == None:
-                fail("dd_topt_go_test: topt_service '%s' not found. Available: %s" % (topt_service, ", ".join(sorted(keys))))
+        # Aggregator mapping: select service from service-shaped entries only.
+        service_entries = _service_mapping_entries(topt_data)
+        if not service_entries:
+            fail("dd_topt_go_test: topt_data mapping did not contain any service entries")
+        selected_key = _resolve_topt_service_key(service_entries, topt_service)
+        _svc = service_entries[selected_key]
 
     # Prepare data dependencies
     user_data = kwargs.pop("data", [])
@@ -119,7 +143,7 @@ def dd_topt_go_test(
     if uses_inference:
         include_per_module_files = True
     else:
-        _inc = _go.get("module_included") if (type(_go) == type({})) else None
+        _inc = _go.get("module_included") if _is_dict(_go) else None
         if _inc != None:
             include_per_module_files = bool(_inc)
 
@@ -143,7 +167,7 @@ def dd_topt_go_test(
     if explicit_importpath:
         fallback_importpath = explicit_importpath
     else:
-        _mp = (_go.get("module_path") if type(_go) == type({}) else None) or None
+        _mp = (_go.get("module_path") if _is_dict(_go) else None) or None
         if _mp:
             base = _mp[:-1] if _mp.endswith("/") else _mp
             fallback_importpath = (base + "/" + pkg_path) if pkg_path else base

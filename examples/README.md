@@ -122,6 +122,7 @@ dd_topt_go_test(
     embed = [":pkg_lib"],
     topt_data = topt_data_by_service,
     topt_service = "go_service",                 # or raw "go-service"
+    # If two services sanitize to the same key, use the deduped key (e.g. go_service_2).
     go_test_rule = go_test,
 )
 ```

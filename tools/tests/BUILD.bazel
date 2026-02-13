@@ -8,10 +8,17 @@ load(
     "validate_service_name_test",
 )
 load(
+    "//tools/tests:test_go_selection_utils.bzl",
+    "resolve_topt_service_key_prefers_exact_then_sanitized_test",
+    "select_module_group_name_test",
+    "service_mapping_entries_filters_non_service_test",
+)
+load(
     "//tools/tests:test_sync_utils.bzl",
     "dd_site_normalization_test",
     "dirname_test",
     "export_bzl_manifest_path_test",
+    "http_execute_timeout_seconds_test",
     "module_label_map_collision_test",
     "normalize_ref_test",
     "parse_go_module_path_test",
@@ -19,6 +26,7 @@ load(
 )
 load(
     "//tools/tests:test_uploader_utils.bzl",
+    "bash_curl_retry_flags_test",
     "codeowners_compile_regex_edge_cases_test",
     "codeowners_compile_regex_test",
     "codeowners_derived_candidate_filter_test",
@@ -113,6 +121,36 @@ validate_runtime_name_test(
 
 validate_runtime_version_test(
     name = "validate_runtime_version_test",
+    size = "small",
+    timeout = "short",
+)
+
+service_mapping_entries_filters_non_service_test(
+    name = "service_mapping_entries_filters_non_service_test",
+    size = "small",
+    timeout = "short",
+)
+
+resolve_topt_service_key_prefers_exact_then_sanitized_test(
+    name = "resolve_topt_service_key_prefers_exact_then_sanitized_test",
+    size = "small",
+    timeout = "short",
+)
+
+select_module_group_name_test(
+    name = "select_module_group_name_test",
+    size = "small",
+    timeout = "short",
+)
+
+http_execute_timeout_seconds_test(
+    name = "http_execute_timeout_seconds_test",
+    size = "small",
+    timeout = "short",
+)
+
+bash_curl_retry_flags_test(
+    name = "bash_curl_retry_flags_test",
     size = "small",
     timeout = "short",
 )
@@ -229,6 +267,11 @@ test_suite(
         ":validate_api_key_normalization_test",
         ":validate_runtime_name_test",
         ":validate_runtime_version_test",
+        ":service_mapping_entries_filters_non_service_test",
+        ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
+        ":select_module_group_name_test",
+        ":http_execute_timeout_seconds_test",
+        ":bash_curl_retry_flags_test",
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",
         ":render_template_missing_placeholder_test",

@@ -30,6 +30,21 @@ Maintenance notes:
 load("@rules_go//go/private:providers.bzl", "GoArchive", "GoInfo")
 load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
+def _select_module_group_name(importpath, module_group_names, include_per_module, module_label_override = None):
+    if not include_per_module:
+        return ""
+    sanitized = module_label_override or sanitize_label_fragment(importpath or "")
+    if not sanitized:
+        return ""
+    expected_name = "module_%s" % sanitized
+    for name in module_group_names:
+        if name == expected_name:
+            return name
+    return ""
+
+# Public alias for unit tests.
+select_module_group_name_for_tests = _select_module_group_name
+
 # Provider carrying the inferred importpath string
 ToptGoImportpathInfo = provider(
     doc = "Provider carrying the inferred Go package importpath from rules_go.",
@@ -100,17 +115,17 @@ def _topt_go_payloads_selector_impl(ctx):
     if not ip:
         ip = ctx.attr.fallback_importpath or ""
 
-    # Optional override when caller knows better
-    if ctx.attr.module_label_override:
-        sanitized = ctx.attr.module_label_override
-    else:
-        sanitized = sanitize_label_fragment(ip)
-
+    module_group_names = [m.label.name for m in ctx.attr.module_groups]
+    selected_name = _select_module_group_name(
+        ip,
+        module_group_names,
+        ctx.attr.include_per_module,
+        ctx.attr.module_label_override,
+    )
     chosen = None
-    if ctx.attr.include_per_module and sanitized:
-        expected_name = "module_%s" % sanitized
+    if selected_name:
         for m in ctx.attr.module_groups:
-            if m.label.name == expected_name:
+            if m.label.name == selected_name:
                 chosen = m
                 break
 

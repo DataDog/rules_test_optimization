@@ -67,6 +67,9 @@ load(
 TEST_OPT_DIR = ".testoptimization"
 TEST_BAZEL_RULE_NAME = "datadog-rules-test-optimization"
 TEST_BAZEL_RULE_VERSION = "1.0.0"
+# Upper bound for repository_ctx.execute() around HTTP tooling.
+# Keep this above curl/PowerShell per-request max-time to include process startup.
+HTTP_EXECUTE_TIMEOUT_SECONDS = 120
 
 # ##########################################################################
 # Tools functions
@@ -640,9 +643,13 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             result = ctx.execute(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name],
                 environment = ps_env,
+                timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
             )
         else:
-            result = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name])
+            result = ctx.execute(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name],
+                timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
+            )
     else:
         args = [] + _curl_base_args()
         if http_method and http_method != "GET":
@@ -652,7 +659,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         if data_file:
             args.extend(["--data-binary", "@%s" % data_file])
         args.extend([url, "-o", out_file, "-w", "%{http_code}"])
-        result = ctx.execute(args)
+        result = ctx.execute(args, timeout = HTTP_EXECUTE_TIMEOUT_SECONDS)
 
     # Parse HTTP status code captured by tool stdout. On network errors it may be empty.
     http_status = (result.stdout or "").strip() or "000"
@@ -756,6 +763,7 @@ normalize_ref_for_tests = _normalize_ref
 parse_go_module_path_for_tests = _parse_go_module_path
 dirname_for_tests = _dirname
 render_export_bzl_for_tests = _render_export_bzl
+http_execute_timeout_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_SECONDS
 
 # ##########################################################################
 # CI environment detection
