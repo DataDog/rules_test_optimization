@@ -5,6 +5,24 @@ This file provides:
   computed importpath (matching rules_go's logic).
 - A rule that uses that aspect result to choose the correct per-module
   filegroup from the synced repository and expose those files as runfiles.
+
+Why this rule/aspect exists:
+- A macro alone cannot reliably inspect provider values from dependencies.
+- By using an aspect + analysis-time rule, selection follows Bazel's normal
+  analysis graph and remains cache/incrementality friendly.
+
+Selection model:
+1) explicit importpath (highest precedence)
+2) inferred importpath from embed providers
+3) fallback importpath supplied by caller
+4) module label sanitization + lookup against `module_<label>` targets
+5) fallback to full bundle when no module match exists
+
+Maintenance notes:
+- Keep provider access defensive (`getattr` / `hasattr`) because rules_go
+  provider internals can vary across versions.
+- Never make selection failure fatal; always preserve the safe fallback to the
+  full payload bundle.
 """
 
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
@@ -52,7 +70,8 @@ def _importpath_aspect_impl(target, ctx):
         if ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
-    # Propagate from `embed` deps
+    # Propagate from `embed` deps.
+    # Returning the first non-empty importpath preserves deterministic behavior.
     for dep in getattr(ctx.rule.attr, "embed", []):
         if ToptGoImportpathInfo in dep:
             ip = dep[ToptGoImportpathInfo].importpath
@@ -69,6 +88,8 @@ _importpath_aspect = aspect(
 
 def _topt_go_payloads_selector_impl(ctx):
     # Decide which payload files to expose as runfiles based on the inferred importpath.
+    # This rule deliberately returns a plain DefaultInfo so downstream macros
+    # can treat it like a normal data dependency.
     ip = ctx.attr.explicit_importpath or ""
     if not ip:
         for dep in ctx.attr.embeds:
@@ -93,11 +114,12 @@ def _topt_go_payloads_selector_impl(ctx):
                 chosen = m
                 break
 
-    # Fallback to the full bundle when no per-module group matches
+    # Fallback to the full bundle when no per-module group matches.
+    # This avoids surprising build/test failures when module mapping drifts.
     source = chosen if chosen != None else ctx.attr.full_files
 
-    # Expose selected files via runfiles
-    # Merge runfiles so we can always depend on this single target.
+    # Expose selected files via runfiles.
+    # Using a single selector target keeps consuming macros simple.
     src_default = source[DefaultInfo]
     runfiles = src_default.default_runfiles
     files = src_default.files

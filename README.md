@@ -1,6 +1,13 @@
 # Datadog Test Optimization Bazel Module Extension
 
-This repository provides a Bazel module extension and repository rule that fetch Datadog Test Optimization metadata during the module resolution phase and materialize JSON files for use in your build. It also generates a public filegroup so you can conveniently depend on all produced files with a single label.
+This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
+
+## Documentation map
+
+- `README.md` (this file): setup, usage, runtime behavior, and troubleshooting
+- `docs/Initial_documentation.md`: architecture and data-flow deep dive
+- `docs/RFC.md`: design rationale, trade-offs, and historical proposal context
+- `examples/README.md`: copy/paste snippets for single-service and multi-service setup
 
 ## Requirements
 
@@ -16,7 +23,7 @@ Optional tooling:
 - **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
 - **python3** - Used for uploader payload schema validation. If missing, uploads proceed without schema validation.
 
-The extension performs these HTTP POST transactions (via curl):
+The extension performs these HTTP POST transactions (via host HTTP tooling: curl on Unix/macOS, PowerShell on Windows):
 
 - Settings: always executed. Parses feature flags from response.
 - Known Tests: executed only when `known_tests_enabled: true` in Settings.

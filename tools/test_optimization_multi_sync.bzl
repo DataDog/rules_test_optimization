@@ -4,6 +4,27 @@ Provides a higher-level module extension that instantiates the existing
 `test_optimization_sync` repository rule once per service, and also creates
 an aggregator repository that exposes service-suffixed labels so consumers
 can select a single service's data.
+
+Why this exists:
+- Monorepos frequently map multiple logical services to one Bazel workspace.
+- The single-service extension is intentionally simple; this layer composes it
+  without changing the underlying repository rule contracts.
+
+How it works:
+1) For each requested service, instantiate `test_optimization_sync` with a
+   generated repository name (`<name>_<sanitized_service>`).
+2) Generate an aggregator repository (`name`) that:
+   - re-exports a `topt_data_by_service` mapping in `export.bzl`,
+   - publishes service-qualified filegroups:
+     `:test_optimization_files_<service>`,
+     `:test_optimization_context_<service>`,
+     `:module_<service>_<module_label>`.
+
+Maintenance notes:
+- Service keys are sanitized and de-duplicated via `dedup_keys`; this means
+  user-provided service names can map to suffixed keys (`foo`, `foo_2`).
+- Keep generated label naming stable; these labels are consumed directly in
+  downstream BUILD files.
 """
 
 load("//tools:test_optimization_sync.bzl", "test_optimization_sync")
@@ -18,6 +39,8 @@ load(
 # ---------------------------------------------------------------------------
 
 def _multi_aggregate_impl(ctx):
+    # Build an in-repo Starlark shim (`aggregate.bzl`) rather than writing a
+    # giant BUILD directly so generated logic remains easy to inspect/debug.
     keys = list(ctx.attr.service_keys)
     repos = list(ctx.attr.repo_names)
     if len(keys) != len(repos):
@@ -101,6 +124,8 @@ test_optimization_multi_aggregate = repository_rule(
 
 def _test_optimization_multi_sync_extension_impl(module_ctx):
     # Iterate tags and instantiate per-service repos + aggregator
+    # This mirrors the single-service extension behavior while faning out
+    # service-specific repositories in one declarative call.
     for mod in module_ctx.modules:
         for call in mod.tags.test_optimization_multi_sync:
             name = call.name

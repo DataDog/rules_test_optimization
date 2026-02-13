@@ -15,6 +15,21 @@ Notes:
   back to go_module_path + Bazel package path.
 - Create ONE uploader target per workspace (see dd_payload_uploader in
   test_optimization_uploader.bzl) and run it via `bazel run` after tests.
+
+Macro design constraints:
+- This macro only wraps `go_test`; it does not create upload targets and does
+  not alter workspace-level upload behavior.
+- Runtime behavior must remain hermetic: tests write payloads to
+  `TEST_UNDECLARED_OUTPUTS_DIR`; uploads happen in a separate `bazel run` step.
+- Data selection should be predictable:
+  - Prefer per-module payloads when importpath inference is available.
+  - Fall back to full bundle safely when module matching is unavailable.
+
+Maintenance notes:
+- Keep this macro repository-agnostic by requiring `go_test_rule` injection.
+- Avoid hardcoding labels outside values exported by `@<repo>//:export.bzl`.
+- Preserve compatibility with both single-service (`topt_data`) and
+  multi-service (`topt_data_by_service`) exports.
 """
 
 load("//tools:topt_go_infer.bzl", "topt_go_payloads_selector")
@@ -56,7 +71,7 @@ def dd_topt_go_test(
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
-    # Validate required topt_data
+    # Validate required topt_data early so failures surface at loading time.
     if topt_data == None or type(topt_data) != type({}):
         fail("dd_topt_go_test: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
 
@@ -108,7 +123,8 @@ def dd_topt_go_test(
         if _inc != None:
             include_per_module_files = bool(_inc)
 
-    # Build labels for files/context based on (possibly derived) sync_repo_name
+    # Build labels for files/context based on (possibly derived) sync_repo_name.
+    # These labels remain stable public contracts of the generated sync repo.
     files_label = "@%s//:test_optimization_files" % sync_repo_name
 
     # Prepare env map using a selector rule that infers importpath via aspect
@@ -146,7 +162,8 @@ def dd_topt_go_test(
         module_label_override = module_label_override,
     )
 
-    # Data/env for the go test: depend only on the selector and use its runfiles
+    # Data/env for the go test: depend only on the selector and use its runfiles.
+    # This keeps go_test callsites simple while centralizing selection logic.
     data.append(":" + selector_name)
 
     # Add manifest file reference for deriving the working directory
@@ -170,8 +187,8 @@ def dd_topt_go_test(
     if "rundir" not in kwargs:
         kwargs["rundir"] = native.package_name()
 
-    # Create ONLY the go_test - NO uploader, NO test_suite
-    # Users must create ONE uploader target per workspace and run it via `bazel run`
+    # Create ONLY the go_test - NO uploader, NO test_suite.
+    # Users must create ONE uploader target per workspace and run it via `bazel run`.
     _go_test(
         name = name,
         data = data,

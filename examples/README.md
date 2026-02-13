@@ -2,6 +2,9 @@
 
 This folder shows concise usage patterns for single-service and multi-service setups. These are snippets meant to be copied into your repo; they are not runnable here.
 
+Tip: commands use `bazel` for portability in consumer repos. In this
+repository, use `./bazelw` for local development convenience.
+
 ## Single-service (classic)
 
 MODULE.bazel:
@@ -31,8 +34,8 @@ go_library(
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
-    embed = [":pkg_lib"],            # importpath inferred via rules_go provider
-    topt_data = topt_data,        # single-service dict
+    embed = [":pkg_lib"],      # importpath inferred via rules_go provider
+    topt_data = topt_data,     # single-service dict
     go_test_rule = go_test,
 )
 ```

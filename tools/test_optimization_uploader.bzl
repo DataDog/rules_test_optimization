@@ -1,13 +1,31 @@
-# A Starlark rule that uploads CI Visibility test and coverage payloads
-# after tests complete, by discovering all test.outputs directories in
-# bazel-testlogs, waiting for filesystem quiescence, and uploading payloads.
-#
-# This is a normal rule (not a test rule) invoked via `bazel run` after
-# `bazel test` completes. This simplifies sandbox/network access since
-# `bazel run` runs locally with full host access.
-#
+"""Uploader rule implementation for Datadog CI Visibility payloads.
+
+This file generates platform-specific uploader entrypoints (Bash + PowerShell)
+at analysis time and exposes them via a normal Bazel rule (`bazel run`).
+
+Operational model:
+- Tests run hermetically and write JSON payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
+- Bazel collects those files under `bazel-testlogs/**/test.outputs`.
+- The uploader runs post-test and performs:
+  1) payload discovery
+  2) optional metadata enrichment (context + CODEOWNERS)
+  3) upload to agentless or EVP endpoints
+  4) cleanup of successfully uploaded files
+
+Why generated scripts:
+- Upload logic needs host-specific tooling (`bash/curl` on Unix,
+  PowerShell/.NET HttpClient on Windows).
+- Keeping scripts generated from one Starlark source preserves parity while
+  avoiding separate hand-maintained script files.
+
+Developer navigation:
+- Starlark test helpers (manifest/CODEOWNERS parsing parity) near the top.
+- `_uploader_impl` builds both script templates and wires rule outputs.
+- Script templates contain the runtime behavior for discovery, enrichment,
+  uploads, retries, and locking.
+"""
+
 # Usage pattern:
-#   # Run tests first, then upload payloads
 #   bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
 #
 # Key features:
@@ -419,6 +437,19 @@ resolve_runfile_manifest_bash_for_tests = _resolve_runfile_manifest_bash_for_tes
 resolve_runfile_manifest_powershell_for_tests = _resolve_runfile_manifest_powershell_for_tests
 
 def _uploader_impl(ctx):
+    # `_uploader_impl` is responsible for generating *all* runtime uploader
+    # artifacts. It does not upload anything itself; it emits executable scripts
+    # that run during `bazel run`.
+    #
+    # Responsibilities:
+    # 1) collect rule attrs and data dependencies (context/schema/validator)
+    # 2) render Bash and PowerShell script templates with concrete runfile paths
+    # 3) emit platform launchers (`.sh`, `.ps1`, `.bat`) with consistent behavior
+    # 4) return DefaultInfo exposing the correct executable for the target OS
+    #
+    # Keep template substitutions explicit and centralized. If new placeholders
+    # are introduced, add tests in `tools/tests/test_uploader_utils.bzl` to
+    # lock behavior and avoid cross-platform drift.
     quiescent_sec = ctx.attr.quiescent_sec
     max_wait_sec = ctx.attr.max_wait_sec
     fail_on_error = ctx.attr.fail_on_error

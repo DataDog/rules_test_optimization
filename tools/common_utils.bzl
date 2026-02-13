@@ -1,12 +1,34 @@
 """Common utilities for Datadog Test Optimization Bazel rules.
 
-This file provides shared helper functions used across multiple rule files
-to reduce duplication and ensure consistency.
+This module is intentionally dependency-free and is imported by most rule files
+in `tools/`. Keep this file small, deterministic, and easy to reason about.
+
+Design goals:
+- Provide reusable primitives (logging, sanitization, validation, de-duplication)
+  so each rule does not re-implement cross-cutting behavior.
+- Keep helpers pure where possible: a helper should return normalized data
+  instead of mutating caller state.
+- Emit user-focused failures for configuration mistakes (for example, missing
+  service/API key) so users do not have to inspect Starlark stack traces.
+
+Maintenance notes:
+- Any change here can affect sync, multi-sync, uploader, and test helpers.
+  Favor additive changes and preserve backwards compatibility of helper
+  contracts (inputs/outputs).
+- Validation helpers return normalized values and may call `fail(...)` when
+  invariants are violated.
+- Logging helpers should never print secrets.
 """
 
 # ##########################################################################
 # Logging utilities
 # ##########################################################################
+#
+# Logging is split into:
+# - log_info: always-on progress messages visible to users.
+# - log_debug: gated diagnostics controlled by each rule's debug flag.
+#
+# Keep log messages short and actionable because they appear in Bazel output.
 
 def log_info(message):
     """Print user-facing progress messages."""
@@ -168,11 +190,11 @@ Please provide a non-empty API key via:
 
 def validate_runtime_name(name, debug = False):
     """Validate and normalize runtime name string.
-    
+
     Args:
       name: Runtime name string (may be None)
       debug: Whether debug logging is enabled
-      
+
     Returns:
       Normalized runtime name string or "unknown"
     """
@@ -190,24 +212,24 @@ def validate_runtime_name(name, debug = False):
 
 def validate_runtime_version(version, debug = False):
     """Validate and normalize runtime version string.
-    
+
     Args:
       version: Runtime version string (may be None)
       debug: Whether debug logging is enabled
-      
+
     Returns:
       Normalized version string or "unknown"
     """
     if not version:
         return "unknown"
-    
+
     trimmed = version.strip()
     if not trimmed:
         return "unknown"
-    
+
     if len(trimmed) > 100:
         log_debug(debug, "validation", "WARNING: runtime version is unusually long: '%s'" % trimmed)
-    
+
     return trimmed
 
 # ##########################################################################

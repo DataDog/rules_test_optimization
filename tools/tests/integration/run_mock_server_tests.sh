@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# -----------------------------------------------------------------------------
+# Integration harness: sync + uploader end-to-end verification
+# -----------------------------------------------------------------------------
+#
+# This script intentionally exercises the repository as a *consumer* by creating
+# a temporary Bazel workspace, wiring `local_path_override` to this repo, and
+# executing real Bazel targets.
+#
+# Scenario phases:
+# 1) Start local mock Datadog server and collect all requests.
+# 2) Generate ephemeral MODULE/BUILD files in a temp workspace.
+# 3) Run sync + writer test + uploader and verify API coverage/snapshots.
+# 4) Validate CODEOWNERS enrichment behavior (injection, preservation, edge
+#    cases, runfiles/execroot normalization).
+# 5) Force manifest-only runfile fallback and verify context/schema resolution.
+#
+# Debugging tips:
+# - Set KEEP_TMP=1 to inspect the generated temp workspace after failures.
+# - Set HARNESS_UPLOADER_DEBUG=1 to force verbose uploader diagnostics.
+# - Snapshot updates are opt-in via UPDATE_SNAPSHOTS=1.
+#
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TMP_WS="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_test.XXXXXX")"
 # Store server logs + request bodies outside the repo tree for easy cleanup.
@@ -440,20 +461,21 @@ def parse_multipart(body, content_type):
 
 def normalize_citestcycle(payload):
     # Keep full payload shape while removing user/machine-specific path context.
-    def sanitize_value(value, key=None):
+    def sanitize_value(value):
         if isinstance(value, dict):
             out = {}
             for k, v in value.items():
                 if k == "env" and isinstance(v, str):
                     out[k] = "test-env"
                 else:
-                    out[k] = sanitize_value(v, key=k)
+                    out[k] = sanitize_value(v)
             return out
         if isinstance(value, list):
-            return [sanitize_value(v, key=key) for v in value]
+            return [sanitize_value(v) for v in value]
         if isinstance(value, str):
             value = re.sub(r"/Users/[^/]+", "/Users/<user>", value)
             value = re.sub(r"/home/[^/]+", "/home/<user>", value)
+            value = re.sub(r"[A-Za-z]:/Users/[^/]+", "C:/Users/<user>", value)
             value = re.sub(r"[A-Za-z]:\\\\Users\\\\[^\\\\]+", r"C:\\Users\\<user>", value)
             return value
         return value
