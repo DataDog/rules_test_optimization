@@ -1365,66 +1365,63 @@ def _impl(ctx):
     test_management_enabled = False
     settings_path = ctx.path(settings_file)
     settings_content = ctx.read(settings_path)
-    if settings_content and settings_content.strip():
-        settings_obj = _decode_json_object_or_fail(settings_content, settings_file)
-        data_obj = settings_obj.get("data") or {}
-        attrs_obj = data_obj.get("attributes") or {}
-        enabled_val = attrs_obj.get("known_tests_enabled")
-        known_tests_enabled = (enabled_val == True)
+    settings_obj = _decode_json_object_or_fail(settings_content, settings_file)
+    data_obj = settings_obj.get("data") or {}
+    attrs_obj = data_obj.get("attributes") or {}
+    enabled_val = attrs_obj.get("known_tests_enabled")
+    known_tests_enabled = (enabled_val == True)
 
-        tm_obj = attrs_obj.get("test_management") or {}
-        test_management_enabled = (tm_obj.get("enabled") == True)
-        log_debug(debug, "settings", "known_tests_enabled parsed as: %s" % known_tests_enabled)
+    tm_obj = attrs_obj.get("test_management") or {}
+    test_management_enabled = (tm_obj.get("enabled") == True)
+    log_debug(debug, "settings", "known_tests_enabled parsed as: %s" % known_tests_enabled)
 
-        log_debug(debug, "settings", "test_management.enabled parsed as: %s" % test_management_enabled)
+    log_debug(debug, "settings", "test_management.enabled parsed as: %s" % test_management_enabled)
 
-        # ------------------------------------------------------------------
-        # Kill-switch overrides
-        # ------------------------------------------------------------------
-        # If any kill-switch is set to False via rule attributes, we:
-        # 1) Force the local enablement variable to False to prevent the HTTP
-        #    request for that feature.
-        # 2) Mutate the downloaded settings JSON to reflect the override so
-        #    any downstream consumer that reads the settings file will observe
-        #    the feature as disabled as well.
-        #
-        # All three kill-switch attributes default to True, which preserves the
-        # server-provided behavior when not explicitly set by the user.
-        if hasattr(ctx.attr, "known_tests") and ctx.attr.known_tests == False:
-            known_tests_enabled = False
+    # ------------------------------------------------------------------
+    # Kill-switch overrides
+    # ------------------------------------------------------------------
+    # If any kill-switch is set to False via rule attributes, we:
+    # 1) Force the local enablement variable to False to prevent the HTTP
+    #    request for that feature.
+    # 2) Mutate the downloaded settings JSON to reflect the override so
+    #    any downstream consumer that reads the settings file will observe
+    #    the feature as disabled as well.
+    #
+    # All three kill-switch attributes default to True, which preserves the
+    # server-provided behavior when not explicitly set by the user.
+    if hasattr(ctx.attr, "known_tests") and ctx.attr.known_tests == False:
+        known_tests_enabled = False
 
-            # Ensure attributes dict exists and update the flag
-            if type(data_obj) != "dict":
-                settings_obj["data"] = {"attributes": {}}
-                data_obj = settings_obj["data"]
-                attrs_obj = data_obj["attributes"]
-            elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
-                data_obj["attributes"] = {}
-                attrs_obj = data_obj["attributes"]
-            attrs_obj["known_tests_enabled"] = False
+        # Ensure attributes dict exists and update the flag
+        if type(data_obj) != "dict":
+            settings_obj["data"] = {"attributes": {}}
+            data_obj = settings_obj["data"]
+            attrs_obj = data_obj["attributes"]
+        elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
+            data_obj["attributes"] = {}
+            attrs_obj = data_obj["attributes"]
+        attrs_obj["known_tests_enabled"] = False
 
-        if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
-            test_management_enabled = False
-            if type(data_obj) != "dict":
-                settings_obj["data"] = {"attributes": {}}
-                data_obj = settings_obj["data"]
-                attrs_obj = data_obj["attributes"]
-            elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
-                data_obj["attributes"] = {}
-                attrs_obj = data_obj["attributes"]
+    if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
+        test_management_enabled = False
+        if type(data_obj) != "dict":
+            settings_obj["data"] = {"attributes": {}}
+            data_obj = settings_obj["data"]
+            attrs_obj = data_obj["attributes"]
+        elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
+            data_obj["attributes"] = {}
+            attrs_obj = data_obj["attributes"]
 
-            # Ensure nested test_management object exists and set enabled=false
-            tm_mut = attrs_obj.get("test_management")
-            if type(tm_mut) != "dict":
-                tm_mut = {}
-            tm_mut["enabled"] = False
-            attrs_obj["test_management"] = tm_mut
+        # Ensure nested test_management object exists and set enabled=false
+        tm_mut = attrs_obj.get("test_management")
+        if type(tm_mut) != "dict":
+            tm_mut = {}
+        tm_mut["enabled"] = False
+        attrs_obj["test_management"] = tm_mut
 
-        # Persist the possibly-updated settings back to disk so that the
-        # overridden disablement is reflected to later phases.
-        ctx.file(settings_file, json.encode(settings_obj) + "\n")
-    else:
-        log_debug(debug, "settings", "Settings file is empty; cannot determine feature flags")
+    # Persist the possibly-updated settings back to disk so that the
+    # overridden disablement is reflected to later phases.
+    ctx.file(settings_file, json.encode(settings_obj) + "\n")
 
     # Always produce known tests and test-management files; write empty stubs when disabled
     # Write manifest version (v1) to manifest.txt for change tracking

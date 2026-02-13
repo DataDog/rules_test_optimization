@@ -741,11 +741,22 @@ with tempfile.TemporaryDirectory() as td:
         sys.exit(1)
 PY
 
-# Scenario: malformed known-tests sync response should fail with actionable diagnostics.
-MALFORMED_WS="$TMP_WS/ws_malformed_sync"
-mkdir -p "$MALFORMED_WS"
-cat > "$MALFORMED_WS/MODULE.bazel" <<MODULE_MALFORMED_EOF
-module(name = "topt-malformed-sync", version = "0.0.0")
+# Scenario: malformed/empty sync responses should fail with actionable diagnostics.
+run_malformed_sync_case() {
+  local ws_name="$1"
+  local repo_name="$2"
+  local service_name="$3"
+  local expected_context="$4"
+  local expected_error="$5"
+  shift 5
+  local extra_repo_envs=("$@")
+
+  local ws_path="$TMP_WS/$ws_name"
+  local log_path="$TMP_WS/${ws_name}.log"
+  mkdir -p "$ws_path"
+
+  cat > "$ws_path/MODULE.bazel" <<MODULE_MALFORMED_EOF
+module(name = "topt-${ws_name}", version = "0.0.0")
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 
@@ -760,42 +771,76 @@ test_optimization_sync = use_extension(
 )
 
 test_optimization_sync.test_optimization_sync(
-    name = "test_optimization_data_bad_json",
-    service = "malformed-json-service",
+    name = "${repo_name}",
+    service = "${service_name}",
     runtime_name = "go",
     runtime_version = "1.2.3",
 )
 
-use_repo(test_optimization_sync, "test_optimization_data_bad_json")
+use_repo(test_optimization_sync, "${repo_name}")
 MODULE_MALFORMED_EOF
 
-cat > "$MALFORMED_WS/BUILD.bazel" <<'BUILD_MALFORMED_EOF'
+  cat > "$ws_path/BUILD.bazel" <<'BUILD_MALFORMED_EOF'
 filegroup(
     name = "noop",
     srcs = [],
 )
 BUILD_MALFORMED_EOF
 
-MALFORMED_LOG="$TMP_WS/malformed_sync.log"
-if (
-  cd "$MALFORMED_WS" && \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build @test_optimization_data_bad_json//:test_optimization_files \
-    "${REPO_ENVS[@]}" >"$MALFORMED_LOG" 2>&1
-); then
-  echo "error: malformed known-tests scenario unexpectedly succeeded"
-  cat "$MALFORMED_LOG" || true
-  exit 1
-fi
-if ! grep -q "response is not JSON" "$MALFORMED_LOG"; then
-  echo "error: malformed known-tests scenario missing actionable JSON failure message"
-  cat "$MALFORMED_LOG" || true
-  exit 1
-fi
-if ! grep -q "known_tests.json" "$MALFORMED_LOG"; then
-  echo "error: malformed known-tests scenario missing known_tests context in failure message"
-  cat "$MALFORMED_LOG" || true
-  exit 1
-fi
+  local cmd=("$BAZEL" "${BAZEL_FLAGS[@]}" build "@${repo_name}//:test_optimization_files" "${REPO_ENVS[@]}")
+  if (( ${#extra_repo_envs[@]} )); then
+    cmd+=("${extra_repo_envs[@]}")
+  fi
+  if (
+    cd "$ws_path" && \
+    "${cmd[@]}" >"$log_path" 2>&1
+  ); then
+    echo "error: malformed sync scenario unexpectedly succeeded for $ws_name"
+    cat "$log_path" || true
+    exit 1
+  fi
+
+  if ! grep -q "$expected_error" "$log_path"; then
+    echo "error: malformed sync scenario missing expected error '$expected_error' for $ws_name"
+    cat "$log_path" || true
+    exit 1
+  fi
+  if ! grep -q "$expected_context" "$log_path"; then
+    echo "error: malformed sync scenario missing expected context '$expected_context' for $ws_name"
+    cat "$log_path" || true
+    exit 1
+  fi
+}
+
+run_malformed_sync_case \
+  "ws_malformed_settings" \
+  "test_optimization_data_bad_settings" \
+  "malformed-settings-service" \
+  "settings.json" \
+  "response is not JSON"
+
+run_malformed_sync_case \
+  "ws_empty_settings" \
+  "test_optimization_data_empty_settings" \
+  "empty-settings-service" \
+  "settings.json" \
+  "response is empty; expected JSON object"
+
+run_malformed_sync_case \
+  "ws_malformed_known_tests" \
+  "test_optimization_data_bad_known_tests" \
+  "malformed-known-tests-service" \
+  "known_tests.json" \
+  "response is not JSON"
+
+run_malformed_sync_case \
+  "ws_malformed_test_management" \
+  "test_optimization_data_bad_test_management" \
+  "mock-service" \
+  "test_management.json" \
+  "response is not JSON" \
+  "--repo_env=DD_GIT_COMMIT_MESSAGE=malformed-test-management-commit-message" \
+  "--repo_env=DD_GIT_HEAD_MESSAGE=malformed-test-management-commit-message"
 
 # Scenario: multi-service extension wiring + deduped sanitized service keys.
 MULTI_WS="$TMP_WS/ws_multi"
@@ -869,6 +914,24 @@ def fake_go_test(name, data = [], env = {}, **kwargs):
     )
 MACRO_PROBE_EOF
 
+mkdir -p "$MULTI_WS/invalid"
+cat > "$MULTI_WS/invalid/BUILD.bazel" <<'BUILD_MULTI_INVALID_EOF'
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
+load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
+load("//:macro_probe.bzl", "fake_go_test")
+
+dd_topt_go_test(
+    name = "macro_service_probe_invalid",
+    go_test_rule = fake_go_test,
+    topt_data = {
+        "go_service": topt_data_go_service,
+        "go_service_2": topt_data_go_service_2,
+    },
+    topt_service = "missing_service",
+)
+BUILD_MULTI_INVALID_EOF
+
 MULTI_LOG_START="$(log_line_count)"
 (
   cd "$MULTI_WS"
@@ -888,6 +951,26 @@ fi
 if printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service//:.testoptimization/manifest.txt"; then
   echo "error: dd_topt_go_test multi-service probe unexpectedly resolved to go_service manifest"
   echo "$MULTI_MACRO_CQUERY"
+  exit 1
+fi
+
+MULTI_INVALID_LOG="$TMP_WS/multi_invalid_service.log"
+if (
+  cd "$MULTI_WS" && \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build //invalid:macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
+); then
+  echo "error: dd_topt_go_test invalid-service scenario unexpectedly succeeded"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "topt_service 'missing_service' not found" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing topt_service not found message"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "Available: go_service, go_service_2" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing available service keys in message"
+  cat "$MULTI_INVALID_LOG" || true
   exit 1
 fi
 

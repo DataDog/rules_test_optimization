@@ -18,8 +18,12 @@ def _read_json(path):
 def _json_error(message):
     return {"error": message}
 
-MALFORMED_KNOWN_TESTS_SERVICE = "malformed-json-service"
+MALFORMED_SETTINGS_SERVICE = "malformed-settings-service"
+EMPTY_SETTINGS_SERVICE = "empty-settings-service"
+MALFORMED_KNOWN_TESTS_SERVICE = "malformed-known-tests-service"
 MALFORMED_KNOWN_TESTS_BODY = b"NOT_JSON_KNOWN_TESTS_RESPONSE"
+MALFORMED_TEST_MANAGEMENT_COMMIT_MESSAGE = "malformed-test-management-commit-message"
+MALFORMED_TEST_MANAGEMENT_BODY = b"NOT_JSON_TEST_MANAGEMENT_RESPONSE"
 
 
 class _ServerState:
@@ -156,14 +160,20 @@ class _Handler(BaseHTTPRequestHandler):
             return "configurations must be an object"
         return None
 
-    def _extract_service(self, body):
+    def _extract_attribute(self, body, key):
         try:
             data = json.loads(body.decode("utf-8"))
         except Exception:
             return ""
         attrs = data.get("data", {}).get("attributes", {})
-        service = attrs.get("service")
+        service = attrs.get(key)
         return service if isinstance(service, str) else ""
+
+    def _extract_service(self, body):
+        return self._extract_attribute(body, "service")
+
+    def _extract_commit_message(self, body):
+        return self._extract_attribute(body, "commit_message")
 
     def _validate_test_management(self, body):
         # Validate the test management request payload and required headers.
@@ -238,6 +248,13 @@ class _Handler(BaseHTTPRequestHandler):
             if err:
                 self._send_json(400, _json_error(err))
                 return
+            service = self._extract_service(body)
+            if service == MALFORMED_SETTINGS_SERVICE:
+                self._send_text(200, b"NOT_JSON_SETTINGS_RESPONSE")
+                return
+            if service == EMPTY_SETTINGS_SERVICE:
+                self._send_text(200, b"")
+                return
             self._send_json(200, self.server.state.fixtures["settings"])
             return
         if path == "/api/v2/ci/libraries/tests":
@@ -254,6 +271,9 @@ class _Handler(BaseHTTPRequestHandler):
             err = self._validate_test_management(body)
             if err:
                 self._send_json(400, _json_error(err))
+                return
+            if self._extract_commit_message(body) == MALFORMED_TEST_MANAGEMENT_COMMIT_MESSAGE:
+                self._send_text(200, MALFORMED_TEST_MANAGEMENT_BODY)
                 return
             self._send_json(200, self.server.state.fixtures["test_management"])
             return

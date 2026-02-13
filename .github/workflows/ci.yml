@@ -34,6 +34,22 @@ jobs:
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
+  shell-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Lint integration shell scripts
+        shell: bash
+        run: shellcheck --severity=error tools/tests/integration/*.sh
+
   bazel-tests-hermetic:
     runs-on: ubuntu-latest
     steps:
