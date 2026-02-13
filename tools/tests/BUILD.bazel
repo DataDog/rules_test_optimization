@@ -25,6 +25,14 @@ load(
     "service_mapping_entries_filters_non_service_test",
 )
 load(
+    "//tools/tests:test_multi_sync_utils.bzl",
+    "compute_repo_names_test",
+    "compute_service_keys_dedups_collisions_test",
+    "render_multi_aggregate_bzl_contains_expected_targets_test",
+    "render_multi_aggregate_bzl_mismatch_failure_test",
+    "render_multi_aggregate_bzl_mismatch_target_rule",
+)
+load(
     "//tools/tests:test_sync_utils.bzl",
     "decode_json_object_array_failure_test",
     "decode_json_object_array_target_rule",
@@ -217,6 +225,34 @@ normalize_user_data_handles_none_test(
     timeout = "short",
 )
 
+compute_service_keys_dedups_collisions_test(
+    name = "compute_service_keys_dedups_collisions_test",
+    size = "small",
+    timeout = "short",
+)
+
+compute_repo_names_test(
+    name = "compute_repo_names_test",
+    size = "small",
+    timeout = "short",
+)
+
+render_multi_aggregate_bzl_contains_expected_targets_test(
+    name = "render_multi_aggregate_bzl_contains_expected_targets_test",
+    size = "small",
+    timeout = "short",
+)
+
+render_multi_aggregate_bzl_mismatch_target_rule(
+    name = "render_multi_aggregate_bzl_mismatch_target",
+    tags = ["manual"],
+)
+
+render_multi_aggregate_bzl_mismatch_failure_test(
+    name = "render_multi_aggregate_bzl_mismatch_failure_test",
+    target_under_test = ":render_multi_aggregate_bzl_mismatch_target",
+)
+
 http_execute_timeout_seconds_test(
     name = "http_execute_timeout_seconds_test",
     size = "small",
@@ -386,6 +422,10 @@ test_suite(
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":select_module_group_name_test",
         ":normalize_user_data_handles_none_test",
+        ":compute_service_keys_dedups_collisions_test",
+        ":compute_repo_names_test",
+        ":render_multi_aggregate_bzl_contains_expected_targets_test",
+        ":render_multi_aggregate_bzl_mismatch_failure_test",
         ":http_execute_timeout_seconds_test",
         ":decode_json_object_valid_test",
         ":decode_json_object_empty_failure_test",

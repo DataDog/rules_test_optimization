@@ -863,6 +863,7 @@ topt_multi = use_extension(
 topt_multi.test_optimization_multi_sync(
     name = "test_optimization_data",
     services = ["go-service", "go_service"],
+    out_dir = "custom_topt",
     runtime_name = "go",
     runtime_version = "1.2.3",
 )
@@ -954,13 +955,13 @@ MULTI_MACRO_CQUERY=$(
   cd "$MULTI_WS" && \
   "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe --output=build "${REPO_ENVS[@]}"
 )
-if ! printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service_2//:.testoptimization/manifest.txt"; then
-  echo "error: dd_topt_go_test multi-service probe did not resolve to go_service_2 manifest"
+if ! printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service_2//:custom_topt/manifest.txt"; then
+  echo "error: dd_topt_go_test multi-service probe did not resolve to go_service_2 custom out_dir manifest"
   echo "$MULTI_MACRO_CQUERY"
   exit 1
 fi
-if printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service//:.testoptimization/manifest.txt"; then
-  echo "error: dd_topt_go_test multi-service probe unexpectedly resolved to go_service manifest"
+if printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service//:custom_topt/manifest.txt"; then
+  echo "error: dd_topt_go_test multi-service probe unexpectedly resolved to go_service custom out_dir manifest"
   echo "$MULTI_MACRO_CQUERY"
   exit 1
 fi

@@ -386,7 +386,7 @@ bazel run //:dd_upload_payloads
 | `DD_TOPT_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
 | `DD_TOPT_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
-| `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
+| `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
 | `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TOPT_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
 | `DD_TOPT_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
@@ -697,7 +697,7 @@ Rule: `dd_payload_uploader(...)`
 |-----------|------|---------|-------------|
 | `name` | string | required | Target name |
 | `quiescent_sec` | int | `10` | Seconds to wait for filesystem to settle before uploading |
-| `max_wait_sec` | int | `300` | Maximum seconds to wait for payloads |
+| `max_wait_sec` | int | `300` | Maximum seconds to wait for payloads (`0` skips waiting when no payloads are present) |
 | `fail_on_error` | bool | `False` | Exit with error if no payloads found when tests ran |
 | `debug` | bool | `False` | Enable debug logging |
 | `keep_payloads` | bool | `False` | Keep payload files after successful upload |
