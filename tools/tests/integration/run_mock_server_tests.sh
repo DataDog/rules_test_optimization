@@ -501,10 +501,22 @@ def print_uploader_log_tail():
     if not os.path.exists(uploader_log):
         print(f"debug: uploader log not found at {uploader_log}")
         return
-    print("debug: uploader log tail follows")
     with open(uploader_log, "r", encoding="utf-8", errors="replace") as handle:
         lines = handle.readlines()
-    for line in lines[-200:]:
+    codeowners_lines = [
+        line.rstrip("\n")
+        for line in lines
+        if "[dd-uploader][dbg] codeowners" in line or "codeowners env:" in line
+    ]
+    if codeowners_lines:
+        print("debug: uploader CODEOWNERS diagnostics follows")
+        for line in codeowners_lines[-120:]:
+            print(line)
+        print("debug: end uploader CODEOWNERS diagnostics")
+    else:
+        print("debug: uploader CODEOWNERS diagnostics not present in log")
+    print("debug: uploader log tail follows")
+    for line in lines[-120:]:
         print(line.rstrip("\n"))
     print("debug: end uploader log tail")
 
