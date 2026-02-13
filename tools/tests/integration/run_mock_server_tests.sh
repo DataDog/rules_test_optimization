@@ -75,6 +75,12 @@ fi
 WORKSPACE="$TMP_WS/ws"
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
+# Pass an explicit workspace path to uploader runs so CODEOWNERS lookup stays
+# stable across platforms/runtimes (especially Bazel 9 on Windows).
+WORKSPACE_FOR_UPLOADER="$WORKSPACE"
+if command -v cygpath >/dev/null 2>&1; then
+  WORKSPACE_FOR_UPLOADER="$(cygpath -w "$WORKSPACE" 2>/dev/null || echo "$WORKSPACE")"
+fi
 
 # JSON-escape REPO_ROOT for safe insertion into MODULE.bazel.
 ESCAPED_REPO_ROOT=$("$PYTHON" - <<'PY'
@@ -323,6 +329,7 @@ TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
 
 UPLOADER_LOG="$TMP_WS/uploader.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_API_KEY=mock \
 DD_TOPT_KEEP_PAYLOADS=1 \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
@@ -624,6 +631,7 @@ PY
 # by the context-enriched uploader run below.
 UPLOADER_CONTEXT_LOG="$TMP_WS/uploader_with_context.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_API_KEY=mock \
 DD_TOPT_KEEP_PAYLOADS=1 \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
@@ -743,6 +751,7 @@ echo '{}' > "$MANUAL_NO_CO/coverage/manual_no_codeowners_cov.json"
 
 UPLOADER_NO_CO_LOG="$TMP_WS/uploader_no_codeowners.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_API_KEY=mock \
 DD_TOPT_KEEP_PAYLOADS=1 \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
@@ -1258,6 +1267,7 @@ echo '{}' > "$MANUAL_EMPTY_OWNER/coverage/manual_empty_owner_cov.json"
 
 UPLOADER_EMPTY_OWNER_LOG="$TMP_WS/uploader_empty_owner.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_API_KEY=mock \
 DD_TOPT_KEEP_PAYLOADS=1 \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
@@ -1582,6 +1592,7 @@ write_manifest_payload "$MANIFEST_EXACT_OUT" "Manual.ManifestExactTabBom"
 
 UPLOADER_MANIFEST_EXACT_LOG="$TMP_WS/uploader_manifest_exact.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 RUNFILES_MANIFEST_FILE="$MANIFEST_EXACT" \
 RUNFILES_DIR= \
 DD_API_KEY=mock \
@@ -1603,6 +1614,7 @@ write_manifest_payload "$MANIFEST_SUFFIX_OUT" "Manual.ManifestSuffixKey"
 
 UPLOADER_MANIFEST_SUFFIX_LOG="$TMP_WS/uploader_manifest_suffix.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 RUNFILES_MANIFEST_FILE="$MANIFEST_SUFFIX" \
 RUNFILES_DIR= \
 DD_API_KEY=mock \
