@@ -518,7 +518,7 @@ def print_uploader_log_tail():
     codeowners_lines = [
         line.rstrip("\n")
         for line in lines
-        if "[dd-uploader][dbg] codeowners" in line or "codeowners env:" in line
+        if "[dd-uploader][dbg] codeowners" in line
     ]
     if codeowners_lines:
         print("debug: uploader CODEOWNERS diagnostics follows")
@@ -1406,6 +1406,8 @@ def owners_for(resource):
             return "__invalid__"
     return None
 
+# Keep this scenario table-driven so new CODEOWNERS edge cases are easy to add
+# without duplicating assertion boilerplate.
 checks = [
     ("Manual.Owned", ["@org/owned"], "should resolve explicit owner rule"),
     ("Manual.Unowned", None, "should not set test.codeowners when no owners resolve"),

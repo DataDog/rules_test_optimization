@@ -1237,7 +1237,6 @@ JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 dbg "jq available: $JQ_AVAILABLE"
 dbg "context.json: ${{CONTEXT_JSON:-<none>}}"
-dbg "codeowners env: BUILD_WORKSPACE_DIRECTORY='${{BUILD_WORKSPACE_DIRECTORY:-<unset>}}' TESTLOGS_DIR='${{TESTLOGS_DIR:-<unset>}}' DD_TOPT_CODEOWNERS_FILE='${{DD_TOPT_CODEOWNERS_FILE:-<unset>}}' pwd='$(pwd)'"
 
 # CODEOWNERS state (initialized lazily on first enrichment attempt).
 CODEOWNERS_INITIALIZED=0
@@ -1804,13 +1803,7 @@ init_codeowners() {{
     local candidate
     for candidate in "${{candidates[@]}}"; do
       [[ -z "$candidate" ]] && continue
-      if [[ "$DEBUG" == "1" ]]; then
-        if [[ -f "$candidate" ]]; then
-          dbg "codeowners: discovery candidate hit '$candidate'"
-        else
-          dbg "codeowners: discovery candidate miss '$candidate'"
-        fi
-      fi
+      [[ "$DEBUG" == "1" && -f "$candidate" ]] && dbg "codeowners: discovery candidate hit '$candidate'"
       if [[ -f "$candidate" && -r "$candidate" ]]; then
         CODEOWNERS_FILE="$candidate"
         break
@@ -2822,7 +2815,6 @@ $GzipPayloads = if ($env:DD_TOPT_GZIP) {{ Normalize-Bool $env:DD_TOPT_GZIP }} el
 $script:DebugMode = $Debug
 $script:GzipPayloads = $GzipPayloads
 Dbg "gzip enabled: $GzipPayloads"
-Dbg "codeowners env: BUILD_WORKSPACE_DIRECTORY='$($env:BUILD_WORKSPACE_DIRECTORY)' TESTLOGS_DIR='$($env:TESTLOGS_DIR)' DD_TOPT_CODEOWNERS_FILE='$($env:DD_TOPT_CODEOWNERS_FILE)' cwd='$((Get-Location).Path)'"
 
 # Acquire exclusive lock to prevent concurrent uploaders
 # Lock is scoped to workspace to allow parallel uploads in different workspaces
@@ -3598,12 +3590,11 @@ function Initialize-CodeOwnersRules {{
 
     foreach ($candidate in $lookupPaths) {{
       if ([string]::IsNullOrEmpty($candidate)) {{ continue }}
-      if (Test-Path -LiteralPath $candidate -PathType Leaf) {{
+      $candidateExists = Test-Path -LiteralPath $candidate -PathType Leaf
+      if ($candidateExists) {{
         Dbg "codeowners: discovery candidate hit '$candidate'"
-      }} else {{
-        Dbg "codeowners: discovery candidate miss '$candidate'"
       }}
-      if (Test-Path -LiteralPath $candidate -PathType Leaf) {{
+      if ($candidateExists) {{
         $script:CodeOwnersPath = $candidate
         break
       }}

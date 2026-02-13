@@ -369,7 +369,7 @@ bazel run //:dd_upload_payloads
 |----------|---------|---------|
 | `DD_TOPT_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
 | `DD_TOPT_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
-| `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats) |
+| `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
 | `DD_TOPT_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
 | `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
 | `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
@@ -773,10 +773,17 @@ On Windows, use the PowerShell entrypoint (or the `cmd.exe` wrapper):
 tools\tests\integration\run_mock_server_tests.cmd
 ```
 
+The Windows PowerShell entrypoint reuses the same Bash harness for parity and
+prefers Git for Windows `bash.exe` (or `DD_TOPT_GIT_BASH` when set).
+
 This starts a local mock HTTP server and uses the following test-only overrides:
 
 - `DD_TOPT_API_BASE` to redirect sync requests
 - `DD_TOPT_INTAKE_BASE` to redirect uploader requests (agentless only)
+- The harness asserts CODEOWNERS enrichment/preservation and runfile manifest
+  fallback behavior (including BOM/tab exact keys and suffix-key resolution).
+- On assertion failures, it prints focused uploader diagnostics plus manifest
+  uploader log tails to speed up cross-platform triage.
 
 ## Schema sync helper
 
