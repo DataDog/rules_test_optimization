@@ -2437,7 +2437,7 @@ function Resolve-Runfile {{
     param([string]$InputRloc)
 
     $Rloc = $InputRloc
-    $Rloc = $Rloc.Replace('\', '/')
+    $Rloc = $Rloc.Replace([char]92, [char]47)
     # Normalize relative prefixes that can appear in bzlmod runfile paths
     if ($Rloc.StartsWith("./")) {{ $Rloc = $Rloc.Substring(2) }}
     while ($Rloc.StartsWith("../")) {{ $Rloc = $Rloc.Substring(3) }}
@@ -3240,7 +3240,7 @@ function Normalize-PathLike([string]$PathValue) {{
   }}
   # Decode can re-introduce backslashes (for example %5C on Windows paths).
   # Normalize after decoding so slash-based matching stays consistent.
-  $v = $v.Replace('\', '/')
+  $v = $v.Replace([char]92, [char]47)
   # Normalize duplicate separators and leading "./" fragments first.
   while ($v.Contains("//")) {{ $v = $v.Replace("//", "/") }}
   while ($v.StartsWith("./")) {{ $v = $v.Substring(2) }}
@@ -3361,7 +3361,7 @@ function Convert-CodeOwnersGlobToRegex([string]$Pattern) {{
   while ($i -lt $Pattern.Length) {{
     $ch = $Pattern.Substring($i, 1)
     # Backslash escapes a literal glob metacharacter.
-    if ($ch -eq '\') {{
+    if ([int][char]$ch -eq 92) {{
       if (($i + 1) -lt $Pattern.Length) {{
         $escapedCh = $Pattern.Substring($i + 1, 1)
         [void]$sb.Append([Regex]::Escape($escapedCh))
@@ -3415,7 +3415,7 @@ function Convert-CodeOwnersGlobToRegex([string]$Pattern) {{
           $closed = $true
           break
         }}
-        if ($classCh -eq '\') {{
+        if ([int][char]$classCh -eq 92) {{
           [void]$classSb.Append("\\\\")
         }} elseif ($classCh -eq '^') {{
           [void]$classSb.Append("\\^")
@@ -3455,7 +3455,7 @@ function Convert-CodeOwnersGlobToRegex([string]$Pattern) {{
       [void]$sb.Append("\\$")
     }} elseif ($ch -eq '|') {{
       [void]$sb.Append("\\|")
-    }} elseif ($ch -eq '\') {{
+    }} elseif ([int][char]$ch -eq 92) {{
       [void]$sb.Append("\\\\")
     }} elseif ($ch -eq ']') {{
       [void]$sb.Append("\\]")
@@ -3505,7 +3505,7 @@ function Split-CodeOwnersLine([string]$Line) {{
       $escaped = $false
       continue
     }}
-    if ($ch -eq '\') {{
+    if ([int][char]$ch -eq 92) {{
       [void]$sb.Append($ch)
       $escaped = $true
       continue
@@ -3529,7 +3529,7 @@ function Test-IsGitLabSectionHeaderPattern([string]$Pattern) {{
   }}
   # Heuristic to avoid class-only glob false positives:
   # keep range-like and short bracket classes (for example [xy], [A-Z]).
-  if ($inner.Contains('-') -or $inner.Contains('!') -or $inner.Contains('^') -or $inner.Contains('\')) {{
+  if ($inner.Contains('-') -or $inner.Contains('!') -or $inner.Contains('^') -or $inner.Contains([string]([char]92))) {{
     return $false
   }}
   # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
