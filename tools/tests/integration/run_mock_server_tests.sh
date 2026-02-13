@@ -29,9 +29,18 @@ cleanup() {
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
   fi
+  # Bazel can keep files under output_base open on Windows for a short time.
+  # Best-effort shutdown avoids cleanup flakiness from locked JVM logs.
+  if [[ -n "${BAZEL:-}" && -x "${BAZEL:-}" ]]; then
+    if [[ -n "${OUT_BASE:-}" ]]; then
+      "$BAZEL" --output_base="$OUT_BASE" shutdown >/dev/null 2>&1 || true
+    else
+      "$BAZEL" shutdown >/dev/null 2>&1 || true
+    fi
+  fi
   if [[ -n "${TMP_WS:-}" && -d "$TMP_WS" && "${KEEP_TMP:-0}" != "1" ]]; then
     chmod -R u+w "$TMP_WS" 2>/dev/null || true
-    rm -rf "$TMP_WS"
+    rm -rf "$TMP_WS" || true
   fi
 }
 trap cleanup EXIT
