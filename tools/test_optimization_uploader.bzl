@@ -1756,8 +1756,7 @@ init_codeowners() {{
       CODEOWNERS_FILE="$explicit_codeowners"
       dbg "codeowners: using explicit CODEOWNERS file '$CODEOWNERS_FILE'"
     else
-      dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicit_codeowners'"
-      return
+      dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicit_codeowners' (falling back to discovery)"
     fi
   fi
 
@@ -3556,8 +3555,7 @@ function Initialize-CodeOwnersRules {{
       $script:CodeOwnersPath = $explicitCodeOwners
       Dbg "codeowners: using explicit CODEOWNERS file '$script:CodeOwnersPath'"
     }} else {{
-      Dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicitCodeOwners'"
-      return
+      Dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicitCodeOwners' (falling back to discovery)"
     }}
   }}
   $compatWorkspace = if ($script:ContextObj) {{ $script:ContextObj.'ci.workspace_path' }} else {{ $null }}

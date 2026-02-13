@@ -82,6 +82,15 @@ if command -v cygpath >/dev/null 2>&1; then
   # Use mixed-style paths (C:/...) for cross-shell compatibility.
   WORKSPACE_FOR_UPLOADER="$(cygpath -m "$WORKSPACE" 2>/dev/null || echo "$WORKSPACE")"
 fi
+HARNESS_UPLOADER_DEBUG="${HARNESS_UPLOADER_DEBUG:-}"
+if [[ -z "$HARNESS_UPLOADER_DEBUG" ]]; then
+  UNAME_LC="$(uname -s | tr 'A-Z' 'a-z')"
+  if [[ "$UNAME_LC" == *mingw* || "$UNAME_LC" == *msys* || "$UNAME_LC" == *cygwin* ]]; then
+    HARNESS_UPLOADER_DEBUG=1
+  else
+    HARNESS_UPLOADER_DEBUG=0
+  fi
+fi
 
 # JSON-escape REPO_ROOT for safe insertion into MODULE.bazel.
 ESCAPED_REPO_ROOT=$("$PYTHON" - <<'PY'
@@ -337,6 +346,7 @@ UPLOADER_LOG="$TMP_WS/uploader.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
 DD_API_KEY=mock \
 DD_TOPT_KEEP_PAYLOADS=1 \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
@@ -389,7 +399,7 @@ if missing:
     sys.exit(1)
 PY
 
-"$PYTHON" - <<'PY'
+UPLOADER_LOG="$UPLOADER_LOG" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
@@ -484,17 +494,46 @@ def parse_owners(value):
     except Exception:
         return "__invalid__"
 
+def print_uploader_log_tail():
+    uploader_log = os.environ.get("UPLOADER_LOG")
+    if not uploader_log:
+        return
+    if not os.path.exists(uploader_log):
+        print(f"debug: uploader log not found at {uploader_log}")
+        return
+    print("debug: uploader log tail follows")
+    with open(uploader_log, "r", encoding="utf-8", errors="replace") as handle:
+        lines = handle.readlines()
+    for line in lines[-200:]:
+        print(line.rstrip("\n"))
+    print("debug: end uploader log tail")
+
 test_event_owners = parse_owners(event_codeowners("test", "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"))
 if test_event_owners != ["@DataDog/ci-app-libraries-dotnet"]:
     print(f"error: expected codeowners re-injection for test event (got={test_event_owners!r})")
+    evt = find_event("test", "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest")
+    if evt is None:
+        print("debug: target test event not found in latest citestcycle payload")
+    else:
+        meta = ((evt.get("content") or {}).get("meta") or {})
+        print(f"debug: target event source={meta.get('test.source.file')!r} has_codeowners={'test.codeowners' in meta}")
+    print_uploader_log_tail()
     sys.exit(1)
 suite_event_owners = parse_owners(event_codeowners("test_suite_end", "Samples.XUnitTests.TestSuite"))
 if suite_event_owners != ["@DataDog/ci-app-libraries-dotnet"]:
     print(f"error: expected codeowners re-injection for test_suite_end event (got={suite_event_owners!r})")
+    evt = find_event("test_suite_end", "Samples.XUnitTests.TestSuite")
+    if evt is None:
+        print("debug: target test_suite_end event not found in latest citestcycle payload")
+    else:
+        meta = ((evt.get("content") or {}).get("meta") or {})
+        print(f"debug: target suite source={meta.get('test.source.file')!r} has_codeowners={'test.codeowners' in meta}")
+    print_uploader_log_tail()
     sys.exit(1)
 existing_event_owners = parse_owners(event_codeowners("test", "Samples.XUnitTests.UnSkippableSuite.UnskippableTest"))
 if existing_event_owners != ["@DataDog/ci-app-libraries-dotnet"]:
     print(f"error: expected existing codeowners to be preserved for test event (got={existing_event_owners!r})")
+    print_uploader_log_tail()
     sys.exit(1)
 
 session_evt = find_event("test_session_end")
