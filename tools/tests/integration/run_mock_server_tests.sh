@@ -13,9 +13,11 @@ set -euo pipefail
 # 1) Start local mock Datadog server and collect all requests.
 # 2) Generate ephemeral MODULE/BUILD files in a temp workspace.
 # 3) Run sync + writer test + uploader and verify API coverage/snapshots.
-# 4) Validate CODEOWNERS enrichment behavior (injection, preservation, edge
+# 4) Validate multi-service extension wiring (including deduped sanitized keys).
+# 5) Validate CODEOWNERS enrichment behavior (injection, preservation, edge
 #    cases, runfiles/execroot normalization).
-# 5) Force manifest-only runfile fallback and verify context/schema resolution.
+# 6) Validate EVP-mode uploads (evp_proxy endpoints + EVP headers).
+# 7) Force manifest-only runfile fallback and verify context/schema resolution.
 #
 # Debugging tips:
 # - Set KEEP_TMP=1 to inspect the generated temp workspace after failures.
@@ -113,6 +115,14 @@ to_mixed_path() {
     return
   fi
   printf '%s\n' "$value"
+}
+
+log_line_count() {
+  if [[ -f "$LOG_FILE" ]]; then
+    wc -l < "$LOG_FILE" | tr -d '[:space:]'
+  else
+    echo 0
+  fi
 }
 
 # Pass an explicit workspace path to uploader runs so CODEOWNERS lookup stays
@@ -375,6 +385,7 @@ unset DD_TRACE_AGENT_URL
 # Use Bazel's testlogs location to find payloads for the uploader.
 TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
 
+BASE_UPLOAD_LOG_START="$(log_line_count)"
 UPLOADER_LOG="$TMP_WS/uploader.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
@@ -432,7 +443,7 @@ if missing:
     sys.exit(1)
 PY
 
-UPLOADER_LOG="$UPLOADER_LOG" "$PYTHON" - <<'PY'
+UPLOADER_LOG="$UPLOADER_LOG" BASE_UPLOAD_LOG_START="$BASE_UPLOAD_LOG_START" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
@@ -443,6 +454,7 @@ from email.policy import default
 
 log_path = os.environ["LOG_FILE"]
 snapshot_dir = os.environ["SNAPSHOT_DIR"]
+base_upload_log_start = int(os.environ.get("BASE_UPLOAD_LOG_START", "0") or "0")
 # When set, snapshot files are rewritten instead of compared.
 update = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 
@@ -495,26 +507,34 @@ def write_snap(path, data):
 # Keep all records so later checks can inspect both first and subsequent runs.
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
-    for line in handle:
+    for idx, line in enumerate(handle):
+        if idx < base_upload_log_start:
+            continue
         try:
             records.append(json.loads(line))
         except Exception:
             continue
 
-def find_last(path):
+def find_latest_cycle_for_resource(resource):
     for rec in reversed(records):
-        if rec.get("path") == path:
-            return rec
-    return None
+        if rec.get("path") != "/api/v2/citestcycle":
+            continue
+        try:
+            payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+        except Exception:
+            continue
+        for evt in payload.get("events", []):
+            content = evt.get("content") or {}
+            if content.get("resource") == resource:
+                return rec, payload
+    return None, None
 
-cycle = find_last("/api/v2/citestcycle")
-cov = find_last("/api/v2/citestcov")
-if not cycle or not cov:
+cycle, cycle_json = find_latest_cycle_for_resource("Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest")
+cov = next((rec for rec in reversed(records) if rec.get("path") == "/api/v2/citestcov"), None)
+if not cycle or cycle_json is None or not cov:
     print("error: missing payload logs for snapshotting")
     sys.exit(1)
 
-cycle_body = base64.b64decode(cycle.get("body_b64", ""))
-cycle_json = json.loads(cycle_body.decode("utf-8"))
 cycle_norm = normalize_citestcycle(cycle_json)
 
 def find_event(event_type, resource = None):
@@ -720,29 +740,106 @@ with tempfile.TemporaryDirectory() as td:
         sys.exit(1)
 PY
 
-CYCLE_COUNT_BEFORE_CONTEXT=$("$PYTHON" - <<'PY'
-import json
-import os
+# Scenario: multi-service extension wiring + deduped sanitized service keys.
+MULTI_WS="$TMP_WS/ws_multi"
+mkdir -p "$MULTI_WS"
+cat > "$MULTI_WS/MODULE.bazel" <<MODULE_MULTI_EOF
+module(name = "topt-multi-integration", version = "0.0.0")
 
-log_path = os.environ["LOG_FILE"]
-count = 0
-try:
-    with open(log_path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("path") == "/api/v2/citestcycle":
-                count += 1
-except FileNotFoundError:
-    pass
-print(count)
-PY
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = ${ESCAPED_REPO_ROOT},
 )
 
-# Capture current cycle count so we can isolate uploads produced specifically
+topt_multi = use_extension(
+    "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
+    "test_optimization_multi_sync_extension",
+)
+
+topt_multi.test_optimization_multi_sync(
+    name = "test_optimization_data",
+    services = ["go-service", "go_service"],
+    runtime_name = "go",
+    runtime_version = "1.2.3",
+)
+
+use_repo(
+    topt_multi,
+    "test_optimization_data",
+    "test_optimization_data_go_service",
+    "test_optimization_data_go_service_2",
+)
+MODULE_MULTI_EOF
+
+cat > "$MULTI_WS/BUILD.bazel" <<'BUILD_MULTI_EOF'
+filegroup(
+    name = "multi_sync_smoke",
+    srcs = [
+        "@test_optimization_data//:test_optimization_files_go_service",
+        "@test_optimization_data//:test_optimization_files_go_service_2",
+        "@test_optimization_data//:module_go_service_modulea",
+        "@test_optimization_data//:module_go_service_2_modulea",
+        "@test_optimization_data_go_service//:test_optimization_files",
+        "@test_optimization_data_go_service_2//:test_optimization_files",
+    ],
+)
+BUILD_MULTI_EOF
+
+MULTI_LOG_START="$(log_line_count)"
+(
+  cd "$MULTI_WS"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke \
+    "${REPO_ENVS[@]}"
+)
+
+MULTI_LOG_START="$MULTI_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("MULTI_LOG_START", "0") or "0")
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+setting_requests = [rec for rec in records if rec.get("path") == "/api/v2/libraries/tests/services/setting"]
+if len(setting_requests) < 2:
+    print("error: multi-service scenario expected at least two settings requests")
+    sys.exit(1)
+
+services = set()
+for rec in setting_requests:
+    try:
+        body = base64.b64decode(rec.get("body_b64", "")).decode("utf-8")
+        payload = json.loads(body)
+    except Exception:
+        continue
+    attrs = ((payload.get("data") or {}).get("attributes") or {})
+    service = attrs.get("service")
+    if isinstance(service, str) and service:
+        services.add(service)
+
+missing = {"go-service", "go_service"} - services
+if missing:
+    print("error: multi-service scenario missing expected service settings requests")
+    print("missing:", sorted(missing))
+    print("seen:", sorted(services))
+    sys.exit(1)
+PY
+
+# Capture current log offset so we can isolate uploads produced specifically
 # by the context-enriched uploader run below.
+LOG_LINES_BEFORE_CONTEXT="$(log_line_count)"
 UPLOADER_CONTEXT_LOG="$TMP_WS/uploader_with_context.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
@@ -760,63 +857,51 @@ DD_TRACE_AGENT_URL= \
   exit 1
 fi
 
-export CYCLE_COUNT_BEFORE_CONTEXT
-
-"$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_CONTEXT="$LOG_LINES_BEFORE_CONTEXT" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
-start_count = int(os.environ.get("CYCLE_COUNT_BEFORE_CONTEXT", "0") or "0")
+start_line = int(os.environ.get("LOG_LINES_BEFORE_CONTEXT", "0") or "0")
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
-    for line in handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
         try:
             records.append(json.loads(line))
         except Exception:
             continue
 
-cycle_records = [rec for rec in records if rec.get("path") == "/api/v2/citestcycle"]
-new_cycle_records = cycle_records[start_count:]
-if len(new_cycle_records) < 1:
-    print("error: expected at least one new /api/v2/citestcycle upload for context-enriched run")
-    sys.exit(1)
-cycle = None
-for rec in reversed(new_cycle_records):
-    try:
-        obj = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
-    except Exception:
-        continue
-    found_context_tag = False
-    for evt in obj.get("events", []):
-        if evt.get("type") != "test":
-            continue
-        meta = ((evt.get("content") or {}).get("meta") or {})
-        if "test.bazel.rule_name" in meta and "test.bazel.rule_version" in meta:
-            found_context_tag = True
-            break
-    if found_context_tag:
-        cycle = rec
-        break
-if cycle is None:
-    cycle = new_cycle_records[-1]
-if not cycle:
-    print("error: missing /api/v2/citestcycle upload after context run")
+if not records:
+    print("error: expected context-enriched uploader run to add log records")
     sys.exit(1)
 
-cycle_payload = json.loads(base64.b64decode(cycle.get("body_b64", "")).decode("utf-8"))
+target_resource = "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"
 target_evt = None
-for evt in cycle_payload.get("events", []):
-    if evt.get("type") != "test":
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
         continue
-    content = evt.get("content") or {}
-    if content.get("resource") == "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest":
-        target_evt = evt
+    try:
+        cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except Exception:
+        continue
+    for evt in cycle_payload.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        content = evt.get("content") or {}
+        if content.get("resource") != target_resource:
+            continue
+        evt_meta = content.get("meta") or {}
+        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
+            target_evt = evt
+            break
+    if target_evt is not None:
         break
-if not target_evt:
-    print("error: could not find target test event in context-enriched payload")
+if target_evt is None:
+    print("error: missing context-enriched test event after context run")
     sys.exit(1)
 
 meta = ((target_evt.get("content") or {}).get("meta") or {})
@@ -1507,6 +1592,112 @@ if failures:
     print("error: empty-owner scenario CODEOWNERS assertions failed")
     for failure in failures:
         print(f"  - {failure}")
+    sys.exit(1)
+PY
+
+# Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
+MANUAL_EVP="$TESTLOGS_DIR/manual_evp_mode/test.outputs"
+mkdir -p "$MANUAL_EVP/tests" "$MANUAL_EVP/coverage"
+cat > "$MANUAL_EVP/tests/manual_evp_mode.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.0.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.EvpMode",
+        "meta": {
+          "test.source.file": "manual/owned.cs"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+echo '{}' > "$MANUAL_EVP/coverage/manual_evp_mode_cov.json"
+
+EVP_LOG_START="$(log_line_count)"
+UPLOADER_EVP_LOG="$TMP_WS/uploader_evp.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_API_KEY= \
+DD_SITE= \
+DD_TOPT_KEEP_PAYLOADS=1 \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL="http://127.0.0.1:$PORT" \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_EVP_LOG" 2>&1; then
+  echo "error: uploader EVP-mode run failed"
+  cat "$UPLOADER_EVP_LOG" || true
+  exit 1
+fi
+
+EVP_LOG_START="$EVP_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("EVP_LOG_START", "0") or "0")
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+def lower_headers(record):
+    return {str(k).lower(): v for k, v in ((record.get("headers") or {}).items())}
+
+cycle_record = None
+for rec in reversed(records):
+    if rec.get("path") != "/evp_proxy/v2/api/v2/citestcycle":
+        continue
+    try:
+        payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except Exception:
+        continue
+    for evt in payload.get("events", []):
+        if (evt.get("content") or {}).get("resource") == "Manual.EvpMode":
+            cycle_record = rec
+            break
+    if cycle_record is not None:
+        break
+
+if cycle_record is None:
+    print("error: EVP-mode run missing Manual.EvpMode test upload")
+    sys.exit(1)
+
+cycle_headers = lower_headers(cycle_record)
+if cycle_headers.get("x-datadog-evp-subdomain") != "citestcycle-intake":
+    print("error: EVP-mode test upload missing expected X-Datadog-EVP-Subdomain header")
+    sys.exit(1)
+if "dd-api-key" in cycle_headers:
+    print("error: EVP-mode test upload unexpectedly included DD-API-KEY header")
+    sys.exit(1)
+
+cov_record = next((rec for rec in reversed(records) if rec.get("path") == "/evp_proxy/v2/api/v2/citestcov"), None)
+if cov_record is None:
+    print("error: EVP-mode run missing coverage upload")
+    sys.exit(1)
+
+cov_headers = lower_headers(cov_record)
+if cov_headers.get("x-datadog-evp-subdomain") != "citestcov-intake":
+    print("error: EVP-mode coverage upload missing expected X-Datadog-EVP-Subdomain header")
+    sys.exit(1)
+if "dd-api-key" in cov_headers:
+    print("error: EVP-mode coverage upload unexpectedly included DD-API-KEY header")
     sys.exit(1)
 PY
 

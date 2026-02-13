@@ -33,3 +33,22 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
+
+  bazel-tests-hermetic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Bazel tests (hermetic lane)
+        shell: bash
+        run: >
+          ./bazelw test //tools/...
+          --spawn_strategy=sandboxed
+          --strategy=TestRunner=sandboxed
+          --sandbox_default_allow_network=false
+          --modify_execution_info=TestRunner=+block-network
+          --test_env=TZ=UTC
+          --test_env=LANG=C
+          --test_env=LC_ALL=C
+          --enable_runfiles

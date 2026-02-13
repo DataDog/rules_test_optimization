@@ -161,10 +161,14 @@ class _Handler(BaseHTTPRequestHandler):
             return err
         return None
 
-    def _validate_uploader_test(self, body):
+    def _validate_uploader_test(self, body, evp_subdomain = None):
         lang_hdr = _require_header(self.headers, "Datadog-Meta-Lang")
         tracer_hdr = _require_header(self.headers, "Datadog-Meta-Tracer-Version")
-        if not _require_header(self.headers, "DD-API-KEY"):
+        if evp_subdomain:
+            got_subdomain = _require_header(self.headers, "X-Datadog-EVP-Subdomain")
+            if got_subdomain != evp_subdomain:
+                return "missing or invalid X-Datadog-EVP-Subdomain"
+        elif not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
         if not lang_hdr:
             return "missing Datadog-Meta-Lang"
@@ -188,8 +192,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return "Datadog-Meta-Tracer-Version does not match metadata.*.library_version"
         return None
 
-    def _validate_uploader_cov(self):
-        if not _require_header(self.headers, "DD-API-KEY"):
+    def _validate_uploader_cov(self, evp_subdomain = None):
+        if evp_subdomain:
+            got_subdomain = _require_header(self.headers, "X-Datadog-EVP-Subdomain")
+            if got_subdomain != evp_subdomain:
+                return "missing or invalid X-Datadog-EVP-Subdomain"
+        elif not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
         if not _require_header(self.headers, "Datadog-Meta-Lang"):
             return "missing Datadog-Meta-Lang"
@@ -226,15 +234,17 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, self.server.state.fixtures["test_management"])
             return
-        if path == "/api/v2/citestcycle":
-            err = self._validate_uploader_test(body)
+        if path in ("/api/v2/citestcycle", "/evp_proxy/v2/api/v2/citestcycle"):
+            evp_subdomain = "citestcycle-intake" if path.startswith("/evp_proxy/") else None
+            err = self._validate_uploader_test(body, evp_subdomain = evp_subdomain)
             if err:
                 self._send_json(400, _json_error(err))
                 return
             self._send_json(200, {})
             return
-        if path == "/api/v2/citestcov":
-            err = self._validate_uploader_cov()
+        if path in ("/api/v2/citestcov", "/evp_proxy/v2/api/v2/citestcov"):
+            evp_subdomain = "citestcov-intake" if path.startswith("/evp_proxy/") else None
+            err = self._validate_uploader_cov(evp_subdomain = evp_subdomain)
             if err:
                 self._send_json(400, _json_error(err))
                 return
