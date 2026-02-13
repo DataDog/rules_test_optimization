@@ -1535,17 +1535,44 @@ if [[ -z "$UPLOADER_SCRIPT_PATH" ]]; then
   echo "$UPLOADER_CQUERY"
   exit 1
 fi
-if [[ "$UPLOADER_SCRIPT_PATH" != /* && ! "$UPLOADER_SCRIPT_PATH" =~ ^[A-Za-z]:[\\/] ]]; then
+UPLOADER_SCRIPT_CANDIDATES=()
+if [[ "$UPLOADER_SCRIPT_PATH" == *.bat ]]; then
+  # On Windows, cquery returns the executable (.bat). We need the sibling Bash
+  # script because this harness patches and executes the copied uploader in Bash.
+  UPLOADER_SCRIPT_CANDIDATES+=("${UPLOADER_SCRIPT_PATH%.bat}.sh")
+elif [[ "$UPLOADER_SCRIPT_PATH" == *.ps1 ]]; then
+  UPLOADER_SCRIPT_CANDIDATES+=("${UPLOADER_SCRIPT_PATH%.ps1}.sh")
+fi
+UPLOADER_SCRIPT_CANDIDATES+=("$UPLOADER_SCRIPT_PATH")
+
+RESOLVED_UPLOADER_SCRIPT_PATH=""
+for candidate in "${UPLOADER_SCRIPT_CANDIDATES[@]}"; do
+  [[ -z "$candidate" ]] && continue
+  if [[ "$candidate" == /* || "$candidate" =~ ^[A-Za-z]:[\\/] ]]; then
+    if [[ -f "$candidate" ]]; then
+      RESOLVED_UPLOADER_SCRIPT_PATH="$candidate"
+      break
+    fi
+    continue
+  fi
   for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
     [[ -z "$base" ]] && continue
-    if [[ -f "$base/$UPLOADER_SCRIPT_PATH" ]]; then
-      UPLOADER_SCRIPT_PATH="$base/$UPLOADER_SCRIPT_PATH"
+    if [[ -f "$base/$candidate" ]]; then
+      RESOLVED_UPLOADER_SCRIPT_PATH="$base/$candidate"
       break
     fi
   done
+  [[ -n "$RESOLVED_UPLOADER_SCRIPT_PATH" ]] && break
+done
+if [[ -z "$RESOLVED_UPLOADER_SCRIPT_PATH" ]]; then
+  echo "error: resolved uploader script does not exist from candidates: ${UPLOADER_SCRIPT_CANDIDATES[*]}"
+  echo "$UPLOADER_CQUERY"
+  exit 1
 fi
-if [[ ! -f "$UPLOADER_SCRIPT_PATH" ]]; then
-  echo "error: resolved uploader script does not exist: $UPLOADER_SCRIPT_PATH"
+UPLOADER_SCRIPT_PATH="$RESOLVED_UPLOADER_SCRIPT_PATH"
+if [[ "$UPLOADER_SCRIPT_PATH" != *.sh ]]; then
+  echo "error: expected bash uploader script for manifest patching, got: $UPLOADER_SCRIPT_PATH"
+  echo "$UPLOADER_CQUERY"
   exit 1
 fi
 
@@ -1565,7 +1592,7 @@ with open(path, "r", encoding="utf-8") as handle:
     content = handle.read()
 for key in ("CONTEXT_JSON_PATH", "SCHEMA_JSON_PATH", "SCHEMA_VALIDATOR_PATH"):
     content, count = re.subn(
-        rf'^{key}="[^"]*"$',
+        rf'^{key}\s*=\s*"[^"]*"\r?$',
         f'{key}="__FORCE_RUNFILE_FALLBACK__"',
         content,
         flags=re.MULTILINE,
