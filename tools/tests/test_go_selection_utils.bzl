@@ -6,6 +6,7 @@ load(
 )
 load(
     "//tools:topt_go_test.bzl",
+    "normalize_user_data_for_tests",
     "resolve_topt_service_key_for_tests",
     "service_mapping_entries_for_tests",
 )
@@ -79,6 +80,14 @@ def _select_module_group_name_test(ctx):
     )
     return unittest.end(env)
 
+def _normalize_user_data_handles_none_test(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(env, [], normalize_user_data_for_tests(None))
+    asserts.equals(env, [":a", ":b"], normalize_user_data_for_tests([":a", ":b"]))
+    asserts.equals(env, [":x", ":y"], normalize_user_data_for_tests((":x", ":y")))
+    return unittest.end(env)
+
 service_mapping_entries_filters_non_service_test = unittest.make(_service_mapping_entries_filters_non_service_test)
 resolve_topt_service_key_prefers_exact_then_sanitized_test = unittest.make(_resolve_topt_service_key_prefers_exact_then_sanitized_test)
 select_module_group_name_test = unittest.make(_select_module_group_name_test)
+normalize_user_data_handles_none_test = unittest.make(_normalize_user_data_handles_none_test)

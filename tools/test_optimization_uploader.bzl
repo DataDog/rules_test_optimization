@@ -2931,7 +2931,7 @@ $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {{ Rel
 
 # Check explicit TESTLOGS_DIR override first (fail fast if set but invalid)
 if ($env:TESTLOGS_DIR) {{
-    if (Test-Path $env:TESTLOGS_DIR) {{
+    if (Test-Path -LiteralPath $env:TESTLOGS_DIR) {{
         $TestlogsDir = $env:TESTLOGS_DIR
         Dbg "using explicit TESTLOGS_DIR=$TestlogsDir"
     }} else {{
@@ -2946,12 +2946,12 @@ if ($env:TESTLOGS_DIR) {{
 
     if ($env:BUILD_WORKSPACE_DIRECTORY) {{
         $candidate = Join-Path $env:BUILD_WORKSPACE_DIRECTORY "bazel-testlogs"
-        if (Test-Path $candidate) {{ $TestlogsDir = $candidate }}
+        if (Test-Path -LiteralPath $candidate) {{ $TestlogsDir = $candidate }}
     }}
 
     if (-not $TestlogsDir) {{
         $candidate = Join-Path (Get-Location) "bazel-testlogs"
-        if (Test-Path $candidate) {{ $TestlogsDir = $candidate }}
+        if (Test-Path -LiteralPath $candidate) {{ $TestlogsDir = $candidate }}
     }}
 
     if (-not $TestlogsDir) {{
@@ -3003,7 +3003,7 @@ function Get-LatestMTimeAll {{
     foreach ($outputsDir in $script:TestOutputsCache) {{
         foreach ($subdir in @("tests", "coverage")) {{
             $dir = Join-Path $outputsDir.FullName $subdir
-            if (-not (Test-Path $dir)) {{ continue }}
+            if (-not (Test-Path -LiteralPath $dir)) {{ continue }}
             $files = Get-ChildItem -Path $dir -Filter "*.json" -File -ErrorAction SilentlyContinue
             foreach ($file in $files) {{
                 if ($file.LastWriteTime -gt $maxTime) {{
@@ -3020,10 +3020,10 @@ function Count-PayloadFiles {{
     foreach ($outputsDir in $script:TestOutputsCache) {{
         $testsDir = Join-Path $outputsDir.FullName "tests"
         $covDir = Join-Path $outputsDir.FullName "coverage"
-        if (Test-Path $testsDir) {{
+        if (Test-Path -LiteralPath $testsDir) {{
             $count += @(Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
         }}
-        if (Test-Path $covDir) {{
+        if (Test-Path -LiteralPath $covDir) {{
             $count += @(Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
         }}
     }}
@@ -4096,7 +4096,7 @@ function Upload-AllTests {{
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {{
         $testsDir = Join-Path $outputsDir.FullName "tests"
-        if (-not (Test-Path $testsDir)) {{ continue }}
+        if (-not (Test-Path -LiteralPath $testsDir)) {{ continue }}
         $files = Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue
         foreach ($f in $files) {{
             if (-not (Test-PrefixFilter $f.FullName "span_events_")) {{
@@ -4126,7 +4126,7 @@ function Upload-AllCoverage {{
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {{
         $covDir = Join-Path $outputsDir.FullName "coverage"
-        if (-not (Test-Path $covDir)) {{ continue }}
+        if (-not (Test-Path -LiteralPath $covDir)) {{ continue }}
         $files = Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue
         foreach ($f in $files) {{
             if (-not (Test-PrefixFilter $f.FullName "coverage_")) {{

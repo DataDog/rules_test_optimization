@@ -50,6 +50,16 @@ jobs:
         shell: bash
         run: shellcheck --severity=error tools/tests/integration/*.sh
 
+  schema-sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify schema files are in sync
+        shell: bash
+        run: python3 tools/schemas/sync_agentless_schema.py --check
+
   powershell-lint:
     runs-on: windows-latest
     steps:

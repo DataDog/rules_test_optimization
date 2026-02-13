@@ -805,6 +805,9 @@ CI note: `.github/workflows/ci.yml` also runs a dedicated hermetic lane
 (`bazel-tests-hermetic`) on Linux with sandboxed execution and network blocking.
 This is intentional: it catches hidden host/network dependencies that can pass
 in normal local runs but fail in locked-down CI environments.
+Current PR CI gates `./bazelw test //tools/...` plus the mock-server integration
+harness on each OS; when changing targets outside `//tools/...`, run
+`./bazelw test //...` locally before opening the PR.
 
 ## Schema sync helper
 

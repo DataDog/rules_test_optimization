@@ -45,6 +45,9 @@ def _service_mapping_entries(topt_data):
             entries[key] = value
     return entries
 
+def _normalize_user_data(user_data):
+    return list(user_data or [])
+
 def _resolve_topt_service_key(service_entries, topt_service):
     keys = sorted(service_entries.keys())
     if topt_service == None:
@@ -66,6 +69,7 @@ def _resolve_topt_service_key(service_entries, topt_service):
 # Public aliases for unit tests.
 service_mapping_entries_for_tests = _service_mapping_entries
 resolve_topt_service_key_for_tests = _resolve_topt_service_key
+normalize_user_data_for_tests = _normalize_user_data
 
 def dd_topt_go_test(
         name,
@@ -122,8 +126,8 @@ def dd_topt_go_test(
         _svc = service_entries[selected_key]
 
     # Prepare data dependencies
-    user_data = kwargs.pop("data", [])
-    data = list(user_data)
+    user_data = kwargs.pop("data", None)
+    data = _normalize_user_data(user_data)
 
     # Extract hints for importpath detection
     explicit_importpath = kwargs.get("importpath") if "importpath" in kwargs else None

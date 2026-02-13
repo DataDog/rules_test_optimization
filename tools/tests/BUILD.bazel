@@ -19,6 +19,7 @@ load(
 )
 load(
     "//tools/tests:test_go_selection_utils.bzl",
+    "normalize_user_data_handles_none_test",
     "resolve_topt_service_key_prefers_exact_then_sanitized_test",
     "select_module_group_name_test",
     "service_mapping_entries_filters_non_service_test",
@@ -210,6 +211,12 @@ select_module_group_name_test(
     timeout = "short",
 )
 
+normalize_user_data_handles_none_test(
+    name = "normalize_user_data_handles_none_test",
+    size = "small",
+    timeout = "short",
+)
+
 http_execute_timeout_seconds_test(
     name = "http_execute_timeout_seconds_test",
     size = "small",
@@ -378,6 +385,7 @@ test_suite(
         ":service_mapping_entries_filters_non_service_test",
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":select_module_group_name_test",
+        ":normalize_user_data_handles_none_test",
         ":http_execute_timeout_seconds_test",
         ":decode_json_object_valid_test",
         ":decode_json_object_empty_failure_test",

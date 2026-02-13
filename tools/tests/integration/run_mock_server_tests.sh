@@ -902,6 +902,17 @@ dd_topt_go_test(
     },
     topt_service = "go_service_2",
 )
+
+dd_topt_go_test(
+    name = "macro_data_none_probe",
+    go_test_rule = fake_go_test,
+    topt_data = {
+        "go_service": topt_data_go_service,
+        "go_service_2": topt_data_go_service_2,
+    },
+    topt_service = "go_service",
+    data = None,
+)
 BUILD_MULTI_EOF
 
 cat > "$MULTI_WS/macro_probe.bzl" <<'MACRO_PROBE_EOF'
@@ -935,7 +946,7 @@ BUILD_MULTI_INVALID_EOF
 MULTI_LOG_START="$(log_line_count)"
 (
   cd "$MULTI_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke //:macro_service_probe \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke //:macro_service_probe //:macro_data_none_probe \
     "${REPO_ENVS[@]}"
 )
 
