@@ -352,7 +352,7 @@ def _resolve_runfile_manifest_bash_for_tests(manifest_lines, key, existing_paths
             line_key = _strip_bom_prefix_for_tests(line_key)
         if line_key != key:
             continue
-        path = line[sep_idx + 1:]
+        path = _trim_ascii_whitespace_for_tests(line[sep_idx + 1:])
         if _list_contains_for_tests(existing_paths, path):
             return path
 
@@ -372,7 +372,7 @@ def _resolve_runfile_manifest_bash_for_tests(manifest_lines, key, existing_paths
         sep = line_key[sep_pos:sep_pos + 1]
         if sep != "/" and sep != "\\":
             continue
-        path = line[sep_idx + 1:]
+        path = _trim_ascii_whitespace_for_tests(line[sep_idx + 1:])
         if _list_contains_for_tests(existing_paths, path):
             return path
     return ""
@@ -497,6 +497,13 @@ dbg() {{
 }}
 dbg "startup runfiles env: RUNFILES_DIR='${{RUNFILES_DIR:-<unset>}}' RUNFILES_MANIFEST_FILE='${{RUNFILES_MANIFEST_FILE:-<unset>}}' script='$0'"
 
+trim_ascii_whitespace() {{
+    local value="$1"
+    value="${{value#"${{value%%[!$' \t\r\n']*}}"}}"
+    value="${{value%"${{value##*[!$' \t\r\n']}}"}}"
+    printf '%s\n' "$value"
+}}
+
 # Resolve runfile path for context.json lookup
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 resolve_runfile() {{
@@ -583,6 +590,7 @@ resolve_runfile() {{
                     }}
                 }}
             ' "$manifest_file")
+            path=$(trim_ascii_whitespace "$path")
             if [[ -n "$path" ]]; then
                 if [[ -f "$path" ]]; then
                     dbg "resolve_runfile: hit manifest exact key '$cand' -> '$path'"
@@ -609,6 +617,7 @@ resolve_runfile() {{
                     }}
                 }}
             ' "$manifest_file")
+            path=$(trim_ascii_whitespace "$path")
             if [[ -n "$path" ]]; then
                 if [[ -f "$path" ]]; then
                     dbg "resolve_runfile: hit manifest suffix key '$cand' -> '$path'"

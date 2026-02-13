@@ -84,13 +84,19 @@ fi
 WORKSPACE="$TMP_WS/ws"
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
+
+to_mixed_path() {
+  local value="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$value" 2>/dev/null || printf '%s\n' "$value"
+    return
+  fi
+  printf '%s\n' "$value"
+}
+
 # Pass an explicit workspace path to uploader runs so CODEOWNERS lookup stays
 # stable across platforms/runtimes (especially Bazel 9 on Windows).
-WORKSPACE_FOR_UPLOADER="$WORKSPACE"
-if command -v cygpath >/dev/null 2>&1; then
-  # Use mixed-style paths (C:/...) for cross-shell compatibility.
-  WORKSPACE_FOR_UPLOADER="$(cygpath -m "$WORKSPACE" 2>/dev/null || echo "$WORKSPACE")"
-fi
+WORKSPACE_FOR_UPLOADER="$(to_mixed_path "$WORKSPACE")"
 HARNESS_UPLOADER_DEBUG="${HARNESS_UPLOADER_DEBUG:-}"
 if [[ -z "$HARNESS_UPLOADER_DEBUG" ]]; then
   UNAME_LC="$(uname -s | tr 'A-Z' 'a-z')"
@@ -180,10 +186,7 @@ cat > CODEOWNERS <<'CODEOWNERS_EOF'
 /tracer/test/test-applications/integrations/Samples.XUnitTests/[Tt]estSuite.cs @DataDog/ci-app-libraries-dotnet
 CODEOWNERS_EOF
 CODEOWNERS_FOR_UPLOADER="$WORKSPACE/CODEOWNERS"
-if command -v cygpath >/dev/null 2>&1; then
-  # Use mixed-style paths (C:/...) for cross-shell compatibility.
-  CODEOWNERS_FOR_UPLOADER="$(cygpath -m "$CODEOWNERS_FOR_UPLOADER" 2>/dev/null || echo "$CODEOWNERS_FOR_UPLOADER")"
-fi
+CODEOWNERS_FOR_UPLOADER="$(to_mixed_path "$CODEOWNERS_FOR_UPLOADER")"
 
 cat > payload_writer.sh <<'PAYLOAD_EOF'
 #!/usr/bin/env bash
@@ -1403,134 +1406,64 @@ def owners_for(resource):
             return "__invalid__"
     return None
 
-if owners_for("Manual.Owned") != ["@org/owned"]:
-    print("error: Manual.Owned should resolve explicit owner rule")
-    sys.exit(1)
-if owners_for("Manual.Unowned") is not None:
-    print("error: Manual.Unowned should not set test.codeowners when no owners resolve")
-    sys.exit(1)
-if owners_for("Manual.CommentOnly") is not None:
-    print("error: Manual.CommentOnly should not set test.codeowners when owner segment is comment-only")
-    sys.exit(1)
-if owners_for("Manual.HashOwner") != ["@org/team#chat"]:
-    print("error: Manual.HashOwner should preserve '#' inside owner token")
-    sys.exit(1)
-if owners_for("Manual.SpaceOwner") != ["@org/space-owner"]:
-    print("error: Manual.SpaceOwner should resolve escaped-space CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.DirectoryRule") != ["@org/dir-owner"]:
-    print("error: Manual.DirectoryRule should resolve trailing-slash directory CODEOWNERS rule")
-    sys.exit(1)
-if owners_for("Manual.LiteralStar") != ["@org/literal-star"]:
-    print("error: Manual.LiteralStar should resolve escaped '*' CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.LiteralQuestion") != ["@org/literal-question"]:
-    print("error: Manual.LiteralQuestion should resolve escaped '?' CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.LiteralBrackets") != ["@org/literal-brackets"]:
-    print("error: Manual.LiteralBrackets should resolve escaped bracket CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.DuplicateOwners") != ["@org/dedupe", "@org/extra"]:
-    print("error: Manual.DuplicateOwners should dedupe owners while preserving order")
-    sys.exit(1)
-if owners_for("Manual.LastMatchWins") != ["@org/second"]:
-    print("error: Manual.LastMatchWins should honor last matching CODEOWNERS rule")
-    sys.exit(1)
-if owners_for("Manual.OverrideEmpty") is not None:
-    print("error: Manual.OverrideEmpty should not set owners when final matching rule has no owners")
-    sys.exit(1)
-if owners_for("Manual.FileScheme") != ["@org/file-scheme"]:
-    print("error: Manual.FileScheme should resolve file:// source paths")
-    sys.exit(1)
-if owners_for("Manual.PercentSlash") != ["@org/percent-slash"]:
-    print("error: Manual.PercentSlash should decode %2F before matching")
-    sys.exit(1)
-if owners_for("Manual.DotNormalization") != ["@org/dotnorm"]:
-    print("error: Manual.DotNormalization should normalize dot-segment source paths")
-    sys.exit(1)
-if owners_for("Manual.PathTraversalRejected") is not None:
-    print("error: Manual.PathTraversalRejected should ignore source paths escaping repository root")
-    sys.exit(1)
-if owners_for("Manual.NullEscapeNoDecode") != ["@org/default"]:
-    print("error: Manual.NullEscapeNoDecode should avoid decoding %00 and fall back safely")
-    sys.exit(1)
-if owners_for("Manual.MalformedPercent") != ["@org/default"]:
-    print("error: Manual.MalformedPercent should keep malformed percent encoding and fall back safely")
-    sys.exit(1)
-if owners_for("Manual.RunfilesMain") != ["@org/owned"]:
-    print("error: Manual.RunfilesMain should resolve runfiles _main source paths")
-    sys.exit(1)
-if owners_for("Manual.RunfilesExternal") is not None:
-    print("error: Manual.RunfilesExternal should not inherit repo owners for runfiles external dependency paths")
-    sys.exit(1)
-if owners_for("Manual.ExecrootMain") != ["@org/owned"]:
-    print("error: Manual.ExecrootMain should resolve execroot _main source paths")
-    sys.exit(1)
-if owners_for("Manual.TabOwner") != ["@org/tab-owner"]:
-    print("error: Manual.TabOwner should resolve tab-separated CODEOWNERS owner list")
-    sys.exit(1)
-if owners_for("Manual.CharClass") != ["@org/class-owner"]:
-    print("error: Manual.CharClass should resolve bracket-only class CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.CharClassLong") != ["@org/class-owner-abc"]:
-    print("error: Manual.CharClassLong should resolve longer bracket-only class CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.CharClassUpper") != ["@org/class-owner-upper"]:
-    print("error: Manual.CharClassUpper should resolve uppercase bracket-only class CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.CharClassUpperLong") != ["@org/class-owner-upper-long"]:
-    print("error: Manual.CharClassUpperLong should resolve long uppercase bracket-only class CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.CharClassAlnumLong") != ["@org/class-owner-alnum-long"]:
-    print("error: Manual.CharClassAlnumLong should resolve long uppercase-alnum bracket-only class CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.CharClassMixed") != ["@org/class-owner-mixed"]:
-    print("error: Manual.CharClassMixed should resolve mixed-case bracket-only class CODEOWNERS pattern")
-    sys.exit(1)
-if owners_for("Manual.SectionHeaderWithSpaceIgnored") != ["@org/default"]:
-    print("error: Manual.SectionHeaderWithSpaceIgnored should ignore spaced GitLab section headers")
-    sys.exit(1)
-if owners_for("Manual.InvalidRange") != ["@org/default"]:
-    print("error: Manual.InvalidRange should ignore malformed regex rule and keep fallback owner")
-    sys.exit(1)
-if owners_for("Manual.EncodedBackslash") != ["@org/owned"]:
-    print("error: Manual.EncodedBackslash should normalize %5C separators before matching")
-    sys.exit(1)
-if owners_for("Manual.ExternalAbsolutePath") is not None:
-    print("error: Manual.ExternalAbsolutePath should not inherit repo CODEOWNERS from absolute non-repo paths")
-    sys.exit(1)
-if owners_for("Manual.ExecrootExternalPath") is not None:
-    print("error: Manual.ExecrootExternalPath should not inherit repo CODEOWNERS from execroot external dependency paths")
-    sys.exit(1)
-if owners_for("Manual.RepoRelativeExternalPath") != ["@org/repo-external"]:
-    print("error: Manual.RepoRelativeExternalPath should still resolve repository-owned external/ paths")
-    sys.exit(1)
-if owners_for("Manual.PreservedExisting") != ["@org/preexisting"]:
-    print("error: Manual.PreservedExisting should keep producer-provided test.codeowners value")
-    sys.exit(1)
-if owners_for("Manual.PreservedSuiteEnd") != ["@org/preexisting-suite"]:
-    print("error: Manual.PreservedSuiteEnd should preserve producer-provided owners on test_suite_end events")
-    sys.exit(1)
-if owners_for("Manual.PreservedModuleEnd") != ["@org/preexisting-module"]:
-    print("error: Manual.PreservedModuleEnd should preserve producer-provided owners on test_module_end events")
-    sys.exit(1)
-if owners_for("Manual.PreservedSessionEnd") != ["@org/preexisting-session"]:
-    print("error: Manual.PreservedSessionEnd should preserve producer-provided owners on test_session_end events")
-    sys.exit(1)
-if owners_for("Manual.SpanSkipped") is not None:
-    print("error: Manual.SpanSkipped should not enrich span events")
-    sys.exit(1)
-if owners_for("Manual.ModuleEndOwned") != ["@org/owned"]:
-    print("error: Manual.ModuleEndOwned should enrich test_module_end events when source path resolves")
-    sys.exit(1)
-if owners_for("Manual.SectionHeaderIgnored") != ["@org/default"]:
-    print("error: Manual.SectionHeaderIgnored should ignore GitLab section-owner headers")
-    sys.exit(1)
-if owners_for("Manual.SourceFallback") != ["@org/owned"]:
-    print("error: Manual.SourceFallback should resolve through content.source.path fallback")
-    sys.exit(1)
-if owners_for("Manual.Default") != ["@org/default"]:
-    print("error: Manual.Default should resolve fallback '*' rule")
+checks = [
+    ("Manual.Owned", ["@org/owned"], "should resolve explicit owner rule"),
+    ("Manual.Unowned", None, "should not set test.codeowners when no owners resolve"),
+    ("Manual.CommentOnly", None, "should not set test.codeowners when owner segment is comment-only"),
+    ("Manual.HashOwner", ["@org/team#chat"], "should preserve '#' inside owner token"),
+    ("Manual.SpaceOwner", ["@org/space-owner"], "should resolve escaped-space CODEOWNERS pattern"),
+    ("Manual.DirectoryRule", ["@org/dir-owner"], "should resolve trailing-slash directory CODEOWNERS rule"),
+    ("Manual.LiteralStar", ["@org/literal-star"], "should resolve escaped '*' CODEOWNERS pattern"),
+    ("Manual.LiteralQuestion", ["@org/literal-question"], "should resolve escaped '?' CODEOWNERS pattern"),
+    ("Manual.LiteralBrackets", ["@org/literal-brackets"], "should resolve escaped bracket CODEOWNERS pattern"),
+    ("Manual.DuplicateOwners", ["@org/dedupe", "@org/extra"], "should dedupe owners while preserving order"),
+    ("Manual.LastMatchWins", ["@org/second"], "should honor last matching CODEOWNERS rule"),
+    ("Manual.OverrideEmpty", None, "should not set owners when final matching rule has no owners"),
+    ("Manual.FileScheme", ["@org/file-scheme"], "should resolve file:// source paths"),
+    ("Manual.PercentSlash", ["@org/percent-slash"], "should decode %2F before matching"),
+    ("Manual.DotNormalization", ["@org/dotnorm"], "should normalize dot-segment source paths"),
+    ("Manual.PathTraversalRejected", None, "should ignore source paths escaping repository root"),
+    ("Manual.NullEscapeNoDecode", ["@org/default"], "should avoid decoding %00 and fall back safely"),
+    ("Manual.MalformedPercent", ["@org/default"], "should keep malformed percent encoding and fall back safely"),
+    ("Manual.RunfilesMain", ["@org/owned"], "should resolve runfiles _main source paths"),
+    ("Manual.RunfilesExternal", None, "should not inherit repo owners for runfiles external dependency paths"),
+    ("Manual.ExecrootMain", ["@org/owned"], "should resolve execroot _main source paths"),
+    ("Manual.TabOwner", ["@org/tab-owner"], "should resolve tab-separated CODEOWNERS owner list"),
+    ("Manual.CharClass", ["@org/class-owner"], "should resolve bracket-only class CODEOWNERS pattern"),
+    ("Manual.CharClassLong", ["@org/class-owner-abc"], "should resolve longer bracket-only class CODEOWNERS pattern"),
+    ("Manual.CharClassUpper", ["@org/class-owner-upper"], "should resolve uppercase bracket-only class CODEOWNERS pattern"),
+    ("Manual.CharClassUpperLong", ["@org/class-owner-upper-long"], "should resolve long uppercase bracket-only class CODEOWNERS pattern"),
+    ("Manual.CharClassAlnumLong", ["@org/class-owner-alnum-long"], "should resolve long uppercase-alnum bracket-only class CODEOWNERS pattern"),
+    ("Manual.CharClassMixed", ["@org/class-owner-mixed"], "should resolve mixed-case bracket-only class CODEOWNERS pattern"),
+    ("Manual.SectionHeaderWithSpaceIgnored", ["@org/default"], "should ignore spaced GitLab section headers"),
+    ("Manual.InvalidRange", ["@org/default"], "should ignore malformed regex rule and keep fallback owner"),
+    ("Manual.EncodedBackslash", ["@org/owned"], "should normalize %5C separators before matching"),
+    ("Manual.ExternalAbsolutePath", None, "should not inherit repo CODEOWNERS from absolute non-repo paths"),
+    ("Manual.ExecrootExternalPath", None, "should not inherit repo CODEOWNERS from execroot external dependency paths"),
+    ("Manual.RepoRelativeExternalPath", ["@org/repo-external"], "should still resolve repository-owned external/ paths"),
+    ("Manual.PreservedExisting", ["@org/preexisting"], "should keep producer-provided test.codeowners value"),
+    ("Manual.PreservedSuiteEnd", ["@org/preexisting-suite"], "should preserve producer-provided owners on test_suite_end events"),
+    ("Manual.PreservedModuleEnd", ["@org/preexisting-module"], "should preserve producer-provided owners on test_module_end events"),
+    ("Manual.PreservedSessionEnd", ["@org/preexisting-session"], "should preserve producer-provided owners on test_session_end events"),
+    ("Manual.SpanSkipped", None, "should not enrich span events"),
+    ("Manual.ModuleEndOwned", ["@org/owned"], "should enrich test_module_end events when source path resolves"),
+    ("Manual.SectionHeaderIgnored", ["@org/default"], "should ignore GitLab section-owner headers"),
+    ("Manual.SourceFallback", ["@org/owned"], "should resolve through content.source.path fallback"),
+    ("Manual.Default", ["@org/default"], "should resolve fallback '*' rule"),
+]
+
+failures = []
+for resource, expected, behavior in checks:
+    actual = owners_for(resource)
+    if actual != expected:
+        failures.append(
+            f"{resource}: {behavior} (expected={expected!r}, got={actual!r})",
+        )
+
+if failures:
+    print("error: empty-owner scenario CODEOWNERS assertions failed")
+    for failure in failures:
+        print(f"  - {failure}")
     sys.exit(1)
 PY
 
@@ -1671,9 +1604,7 @@ MANIFEST_UPLOADER_FOR_CMD="$MANIFEST_UPLOADER"
 if [[ "$MANIFEST_UPLOADER_KIND" == "bash" ]]; then
   MANIFEST_UPLOADER_CMD=("$MANIFEST_UPLOADER")
 else
-  if command -v cygpath >/dev/null 2>&1; then
-    MANIFEST_UPLOADER_FOR_CMD="$(cygpath -m "$MANIFEST_UPLOADER" 2>/dev/null || echo "$MANIFEST_UPLOADER")"
-  fi
+  MANIFEST_UPLOADER_FOR_CMD="$(to_mixed_path "$MANIFEST_UPLOADER")"
   MANIFEST_UPLOADER_CMD=(pwsh -NoLogo -NoProfile -File "$MANIFEST_UPLOADER_FOR_CMD")
 fi
 
@@ -1701,9 +1632,9 @@ if [[ ! -f "$CONTEXT_JSON_REAL_PATH" ]]; then
 fi
 CONTEXT_JSON_REAL_PATH_MANIFEST="$CONTEXT_JSON_REAL_PATH"
 TESTLOGS_DIR_FOR_MANIFEST="$TESTLOGS_DIR"
-if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]] && command -v cygpath >/dev/null 2>&1; then
-  CONTEXT_JSON_REAL_PATH_MANIFEST="$(cygpath -m "$CONTEXT_JSON_REAL_PATH" 2>/dev/null || echo "$CONTEXT_JSON_REAL_PATH")"
-  TESTLOGS_DIR_FOR_MANIFEST="$(cygpath -m "$TESTLOGS_DIR" 2>/dev/null || echo "$TESTLOGS_DIR")"
+if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]]; then
+  CONTEXT_JSON_REAL_PATH_MANIFEST="$(to_mixed_path "$CONTEXT_JSON_REAL_PATH")"
+  TESTLOGS_DIR_FOR_MANIFEST="$(to_mixed_path "$TESTLOGS_DIR")"
 fi
 
 write_manifest_payload() {
@@ -1734,62 +1665,53 @@ JSON_EOF
   echo '{}' > "$outputs_dir/coverage/${resource_name}_cov.json"
 }
 
+run_manifest_uploader() {
+  local manifest_file="$1"
+  local output_log="$2"
+  local scenario_label="$3"
+  if ! TESTLOGS_DIR="$TESTLOGS_DIR_FOR_MANIFEST" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  RUNFILES_MANIFEST_FILE="$manifest_file" \
+  RUNFILES_DIR= \
+  DD_API_KEY=mock \
+  DD_TOPT_KEEP_PAYLOADS=0 \
+  DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
+  DD_TOPT_MAX_WAIT_SEC=30 \
+  DD_TOPT_QUIESCENT_SEC=1 \
+  DD_TRACE_AGENT_URL= \
+  "${MANIFEST_UPLOADER_CMD[@]}" >"$output_log" 2>&1; then
+    echo "error: manifest $scenario_label uploader run failed"
+    cat "$output_log" || true
+    exit 1
+  fi
+}
+
 MANIFEST_EXACT="$TMP_WS/runfiles_exact.manifest"
 BOM=$'\xef\xbb\xbf'
 printf '%s%s\t%s\n' "$BOM" "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH_MANIFEST" > "$MANIFEST_EXACT"
 MANIFEST_EXACT_FOR_UPLOADER="$MANIFEST_EXACT"
-if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]] && command -v cygpath >/dev/null 2>&1; then
-  MANIFEST_EXACT_FOR_UPLOADER="$(cygpath -m "$MANIFEST_EXACT" 2>/dev/null || echo "$MANIFEST_EXACT")"
+if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]]; then
+  MANIFEST_EXACT_FOR_UPLOADER="$(to_mixed_path "$MANIFEST_EXACT")"
 fi
 MANIFEST_EXACT_OUT="$TESTLOGS_DIR/manual_manifest_exact/test.outputs"
 write_manifest_payload "$MANIFEST_EXACT_OUT" "Manual.ManifestExactTabBom"
 
 UPLOADER_MANIFEST_EXACT_LOG="$TMP_WS/uploader_manifest_exact.log"
-if ! TESTLOGS_DIR="$TESTLOGS_DIR_FOR_MANIFEST" \
-BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
-RUNFILES_MANIFEST_FILE="$MANIFEST_EXACT_FOR_UPLOADER" \
-RUNFILES_DIR= \
-DD_API_KEY=mock \
-DD_TOPT_KEEP_PAYLOADS=0 \
-DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
-DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
-DD_TOPT_MAX_WAIT_SEC=30 \
-DD_TOPT_QUIESCENT_SEC=1 \
-DD_TRACE_AGENT_URL= \
-"${MANIFEST_UPLOADER_CMD[@]}" >"$UPLOADER_MANIFEST_EXACT_LOG" 2>&1; then
-  echo "error: manifest exact-key uploader run failed"
-  cat "$UPLOADER_MANIFEST_EXACT_LOG" || true
-  exit 1
-fi
+run_manifest_uploader "$MANIFEST_EXACT_FOR_UPLOADER" "$UPLOADER_MANIFEST_EXACT_LOG" "exact-key"
 
 MANIFEST_SUFFIX="$TMP_WS/runfiles_suffix.manifest"
 printf 'repo-prefix/%s %s\n' "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH_MANIFEST" > "$MANIFEST_SUFFIX"
 MANIFEST_SUFFIX_FOR_UPLOADER="$MANIFEST_SUFFIX"
-if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]] && command -v cygpath >/dev/null 2>&1; then
-  MANIFEST_SUFFIX_FOR_UPLOADER="$(cygpath -m "$MANIFEST_SUFFIX" 2>/dev/null || echo "$MANIFEST_SUFFIX")"
+if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]]; then
+  MANIFEST_SUFFIX_FOR_UPLOADER="$(to_mixed_path "$MANIFEST_SUFFIX")"
 fi
 MANIFEST_SUFFIX_OUT="$TESTLOGS_DIR/manual_manifest_suffix/test.outputs"
 write_manifest_payload "$MANIFEST_SUFFIX_OUT" "Manual.ManifestSuffixKey"
 
 UPLOADER_MANIFEST_SUFFIX_LOG="$TMP_WS/uploader_manifest_suffix.log"
-if ! TESTLOGS_DIR="$TESTLOGS_DIR_FOR_MANIFEST" \
-BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
-RUNFILES_MANIFEST_FILE="$MANIFEST_SUFFIX_FOR_UPLOADER" \
-RUNFILES_DIR= \
-DD_API_KEY=mock \
-DD_TOPT_KEEP_PAYLOADS=0 \
-DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
-DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
-DD_TOPT_MAX_WAIT_SEC=30 \
-DD_TOPT_QUIESCENT_SEC=1 \
-DD_TRACE_AGENT_URL= \
-"${MANIFEST_UPLOADER_CMD[@]}" >"$UPLOADER_MANIFEST_SUFFIX_LOG" 2>&1; then
-  echo "error: manifest suffix-key uploader run failed"
-  cat "$UPLOADER_MANIFEST_SUFFIX_LOG" || true
-  exit 1
-fi
+run_manifest_uploader "$MANIFEST_SUFFIX_FOR_UPLOADER" "$UPLOADER_MANIFEST_SUFFIX_LOG" "suffix-key"
 
 UPLOADER_MANIFEST_EXACT_LOG="$UPLOADER_MANIFEST_EXACT_LOG" \
 UPLOADER_MANIFEST_SUFFIX_LOG="$UPLOADER_MANIFEST_SUFFIX_LOG" \
@@ -1853,6 +1775,7 @@ def assert_manifest_resource(resource):
             break
     if payload is None:
         print(f"error: missing manifest resolution upload for {resource}")
+        print_manifest_logs()
         sys.exit(1)
     target = None
     for evt in payload.get("events", []):
@@ -1861,6 +1784,7 @@ def assert_manifest_resource(resource):
             break
     if target is None:
         print(f"error: missing event payload for {resource}")
+        print_manifest_logs()
         sys.exit(1)
     meta = ((target.get("content") or {}).get("meta") or {})
     for key in ("test.bazel.rule_name", "test.bazel.rule_version"):

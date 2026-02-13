@@ -215,8 +215,10 @@ def _runfile_manifest_bash_resolution_test(ctx):
         "_main/schema.json\t/schema/path.json",
         "repo/context.json /suffix/path.json",
         "repo\\context.json /suffix/win/path.json",
+        "_main/context_crlf.json /ctx/crlf/path.json\r",
+        "repo/spaced.json\t /suffix/path with spaces.json \r",
     ]
-    existing = ["/ctx/path.json", "/schema/path.json", "/suffix/path.json", "/suffix/win/path.json"]
+    existing = ["/ctx/path.json", "/schema/path.json", "/suffix/path.json", "/suffix/win/path.json", "/ctx/crlf/path.json", "/suffix/path with spaces.json"]
     asserts.equals(
         env,
         "/ctx/path.json",
@@ -231,6 +233,16 @@ def _runfile_manifest_bash_resolution_test(ctx):
         env,
         "/ctx/path.json",
         resolve_runfile_manifest_bash_for_tests(lines, "context.json", existing),
+    )
+    asserts.equals(
+        env,
+        "/ctx/crlf/path.json",
+        resolve_runfile_manifest_bash_for_tests(lines, "_main/context_crlf.json", existing),
+    )
+    asserts.equals(
+        env,
+        "/suffix/path with spaces.json",
+        resolve_runfile_manifest_bash_for_tests(lines, "spaced.json", existing),
     )
     # Non-existing exact/suffix candidates should not be returned.
     missing_lines = [
@@ -252,8 +264,9 @@ def _runfile_manifest_powershell_resolution_test(ctx):
         "repo/fallback.json /suffix/path.json",
         "repo\\fallback_win.json\t/suffix/win/path.json",
         "\\ufeffcontext_bom.json /bom/path.json",
+        "_main/context_windows.json\tC:/tmp/path with spaces/context.json\r",
     ]
-    existing = ["/ps/path.json", "/suffix/path.json", "/suffix/win/path.json", "/bom/path.json"]
+    existing = ["/ps/path.json", "/suffix/path.json", "/suffix/win/path.json", "/bom/path.json", "C:/tmp/path with spaces/context.json"]
     asserts.equals(
         env,
         "/ps/path.json",
@@ -274,6 +287,11 @@ def _runfile_manifest_powershell_resolution_test(ctx):
         "/bom/path.json",
         resolve_runfile_manifest_powershell_for_tests(lines, "context_bom.json", existing),
     )
+    asserts.equals(
+        env,
+        "C:/tmp/path with spaces/context.json",
+        resolve_runfile_manifest_powershell_for_tests(lines, "_main/context_windows.json", existing),
+    )
     assert_missing = resolve_runfile_manifest_powershell_for_tests(lines, "not_found.json", existing)
     asserts.equals(env, "", assert_missing)
     return unittest.end(env)
@@ -285,9 +303,10 @@ def _runfile_manifest_parser_parity_test(ctx):
         "\\ufeff_main/context.json /ctx/path.json",
         "_main/schema.json\t/schema/path.json",
         "repo/context.json /suffix/path.json",
+        "_main/trimmed.json\t /trim/path.json \r",
     ]
-    existing = ["/ctx/path.json", "/schema/path.json", "/suffix/path.json"]
-    for key in ["_main/context.json", "_main/schema.json", "context.json"]:
+    existing = ["/ctx/path.json", "/schema/path.json", "/suffix/path.json", "/trim/path.json"]
+    for key in ["_main/context.json", "_main/schema.json", "context.json", "_main/trimmed.json"]:
         bash_path = resolve_runfile_manifest_bash_for_tests(lines, key, existing)
         ps_path = resolve_runfile_manifest_powershell_for_tests(lines, key, existing)
         asserts.equals(env, bash_path, ps_path)
