@@ -786,6 +786,7 @@ parse_go_module_path_for_tests = _parse_go_module_path
 dirname_for_tests = _dirname
 render_export_bzl_for_tests = _render_export_bzl
 http_execute_timeout_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_SECONDS
+decode_json_object_or_fail_for_tests = _decode_json_object_or_fail
 
 # ##########################################################################
 # CI environment detection

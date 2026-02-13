@@ -25,6 +25,13 @@ load(
 )
 load(
     "//tools/tests:test_sync_utils.bzl",
+    "decode_json_object_array_failure_test",
+    "decode_json_object_array_target_rule",
+    "decode_json_object_empty_failure_test",
+    "decode_json_object_empty_target_rule",
+    "decode_json_object_non_json_failure_test",
+    "decode_json_object_non_json_target_rule",
+    "decode_json_object_valid_test",
     "dd_site_normalization_test",
     "dirname_test",
     "export_bzl_manifest_path_test",
@@ -209,6 +216,42 @@ http_execute_timeout_seconds_test(
     timeout = "short",
 )
 
+decode_json_object_valid_test(
+    name = "decode_json_object_valid_test",
+    size = "small",
+    timeout = "short",
+)
+
+decode_json_object_empty_target_rule(
+    name = "decode_json_object_empty_target",
+    tags = ["manual"],
+)
+
+decode_json_object_empty_failure_test(
+    name = "decode_json_object_empty_failure_test",
+    target_under_test = ":decode_json_object_empty_target",
+)
+
+decode_json_object_non_json_target_rule(
+    name = "decode_json_object_non_json_target",
+    tags = ["manual"],
+)
+
+decode_json_object_non_json_failure_test(
+    name = "decode_json_object_non_json_failure_test",
+    target_under_test = ":decode_json_object_non_json_target",
+)
+
+decode_json_object_array_target_rule(
+    name = "decode_json_object_array_target",
+    tags = ["manual"],
+)
+
+decode_json_object_array_failure_test(
+    name = "decode_json_object_array_failure_test",
+    target_under_test = ":decode_json_object_array_target",
+)
+
 bash_curl_retry_flags_test(
     name = "bash_curl_retry_flags_test",
     size = "small",
@@ -336,6 +379,10 @@ test_suite(
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":select_module_group_name_test",
         ":http_execute_timeout_seconds_test",
+        ":decode_json_object_valid_test",
+        ":decode_json_object_empty_failure_test",
+        ":decode_json_object_non_json_failure_test",
+        ":decode_json_object_array_failure_test",
         ":bash_curl_retry_flags_test",
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",

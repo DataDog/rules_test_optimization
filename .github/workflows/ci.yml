@@ -50,6 +50,32 @@ jobs:
         shell: bash
         run: shellcheck --severity=error tools/tests/integration/*.sh
 
+  powershell-lint:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {
+              Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+            }
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
+          }
+
+      - name: Lint integration PowerShell scripts
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path "tools/tests/integration/*.ps1" -Severity Error
+          if ($results) {
+            $results | Format-Table -AutoSize
+            throw "PSScriptAnalyzer found lint errors."
+          }
+
   bazel-tests-hermetic:
     runs-on: ubuntu-latest
     steps:

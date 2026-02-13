@@ -1,8 +1,9 @@
 # Unit tests for sync utilities (DD_SITE normalization + module label mapping).
-load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools:test_optimization_sync.bzl",
     "build_module_label_map_for_tests",
+    "decode_json_object_or_fail_for_tests",
     "compute_dd_api_base_for_tests",
     "dirname_for_tests",
     "http_execute_timeout_seconds_for_tests",
@@ -121,6 +122,54 @@ def _http_execute_timeout_seconds_test(ctx):
     asserts.equals(env, 120, http_execute_timeout_seconds_for_tests)
     return unittest.end(env)
 
+def _decode_json_object_valid_test(ctx):
+    env = unittest.begin(ctx)
+    obj = decode_json_object_or_fail_for_tests(
+        "{\"data\": {\"attributes\": {\"marker\": \"ok\"}}}",
+        "settings.json",
+    )
+    asserts.equals(env, "dict", type(obj))
+    attrs = ((obj.get("data") or {}).get("attributes") or {})
+    asserts.equals(env, "ok", attrs.get("marker"))
+    return unittest.end(env)
+
+def _decode_json_object_empty_target_impl(_ctx):
+    decode_json_object_or_fail_for_tests("", "settings.json")
+    return []
+
+def _decode_json_object_non_json_target_impl(_ctx):
+    decode_json_object_or_fail_for_tests("NOT_JSON", "settings.json")
+    return []
+
+def _decode_json_object_array_target_impl(_ctx):
+    decode_json_object_or_fail_for_tests("[]", "settings.json")
+    return []
+
+decode_json_object_empty_target_rule = rule(
+    implementation = _decode_json_object_empty_target_impl,
+)
+decode_json_object_non_json_target_rule = rule(
+    implementation = _decode_json_object_non_json_target_impl,
+)
+decode_json_object_array_target_rule = rule(
+    implementation = _decode_json_object_array_target_impl,
+)
+
+def _decode_json_object_empty_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response is empty; expected JSON object")
+    return analysistest.end(env)
+
+def _decode_json_object_non_json_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response is not JSON")
+    return analysistest.end(env)
+
+def _decode_json_object_array_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response must be a JSON object")
+    return analysistest.end(env)
+
 dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
 resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
@@ -129,3 +178,16 @@ parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
+decode_json_object_valid_test = unittest.make(_decode_json_object_valid_test)
+decode_json_object_empty_failure_test = analysistest.make(
+    _decode_json_object_empty_failure_test_impl,
+    expect_failure = True,
+)
+decode_json_object_non_json_failure_test = analysistest.make(
+    _decode_json_object_non_json_failure_test_impl,
+    expect_failure = True,
+)
+decode_json_object_array_failure_test = analysistest.make(
+    _decode_json_object_array_failure_test_impl,
+    expect_failure = True,
+)

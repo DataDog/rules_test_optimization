@@ -970,8 +970,18 @@ if ! grep -q "topt_service 'missing_service' not found" "$MULTI_INVALID_LOG"; th
   cat "$MULTI_INVALID_LOG" || true
   exit 1
 fi
-if ! grep -q "Available: go_service, go_service_2" "$MULTI_INVALID_LOG"; then
-  echo "error: invalid-service scenario missing available service keys in message"
+if ! grep -q "Available:" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing available-services hint"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "go_service" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing go_service key in message"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "go_service_2" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing go_service_2 key in message"
   cat "$MULTI_INVALID_LOG" || true
   exit 1
 fi
