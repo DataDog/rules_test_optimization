@@ -1,5 +1,8 @@
 # Test Optimization Bazel support
 
+This document explains the current implementation architecture in this
+repository. For installation and day-to-day usage, start with `README.md`.
+
 ## Approach Overview
 
 The integration uses a Bazel module extension and repository rule to fetch Datadog Test Optimization metadata during module/repo resolution, and a workspace-level uploader (via `bazel run`) to ship payloads from hermetic test runs.
@@ -15,13 +18,13 @@ The steps are:
    Notes:
    - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; it is normalized to `https://api.<site>`.
    - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
-   POC: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
+   Reference implementation: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
 
 2. **Test instrumentation**:
    Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (e.g., through `TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to a writable path.
 
 3. **Payload reporting**:
-   A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`,`DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).
+   A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).
    Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status`
 
 4. **Language macros (optional)**:
@@ -31,7 +34,7 @@ The steps are:
 
 The `dd_topt_go_test` macro automatically selects the correct per‑module payloads by inferring the Go package `importpath` using `rules_go` providers, mirroring how `go_test` computes it.
 
-- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoLibrary` from `@rules_go//go/private:providers.bzl` via a Starlark aspect walking `embed`.
+- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoInfo` from `@rules_go//go/private:providers.bzl` via a Starlark aspect walking `embed`.
 - Precedence for determining importpath:
   1) `importpath` explicitly set on the `go_test` invocation (if provided via kwargs)
   2) Provider‑based inference via `embed`
@@ -40,7 +43,7 @@ The `dd_topt_go_test` macro automatically selects the correct per‑module paylo
   - When using (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if the module isn’t present.
   - When using (3), the macro consults `topt_data["go"]["module_included"]` as a coarse gate; if false, it uses the full bundle.
 
-Note: This repository declares a `bazel_dep("rules_go", "0.46.0")` to load provider definitions only. It does not configure any Go toolchains; consumers still set up `rules_go` and the Go SDK in their `MODULE.bazel`.
+Note: This repository declares a `bazel_dep("rules_go", "0.59.0")` to load provider definitions only. It does not configure any Go toolchains; consumers still set up `rules_go` and the Go SDK in their `MODULE.bazel`.
 
 ## Why a repository extension?
 
@@ -141,7 +144,7 @@ flowchart TD
 
   %% Upload step: bazel run after tests
   subgraph U[Upload via bazel run]
-    U1[Uploader rule]\n
+    U1[Uploader rule]
     U1 -->|enrich with| A3
     U1 -->|upload tests| G1{Agentless?\n DD_API_KEY}
     U1 -->|upload coverage| G1

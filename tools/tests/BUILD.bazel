@@ -2,6 +2,8 @@ load(
     "//tools/tests:test_common_utils.bzl",
     "dedup_keys_test",
     "sanitize_label_fragment_test",
+    "validate_api_key_normalization_test",
+    "validate_runtime_name_test",
     "validate_runtime_version_test",
     "validate_service_name_test",
 )
@@ -93,6 +95,18 @@ dedup_keys_test(
 
 validate_service_name_test(
     name = "validate_service_name_test",
+    size = "small",
+    timeout = "short",
+)
+
+validate_api_key_normalization_test(
+    name = "validate_api_key_normalization_test",
+    size = "small",
+    timeout = "short",
+)
+
+validate_runtime_name_test(
+    name = "validate_runtime_name_test",
     size = "small",
     timeout = "short",
 )
@@ -212,6 +226,8 @@ test_suite(
         ":sanitize_label_fragment_test",
         ":dedup_keys_test",
         ":validate_service_name_test",
+        ":validate_api_key_normalization_test",
+        ":validate_runtime_name_test",
         ":validate_runtime_version_test",
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",

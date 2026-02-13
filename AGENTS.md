@@ -10,10 +10,10 @@ The solution separates concerns into three phases:
 
 ## Documentation
 - Overview: see `docs/Initial_documentation.md` for how the solution works (architecture, data flow, and operational notes).
-- Problem statement & proposal: see `docs/RFC.md` for the background problem this solves, rationale, and the detailed design.
-- Implementation plan: see `docs/option2_implementation_plan.md` for the TEST_UNDECLARED_OUTPUTS_DIR approach.
+- Problem statement & proposal: see `docs/RFC.md` for background rationale and trade-offs (historical context).
+- Usage snippets: see `examples/README.md` for copy/paste single-service and multi-service examples.
 
-Agents: start with the Overview, then skim the RFC to understand constraints and goals before modifying code or rules.
+Agents: start with the Overview, then `README.md` for current operational behavior. Use the RFC when you need design rationale or trade-off context.
 
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources:
@@ -45,11 +45,8 @@ The sync rule creates `@test_optimization_data//` containing:
   ```bash
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
-  ./bazelw test //...
-
-  # Then upload via bazel run (preserving test exit code)
   ./bazelw test //... || test_status=$?; test_status=${test_status:-0}
-  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //:dd_upload_payloads
   exit $test_status
   ```
 - Force refetch of test optimization data:
@@ -73,7 +70,7 @@ The sync rule creates `@test_optimization_data//` containing:
 - Prefer `./bazelw test //...` for running tests.
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
-- Use `bazel run //:dd_upload_payloads` after tests complete to upload payloads.
+- Use `./bazelw run //:dd_upload_payloads` after tests complete to upload payloads.
 - For Go, use `dd_topt_go_test` to set up the test with correct environment variables.
 - Create ONE uploader target per workspace at the root BUILD.bazel.
 
@@ -116,5 +113,6 @@ Note: This repository declares a `bazel_dep` on `rules_go` to load provider defi
 ## Security & Configuration Tips
 - Never write secrets to disk. Pass `DD_API_KEY`, `DD_SITE` via environment when running the uploader.
 - `context.json` is non‑secret; include it via `@<repo>//:test_optimization_context` in the uploader's data.
+- If CODEOWNERS auto-discovery is not reliable in your environment, set `DD_TOPT_CODEOWNERS_FILE` explicitly to a checked-in CODEOWNERS path.
 - Agentless uploads require `DD_API_KEY` and `DD_SITE`; EVP proxy requires `DD_TRACE_AGENT_URL` (EVP headers handled by the rule).
-- Uploader credentials are passed at runtime: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads`
+- Uploader credentials are passed at runtime: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //:dd_upload_payloads`

@@ -12,7 +12,41 @@ This file defines:
   `known_tests_enabled = true`, writing `known_tests_file`. If disabled, an
   empty JSON stub for known tests is still written so downstream consumers
   can always depend on the declared outputs.
+
+Repository-rule execution model:
+- This code runs during Bazel repository/module resolution, not test runtime.
+- It must therefore be deterministic given the declared `environ` inputs and
+  repository attributes.
+- Network and host-tool access happen here so test actions can remain hermetic.
+
+High-level data flow:
+1) Resolve env/context metadata (CI + Git + runtime hints)
+2) Fetch settings JSON
+3) Optionally fetch known-tests and test-management JSON
+4) Split module payloads into stable per-module bundles
+5) Generate BUILD/export/context/manifest outputs for consumers
+
+Important invariants:
+- Secrets are never written to generated files (API key is used only in-memory
+  for requests).
+- Public label names are stable (`test_optimization_files`,
+  `test_optimization_context`, `module_<sanitized>`).
+- Output JSONs are generated in deterministic key/order-sensitive paths to keep
+  cache behavior predictable.
+
+Troubleshooting guidance for maintainers:
+- Failures in this file are often due to environment/configuration drift
+  (missing `DD_API_KEY`, wrong `DD_SITE`, stale refs) rather than logic bugs.
+- Keep `fail(...)` messages explicit and user-actionable.
 """
+
+# Developer map (quick navigation):
+# - Filesystem helpers: `_ensure_parent_directory`, `_dirname`, `_try_read_abs_file`
+# - Go/rules metadata helpers: `_detect_go_module_path`, `_build_context_tags`
+# - HTTP helpers: `_http_request`, `_http_post_json`
+# - API calls: `_perform_dd_settings_request`, `_perform_dd_known_tests_request`,
+#              `_perform_dd_test_management_tests_request`
+# - Repository entrypoint: `_impl`
 
 load(
     "//tools:common_utils.bzl",
@@ -21,6 +55,7 @@ load(
     "log_info",
     "sanitize_label_fragment",
     "validate_api_key",
+    "validate_runtime_name",
     "validate_runtime_version",
     "validate_service_name",
 )
@@ -528,6 +563,23 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     # - On Windows: uses PowerShell Invoke-WebRequest for portability.
     # - On Linux/macOS: uses curl with retries.
     # - Returns tool exit code (0=success) and prints HTTP status code to stdout when possible.
+    #
+    # Why this helper exists:
+    # - repository_ctx has no native HTTP primitive with consistent behavior
+    #   across all host platforms we support.
+    # - We centralize retry/timeouts/error formatting here so callers can focus
+    #   on request construction and response handling.
+    #
+    # Error-handling contract:
+    # - Any non-zero tool return code triggers `fail(...)` with a message that
+    #   includes method, URL, return code, response path, and request body
+    #   context when available.
+    # - Request-body text is appended as a plain `%s` argument to avoid format
+    #   string hazards when payloads contain `%` characters.
+    #
+    # Security contract:
+    # - Never print secrets directly. Headers are passed by callers; this
+    #   function should only log method/URL and coarse status details.
     # Ensure output directory exists if a subdirectory is provided
     _ensure_parent_directory(ctx, out_file, debug)
 
@@ -607,12 +659,9 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
 
     # Branch: network error or tool failure
     if result.return_code != 0:
+        request_body = request_debug_payload if request_debug_payload else "<none>"
         fail(
-            (
-                "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\n" +
-                "response_file=%s\n" +
-                ("request_body=%s" % request_debug_payload if request_debug_payload else "request_body=<none>")
-            ) %
+            "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\nresponse_file=%s\nrequest_body=%s" %
             (
                 http_status,
                 http_method,
@@ -620,6 +669,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
                 result.return_code,
                 (result.stderr or "").strip(),
                 out_file,
+                request_body,
             ),
         )
     else:
@@ -851,8 +901,11 @@ def _collect_env(ctx):
 def _build_configurations_json(ctx, debug):
     # _build_configurations_json: builds a testConfigurations structure with
     # auto-detected os.* fields plus simple runtime fields.
+    #
+    # Note: runtime name and runtime version have different semantics. Keep
+    # dedicated validators so future constraints can evolve independently.
     osinfo = _detect_os_info(ctx, debug)
-    runtime_name = validate_runtime_version(ctx.attr.runtime_name, debug) or "unknown"
+    runtime_name = validate_runtime_name(ctx.attr.runtime_name, debug) or "unknown"
     runtime_version = validate_runtime_version(ctx.attr.runtime_version, debug) or "unknown"
     runtime_arch = ctx.attr.runtime_arch or osinfo["arch"]
     
@@ -1225,6 +1278,14 @@ def _impl(ctx):
     # 4) Parse settings to read data.attributes.known_tests_enabled
     # 5) If enabled, POST Known Tests and write `known_tests_file` (known_tests.json); else write an empty stub
     # 6) Emit a BUILD file exporting both outputs
+    #
+    # Implementation notes for maintainers:
+    # - Keep this function mostly orchestration; move reusable logic into
+    #   helpers so tests can target behavior in isolation.
+    # - Any new environment-driven behavior must be declared in `environ`
+    #   on the repository_rule to keep Bazel cache keys correct.
+    # - When adding new generated files, preserve deterministic ordering and
+    #   stable public labels to avoid downstream breakage.
     debug = ctx.attr.debug
     log_info("Starting repository rule implementation")
     ctx.report_progress("test_optimization_sync: starting")
@@ -1232,7 +1293,7 @@ def _impl(ctx):
     # Validate DD_API_KEY from the environment; fail with helpful message if missing
     api_key = ctx.os.environ.get("DD_API_KEY")
     log_debug(debug, "validation", "DD_API_KEY present: %s" % bool(api_key))
-    validate_api_key(api_key)
+    api_key = validate_api_key(api_key)
 
     # Emit salt info if present to trace cache-busting input
     salt = ctx.os.environ.get("FETCH_SALT")

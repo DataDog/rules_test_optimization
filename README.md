@@ -1,6 +1,13 @@
 # Datadog Test Optimization Bazel Module Extension
 
-This repository provides a Bazel module extension and repository rule that fetch Datadog Test Optimization metadata during the module resolution phase and materialize JSON files for use in your build. It also generates a public filegroup so you can conveniently depend on all produced files with a single label.
+This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
+
+## Documentation map
+
+- `README.md` (this file): setup, usage, runtime behavior, and troubleshooting
+- `docs/Initial_documentation.md`: architecture and data-flow deep dive
+- `docs/RFC.md`: design rationale, trade-offs, and historical proposal context
+- `examples/README.md`: copy/paste snippets for single-service and multi-service setup
 
 ## Requirements
 
@@ -16,7 +23,7 @@ Optional tooling:
 - **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
 - **python3** - Used for uploader payload schema validation. If missing, uploads proceed without schema validation.
 
-The extension performs these HTTP POST transactions (via curl):
+The extension performs these HTTP POST transactions (via host HTTP tooling: curl on Unix/macOS, PowerShell on Windows):
 
 - Settings: always executed. Parses feature flags from response.
 - Known Tests: executed only when `known_tests_enabled: true` in Settings.
@@ -287,7 +294,6 @@ test --test_env=DD_API_KEY
 test --test_env=DD_SITE
 test --test_env=DD_TRACE_AGENT_URL
 test --test_env=DD_TOPT_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
-test --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR
 ```
 
 ## Uploading test and coverage payloads
@@ -374,6 +380,7 @@ bazel run //:dd_upload_payloads
 | `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
 | `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TOPT_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
+| `DD_TOPT_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
 
 ### Endpoints and headers

@@ -6,6 +6,10 @@ Status: Draft
 
 This document outlines a proposed method for integrating Datadog Test Optimization with Bazel. The approach involves using a module extension and repository rule to gather metadata during module/repository resolution, and a runtime uploader to transmit test and coverage data back to the backend. The document details the rationale behind this design, current behaviors, limitations, and a strategy for widespread adoption across various services and programming languages.
 
+Note: this RFC is primarily design rationale and historical context. For
+current implementation details and operational guidance, use `README.md` and
+`docs/Initial_documentation.md`.
+
 ## Bazel 101
 
 This section provides a short overview of Bazel concepts that are relevant to the proposal. It is not intended as a full introduction to Bazel, but rather a quick reference for terms used throughout this document.
@@ -42,7 +46,7 @@ Bazel allows passing environment variables into repository rules (--repo\_env) a
 
 ### Sandbox Writable Paths
 
-By default, Bazel sandboxes are read-only. Specific directories can be marked writable via \--sandbox\_writable\_path, allowing tests to produce artifacts such as logs.
+By default, Bazel sandboxes are read-only. Specific directories can be marked writable via \--sandbox\_writable\_path, allowing tests to produce artifacts such as logs. The implementation in this repository does not require this for payload writing because it uses `TEST_UNDECLARED_OUTPUTS_DIR`.
 
 ### BEP, BES, and BSP
 
@@ -293,7 +297,7 @@ Platform and Tooling
 - Bazel spawn strategy wrappers or custom test runners: intrusive and language‑specific; increases maintenance burden.  
 - BES (Build Event Service) post‑processing: could be implemented for the uploader but requires more research time.  
 - Repository rule without per‑module splitting: simpler, but causes wider cache invalidations across large monorepos.
- - Macro‑only Go inference: macros cannot read providers in Bazel; a real rule + aspect is required to access `GoArchive.importpath` and follow `embed` dependencies during analysis while keeping BUILD usage simple.
+- Macro‑only Go inference: macros cannot read providers in Bazel; a real rule + aspect is required to access `GoArchive.importpath` and follow `embed` dependencies during analysis while keeping BUILD usage simple.
 
 ## Future Work
 
