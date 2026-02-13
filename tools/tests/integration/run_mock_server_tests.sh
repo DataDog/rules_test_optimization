@@ -1658,10 +1658,14 @@ if [[ -z "$CONTEXT_JSON_RLOC_MANIFEST" ]]; then
   exit 1
 fi
 MANIFEST_UPLOADER_CMD=()
+MANIFEST_UPLOADER_FOR_CMD="$MANIFEST_UPLOADER"
 if [[ "$MANIFEST_UPLOADER_KIND" == "bash" ]]; then
   MANIFEST_UPLOADER_CMD=("$MANIFEST_UPLOADER")
 else
-  MANIFEST_UPLOADER_CMD=(pwsh -NoLogo -NoProfile -File "$MANIFEST_UPLOADER")
+  if command -v cygpath >/dev/null 2>&1; then
+    MANIFEST_UPLOADER_FOR_CMD="$(cygpath -m "$MANIFEST_UPLOADER" 2>/dev/null || echo "$MANIFEST_UPLOADER")"
+  fi
+  MANIFEST_UPLOADER_CMD=(pwsh -NoLogo -NoProfile -File "$MANIFEST_UPLOADER_FOR_CMD")
 fi
 
 CONTEXT_CQUERY=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_context --output=files \
@@ -1685,6 +1689,12 @@ if [[ ! -f "$CONTEXT_JSON_REAL_PATH" ]]; then
   echo "error: context.json not found for manifest fallback checks: $CONTEXT_JSON_REAL_PATH"
   echo "$CONTEXT_CQUERY"
   exit 1
+fi
+CONTEXT_JSON_REAL_PATH_MANIFEST="$CONTEXT_JSON_REAL_PATH"
+TESTLOGS_DIR_FOR_MANIFEST="$TESTLOGS_DIR"
+if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]] && command -v cygpath >/dev/null 2>&1; then
+  CONTEXT_JSON_REAL_PATH_MANIFEST="$(cygpath -m "$CONTEXT_JSON_REAL_PATH" 2>/dev/null || echo "$CONTEXT_JSON_REAL_PATH")"
+  TESTLOGS_DIR_FOR_MANIFEST="$(cygpath -m "$TESTLOGS_DIR" 2>/dev/null || echo "$TESTLOGS_DIR")"
 fi
 
 write_manifest_payload() {
@@ -1717,18 +1727,23 @@ JSON_EOF
 
 MANIFEST_EXACT="$TMP_WS/runfiles_exact.manifest"
 BOM=$'\xef\xbb\xbf'
-printf '%s%s\t%s\n' "$BOM" "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH" > "$MANIFEST_EXACT"
+printf '%s%s\t%s\n' "$BOM" "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH_MANIFEST" > "$MANIFEST_EXACT"
+MANIFEST_EXACT_FOR_UPLOADER="$MANIFEST_EXACT"
+if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]] && command -v cygpath >/dev/null 2>&1; then
+  MANIFEST_EXACT_FOR_UPLOADER="$(cygpath -m "$MANIFEST_EXACT" 2>/dev/null || echo "$MANIFEST_EXACT")"
+fi
 MANIFEST_EXACT_OUT="$TESTLOGS_DIR/manual_manifest_exact/test.outputs"
 write_manifest_payload "$MANIFEST_EXACT_OUT" "Manual.ManifestExactTabBom"
 
 UPLOADER_MANIFEST_EXACT_LOG="$TMP_WS/uploader_manifest_exact.log"
-if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+if ! TESTLOGS_DIR="$TESTLOGS_DIR_FOR_MANIFEST" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
-RUNFILES_MANIFEST_FILE="$MANIFEST_EXACT" \
+RUNFILES_MANIFEST_FILE="$MANIFEST_EXACT_FOR_UPLOADER" \
 RUNFILES_DIR= \
 DD_API_KEY=mock \
 DD_TOPT_KEEP_PAYLOADS=0 \
+DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
 DD_TOPT_MAX_WAIT_SEC=30 \
 DD_TOPT_QUIESCENT_SEC=1 \
@@ -1740,18 +1755,23 @@ DD_TRACE_AGENT_URL= \
 fi
 
 MANIFEST_SUFFIX="$TMP_WS/runfiles_suffix.manifest"
-printf 'repo-prefix/%s %s\n' "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH" > "$MANIFEST_SUFFIX"
+printf 'repo-prefix/%s %s\n' "$CONTEXT_JSON_RLOC_MANIFEST" "$CONTEXT_JSON_REAL_PATH_MANIFEST" > "$MANIFEST_SUFFIX"
+MANIFEST_SUFFIX_FOR_UPLOADER="$MANIFEST_SUFFIX"
+if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]] && command -v cygpath >/dev/null 2>&1; then
+  MANIFEST_SUFFIX_FOR_UPLOADER="$(cygpath -m "$MANIFEST_SUFFIX" 2>/dev/null || echo "$MANIFEST_SUFFIX")"
+fi
 MANIFEST_SUFFIX_OUT="$TESTLOGS_DIR/manual_manifest_suffix/test.outputs"
 write_manifest_payload "$MANIFEST_SUFFIX_OUT" "Manual.ManifestSuffixKey"
 
 UPLOADER_MANIFEST_SUFFIX_LOG="$TMP_WS/uploader_manifest_suffix.log"
-if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+if ! TESTLOGS_DIR="$TESTLOGS_DIR_FOR_MANIFEST" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
-RUNFILES_MANIFEST_FILE="$MANIFEST_SUFFIX" \
+RUNFILES_MANIFEST_FILE="$MANIFEST_SUFFIX_FOR_UPLOADER" \
 RUNFILES_DIR= \
 DD_API_KEY=mock \
 DD_TOPT_KEEP_PAYLOADS=0 \
+DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
 DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
 DD_TOPT_MAX_WAIT_SEC=30 \
 DD_TOPT_QUIESCENT_SEC=1 \
@@ -1762,6 +1782,8 @@ DD_TRACE_AGENT_URL= \
   exit 1
 fi
 
+UPLOADER_MANIFEST_EXACT_LOG="$UPLOADER_MANIFEST_EXACT_LOG" \
+UPLOADER_MANIFEST_SUFFIX_LOG="$UPLOADER_MANIFEST_SUFFIX_LOG" \
 "$PYTHON" - <<'PY'
 import base64
 import json
@@ -1785,6 +1807,24 @@ def owners_for(meta):
         return json.loads(raw)
     except Exception:
         return "__invalid__"
+
+def print_manifest_logs():
+    for label, env_key in (
+        ("exact", "UPLOADER_MANIFEST_EXACT_LOG"),
+        ("suffix", "UPLOADER_MANIFEST_SUFFIX_LOG"),
+    ):
+        path = os.environ.get(env_key)
+        if not path:
+            continue
+        if not os.path.exists(path):
+            print(f"debug: {label} manifest uploader log missing at {path}")
+            continue
+        print(f"debug: {label} manifest uploader log tail follows")
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+        for line in lines[-120:]:
+            print(line.rstrip("\n"))
+        print(f"debug: end {label} manifest uploader log tail")
 
 def assert_manifest_resource(resource):
     payload = None
@@ -1817,9 +1857,11 @@ def assert_manifest_resource(resource):
     for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
         if key not in meta:
             print(f"error: manifest fallback run missing context tag {key} for {resource}")
+            print_manifest_logs()
             sys.exit(1)
     if owners_for(meta) != ["@org/owned"]:
         print(f"error: manifest fallback run missing expected CODEOWNERS for {resource}")
+        print_manifest_logs()
         sys.exit(1)
 
 assert_manifest_resource("Manual.ManifestExactTabBom")
