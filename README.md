@@ -369,7 +369,7 @@ bazel run //:dd_upload_payloads
 |----------|---------|---------|
 | `DD_TOPT_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
 | `DD_TOPT_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
-| `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats) |
+| `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
 | `DD_TOPT_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
 | `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
 | `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
@@ -401,6 +401,11 @@ bazel run //:dd_upload_payloads
 - If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
 - The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
 - Bazel rule identity is included as stable tags: `test.bazel.rule_name` and `test.bazel.rule_version`.
+- `test`, `test_suite_end`, `test_module_end`, and `test_session_end` events are also enriched with `test.codeowners` when a source file can be resolved, owners are found, and the field is not already present.
+- CODEOWNERS lookup order is: `<ci.workspace_path>/CODEOWNERS`, `<ci.workspace_path>/.github/CODEOWNERS`, `<ci.workspace_path>/.gitlab/CODEOWNERS`, `<ci.workspace_path>/docs/CODEOWNERS`, `<ci.workspace_path>/.docs/CODEOWNERS`, then `<workspace>/...` equivalents, then `./CODEOWNERS`, and finally `<script_dir>/CODEOWNERS`.
+- Matching uses GitHub-style glob semantics with "last matching rule wins". The stored value is a JSON-array string (for example: `["@team/a","@team/b"]` as string content in `test.codeowners`).
+- Absolute source paths outside repository-derived roots are ignored for CODEOWNERS fallback matching.
+- CODEOWNERS enrichment is best-effort: parse/lookup failures and misses do not fail uploads; debug mode logs counters and skip reasons.
 
 ### Payload schema validation (best effort)
 
@@ -758,10 +763,27 @@ For a full end-to-end flow (sync + uploader) without hitting Datadog, run:
 tools/tests/integration/run_mock_server_tests.sh
 ```
 
+On Windows, use the PowerShell entrypoint (or the `cmd.exe` wrapper):
+
+```powershell
+.\tools\tests\integration\run_mock_server_tests.ps1
+```
+
+```bat
+tools\tests\integration\run_mock_server_tests.cmd
+```
+
+The Windows PowerShell entrypoint reuses the same Bash harness for parity and
+prefers Git for Windows `bash.exe` (or `DD_TOPT_GIT_BASH` when set).
+
 This starts a local mock HTTP server and uses the following test-only overrides:
 
 - `DD_TOPT_API_BASE` to redirect sync requests
 - `DD_TOPT_INTAKE_BASE` to redirect uploader requests (agentless only)
+- The harness asserts CODEOWNERS enrichment/preservation and runfile manifest
+  fallback behavior (including BOM/tab exact keys and suffix-key resolution).
+- On assertion failures, it prints focused uploader diagnostics plus manifest
+  uploader log tails to speed up cross-platform triage.
 
 ## Schema sync helper
 

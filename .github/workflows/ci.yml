@@ -23,7 +23,13 @@ jobs:
         run: ./bazelw test //tools/...
 
       # Exercises the uploader end-to-end against a local mock server.
-      - name: Run mock server integration tests
+      - name: Run mock server integration tests (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: tools/tests/integration/run_mock_server_tests.sh
+
+      # Runs the same integration harness on Windows.
+      - name: Run mock server integration tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/tests/integration/run_mock_server_tests.ps1

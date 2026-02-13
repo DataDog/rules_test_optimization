@@ -50,6 +50,374 @@ def _bool_to_str(value):
 # Public alias for tests (avoid importing private symbols)
 render_template_for_tests = _render_template
 
+def _codeowners_glob_to_regex_for_tests(pattern):
+    out = []
+    plen = len(pattern)
+    skip = {}
+    for i in range(plen):
+        if skip.get(i):
+            continue
+        ch = pattern[i]
+        if ch == "\\":
+            if i + 1 < plen:
+                esc = pattern[i + 1]
+                if esc in [".", "+", "(", ")", "{", "}", "^", "$", "|", "\\", "[", "]", "*", "?"]:
+                    out.append("\\" + esc)
+                else:
+                    out.append(esc)
+                skip[i + 1] = True
+            else:
+                out.append("\\\\")
+            continue
+        if ch == "*" and i + 1 < plen and pattern[i + 1] == "*":
+            if i + 2 < plen and pattern[i + 2] == "/":
+                # `**/` matches zero or more directories.
+                out.append("(.*/)?")
+                skip[i + 1] = True
+                skip[i + 2] = True
+            else:
+                out.append(".*")
+                skip[i + 1] = True
+            continue
+        if ch == "[":
+            j = i + 1
+            class_parts = []
+            if j < plen and pattern[j] == "!":
+                class_parts.append("^")
+                j += 1
+            elif j < plen and pattern[j] == "^":
+                class_parts.append("\\^")
+                j += 1
+            if j < plen and pattern[j] == "]":
+                class_parts.append("\\]")
+                j += 1
+
+            closed_at = -1
+            for k in range(j, plen):
+                class_ch = pattern[k]
+                if class_ch == "]":
+                    closed_at = k
+                    break
+                if class_ch == "\\":
+                    class_parts.append("\\\\")
+                elif class_ch == "^":
+                    class_parts.append("\\^")
+                elif class_ch == "[":
+                    class_parts.append("\\[")
+                else:
+                    class_parts.append(class_ch)
+
+            if closed_at >= 0:
+                out.append("[" + "".join(class_parts) + "]")
+                for k in range(i + 1, closed_at + 1):
+                    skip[k] = True
+                continue
+            out.append("\\[")
+            continue
+        if ch == "*":
+            out.append("[^/]*")
+        elif ch == "?":
+            out.append("[^/]")
+        elif ch in [".", "+", "(", ")", "{", "}", "^", "$", "|", "\\", "]"]:
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+def _compile_codeowners_regex_for_tests(pattern):
+    anchored = pattern.startswith("/")
+    dir_only = pattern.endswith("/")
+    if anchored:
+        pattern = pattern[1:]
+    if dir_only:
+        pattern = pattern[:-1]
+    if not pattern:
+        return ""
+
+    has_slash = "/" in pattern
+    body = _codeowners_glob_to_regex_for_tests(pattern)
+    prefix = "^" if (anchored or has_slash) else "(^|.*/)"
+    suffix = "/.*$" if dir_only else "($|/.*)"
+    return prefix + body + suffix
+
+def _build_codeowners_lookup_order_for_tests(context_workspace, workspace_root, script_dir):
+    candidates = []
+    if context_workspace:
+        candidates.extend([
+            context_workspace + "/CODEOWNERS",
+            context_workspace + "/.github/CODEOWNERS",
+            context_workspace + "/.gitlab/CODEOWNERS",
+            context_workspace + "/docs/CODEOWNERS",
+            context_workspace + "/.docs/CODEOWNERS",
+        ])
+    if workspace_root:
+        candidates.extend([
+            workspace_root + "/CODEOWNERS",
+            workspace_root + "/.github/CODEOWNERS",
+            workspace_root + "/.gitlab/CODEOWNERS",
+            workspace_root + "/docs/CODEOWNERS",
+            workspace_root + "/.docs/CODEOWNERS",
+        ])
+    candidates.append("./CODEOWNERS")
+    candidates.append((script_dir + "/CODEOWNERS") if script_dir else "CODEOWNERS")
+    return candidates
+
+def _is_ascii_whitespace_for_tests(ch):
+    return ch in [" ", "\t", "\n", "\r", "\f", "\v"]
+
+def _is_alnum_for_tests(ch):
+    return (ch in "abcdefghijklmnopqrstuvwxyz") or (ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") or (ch in "0123456789")
+
+def _is_lower_or_digit_for_tests(ch):
+    return (ch in "abcdefghijklmnopqrstuvwxyz") or (ch in "0123456789")
+
+def _is_gitlab_section_header_pattern_for_tests(pattern):
+    if not pattern or not pattern.startswith("[") or not pattern.endswith("]"):
+        return False
+    inner = pattern[1:-1]
+    if not inner or ("[" in inner) or ("]" in inner):
+        return False
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if _is_ascii_whitespace_for_tests(ch):
+            return True
+    if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
+        return False
+    # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+    all_upper_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not ((ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") or (ch in "0123456789")):
+            all_upper_or_digit = False
+            break
+    if all_upper_or_digit:
+        return False
+    # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
+    if len(inner) <= 3:
+        all_alnum = True
+        for i in range(len(inner)):
+            ch = inner[i:i + 1]
+            if not _is_alnum_for_tests(ch):
+                all_alnum = False
+                break
+        if all_alnum:
+            return False
+    # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
+    all_lower_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not _is_lower_or_digit_for_tests(ch):
+            all_lower_or_digit = False
+            break
+    if all_lower_or_digit:
+        return False
+    return True
+
+def _is_gitlab_section_header_line_for_tests(line):
+    if not line or not line.startswith("["):
+        return False
+    close_idx = line.find("]")
+    if close_idx <= 0:
+        return False
+    pattern = line[:close_idx + 1]
+    rest = line[close_idx + 1:]
+    if rest and not _is_ascii_whitespace_for_tests(rest[0]):
+        return False
+    return _is_gitlab_section_header_pattern_for_tests(pattern)
+
+def _skip_derived_source_candidate_for_tests(candidate):
+    if not candidate:
+        return False
+    main_external_prefix = "_main/" + "external/"
+    return candidate.startswith("external/") or candidate.startswith(main_external_prefix)
+
+def _is_gitlab_section_header_pattern_powershell_for_tests(pattern):
+    if not pattern or not pattern.startswith("[") or not pattern.endswith("]"):
+        return False
+    inner = pattern[1:-1]
+    if not inner or ("[" in inner) or ("]" in inner):
+        return False
+    # Keep PowerShell behavior aligned with script implementation: section
+    # headers are detected via space/tab within bracket content.
+    if (" " in inner) or ("\t" in inner):
+        return True
+    if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
+        return False
+    # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+    all_upper_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not ((ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") or (ch in "0123456789")):
+            all_upper_or_digit = False
+            break
+    if all_upper_or_digit:
+        return False
+    if len(inner) <= 3:
+        all_alnum = True
+        for i in range(len(inner)):
+            ch = inner[i:i + 1]
+            if not _is_alnum_for_tests(ch):
+                all_alnum = False
+                break
+        if all_alnum:
+            return False
+    all_lower_or_digit = True
+    for i in range(len(inner)):
+        ch = inner[i:i + 1]
+        if not _is_lower_or_digit_for_tests(ch):
+            all_lower_or_digit = False
+            break
+    if all_lower_or_digit:
+        return False
+    return True
+
+def _strip_workspace_prefix_bash_for_tests(path_norm, root_norm):
+    if not path_norm or not root_norm:
+        return None
+    if path_norm == root_norm:
+        return ""
+    prefix = root_norm + "/"
+    if path_norm.startswith(prefix):
+        return path_norm[len(prefix):]
+    return None
+
+def _strip_workspace_prefix_powershell_for_tests(path_norm, root_norm, is_windows):
+    if not path_norm or not root_norm:
+        return None
+    path_cmp = path_norm.lower() if is_windows else path_norm
+    root_cmp = root_norm.lower() if is_windows else root_norm
+    if path_cmp == root_cmp:
+        return ""
+    root_prefix = root_cmp + "/"
+    if path_cmp.startswith(root_prefix):
+        return path_norm[len(root_norm) + 1:]
+    return None
+
+def _first_ascii_whitespace_index_for_tests(value):
+    for i in range(len(value)):
+        if _is_ascii_whitespace_for_tests(value[i:i + 1]):
+            return i
+    return -1
+
+def _first_space_or_tab_index_for_tests(value):
+    for i in range(len(value)):
+        ch = value[i:i + 1]
+        if ch == " " or ch == "\t":
+            return i
+    return -1
+
+def _list_contains_for_tests(items, value):
+    for item in items:
+        if item == value:
+            return True
+    return False
+
+def _trim_ascii_whitespace_for_tests(value):
+    if not value:
+        return ""
+    start = 0
+    found_start = False
+    for i in range(len(value)):
+        if not _is_ascii_whitespace_for_tests(value[i:i + 1]):
+            start = i
+            found_start = True
+            break
+    if not found_start:
+        return ""
+    end = len(value)
+    for i in range(len(value)):
+        idx = len(value) - 1 - i
+        if not _is_ascii_whitespace_for_tests(value[idx:idx + 1]):
+            end = idx + 1
+            break
+    if end <= start:
+        return ""
+    return value[start:end]
+
+def _strip_bom_prefix_for_tests(value):
+    # Tests use an ASCII marker to represent UTF-8 BOM-prefixed manifest keys.
+    bom_marker = "\\ufeff"
+    if value.startswith(bom_marker):
+        return value[len(bom_marker):]
+    return value
+
+def _resolve_runfile_manifest_bash_for_tests(manifest_lines, key, existing_paths):
+    for idx in range(len(manifest_lines)):
+        line = manifest_lines[idx]
+        sep_idx = _first_ascii_whitespace_index_for_tests(line)
+        if sep_idx <= 0:
+            continue
+        line_key = line[:sep_idx]
+        if idx == 0:
+            line_key = _strip_bom_prefix_for_tests(line_key)
+        if line_key != key:
+            continue
+        path = _trim_ascii_whitespace_for_tests(line[sep_idx + 1:])
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+
+    for idx in range(len(manifest_lines)):
+        line = manifest_lines[idx]
+        sep_idx = _first_ascii_whitespace_index_for_tests(line)
+        if sep_idx <= 0:
+            continue
+        line_key = line[:sep_idx]
+        if idx == 0:
+            line_key = _strip_bom_prefix_for_tests(line_key)
+        if len(line_key) <= len(key):
+            continue
+        if not line_key.endswith(key):
+            continue
+        sep_pos = len(line_key) - len(key) - 1
+        sep = line_key[sep_pos:sep_pos + 1]
+        if sep != "/" and sep != "\\":
+            continue
+        path = _trim_ascii_whitespace_for_tests(line[sep_idx + 1:])
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+    return ""
+
+def _resolve_runfile_manifest_powershell_for_tests(manifest_lines, key, existing_paths):
+    for line in manifest_lines:
+        line_norm = _strip_bom_prefix_for_tests(line)
+        if len(line_norm) <= len(key):
+            continue
+        if not line_norm.startswith(key):
+            continue
+        sep = line_norm[len(key):len(key) + 1]
+        if sep != " " and sep != "\t":
+            continue
+        path = _trim_ascii_whitespace_for_tests(line_norm[len(key) + 1:])
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+
+    for line in manifest_lines:
+        line_norm = _strip_bom_prefix_for_tests(line)
+        split_idx = _first_space_or_tab_index_for_tests(line_norm)
+        if split_idx <= 0:
+            continue
+        line_key = line_norm[:split_idx]
+        if len(line_key) <= len(key):
+            continue
+        if not line_key.endswith("/" + key) and not line_key.endswith("\\" + key):
+            continue
+        path = _trim_ascii_whitespace_for_tests(line_norm[split_idx + 1:])
+        if _list_contains_for_tests(existing_paths, path):
+            return path
+    return ""
+
+glob_to_regex_for_tests = _codeowners_glob_to_regex_for_tests
+compile_codeowners_regex_for_tests = _compile_codeowners_regex_for_tests
+build_codeowners_lookup_order_for_tests = _build_codeowners_lookup_order_for_tests
+is_gitlab_section_header_pattern_for_tests = _is_gitlab_section_header_pattern_for_tests
+is_gitlab_section_header_line_for_tests = _is_gitlab_section_header_line_for_tests
+skip_derived_source_candidate_for_tests = _skip_derived_source_candidate_for_tests
+is_gitlab_section_header_pattern_powershell_for_tests = _is_gitlab_section_header_pattern_powershell_for_tests
+strip_workspace_prefix_bash_for_tests = _strip_workspace_prefix_bash_for_tests
+strip_workspace_prefix_powershell_for_tests = _strip_workspace_prefix_powershell_for_tests
+resolve_runfile_manifest_bash_for_tests = _resolve_runfile_manifest_bash_for_tests
+resolve_runfile_manifest_powershell_for_tests = _resolve_runfile_manifest_powershell_for_tests
+
 def _uploader_impl(ctx):
     quiescent_sec = ctx.attr.quiescent_sec
     max_wait_sec = ctx.attr.max_wait_sec
@@ -129,6 +497,13 @@ dbg() {{
 }}
 dbg "startup runfiles env: RUNFILES_DIR='${{RUNFILES_DIR:-<unset>}}' RUNFILES_MANIFEST_FILE='${{RUNFILES_MANIFEST_FILE:-<unset>}}' script='$0'"
 
+trim_ascii_whitespace() {{
+    local value="$1"
+    value="${{value#"${{value%%[!$' \t\r\n']*}}"}}"
+    value="${{value%"${{value##*[!$' \t\r\n']}}"}}"
+    printf '%s\n' "$value"
+}}
+
 # Resolve runfile path for context.json lookup
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 resolve_runfile() {{
@@ -139,6 +514,14 @@ resolve_runfile() {{
     while [[ "$rloc" == ../* ]]; do
         rloc="${rloc#../}"
     done
+    # Defensive guard: runfile labels must remain repository-relative.
+    # We intentionally reject absolute paths and parent traversal segments so
+    # runfile resolution cannot escape the runfiles tree.
+    if [[ -z "$rloc" || "$rloc" == /* || "$rloc" =~ ^[A-Za-z]:/ || "$rloc" == ".." || "$rloc" == */.. || "$rloc" == */../* ]]; then
+        dbg "resolve_runfile: rejected suspicious runfile label '$input_rloc' (normalized='$rloc')"
+        echo ""
+        return
+    fi
     local candidates=("$rloc")
     if [[ "$rloc" == external/* ]]; then
         candidates+=("${rloc#external/}")
@@ -190,8 +573,24 @@ resolve_runfile() {{
         # Try RUNFILES_MANIFEST_FILE (Windows/manifest-only)
         if [[ -n "$manifest_file" && -f "$manifest_file" ]]; then
             local path
-            # Use awk with substr() for regex-free extraction (handles metacharacters in paths)
-            path=$(awk -v key="$cand" '$1 == key {{ print substr($0, length(key)+2); exit }}' "$manifest_file")
+            # Use awk + substr() for regex-free extraction, so candidate labels
+            # containing regex metacharacters are treated as plain text.
+            # We also strip a UTF-8 BOM from the first manifest key for parity
+            # with PowerShell and editors/tools that emit BOM-prefixed files.
+            path=$(awk -v key="$cand" '
+                BEGIN {{ bom = sprintf("%c%c%c", 239, 187, 191) }}
+                {{
+                    k = $1
+                    if (NR == 1 && index(k, bom) == 1) {{
+                        k = substr(k, 4)
+                    }}
+                    if (k == key) {{
+                        print substr($0, length($1) + 2)
+                        exit
+                    }}
+                }}
+            ' "$manifest_file")
+            path=$(trim_ascii_whitespace "$path")
             if [[ -n "$path" ]]; then
                 if [[ -f "$path" ]]; then
                     dbg "resolve_runfile: hit manifest exact key '$cand' -> '$path'"
@@ -203,17 +602,22 @@ resolve_runfile() {{
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
             # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
             path=$(awk -v key="$cand" '
+                BEGIN {{ bom = sprintf("%c%c%c", 239, 187, 191) }}
                 {{
                     k = $1
+                    if (NR == 1 && index(k, bom) == 1) {{
+                        k = substr(k, 4)
+                    }}
                     if (length(k) > length(key) && substr(k, length(k) - length(key) + 1) == key) {{
                         sep = substr(k, length(k) - length(key), 1)
                         if (sep == "/" || sep == "\\\\") {{
-                            print substr($0, length(k) + 2)
+                            print substr($0, length($1) + 2)
                             exit
                         }}
                     }}
                 }}
             ' "$manifest_file")
+            path=$(trim_ascii_whitespace "$path")
             if [[ -n "$path" ]]; then
                 if [[ -f "$path" ]]; then
                     dbg "resolve_runfile: hit manifest suffix key '$cand' -> '$path'"
@@ -439,26 +843,86 @@ compute_workspace_hash() {{
 }}
 WORKSPACE_HASH=$(compute_workspace_hash)
 LOCK_DIR="${{TMPDIR:-/tmp}}/dd_upload_payloads_$WORKSPACE_HASH.lock"
+LOCK_ACQUIRED=0
+
+lock_dir_age_seconds() {{
+    local dir="$1"
+    local now mtime
+    # Cross-platform stat:
+    # - BSD/macOS: stat -f %m
+    # - GNU/Linux: stat -c %Y
+    now=$(date +%s)
+    if mtime=$(stat -f %m "$dir" 2>/dev/null); then
+        :
+    elif mtime=$(stat -c %Y "$dir" 2>/dev/null); then
+        :
+    else
+        echo 0
+        return
+    fi
+    if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+        echo $(( now - mtime ))
+    else
+        echo 0
+    fi
+}}
 
 acquire_lock() {{
     local max_attempts=3
     local attempt=0
     while (( attempt < max_attempts )); do
         if mkdir "$LOCK_DIR" 2>/dev/null; then
-            echo $$ > "$LOCK_DIR/pid"
+            # Persist PID metadata right after lock creation. If this write fails
+            # we treat the lock as unusable and immediately remove it.
+            if ! echo $$ > "$LOCK_DIR/pid" 2>/dev/null; then
+                rm -rf "$LOCK_DIR" 2>/dev/null || true
+                log "error: failed to initialize lock metadata at $LOCK_DIR/pid"
+                return 1
+            fi
+            LOCK_ACQUIRED=1
             dbg "acquired lock: $LOCK_DIR (workspace hash: $WORKSPACE_HASH)"
             return 0
         fi
-        # Check if lock is stale (owner process dead)
+        # Check if lock is stale:
+        # 1) lock dir exists but pid file is empty/malformed
+        # 2) lock dir exists but pid file is missing
+        # 3) pid exists but process is no longer alive
         if [[ -f "$LOCK_DIR/pid" ]]; then
             local owner_pid
-            owner_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
-            if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+            owner_pid=$(tr -d '[:space:]' < "$LOCK_DIR/pid" 2>/dev/null || echo "")
+            if [[ -z "$owner_pid" ]]; then
+                local lock_age
+                lock_age=$(lock_dir_age_seconds "$LOCK_DIR")
+                if [[ "$lock_age" =~ ^[0-9]+$ ]] && (( lock_age > 30 )); then
+                    dbg "removing stale lock (empty pid file, age ${lock_age}s)"
+                    rm -rf "$LOCK_DIR" 2>/dev/null || true
+                    ((++attempt))
+                    continue
+                fi
+                ((++attempt))
+                sleep 1
+                continue
+            fi
+            if ! kill -0 "$owner_pid" 2>/dev/null; then
                 dbg "removing stale lock (pid $owner_pid is dead)"
                 rm -rf "$LOCK_DIR" 2>/dev/null || true
                 ((++attempt))
                 continue
             fi
+        else
+            local lock_age
+            lock_age=$(lock_dir_age_seconds "$LOCK_DIR")
+            if [[ "$lock_age" =~ ^[0-9]+$ ]] && (( lock_age > 30 )); then
+                dbg "removing stale lock (missing pid file, age ${lock_age}s)"
+                rm -rf "$LOCK_DIR" 2>/dev/null || true
+                ((++attempt))
+                continue
+            fi
+            # Fresh lock without pid metadata might be in the middle of setup by
+            # another uploader; back off briefly before retrying.
+            ((++attempt))
+            sleep 1
+            continue
         fi
         log "error: another uploader is already running (lock: $LOCK_DIR)"
         log "hint: wait for the other uploader to finish, or remove the lock directory if stale"
@@ -481,7 +945,11 @@ fi
 
 # Cleanup lock on exit
 cleanup() {{
-    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    # Only the lock owner may remove LOCK_DIR. This avoids deleting an active
+    # uploader's lock when the current process failed to acquire it.
+    if [[ "$LOCK_ACQUIRED" == "1" ]]; then
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
+    fi
     rm -rf "$TMP_PAYLOAD_DIR" 2>/dev/null || true
 }}
 trap cleanup EXIT
@@ -770,6 +1238,748 @@ if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 dbg "jq available: $JQ_AVAILABLE"
 dbg "context.json: ${{CONTEXT_JSON:-<none>}}"
 
+# CODEOWNERS state (initialized lazily on first enrichment attempt).
+CODEOWNERS_INITIALIZED=0
+CODEOWNERS_ENABLED=0
+CODEOWNERS_FILE=""
+CODEOWNERS_WORKSPACE_ROOT=""
+CODEOWNERS_CONTEXT_WORKSPACE=""
+CODEOWNERS_RULE_REGEX=()
+CODEOWNERS_RULE_OWNERS=()
+CODEOWNERS_RULE_HAS_OWNERS=()
+CODEOWNERS_SOURCE_CANDIDATES=()
+CODEOWNERS_MATCH_NONE="__DD_CODEOWNERS_NO_MATCH__"
+CODEOWNERS_MATCH_EMPTY="__DD_CODEOWNERS_EMPTY_OWNERS__"
+CODEOWNERS_SPLIT_PATTERN=""
+CODEOWNERS_SPLIT_OWNERS_RAW=""
+CO_EVENTS_SCANNED=0
+CO_EVENTS_ENRICHED=0
+CO_EVENTS_SKIPPED_EXISTING=0
+CO_EVENTS_SKIPPED_MISSING_SOURCE=0
+CO_EVENTS_SKIPPED_UNMATCHED=0
+CO_EVENTS_SKIPPED_ERRORS=0
+
+decode_percent_path() {{
+  local value="$1"
+  if [[ "$value" != *"%"* ]]; then
+    echo "$value"
+    return
+  fi
+  # Avoid introducing NUL bytes into shell strings.
+  if [[ "$value" == *"%00"* ]]; then
+    echo "$value"
+    return
+  fi
+  # Decode only when every '%' participates in a valid %XX sequence.
+  # This keeps behavior deterministic for malformed input.
+  local stripped
+  stripped=$(echo "$value" | sed -E 's/%[0-9A-Fa-f]{2}//g')
+  if [[ "$stripped" == *"%"* ]]; then
+    echo "$value"
+    return
+  fi
+  local decoded
+  decoded=$(printf '%b' "${{value//%/\\\\x}}" 2>/dev/null || true)
+  if [[ -n "$decoded" ]]; then
+    echo "$decoded"
+  else
+    echo "$value"
+  fi
+}}
+
+normalize_path_like() {{
+  local raw="$1"
+  if [[ "$raw" == file://* ]]; then
+    raw="${{raw#file://}}"
+  fi
+  raw=$(decode_percent_path "$raw")
+  # Decode can re-introduce backslashes (for example %5C on Windows paths).
+  # Normalize after decoding so slash-based matching stays consistent.
+  raw="${{raw//\\\\//}}"
+  # Collapse duplicated separators to improve matching stability.
+  while [[ "$raw" == *"//"* ]]; do
+    raw=$(echo "$raw" | sed -E 's#/{2,}#/#g')
+  done
+  while [[ "$raw" == ./* ]]; do
+    raw="${{raw#./}}"
+  done
+  if [[ "$raw" =~ ^/[A-Za-z]:/ ]]; then
+    # file:///C:/... style paths become /C:/... after scheme removal.
+    # Drop only the leading slash to preserve the drive-qualified path.
+    raw="${{raw:1}}"
+  fi
+
+  local is_abs=0
+  if [[ "$raw" == /* ]]; then
+    is_abs=1
+    raw="${{raw#/}}"
+  fi
+
+  # Canonicalize dot segments. If normalization would escape above root,
+  # return failure so caller can skip unsafe/invalid candidates.
+  local -a parts=()
+  local -a stack=()
+  local part idx
+  IFS='/' read -r -a parts <<< "$raw"
+  for part in "${{parts[@]}}"; do
+    case "$part" in
+      ""|".")
+        continue
+        ;;
+      "..")
+        if (( ${{#stack[@]}} > 0 )); then
+          idx=$(( ${{#stack[@]}} - 1 ))
+          unset "stack[$idx]"
+          stack=("${{stack[@]}}")
+        else
+          echo ""
+          return 1
+        fi
+        ;;
+      *)
+        stack+=("$part")
+        ;;
+    esac
+  done
+
+  local joined=""
+  if (( ${{#stack[@]}} > 0 )); then
+    joined="${{stack[0]}}"
+    for ((idx = 1; idx < ${{#stack[@]}}; idx++)); do
+      joined="$joined/${{stack[$idx]}}"
+    done
+  fi
+
+  if (( is_abs == 1 )); then
+    echo "/$joined"
+  else
+    echo "$joined"
+  fi
+  return 0
+}}
+
+add_path_candidate() {{
+  local candidate="$1"
+  local normalized
+  normalized=$(normalize_path_like "$candidate" || true)
+  [[ -z "$normalized" ]] && return
+  normalized="${{normalized#/}}"
+  while [[ "$normalized" == ./* ]]; do
+    normalized="${{normalized#./}}"
+  done
+  [[ -z "$normalized" ]] && return
+  # Generated output paths do not map to repository-owned source files.
+  [[ "$normalized" == bazel-out/* ]] && return
+  local existing
+  if (( ${{#CODEOWNERS_SOURCE_CANDIDATES[@]}} > 0 )); then
+    for existing in "${{CODEOWNERS_SOURCE_CANDIDATES[@]}}"; do
+      [[ "$existing" == "$normalized" ]] && return
+    done
+  fi
+  CODEOWNERS_SOURCE_CANDIDATES+=("$normalized")
+}}
+
+add_derived_source_candidate() {{
+  local candidate="$1"
+  if [[ "$candidate" == external/* || "$candidate" == _main/external/* ]]; then
+    # Execroot/runfiles derived external paths belong to fetched dependencies,
+    # not repository-owned source files. Skip to avoid false owner attribution.
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip external source candidate '$candidate'"
+    return
+  fi
+  add_path_candidate "$candidate"
+}}
+
+strip_workspace_prefix() {{
+  local path_value="$1"
+  local root_value="$2"
+  [[ -z "$path_value" || -z "$root_value" ]] && return
+  local path_norm root_norm
+  path_norm=$(normalize_path_like "$path_value" || true)
+  root_norm=$(normalize_path_like "$root_value" || true)
+  [[ -z "$path_norm" || -z "$root_norm" ]] && return
+  if [[ "$path_norm" == "$root_norm" ]]; then
+    echo ""
+    return
+  fi
+  if [[ "$path_norm" == "$root_norm/"* ]]; then
+    echo "${{path_norm#"$root_norm/"}}"
+  fi
+}}
+
+build_source_candidates() {{
+  local source_path="$1"
+  CODEOWNERS_SOURCE_CANDIDATES=()
+  local normalized_source stripped
+  normalized_source=$(normalize_path_like "$source_path" || true)
+  [[ -z "$normalized_source" ]] && return
+
+  stripped=$(strip_workspace_prefix "$normalized_source" "$CODEOWNERS_CONTEXT_WORKSPACE")
+  [[ -n "$stripped" ]] && add_path_candidate "$stripped"
+  stripped=$(strip_workspace_prefix "$normalized_source" "$CODEOWNERS_WORKSPACE_ROOT")
+  [[ -n "$stripped" ]] && add_path_candidate "$stripped"
+
+  if [[ "$normalized_source" =~ /execroot/[^/]+/_main/(.+)$ ]]; then
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
+  fi
+  if [[ "$normalized_source" =~ /execroot/[^/]+/(.+)$ ]]; then
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
+  fi
+  if [[ "$normalized_source" =~ \\.runfiles/_main/(.+)$ ]]; then
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
+  fi
+  if [[ "$normalized_source" =~ \\.runfiles/[^/]+/(.+)$ ]]; then
+    add_derived_source_candidate "${{BASH_REMATCH[1]}}"
+  fi
+  # Keep only repository-relative fallback candidates. Absolute paths that are
+  # not under known repo roots can incorrectly inherit broad CODEOWNERS rules.
+  if [[ "$normalized_source" != /* && ! "$normalized_source" =~ ^[A-Za-z]:/ ]]; then
+    add_path_candidate "$normalized_source"
+  elif [[ "$DEBUG" == "1" ]]; then
+    dbg "codeowners: skip absolute source fallback candidate '$normalized_source'"
+  fi
+}}
+
+glob_to_regex() {{
+  local pattern="$1"
+  local out=""
+  local i=0
+  local plen="${{#pattern}}"
+  local ch nxt j class_ch class_body class_closed
+  while (( i < plen )); do
+    ch="${{pattern:i:1}}"
+    # Backslash escapes the next glob metacharacter literally.
+    if [[ "$ch" == "\\\\" ]]; then
+      if (( i + 1 < plen )); then
+        nxt="${{pattern:i+1:1}}"
+        case "$nxt" in
+          "."|"+"|"("|")"|"{"|"}"|"^"|"$"|"|"|"["|"]"|"*"|"?"|"\\\\")
+            if [[ "$nxt" == "\\\\" ]]; then
+              out="$out\\\\\\\\"
+            else
+              out="$out\\\\$nxt"
+            fi
+            ;;
+          *)
+            out="$out$nxt"
+            ;;
+        esac
+        i=$((i + 2))
+      else
+        out="$out\\\\\\\\"
+        i=$((i + 1))
+      fi
+      continue
+    fi
+    if [[ "$ch" == "*" ]] && (( i + 1 < plen )); then
+      nxt="${{pattern:i+1:1}}"
+      if [[ "$nxt" == "*" ]]; then
+        if (( i + 2 < plen )) && [[ "${{pattern:i+2:1}}" == "/" ]]; then
+          # CODEOWNERS follows gitignore-style globbing: **/ matches zero or more directories.
+          out="$out(.*/)?"
+          i=$((i + 3))
+        else
+          out="$out.*"
+          i=$((i + 2))
+        fi
+        continue
+      fi
+    fi
+    if [[ "$ch" == "[" ]]; then
+      # Preserve character class semantics (including "!"/"^" negation).
+      j=$((i + 1))
+      class_body=""
+      class_closed=0
+      if (( j < plen )) && [[ "${{pattern:j:1}}" == "!" ]]; then
+        class_body="^"
+        j=$((j + 1))
+      elif (( j < plen )) && [[ "${{pattern:j:1}}" == "^" ]]; then
+        class_body="\\\\^"
+        j=$((j + 1))
+      fi
+      if (( j < plen )) && [[ "${{pattern:j:1}}" == "]" ]]; then
+        class_body="$class_body\\\\]"
+        j=$((j + 1))
+      fi
+      while (( j < plen )); do
+        class_ch="${{pattern:j:1}}"
+        if [[ "$class_ch" == "]" ]]; then
+          class_closed=1
+          break
+        fi
+        case "$class_ch" in
+          "\\\\")
+            class_body="$class_body\\\\\\\\"
+            ;;
+          "^")
+            class_body="$class_body\\\\^"
+            ;;
+          "[")
+            class_body="$class_body\\\\["
+            ;;
+          *)
+            class_body="$class_body$class_ch"
+            ;;
+        esac
+        j=$((j + 1))
+      done
+      if (( class_closed == 1 )); then
+        out="$out[$class_body]"
+        i=$((j + 1))
+        continue
+      fi
+      out="$out\\\\["
+      i=$((i + 1))
+      continue
+    fi
+    case "$ch" in
+      "*")
+        out="$out[^/]*"
+        ;;
+      "?")
+        out="$out[^/]"
+        ;;
+      "."|"+"|"("|")"|"{"|"}"|"^"|"$"|"|"|"\\\\")
+        out="$out\\\\$ch"
+        ;;
+      "]")
+        out="$out\\\\]"
+        ;;
+      *)
+        out="$out$ch"
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  echo "$out"
+}}
+
+compile_codeowners_regex() {{
+  local pattern="$1"
+  local anchored=0
+  local dir_only=0
+  if [[ "$pattern" == /* ]]; then
+    anchored=1
+    pattern="${{pattern#/}}"
+  fi
+  if [[ "$pattern" == */ ]]; then
+    dir_only=1
+    pattern="${{pattern%/}}"
+  fi
+  [[ -z "$pattern" ]] && return 1
+
+  local has_slash=0
+  [[ "$pattern" == */* ]] && has_slash=1
+  local body
+  body=$(glob_to_regex "$pattern")
+  local prefix suffix regex
+  # Match semantics:
+  # - anchored or slash-containing patterns match from repo root
+  # - plain patterns match at any path segment boundary
+  if (( anchored == 1 || has_slash == 1 )); then
+    prefix="^"
+  else
+    prefix="(^|.*/)"
+  fi
+  if (( dir_only == 1 )); then
+    suffix="/.*$"
+  else
+    suffix="($|/.*)"
+  fi
+  regex="$prefix$body$suffix"
+  echo "$regex"
+  return 0
+}}
+
+parse_codeowners_file() {{
+  local file_path="$1"
+  local line pattern rest regex
+  local -a owner_tokens=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${{line%$'\\r'}}"
+    line="${{line#"${{line%%[![:space:]]*}}"}}"
+    [[ -z "$line" || "${{line:0:1}}" == "#" ]] && continue
+    # Section headers may include spaces (for example "[Core Team] @org/team").
+    # Detect them from the full raw line before splitting on whitespace.
+    if is_gitlab_section_header_line "$line"; then
+      continue
+    fi
+    split_codeowners_pattern_and_owners "$line"
+    pattern="$CODEOWNERS_SPLIT_PATTERN"
+    rest="$CODEOWNERS_SPLIT_OWNERS_RAW"
+    # Ignore GitLab section headers while preserving bracket-class glob rules.
+    # This keeps patterns like "[xy] @team/owners" valid CODEOWNERS entries.
+    if is_gitlab_section_header_pattern "$pattern"; then
+      continue
+    fi
+    # Strip comments in owner segments while preserving '#' inside owner tokens.
+    # Example: "@org/team#chat" stays intact, while " @org/team # note" strips note.
+    if [[ "$rest" == "#"* ]]; then
+      rest=""
+    elif [[ "$rest" == *[[:space:]]#* ]]; then
+      rest=$(printf '%s\n' "$rest" | sed -E 's/[[:space:]]#.*$//')
+    fi
+    rest="${{rest%"${{rest##*[![:space:]]}}"}}"
+    [[ -z "$pattern" ]] && continue
+    owner_tokens=()
+    if [[ -n "$rest" ]]; then
+      read -r -a owner_tokens <<< "$rest"
+    fi
+    regex=$(compile_codeowners_regex "$pattern" || true)
+    [[ -z "$regex" ]] && continue
+    # Some character-class patterns can produce invalid POSIX ERE fragments
+    # (for example "[z-a]"). Validate here so malformed rules are skipped once
+    # at parse time instead of repeatedly triggering regex-eval errors later.
+    if ! codeowners_regex_is_valid "$regex"; then
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skipping invalid regex '$regex' from pattern '$pattern'"
+      continue
+    fi
+    CODEOWNERS_RULE_REGEX+=("$regex")
+    if (( ${{#owner_tokens[@]}} == 0 )); then
+      CODEOWNERS_RULE_OWNERS+=("")
+      CODEOWNERS_RULE_HAS_OWNERS+=("0")
+    else
+      CODEOWNERS_RULE_OWNERS+=("$rest")
+      CODEOWNERS_RULE_HAS_OWNERS+=("1")
+    fi
+    if [[ "$DEBUG" == "1" ]]; then
+      local owners_dbg="<empty>"
+      if (( ${{#owner_tokens[@]}} > 0 )); then
+        owners_dbg="$rest"
+      fi
+      dbg "codeowners: parsed rule pattern='$pattern' regex='$regex' owners='$owners_dbg'"
+    fi
+  done < "$file_path"
+}}
+
+is_gitlab_section_header_pattern() {{
+  local pattern="$1"
+  [[ "$pattern" =~ ^\\[[^][]+\\]$ ]] || return 1
+  local inner="${{pattern:1:${{#pattern}}-2}}"
+  # GitLab section headers can include whitespace (for example [Core Team]).
+  if [[ "$inner" == *[[:space:]]* ]]; then
+    return 0
+  fi
+  # Heuristic to avoid class-only glob false positives:
+  # keep range-like and short bracket classes (for example [xy], [A-Z]).
+  if [[ "$inner" == *"-"* || "$inner" == *"!"* || "$inner" == *"^"* || "$inner" == *"\\\\"* ]]; then
+    return 1
+  fi
+  # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+  if [[ "$inner" =~ ^[A-Z0-9]+$ ]]; then
+    return 1
+  fi
+  # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
+  if (( ${{#inner}} <= 3 )) && [[ "$inner" =~ ^[A-Za-z0-9]+$ ]]; then
+    return 1
+  fi
+  # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
+  if [[ "$inner" =~ ^[a-z0-9]+$ ]]; then
+    return 1
+  fi
+  return 0
+}}
+
+is_gitlab_section_header_line() {{
+  local line="$1"
+  if [[ "$line" =~ ^(\\[[^][]+\\])([[:space:]]+.*)?$ ]]; then
+    is_gitlab_section_header_pattern "${{BASH_REMATCH[1]}}"
+    return $?
+  fi
+  return 1
+}}
+
+codeowners_regex_is_valid() {{
+  local regex="$1"
+  local status=0
+  # Run the probe inside `if` so set -e does not abort on a normal no-match.
+  if ( [[ "" =~ $regex ]] ) 2>/dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+  # Bash returns:
+  #   0 => matched
+  #   1 => valid regex, no match
+  #   2 => invalid regex syntax
+  if (( status == 0 || status == 1 )); then
+    return 0
+  fi
+  return 1
+}}
+
+split_codeowners_pattern_and_owners() {{
+  local line="$1"
+  local pattern=""
+  local rest=""
+  local i ch escaped=0
+  local line_len="${{#line}}"
+  for ((i = 0; i < line_len; i++)); do
+    ch="${{line:i:1}}"
+    if (( escaped == 1 )); then
+      pattern="$pattern$ch"
+      escaped=0
+      continue
+    fi
+    if [[ "$ch" == "\\\\" ]]; then
+      pattern="$pattern$ch"
+      escaped=1
+      continue
+    fi
+    # Split on the first unescaped whitespace character.
+    # We intentionally use a character-class check (instead of only " " and
+    # tab) to match CODEOWNERS behavior for any ASCII whitespace separator.
+    if [[ "$ch" =~ [[:space:]] ]]; then
+      rest="${{line:i}}"
+      rest="${{rest#"${{rest%%[![:space:]]*}}"}}"
+      CODEOWNERS_SPLIT_PATTERN="$pattern"
+      CODEOWNERS_SPLIT_OWNERS_RAW="$rest"
+      return 0
+    fi
+    pattern="$pattern$ch"
+  done
+  CODEOWNERS_SPLIT_PATTERN="$pattern"
+  CODEOWNERS_SPLIT_OWNERS_RAW=""
+  return 0
+}}
+
+init_codeowners() {{
+  (( CODEOWNERS_INITIALIZED == 1 )) && return
+  CODEOWNERS_INITIALIZED=1
+  if [[ -n "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
+    CODEOWNERS_WORKSPACE_ROOT="$BUILD_WORKSPACE_DIRECTORY"
+  elif [[ -n "${{TESTLOGS_DIR:-}}" && "$TESTLOGS_DIR" == */bazel-testlogs* ]]; then
+    CODEOWNERS_WORKSPACE_ROOT="${{TESTLOGS_DIR%%/bazel-testlogs*}}"
+  else
+    CODEOWNERS_WORKSPACE_ROOT="$(pwd)"
+  fi
+  [[ -z "$CODEOWNERS_WORKSPACE_ROOT" ]] && CODEOWNERS_WORKSPACE_ROOT="$(pwd)"
+  CODEOWNERS_CONTEXT_WORKSPACE=""
+  if (( JQ_AVAILABLE == 1 )) && [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" ]]; then
+    CODEOWNERS_CONTEXT_WORKSPACE=$(jq -r '."ci.workspace_path" // empty' "$CONTEXT_JSON" 2>/dev/null || true)
+  fi
+
+  local explicit_codeowners="${{DD_TOPT_CODEOWNERS_FILE:-}}"
+  if [[ -n "$explicit_codeowners" ]]; then
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: explicit path candidate '$explicit_codeowners'"
+    if [[ -f "$explicit_codeowners" && -r "$explicit_codeowners" ]]; then
+      CODEOWNERS_FILE="$explicit_codeowners"
+      dbg "codeowners: using explicit CODEOWNERS file '$CODEOWNERS_FILE'"
+    else
+      dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicit_codeowners' (falling back to discovery)"
+    fi
+  fi
+
+  local script_dir
+  script_dir=$(cd "$(dirname "$0")" && pwd -P)
+  local -a candidates=()
+  if [[ -z "$CODEOWNERS_FILE" ]]; then
+    # Lookup order is intentional and mirrored in PowerShell implementation.
+    # We prefer `ci.workspace_path` when present, then workspace-derived paths,
+    # then process cwd, then script directory fallback.
+    if [[ -n "$CODEOWNERS_CONTEXT_WORKSPACE" ]]; then
+      candidates+=(
+        "$CODEOWNERS_CONTEXT_WORKSPACE/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/.github/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/.gitlab/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/docs/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/.docs/CODEOWNERS"
+      )
+    fi
+    if [[ -n "$CODEOWNERS_WORKSPACE_ROOT" ]]; then
+      candidates+=(
+        "$CODEOWNERS_WORKSPACE_ROOT/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/.github/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/.gitlab/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/docs/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/.docs/CODEOWNERS"
+      )
+    fi
+    candidates+=(
+      "./CODEOWNERS"
+      "$script_dir/CODEOWNERS"
+    )
+
+    local candidate
+    for candidate in "${{candidates[@]}}"; do
+      [[ -z "$candidate" ]] && continue
+      [[ "$DEBUG" == "1" && -f "$candidate" ]] && dbg "codeowners: discovery candidate hit '$candidate'"
+      if [[ -f "$candidate" && -r "$candidate" ]]; then
+        CODEOWNERS_FILE="$candidate"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$CODEOWNERS_FILE" ]]; then
+    dbg "codeowners: no CODEOWNERS file found (workspace='$CODEOWNERS_WORKSPACE_ROOT')"
+    return
+  fi
+
+  parse_codeowners_file "$CODEOWNERS_FILE"
+  if (( ${{#CODEOWNERS_RULE_REGEX[@]}} > 0 )); then
+    CODEOWNERS_ENABLED=1
+    dbg "codeowners: using '$CODEOWNERS_FILE' with ${{#CODEOWNERS_RULE_REGEX[@]}} rule(s)"
+  else
+    dbg "codeowners: file '$CODEOWNERS_FILE' had no usable rules"
+  fi
+}}
+
+dedupe_owners() {{
+  local owners_line="$1"
+  local -a in_tokens=()
+  local -a out_tokens=()
+  local token existing seen
+  read -r -a in_tokens <<< "$owners_line"
+  for token in "${{in_tokens[@]}}"; do
+    [[ -z "$token" ]] && continue
+    seen=0
+    if (( ${{#out_tokens[@]}} > 0 )); then
+      for existing in "${{out_tokens[@]}}"; do
+        if [[ "$existing" == "$token" ]]; then
+          seen=1
+          break
+        fi
+      done
+    fi
+    (( seen == 0 )) && out_tokens+=("$token")
+  done
+  if (( ${{#out_tokens[@]}} > 0 )); then
+    printf '%s\n' "${{out_tokens[@]}}"
+  fi
+}}
+
+owners_line_to_json() {{
+  local owners_line="$1"
+  local deduped
+  deduped=$(dedupe_owners "$owners_line" | jq -R . | jq -s -c '.' 2>/dev/null || true)
+  if [[ "$deduped" == "[]" ]]; then
+    echo ""
+  else
+    echo "$deduped"
+  fi
+}}
+
+match_codeowners_owners_line() {{
+  local candidate="$1"
+  local idx regex owners_line rule_has_owners matched="$CODEOWNERS_MATCH_NONE"
+  # Last matching CODEOWNERS rule wins.
+  for ((idx = 0; idx < ${{#CODEOWNERS_RULE_REGEX[@]}}; idx++)); do
+    regex="${{CODEOWNERS_RULE_REGEX[$idx]}}"
+    owners_line="${{CODEOWNERS_RULE_OWNERS[$idx]}}"
+    rule_has_owners="${{CODEOWNERS_RULE_HAS_OWNERS[$idx]}}"
+    if [[ "$candidate" =~ $regex ]]; then
+      if [[ "$rule_has_owners" == "1" ]]; then
+        matched="$owners_line"
+      else
+        matched="$CODEOWNERS_MATCH_EMPTY"
+      fi
+    fi
+  done
+  echo "$matched"
+}}
+
+resolve_codeowners_json_for_source() {{
+  local source_path="$1"
+  build_source_candidates "$source_path"
+  local candidate owners_line owners_json
+  # Candidate order matters: prefer repo-relative derivations before broader
+  # fallbacks so ownership reflects the most likely source path.
+  for candidate in "${{CODEOWNERS_SOURCE_CANDIDATES[@]}}"; do
+    owners_line=$(match_codeowners_owners_line "$candidate")
+    if [[ "$DEBUG" == "1" ]]; then
+      if [[ "$owners_line" == "$CODEOWNERS_MATCH_NONE" ]]; then
+        dbg "codeowners: candidate='$candidate' owners='<none>'"
+      elif [[ "$owners_line" == "$CODEOWNERS_MATCH_EMPTY" ]]; then
+        dbg "codeowners: candidate='$candidate' owners='<empty>'"
+      else
+        dbg "codeowners: candidate='$candidate' owners='$owners_line'"
+      fi
+    fi
+    if [[ "$owners_line" == "$CODEOWNERS_MATCH_NONE" ]]; then
+      continue
+    fi
+    if [[ "$owners_line" == "$CODEOWNERS_MATCH_EMPTY" ]]; then
+      # Explicit "no owners" rule matched; treat as no tag.
+      echo ""
+      return
+    fi
+    if [[ -n "$owners_line" ]]; then
+      owners_json=$(owners_line_to_json "$owners_line")
+      if [[ -n "$owners_json" ]]; then
+        echo "$owners_json"
+        return
+      fi
+    fi
+  done
+  echo ""
+}}
+
+inject_codeowners_tags() {{
+  local payload_file="$1"
+  init_codeowners
+  (( CODEOWNERS_ENABLED == 1 )) || return 0
+
+  local events_len idx event_type has_existing source_path owners_json tmp_payload
+  # Skip gracefully on malformed payload shapes; uploader remains best-effort.
+  events_len=$(jq '.events | if type=="array" then length else 0 end' "$payload_file" 2>/dev/null || echo 0)
+  if ! [[ "$events_len" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  for ((idx = 0; idx < events_len; idx++)); do
+    event_type=$(jq -r --argjson idx "$idx" '.events[$idx].type // ""' "$payload_file" 2>/dev/null || true)
+    # Spans are intentionally not enriched with CODEOWNERS metadata.
+    [[ "$event_type" == "span" ]] && continue
+    ((++CO_EVENTS_SCANNED))
+
+    has_existing=$(jq -r --argjson idx "$idx" 'if (.events[$idx].content.meta | type) == "object" and (.events[$idx].content.meta | has("test.codeowners")) then "1" else "0" end' "$payload_file" 2>/dev/null || echo "0")
+    if [[ "$has_existing" == "1" ]]; then
+      ((++CO_EVENTS_SKIPPED_EXISTING))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip existing tag at event[$idx]"
+      continue
+    fi
+
+    source_path=$(jq -r --argjson idx "$idx" '.events[$idx].content.meta["test.source.file"] // .events[$idx].content.meta["test.source.path"] // .events[$idx].content.meta["source.file"] // .events[$idx].content.meta["source.path"] // .events[$idx].content.source.file // .events[$idx].content.source.path // ""' "$payload_file" 2>/dev/null || true)
+    if [[ -z "$source_path" ]]; then
+      ((++CO_EVENTS_SKIPPED_MISSING_SOURCE))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip missing source at event[$idx]"
+      continue
+    fi
+
+    owners_json=$(resolve_codeowners_json_for_source "$source_path")
+    if [[ -z "$owners_json" ]]; then
+      ((++CO_EVENTS_SKIPPED_UNMATCHED))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip unmatched source '$source_path' at event[$idx]"
+      continue
+    fi
+
+    tmp_payload=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_payload.XXXXXX" 2>/dev/null || true)
+    if [[ -z "$tmp_payload" ]]; then
+      ((++CO_EVENTS_SKIPPED_ERRORS))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip internal error creating temp payload at event[$idx]"
+      continue
+    fi
+    if jq --arg owners "$owners_json" --argjson idx "$idx" '
+      .events[$idx].content = (.events[$idx].content // {})
+      | .events[$idx].content.meta = ((.events[$idx].content.meta // {}) | .["test.codeowners"] = $owners)
+    ' "$payload_file" > "$tmp_payload"; then
+      # Atomic replacement prevents partially-written payload files.
+      mv "$tmp_payload" "$payload_file"
+      ((++CO_EVENTS_ENRICHED))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: assigned owners '$owners_json' at event[$idx]"
+    else
+      rm -f "$tmp_payload" 2>/dev/null || true
+      ((++CO_EVENTS_SKIPPED_ERRORS))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip jq update failure at event[$idx]"
+    fi
+  done
+
+  if [[ "$DEBUG" == "1" ]]; then
+    dbg "codeowners: scanned=$CO_EVENTS_SCANNED enriched=$CO_EVENTS_ENRICHED skipped_existing=$CO_EVENTS_SKIPPED_EXISTING skipped_missing_source=$CO_EVENTS_SKIPPED_MISSING_SOURCE skipped_unmatched=$CO_EVENTS_SKIPPED_UNMATCHED skipped_errors=$CO_EVENTS_SKIPPED_ERRORS"
+  fi
+}}
+
 # Build common Datadog headers, optionally deriving values from payload metadata["*"].
 build_common_headers() {{
   local payload_file="${{1:-}}"
@@ -897,6 +2107,7 @@ enrich_with_context() {{
       else .
       end)
   ' "$infile" > "$tmpfile"
+  inject_codeowners_tags "$tmpfile"
   if [[ -n "$cleanup_ctx" ]]; then
     rm -f "$ctx_file" 2>/dev/null || true
   fi
@@ -1228,9 +2439,17 @@ function Resolve-Runfile {{
     param([string]$InputRloc)
 
     $Rloc = $InputRloc
+    $Rloc = $Rloc.Replace([char]92, [char]47)
     # Normalize relative prefixes that can appear in bzlmod runfile paths
     if ($Rloc.StartsWith("./")) {{ $Rloc = $Rloc.Substring(2) }}
     while ($Rloc.StartsWith("../")) {{ $Rloc = $Rloc.Substring(3) }}
+    # Defensive guard: runfile labels must remain repository-relative.
+    # We reject absolute/drive-qualified and parent-traversal paths so lookups
+    # cannot accidentally resolve outside runfiles roots.
+    if ([string]::IsNullOrEmpty($Rloc) -or $Rloc.StartsWith("/") -or ($Rloc -match '^[A-Za-z]:/') -or $Rloc -eq ".." -or $Rloc.EndsWith("/..") -or $Rloc.Contains("/../")) {{
+        Dbg "Resolve-Runfile rejected suspicious runfile label '$InputRloc' (normalized='$Rloc')"
+        return $null
+    }}
 
     $candidates = @($Rloc)
     if ($Rloc.StartsWith("external/")) {{
@@ -1256,7 +2475,7 @@ function Resolve-Runfile {{
         $mfExists = Test-Path -LiteralPath $env:RUNFILES_MANIFEST_FILE
         Dbg "Resolve-Runfile RUNFILES_MANIFEST_FILE='$($env:RUNFILES_MANIFEST_FILE)' exists=$mfExists"
         if ($mfExists) {{
-            $manifest = Get-Content -LiteralPath $env:RUNFILES_MANIFEST_FILE
+            $manifest = Get-Content -LiteralPath $env:RUNFILES_MANIFEST_FILE -Encoding UTF8
             Dbg "Resolve-Runfile manifest entries loaded=$($manifest.Count)"
         }}
     }} else {{
@@ -1268,25 +2487,44 @@ function Resolve-Runfile {{
         # Try RUNFILES_DIR first
         if ($env:RUNFILES_DIR) {{
             $candidate = Join-Path $env:RUNFILES_DIR $cand
-            if (Test-Path -LiteralPath $candidate) {{
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {{
                 Dbg "Resolve-Runfile hit RUNFILES_DIR -> '$candidate'"
                 return $candidate
             }}
         }}
 
-        # Try $PSScriptRoot.runfiles fallback
-        $candidate = Join-Path "$PSScriptRoot.runfiles" $cand
-        if (Test-Path -LiteralPath $candidate) {{
-            Dbg "Resolve-Runfile hit script runfiles -> '$candidate'"
-            return $candidate
+        # Try local runfiles directory fallbacks when RUNFILES_DIR is unavailable.
+        # Depending on launcher/platform we may see:
+        #   - <script>.runfiles
+        #   - <script>.bat.runfiles
+        #   - legacy $PSScriptRoot.runfiles path
+        $scriptBase = [System.IO.Path]::GetFileNameWithoutExtension($PSCommandPath)
+        $runfilesDirs = @(
+            "$PSScriptRoot.runfiles",
+            (Join-Path $PSScriptRoot "$scriptBase.runfiles"),
+            (Join-Path $PSScriptRoot "$scriptBase.bat.runfiles")
+        ) | Where-Object { -not [string]::IsNullOrEmpty($_) }
+        foreach ($runfilesDir in $runfilesDirs) {{
+            $candidate = Join-Path $runfilesDir $cand
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {{
+                Dbg "Resolve-Runfile hit script runfiles -> '$candidate'"
+                return $candidate
+            }}
         }}
 
         # Try RUNFILES_MANIFEST_FILE (Windows default)
         if ($manifest) {{
             foreach ($line in $manifest) {{
-                if ($line.StartsWith("$cand ")) {{
-                    $path = $line.Substring($cand.Length + 1)
-                    if (Test-Path -LiteralPath $path) {{
+                $lineNorm = $line
+                # Some tools write manifests with UTF-8 BOM; strip it from key.
+                if ($lineNorm.Length -gt 0 -and [int][char]$lineNorm[0] -eq 0xFEFF) {{
+                    $lineNorm = $lineNorm.Substring(1)
+                }}
+                if ($lineNorm.Length -gt $cand.Length -and $lineNorm.StartsWith($cand, [System.StringComparison]::Ordinal)) {{
+                    $sep = $lineNorm.Substring($cand.Length, 1)
+                    if ($sep -ne ' ' -and $sep -ne "`t") {{ continue }}
+                    $path = $lineNorm.Substring($cand.Length + 1).TrimStart().TrimEnd()
+                    if (Test-Path -LiteralPath $path -PathType Leaf) {{
                         Dbg "Resolve-Runfile hit manifest exact key '$cand' -> '$path'"
                         return $path
                     }}
@@ -1296,13 +2534,26 @@ function Resolve-Runfile {{
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
             # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
             foreach ($line in $manifest) {{
-                $i = $line.IndexOf(' ')
+                $lineNorm = $line
+                # Same BOM handling for suffix-key fallback.
+                if ($lineNorm.Length -gt 0 -and [int][char]$lineNorm[0] -eq 0xFEFF) {{
+                    $lineNorm = $lineNorm.Substring(1)
+                }}
+                $spaceIdx = $lineNorm.IndexOf(' ')
+                $tabIdx = $lineNorm.IndexOf("`t")
+                if ($spaceIdx -lt 0) {{
+                    $i = $tabIdx
+                }} elseif ($tabIdx -lt 0) {{
+                    $i = $spaceIdx
+                }} else {{
+                    $i = [Math]::Min($spaceIdx, $tabIdx)
+                }}
                 if ($i -le 0) {{ continue }}
-                $key = $line.Substring(0, $i)
+                $key = $lineNorm.Substring(0, $i)
                 if ($key.Length -le $cand.Length) {{ continue }}
-                if ($key.EndsWith("/$cand") -or $key.EndsWith("\\$cand")) {{
-                    $path = $line.Substring($i + 1)
-                    if (Test-Path -LiteralPath $path) {{
+                if ($key.EndsWith("/$cand", [System.StringComparison]::Ordinal) -or $key.EndsWith("\\$cand", [System.StringComparison]::Ordinal)) {{
+                    $path = $lineNorm.Substring($i + 1).TrimStart().TrimEnd()
+                    if (Test-Path -LiteralPath $path -PathType Leaf) {{
                         Dbg "Resolve-Runfile hit manifest suffix key '$cand' -> '$path'"
                         return $path
                     }}
@@ -1421,7 +2672,7 @@ function Get-StartTimes($obj, [ref]$acc) {{
 
 function Log-StartTimeStats([string]$FilePath) {{
     try {{
-        $payload = Get-Content -LiteralPath $FilePath -Raw | ConvertFrom-Json -ErrorAction Stop
+        $payload = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
         $times = @()
         Get-StartTimes $payload ([ref]$times)
         if ($times.Count -eq 0) {{
@@ -1498,7 +2749,7 @@ if ($script:SchemaValidator) {{
 $script:ContextObj = $null
 if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {{
     try {{
-        $script:ContextObj = Get-Content -LiteralPath $script:ContextJson -Raw | ConvertFrom-Json -ErrorAction Stop
+        $script:ContextObj = Get-Content -LiteralPath $script:ContextJson -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
     }} catch {{
         $script:ContextObj = $null
     }}
@@ -1575,19 +2826,17 @@ function Acquire-Lock {{
     $maxAttempts = 3
     for ($attempt = 0; $attempt -lt $maxAttempts; $attempt++) {{
         try {{
+            # FileShare.None provides process-wide mutual exclusion while this
+            # handle stays open. If another uploader holds it, Open will throw.
             $script:LockStream = [System.IO.File]::Open($LockFile, 'OpenOrCreate', 'ReadWrite', 'None')
             Dbg "acquired lock: $LockFile (workspace hash: $WorkspaceHash)"
             return $true
         }} catch {{
-            # Check if lock file is stale (no process holding it, but file exists)
-            if (Test-Path $LockFile) {{
-                $lockAge = (Get-Date) - (Get-Item $LockFile).LastWriteTime
-                if ($lockAge.TotalMinutes -gt 30) {{
-                    Dbg "removing stale lock (age: $($lockAge.TotalMinutes) minutes)"
-                    Remove-Item -Path $LockFile -Force -ErrorAction SilentlyContinue
-                    continue
-                }}
-            }}
+            # If the lock were truly stale (unheld), OpenOrCreate with FileShare.None
+            # would succeed. In the catch path, prefer bounded retries over deleting
+            # lock files, which can race with another active uploader.
+            Dbg "lock acquisition attempt $($attempt + 1)/$maxAttempts failed: $_"
+            Start-Sleep -Seconds 1
         }}
     }}
     return $false
@@ -1611,6 +2860,7 @@ try {{
 
 # Cleanup function for lock release
 function Release-Lock {{
+    # Release lock handle first, then best-effort remove lock file and temp dir.
     if ($script:LockStream) {{
         $script:LockStream.Close()
         $script:LockStream = $null
@@ -1858,7 +3108,7 @@ Dbg "context.json: $(if ([string]::IsNullOrEmpty($script:ContextJson)) {{ '<none
 $ContextFingerprint = $null
 if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {{
   try {{
-    $ctxForCheck = Get-Content -LiteralPath $script:ContextJson -Raw | ConvertFrom-Json -ErrorAction Stop
+    $ctxForCheck = Get-Content -LiteralPath $script:ContextJson -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
     $ContextFingerprint = $ctxForCheck.'topt.api_key_fingerprint'
   }} catch {{
     $ContextFingerprint = $null
@@ -1885,7 +3135,7 @@ function Get-CommonHeaders([string]$PayloadPath) {{
 
   if (-not [string]::IsNullOrEmpty($PayloadPath) -and (Test-Path -LiteralPath $PayloadPath)) {{
     try {{
-      $payloadObj = Get-Content -LiteralPath $PayloadPath -Raw | ConvertFrom-Json -ErrorAction Stop
+      $payloadObj = Get-Content -LiteralPath $PayloadPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
       $metaStar = $null
       if ($payloadObj.metadata) {{ $metaStar = $payloadObj.metadata.'*' }}
       if ($metaStar) {{
@@ -1919,20 +3169,587 @@ function Get-CommonHeaders([string]$PayloadPath) {{
   return $headers
 }}
 
+function Convert-ToMutableObject($Value) {{
+  if ($null -eq $Value) {{ return $null }}
+  if ($Value -is [System.Collections.IDictionary]) {{
+    $map = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    foreach ($k in $Value.Keys) {{
+      $map[[string]$k] = Convert-ToMutableObject $Value[$k]
+    }}
+    return $map
+  }}
+  if ($Value -is [PSCustomObject]) {{
+    $map = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    foreach ($p in $Value.PSObject.Properties) {{
+      $map[$p.Name] = Convert-ToMutableObject $p.Value
+    }}
+    return $map
+  }}
+  if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {{
+    $arr = @()
+    foreach ($item in $Value) {{
+      $arr += ,(Convert-ToMutableObject $item)
+    }}
+    return $arr
+  }}
+  return $Value
+}}
+
+function Ensure-Hashtable($Value) {{
+  $converted = Convert-ToMutableObject $Value
+  if ($converted -is [System.Collections.IDictionary]) {{
+    return $converted
+  }}
+  return [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+}}
+
+function Get-MapValue($MapObj, [string]$Key) {{
+  if ($null -eq $MapObj -or [string]::IsNullOrEmpty($Key)) {{ return $null }}
+  if ($MapObj -is [System.Collections.IDictionary]) {{
+    if ($MapObj.Contains($Key)) {{ return $MapObj[$Key] }}
+    return $null
+  }}
+  $prop = $MapObj.PSObject.Properties[$Key]
+  if ($prop) {{ return $prop.Value }}
+  return $null
+}}
+
+$script:CodeOwnersInitialized = $false
+$script:CodeOwnersEnabled = $false
+$script:CodeOwnersPath = $null
+$script:CodeOwnersRules = @()
+$script:CodeOwnersStats = @{{
+  scanned = 0
+  enriched = 0
+  skipped_existing = 0
+  skipped_missing_source = 0
+  skipped_unmatched = 0
+  skipped_errors = 0
+}}
+
+function Normalize-PathLike([string]$PathValue) {{
+  if ([string]::IsNullOrEmpty($PathValue)) {{ return $null }}
+  $v = $PathValue
+  if ($v.StartsWith("file://")) {{ $v = $v.Substring(7) }}
+  if ($v.Contains('%')) {{
+    # Keep behavior aligned with Bash: avoid decoding NUL (%00) into paths.
+    $containsNullEscape = ($v -match '(?i)%00')
+    $stripped = [regex]::Replace($v, '%[0-9A-Fa-f]{{2}}', '')
+    if (-not $containsNullEscape -and -not $stripped.Contains('%')) {{
+      try {{ $v = [Uri]::UnescapeDataString($v) }} catch {{}}
+    }}
+  }}
+  # Decode can re-introduce backslashes (for example %5C on Windows paths).
+  # Normalize after decoding so slash-based matching stays consistent.
+  $v = $v.Replace([char]92, [char]47)
+  # Normalize duplicate separators and leading "./" fragments first.
+  while ($v.Contains("//")) {{ $v = $v.Replace("//", "/") }}
+  while ($v.StartsWith("./")) {{ $v = $v.Substring(2) }}
+  if ($v -match '^/[A-Za-z]:/') {{
+    # file:///C:/... style paths become /C:/... after scheme removal.
+    # Drop only the leading slash to preserve the drive-qualified path.
+    $v = $v.Substring(1)
+  }}
+
+  # Resolve dot segments. If ".." would traverse above root, return null so
+  # callers can safely ignore this candidate.
+  $isAbs = $v.StartsWith("/")
+  if ($isAbs) {{ $v = $v.Substring(1) }}
+  $parts = @($v.Split('/', [System.StringSplitOptions]::None))
+  $stack = New-Object System.Collections.Generic.List[string]
+  foreach ($part in $parts) {{
+    if ([string]::IsNullOrEmpty($part) -or $part -eq ".") {{ continue }}
+    if ($part -eq "..") {{
+      if ($stack.Count -gt 0) {{
+        $stack.RemoveAt($stack.Count - 1)
+        continue
+      }}
+      return $null
+    }}
+    $stack.Add($part)
+  }}
+  $joined = [string]::Join("/", $stack.ToArray())
+  if ($isAbs) {{ return "/$joined" }}
+  return $joined
+}}
+
+function Add-PathCandidate([System.Collections.Generic.List[string]]$Candidates, [string]$Candidate) {{
+  $normalized = Normalize-PathLike $Candidate
+  if ([string]::IsNullOrEmpty($normalized)) {{ return }}
+  if ($normalized.StartsWith("/")) {{ $normalized = $normalized.Substring(1) }}
+  while ($normalized.StartsWith("./")) {{ $normalized = $normalized.Substring(2) }}
+  if ([string]::IsNullOrEmpty($normalized)) {{ return }}
+  # Generated artifacts should not be matched against repo CODEOWNERS.
+  if ($normalized.StartsWith("bazel-out/")) {{ return }}
+  if (-not $Candidates.Contains($normalized)) {{ $Candidates.Add($normalized) | Out-Null }}
+}}
+
+function Add-DerivedPathCandidate([System.Collections.Generic.List[string]]$Candidates, [string]$Candidate) {{
+  if ([string]::IsNullOrEmpty($Candidate)) {{ return }}
+  if ($Candidate.StartsWith("external/") -or $Candidate.StartsWith("_main/external/")) {{
+    # Execroot/runfiles derived external paths belong to fetched dependencies,
+    # not repository-owned source files. Skip to avoid false owner attribution.
+    if ($script:DebugMode) {{ Dbg "codeowners: skip external source candidate '$Candidate'" }}
+    return
+  }}
+  Add-PathCandidate $Candidates $Candidate
+}}
+
+function Strip-WorkspacePrefix([string]$PathValue, [string]$WorkspaceRoot) {{
+  if ([string]::IsNullOrEmpty($PathValue) -or [string]::IsNullOrEmpty($WorkspaceRoot)) {{ return $null }}
+  $pathNorm = Normalize-PathLike $PathValue
+  $rootNorm = Normalize-PathLike $WorkspaceRoot
+  if ([string]::IsNullOrEmpty($pathNorm) -or [string]::IsNullOrEmpty($rootNorm)) {{ return $null }}
+  # Windows paths are case-insensitive; honor that when stripping repo roots.
+  $pathComparison = if ($env:OS -eq 'Windows_NT') {{ [System.StringComparison]::OrdinalIgnoreCase }} else {{ [System.StringComparison]::Ordinal }}
+  if ([string]::Equals($pathNorm, $rootNorm, $pathComparison)) {{ return "" }}
+  if ($pathNorm.StartsWith("$rootNorm/", $pathComparison)) {{
+    return $pathNorm.Substring($rootNorm.Length + 1)
+  }}
+  return $null
+}}
+
+function Get-PathCandidates([string]$SourcePath) {{
+  $candidates = New-Object System.Collections.Generic.List[string]
+  $normalized = Normalize-PathLike $SourcePath
+  if ([string]::IsNullOrEmpty($normalized)) {{ return $candidates }}
+
+  $workspaceRoot = $null
+  if ($env:BUILD_WORKSPACE_DIRECTORY) {{
+    $workspaceRoot = $env:BUILD_WORKSPACE_DIRECTORY
+  }} elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\\]bazel-testlogs(?:[/\\].*)?$')) {{
+    $workspaceRoot = $Matches[1]
+  }} else {{
+    $workspaceRoot = (Get-Location).Path
+  }}
+
+  # Candidate order is deliberate: try repo-relative variants first, then
+  # runfiles/execroot-derived forms, then absolute normalized fallback.
+  $workspaceRoots = @(
+    $(if ($script:ContextObj) {{ $script:ContextObj.'ci.workspace_path' }} else {{ $null }}),
+    $workspaceRoot
+  )
+  foreach ($root in $workspaceRoots) {{
+    $stripped = Strip-WorkspacePrefix $normalized $root
+    if ($stripped -ne $null) {{ Add-PathCandidate $candidates $stripped }}
+  }}
+
+  if ($normalized -match '/execroot/[^/]+/_main/(.+)$') {{
+    Add-DerivedPathCandidate $candidates $Matches[1]
+  }}
+  if ($normalized -match '/execroot/[^/]+/(.+)$') {{
+    Add-DerivedPathCandidate $candidates $Matches[1]
+  }}
+  if ($normalized -match '\\.runfiles/_main/(.+)$') {{
+    Add-DerivedPathCandidate $candidates $Matches[1]
+  }}
+  if ($normalized -match '\\.runfiles/[^/]+/(.+)$') {{
+    Add-DerivedPathCandidate $candidates $Matches[1]
+  }}
+  # Keep only repository-relative fallback candidates. Absolute paths that are
+  # not under known repo roots can incorrectly inherit broad CODEOWNERS rules.
+  if (-not $normalized.StartsWith("/") -and -not ($normalized -match '^[A-Za-z]:/')) {{
+    Add-PathCandidate $candidates $normalized
+  }} elseif ($script:DebugMode) {{
+    Dbg "codeowners: skip absolute source fallback candidate '$normalized'"
+  }}
+  return $candidates
+}}
+
+function Convert-CodeOwnersGlobToRegex([string]$Pattern) {{
+  $sb = New-Object System.Text.StringBuilder
+  $i = 0
+  while ($i -lt $Pattern.Length) {{
+    $ch = $Pattern.Substring($i, 1)
+    # Backslash escapes a literal glob metacharacter.
+    if ([int][char]$ch -eq 92) {{
+      if (($i + 1) -lt $Pattern.Length) {{
+        $escapedCh = $Pattern.Substring($i + 1, 1)
+        [void]$sb.Append([Regex]::Escape($escapedCh))
+        $i += 2
+      }} else {{
+        [void]$sb.Append("\\\\")
+        $i++
+      }}
+      continue
+    }}
+    if ($ch -eq '*' -and ($i + 1) -lt $Pattern.Length -and $Pattern.Substring($i + 1, 1) -eq '*') {{
+      if (($i + 2) -lt $Pattern.Length -and $Pattern.Substring($i + 2, 1) -eq '/') {{
+        # CODEOWNERS follows gitignore-style globbing: **/ matches zero or more directories.
+        [void]$sb.Append("(.*/)?")
+        $i += 3
+      }} else {{
+        [void]$sb.Append(".*")
+        $i += 2
+      }}
+      continue
+    }}
+    if ($ch -eq '*') {{
+      [void]$sb.Append("[^/]*")
+      $i++
+      continue
+    }} elseif ($ch -eq '?') {{
+      [void]$sb.Append("[^/]")
+      $i++
+      continue
+    }}
+    if ($ch -eq '[') {{
+      # Preserve character classes (including negation), because repositories
+      # frequently use patterns like [Tt]est*.cs in CODEOWNERS.
+      $j = $i + 1
+      $classSb = New-Object System.Text.StringBuilder
+      $closed = $false
+      if ($j -lt $Pattern.Length -and $Pattern.Substring($j, 1) -eq '!') {{
+        [void]$classSb.Append("^")
+        $j++
+      }} elseif ($j -lt $Pattern.Length -and $Pattern.Substring($j, 1) -eq '^') {{
+        [void]$classSb.Append("\\^")
+        $j++
+      }}
+      if ($j -lt $Pattern.Length -and $Pattern.Substring($j, 1) -eq ']') {{
+        [void]$classSb.Append("\\]")
+        $j++
+      }}
+      while ($j -lt $Pattern.Length) {{
+        $classCh = $Pattern.Substring($j, 1)
+        if ($classCh -eq ']') {{
+          $closed = $true
+          break
+        }}
+        if ([int][char]$classCh -eq 92) {{
+          [void]$classSb.Append("\\\\")
+        }} elseif ($classCh -eq '^') {{
+          [void]$classSb.Append("\\^")
+        }} elseif ($classCh -eq '[') {{
+          [void]$classSb.Append("\\[")
+        }} elseif ($classCh -eq '-') {{
+          [void]$classSb.Append("-")
+        }} else {{
+          [void]$classSb.Append([Regex]::Escape($classCh))
+        }}
+        $j++
+      }}
+      if ($closed) {{
+        [void]$sb.Append("[$classSb]")
+        $i = $j + 1
+        continue
+      }}
+      [void]$sb.Append("\\[")
+      $i++
+      continue
+    }}
+    if ($ch -eq '.') {{
+      [void]$sb.Append("\\.")
+    }} elseif ($ch -eq '+') {{
+      [void]$sb.Append("\\+")
+    }} elseif ($ch -eq '(') {{
+      [void]$sb.Append("\\(")
+    }} elseif ($ch -eq ')') {{
+      [void]$sb.Append("\\)")
+    }} elseif ($ch -eq '{') {{
+      [void]$sb.Append("\\{")
+    }} elseif ($ch -eq '}') {{
+      [void]$sb.Append("\\}")
+    }} elseif ($ch -eq '^') {{
+      [void]$sb.Append("\\^")
+    }} elseif ($ch -eq '$') {{
+      [void]$sb.Append("\\$")
+    }} elseif ($ch -eq '|') {{
+      [void]$sb.Append("\\|")
+    }} elseif ([int][char]$ch -eq 92) {{
+      [void]$sb.Append("\\\\")
+    }} elseif ($ch -eq ']') {{
+      [void]$sb.Append("\\]")
+    }} else {{
+      [void]$sb.Append($ch)
+    }}
+    $i++
+  }}
+  return $sb.ToString()
+}}
+
+function Convert-CodeOwnersPatternToRegex([string]$Pattern) {{
+  if ([string]::IsNullOrEmpty($Pattern)) {{ return $null }}
+  $anchored = $false
+  $dirOnly = $false
+  $raw = $Pattern
+  if ($raw.StartsWith("/")) {{
+    $anchored = $true
+    $raw = $raw.Substring(1)
+  }}
+  if ($raw.EndsWith("/")) {{
+    $dirOnly = $true
+    $raw = $raw.Substring(0, $raw.Length - 1)
+  }}
+  if ([string]::IsNullOrEmpty($raw)) {{ return $null }}
+  $hasSlash = $raw.Contains("/")
+  $body = Convert-CodeOwnersGlobToRegex $raw
+
+  # Match semantics:
+  # - anchored or slash-containing rules start at repo root
+  # - simple names can match at any path segment boundary
+  $prefix = if ($anchored -or $hasSlash) {{ "^" }} else {{ "(^|.*/)" }}
+  $suffix = if ($dirOnly) {{ "/.*$" }} else {{ "($|/.*)" }}
+  return "$prefix$body$suffix"
+}}
+
+function Split-CodeOwnersLine([string]$Line) {{
+  if ([string]::IsNullOrEmpty($Line)) {{
+    return [PSCustomObject]@{{ Pattern = ""; OwnersRaw = "" }}
+  }}
+  $sb = New-Object System.Text.StringBuilder
+  $escaped = $false
+  for ($i = 0; $i -lt $Line.Length; $i++) {{
+    $ch = $Line.Substring($i, 1)
+    if ($escaped) {{
+      [void]$sb.Append($ch)
+      $escaped = $false
+      continue
+    }}
+    if ([int][char]$ch -eq 92) {{
+      [void]$sb.Append($ch)
+      $escaped = $true
+      continue
+    }}
+    if ([char]::IsWhiteSpace($Line[$i])) {{
+      $ownersRaw = $Line.Substring($i).TrimStart()
+      return [PSCustomObject]@{{ Pattern = $sb.ToString(); OwnersRaw = $ownersRaw }}
+    }}
+    [void]$sb.Append($ch)
+  }}
+  return [PSCustomObject]@{{ Pattern = $sb.ToString(); OwnersRaw = "" }}
+}}
+
+function Test-IsGitLabSectionHeaderPattern([string]$Pattern) {{
+  if ([string]::IsNullOrEmpty($Pattern)) {{ return $false }}
+  if ($Pattern -notmatch '^\\[[^\\[\\]]+\\]$') {{ return $false }}
+  $inner = $Pattern.Substring(1, $Pattern.Length - 2)
+  # GitLab section headers can include whitespace (for example [Core Team]).
+  if ($inner.Contains(" ") -or $inner.Contains("`t")) {{
+    return $true
+  }}
+  # Heuristic to avoid class-only glob false positives:
+  # keep range-like and short bracket classes (for example [xy], [A-Z]).
+  if ($inner.Contains('-') -or $inner.Contains('!') -or $inner.Contains('^') -or $inner.Contains([string]([char]92))) {{
+    return $false
+  }}
+  # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
+  if ($inner -cmatch '^[A-Z0-9]+$') {{ return $false }}
+  # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
+  if ($inner.Length -le 3 -and $inner -cmatch '^[A-Za-z0-9]+$') {{ return $false }}
+  # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
+  if ($inner -cmatch '^[a-z0-9]+$') {{ return $false }}
+  return $true
+}}
+
+function Test-IsGitLabSectionHeaderLine([string]$Line) {{
+  if ([string]::IsNullOrEmpty($Line)) {{ return $false }}
+  if ($Line -notmatch '^(\\[[^\\[\\]]+\\])(?:\\s+.*)?$') {{ return $false }}
+  return (Test-IsGitLabSectionHeaderPattern $Matches[1])
+}}
+
+function Initialize-CodeOwnersRules {{
+  if ($script:CodeOwnersInitialized) {{ return }}
+  $script:CodeOwnersInitialized = $true
+
+  $workspace = $null
+  if ($env:BUILD_WORKSPACE_DIRECTORY) {{
+    $workspace = $env:BUILD_WORKSPACE_DIRECTORY
+  }} elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\\]bazel-testlogs(?:[/\\].*)?$')) {{
+    $workspace = $Matches[1]
+  }} else {{
+    $workspace = (Get-Location).Path
+  }}
+  $explicitCodeOwners = $env:DD_TOPT_CODEOWNERS_FILE
+  if (-not [string]::IsNullOrEmpty($explicitCodeOwners)) {{
+    Dbg "codeowners: explicit path candidate '$explicitCodeOwners'"
+    if (Test-Path -LiteralPath $explicitCodeOwners -PathType Leaf) {{
+      $script:CodeOwnersPath = $explicitCodeOwners
+      Dbg "codeowners: using explicit CODEOWNERS file '$script:CodeOwnersPath'"
+    }} else {{
+      Dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicitCodeOwners' (falling back to discovery)"
+    }}
+  }}
+  $compatWorkspace = if ($script:ContextObj) {{ $script:ContextObj.'ci.workspace_path' }} else {{ $null }}
+  # Lookup order must mirror Bash implementation for cross-platform parity.
+  if (-not $script:CodeOwnersPath) {{
+    $lookupPaths = @(
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".github/CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".gitlab/CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "docs/CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".docs/CODEOWNERS" }} else {{ $null }}),
+      (Join-Path $workspace "CODEOWNERS"),
+      (Join-Path $workspace ".github/CODEOWNERS"),
+      (Join-Path $workspace ".gitlab/CODEOWNERS"),
+      (Join-Path $workspace "docs/CODEOWNERS"),
+      (Join-Path $workspace ".docs/CODEOWNERS"),
+      (Join-Path (Get-Location).Path "CODEOWNERS"),
+      (Join-Path $PSScriptRoot "CODEOWNERS")
+    )
+
+    foreach ($candidate in $lookupPaths) {{
+      if ([string]::IsNullOrEmpty($candidate)) {{ continue }}
+      $candidateExists = Test-Path -LiteralPath $candidate -PathType Leaf
+      if ($candidateExists) {{
+        Dbg "codeowners: discovery candidate hit '$candidate'"
+      }}
+      if ($candidateExists) {{
+        $script:CodeOwnersPath = $candidate
+        break
+      }}
+    }}
+  }}
+  if (-not $script:CodeOwnersPath) {{
+    Dbg "codeowners: no CODEOWNERS file found (workspace='$workspace')"
+    return
+  }}
+
+  try {{
+    $lines = Get-Content -LiteralPath $script:CodeOwnersPath -Encoding UTF8 -ErrorAction Stop
+  }} catch {{
+    Dbg "codeowners: failed to read '$script:CodeOwnersPath' ($_)"
+    return
+  }}
+
+  foreach ($line in $lines) {{
+    $trimmed = $line.Trim()
+    if ([string]::IsNullOrEmpty($trimmed) -or $trimmed.StartsWith("#")) {{ continue }}
+    # Section headers may include spaces (for example "[Core Team] @org/team").
+    # Detect them from the full raw line before splitting on whitespace.
+    if (Test-IsGitLabSectionHeaderLine $trimmed) {{
+      continue
+    }}
+    $split = Split-CodeOwnersLine $trimmed
+    $pattern = [string]$split.Pattern
+    if ([string]::IsNullOrEmpty($pattern)) {{ continue }}
+    $ownersRaw = [string]$split.OwnersRaw
+    # Ignore GitLab-style section headers while preserving bracket-class globs.
+    if (Test-IsGitLabSectionHeaderPattern $pattern) {{
+      continue
+    }}
+    $ownersRaw = $ownersRaw.Trim()
+    # Strip inline comments only when '#' begins a comment segment.
+    if ($ownersRaw.StartsWith("#")) {{
+      $ownersRaw = ""
+    }} elseif ($ownersRaw -match '\\s#') {{
+      $ownersRaw = ($ownersRaw -replace '\\s#.*$', '').TrimEnd()
+    }}
+    $ownerTokens = @()
+    if (-not [string]::IsNullOrWhiteSpace($ownersRaw)) {{
+      $ownerTokens = @($ownersRaw -split '\\s+' | Where-Object {{ -not [string]::IsNullOrEmpty($_) }})
+    }}
+    $regex = Convert-CodeOwnersPatternToRegex $pattern
+    if ([string]::IsNullOrEmpty($regex)) {{ continue }}
+    # Best-effort hardening: malformed character classes can produce invalid
+    # .NET regexes (for example "[z-a]"). Skip those rules here so one bad
+    # line cannot force all candidate evaluations into catch paths.
+    try {{
+      [void][System.Text.RegularExpressions.Regex]::new($regex)
+    }} catch {{
+      Dbg "codeowners: skipping invalid regex '$regex' from pattern '$pattern'"
+      continue
+    }}
+    $script:CodeOwnersRules += [PSCustomObject]@{{
+      Regex = $regex
+      Owners = $ownerTokens
+      HasOwners = ($ownerTokens.Count -gt 0)
+    }}
+  }}
+
+  if ($script:CodeOwnersRules.Count -gt 0) {{
+    $script:CodeOwnersEnabled = $true
+    Dbg "codeowners: using '$script:CodeOwnersPath' with $($script:CodeOwnersRules.Count) rule(s)"
+  }} else {{
+    Dbg "codeowners: file '$script:CodeOwnersPath' had no usable rules"
+  }}
+}}
+
+function Get-CodeOwnersMatchForCandidate([string]$Candidate) {{
+  $matched = $false
+  $matchOwners = @()
+  $matchHasOwners = $false
+  # Last matching rule wins (GitHub CODEOWNERS behavior).
+  foreach ($rule in $script:CodeOwnersRules) {{
+    if ($Candidate -cmatch $rule.Regex) {{
+      $matched = $true
+      $matchOwners = @($rule.Owners)
+      $matchHasOwners = [bool]$rule.HasOwners
+    }}
+  }}
+  return [PSCustomObject]@{{
+    Matched = $matched
+    Owners = $matchOwners
+    HasOwners = $matchHasOwners
+  }}
+}}
+
+function Convert-OwnersToJsonString($Owners) {{
+  if (-not $Owners -or $Owners.Count -eq 0) {{ return $null }}
+  $dedup = New-Object System.Collections.Generic.List[string]
+  foreach ($owner in $Owners) {{
+    if (-not [string]::IsNullOrEmpty($owner) -and -not $dedup.Contains([string]$owner)) {{
+      $dedup.Add([string]$owner) | Out-Null
+    }}
+  }}
+  if ($dedup.Count -eq 0) {{ return $null }}
+  # Keep JSON shape stable: always emit an array string, including a single owner.
+  $dedupArr = @($dedup.ToArray())
+  return (ConvertTo-Json -InputObject $dedupArr -Compress)
+}}
+
+function Get-CodeOwnersJsonForSource([string]$SourcePath) {{
+  Initialize-CodeOwnersRules
+  if (-not $script:CodeOwnersEnabled) {{ return $null }}
+  $candidates = Get-PathCandidates $SourcePath
+  # Return first candidate hit (candidate list is already priority-ordered).
+  foreach ($candidate in $candidates) {{
+    $match = Get-CodeOwnersMatchForCandidate $candidate
+    if (-not $match.Matched) {{ continue }}
+    if (-not $match.HasOwners) {{ return $null }}
+    $jsonOwners = Convert-OwnersToJsonString $match.Owners
+    if (-not [string]::IsNullOrEmpty($jsonOwners)) {{
+      return $jsonOwners
+    }}
+  }}
+  return $null
+}}
+
+function Get-EventSourcePath($EventObj) {{
+  if (-not $EventObj) {{ return $null }}
+  $content = Get-MapValue $EventObj 'content'
+  if ($null -eq $content) {{ return $null }}
+  $contentMap = Ensure-Hashtable $content
+
+  # Accept both flattened meta keys and nested source objects.
+  $meta = Ensure-Hashtable (Get-MapValue $contentMap 'meta')
+  foreach ($k in @('test.source.file', 'test.source.path', 'source.file', 'source.path')) {{
+    $v = Get-MapValue $meta $k
+    if ($v -is [string] -and -not [string]::IsNullOrEmpty($v)) {{ return $v }}
+  }}
+
+  $source = Ensure-Hashtable (Get-MapValue $contentMap 'source')
+  foreach ($k in @('file', 'path')) {{
+    $v = Get-MapValue $source $k
+    if ($v -is [string] -and -not [string]::IsNullOrEmpty($v)) {{ return $v }}
+  }}
+  return $null
+}}
+
 function Merge-With-Context([string]$infile, [string]$outfile) {{
   try {{
-    $payload = Get-Content -LiteralPath $infile -Raw | ConvertFrom-Json -ErrorAction Stop
+    $payload = Get-Content -LiteralPath $infile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
   }} catch {{
     Copy-Item -LiteralPath $infile -Destination $outfile -Force
     return
   }}
 
-  if (-not $payload.metadata) {{ $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{{}} }}
-  $meta = $payload.metadata
-  $star = if ($meta.'*' -and ($meta.'*' -is [System.Collections.IDictionary])) {{ $meta.'*' }} else {{ @{{}} }}
+  if (-not $payload.metadata) {{ $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{{}} -Force }}
+  $meta = Ensure-Hashtable $payload.metadata
+  $star = Ensure-Hashtable (Get-MapValue $meta '*')
 
   # Compute runtime-id, language, library_version, env (fill missing only)
-  $runtimeId = $star.'runtime-id'
+  $runtimeId = Get-MapValue $star 'runtime-id'
   if ([string]::IsNullOrEmpty($runtimeId)) {{
     if ($script:ContextObj) {{
       $runtimeId = $script:ContextObj.'runtime-id'
@@ -1942,7 +3759,7 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
     if ([string]::IsNullOrEmpty($runtimeId)) {{ $runtimeId = $script:RuntimeId }}
   }}
 
-  $language = $star.language
+  $language = Get-MapValue $star 'language'
   if ([string]::IsNullOrEmpty($language)) {{
     if ($script:ContextObj) {{
       $language = $script:ContextObj.language
@@ -1952,10 +3769,10 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
     if ([string]::IsNullOrEmpty($language)) {{ $language = 'bazel' }}
   }}
 
-  $libraryVersion = $star.library_version
+  $libraryVersion = Get-MapValue $star 'library_version'
   if ([string]::IsNullOrEmpty($libraryVersion)) {{ $libraryVersion = $script:RulesVersion }}
 
-  $envVal = $star.env
+  $envVal = Get-MapValue $star 'env'
   if ([string]::IsNullOrEmpty($envVal) -and $script:ContextObj) {{ $envVal = $script:ContextObj.env }}
 
   $newStar = @{{ 'runtime-id' = $runtimeId; 'language' = $language; 'library_version' = $libraryVersion }}
@@ -1964,33 +3781,73 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
   # Prune top-level metadata keys
   $newMeta = @{{ '*' = $newStar }}
   foreach ($k in @('test', 'test_suite_end', 'test_module_end', 'test_session_end')) {{
-    if ($meta.PSObject.Properties.Name -contains $k) {{ $newMeta[$k] = $meta.$k }}
+    $metaVal = Get-MapValue $meta $k
+    if ($null -ne $metaVal) {{ $newMeta[$k] = $metaVal }}
   }}
   $payload.metadata = $newMeta
 
-  # Copy context tags into event meta/metrics (skip spans)
-  if ($payload.events -and $script:ContextObj) {{
+  # Copy context tags into event meta/metrics, then inject CODEOWNERS.
+  # Span events are intentionally excluded from enrichment.
+  if ($payload.events) {{
     foreach ($evt in $payload.events) {{
-      if ($evt.type -eq 'span') {{ continue }}
-      if (-not $evt.content) {{ $evt | Add-Member -NotePropertyName content -NotePropertyValue @{{}} -Force }}
-      if (-not ($evt.content.meta -is [System.Collections.IDictionary])) {{ $evt.content | Add-Member -NotePropertyName meta -NotePropertyValue @{{}} -Force }}
-      if (-not ($evt.content.metrics -is [System.Collections.IDictionary])) {{ $evt.content | Add-Member -NotePropertyName metrics -NotePropertyValue @{{}} -Force }}
-      foreach ($prop in $script:ContextObj.PSObject.Properties) {{
-        if ($prop.Name -eq 'topt.api_key_fingerprint') {{ continue }}
-        $val = $prop.Value
-        if ($val -is [string]) {{
-          $evt.content.meta[$prop.Name] = $val
-        }} elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {{
-          $evt.content.metrics[$prop.Name] = [double]$val
-        }} else {{
-          try {{
-            $evt.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 20)
-          }} catch {{
-            $evt.content.meta[$prop.Name] = $val.ToString()
+      $evtType = Get-MapValue $evt 'type'
+      if ($evtType -eq 'span') {{ continue }}
+      if (-not (Get-MapValue $evt 'content')) {{ $evt | Add-Member -NotePropertyName content -NotePropertyValue @{{}} -Force }}
+      $evt.content = Ensure-Hashtable $evt.content
+      $evt.content.meta = Ensure-Hashtable $evt.content.meta
+      $evt.content.metrics = Ensure-Hashtable $evt.content.metrics
+
+      if ($script:ContextObj) {{
+        foreach ($prop in $script:ContextObj.PSObject.Properties) {{
+          # Keep API key fingerprint out of uploaded event content.
+          if ($prop.Name -eq 'topt.api_key_fingerprint') {{ continue }}
+          $val = $prop.Value
+          if ($val -is [string]) {{
+            $evt.content.meta[$prop.Name] = $val
+          }} elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {{
+            $evt.content.metrics[$prop.Name] = [double]$val
+          }} else {{
+            try {{
+              $evt.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 100)
+            }} catch {{
+              $evt.content.meta[$prop.Name] = $val.ToString()
+            }}
           }}
         }}
       }}
+
+      $script:CodeOwnersStats.scanned++
+      # Respect upstream/producer-specified ownership tags.
+      if ($evt.content.meta.Contains('test.codeowners')) {{
+        $script:CodeOwnersStats.skipped_existing++
+        if ($script:DebugMode) {{ Dbg "codeowners: skip existing tag for event type '$evtType'" }}
+        continue
+      }}
+      $sourcePath = Get-EventSourcePath $evt
+      if ([string]::IsNullOrEmpty($sourcePath)) {{
+        $script:CodeOwnersStats.skipped_missing_source++
+        if ($script:DebugMode) {{ Dbg "codeowners: skip missing source for event type '$evtType'" }}
+        continue
+      }}
+      try {{
+        $ownersJson = Get-CodeOwnersJsonForSource $sourcePath
+        if ([string]::IsNullOrEmpty($ownersJson)) {{
+          $script:CodeOwnersStats.skipped_unmatched++
+          if ($script:DebugMode) {{ Dbg "codeowners: skip unmatched source '$sourcePath' for event type '$evtType'" }}
+          continue
+        }}
+        $evt.content.meta['test.codeowners'] = $ownersJson
+        $script:CodeOwnersStats.enriched++
+        if ($script:DebugMode) {{ Dbg "codeowners: assigned owners '$ownersJson' for event type '$evtType'" }}
+      }} catch {{
+        $script:CodeOwnersStats.skipped_errors++
+        Dbg "codeowners: failed to resolve owners for '$sourcePath' ($_)"
+      }}
     }}
+  }}
+
+  if ($script:DebugMode) {{
+    Dbg "codeowners: scanned=$($script:CodeOwnersStats.scanned) enriched=$($script:CodeOwnersStats.enriched) skipped_existing=$($script:CodeOwnersStats.skipped_existing) skipped_missing_source=$($script:CodeOwnersStats.skipped_missing_source) skipped_unmatched=$($script:CodeOwnersStats.skipped_unmatched) skipped_errors=$($script:CodeOwnersStats.skipped_errors)"
   }}
 
   Dbg "Merge-With-Context: wrote enriched '$outfile'"
