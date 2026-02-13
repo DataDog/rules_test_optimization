@@ -287,7 +287,6 @@ test --test_env=DD_API_KEY
 test --test_env=DD_SITE
 test --test_env=DD_TRACE_AGENT_URL
 test --test_env=DD_TOPT_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
-test --test_env=TEST_OPTIMIZATION_PAYLOADS_DIR
 ```
 
 ## Uploading test and coverage payloads
@@ -374,6 +373,7 @@ bazel run //:dd_upload_payloads
 | `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives) |
 | `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TOPT_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
+| `DD_TOPT_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
 
 ### Endpoints and headers

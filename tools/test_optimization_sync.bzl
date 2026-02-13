@@ -21,6 +21,7 @@ load(
     "log_info",
     "sanitize_label_fragment",
     "validate_api_key",
+    "validate_runtime_name",
     "validate_runtime_version",
     "validate_service_name",
 )
@@ -607,12 +608,9 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
 
     # Branch: network error or tool failure
     if result.return_code != 0:
+        request_body = request_debug_payload if request_debug_payload else "<none>"
         fail(
-            (
-                "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\n" +
-                "response_file=%s\n" +
-                ("request_body=%s" % request_debug_payload if request_debug_payload else "request_body=<none>")
-            ) %
+            "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\nresponse_file=%s\nrequest_body=%s" %
             (
                 http_status,
                 http_method,
@@ -620,6 +618,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
                 result.return_code,
                 (result.stderr or "").strip(),
                 out_file,
+                request_body,
             ),
         )
     else:
@@ -852,7 +851,7 @@ def _build_configurations_json(ctx, debug):
     # _build_configurations_json: builds a testConfigurations structure with
     # auto-detected os.* fields plus simple runtime fields.
     osinfo = _detect_os_info(ctx, debug)
-    runtime_name = validate_runtime_version(ctx.attr.runtime_name, debug) or "unknown"
+    runtime_name = validate_runtime_name(ctx.attr.runtime_name, debug) or "unknown"
     runtime_version = validate_runtime_version(ctx.attr.runtime_version, debug) or "unknown"
     runtime_arch = ctx.attr.runtime_arch or osinfo["arch"]
     
@@ -1232,7 +1231,7 @@ def _impl(ctx):
     # Validate DD_API_KEY from the environment; fail with helpful message if missing
     api_key = ctx.os.environ.get("DD_API_KEY")
     log_debug(debug, "validation", "DD_API_KEY present: %s" % bool(api_key))
-    validate_api_key(api_key)
+    api_key = validate_api_key(api_key)
 
     # Emit salt info if present to trace cache-busting input
     salt = ctx.os.environ.get("FETCH_SALT")

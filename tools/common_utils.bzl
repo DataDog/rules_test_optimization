@@ -133,6 +133,9 @@ def validate_api_key(api_key):
     
     Args:
       api_key: The API key value (may be None/empty)
+
+    Returns:
+      Normalized API key value
     """
     if not api_key:
         fail("""
@@ -151,6 +154,39 @@ To obtain an API key:
 2. Navigate to Organization Settings > API Keys
 3. Create a new API key or use an existing one
 """)
+
+    trimmed = api_key.strip()
+    if not trimmed:
+        fail("""
+test_optimization: DD_API_KEY cannot be empty or whitespace-only.
+
+Please provide a non-empty API key via:
+  common --repo_env=DD_API_KEY
+""")
+
+    return trimmed
+
+def validate_runtime_name(name, debug = False):
+    """Validate and normalize runtime name string.
+    
+    Args:
+      name: Runtime name string (may be None)
+      debug: Whether debug logging is enabled
+      
+    Returns:
+      Normalized runtime name string or "unknown"
+    """
+    if not name:
+        return "unknown"
+
+    trimmed = name.strip()
+    if not trimmed:
+        return "unknown"
+
+    if len(trimmed) > 100:
+        log_debug(debug, "validation", "WARNING: runtime name is unusually long: '%s'" % trimmed)
+
+    return trimmed
 
 def validate_runtime_version(version, debug = False):
     """Validate and normalize runtime version string.

@@ -415,6 +415,7 @@ UPLOADER_LOG="$UPLOADER_LOG" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
+import re
 import sys
 from email.parser import BytesParser
 from email.policy import default
@@ -438,8 +439,26 @@ def parse_multipart(body, content_type):
     return parts
 
 def normalize_citestcycle(payload):
-    # Keep full payload shape; the fixture snapshot already uses stable values.
-    return payload
+    # Keep full payload shape while removing user/machine-specific path context.
+    def sanitize_value(value, key=None):
+        if isinstance(value, dict):
+            out = {}
+            for k, v in value.items():
+                if k == "env" and isinstance(v, str):
+                    out[k] = "test-env"
+                else:
+                    out[k] = sanitize_value(v, key=k)
+            return out
+        if isinstance(value, list):
+            return [sanitize_value(v, key=key) for v in value]
+        if isinstance(value, str):
+            value = re.sub(r"/Users/[^/]+", "/Users/<user>", value)
+            value = re.sub(r"/home/[^/]+", "/home/<user>", value)
+            value = re.sub(r"[A-Za-z]:\\\\Users\\\\[^\\\\]+", r"C:\\Users\\<user>", value)
+            return value
+        return value
+
+    return sanitize_value(payload)
 
 def load_snap(path):
     with open(path, "r", encoding="utf-8") as handle:

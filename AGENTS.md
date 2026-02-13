@@ -11,7 +11,6 @@ The solution separates concerns into three phases:
 ## Documentation
 - Overview: see `docs/Initial_documentation.md` for how the solution works (architecture, data flow, and operational notes).
 - Problem statement & proposal: see `docs/RFC.md` for the background problem this solves, rationale, and the detailed design.
-- Implementation plan: see `docs/option2_implementation_plan.md` for the TEST_UNDECLARED_OUTPUTS_DIR approach.
 
 Agents: start with the Overview, then skim the RFC to understand constraints and goals before modifying code or rules.
 
