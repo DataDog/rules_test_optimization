@@ -1750,43 +1750,56 @@ init_codeowners() {{
     CODEOWNERS_CONTEXT_WORKSPACE=$(jq -r '."ci.workspace_path" // empty' "$CONTEXT_JSON" 2>/dev/null || true)
   fi
 
+  local explicit_codeowners="${{DD_TOPT_CODEOWNERS_FILE:-}}"
+  if [[ -n "$explicit_codeowners" ]]; then
+    if [[ -f "$explicit_codeowners" && -r "$explicit_codeowners" ]]; then
+      CODEOWNERS_FILE="$explicit_codeowners"
+      dbg "codeowners: using DD_TOPT_CODEOWNERS_FILE='$CODEOWNERS_FILE'"
+    else
+      dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicit_codeowners'"
+      return
+    fi
+  fi
+
   local script_dir
   script_dir=$(cd "$(dirname "$0")" && pwd -P)
   local -a candidates=()
-  # Lookup order is intentional and mirrored in PowerShell implementation.
-  # We prefer `ci.workspace_path` when present, then workspace-derived paths,
-  # then process cwd, then script directory fallback.
-  if [[ -n "$CODEOWNERS_CONTEXT_WORKSPACE" ]]; then
-    candidates+=(
-      "$CODEOWNERS_CONTEXT_WORKSPACE/CODEOWNERS"
-      "$CODEOWNERS_CONTEXT_WORKSPACE/.github/CODEOWNERS"
-      "$CODEOWNERS_CONTEXT_WORKSPACE/.gitlab/CODEOWNERS"
-      "$CODEOWNERS_CONTEXT_WORKSPACE/docs/CODEOWNERS"
-      "$CODEOWNERS_CONTEXT_WORKSPACE/.docs/CODEOWNERS"
-    )
-  fi
-  if [[ -n "$CODEOWNERS_WORKSPACE_ROOT" ]]; then
-    candidates+=(
-      "$CODEOWNERS_WORKSPACE_ROOT/CODEOWNERS"
-      "$CODEOWNERS_WORKSPACE_ROOT/.github/CODEOWNERS"
-      "$CODEOWNERS_WORKSPACE_ROOT/.gitlab/CODEOWNERS"
-      "$CODEOWNERS_WORKSPACE_ROOT/docs/CODEOWNERS"
-      "$CODEOWNERS_WORKSPACE_ROOT/.docs/CODEOWNERS"
-    )
-  fi
-  candidates+=(
-    "./CODEOWNERS"
-    "$script_dir/CODEOWNERS"
-  )
-
-  local candidate
-  for candidate in "${{candidates[@]}}"; do
-    [[ -z "$candidate" ]] && continue
-    if [[ -f "$candidate" && -r "$candidate" ]]; then
-      CODEOWNERS_FILE="$candidate"
-      break
+  if [[ -z "$CODEOWNERS_FILE" ]]; then
+    # Lookup order is intentional and mirrored in PowerShell implementation.
+    # We prefer `ci.workspace_path` when present, then workspace-derived paths,
+    # then process cwd, then script directory fallback.
+    if [[ -n "$CODEOWNERS_CONTEXT_WORKSPACE" ]]; then
+      candidates+=(
+        "$CODEOWNERS_CONTEXT_WORKSPACE/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/.github/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/.gitlab/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/docs/CODEOWNERS"
+        "$CODEOWNERS_CONTEXT_WORKSPACE/.docs/CODEOWNERS"
+      )
     fi
-  done
+    if [[ -n "$CODEOWNERS_WORKSPACE_ROOT" ]]; then
+      candidates+=(
+        "$CODEOWNERS_WORKSPACE_ROOT/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/.github/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/.gitlab/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/docs/CODEOWNERS"
+        "$CODEOWNERS_WORKSPACE_ROOT/.docs/CODEOWNERS"
+      )
+    fi
+    candidates+=(
+      "./CODEOWNERS"
+      "$script_dir/CODEOWNERS"
+    )
+
+    local candidate
+    for candidate in "${{candidates[@]}}"; do
+      [[ -z "$candidate" ]] && continue
+      if [[ -f "$candidate" && -r "$candidate" ]]; then
+        CODEOWNERS_FILE="$candidate"
+        break
+      fi
+    done
+  fi
 
   if [[ -z "$CODEOWNERS_FILE" ]]; then
     dbg "codeowners: no CODEOWNERS file found (workspace='$CODEOWNERS_WORKSPACE_ROOT')"
@@ -3537,28 +3550,40 @@ function Initialize-CodeOwnersRules {{
   }} else {{
     $workspace = (Get-Location).Path
   }}
+  $explicitCodeOwners = $env:DD_TOPT_CODEOWNERS_FILE
+  if (-not [string]::IsNullOrEmpty($explicitCodeOwners)) {{
+    if (Test-Path -LiteralPath $explicitCodeOwners -PathType Leaf) {{
+      $script:CodeOwnersPath = $explicitCodeOwners
+      Dbg "codeowners: using DD_TOPT_CODEOWNERS_FILE='$script:CodeOwnersPath'"
+    }} else {{
+      Dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicitCodeOwners'"
+      return
+    }}
+  }}
   $compatWorkspace = if ($script:ContextObj) {{ $script:ContextObj.'ci.workspace_path' }} else {{ $null }}
   # Lookup order must mirror Bash implementation for cross-platform parity.
-  $lookupPaths = @(
-    $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "CODEOWNERS" }} else {{ $null }}),
-    $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".github/CODEOWNERS" }} else {{ $null }}),
-    $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".gitlab/CODEOWNERS" }} else {{ $null }}),
-    $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "docs/CODEOWNERS" }} else {{ $null }}),
-    $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".docs/CODEOWNERS" }} else {{ $null }}),
-    (Join-Path $workspace "CODEOWNERS"),
-    (Join-Path $workspace ".github/CODEOWNERS"),
-    (Join-Path $workspace ".gitlab/CODEOWNERS"),
-    (Join-Path $workspace "docs/CODEOWNERS"),
-    (Join-Path $workspace ".docs/CODEOWNERS"),
-    (Join-Path (Get-Location).Path "CODEOWNERS"),
-    (Join-Path $PSScriptRoot "CODEOWNERS")
-  )
+  if (-not $script:CodeOwnersPath) {{
+    $lookupPaths = @(
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".github/CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".gitlab/CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace "docs/CODEOWNERS" }} else {{ $null }}),
+      $(if ($compatWorkspace) {{ Join-Path $compatWorkspace ".docs/CODEOWNERS" }} else {{ $null }}),
+      (Join-Path $workspace "CODEOWNERS"),
+      (Join-Path $workspace ".github/CODEOWNERS"),
+      (Join-Path $workspace ".gitlab/CODEOWNERS"),
+      (Join-Path $workspace "docs/CODEOWNERS"),
+      (Join-Path $workspace ".docs/CODEOWNERS"),
+      (Join-Path (Get-Location).Path "CODEOWNERS"),
+      (Join-Path $PSScriptRoot "CODEOWNERS")
+    )
 
-  foreach ($candidate in $lookupPaths) {{
-    if ([string]::IsNullOrEmpty($candidate)) {{ continue }}
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {{
-      $script:CodeOwnersPath = $candidate
-      break
+    foreach ($candidate in $lookupPaths) {{
+      if ([string]::IsNullOrEmpty($candidate)) {{ continue }}
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {{
+        $script:CodeOwnersPath = $candidate
+        break
+      }}
     }}
   }}
   if (-not $script:CodeOwnersPath) {{
