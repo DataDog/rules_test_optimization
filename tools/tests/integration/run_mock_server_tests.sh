@@ -1537,11 +1537,16 @@ if [[ -z "$UPLOADER_SCRIPT_PATH" ]]; then
 fi
 UPLOADER_SCRIPT_CANDIDATES=()
 if [[ "$UPLOADER_SCRIPT_PATH" == *.bat ]]; then
-  # On Windows, cquery returns the executable (.bat). We need the sibling Bash
-  # script because this harness patches and executes the copied uploader in Bash.
+  # On Windows, cquery returns the executable (.bat). Prefer a sibling Bash
+  # script when available, and otherwise fall back to sibling PowerShell.
   UPLOADER_SCRIPT_CANDIDATES+=("${UPLOADER_SCRIPT_PATH%.bat}.sh")
+  UPLOADER_SCRIPT_CANDIDATES+=("${UPLOADER_SCRIPT_PATH%.bat}.ps1")
 elif [[ "$UPLOADER_SCRIPT_PATH" == *.ps1 ]]; then
+  UPLOADER_SCRIPT_CANDIDATES+=("$UPLOADER_SCRIPT_PATH")
   UPLOADER_SCRIPT_CANDIDATES+=("${UPLOADER_SCRIPT_PATH%.ps1}.sh")
+elif [[ "$UPLOADER_SCRIPT_PATH" == *.sh ]]; then
+  UPLOADER_SCRIPT_CANDIDATES+=("$UPLOADER_SCRIPT_PATH")
+  UPLOADER_SCRIPT_CANDIDATES+=("${UPLOADER_SCRIPT_PATH%.sh}.ps1")
 fi
 UPLOADER_SCRIPT_CANDIDATES+=("$UPLOADER_SCRIPT_PATH")
 
@@ -1570,49 +1575,78 @@ if [[ -z "$RESOLVED_UPLOADER_SCRIPT_PATH" ]]; then
   exit 1
 fi
 UPLOADER_SCRIPT_PATH="$RESOLVED_UPLOADER_SCRIPT_PATH"
-if [[ "$UPLOADER_SCRIPT_PATH" != *.sh ]]; then
-  echo "error: expected bash uploader script for manifest patching, got: $UPLOADER_SCRIPT_PATH"
+
+MANIFEST_UPLOADER_KIND=""
+MANIFEST_UPLOADER=""
+if [[ "$UPLOADER_SCRIPT_PATH" == *.sh ]]; then
+  MANIFEST_UPLOADER_KIND="bash"
+  MANIFEST_UPLOADER="$TMP_WS/manifest_uploader.sh"
+elif [[ "$UPLOADER_SCRIPT_PATH" == *.ps1 ]]; then
+  MANIFEST_UPLOADER_KIND="powershell"
+  MANIFEST_UPLOADER="$TMP_WS/manifest_uploader.ps1"
+else
+  echo "error: expected .sh or .ps1 uploader script for manifest patching, got: $UPLOADER_SCRIPT_PATH"
   echo "$UPLOADER_CQUERY"
   exit 1
 fi
 
-MANIFEST_UPLOADER="$TMP_WS/manifest_uploader.sh"
 cp "$UPLOADER_SCRIPT_PATH" "$MANIFEST_UPLOADER"
 chmod u+w,ugo+x "$MANIFEST_UPLOADER"
 
 # Patch copied script so direct artifact resolution always misses and runfile
 # manifest lookup is required for context/schema files.
-MANIFEST_UPLOADER_PATH="$MANIFEST_UPLOADER" "$PYTHON" - <<'PY'
+MANIFEST_UPLOADER_PATH="$MANIFEST_UPLOADER" MANIFEST_UPLOADER_KIND="$MANIFEST_UPLOADER_KIND" "$PYTHON" - <<'PY'
 import os
 import re
 import sys
 
 path = os.environ["MANIFEST_UPLOADER_PATH"]
+kind = os.environ["MANIFEST_UPLOADER_KIND"]
 with open(path, "r", encoding="utf-8") as handle:
     content = handle.read()
-for key in ("CONTEXT_JSON_PATH", "SCHEMA_JSON_PATH", "SCHEMA_VALIDATOR_PATH"):
-    content, count = re.subn(
-        rf'^{key}\s*=\s*"[^"]*"\r?$',
-        f'{key}="__FORCE_RUNFILE_FALLBACK__"',
-        content,
-        flags=re.MULTILINE,
+if kind == "bash":
+    for key in ("CONTEXT_JSON_PATH", "SCHEMA_JSON_PATH", "SCHEMA_VALIDATOR_PATH"):
+        content, count = re.subn(
+            rf'^{key}\s*=\s*"[^"]*"\r?$',
+            f'{key}="__FORCE_RUNFILE_FALLBACK__"',
+            content,
+            flags=re.MULTILINE,
+        )
+        if count != 1:
+            print(f"error: failed to patch {key} in copied uploader script")
+            sys.exit(1)
+elif kind == "powershell":
+    replacements = (
+        (r'^\$ContextJsonPath\s*=\s*"[^"]*"\r?$', '$ContextJsonPath = "__FORCE_RUNFILE_FALLBACK__"'),
+        (r'^\$SchemaJsonPath\s*=\s*"[^"]*"\r?$', '$SchemaJsonPath = "__FORCE_RUNFILE_FALLBACK__"'),
+        (r'^\$SchemaValidatorPath\s*=\s*"[^"]*"\r?$', '$SchemaValidatorPath = "__FORCE_RUNFILE_FALLBACK__"'),
     )
-    if count != 1:
-        print(f"error: failed to patch {key} in copied uploader script")
-        sys.exit(1)
+    for pattern, repl in replacements:
+        content, count = re.subn(pattern, repl, content, flags=re.MULTILINE)
+        if count != 1:
+            print(f"error: failed to patch pattern {pattern!r} in copied uploader script")
+            sys.exit(1)
+else:
+    print(f"error: unknown manifest uploader kind: {kind!r}")
+    sys.exit(1)
 with open(path, "w", encoding="utf-8") as handle:
     handle.write(content)
 PY
 
-CONTEXT_JSON_RLOC_MANIFEST=$(MANIFEST_UPLOADER_PATH="$MANIFEST_UPLOADER" "$PYTHON" - <<'PY'
+CONTEXT_JSON_RLOC_MANIFEST=$(MANIFEST_UPLOADER_PATH="$MANIFEST_UPLOADER" MANIFEST_UPLOADER_KIND="$MANIFEST_UPLOADER_KIND" "$PYTHON" - <<'PY'
 import os
 import re
 import sys
 
 path = os.environ["MANIFEST_UPLOADER_PATH"]
+kind = os.environ["MANIFEST_UPLOADER_KIND"]
 with open(path, "r", encoding="utf-8") as handle:
     content = handle.read()
-match = re.search(r'^CONTEXT_JSON_RLOC="([^"]*)"$', content, flags=re.MULTILINE)
+if kind == "bash":
+    pattern = r'^CONTEXT_JSON_RLOC="([^"]*)"\r?$'
+else:
+    pattern = r'^\$ContextJsonRloc\s*=\s*"([^"]*)"\r?$'
+match = re.search(pattern, content, flags=re.MULTILINE)
 if not match:
     print("error: failed to locate CONTEXT_JSON_RLOC in copied uploader script")
     sys.exit(1)
@@ -1622,6 +1656,12 @@ PY
 if [[ -z "$CONTEXT_JSON_RLOC_MANIFEST" ]]; then
   echo "error: CONTEXT_JSON_RLOC from copied uploader is empty"
   exit 1
+fi
+MANIFEST_UPLOADER_CMD=()
+if [[ "$MANIFEST_UPLOADER_KIND" == "bash" ]]; then
+  MANIFEST_UPLOADER_CMD=("$MANIFEST_UPLOADER")
+else
+  MANIFEST_UPLOADER_CMD=(pwsh -NoLogo -NoProfile -File "$MANIFEST_UPLOADER")
 fi
 
 CONTEXT_CQUERY=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_context --output=files \
@@ -1693,7 +1733,7 @@ DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
 DD_TOPT_MAX_WAIT_SEC=30 \
 DD_TOPT_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
-"$MANIFEST_UPLOADER" >"$UPLOADER_MANIFEST_EXACT_LOG" 2>&1; then
+"${MANIFEST_UPLOADER_CMD[@]}" >"$UPLOADER_MANIFEST_EXACT_LOG" 2>&1; then
   echo "error: manifest exact-key uploader run failed"
   cat "$UPLOADER_MANIFEST_EXACT_LOG" || true
   exit 1
@@ -1716,7 +1756,7 @@ DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
 DD_TOPT_MAX_WAIT_SEC=30 \
 DD_TOPT_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
-"$MANIFEST_UPLOADER" >"$UPLOADER_MANIFEST_SUFFIX_LOG" 2>&1; then
+"${MANIFEST_UPLOADER_CMD[@]}" >"$UPLOADER_MANIFEST_SUFFIX_LOG" 2>&1; then
   echo "error: manifest suffix-key uploader run failed"
   cat "$UPLOADER_MANIFEST_SUFFIX_LOG" || true
   exit 1
