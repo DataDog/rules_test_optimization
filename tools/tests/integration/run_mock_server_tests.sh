@@ -956,8 +956,10 @@ fi
 
 MULTI_INVALID_LOG="$TMP_WS/multi_invalid_service.log"
 if (
-  cd "$MULTI_WS" && \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build //invalid:macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
+  # Build from the package directory to avoid //pkg:label path conversion
+  # quirks under Git Bash on Windows.
+  cd "$MULTI_WS/invalid" && \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build :macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
 ); then
   echo "error: dd_topt_go_test invalid-service scenario unexpectedly succeeded"
   cat "$MULTI_INVALID_LOG" || true
