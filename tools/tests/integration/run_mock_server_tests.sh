@@ -79,7 +79,8 @@ cd "$WORKSPACE"
 # stable across platforms/runtimes (especially Bazel 9 on Windows).
 WORKSPACE_FOR_UPLOADER="$WORKSPACE"
 if command -v cygpath >/dev/null 2>&1; then
-  WORKSPACE_FOR_UPLOADER="$(cygpath -w "$WORKSPACE" 2>/dev/null || echo "$WORKSPACE")"
+  # Use mixed-style paths (C:/...) for cross-shell compatibility.
+  WORKSPACE_FOR_UPLOADER="$(cygpath -m "$WORKSPACE" 2>/dev/null || echo "$WORKSPACE")"
 fi
 
 # JSON-escape REPO_ROOT for safe insertion into MODULE.bazel.
@@ -162,7 +163,8 @@ cat > CODEOWNERS <<'CODEOWNERS_EOF'
 CODEOWNERS_EOF
 CODEOWNERS_FOR_UPLOADER="$WORKSPACE/CODEOWNERS"
 if command -v cygpath >/dev/null 2>&1; then
-  CODEOWNERS_FOR_UPLOADER="$(cygpath -w "$CODEOWNERS_FOR_UPLOADER" 2>/dev/null || echo "$CODEOWNERS_FOR_UPLOADER")"
+  # Use mixed-style paths (C:/...) for cross-shell compatibility.
+  CODEOWNERS_FOR_UPLOADER="$(cygpath -m "$CODEOWNERS_FOR_UPLOADER" 2>/dev/null || echo "$CODEOWNERS_FOR_UPLOADER")"
 fi
 
 cat > payload_writer.sh <<'PAYLOAD_EOF'
@@ -482,14 +484,17 @@ def parse_owners(value):
     except Exception:
         return "__invalid__"
 
-if parse_owners(event_codeowners("test", "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest")) != ["@DataDog/ci-app-libraries-dotnet"]:
-    print("error: expected codeowners re-injection for test event")
+test_event_owners = parse_owners(event_codeowners("test", "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"))
+if test_event_owners != ["@DataDog/ci-app-libraries-dotnet"]:
+    print(f"error: expected codeowners re-injection for test event (got={test_event_owners!r})")
     sys.exit(1)
-if parse_owners(event_codeowners("test_suite_end", "Samples.XUnitTests.TestSuite")) != ["@DataDog/ci-app-libraries-dotnet"]:
-    print("error: expected codeowners re-injection for test_suite_end event")
+suite_event_owners = parse_owners(event_codeowners("test_suite_end", "Samples.XUnitTests.TestSuite"))
+if suite_event_owners != ["@DataDog/ci-app-libraries-dotnet"]:
+    print(f"error: expected codeowners re-injection for test_suite_end event (got={suite_event_owners!r})")
     sys.exit(1)
-if parse_owners(event_codeowners("test", "Samples.XUnitTests.UnSkippableSuite.UnskippableTest")) != ["@DataDog/ci-app-libraries-dotnet"]:
-    print("error: expected existing codeowners to be preserved for test event")
+existing_event_owners = parse_owners(event_codeowners("test", "Samples.XUnitTests.UnSkippableSuite.UnskippableTest"))
+if existing_event_owners != ["@DataDog/ci-app-libraries-dotnet"]:
+    print(f"error: expected existing codeowners to be preserved for test event (got={existing_event_owners!r})")
     sys.exit(1)
 
 session_evt = find_event("test_session_end")

@@ -1754,7 +1754,7 @@ init_codeowners() {{
   if [[ -n "$explicit_codeowners" ]]; then
     if [[ -f "$explicit_codeowners" && -r "$explicit_codeowners" ]]; then
       CODEOWNERS_FILE="$explicit_codeowners"
-      dbg "codeowners: using DD_TOPT_CODEOWNERS_FILE='$CODEOWNERS_FILE'"
+      dbg "codeowners: using explicit CODEOWNERS file '$CODEOWNERS_FILE'"
     else
       dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicit_codeowners'"
       return
@@ -3554,7 +3554,7 @@ function Initialize-CodeOwnersRules {{
   if (-not [string]::IsNullOrEmpty($explicitCodeOwners)) {{
     if (Test-Path -LiteralPath $explicitCodeOwners -PathType Leaf) {{
       $script:CodeOwnersPath = $explicitCodeOwners
-      Dbg "codeowners: using DD_TOPT_CODEOWNERS_FILE='$script:CodeOwnersPath'"
+      Dbg "codeowners: using explicit CODEOWNERS file '$script:CodeOwnersPath'"
     }} else {{
       Dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicitCodeOwners'"
       return
