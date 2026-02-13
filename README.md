@@ -801,6 +801,11 @@ This starts a local mock HTTP server and uses the following test-only overrides:
 - On assertion failures, it prints focused uploader diagnostics plus manifest
   uploader log tails to speed up cross-platform triage.
 
+CI note: `.github/workflows/ci.yml` also runs a dedicated hermetic lane
+(`bazel-tests-hermetic`) on Linux with sandboxed execution and network blocking.
+This is intentional: it catches hidden host/network dependencies that can pass
+in normal local runs but fail in locked-down CI environments.
+
 ## Schema sync helper
 
 The source of truth for the uploader payload schema is:

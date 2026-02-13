@@ -272,7 +272,7 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None)
         return specs
 
     # Decode and navigate to data.attributes.tests (map: module -> suites map)
-    obj = json.decode(content)
+    obj = _decode_json_object_or_fail(content, known_tests_file)
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     tests_obj = attrs_obj.get("tests") or {}
@@ -343,7 +343,7 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         return specs
 
     # Decode and navigate to data.attributes.modules (map: module -> module suites/tests object)
-    obj = json.decode(content)
+    obj = _decode_json_object_or_fail(content, test_management_file)
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     modules_obj = attrs_obj.get("modules") or {}
@@ -487,13 +487,35 @@ def _resolve_dd_api_base_for_tests(dd_site, dd_api_base):
     }
     return _resolve_dd_api_base(env_data, False)
 
+def _decode_json_object_or_fail(content, context):
+    # Parse API/file JSON with actionable guardrails for malformed responses.
+    trimmed = (content or "").strip()
+    if not trimmed:
+        fail("test_optimization: %s response is empty; expected JSON object" % context)
+
+    # Catch common non-JSON responses (HTML/text proxy errors) early.
+    if not (trimmed.startswith("{") or trimmed.startswith("[")):
+        sample = trimmed[:120].replace("\n", " ").replace("\r", " ")
+        fail(
+            (
+                "test_optimization: %s response is not JSON (starts with: %s). " +
+                "Check DD_SITE/DD_TOPT_API_BASE, credentials, and endpoint routing."
+            ) %
+            (context, repr(sample)),
+        )
+
+    obj = json.decode(trimmed)
+    if type(obj) != "dict":
+        fail("test_optimization: %s response must be a JSON object, got %s" % (context, type(obj)))
+    return obj
+
 def _collect_known_tests_modules(ctx, known_tests_file):
     # _collect_known_tests_modules: list module names from known_tests.json
     kt_path = ctx.path(known_tests_file)
     content = ctx.read(kt_path)
     if not content or not content.strip():
         return []
-    obj = json.decode(content)
+    obj = _decode_json_object_or_fail(content, known_tests_file)
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     tests_obj = attrs_obj.get("tests") or {}
@@ -511,7 +533,7 @@ def _collect_test_management_modules(ctx, test_management_file):
     content = ctx.read(tm_path)
     if not content or not content.strip():
         return []
-    obj = json.decode(content)
+    obj = _decode_json_object_or_fail(content, test_management_file)
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     modules_obj = attrs_obj.get("modules") or {}
@@ -1344,7 +1366,7 @@ def _impl(ctx):
     settings_path = ctx.path(settings_file)
     settings_content = ctx.read(settings_path)
     if settings_content and settings_content.strip():
-        settings_obj = json.decode(settings_content)
+        settings_obj = _decode_json_object_or_fail(settings_content, settings_file)
         data_obj = settings_obj.get("data") or {}
         attrs_obj = data_obj.get("attributes") or {}
         enabled_val = attrs_obj.get("known_tests_enabled")

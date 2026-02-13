@@ -13,11 +13,12 @@ set -euo pipefail
 # 1) Start local mock Datadog server and collect all requests.
 # 2) Generate ephemeral MODULE/BUILD files in a temp workspace.
 # 3) Run sync + writer test + uploader and verify API coverage/snapshots.
-# 4) Validate multi-service extension wiring (including deduped sanitized keys).
-# 5) Validate CODEOWNERS enrichment behavior (injection, preservation, edge
+# 4) Validate malformed sync responses fail with actionable diagnostics.
+# 5) Validate multi-service extension wiring + macro service-key resolution.
+# 6) Validate CODEOWNERS enrichment behavior (injection, preservation, edge
 #    cases, runfiles/execroot normalization).
-# 6) Validate EVP-mode uploads (evp_proxy endpoints + EVP headers).
-# 7) Force manifest-only runfile fallback and verify context/schema resolution.
+# 7) Validate EVP-mode uploads (evp_proxy endpoints + EVP headers).
+# 8) Force manifest-only runfile fallback and verify context/schema resolution.
 #
 # Debugging tips:
 # - Set KEEP_TMP=1 to inspect the generated temp workspace after failures.
@@ -740,6 +741,62 @@ with tempfile.TemporaryDirectory() as td:
         sys.exit(1)
 PY
 
+# Scenario: malformed known-tests sync response should fail with actionable diagnostics.
+MALFORMED_WS="$TMP_WS/ws_malformed_sync"
+mkdir -p "$MALFORMED_WS"
+cat > "$MALFORMED_WS/MODULE.bazel" <<MODULE_MALFORMED_EOF
+module(name = "topt-malformed-sync", version = "0.0.0")
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = ${ESCAPED_REPO_ROOT},
+)
+
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data_bad_json",
+    service = "malformed-json-service",
+    runtime_name = "go",
+    runtime_version = "1.2.3",
+)
+
+use_repo(test_optimization_sync, "test_optimization_data_bad_json")
+MODULE_MALFORMED_EOF
+
+cat > "$MALFORMED_WS/BUILD.bazel" <<'BUILD_MALFORMED_EOF'
+filegroup(
+    name = "noop",
+    srcs = [],
+)
+BUILD_MALFORMED_EOF
+
+MALFORMED_LOG="$TMP_WS/malformed_sync.log"
+if (
+  cd "$MALFORMED_WS" && \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build @test_optimization_data_bad_json//:test_optimization_files \
+    "${REPO_ENVS[@]}" >"$MALFORMED_LOG" 2>&1
+); then
+  echo "error: malformed known-tests scenario unexpectedly succeeded"
+  cat "$MALFORMED_LOG" || true
+  exit 1
+fi
+if ! grep -q "response is not JSON" "$MALFORMED_LOG"; then
+  echo "error: malformed known-tests scenario missing actionable JSON failure message"
+  cat "$MALFORMED_LOG" || true
+  exit 1
+fi
+if ! grep -q "known_tests.json" "$MALFORMED_LOG"; then
+  echo "error: malformed known-tests scenario missing known_tests context in failure message"
+  cat "$MALFORMED_LOG" || true
+  exit 1
+fi
+
 # Scenario: multi-service extension wiring + deduped sanitized service keys.
 MULTI_WS="$TMP_WS/ws_multi"
 mkdir -p "$MULTI_WS"
@@ -774,6 +831,11 @@ use_repo(
 MODULE_MULTI_EOF
 
 cat > "$MULTI_WS/BUILD.bazel" <<'BUILD_MULTI_EOF'
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
+load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
+load("//:macro_probe.bzl", "fake_go_test")
+
 filegroup(
     name = "multi_sync_smoke",
     srcs = [
@@ -785,14 +847,49 @@ filegroup(
         "@test_optimization_data_go_service_2//:test_optimization_files",
     ],
 )
+
+dd_topt_go_test(
+    name = "macro_service_probe",
+    go_test_rule = fake_go_test,
+    topt_data = {
+        "go_service": topt_data_go_service,
+        "go_service_2": topt_data_go_service_2,
+    },
+    topt_service = "go_service_2",
+)
 BUILD_MULTI_EOF
+
+cat > "$MULTI_WS/macro_probe.bzl" <<'MACRO_PROBE_EOF'
+def fake_go_test(name, data = [], env = {}, **kwargs):
+    _ = env
+    _ = kwargs
+    native.filegroup(
+        name = name,
+        srcs = data,
+    )
+MACRO_PROBE_EOF
 
 MULTI_LOG_START="$(log_line_count)"
 (
   cd "$MULTI_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke //:macro_service_probe \
     "${REPO_ENVS[@]}"
 )
+
+MULTI_MACRO_CQUERY=$(
+  cd "$MULTI_WS" && \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe --output=build "${REPO_ENVS[@]}"
+)
+if ! printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service_2//:.testoptimization/manifest.txt"; then
+  echo "error: dd_topt_go_test multi-service probe did not resolve to go_service_2 manifest"
+  echo "$MULTI_MACRO_CQUERY"
+  exit 1
+fi
+if printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service//:.testoptimization/manifest.txt"; then
+  echo "error: dd_topt_go_test multi-service probe unexpectedly resolved to go_service manifest"
+  echo "$MULTI_MACRO_CQUERY"
+  exit 1
+fi
 
 MULTI_LOG_START="$MULTI_LOG_START" "$PYTHON" - <<'PY'
 import base64

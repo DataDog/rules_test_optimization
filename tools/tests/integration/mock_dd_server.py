@@ -18,6 +18,9 @@ def _read_json(path):
 def _json_error(message):
     return {"error": message}
 
+MALFORMED_KNOWN_TESTS_SERVICE = "malformed-json-service"
+MALFORMED_KNOWN_TESTS_BODY = b"NOT_JSON_KNOWN_TESTS_RESPONSE"
+
 
 class _ServerState:
     """Shared server state: fixtures and a thread-safe request log."""
@@ -93,6 +96,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_text(self, code, payload):
+        body = payload.encode("utf-8") if isinstance(payload, str) else payload
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _read_body(self):
         raw_len = self.headers.get("Content-Length")
         if not raw_len:
@@ -144,6 +155,15 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(attrs.get("configurations"), dict):
             return "configurations must be an object"
         return None
+
+    def _extract_service(self, body):
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except Exception:
+            return ""
+        attrs = data.get("data", {}).get("attributes", {})
+        service = attrs.get("service")
+        return service if isinstance(service, str) else ""
 
     def _validate_test_management(self, body):
         # Validate the test management request payload and required headers.
@@ -224,6 +244,9 @@ class _Handler(BaseHTTPRequestHandler):
             err = self._validate_known_tests(body)
             if err:
                 self._send_json(400, _json_error(err))
+                return
+            if self._extract_service(body) == MALFORMED_KNOWN_TESTS_SERVICE:
+                self._send_text(200, MALFORMED_KNOWN_TESTS_BODY)
                 return
             self._send_json(200, self.server.state.fixtures["known_tests"])
             return
