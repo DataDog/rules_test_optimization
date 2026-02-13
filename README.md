@@ -763,6 +763,16 @@ For a full end-to-end flow (sync + uploader) without hitting Datadog, run:
 tools/tests/integration/run_mock_server_tests.sh
 ```
 
+On Windows, use the PowerShell entrypoint (or the `cmd.exe` wrapper):
+
+```powershell
+.\tools\tests\integration\run_mock_server_tests.ps1
+```
+
+```bat
+tools\tests\integration\run_mock_server_tests.cmd
+```
+
 This starts a local mock HTTP server and uses the following test-only overrides:
 
 - `DD_TOPT_API_BASE` to redirect sync requests
