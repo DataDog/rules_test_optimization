@@ -120,7 +120,7 @@ load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "
 sh_test(
     name = "write_payloads_test",
     srcs = ["payload_writer.sh"],
-    data = ["citestcycle_template.json"],
+    data = ["citestcycle_payload.json"],
     size = "small",
     timeout = "short",
 )
@@ -136,41 +136,6 @@ dd_payload_uploader(
 BUILD_EOF
 
 cp "$REPO_ROOT/tools/tests/integration/snapshots/citestcycle.json" "$WORKSPACE/citestcycle_template.json"
-
-cat > CODEOWNERS <<'CODEOWNERS_EOF'
-* @org/default
-/tracer/test/test-applications/integrations/Samples.XUnitTests/[Tt]estSuite.cs @DataDog/ci-app-libraries-dotnet
-CODEOWNERS_EOF
-
-cat > payload_writer.sh <<'PAYLOAD_EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-out="${TEST_UNDECLARED_OUTPUTS_DIR:?}"
-mkdir -p "$out/tests" "$out/coverage"
-template=""
-if [[ -n "${TEST_SRCDIR:-}" ]]; then
-  for ws in "${TEST_WORKSPACE:-}" "_main"; do
-    [[ -z "$ws" ]] && continue
-    candidate="$TEST_SRCDIR/$ws/citestcycle_template.json"
-    if [[ -f "$candidate" ]]; then
-      template="$candidate"
-      break
-    fi
-  done
-  if [[ -z "$template" ]]; then
-    candidate="$TEST_SRCDIR/citestcycle_template.json"
-    [[ -f "$candidate" ]] && template="$candidate"
-  fi
-fi
-if [[ -z "$template" || ! -f "$template" ]]; then
-  template="$(dirname "$0")/citestcycle_template.json"
-fi
-if [[ ! -f "$template" ]]; then
-  echo "error: fixture template not found: $template" >&2
-  exit 1
-fi
-
 jq '
   .events |= map(
     if (
@@ -183,7 +148,102 @@ jq '
       .
     end
   )
-' "$template" > "$out/tests/test1.json"
+' "$WORKSPACE/citestcycle_template.json" > "$WORKSPACE/citestcycle_payload.json"
+
+cat > CODEOWNERS <<'CODEOWNERS_EOF'
+* @org/default
+/tracer/test/test-applications/integrations/Samples.XUnitTests/[Tt]estSuite.cs @DataDog/ci-app-libraries-dotnet
+CODEOWNERS_EOF
+
+cat > payload_writer.sh <<'PAYLOAD_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+out="${TEST_UNDECLARED_OUTPUTS_DIR:?}"
+mkdir -p "$out/tests" "$out/coverage"
+fixture_name="citestcycle_payload.json"
+
+resolve_from_manifest() {
+  local key="$1"
+  local manifest="${RUNFILES_MANIFEST_FILE:-}"
+  [[ -z "$manifest" || ! -f "$manifest" ]] && return 1
+  local path
+  path=$(awk -v key="$key" '
+    BEGIN { bom = sprintf("%c%c%c", 239, 187, 191) }
+    {
+      k = $1
+      if (NR == 1 && index(k, bom) == 1) {
+        k = substr(k, 4)
+      }
+      if (k == key) {
+        print substr($0, length($1) + 2)
+        exit
+      }
+    }
+  ' "$manifest")
+  if [[ -n "$path" && -f "$path" ]]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  path=$(awk -v key="$key" '
+    BEGIN { bom = sprintf("%c%c%c", 239, 187, 191) }
+    {
+      k = $1
+      if (NR == 1 && index(k, bom) == 1) {
+        k = substr(k, 4)
+      }
+      if (length(k) > length(key) && substr(k, length(k) - length(key) + 1) == key) {
+        sep = substr(k, length(k) - length(key), 1)
+        if (sep == "/" || sep == "\\") {
+          print substr($0, length($1) + 2)
+          exit
+        }
+      }
+    }
+  ' "$manifest")
+  if [[ -n "$path" && -f "$path" ]]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  return 1
+}
+
+template=""
+if [[ -n "${TEST_SRCDIR:-}" ]]; then
+  for ws in "${TEST_WORKSPACE:-}" "_main"; do
+    [[ -z "$ws" ]] && continue
+    candidate="$TEST_SRCDIR/$ws/$fixture_name"
+    if [[ -f "$candidate" ]]; then
+      template="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$template" ]]; then
+    candidate="$TEST_SRCDIR/$fixture_name"
+    [[ -f "$candidate" ]] && template="$candidate"
+  fi
+fi
+
+if [[ -z "$template" ]]; then
+  for key in "${TEST_WORKSPACE:-}/$fixture_name" "_main/$fixture_name" "$fixture_name"; do
+    [[ "$key" == "/$fixture_name" ]] && continue
+    candidate=$(resolve_from_manifest "$key" || true)
+    if [[ -n "$candidate" ]]; then
+      template="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$template" || ! -f "$template" ]]; then
+  template="$(dirname "$0")/$fixture_name"
+fi
+if [[ ! -f "$template" ]]; then
+  echo "error: fixture template not found: $template" >&2
+  exit 1
+fi
+
+cp "$template" "$out/tests/test1.json"
 echo '{}' > "$out/coverage/cov1.json"
 PAYLOAD_EOF
 chmod +x payload_writer.sh
