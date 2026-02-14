@@ -5,11 +5,24 @@ This folder shows concise usage patterns for single-service and multi-service se
 Tip: commands use `bazel` for portability in consumer repos. In this
 repository, use `./bazelw` for local development convenience.
 
+## Prerequisites
+
+- Add module dependencies before `use_extension(...)`:
+  - `bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")`
+  - `bazel_dep(name = "rules_go", ...)` for Go examples shown below
+- Configure Go toolchains/SDK in your repo if you build Go targets.
+- Provide sync credentials via environment and forward them to repository rules:
+  - shell/CI secret: `DD_API_KEY`
+  - `.bazelrc`: `common --repo_env=DD_API_KEY` (and optionally `common --repo_env=DD_SITE`)
+
 ## Single-service (classic)
 
 MODULE.bazel:
 
 ```bzl
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
+
 test_optimization_sync = use_extension(
     "@datadog-rules-test-optimization//tools:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
@@ -58,13 +71,25 @@ Running tests and uploading payloads:
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 exit $test_status
+
+# RBE users: download outputs so uploader can discover payload files
+bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+exit $test_status
 ```
+
+Notes:
+- The sequence above intentionally preserves the test exit code.
+- Uploader failures are still reported in uploader logs/output; monitor those in CI.
 
 ## Multi-service (aggregator)
 
 MODULE.bazel:
 
 ```bzl
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
+
 topt_multi = use_extension(
     "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
     "test_optimization_multi_sync_extension",

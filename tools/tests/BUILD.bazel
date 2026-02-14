@@ -28,6 +28,9 @@ load(
     "//tools/tests:test_multi_sync_utils.bzl",
     "compute_repo_names_test",
     "compute_service_keys_dedups_collisions_test",
+    "record_multi_repo_owner_duplicate_failure_test",
+    "record_multi_repo_owner_duplicate_target_rule",
+    "record_multi_repo_owner_success_test",
     "render_multi_aggregate_bzl_contains_expected_targets_test",
     "render_multi_aggregate_bzl_mismatch_failure_test",
     "render_multi_aggregate_bzl_mismatch_target_rule",
@@ -38,6 +41,10 @@ load(
     "decode_json_object_array_target_rule",
     "decode_json_object_empty_failure_test",
     "decode_json_object_empty_target_rule",
+    "decode_json_object_malformed_array_failure_test",
+    "decode_json_object_malformed_array_target_rule",
+    "decode_json_object_malformed_object_failure_test",
+    "decode_json_object_malformed_object_target_rule",
     "decode_json_object_non_json_failure_test",
     "decode_json_object_non_json_target_rule",
     "decode_json_object_valid_test",
@@ -48,6 +55,10 @@ load(
     "module_label_map_collision_test",
     "normalize_ref_test",
     "parse_go_module_path_test",
+    "partition_unix_headers_test",
+    "record_sync_extension_repo_owner_duplicate_failure_test",
+    "record_sync_extension_repo_owner_duplicate_target_rule",
+    "record_sync_extension_repo_owner_success_test",
     "resolve_dd_api_base_test",
 )
 load(
@@ -237,6 +248,12 @@ compute_repo_names_test(
     timeout = "short",
 )
 
+record_multi_repo_owner_success_test(
+    name = "record_multi_repo_owner_success_test",
+    size = "small",
+    timeout = "short",
+)
+
 render_multi_aggregate_bzl_contains_expected_targets_test(
     name = "render_multi_aggregate_bzl_contains_expected_targets_test",
     size = "small",
@@ -253,8 +270,30 @@ render_multi_aggregate_bzl_mismatch_failure_test(
     target_under_test = ":render_multi_aggregate_bzl_mismatch_target",
 )
 
+record_multi_repo_owner_duplicate_target_rule(
+    name = "record_multi_repo_owner_duplicate_target",
+    tags = ["manual"],
+)
+
+record_multi_repo_owner_duplicate_failure_test(
+    name = "record_multi_repo_owner_duplicate_failure_test",
+    target_under_test = ":record_multi_repo_owner_duplicate_target",
+)
+
 http_execute_timeout_seconds_test(
     name = "http_execute_timeout_seconds_test",
+    size = "small",
+    timeout = "short",
+)
+
+partition_unix_headers_test(
+    name = "partition_unix_headers_test",
+    size = "small",
+    timeout = "short",
+)
+
+record_sync_extension_repo_owner_success_test(
+    name = "record_sync_extension_repo_owner_success_test",
     size = "small",
     timeout = "short",
 )
@@ -293,6 +332,36 @@ decode_json_object_array_target_rule(
 decode_json_object_array_failure_test(
     name = "decode_json_object_array_failure_test",
     target_under_test = ":decode_json_object_array_target",
+)
+
+decode_json_object_malformed_object_target_rule(
+    name = "decode_json_object_malformed_object_target",
+    tags = ["manual"],
+)
+
+decode_json_object_malformed_object_failure_test(
+    name = "decode_json_object_malformed_object_failure_test",
+    target_under_test = ":decode_json_object_malformed_object_target",
+)
+
+decode_json_object_malformed_array_target_rule(
+    name = "decode_json_object_malformed_array_target",
+    tags = ["manual"],
+)
+
+decode_json_object_malformed_array_failure_test(
+    name = "decode_json_object_malformed_array_failure_test",
+    target_under_test = ":decode_json_object_malformed_array_target",
+)
+
+record_sync_extension_repo_owner_duplicate_target_rule(
+    name = "record_sync_extension_repo_owner_duplicate_target",
+    tags = ["manual"],
+)
+
+record_sync_extension_repo_owner_duplicate_failure_test(
+    name = "record_sync_extension_repo_owner_duplicate_failure_test",
+    target_under_test = ":record_sync_extension_repo_owner_duplicate_target",
 )
 
 bash_curl_retry_flags_test(
@@ -424,13 +493,20 @@ test_suite(
         ":normalize_user_data_handles_none_test",
         ":compute_service_keys_dedups_collisions_test",
         ":compute_repo_names_test",
+        ":record_multi_repo_owner_success_test",
         ":render_multi_aggregate_bzl_contains_expected_targets_test",
         ":render_multi_aggregate_bzl_mismatch_failure_test",
+        ":record_multi_repo_owner_duplicate_failure_test",
         ":http_execute_timeout_seconds_test",
+        ":partition_unix_headers_test",
+        ":record_sync_extension_repo_owner_success_test",
         ":decode_json_object_valid_test",
         ":decode_json_object_empty_failure_test",
         ":decode_json_object_non_json_failure_test",
         ":decode_json_object_array_failure_test",
+        ":decode_json_object_malformed_object_failure_test",
+        ":decode_json_object_malformed_array_failure_test",
+        ":record_sync_extension_repo_owner_duplicate_failure_test",
         ":bash_curl_retry_flags_test",
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",

@@ -86,6 +86,9 @@ jobs:
             throw "PSScriptAnalyzer found lint errors."
           }
 
+  # Policy: keep the hermetic lane Linux-only for now.
+  # Rationale: sandbox/network-blocking semantics are most reliable on Linux;
+  # macOS/Windows are still covered by the standard test+integration matrix.
   bazel-tests-hermetic:
     runs-on: ubuntu-latest
     steps:

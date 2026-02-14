@@ -556,6 +556,28 @@ def _decode_json_object_or_fail(content, context):
             (context, repr(sample)),
         )
 
+    # Deterministic malformed-JSON guardrails before decode.
+    # Starlark cannot catch all parser exceptions, so classify common unclosed
+    # object/array responses early with actionable errors.
+    if trimmed.startswith("{") and (not trimmed.endswith("}")):
+        sample = trimmed[:120].replace("\n", " ").replace("\r", " ")
+        fail(
+            (
+                "test_optimization: %s response appears malformed JSON object " +
+                "(missing closing '}'). Starts with: %s"
+            ) %
+            (context, repr(sample)),
+        )
+    if trimmed.startswith("[") and (not trimmed.endswith("]")):
+        sample = trimmed[:120].replace("\n", " ").replace("\r", " ")
+        fail(
+            (
+                "test_optimization: %s response appears malformed JSON array " +
+                "(missing closing ']'). Starts with: %s"
+            ) %
+            (context, repr(sample)),
+        )
+
     obj = json.decode(trimmed)
     if type(obj) != "dict":
         fail("test_optimization: %s response must be a JSON object, got %s" % (context, type(obj)))
@@ -638,6 +660,35 @@ def _render_export_bzl(repo_name, labels, set_literal, go_module_path, sanitized
         "    },\n" +
         "}\n"
     )
+
+def _partition_unix_headers(headers):
+    """Split public headers from DD-API-KEY for secure Unix curl transport."""
+    public_headers = {}
+    dd_api_key = ""
+    has_dd_api_key = False
+    for header_key, header_value in headers.items():
+        hk = str(header_key)
+        hv = str(header_value)
+        if hk.lower() == "dd-api-key":
+            dd_api_key = hv
+            has_dd_api_key = True
+        else:
+            public_headers[hk] = hv
+    return {
+        "public_headers": public_headers,
+        "dd_api_key": dd_api_key,
+        "has_dd_api_key": has_dd_api_key,
+    }
+
+def _record_sync_extension_repo_owner_or_fail(seen_repo_owners, repo_name, owner):
+    """Record extension repo owner and fail on duplicate repository names."""
+    prev_owner = seen_repo_owners.get(repo_name)
+    if prev_owner != None:
+        fail(
+            "test_optimization_sync_extension: duplicate repository name '%s' declared by modules '%s' and '%s'. Use unique names for each test_optimization_sync tag." %
+            (repo_name, prev_owner, owner),
+        )
+    seen_repo_owners[repo_name] = owner
 
 def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, request_debug_payload = None):
     """Execute cross-platform HTTP request and write response to `out_file`.
@@ -741,12 +792,28 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         args = [] + _curl_base_args()
         if http_method and http_method != "GET":
             args.extend(["-X", http_method])
-        for header_key, header_value in headers.items():
+        split_headers = _partition_unix_headers(headers)
+        for header_key, header_value in split_headers.get("public_headers", {}).items():
             args.extend(["-H", "%s: %s" % (header_key, header_value)])
         if data_file:
             args.extend(["--data-binary", "@%s" % data_file])
         args.extend([url, "-o", out_file, "-w", "%{http_code}"])
-        result = ctx.execute(args, timeout = HTTP_EXECUTE_TIMEOUT_SECONDS)
+        if split_headers.get("has_dd_api_key"):
+            # Provide DD-API-KEY via stdin (`-H @-`) to avoid exposing the raw
+            # secret in process arguments.
+            args_with_stdin_header = args + ["-H", "@-"]
+            unix_env = {}
+            for env_key, env_value in ctx.os.environ.items():
+                unix_env[env_key] = env_value
+            unix_env["DD_TOPT_API_KEY"] = split_headers.get("dd_api_key") or ""
+
+            result = ctx.execute(
+                ["/bin/sh", "-c", "printf 'DD-API-KEY: %s\\n' \"$DD_TOPT_API_KEY\" | curl \"$@\"", "curl"] + args_with_stdin_header[1:],
+                environment = unix_env,
+                timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
+            )
+        else:
+            result = ctx.execute(args, timeout = HTTP_EXECUTE_TIMEOUT_SECONDS)
 
     # Parse HTTP status code captured by tool stdout. On network errors it may be empty.
     http_status = (result.stdout or "").strip() or "000"
@@ -864,6 +931,8 @@ http_retry_delay_seconds_for_tests = HTTP_RETRY_DELAY_SECONDS
 http_execute_timeout_buffer_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS
 http_execute_timeout_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_SECONDS
 decode_json_object_or_fail_for_tests = _decode_json_object_or_fail
+partition_unix_headers_for_tests = _partition_unix_headers
+record_sync_extension_repo_owner_or_fail_for_tests = _record_sync_extension_repo_owner_or_fail
 
 # ##########################################################################
 # CI environment detection
@@ -1962,12 +2031,17 @@ def _test_optimization_sync_extension_impl(module_ctx):
     log_debug(extension_debug, "extension", "Starting module extension implementation")
     log_debug(extension_debug, "extension", "Number of modules: %d" % len(module_ctx.modules))
 
+    seen_repo_owners = {}
     for mod in module_ctx.modules:
+        owner = mod.name or "<unnamed-module>"
         log_debug(extension_debug, "extension", "Processing module: %s" % mod.name)
         log_debug(extension_debug, "extension", "Module is_root: %s" % mod.is_root)
         log_debug(extension_debug, "extension", "Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
 
         for test_optimization_call in mod.tags.test_optimization_sync:
+            repo_name = test_optimization_call.name
+            _record_sync_extension_repo_owner_or_fail(seen_repo_owners, repo_name, owner)
+
             # Tag-level debug allows one noisy callsite without enabling verbose
             # logging for all extension users in the dependency graph.
             call_debug = hasattr(test_optimization_call, "debug") and test_optimization_call.debug

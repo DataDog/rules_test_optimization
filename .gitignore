@@ -1,8 +1,6 @@
 # Bazel files
 bazel-*
 .bazelrc.user
-.bazelversion
-MODULE.bazel.lock
 
 # Bazel outputs
 /bazel-bin/

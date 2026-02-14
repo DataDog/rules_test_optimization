@@ -4,6 +4,7 @@ load(
     "//tools:test_optimization_multi_sync.bzl",
     "compute_multi_repo_names_for_tests",
     "compute_multi_service_keys_for_tests",
+    "record_multi_repo_owner_or_fail_for_tests",
     "render_multi_aggregate_bzl_for_tests",
 )
 
@@ -32,6 +33,16 @@ def _compute_repo_names_test(ctx):
     )
     return unittest.end(env)
 
+def _record_multi_repo_owner_success_test(ctx):
+    """Validate multi-sync repo owner tracking success path."""
+    env = unittest.begin(ctx)
+    seen = {}
+    record_multi_repo_owner_or_fail_for_tests(seen, "repo_a", "module_a")
+    record_multi_repo_owner_or_fail_for_tests(seen, "repo_b", "module_b")
+    asserts.equals(env, "module_a", seen.get("repo_a"))
+    asserts.equals(env, "module_b", seen.get("repo_b"))
+    return unittest.end(env)
+
 def _render_multi_aggregate_bzl_contains_expected_targets_test(ctx):
     """Validate generated aggregate.bzl includes expected exports/targets."""
     env = unittest.begin(ctx)
@@ -54,8 +65,18 @@ def _render_multi_aggregate_bzl_mismatch_target_impl(_ctx):
     render_multi_aggregate_bzl_for_tests(["go_service"], ["repo_a", "repo_b"])
     return []
 
+def _record_multi_repo_owner_duplicate_target_impl(_ctx):
+    """Target expected to fail on duplicate multi-sync repo names."""
+    seen = {}
+    record_multi_repo_owner_or_fail_for_tests(seen, "repo_a", "module_a")
+    record_multi_repo_owner_or_fail_for_tests(seen, "repo_a", "module_b")
+    return []
+
 render_multi_aggregate_bzl_mismatch_target_rule = rule(
     implementation = _render_multi_aggregate_bzl_mismatch_target_impl,
+)
+record_multi_repo_owner_duplicate_target_rule = rule(
+    implementation = _record_multi_repo_owner_duplicate_target_impl,
 )
 
 def _render_multi_aggregate_bzl_mismatch_failure_test_impl(ctx):
@@ -64,10 +85,21 @@ def _render_multi_aggregate_bzl_mismatch_failure_test_impl(ctx):
     asserts.expect_failure(env, "service_keys and repo_names length mismatch")
     return analysistest.end(env)
 
+def _record_multi_repo_owner_duplicate_failure_test_impl(ctx):
+    """Assert duplicate multi-sync repo-name failures remain actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "duplicate repository name 'repo_a' generated")
+    return analysistest.end(env)
+
 compute_service_keys_dedups_collisions_test = unittest.make(_compute_service_keys_dedups_collisions_test)
 compute_repo_names_test = unittest.make(_compute_repo_names_test)
+record_multi_repo_owner_success_test = unittest.make(_record_multi_repo_owner_success_test)
 render_multi_aggregate_bzl_contains_expected_targets_test = unittest.make(_render_multi_aggregate_bzl_contains_expected_targets_test)
 render_multi_aggregate_bzl_mismatch_failure_test = analysistest.make(
     _render_multi_aggregate_bzl_mismatch_failure_test_impl,
+    expect_failure = True,
+)
+record_multi_repo_owner_duplicate_failure_test = analysistest.make(
+    _record_multi_repo_owner_duplicate_failure_test_impl,
     expect_failure = True,
 )
