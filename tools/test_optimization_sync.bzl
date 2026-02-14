@@ -67,9 +67,19 @@ load(
 TEST_OPT_DIR = ".testoptimization"
 TEST_BAZEL_RULE_NAME = "datadog-rules-test-optimization"
 TEST_BAZEL_RULE_VERSION = "1.0.0"
-# Upper bound for repository_ctx.execute() around HTTP tooling.
-# Keep this above curl/PowerShell per-request max-time to include process startup.
-HTTP_EXECUTE_TIMEOUT_SECONDS = 120
+# Shared HTTP timing/retry policy for both curl and Invoke-WebRequest paths.
+HTTP_CONNECT_TIMEOUT_SECONDS = 10
+HTTP_MAX_TIME_SECONDS = 60
+HTTP_RETRY_ATTEMPTS = 3
+HTTP_RETRY_DELAY_SECONDS = 2
+# Keep outer execute timeout above worst-case retry budget to avoid cutting
+# transport retries short on slower hosts/CI workers.
+HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS = 60
+HTTP_EXECUTE_TIMEOUT_SECONDS = (
+    (HTTP_RETRY_ATTEMPTS * HTTP_MAX_TIME_SECONDS) +
+    ((HTTP_RETRY_ATTEMPTS - 1) * HTTP_RETRY_DELAY_SECONDS) +
+    HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS
+)
 
 # ##########################################################################
 # Tools functions
@@ -90,13 +100,13 @@ def _curl_base_args():
         "-f",
         "-sS",
         "--connect-timeout",
-        "10",
+        str(HTTP_CONNECT_TIMEOUT_SECONDS),
         "--max-time",
-        "60",
+        str(HTTP_MAX_TIME_SECONDS),
         "--retry",
-        "3",
+        str(HTTP_RETRY_ATTEMPTS),
         "--retry-delay",
-        "2",
+        str(HTTP_RETRY_DELAY_SECONDS),
         "--retry-connrefused",
     ]
 
@@ -697,20 +707,20 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             # Keep body on disk and pass `-InFile` to avoid quoting/encoding
             # drift for JSON payloads that may contain special characters.
             lines.append("$BodyFile = '%s'" % data_file.replace("'", "''"))
-        lines.append("$max = 3; $attempt = 0")
+        lines.append("$max = %d; $attempt = 0" % HTTP_RETRY_ATTEMPTS)
         lines.append("while ($true) {")
         lines.append("  try {")
         if data_file:
-            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -InFile $BodyFile -OutFile $OutFile -ContentType 'application/json' -TimeoutSec 60")
+            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -InFile $BodyFile -OutFile $OutFile -ContentType 'application/json' -TimeoutSec %d" % HTTP_MAX_TIME_SECONDS)
         else:
-            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -OutFile $OutFile -TimeoutSec 60")
+            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -OutFile $OutFile -TimeoutSec %d" % HTTP_MAX_TIME_SECONDS)
 
         # Emulate curl -f: treat HTTP >= 400 as failure
         lines.append("    $code = if ($resp.StatusCode) { [int]$resp.StatusCode } else { 200 }")
         lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned for ' + $Url) -f $code; exit 1 }")
         lines.append("    Write-Output $code")
         lines.append("    exit 0")
-        lines.append("  } catch { if ($attempt -lt ($max - 1)) { Start-Sleep -Seconds 2; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }")
+        lines.append("  } catch { if ($attempt -lt ($max - 1)) { Start-Sleep -Seconds %d; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }" % HTTP_RETRY_DELAY_SECONDS)
         lines.append("}")
         script_content = "\n".join(lines) + "\n"
         ctx.file(script_name, script_content)
@@ -847,6 +857,11 @@ normalize_ref_for_tests = _normalize_ref
 parse_go_module_path_for_tests = _parse_go_module_path
 dirname_for_tests = _dirname
 render_export_bzl_for_tests = _render_export_bzl
+http_connect_timeout_seconds_for_tests = HTTP_CONNECT_TIMEOUT_SECONDS
+http_max_time_seconds_for_tests = HTTP_MAX_TIME_SECONDS
+http_retry_attempts_for_tests = HTTP_RETRY_ATTEMPTS
+http_retry_delay_seconds_for_tests = HTTP_RETRY_DELAY_SECONDS
+http_execute_timeout_buffer_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS
 http_execute_timeout_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_SECONDS
 decode_json_object_or_fail_for_tests = _decode_json_object_or_fail
 

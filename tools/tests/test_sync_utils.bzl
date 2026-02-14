@@ -6,10 +6,14 @@ load(
     "decode_json_object_or_fail_for_tests",
     "compute_dd_api_base_for_tests",
     "dirname_for_tests",
+    "http_execute_timeout_buffer_seconds_for_tests",
     "http_execute_timeout_seconds_for_tests",
+    "http_max_time_seconds_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
     "render_export_bzl_for_tests",
+    "http_retry_attempts_for_tests",
+    "http_retry_delay_seconds_for_tests",
     "resolve_dd_api_base_for_tests",
 )
 
@@ -124,10 +128,17 @@ def _export_bzl_manifest_path_test(ctx):
     return unittest.end(env)
 
 def _http_execute_timeout_seconds_test(ctx):
-    """Guard HTTP execute timeout constant against accidental drift."""
+    """Guard execute-timeout derivation against retry-policy drift."""
     env = unittest.begin(ctx)
-    # Keep this aligned with curl/Invoke-WebRequest max-time plus startup overhead.
-    asserts.equals(env, 120, http_execute_timeout_seconds_for_tests)
+    # Keep execute timeout derived from retry policy + explicit buffer instead
+    # of a magic number to avoid accidentally clipping retries in CI.
+    expected = (
+        (http_retry_attempts_for_tests * http_max_time_seconds_for_tests) +
+        ((http_retry_attempts_for_tests - 1) * http_retry_delay_seconds_for_tests) +
+        http_execute_timeout_buffer_seconds_for_tests
+    )
+    asserts.equals(env, expected, http_execute_timeout_seconds_for_tests)
+    asserts.true(env, http_execute_timeout_seconds_for_tests > (http_retry_attempts_for_tests * http_max_time_seconds_for_tests))
     return unittest.end(env)
 
 def _decode_json_object_valid_test(ctx):
