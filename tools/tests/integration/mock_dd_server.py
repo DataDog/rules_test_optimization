@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+"""Mock Datadog API server used by integration harnesses.
+
+This server provides deterministic fixture-based responses for sync endpoints
+and lightweight validation for uploader requests. It also records all incoming
+requests (headers + body) to a JSONL log so integration tests can assert exact
+behavior without relying on fragile stdout parsing.
+
+Key behavior toggles:
+- Service names can trigger malformed/empty sync responses.
+- Commit message can trigger malformed test-management response.
+- EVP proxy paths enforce EVP-specific headers and forbid DD-API-KEY usage.
+"""
+
 import argparse
 import base64
 import json
@@ -16,6 +29,7 @@ def _read_json(path):
 
 
 def _json_error(message):
+    """Return a standard error payload for mock endpoint failures."""
     return {"error": message}
 
 MALFORMED_SETTINGS_SERVICE = "malformed-settings-service"
@@ -50,6 +64,7 @@ class _ServerState:
 
 
 def _normalize_headers(headers):
+    """Normalize request headers for logging while redacting secrets."""
     out = {}
     for key, value in headers.items():
         if key.lower() == "dd-api-key":
@@ -61,6 +76,7 @@ def _normalize_headers(headers):
 
 
 def _require_header(headers, name):
+    """Return header value case-insensitively, or None when missing."""
     for key, value in headers.items():
         if key.lower() == name.lower():
             return value
@@ -68,6 +84,7 @@ def _require_header(headers, name):
 
 
 def _require_type(data, expected):
+    """Validate top-level Datadog request envelope type."""
     if not isinstance(data, dict):
         return "body is not a JSON object"
     data_obj = data.get("data")
@@ -79,6 +96,7 @@ def _require_type(data, expected):
 
 
 def _require_attrs(data, keys):
+    """Validate required attribute keys in request envelope."""
     data_obj = data.get("data") or {}
     attrs = data_obj.get("attributes")
     if not isinstance(attrs, dict):
@@ -93,6 +111,7 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "MockDD/1.0"
 
     def _send_json(self, code, payload):
+        """Write JSON response payload with explicit content headers."""
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -101,6 +120,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_text(self, code, payload):
+        """Write plain-text/bytes response payload."""
         body = payload.encode("utf-8") if isinstance(payload, str) else payload
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
@@ -109,6 +129,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self):
+        """Read request body using Content-Length; return empty bytes on miss."""
         raw_len = self.headers.get("Content-Length")
         if not raw_len:
             return b""
@@ -121,11 +142,13 @@ class _Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     def _log_and_validate(self, path, body):
+        """Persist request details to shared JSONL log."""
         # Capture requests for snapshot tests and assertions.
         headers = _normalize_headers(self.headers)
         self.server.state.log_request(path, self.command, headers, body)
 
     def _validate_settings(self, body):
+        """Validate sync settings request payload and required headers."""
         # Validate the sync "settings" request payload and required headers.
         if not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
@@ -142,6 +165,7 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
     def _validate_known_tests(self, body):
+        """Validate known-tests request payload and required headers."""
         # Validate the "known tests" request payload and required headers.
         if not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
@@ -161,6 +185,7 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
     def _extract_attribute(self, body, key):
+        """Extract a string attribute from request body; return empty on miss."""
         try:
             data = json.loads(body.decode("utf-8"))
         except Exception:
@@ -170,12 +195,15 @@ class _Handler(BaseHTTPRequestHandler):
         return service if isinstance(service, str) else ""
 
     def _extract_service(self, body):
+        """Extract `service` attribute from request body."""
         return self._extract_attribute(body, "service")
 
     def _extract_commit_message(self, body):
+        """Extract `commit_message` attribute from request body."""
         return self._extract_attribute(body, "commit_message")
 
     def _validate_test_management(self, body):
+        """Validate test-management request payload and required headers."""
         # Validate the test management request payload and required headers.
         if not _require_header(self.headers, "DD-API-KEY"):
             return "missing DD-API-KEY"
@@ -192,6 +220,7 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
     def _validate_uploader_test(self, body, evp_subdomain = None):
+        """Validate uploader test payload request (agentless or EVP mode)."""
         lang_hdr = _require_header(self.headers, "Datadog-Meta-Lang")
         tracer_hdr = _require_header(self.headers, "Datadog-Meta-Tracer-Version")
         if evp_subdomain:
@@ -223,6 +252,7 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
     def _validate_uploader_cov(self, evp_subdomain = None):
+        """Validate uploader coverage payload request (agentless or EVP mode)."""
         if evp_subdomain:
             got_subdomain = _require_header(self.headers, "X-Datadog-EVP-Subdomain")
             if got_subdomain != evp_subdomain:
@@ -239,10 +269,14 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
     def do_POST(self):  # noqa: N802 (Bazel style)
+        """Handle POST routes for sync + uploader integration scenarios."""
         path = urlsplit(self.path).path
         body = self._read_body()
         self._log_and_validate(path, body)
 
+        # Sync settings endpoint.
+        # Supports malformed/empty body toggles keyed by service name so
+        # integration tests can assert failure diagnostics in repository rules.
         if path == "/api/v2/libraries/tests/services/setting":
             err = self._validate_settings(body)
             if err:
@@ -257,6 +291,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, self.server.state.fixtures["settings"])
             return
+
+        # Sync known-tests endpoint.
+        # Supports malformed response toggle keyed by service name.
         if path == "/api/v2/ci/libraries/tests":
             err = self._validate_known_tests(body)
             if err:
@@ -267,6 +304,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, self.server.state.fixtures["known_tests"])
             return
+
+        # Sync test-management endpoint.
+        # Supports malformed response toggle keyed by commit_message.
         if path == "/api/v2/test/libraries/test-management/tests":
             err = self._validate_test_management(body)
             if err:
@@ -277,6 +317,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, self.server.state.fixtures["test_management"])
             return
+
+        # Uploader test-events endpoint.
+        # Accept both agentless and EVP-proxy path forms so the same harness can
+        # validate both execution modes against one mock server.
         if path in ("/api/v2/citestcycle", "/evp_proxy/v2/api/v2/citestcycle"):
             evp_subdomain = "citestcycle-intake" if path.startswith("/evp_proxy/") else None
             err = self._validate_uploader_test(body, evp_subdomain = evp_subdomain)
@@ -285,6 +329,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, {})
             return
+
+        # Uploader coverage endpoint (agentless + EVP forms).
         if path in ("/api/v2/citestcov", "/evp_proxy/v2/api/v2/citestcov"):
             evp_subdomain = "citestcov-intake" if path.startswith("/evp_proxy/") else None
             err = self._validate_uploader_cov(evp_subdomain = evp_subdomain)
@@ -294,6 +340,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {})
             return
 
+        # Keep unknown routes explicit to surface fixture drift quickly.
         self._send_json(404, _json_error("unknown path"))
 
     def log_message(self, fmt, *args):
@@ -302,10 +349,12 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class _ReusableHTTPServer(HTTPServer):
+    """HTTPServer variant with reusable address for fast reruns."""
     allow_reuse_address = True
 
 
 def main():
+    """Start server, print bound port for harness discovery, and serve forever."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)

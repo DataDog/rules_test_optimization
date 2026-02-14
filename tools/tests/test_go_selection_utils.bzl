@@ -12,6 +12,7 @@ load(
 )
 
 def _service_mapping_entries_filters_non_service_test(ctx):
+    """Validate filtering of non-service entries in aggregator mappings."""
     env = unittest.begin(ctx)
     entries = service_mapping_entries_for_tests({
         "go_service": {"repo_name": "repo_go"},
@@ -24,6 +25,7 @@ def _service_mapping_entries_filters_non_service_test(ctx):
     return unittest.end(env)
 
 def _resolve_topt_service_key_prefers_exact_then_sanitized_test(ctx):
+    """Validate service key resolution precedence (exact before sanitized)."""
     env = unittest.begin(ctx)
     entries = {
         "go_service": {"repo_name": "repo_go"},
@@ -36,6 +38,7 @@ def _resolve_topt_service_key_prefers_exact_then_sanitized_test(ctx):
     return unittest.end(env)
 
 def _select_module_group_name_test(ctx):
+    """Validate module-group selection helper and override behavior."""
     env = unittest.begin(ctx)
     groups = [
         "module_github_com_example_mod_pkg",
@@ -81,6 +84,7 @@ def _select_module_group_name_test(ctx):
     return unittest.end(env)
 
 def _normalize_user_data_handles_none_test(ctx):
+    """Validate macro `data` normalization for None/list/tuple input."""
     env = unittest.begin(ctx)
     asserts.equals(env, [], normalize_user_data_for_tests(None))
     asserts.equals(env, [":a", ":b"], normalize_user_data_for_tests([":a", ":b"]))

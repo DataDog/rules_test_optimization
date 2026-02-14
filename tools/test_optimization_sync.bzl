@@ -76,6 +76,11 @@ HTTP_EXECUTE_TIMEOUT_SECONDS = 120
 # ##########################################################################
 
 def _curl_base_args():
+    """Return the shared curl argument baseline for sync API calls.
+
+    Keep this in one helper so timeout/retry policy stays consistent across
+    settings/known-tests/test-management requests.
+    """
     # _curl_base_args: returns common curl flags applied to all HTTP requests
     # -f: fail on HTTP errors (>= 400)
     # -sS: silent, but show errors
@@ -96,6 +101,7 @@ def _curl_base_args():
     ]
 
 def _is_windows(ctx):
+    """Best-effort repository-host Windows detection."""
     # _is_windows: best-effort host OS detection using environment variables available in repository_ctx.
     os_env = (ctx.os.environ.get("OS") or "").lower()
     comspec = (ctx.os.environ.get("ComSpec") or ctx.os.environ.get("COMSPEC") or "").lower()
@@ -104,6 +110,10 @@ def _is_windows(ctx):
 _FINGERPRINT_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
 
 def _fnv1a_32(value):
+    """Compute a deterministic non-cryptographic 32-bit hash.
+
+    Used only for context fingerprinting; this is *not* a security primitive.
+    """
     # FNV-1a style 32-bit hash for stable fingerprinting (non-cryptographic).
     # Starlark lacks ord()/bytes, so map characters via a fixed alphabet.
     h = 2166136261
@@ -118,6 +128,7 @@ def _fnv1a_32(value):
     return h
 
 def _hex32(value):
+    """Format a 32-bit integer as lowercase 8-char hex."""
     digits = "0123456789abcdef"
     out = ""
     v = value
@@ -127,11 +138,17 @@ def _hex32(value):
     return out
 
 def _api_key_fingerprint(api_key):
+    """Return a non-reversible stable fingerprint for an API key value."""
     if not api_key:
         return ""
     return _hex32(_fnv1a_32(api_key))
 
 def _ensure_parent_directory(ctx, path, debug):
+    """Ensure parent directory exists for a generated output file path.
+
+    This helper is cross-platform: Unix uses `mkdir -p`; Windows uses
+    PowerShell `New-Item -ItemType Directory -Force`.
+    """
     # Create parent directory for a given file path if needed.
     # Starlark has no os.path utilities; use simple split/join.
     if not path:
@@ -160,6 +177,7 @@ def _ensure_parent_directory(ctx, path, debug):
         fail("Failed creating directory %s for output %s: %s" % (dirp, path, (res.stderr or "").strip()))
 
 def _dirname(path):
+    """Return parent directory using simple Starlark path operations."""
     # _dirname: return parent directory component of a path using simple split
     if not path:
         return ""
@@ -169,6 +187,7 @@ def _dirname(path):
     return "/".join(segs[:-1])
 
 def _try_read_abs_file(ctx, abs_path):
+    """Best-effort absolute file read on host, returning empty string on miss."""
     # _try_read_abs_file: best-effort read of a file at an absolute path using host tools.
     # Returns file content string on success; empty string otherwise.
     if not abs_path:
@@ -192,6 +211,7 @@ def _try_read_abs_file(ctx, abs_path):
         return ""
 
 def _parse_go_module_path(go_mod_content):
+    """Extract `module <path>` value from go.mod content."""
     # _parse_go_module_path: extract the module path from a go.mod content string.
     if not go_mod_content:
         return ""
@@ -210,6 +230,13 @@ def _parse_go_module_path(go_mod_content):
     return ""
 
 def _detect_go_module_path(ctx, debug):
+    """Best-effort Go module path detection for export metadata.
+
+    Precedence:
+    1) `GO_MODULE_PATH` override
+    2) go.mod in known CI workspace directories
+    3) go.mod under git top-level directory
+    """
     # _detect_go_module_path: best-effort detection of Go module path.
     # Precedence: GO_MODULE_PATH env > discover go.mod under known workspace envs > git toplevel go.mod
     mod_env = ctx.os.environ.get("GO_MODULE_PATH") or ""
@@ -262,6 +289,11 @@ def _detect_go_module_path(ctx, debug):
     return ""
 
 def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None):
+    """Split aggregate known-tests payload into one file per module.
+
+    Each output keeps canonical filename `known_tests.json` under
+    `<base>/module_<label>/` so runfiles paths remain stable for consumers.
+    """
     # _split_known_tests_by_module: from the combined known_tests JSON, produce
     # one JSON file per module under the same directory as `known_tests_file`.
     # Returns a list of dicts with keys: module, label, file
@@ -333,6 +365,11 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None)
     return specs
 
 def _split_test_management_by_module(ctx, test_management_file, debug, label_map = None):
+    """Split aggregate test-management payload into one file per module.
+
+    Mirrors known-tests splitting so both feature sets share label mapping and
+    canonical runfile names.
+    """
     # _split_test_management_by_module: from the combined test_management JSON, produce
     # one JSON file per module under the same directory as `test_management_file`.
     # Returns a list of dicts with keys: module, label, file
@@ -401,6 +438,7 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
     return specs
 
 def _detect_os_info(ctx, debug):
+    """Detect host OS platform/version/arch for request configuration tags."""
     # _detect_os_info: detect OS platform, version, and architecture using host tools.
     # Returns a dict with keys: platform, version, arch
     def _run(args):
@@ -441,6 +479,7 @@ def _detect_os_info(ctx, debug):
     return {"platform": platform, "version": version, "arch": arch}
 
 def _compute_dd_api_base(site_env):
+    """Normalize DD_SITE-like input into Datadog API base URL."""
     # _compute_dd_api_base: compute the base Datadog API URL from a site value.
     # - Input examples:
     #   site_env = "app.datadoghq.com"  -> returns https://api.datadoghq.com
@@ -470,6 +509,7 @@ def _compute_dd_api_base(site_env):
     return "https://api.%s" % site
 
 def _resolve_dd_api_base(env_data, debug):
+    """Resolve API base URL using override-first precedence."""
     # _resolve_dd_api_base: resolve API base URL from overrides or DD_SITE.
     override = env_data.get("dd_api_base") or ""
     if override:
@@ -480,6 +520,7 @@ def _resolve_dd_api_base(env_data, debug):
     return _compute_dd_api_base(env_data.get("dd_site"))
 
 def _resolve_dd_api_base_for_tests(dd_site, dd_api_base):
+    """Test helper wrapper for API base resolution."""
     # Test helper to validate override behavior deterministically.
     env_data = {
         "dd_site": dd_site or "",
@@ -488,6 +529,7 @@ def _resolve_dd_api_base_for_tests(dd_site, dd_api_base):
     return _resolve_dd_api_base(env_data, False)
 
 def _decode_json_object_or_fail(content, context):
+    """Decode JSON and enforce top-level object with actionable failures."""
     # Parse API/file JSON with actionable guardrails for malformed responses.
     trimmed = (content or "").strip()
     if not trimmed:
@@ -510,6 +552,7 @@ def _decode_json_object_or_fail(content, context):
     return obj
 
 def _collect_known_tests_modules(ctx, known_tests_file):
+    """Return sorted module names present in known_tests payload."""
     # _collect_known_tests_modules: list module names from known_tests.json
     kt_path = ctx.path(known_tests_file)
     content = ctx.read(kt_path)
@@ -528,6 +571,7 @@ def _collect_known_tests_modules(ctx, known_tests_file):
     return sorted(modules)
 
 def _collect_test_management_modules(ctx, test_management_file):
+    """Return sorted module names present in test_management payload."""
     # _collect_test_management_modules: list module names from test_management.json
     tm_path = ctx.path(test_management_file)
     content = ctx.read(tm_path)
@@ -546,6 +590,7 @@ def _collect_test_management_modules(ctx, test_management_file):
     return sorted(modules)
 
 def _build_module_label_map(known_modules, test_management_modules):
+    """Build stable deduplicated module->label mapping across both features."""
     # _build_module_label_map: build a stable module->label mapping across the union.
     # This prevents cross-feature label collisions when modules sanitize to the same label.
     seen = {}
@@ -568,6 +613,7 @@ def _build_module_label_map(known_modules, test_management_modules):
 
 # Public aliases for tests (avoid importing private symbols)
 def _render_export_bzl(repo_name, labels, set_literal, go_module_path, sanitized_go_module_path, go_module_included, manifest_file):
+    """Render export.bzl content consumed by macros and BUILD files."""
     return (
         "# Generated by test_optimization_sync; unified exports for test optimization info\n" +
         "topt_data = {\n" +
@@ -584,6 +630,11 @@ def _render_export_bzl(repo_name, labels, set_literal, go_module_path, sanitized
     )
 
 def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, request_debug_payload = None):
+    """Execute cross-platform HTTP request and write response to `out_file`.
+
+    Uses curl on Unix and Invoke-WebRequest on Windows with aligned timeout and
+    retry behavior. Any transport error is raised with actionable context.
+    """
     # _http_request: executes an HTTP call and writes the response to `out_file`.
     # - On Windows: uses PowerShell Invoke-WebRequest for portability.
     # - On Linux/macOS: uses curl with retries.
@@ -643,6 +694,8 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
 
         # Optional body file
         if data_file:
+            # Keep body on disk and pass `-InFile` to avoid quoting/encoding
+            # drift for JSON payloads that may contain special characters.
             lines.append("$BodyFile = '%s'" % data_file.replace("'", "''"))
         lines.append("$max = 3; $attempt = 0")
         lines.append("while ($true) {")
@@ -673,6 +726,8 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
                 timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
             )
     else:
+        # Unix path: keep curl invocation centralized and aligned with
+        # `_curl_base_args()` so timeout/retry behavior stays consistent.
         args = [] + _curl_base_args()
         if http_method and http_method != "GET":
             args.extend(["-X", http_method])
@@ -689,6 +744,8 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     # Branch: network error or tool failure
     if result.return_code != 0:
         request_body = request_debug_payload if request_debug_payload else "<none>"
+        # Include response file path in failures so developers can inspect
+        # partial payloads produced by proxies/gateways.
         fail(
             "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\nresponse_file=%s\nrequest_body=%s" %
             (
@@ -739,10 +796,13 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     return result.return_code
 
 def _http_post_json(ctx, url, headers, json_body_str, tmp_body_file, out_file, debug):
+    """POST JSON payload by delegating to `_http_request`."""
     # Write the request body to a temp file for curl --data-binary
+    # Keeping body materialized improves debuggability when a request fails.
     ctx.file(tmp_body_file, json_body_str)
 
     # Merge content headers with caller-provided headers
+    # Caller-provided keys overwrite defaults below when duplicated.
     merged_headers = {"Content-Type": "application/json", "Accept": "application/json"}
     for k, v in headers.items():
         merged_headers[k] = v
@@ -760,6 +820,7 @@ def _http_post_json(ctx, url, headers, json_body_str, tmp_body_file, out_file, d
     )
 
 def _first_env(ctx, keys):
+    """Return the first non-empty environment value among candidate keys."""
     # _first_env: returns the first non-empty environment variable value
     for k in keys:
         v = ctx.os.environ.get(k)
@@ -768,6 +829,7 @@ def _first_env(ctx, keys):
     return ""
 
 def _normalize_ref(name):
+    """Normalize branch/tag refs by removing common prefix forms."""
     # _normalize_ref: removes common ref prefixes from branch/tag names
     if not name:
         return name
@@ -793,6 +855,11 @@ decode_json_object_or_fail_for_tests = _decode_json_object_or_fail
 # ##########################################################################
 
 def _collect_env(ctx):
+    """Collect CI/git/service context into a normalized metadata dict.
+
+    Provider-specific environment variables are mapped into stable keys so
+    request builders and context generation do not need provider branching.
+    """
     # _collect_env: reads CI provider env once and returns a unified dict used
     # by request helpers. Detection order mirrors Datadog's providers list.
     env_data = {
@@ -811,8 +878,16 @@ def _collect_env(ctx):
     }
 
     # Provider detection and extraction
+    #
+    # Important maintenance contract:
+    # - Keep this as a single `if/elif` chain so exactly one provider mapping
+    #   wins when multiple CI env signatures are present.
+    # - Prefer provider-native variables first; user DD_* overrides are applied
+    #   afterwards in one explicit precedence layer below.
     provider = ""
     if ctx.os.environ.get("APPVEYOR"):
+        # AppVeyor can represent non-GitHub providers; preserve raw repo name
+        # unless provider explicitly indicates GitHub.
         provider = "appveyor"
         repo_name = ctx.os.environ.get("APPVEYOR_REPO_NAME") or ""
         if (ctx.os.environ.get("APPVEYOR_REPO_PROVIDER") or "") == "github" and repo_name:
@@ -822,12 +897,14 @@ def _collect_env(ctx):
         env_data["sha"] = ctx.os.environ.get("APPVEYOR_REPO_COMMIT") or ""
         env_data["branch"] = _first_env(ctx, ["APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH", "APPVEYOR_REPO_BRANCH"]) or ""
     elif ctx.os.environ.get("TF_BUILD"):
+        # Azure Pipelines branch often arrives as full ref path.
         provider = "azure_pipelines"
         env_data["repository_url"] = ctx.os.environ.get("BUILD_REPOSITORY_URI") or ""
         env_data["sha"] = ctx.os.environ.get("BUILD_SOURCEVERSION") or ""
         env_data["branch"] = ctx.os.environ.get("BUILD_SOURCEBRANCH") or ""
         env_data["commit_message"] = ctx.os.environ.get("BUILD_SOURCEVERSIONMESSAGE") or ""
     elif ctx.os.environ.get("BITBUCKET_COMMIT"):
+        # Prefer explicit origin URL, else synthesize canonical slug URL.
         provider = "bitbucket"
         env_data["repository_url"] = (
             ctx.os.environ.get("BITBUCKET_GIT_HTTP_ORIGIN") or
@@ -840,6 +917,7 @@ def _collect_env(ctx):
         # Buddy variables vary; keep placeholders
 
     elif ctx.os.environ.get("BUILDKITE"):
+        # Buildkite exposes direct message and branch fields used by settings/TM.
         provider = "buildkite"
         env_data["repository_url"] = ctx.os.environ.get("BUILDKITE_REPO") or ""
         env_data["sha"] = ctx.os.environ.get("BUILDKITE_COMMIT") or ""
@@ -851,6 +929,7 @@ def _collect_env(ctx):
         env_data["sha"] = ctx.os.environ.get("CIRCLE_SHA1") or ""
         env_data["branch"] = ctx.os.environ.get("CIRCLE_BRANCH") or ""
     elif ctx.os.environ.get("GITHUB_SHA"):
+        # GitHub Actions exposes repository and server separately.
         provider = "github_actions"
         gh_repo = ctx.os.environ.get("GITHUB_REPOSITORY") or ""
         gh_server = ctx.os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
@@ -859,6 +938,7 @@ def _collect_env(ctx):
         env_data["sha"] = ctx.os.environ.get("GITHUB_SHA") or ""
         env_data["branch"] = _normalize_ref(ctx.os.environ.get("GITHUB_REF") or "")
     elif ctx.os.environ.get("GITLAB_CI"):
+        # GitLab MR pipelines may provide source branch head SHA separately.
         provider = "gitlab"
         env_data["repository_url"] = ctx.os.environ.get("CI_REPOSITORY_URL") or ""
         env_data["sha"] = ctx.os.environ.get("CI_COMMIT_SHA") or ""
@@ -866,6 +946,7 @@ def _collect_env(ctx):
         env_data["commit_message"] = ctx.os.environ.get("CI_COMMIT_MESSAGE") or ""
         env_data["head_sha"] = ctx.os.environ.get("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA") or ""
     elif ctx.os.environ.get("JENKINS_URL"):
+        # Jenkins plugin variants expose git URL under multiple key names.
         provider = "jenkins"
         env_data["repository_url"] = _first_env(ctx, ["GIT_URL", "GIT_URL_1"]) or ""
         env_data["sha"] = ctx.os.environ.get("GIT_COMMIT") or ""
@@ -876,6 +957,7 @@ def _collect_env(ctx):
         env_data["sha"] = ctx.os.environ.get("GIT_COMMIT") or ""
         env_data["branch"] = ctx.os.environ.get("GIT_BRANCH") or ""
     elif ctx.os.environ.get("TRAVIS"):
+        # Travis branch precedence: PR head branch > build branch.
         provider = "travisci"
         slug = ctx.os.environ.get("TRAVIS_REPO_SLUG") or ""
         if slug:
@@ -903,9 +985,14 @@ def _collect_env(ctx):
         env_data["commit_message"] = ctx.os.environ.get("DRONE_COMMIT_MESSAGE") or ""
 
     # Normalize ref formats
+    # Some providers emit refs as "refs/heads/main" while others emit "main".
+    # We normalize here so request/build-context users can treat branch values
+    # uniformly without extra provider conditionals.
     env_data["branch"] = _normalize_ref(env_data.get("branch"))
 
     # Overlay with user-specific DD_* overrides when present (highest precedence)
+    # This allows local debugging and CI customization without changing provider
+    # mapping logic above.
     dd_repo = ctx.os.environ.get("DD_GIT_REPOSITORY_URL") or ""
     dd_branch = ctx.os.environ.get("DD_GIT_BRANCH") or ""
     dd_sha = ctx.os.environ.get("DD_GIT_COMMIT_SHA") or ""
@@ -925,11 +1012,12 @@ def _collect_env(ctx):
     if dd_head_msg:
         env_data["head_message"] = dd_head_msg
 
-    # Expose provider name to callers (e.g., for context tags)
+    # Expose provider name to callers (e.g., for context tags and diagnostics).
     env_data["ci_provider_name"] = provider
     return env_data
 
 def _build_configurations_json(ctx, debug):
+    """Build Datadog `configurations` payload from OS/runtime attributes."""
     # _build_configurations_json: builds a testConfigurations structure with
     # auto-detected os.* fields plus simple runtime fields.
     #
@@ -938,6 +1026,7 @@ def _build_configurations_json(ctx, debug):
     osinfo = _detect_os_info(ctx, debug)
     runtime_name = validate_runtime_name(ctx.attr.runtime_name, debug) or "unknown"
     runtime_version = validate_runtime_version(ctx.attr.runtime_version, debug) or "unknown"
+    # Explicit runtime_arch override wins; otherwise inherit detected host arch.
     runtime_arch = ctx.attr.runtime_arch or osinfo["arch"]
     
     # Build configuration object using json.encode for proper escaping
@@ -954,6 +1043,7 @@ def _build_configurations_json(ctx, debug):
     return conf_json
 
 def _build_context_tags(ctx, env_data, api_key, debug):
+    """Build non-secret context tags stored in generated `context.json`."""
     # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
     tags = {}
 
@@ -993,6 +1083,8 @@ def _build_context_tags(ctx, env_data, api_key, debug):
         tags["git.commit.head.message"] = env_data.get("head_message")
 
     # Git overrides / extended tags via DD_* env
+    # Keep this helper local so adding a new optional DD_* passthrough key only
+    # requires a single `_opt(...)` line and preserves existing omission behavior.
     def _opt(env_key, tag_key):
         v = ctx.os.environ.get(env_key)
         if v:
@@ -1063,6 +1155,8 @@ def _build_context_tags(ctx, env_data, api_key, debug):
         tags["ci.pipeline.number"] = pipeline_number
 
     # CI pipeline URL: prefer provider URL then synthesize for GitHub
+    # Synthesis keeps context useful even when provider URL vars are absent
+    # but core GitHub Actions identifiers are available.
     pipeline_url = _first_env(ctx, [
         "CI_PIPELINE_URL",
         "TRAVIS_BUILD_WEB_URL",
@@ -1080,6 +1174,8 @@ def _build_context_tags(ctx, env_data, api_key, debug):
         tags["ci.pipeline.url"] = pipeline_url
 
     # CI pipeline name (best-effort)
+    # Keep this intentionally sparse to avoid provider-specific heuristics that
+    # could emit unstable names across CI configurations.
     pipeline_name = _first_env(ctx, [
         "GITHUB_WORKFLOW",
         "CI_PROJECT_PATH",
@@ -1124,6 +1220,8 @@ def _build_context_tags(ctx, env_data, api_key, debug):
         tags["ci.node.labels"] = node_labels
 
     # Embed a non-reversible fingerprint to validate uploader key parity.
+    # This is intentionally low-entropy/non-secret metadata that lets tests
+    # assert sync/uploader key consistency without exposing raw credentials.
     fingerprint = _api_key_fingerprint(api_key)
     if fingerprint:
         tags["topt.api_key_fingerprint"] = fingerprint
@@ -1137,6 +1235,7 @@ def _build_context_tags(ctx, env_data, api_key, debug):
 # ##########################################################################
 
 def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
+    """Build and execute CI Visibility settings request."""
     # _perform_dd_settings_request: build and send the CI Visibility Settings request.
     # - Writes the JSON response body to `settings_file`.
     # - Returns curl's exit code (0 on success, otherwise fail() already raised inside helper).
@@ -1150,6 +1249,7 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
     service = env_data.get("service")
     environment = env_data.get("environment")
     repository_url = env_data.get("repository_url")
+    # Settings endpoint uses branch+sha pair; head_sha is not required here.
     branch = env_data.get("branch")
     sha = env_data.get("sha")
 
@@ -1200,6 +1300,7 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug):
     return return_code
 
 def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, debug):
+    """Build and execute CI Visibility known-tests request."""
     # _perform_dd_known_tests_request: build and send the Known Tests request.
     # - Writes the JSON response body to `known_tests_file`.
     # - Returns curl's exit code (0 on success, otherwise fail() already raised inside helper).
@@ -1215,6 +1316,7 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
     repository_url = env_data.get("repository_url")
     
     # Configurations is a JSON object, decode it to embed properly
+    # Keep this decode explicit to avoid double-encoding nested JSON payloads.
     configurations_json = _build_configurations_json(ctx, debug)
     configurations = json.decode(configurations_json)
 
@@ -1251,6 +1353,7 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
     )
 
 def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug):
+    """Build and execute CI Visibility test-management request."""
     # _perform_dd_test_management_tests_request: build and send the Test Management Tests request.
     # - Writes the JSON response body to `test_management_file`.
     # Datadog Test Management Tests endpoint
@@ -1263,9 +1366,11 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_manag
     repository_url = env_data.get("repository_url")
 
     # Prefer head commit if present; else fall back
+    # This mirrors PR/MR pipelines where head SHA can differ from merge SHA.
     sha = env_data.get("head_sha") or env_data.get("sha") or ""
 
     # Commit message: prefer head message then commit message; else empty
+    # Head message improves change attribution for branch-tip evaluation.
     commit_message = env_data.get("head_message") or env_data.get("commit_message") or ""
 
     # Build request payload using json.encode for proper escaping
@@ -1301,6 +1406,12 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_manag
 # ##########################################################################
 
 def _impl(ctx):
+    """Repository rule orchestration entrypoint.
+
+    Maintainers: treat this function as a phase coordinator. Keep cross-cutting
+    logic in helpers above so unit tests can validate behavior without executing
+    the full repository rule.
+    """
     # _impl: repository_rule entrypoint orchestrating the full flow.
     # Steps:
     # 1) Validate required env and log cache-busting inputs for traceability
@@ -1321,6 +1432,9 @@ def _impl(ctx):
     log_info("Starting repository rule implementation")
     ctx.report_progress("test_optimization_sync: starting")
 
+    # ------------------------------------------------------------------
+    # Phase 1: Resolve/validate required inputs and output paths.
+    # ------------------------------------------------------------------
     # Validate DD_API_KEY from the environment; fail with helpful message if missing
     api_key = ctx.os.environ.get("DD_API_KEY")
     log_debug(debug, "validation", "DD_API_KEY present: %s" % bool(api_key))
@@ -1358,6 +1472,9 @@ def _impl(ctx):
     _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug)
     ctx.report_progress("test_optimization_sync: download complete")
 
+    # ------------------------------------------------------------------
+    # Phase 2: Parse settings and determine feature enablement.
+    # ------------------------------------------------------------------
     # Decide whether to fetch known tests/test-management based on settings (use repository_ctx.read + json.decode)
     # Additionally, support local kill-switches exposed as rule attributes to force-disable
     # any of these features regardless of server-side configuration.
@@ -1401,6 +1518,8 @@ def _impl(ctx):
         elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
             data_obj["attributes"] = {}
             attrs_obj = data_obj["attributes"]
+        # Persist explicit disablement so downstream consumers relying on
+        # settings.json (instead of rule attrs) see the same effective state.
         attrs_obj["known_tests_enabled"] = False
 
     if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
@@ -1417,6 +1536,7 @@ def _impl(ctx):
         tm_mut = attrs_obj.get("test_management")
         if type(tm_mut) != "dict":
             tm_mut = {}
+        # Mirror settings API shape: `test_management` is nested object.
         tm_mut["enabled"] = False
         attrs_obj["test_management"] = tm_mut
 
@@ -1424,6 +1544,9 @@ def _impl(ctx):
     # overridden disablement is reflected to later phases.
     ctx.file(settings_file, json.encode(settings_obj) + "\n")
 
+    # ------------------------------------------------------------------
+    # Phase 3: Materialize primary payload files (real fetches or stubs).
+    # ------------------------------------------------------------------
     # Always produce known tests and test-management files; write empty stubs when disabled
     # Write manifest version (v1) to manifest.txt for change tracking
     ctx.file(manifest_file, "version=1\n")
@@ -1439,6 +1562,7 @@ def _impl(ctx):
         log_debug(debug, "known_tests", "known_tests_enabled is false; writing empty known tests file")
 
         # Minimal valid JSON structure
+        # Keep canonical envelope shape so downstream code can parse uniformly.
         ctx.file(known_tests_file, '{"data": {"attributes": {"tests": {}}}}\n')
 
     # Always add known_tests.json to exports (either real data or stub)
@@ -1452,11 +1576,15 @@ def _impl(ctx):
         log_debug(debug, "test_management", "test_management.enabled is false; writing empty test management tests file")
 
         # Minimal valid JSON structure for test management tests
+        # Keep canonical envelope shape so module splitting logic can run.
         ctx.file(test_management_file, '{"data": {"attributes": {"modules": {}}}}\n')
 
     # Always add test_management.json to exports (either real data or stub)
     exports.append(test_management_file)
 
+    # ------------------------------------------------------------------
+    # Phase 4: Derive per-module splits and context metadata.
+    # ------------------------------------------------------------------
     # Build unified module label mapping to avoid cross-feature collisions
     known_modules = _collect_known_tests_modules(ctx, known_tests_file)
     tm_modules = _collect_test_management_modules(ctx, test_management_file)
@@ -1490,6 +1618,7 @@ def _impl(ctx):
     go_module_included = False
     if sanitized_go_module_path:
         if label_seen.get(sanitized_go_module_path):
+            # This flag is consumed by fallback macro path selection logic.
             go_module_included = True
 
     # Unified export file for simpler loading from user repos
@@ -1506,7 +1635,12 @@ def _impl(ctx):
     )
     ctx.file("export.bzl", export_bzl)
 
+    # ------------------------------------------------------------------
+    # Phase 5: Emit generated helper files and public BUILD targets.
+    # ------------------------------------------------------------------
     # Rule to present per-module files with canonical runfile names via symlinks
+    # We generate this helper rule as source text to keep repository-rule output
+    # self-contained and avoid hard-coding additional checked-in helper files.
     module_runfiles_bzl = (
         "def _topt_module_files_impl(ctx):\n" +
         "    syms = {}\n" +
@@ -1556,6 +1690,8 @@ def _impl(ctx):
         labels_for_modules = labels
         if not labels_for_modules:
             # Fallback: derive labels from specs if mapping is unavailable
+            # This path should be rare, but keeps BUILD generation resilient
+            # when upstream payloads are partially populated.
             label_seen = {}
             labels_for_modules = []
             for s in module_specs_known:
@@ -1595,6 +1731,8 @@ def _impl(ctx):
                 tm_by_label[lab] = tfile
 
         for lab in labels_for_modules:
+            # Emit a dedicated target per module so macro consumers can select
+            # narrow runfiles while preserving canonical filenames via symlinks.
             build_content += ("\ntopt_module_files(\n" +
                 ('    name = "module_%s",\n' % lab) +
                 ('    settings = "%s",\n' % settings_file) +
@@ -1642,6 +1780,8 @@ test_optimization_sync = repository_rule(
         "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
     environ = [
+        # Keep this list intentionally broad: every env var that can influence
+        # generated outputs must be declared so Bazel cache keys stay correct.
         # Environment variables treated as rule inputs
         "DD_API_KEY",  # Required: Datadog API key for authentication
         "DD_SITE",  # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
@@ -1780,12 +1920,19 @@ test_optimization_sync = repository_rule(
         "NODE_NAME",
         "NODE_LABELS",
     ],
-    local = True,  # Always run this rule locally, bypassing repository cache
+    # Repository rules run during workspace/module resolution; keep local=True
+    # so host tooling/env detection remains predictable across environments.
+    local = True,
 )
 
 # Module extension implementation for Bazel 6+ MODULE.bazel system
 def _test_optimization_sync_extension_impl(module_ctx):
-    """Implementation of the test_optimization_sync module extension."""
+    """Instantiate `test_optimization_sync` repositories from extension tags.
+
+    This function intentionally mirrors extension tag fields to repository rule
+    attrs with minimal transformation so behavior stays predictable between
+    bzlmod and WORKSPACE usage.
+    """
 
     # Determine if any tag has debug enabled to gate high-level logging
     extension_debug = False
@@ -1806,6 +1953,8 @@ def _test_optimization_sync_extension_impl(module_ctx):
         log_debug(extension_debug, "extension", "Number of test_optimization_sync tags: %d" % len(mod.tags.test_optimization_sync))
 
         for test_optimization_call in mod.tags.test_optimization_sync:
+            # Tag-level debug allows one noisy callsite without enabling verbose
+            # logging for all extension users in the dependency graph.
             call_debug = hasattr(test_optimization_call, "debug") and test_optimization_call.debug
             log_debug(call_debug, "extension", "Processing test_optimization_sync call: %s" % test_optimization_call.name)
             log_debug(
@@ -1823,6 +1972,10 @@ def _test_optimization_sync_extension_impl(module_ctx):
             test_optimization_sync(
                 name = test_optimization_call.name,
                 repo_name = test_optimization_call.name,
+                # Keep `repo_name` aligned with extension repo alias so exported
+                # labels in `export.bzl` remain intuitive for consumers.
+                # Forward extension attrs nearly 1:1 to preserve parity between
+                # bzlmod usage and direct WORKSPACE/repo_rule usage.
                 out_dir = test_optimization_call.out_dir,
                 service = test_optimization_call.service,
                 runtime_name = test_optimization_call.runtime_name,

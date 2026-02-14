@@ -50,6 +50,9 @@ if [[ "${KEEP_TMP:-0}" == "1" ]]; then
 fi
 
 cleanup() {
+  # Best-effort teardown that prioritizes deterministic cleanup over strict
+  # failures. Integration runs can leave transient Bazel/Java locks behind,
+  # especially on Windows, so this helper is intentionally defensive.
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
   fi
@@ -110,6 +113,8 @@ mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 
 to_mixed_path() {
+  # Convert a local path to mixed-style form (C:/...) when cygpath is
+  # available. This keeps PowerShell + Git Bash path handoff predictable.
   local value="$1"
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -m "$value" 2>/dev/null || printf '%s\n' "$value"
@@ -119,6 +124,8 @@ to_mixed_path() {
 }
 
 log_line_count() {
+  # Return current mock server log line count. Used as an offset marker so
+  # per-scenario assertions only inspect newly produced request records.
   if [[ -f "$LOG_FILE" ]]; then
     wc -l < "$LOG_FILE" | tr -d '[:space:]'
   else
@@ -229,6 +236,10 @@ mkdir -p "$out/tests" "$out/coverage"
 fixture_name="citestcycle_payload.json"
 
 resolve_from_manifest() {
+  # Resolve a runfile from RUNFILES_MANIFEST_FILE using:
+  # 1) exact key match
+  # 2) suffix-key match ("repo-prefix/<key>")
+  # and UTF-8 BOM stripping parity with uploader logic.
   local key="$1"
   local manifest="${RUNFILES_MANIFEST_FILE:-}"
   [[ -z "$manifest" || ! -f "$manifest" ]] && return 1
@@ -331,6 +342,11 @@ REPO_ENVS=(
   --repo_env=DD_GIT_TAG=v1.0.0
 )
 
+# ---------------------------------------------------------------------------
+# Scenario: baseline sync + uploader run (agentless) with fixture assertions.
+# ---------------------------------------------------------------------------
+# This is the "known-good" path. Later scenarios intentionally mutate one
+# variable at a time and reuse these repo env defaults.
 "$BAZEL" "${BAZEL_FLAGS[@]}" build @test_optimization_data//:test_optimization_files \
   "${REPO_ENVS[@]}"
 
@@ -743,6 +759,17 @@ PY
 
 # Scenario: malformed/empty sync responses should fail with actionable diagnostics.
 run_malformed_sync_case() {
+  # Execute a failing sync scenario in an isolated workspace and assert both:
+  # - a stable context hint (for example settings/known_tests/test_management)
+  # - an actionable error substring
+  #
+  # Params:
+  #   $1 ws_name
+  #   $2 repo_name
+  #   $3 service_name
+  #   $4 expected_context_substring
+  #   $5 expected_error_substring
+  #   $6+ optional extra --repo_env flags
   local ws_name="$1"
   local repo_name="$2"
   local service_name="$3"
@@ -800,6 +827,8 @@ BUILD_MALFORMED_EOF
     exit 1
   fi
 
+  # Assert both content and context fragments so errors stay actionable
+  # even when surrounding wording changes.
   if ! grep -q "$expected_error" "$log_path"; then
     echo "error: malformed sync scenario missing expected error '$expected_error' for $ws_name"
     cat "$log_path" || true
@@ -843,6 +872,8 @@ run_malformed_sync_case \
   "--repo_env=DD_GIT_HEAD_MESSAGE=malformed-test-management-commit-message"
 
 # Scenario: multi-service extension wiring + deduped sanitized service keys.
+# This block verifies both repository-rule fanout and macro-level service key
+# resolution semantics (including collision-safe explicit key selection).
 MULTI_WS="$TMP_WS/ws_multi"
 mkdir -p "$MULTI_WS"
 cat > "$MULTI_WS/MODULE.bazel" <<MODULE_MULTI_EOF
@@ -955,6 +986,8 @@ MULTI_MACRO_CQUERY=$(
   cd "$MULTI_WS" && \
   "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe --output=build "${REPO_ENVS[@]}"
 )
+# The selected manifest label is the strongest end-to-end macro assertion:
+# it proves the chosen service mapping and out_dir propagation simultaneously.
 if ! printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service_2//:custom_topt/manifest.txt"; then
   echo "error: dd_topt_go_test multi-service probe did not resolve to go_service_2 custom out_dir manifest"
   echo "$MULTI_MACRO_CQUERY"
@@ -1127,6 +1160,8 @@ ORIG_CODEOWNERS="$WORKSPACE/CODEOWNERS.orig"
 cp "$WORKSPACE/CODEOWNERS" "$ORIG_CODEOWNERS"
 
 # Scenario: missing CODEOWNERS file must not fail uploads and must not inject new owners.
+# This guards the "best effort enrichment" contract: uploader success must not
+# depend on CODEOWNERS availability.
 mv "$WORKSPACE/CODEOWNERS" "$WORKSPACE/CODEOWNERS.bak"
 MANUAL_NO_CO="$TESTLOGS_DIR/manual_no_codeowners/test.outputs"
 mkdir -p "$MANUAL_NO_CO/tests" "$MANUAL_NO_CO/coverage"
@@ -1225,6 +1260,8 @@ PY
 mv "$WORKSPACE/CODEOWNERS.bak" "$WORKSPACE/CODEOWNERS"
 
 # Scenario: empty-owner rule should not set test.codeowners while preserving fallback/source-key behavior.
+# This is intentionally broad and table-driven: each synthetic resource maps to
+# one parser/normalization edge case so regressions are easy to localize.
 cat > "$WORKSPACE/CODEOWNERS" <<'CODEOWNERS_EOF'
 [CoreTeam]
 [Core Team] @org/section-space
@@ -1800,6 +1837,8 @@ if failures:
 PY
 
 # Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
+# This validates mode switching behavior: EVP must use evp_proxy routes and
+# EVP subdomain headers, and must not send DD-API-KEY.
 MANUAL_EVP="$TESTLOGS_DIR/manual_evp_mode/test.outputs"
 mkdir -p "$MANUAL_EVP/tests" "$MANUAL_EVP/coverage"
 cat > "$MANUAL_EVP/tests/manual_evp_mode.json" <<'JSON_EOF'
@@ -1907,6 +1946,8 @@ PY
 
 # Scenario: force context.json resolution through RUNFILES_MANIFEST_FILE only.
 # This validates BOM/tab exact-key matching and suffix-key fallback end-to-end.
+# The manifest is intentionally constructed with both exact and suffix-key
+# forms to cover both resolver branches deterministically.
 UPLOADER_CQUERY=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:dd_upload_payloads_with_context --output=files \
   "${REPO_ENVS[@]}")
 UPLOADER_SCRIPT_PATH=$(echo "$UPLOADER_CQUERY" | awk 'NF { print; exit }')
@@ -2076,6 +2117,7 @@ if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]]; then
 fi
 
 write_manifest_payload() {
+  # Create one test + one coverage payload for manifest-fallback uploader tests.
   local outputs_dir="$1"
   local resource_name="$2"
   mkdir -p "$outputs_dir/tests" "$outputs_dir/coverage"
@@ -2104,6 +2146,8 @@ JSON_EOF
 }
 
 run_manifest_uploader() {
+  # Run uploader with RUNFILES_MANIFEST_FILE-only resolution enabled and fail
+  # fast with captured logs when any manifest-key scenario regresses.
   local manifest_file="$1"
   local output_log="$2"
   local scenario_label="$3"

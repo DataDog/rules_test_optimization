@@ -8,6 +8,7 @@ load(
 )
 
 def _compute_service_keys_dedups_collisions_test(ctx):
+    """Validate sanitized-key collision deduping for multi-service inputs."""
     env = unittest.begin(ctx)
     keys = compute_multi_service_keys_for_tests([
         "go-service",
@@ -18,6 +19,7 @@ def _compute_service_keys_dedups_collisions_test(ctx):
     return unittest.end(env)
 
 def _compute_repo_names_test(ctx):
+    """Validate deterministic per-service repository naming."""
     env = unittest.begin(ctx)
     repo_names = compute_multi_repo_names_for_tests(
         "test_optimization_data",
@@ -31,6 +33,7 @@ def _compute_repo_names_test(ctx):
     return unittest.end(env)
 
 def _render_multi_aggregate_bzl_contains_expected_targets_test(ctx):
+    """Validate generated aggregate.bzl includes expected exports/targets."""
     env = unittest.begin(ctx)
     content = render_multi_aggregate_bzl_for_tests(
         ["go_service", "go_service_2"],
@@ -47,6 +50,7 @@ def _render_multi_aggregate_bzl_contains_expected_targets_test(ctx):
     return unittest.end(env)
 
 def _render_multi_aggregate_bzl_mismatch_target_impl(_ctx):
+    """Target expected to fail on keys/repos length mismatch."""
     render_multi_aggregate_bzl_for_tests(["go_service"], ["repo_a", "repo_b"])
     return []
 
@@ -55,6 +59,7 @@ render_multi_aggregate_bzl_mismatch_target_rule = rule(
 )
 
 def _render_multi_aggregate_bzl_mismatch_failure_test_impl(ctx):
+    """Assert mismatch failure message remains stable and actionable."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "service_keys and repo_names length mismatch")
     return analysistest.end(env)

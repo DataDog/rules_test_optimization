@@ -36,9 +36,19 @@ load("//tools:topt_go_infer.bzl", "topt_go_payloads_selector")
 load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
 def _is_dict(value):
+    """Return True when value is a Starlark dict.
+
+    Keep this tiny helper instead of repeating `type(x) == type({})` so intent
+    remains obvious in validation branches.
+    """
     return type(value) == type({})
 
 def _service_mapping_entries(topt_data):
+    """Extract service-shaped entries from an aggregator mapping.
+
+    The multi-service export may contain helper/meta keys. A service entry is
+    identified by a dict value that includes `repo_name`.
+    """
     entries = {}
     for key, value in topt_data.items():
         if _is_dict(value) and value.get("repo_name"):
@@ -46,9 +56,21 @@ def _service_mapping_entries(topt_data):
     return entries
 
 def _normalize_user_data(user_data):
+    """Normalize caller-provided `data` into a mutable list.
+
+    Accepts None/list/tuple and always returns a list to avoid surprising
+    type-specific behavior when appending selector/manifest labels.
+    """
     return list(user_data or [])
 
 def _resolve_topt_service_key(service_entries, topt_service):
+    """Resolve a requested service key within a multi-service mapping.
+
+    Resolution order:
+    1) If `topt_service` is omitted and there is exactly one service, use it.
+    2) Prefer exact key match for deterministic, collision-safe selection.
+    3) Fall back to sanitized key lookup for ergonomic raw-service input.
+    """
     keys = sorted(service_entries.keys())
     if topt_service == None:
         if len(keys) == 1:
@@ -108,6 +130,9 @@ def dd_topt_go_test(
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
+    # ------------------------------------------------------------------
+    # Phase 1: Validate + select service payload metadata.
+    # ------------------------------------------------------------------
     # Validate required topt_data early so failures surface at loading time.
     if topt_data == None or not _is_dict(topt_data):
         fail("dd_topt_go_test: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
@@ -116,16 +141,25 @@ def dd_topt_go_test(
     # 1) Single-service dict with keys: repo_name, labels, set, go
     # 2) Aggregator mapping dict: { <svc_key>: single-service dict, ... }
     if topt_data.get("repo_name"):
+        # Single-service shape: caller already selected the service by choosing
+        # this exported dict, so no key resolution is needed.
         _svc = topt_data
     else:
         # Aggregator mapping: select service from service-shaped entries only.
         service_entries = _service_mapping_entries(topt_data)
         if not service_entries:
             fail("dd_topt_go_test: topt_data mapping did not contain any service entries")
+        # Explicit `topt_service` is resolved via exact-then-sanitized matching
+        # to preserve collision-safe keys while still accepting ergonomic input.
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
         _svc = service_entries[selected_key]
 
+    # ------------------------------------------------------------------
+    # Phase 2: Collect caller-provided inputs that we augment downstream.
+    # ------------------------------------------------------------------
     # Prepare data dependencies
+    # Use `pop` so caller kwargs forwarded to go_test do not contain stale
+    # `data` after we normalize/augment it below.
     user_data = kwargs.pop("data", None)
     data = _normalize_user_data(user_data)
 
@@ -133,6 +167,9 @@ def dd_topt_go_test(
     explicit_importpath = kwargs.get("importpath") if "importpath" in kwargs else None
     embed_labels = (kwargs.get("embed", []) or [])
 
+    # ------------------------------------------------------------------
+    # Phase 3: Compute selection strategy and labels for payload files.
+    # ------------------------------------------------------------------
     # If caller provided the exported service dict, derive defaults
     include_per_module_files = False
 
@@ -145,21 +182,31 @@ def dd_topt_go_test(
     _go = _svc.get("go") or {}
     uses_inference = bool(explicit_importpath) or bool(embed_labels)
     if uses_inference:
+        # When we can infer importpath, always allow per-module selection.
+        # Missing module matches still safely fall back in selector rule.
         include_per_module_files = True
     else:
         _inc = _go.get("module_included") if _is_dict(_go) else None
         if _inc != None:
+            # In fallback mode, `module_included` acts as a coarse gate derived
+            # from sync metadata rather than analysis-time provider information.
             include_per_module_files = bool(_inc)
 
     # Build labels for files/context based on (possibly derived) sync_repo_name.
     # These labels remain stable public contracts of the generated sync repo.
     files_label = "@%s//:test_optimization_files" % sync_repo_name
 
+    # ------------------------------------------------------------------
+    # Phase 4: Build environment and selector inputs for analysis-time mapping.
+    # ------------------------------------------------------------------
     # Prepare env map using a selector rule that infers importpath via aspect
+    # Same `pop` pattern keeps final go_test kwargs clean and explicit.
     user_env = kwargs.pop("env", {})
     env = dict(user_env)
 
     # Build the list of per-module groups once (if any were exported)
+    # Use exported sanitized labels directly to avoid re-deriving naming policy
+    # in the macro and drifting from sync-side label generation.
     module_labels = []
     _labels = _svc.get("labels") or []
     for lab in _labels:
@@ -169,16 +216,23 @@ def dd_topt_go_test(
     pkg_path = native.package_name()
     fallback_importpath = None
     if explicit_importpath:
+        # Explicit importpath is authoritative and mirrors rules_go semantics.
         fallback_importpath = explicit_importpath
     else:
         _mp = (_go.get("module_path") if _is_dict(_go) else None) or None
         if _mp:
+            # Build module-relative fallback importpath: "<go_module>/<pkg>".
+            # Trim trailing slash to avoid accidental double separators.
             base = _mp[:-1] if _mp.endswith("/") else _mp
             fallback_importpath = (base + "/" + pkg_path) if pkg_path else base
         else:
+            # Last resort: package path only, still sufficient for best-effort
+            # module label matching when repo metadata is incomplete.
             fallback_importpath = pkg_path
 
     selector_name = name + "_topt_payloads"
+    # Selector encapsulates importpath inference + module fallback in analysis
+    # phase, keeping runtime logic and user callsites simple.
     topt_go_payloads_selector(
         name = selector_name,
         embeds = embed_labels,
@@ -190,11 +244,16 @@ def dd_topt_go_test(
         module_label_override = module_label_override,
     )
 
+    # ------------------------------------------------------------------
+    # Phase 5: Wire selector + manifest into go_test runfiles and environment.
+    # ------------------------------------------------------------------
     # Data/env for the go test: depend only on the selector and use its runfiles.
     # This keeps go_test callsites simple while centralizing selection logic.
     data.append(":" + selector_name)
 
-    # Add manifest file reference for deriving the working directory
+    # Add manifest file reference for deriving the working directory.
+    # Keep this dynamic via export metadata so custom out_dir values continue
+    # to work without macro changes.
     # Library can resolve this path and call filepath.Dir() to get the .testoptimization directory
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
@@ -206,6 +265,7 @@ def dd_topt_go_test(
     env["TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
+    # Keeping this explicit avoids hidden repository dependencies in the macro.
     _go_test = go_test_rule if go_test_rule != None else None
     if _go_test == None:
         fail("dd_topt_go_test: you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
