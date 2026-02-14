@@ -43,13 +43,16 @@ UPLOADER_VERSION = "2.0.0"
 RULES_VERSION = "1.0.0"
 
 def log_info(message):
+    """Emit user-facing uploader progress log line."""
     print("dd_payload_uploader: %s" % message)
 
 def log_debug(debug_enabled, message):
+    """Emit debug log line when uploader debugging is enabled."""
     if debug_enabled:
         print("dd_payload_uploader: %s" % message)
 
 def _render_template(template, substitutions):
+    """Render script template placeholders with literal-brace support."""
     # Simple template renderer compatible with the existing {key} placeholders.
     # It also converts doubled braces ({{, }}) into single braces after substitution,
     # which keeps literal braces used by shell/JSON/PowerShell intact.
@@ -63,12 +66,20 @@ def _render_template(template, substitutions):
 
 # Helper to keep template booleans consistent across bash/PowerShell.
 def _bool_to_str(value):
+    """Return Starlark bool as title-cased string for template injection."""
     return "True" if value else "False"
+
+def _bash_curl_retry_flags_for_tests():
+    """Expose uploader curl retry defaults for unit tests."""
+    # Keep the baseline retry behavior compatible with older curl releases.
+    return ["--retry", "3", "--retry-delay", "2", "--retry-connrefused"]
 
 # Public alias for tests (avoid importing private symbols)
 render_template_for_tests = _render_template
+bash_curl_retry_flags_for_tests = _bash_curl_retry_flags_for_tests
 
 def _codeowners_glob_to_regex_for_tests(pattern):
+    """Translate CODEOWNERS glob expression to regex fragment."""
     out = []
     plen = len(pattern)
     skip = {}
@@ -143,6 +154,7 @@ def _codeowners_glob_to_regex_for_tests(pattern):
     return "".join(out)
 
 def _compile_codeowners_regex_for_tests(pattern):
+    """Compile one CODEOWNERS pattern into full-match regex text."""
     anchored = pattern.startswith("/")
     dir_only = pattern.endswith("/")
     if anchored:
@@ -159,6 +171,7 @@ def _compile_codeowners_regex_for_tests(pattern):
     return prefix + body + suffix
 
 def _build_codeowners_lookup_order_for_tests(context_workspace, workspace_root, script_dir):
+    """Return ordered CODEOWNERS candidate paths used by runtime lookup."""
     candidates = []
     if context_workspace:
         candidates.extend([
@@ -181,15 +194,19 @@ def _build_codeowners_lookup_order_for_tests(context_workspace, workspace_root, 
     return candidates
 
 def _is_ascii_whitespace_for_tests(ch):
+    """ASCII-only whitespace check used by parser helpers."""
     return ch in [" ", "\t", "\n", "\r", "\f", "\v"]
 
 def _is_alnum_for_tests(ch):
+    """Return True for ASCII alphanumeric char."""
     return (ch in "abcdefghijklmnopqrstuvwxyz") or (ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") or (ch in "0123456789")
 
 def _is_lower_or_digit_for_tests(ch):
+    """Return True for lowercase ASCII letters and digits."""
     return (ch in "abcdefghijklmnopqrstuvwxyz") or (ch in "0123456789")
 
 def _is_gitlab_section_header_pattern_for_tests(pattern):
+    """Detect GitLab CODEOWNERS section header syntax for one pattern token."""
     if not pattern or not pattern.startswith("[") or not pattern.endswith("]"):
         return False
     inner = pattern[1:-1]
@@ -232,6 +249,7 @@ def _is_gitlab_section_header_pattern_for_tests(pattern):
     return True
 
 def _is_gitlab_section_header_line_for_tests(line):
+    """Detect GitLab section header from an entire CODEOWNERS line."""
     if not line or not line.startswith("["):
         return False
     close_idx = line.find("]")
@@ -244,12 +262,14 @@ def _is_gitlab_section_header_line_for_tests(line):
     return _is_gitlab_section_header_pattern_for_tests(pattern)
 
 def _skip_derived_source_candidate_for_tests(candidate):
+    """Return True when derived source path should be skipped."""
     if not candidate:
         return False
     main_external_prefix = "_main/" + "external/"
     return candidate.startswith("external/") or candidate.startswith(main_external_prefix)
 
 def _is_gitlab_section_header_pattern_powershell_for_tests(pattern):
+    """PowerShell-parity variant of section header pattern detection."""
     if not pattern or not pattern.startswith("[") or not pattern.endswith("]"):
         return False
     inner = pattern[1:-1]
@@ -290,6 +310,7 @@ def _is_gitlab_section_header_pattern_powershell_for_tests(pattern):
     return True
 
 def _strip_workspace_prefix_bash_for_tests(path_norm, root_norm):
+    """Strip normalized workspace root prefix (Bash behavior)."""
     if not path_norm or not root_norm:
         return None
     if path_norm == root_norm:
@@ -300,6 +321,7 @@ def _strip_workspace_prefix_bash_for_tests(path_norm, root_norm):
     return None
 
 def _strip_workspace_prefix_powershell_for_tests(path_norm, root_norm, is_windows):
+    """Strip normalized workspace root prefix (PowerShell behavior)."""
     if not path_norm or not root_norm:
         return None
     path_cmp = path_norm.lower() if is_windows else path_norm
@@ -312,12 +334,14 @@ def _strip_workspace_prefix_powershell_for_tests(path_norm, root_norm, is_window
     return None
 
 def _first_ascii_whitespace_index_for_tests(value):
+    """Return index of first ASCII whitespace char, or -1."""
     for i in range(len(value)):
         if _is_ascii_whitespace_for_tests(value[i:i + 1]):
             return i
     return -1
 
 def _first_space_or_tab_index_for_tests(value):
+    """Return index of first space/tab char, or -1."""
     for i in range(len(value)):
         ch = value[i:i + 1]
         if ch == " " or ch == "\t":
@@ -325,12 +349,14 @@ def _first_space_or_tab_index_for_tests(value):
     return -1
 
 def _list_contains_for_tests(items, value):
+    """Deterministic list membership helper for Starlark tests."""
     for item in items:
         if item == value:
             return True
     return False
 
 def _trim_ascii_whitespace_for_tests(value):
+    """Trim leading/trailing ASCII whitespace without regex."""
     if not value:
         return ""
     start = 0
@@ -353,6 +379,7 @@ def _trim_ascii_whitespace_for_tests(value):
     return value[start:end]
 
 def _strip_bom_prefix_for_tests(value):
+    """Remove UTF-8 BOM marker used in manifest parser test fixtures."""
     # Tests use an ASCII marker to represent UTF-8 BOM-prefixed manifest keys.
     bom_marker = "\\ufeff"
     if value.startswith(bom_marker):
@@ -360,6 +387,7 @@ def _strip_bom_prefix_for_tests(value):
     return value
 
 def _resolve_runfile_manifest_bash_for_tests(manifest_lines, key, existing_paths):
+    """Resolve runfile path from manifest using Bash parser semantics."""
     for idx in range(len(manifest_lines)):
         line = manifest_lines[idx]
         sep_idx = _first_ascii_whitespace_index_for_tests(line)
@@ -396,6 +424,7 @@ def _resolve_runfile_manifest_bash_for_tests(manifest_lines, key, existing_paths
     return ""
 
 def _resolve_runfile_manifest_powershell_for_tests(manifest_lines, key, existing_paths):
+    """Resolve runfile path from manifest using PowerShell parser semantics."""
     for line in manifest_lines:
         line_norm = _strip_bom_prefix_for_tests(line)
         if len(line_norm) <= len(key):
@@ -437,6 +466,11 @@ resolve_runfile_manifest_bash_for_tests = _resolve_runfile_manifest_bash_for_tes
 resolve_runfile_manifest_powershell_for_tests = _resolve_runfile_manifest_powershell_for_tests
 
 def _uploader_impl(ctx):
+    """Rule implementation that generates cross-platform uploader executables.
+
+    The generated scripts perform runtime payload discovery/enrichment/upload,
+    while this function stays analysis-time only (template rendering + runfiles).
+    """
     # `_uploader_impl` is responsible for generating *all* runtime uploader
     # artifacts. It does not upload anything itself; it emits executable scripts
     # that run during `bazel run`.
@@ -450,6 +484,9 @@ def _uploader_impl(ctx):
     # Keep template substitutions explicit and centralized. If new placeholders
     # are introduced, add tests in `tools/tests/test_uploader_utils.bzl` to
     # lock behavior and avoid cross-platform drift.
+    # ------------------------------------------------------------------
+    # Phase 1: Read rule attributes and discover optional runfile artifacts.
+    # ------------------------------------------------------------------
     quiescent_sec = ctx.attr.quiescent_sec
     max_wait_sec = ctx.attr.max_wait_sec
     fail_on_error = ctx.attr.fail_on_error
@@ -463,6 +500,9 @@ def _uploader_impl(ctx):
     context_json_path = ""
     for f in ctx.files.data:
         if f.basename == "context.json":
+            # Keep first-match semantics deterministic: data deps are already
+            # explicit in BUILD definitions and should not contain conflicting
+            # context files. If they do, first one wins for stability.
             context_json_rloc = f.short_path
             context_json_path = f.path
             break
@@ -490,6 +530,7 @@ def _uploader_impl(ctx):
         log_debug(debug, "context.json found at: %s" % context_json_rloc)
         log_debug(debug, "context.json artifact path: %s" % context_json_path)
     else:
+        # Runtime script treats missing context as best-effort disablement.
         log_debug(debug, "context.json not found in data files; enrichment disabled")
     if schema_json_rloc:
         log_debug(debug, "schema found at: %s" % schema_json_rloc)
@@ -506,6 +547,9 @@ def _uploader_impl(ctx):
         for f in ctx.files.data:
             log_debug(debug, "  data file: %s (%s)" % (f.basename, f.short_path))
 
+    # ------------------------------------------------------------------
+    # Phase 2: Render Bash runtime implementation.
+    # ------------------------------------------------------------------
     # Bash implementation (Unix)
     bash_template = """
 #!/usr/bin/env bash
@@ -604,6 +648,7 @@ resolve_runfile() {{
         # Try RUNFILES_MANIFEST_FILE (Windows/manifest-only)
         if [[ -n "$manifest_file" && -f "$manifest_file" ]]; then
             local path
+            # Pass 1: exact manifest key match (preferred).
             # Use awk + substr() for regex-free extraction, so candidate labels
             # containing regex metacharacters are treated as plain text.
             # We also strip a UTF-8 BOM from the first manifest key for parity
@@ -632,6 +677,7 @@ resolve_runfile() {{
             fi
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
             # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
+            # Pass 2: suffix match for repo-prefixed key variants.
             path=$(awk -v key="$cand" '
                 BEGIN {{ bom = sprintf("%c%c%c", 239, 187, 191) }}
                 {{
@@ -699,8 +745,10 @@ CONTEXT_JSON_PATH="{context_json_path}"
 dbg "context.json resolution inputs: path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC'"
 CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")
 if [[ -n "$CONTEXT_JSON" ]]; then
+    # Direct artifact path is fastest and most deterministic when available.
     dbg "context.json resolved via direct path: '$CONTEXT_JSON'"
 elif [[ -n "$CONTEXT_JSON_RLOC" ]]; then
+    # Runfiles lookup supports launcher/platform variants and bzlmod naming.
     CONTEXT_JSON=$(resolve_runfile "$CONTEXT_JSON_RLOC")
     if [[ -z "$CONTEXT_JSON" ]]; then
         log "warning: context.json not found in runfiles; payloads will not be enriched"
@@ -722,6 +770,7 @@ SCHEMA_JSON=$(resolve_artifact_path "$SCHEMA_JSON_PATH")
 if [[ -n "$SCHEMA_JSON" ]]; then
     dbg "schema resolved via direct path: '$SCHEMA_JSON'"
 elif [[ -n "$SCHEMA_JSON_RLOC" ]]; then
+    # Fallback to runfiles so validation still works under manifest-only setups.
     SCHEMA_JSON=$(resolve_runfile "$SCHEMA_JSON_RLOC")
     if [[ -z "$SCHEMA_JSON" ]]; then
         log "warning: schema not found in runfiles; validation disabled"
@@ -736,6 +785,7 @@ SCHEMA_VALIDATOR=$(resolve_artifact_path "$SCHEMA_VALIDATOR_PATH")
 if [[ -n "$SCHEMA_VALIDATOR" ]]; then
     dbg "schema validator resolved via direct path: '$SCHEMA_VALIDATOR'"
 elif [[ -n "$SCHEMA_VALIDATOR_RLOC" ]]; then
+    # Keep parity with schema resolution order (direct path first, runfile second).
     SCHEMA_VALIDATOR=$(resolve_runfile "$SCHEMA_VALIDATOR_RLOC")
     if [[ -z "$SCHEMA_VALIDATOR" ]]; then
         log "warning: schema validator not found in runfiles; validation disabled"
@@ -847,6 +897,14 @@ if [[ "$GZIP_PAYLOADS" == "1" ]]; then
     fi
 fi
 dbg "gzip enabled: $GZIP_PAYLOADS"
+
+# Baseline curl retry flags. We append --retry-all-errors only when supported
+# by the installed curl binary (introduced in curl 7.85.0).
+CURL_RETRY_FLAGS=({curl_retry_flags})
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+    CURL_RETRY_FLAGS+=(--retry-all-errors)
+fi
+dbg "curl retry flags: ${{CURL_RETRY_FLAGS[*]}}"
 
 # Windows detection - delegate to PowerShell if needed
 if [[ "$(uname -s | tr 'A-Z' 'a-z')" == *mingw* || "$(uname -s | tr 'A-Z' 'a-z')" == *msys* || "$(uname -s | tr 'A-Z' 'a-z')" == *cygwin* ]]; then
@@ -998,6 +1056,7 @@ trap cleanup EXIT
 # Check explicit TESTLOGS_DIR override first (fail fast if set but invalid)
 if [[ -n "${{TESTLOGS_DIR:-}}" ]]; then
     if [[ -d "$TESTLOGS_DIR" ]]; then
+        # Explicit override wins over all discovery heuristics.
         dbg "using explicit TESTLOGS_DIR=$TESTLOGS_DIR"
     else
         log "error: TESTLOGS_DIR is set but path does not exist: $TESTLOGS_DIR"
@@ -1006,6 +1065,9 @@ if [[ -n "${{TESTLOGS_DIR:-}}" ]]; then
     fi
 else
     # Auto-discover testlogs directory
+    # Discovery order intentionally mirrors common Bazel invocation contexts:
+    # 1) BUILD_WORKSPACE_DIRECTORY (when provided by launcher)
+    # 2) local bazel-testlogs symlink in current directory
     if [[ -n "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
         candidate="$BUILD_WORKSPACE_DIRECTORY/bazel-testlogs"
         if [[ -d "$candidate" ]] || [[ -L "$candidate" ]]; then
@@ -1139,6 +1201,9 @@ while true; do
     total_files=$(count_payload_files)
 
     if (( total_files == 0 )); then
+        # No payloads yet. Branch behavior depends on max-wait policy:
+        # - MAX_WAIT_SEC=0: immediate decision (upload no-op or fail-on-error)
+        # - MAX_WAIT_SEC>0: keep polling until timeout
         if (( MAX_WAIT_SEC == 0 )); then
             if tests_executed; then
                 log "warning: tests ran but no payload files found"
@@ -1171,6 +1236,7 @@ while true; do
     fi
 
     if (( elapsed > MAX_WAIT_SEC )); then
+        # Payloads exist but waiting budget is exhausted; proceed anyway.
         log "max wait exceeded ($MAX_WAIT_SEC s); proceeding to upload"
         break
     fi
@@ -1192,6 +1258,7 @@ done
 DD_SITE="${{DD_SITE:-datadoghq.com}}"
 INTAKE_BASE="${{DD_TOPT_INTAKE_BASE:-}}"
 if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
+  # Agentless mode: direct public intake URLs (or explicit override base).
   AGENTLESS=1
   if [[ -n "$INTAKE_BASE" ]]; then
     # Allow tests/dev to override intake base without changing DD_SITE.
@@ -1204,6 +1271,7 @@ if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
     COV_URL="https://citestcov-intake.${{DD_SITE}}/api/v2/citestcov"
   fi
 else
+  # EVP mode: route through agent endpoint with required subdomain headers.
   AGENTLESS=0
   TEST_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcycle"
   COV_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcov"
@@ -1932,6 +2000,8 @@ resolve_codeowners_json_for_source() {{
     fi
     if [[ "$owners_line" == "$CODEOWNERS_MATCH_EMPTY" ]]; then
       # Explicit "no owners" rule matched; treat as no tag.
+      # This preserves CODEOWNERS semantics where later empty-owner rules
+      # intentionally clear ownership for matching paths.
       echo ""
       return
     fi
@@ -2057,6 +2127,7 @@ if (( JQ_AVAILABLE == 1 )) && [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" ]]; th
 fi
 if [[ -n "$API_KEY_FINGERPRINT" ]]; then
   if (( AGENTLESS == 1 )); then
+    # Compare fetch-time and upload-time credentials without exposing raw keys.
     local_fp=$(fnv1a_32 "$DD_API_KEY")
     if [[ -n "$local_fp" && "$local_fp" != "$API_KEY_FINGERPRINT" ]]; then
       log "warning: DD_API_KEY mismatch between fetch and uploader"
@@ -2064,6 +2135,7 @@ if [[ -n "$API_KEY_FINGERPRINT" ]]; then
       dbg "DD_API_KEY fingerprint match"
     fi
   else
+    # EVP mode does not require DD_API_KEY for upload requests.
     log "warning: DD_API_KEY fingerprint present but uploader running in EVP mode; check skipped"
   fi
 elif [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" && "$JQ_AVAILABLE" != "1" ]]; then
@@ -2074,12 +2146,15 @@ enrich_with_context() {{
   local infile="$1"; local tmpfile="$2"
   dbg "enrich_with_context: infile='$infile' outfile='$tmpfile' ctx='${{CONTEXT_JSON:-<none>}}' jq=$JQ_AVAILABLE"
   if (( JQ_AVAILABLE == 0 )); then
+    # No jq means no structural merge; forward original payload unchanged.
     cp "$infile" "$tmpfile"
     return 0
   fi
   local ctx_file="$CONTEXT_JSON"
   local cleanup_ctx=""
   if [[ -z "$ctx_file" || ! -f "$ctx_file" ]]; then
+    # Missing context is non-fatal: use empty object so enrichment still
+    # normalizes metadata shape without injecting context tags.
     ctx_file="$(mktemp "$TMP_PAYLOAD_DIR/context.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$ctx_file" ]]; then
       cp "$infile" "$tmpfile"
@@ -2138,6 +2213,8 @@ enrich_with_context() {{
       else .
       end)
   ' "$infile" > "$tmpfile"
+  # CODEOWNERS enrichment is applied after metadata/context merge so source-path
+  # detection can leverage normalized event structure.
   inject_codeowners_tags "$tmpfile"
   if [[ -n "$cleanup_ctx" ]]; then
     rm -f "$ctx_file" 2>/dev/null || true
@@ -2195,6 +2272,7 @@ cleanup_file() {{
 validate_payload() {{
     local file="$1"
     if [[ -z "$SCHEMA_JSON" || ! -f "$SCHEMA_JSON" ]]; then
+        # Validation is best-effort and must never block uploads by default.
         dbg "schema validation skipped: schema not available"
         return 0
     fi
@@ -2208,6 +2286,7 @@ validate_payload() {{
     fi
     dbg "schema validate: python3 $SCHEMA_VALIDATOR $SCHEMA_JSON $file"
     if ! python3 "$SCHEMA_VALIDATOR" "$SCHEMA_JSON" "$file"; then
+        # Keep warning-only behavior so schema drift does not drop payloads.
         log "warning: schema validation failed for payload: $file"
     fi
     return 0
@@ -2244,6 +2323,8 @@ upload_single_test() {{
     payload_file="$body"
     gz=""
     if [[ "$GZIP_PAYLOADS" == "1" ]]; then
+        # Compress enriched payload, but gracefully fall back to plain JSON if
+        # gzip is unavailable/fails on the host.
         gz="$body.gz"
         if gzip -c "$body" > "$gz"; then
             payload_file="$gz"
@@ -2261,6 +2342,7 @@ upload_single_test() {{
     fi
     local ce_hdr=()
     if [[ "$payload_file" != "$body" ]]; then
+        # Signal compressed body only when gzip output is actually used.
         ce_hdr=(-H "Content-Encoding: gzip")
     fi
     if [[ "$DEBUG" == "1" ]]; then
@@ -2274,10 +2356,10 @@ upload_single_test() {{
         fi
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{TEST_EVP[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     fi
     rc=$?
@@ -2289,6 +2371,7 @@ upload_single_test() {{
         fi
     fi
     rm -f "$resp" "$body" "$gz" 2>/dev/null || true
+    # Cleanup happens before return to avoid temp-file buildup on retries/runs.
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
         return 1
     fi
@@ -2323,12 +2406,12 @@ upload_single_coverage() {{
         dbg "headers: multipart/form-data (event + coveragex)"
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 --retry-connrefused --retry-all-errors \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" "${{COV_EVP[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")
@@ -2371,6 +2454,8 @@ upload_all_tests() {{
                 cleanup_file "$f"
                 ((++total))
             else
+                # Keep uploading subsequent files to maximize successful delivery
+                # even when one payload is malformed or temporarily rejected.
                 log "warning: failed to upload $f"
                 ((++failed))
                 ((++UPLOAD_FAILURES))
@@ -2409,6 +2494,8 @@ upload_all_coverage() {{
                 cleanup_file "$f"
                 ((++total))
             else
+                # Coverage failures are tracked but non-fatal per-file; final
+                # exit code reflects aggregate failure count after both passes.
                 log "warning: failed to upload $f"
                 ((++failed))
                 ((++UPLOAD_FAILURES))
@@ -2429,9 +2516,11 @@ upload_all_coverage
 
 # Exit with appropriate code based on upload results
 if (( UPLOAD_FAILURES > 0 )); then
+    # Non-zero signals partial/total upload failure to CI orchestration.
     log "done with $UPLOAD_FAILURES upload failures"
     exit 1
 else
+    # Zero means either complete success or intentional no-op path above.
     log "done"
     exit 0
 fi
@@ -2455,6 +2544,7 @@ fi
             "schema_validator_rloc": schema_validator_rloc,
             "schema_validator_path": schema_validator_path,
             "rules_version": RULES_VERSION,
+            "curl_retry_flags": " ".join(_bash_curl_retry_flags_for_tests()),
         },
     )
     log_debug(debug, "Bash script rendered (bytes=%d)" % len(bash_script))
@@ -2545,6 +2635,7 @@ function Resolve-Runfile {{
 
         # Try RUNFILES_MANIFEST_FILE (Windows default)
         if ($manifest) {{
+            # Pass 1: exact key matches (fast path, most reliable).
             foreach ($line in $manifest) {{
                 $lineNorm = $line
                 # Some tools write manifests with UTF-8 BOM; strip it from key.
@@ -2564,6 +2655,7 @@ function Resolve-Runfile {{
             }}
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
             # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
+            # Pass 2: suffix-key matches for bzlmod/workspace key variants.
             foreach ($line in $manifest) {{
                 $lineNorm = $line
                 # Same BOM handling for suffix-key fallback.
@@ -2726,8 +2818,10 @@ $ContextJsonPath = "{context_json_path}"
 Dbg "context.json resolution inputs: path='$ContextJsonPath' rloc='$ContextJsonRloc'"
 $script:ContextJson = Resolve-ArtifactPath $ContextJsonPath
 if ($script:ContextJson) {{
+    # Direct artifact path is preferred when launcher preserves it.
     Dbg "context.json resolved via direct path: '$script:ContextJson'"
 }} elseif ($ContextJsonRloc) {{
+    # Runfiles fallback supports manifest-only and bzlmod path variants.
     $script:ContextJson = Resolve-Runfile $ContextJsonRloc
     if (-not $script:ContextJson) {{
         Log "warning: context.json not found in runfiles; payloads will not be enriched"
@@ -2747,6 +2841,7 @@ $script:SchemaJson = Resolve-ArtifactPath $SchemaJsonPath
 if ($script:SchemaJson) {{
     Dbg "schema resolved via direct path: '$script:SchemaJson'"
 }} elseif ($SchemaJsonRloc) {{
+    # Keep parity with Bash: attempt runfiles resolution before disabling.
     $script:SchemaJson = Resolve-Runfile $SchemaJsonRloc
     if (-not $script:SchemaJson) {{
         Log "warning: schema not found in runfiles; validation disabled"
@@ -2765,6 +2860,7 @@ $script:SchemaValidator = Resolve-ArtifactPath $SchemaValidatorPath
 if ($script:SchemaValidator) {{
     Dbg "schema validator resolved via direct path: '$script:SchemaValidator'"
 }} elseif ($SchemaValidatorRloc) {{
+    # Validation is best-effort; unresolved validator disables schema checks.
     $script:SchemaValidator = Resolve-Runfile $SchemaValidatorRloc
     if (-not $script:SchemaValidator) {{
         Log "warning: schema validator not found in runfiles; validation disabled"
@@ -2917,7 +3013,8 @@ $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {{ Rel
 
 # Check explicit TESTLOGS_DIR override first (fail fast if set but invalid)
 if ($env:TESTLOGS_DIR) {{
-    if (Test-Path $env:TESTLOGS_DIR) {{
+    if (Test-Path -LiteralPath $env:TESTLOGS_DIR) {{
+        # Explicit override bypasses auto-discovery heuristics.
         $TestlogsDir = $env:TESTLOGS_DIR
         Dbg "using explicit TESTLOGS_DIR=$TestlogsDir"
     }} else {{
@@ -2928,16 +3025,19 @@ if ($env:TESTLOGS_DIR) {{
     }}
 }} else {{
     # Auto-discover testlogs directory
+    # Discovery order mirrors Bash implementation for cross-platform parity:
+    # 1) BUILD_WORKSPACE_DIRECTORY/bazel-testlogs
+    # 2) cwd/bazel-testlogs
     $TestlogsDir = $null
 
     if ($env:BUILD_WORKSPACE_DIRECTORY) {{
         $candidate = Join-Path $env:BUILD_WORKSPACE_DIRECTORY "bazel-testlogs"
-        if (Test-Path $candidate) {{ $TestlogsDir = $candidate }}
+        if (Test-Path -LiteralPath $candidate) {{ $TestlogsDir = $candidate }}
     }}
 
     if (-not $TestlogsDir) {{
         $candidate = Join-Path (Get-Location) "bazel-testlogs"
-        if (Test-Path $candidate) {{ $TestlogsDir = $candidate }}
+        if (Test-Path -LiteralPath $candidate) {{ $TestlogsDir = $candidate }}
     }}
 
     if (-not $TestlogsDir) {{
@@ -2989,7 +3089,7 @@ function Get-LatestMTimeAll {{
     foreach ($outputsDir in $script:TestOutputsCache) {{
         foreach ($subdir in @("tests", "coverage")) {{
             $dir = Join-Path $outputsDir.FullName $subdir
-            if (-not (Test-Path $dir)) {{ continue }}
+            if (-not (Test-Path -LiteralPath $dir)) {{ continue }}
             $files = Get-ChildItem -Path $dir -Filter "*.json" -File -ErrorAction SilentlyContinue
             foreach ($file in $files) {{
                 if ($file.LastWriteTime -gt $maxTime) {{
@@ -3006,10 +3106,10 @@ function Count-PayloadFiles {{
     foreach ($outputsDir in $script:TestOutputsCache) {{
         $testsDir = Join-Path $outputsDir.FullName "tests"
         $covDir = Join-Path $outputsDir.FullName "coverage"
-        if (Test-Path $testsDir) {{
+        if (Test-Path -LiteralPath $testsDir) {{
             $count += @(Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
         }}
-        if (Test-Path $covDir) {{
+        if (Test-Path -LiteralPath $covDir) {{
             $count += @(Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
         }}
     }}
@@ -3040,6 +3140,7 @@ while ($true) {{
     $totalFiles = Count-PayloadFiles
 
     if ($totalFiles -eq 0) {{
+        # No payloads yet. Branch behavior depends on max-wait configuration.
         if ($MaxWaitSec -eq 0) {{
             if (Test-ExecutedTests) {{
                 Log "warning: tests ran but no payload files found"
@@ -3076,6 +3177,7 @@ while ($true) {{
     }}
 
     if ($elapsed -gt $MaxWaitSec) {{
+        # Payloads are present; continue with upload once budget expires.
         Log "max wait exceeded ($MaxWaitSec s); proceeding to upload"
         break
     }}
@@ -3099,6 +3201,7 @@ $DD_Site = if ([string]::IsNullOrEmpty($env:DD_SITE)) {{ 'datadoghq.com' }} else
 # Allow tests/dev to override intake base without changing DD_SITE.
 $IntakeBase = $env:DD_TOPT_INTAKE_BASE
 if ($Agentless) {{
+  # Agentless mode posts directly to Datadog intake hosts.
   if (-not [string]::IsNullOrEmpty($IntakeBase)) {{
     $Base = $IntakeBase.TrimEnd('/')
     $TestUrl = "$Base/api/v2/citestcycle"
@@ -3109,6 +3212,7 @@ if ($Agentless) {{
     $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
   }}
 }} else {{
+  # EVP mode tunnels through agent endpoint and requires EVP subdomain headers.
   $TestUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcycle"
   $CovUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcov"
   if (-not [string]::IsNullOrEmpty($IntakeBase)) {{ Dbg "DD_TOPT_INTAKE_BASE ignored in EVP mode" }}
@@ -3147,6 +3251,7 @@ if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {{
 }}
 if ($ContextFingerprint) {{
   if ($Agentless) {{
+    # Compare only non-secret fingerprints; never log raw DD_API_KEY.
     $LocalFp = Get-Fnv1a32Hex $env:DD_API_KEY
     if ($LocalFp -and ($LocalFp -ne $ContextFingerprint)) {{
       Log "warning: DD_API_KEY mismatch between fetch and uploader"
@@ -3185,6 +3290,7 @@ function Get-CommonHeaders([string]$PayloadPath) {{
         if (-not [string]::IsNullOrEmpty($metaLangInterpreter)) {{ $langInterpreter = [string]$metaLangInterpreter }}
       }}
     }} catch {{
+      # Metadata extraction is best-effort; fall back to defaults on parse issues.
       Dbg "Get-CommonHeaders: failed to parse payload metadata from '$PayloadPath' ($_)"
     }}
   }}
@@ -3196,7 +3302,10 @@ function Get-CommonHeaders([string]$PayloadPath) {{
     'Datadog-Meta-Tracer-Version' = $tracerVersion
     'Accept' = 'application/json'
   }}
-  if ($Agentless) {{ $headers['DD-API-KEY'] = $env:DD_API_KEY }}
+  if ($Agentless) {{
+    # DD-API-KEY is only required in direct agentless upload mode.
+    $headers['DD-API-KEY'] = $env:DD_API_KEY
+  }}
   return $headers
 }}
 
@@ -3771,6 +3880,8 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
   try {{
     $payload = Get-Content -LiteralPath $infile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
   }} catch {{
+    # If payload is not JSON, preserve original bytes and let upload attempt
+    # proceed; validation/debugging layers surface the issue separately.
     Copy-Item -LiteralPath $infile -Destination $outfile -Force
     return
   }}
@@ -3810,6 +3921,8 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
   if (-not [string]::IsNullOrEmpty($envVal)) {{ $newStar['env'] = $envVal }}
 
   # Prune top-level metadata keys
+  # Keep only documented metadata sections to avoid propagating unexpected
+  # large/unstable keys from upstream payload generators.
   $newMeta = @{{ '*' = $newStar }}
   foreach ($k in @('test', 'test_suite_end', 'test_module_end', 'test_session_end')) {{
     $metaVal = Get-MapValue $meta $k
@@ -3836,6 +3949,7 @@ function Merge-With-Context([string]$infile, [string]$outfile) {{
           if ($val -is [string]) {{
             $evt.content.meta[$prop.Name] = $val
           }} elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {{
+            # Preserve numeric tags as metrics for Datadog queryability.
             $evt.content.metrics[$prop.Name] = [double]$val
           }} else {{
             try {{
@@ -3904,6 +4018,7 @@ function Validate-Payload([string]$FilePath) {{
     try {{
         & $py.Source $script:SchemaValidator $script:SchemaJson $FilePath | Out-Null
         if ($LASTEXITCODE -ne 0) {{
+            # Warning-only contract: validation should not block uploads.
             Log "warning: schema validation failed for payload: $FilePath"
         }}
     }} catch {{
@@ -3921,6 +4036,8 @@ function Test-PrefixFilter([string]$FilePath, [string]$ExpectedPrefix) {{
 # Delete file unless KeepPayloads is set
 function Remove-PayloadFile([string]$FilePath) {{
     if (-not $KeepPayloads) {{
+        # Best-effort cleanup: payload persistence is controlled by KeepPayloads,
+        # not by upload success/failure of individual files.
         Remove-Item -LiteralPath $FilePath -Force
     }} else {{
         Dbg "keeping payload (KEEP_PAYLOADS=1): $FilePath"
@@ -3940,11 +4057,14 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
   for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {{
     $client = $null
     try {{
+      # Build a fresh HttpClient per retry attempt to avoid carrying stale
+      # request state or headers across attempts.
       $client = New-Object System.Net.Http.HttpClient
       $client.Timeout = [TimeSpan]::FromSeconds(60)
       foreach ($k in $headers.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$headers[$k]) }}
       Dbg "Send-PostJson: POST $url (file '$file'; attempt $attempt/$maxRetries)"
       if ($script:GzipPayloads) {{
+        # Inline gzip keeps implementation dependency-free on Windows hosts.
         $bytes = [IO.File]::ReadAllBytes($file)
         $ms = New-Object System.IO.MemoryStream
         $gz = New-Object System.IO.Compression.GzipStream($ms, [System.IO.Compression.CompressionMode]::Compress)
@@ -3971,6 +4091,7 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Dbg "Send-PostJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
         if ($attempt -eq $maxRetries) {{
+          # Emit user-facing failure only after retry budget is exhausted.
           Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
           return $false
         }}
@@ -3982,8 +4103,10 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
         return $false
       }}
     }} finally {{
+      # Dispose HttpClient each attempt to release sockets promptly in long runs.
       if ($client) {{ $client.Dispose() }}
     }}
+    # Fixed retry delay keeps behavior deterministic across hosts/CI lanes.
     Start-Sleep -Seconds $retryDelay
   }}
   return $false
@@ -4004,12 +4127,15 @@ function Upload-SingleTest([string]$FilePath) {{
         Log-StartTimeStats $body
     }}
     $result = Send-PostJson $TestUrl $hdrs $body
+    # Enriched temp payload is always ephemeral.
     Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
     return $result
 }}
 
 function Upload-SingleCoverage([string]$FilePath) {{
     $eventFile = Join-Path $script:TmpPayloadDir ("coverage_event_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+    # Coverage endpoint expects multipart with an `event` part; a small dummy
+    # object is sufficient and matches agentless/EVP server expectations.
     Write-Utf8NoBomFile -Path $eventFile -Content '{{"dummy":true}}'
 
     $client = $null
@@ -4036,6 +4162,8 @@ function Upload-SingleCoverage([string]$FilePath) {{
 
         for ($attempt = 1; $attempt -le $maxRetries -and -not $uploaded; $attempt++) {{
             try {{
+                # Recreate multipart content on each retry; StreamContent cannot
+                # be safely reused once a request has been sent.
                 $content = New-Object System.Net.Http.MultipartFormDataContent
                 $eventContent = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($eventFile, [System.Text.Encoding]::UTF8))
                 $eventContent.Headers.ContentType = 'application/json'
@@ -4056,6 +4184,8 @@ function Upload-SingleCoverage([string]$FilePath) {{
                     $respBody = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
                     Dbg "Upload-SingleCoverage: HTTP $([int]$resp.StatusCode) on attempt $attempt"
                     if ($attempt -eq $maxRetries) {{
+                        # Only emit user-facing error after final retry to avoid
+                        # noisy logs for transient first-attempt failures.
                         Log "coverage upload failed: HTTP $([int]$resp.StatusCode) $respBody"
                     }}
                 }}
@@ -4065,6 +4195,7 @@ function Upload-SingleCoverage([string]$FilePath) {{
                     Log "coverage upload failed: $_"
                 }}
             }} finally {{
+                # Close file handle every attempt before retrying.
                 if ($fs) {{ $fs.Dispose(); $fs = $null }}
             }}
             if (-not $uploaded -and $attempt -lt $maxRetries) {{ Start-Sleep -Seconds $retryDelay }}
@@ -4082,7 +4213,7 @@ function Upload-AllTests {{
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {{
         $testsDir = Join-Path $outputsDir.FullName "tests"
-        if (-not (Test-Path $testsDir)) {{ continue }}
+        if (-not (Test-Path -LiteralPath $testsDir)) {{ continue }}
         $files = Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue
         foreach ($f in $files) {{
             if (-not (Test-PrefixFilter $f.FullName "span_events_")) {{
@@ -4095,6 +4226,7 @@ function Upload-AllTests {{
                 Remove-PayloadFile $f.FullName
                 $total++
             }} else {{
+                # Continue best-effort upload and report aggregate failures at end.
                 Log "warning: failed to upload $($f.FullName)"
                 $failed++
                 $script:UploadFailures++
@@ -4112,7 +4244,7 @@ function Upload-AllCoverage {{
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {{
         $covDir = Join-Path $outputsDir.FullName "coverage"
-        if (-not (Test-Path $covDir)) {{ continue }}
+        if (-not (Test-Path -LiteralPath $covDir)) {{ continue }}
         $files = Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue
         foreach ($f in $files) {{
             if (-not (Test-PrefixFilter $f.FullName "coverage_")) {{
@@ -4125,6 +4257,7 @@ function Upload-AllCoverage {{
                 Remove-PayloadFile $f.FullName
                 $total++
             }} else {{
+                # Preserve symmetry with test uploads: keep going, count failures.
                 Log "warning: failed to upload $($f.FullName)"
                 $failed++
                 $script:UploadFailures++
@@ -4138,6 +4271,8 @@ function Upload-AllCoverage {{
 
 # Main upload logic wrapped in try/finally for proper cleanup
 try {{
+    # Run tests first, then coverage. This ordering mirrors historical behavior
+    # and keeps log/snapshot expectations stable across platforms.
     Upload-AllTests
     Upload-AllCoverage
 
@@ -4154,6 +4289,9 @@ try {{
 }}
 """
 
+    # ------------------------------------------------------------------
+    # Phase 3: Render PowerShell runtime implementation.
+    # ------------------------------------------------------------------
     ps_script = _render_template(
         ps_template,
         {
@@ -4176,6 +4314,9 @@ try {{
     )
     log_debug(debug, "PowerShell script rendered (bytes=%d)" % len(ps_script))
 
+    # ------------------------------------------------------------------
+    # Phase 4: Materialize executable/script artifacts.
+    # ------------------------------------------------------------------
     # Emit scripts
     bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.write(output = bash_file, content = bash_script, is_executable = True)
@@ -4194,6 +4335,9 @@ exit /b %ERRORLEVEL%
     ctx.actions.write(output = bat_file, content = bat_script, is_executable = True)
     log_debug(debug, "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
 
+    # ------------------------------------------------------------------
+    # Phase 5: Build runfiles set and choose platform-specific executable.
+    # ------------------------------------------------------------------
     # Include optional data files (e.g., context.json) in runfiles so scripts can locate them
     # Include both the PowerShell and batch files in runfiles for cross-platform support
     extra_files = []
@@ -4215,7 +4359,7 @@ dd_payload_uploader = rule(
     attrs = {
         "quiescent_sec": attr.int(default = 10, doc = "Seconds to wait for filesystem to settle before uploading (env: DD_TOPT_QUIESCENT_SEC)"),
         "max_wait_sec": attr.int(default = 300, doc = "Maximum seconds to wait for payloads (env: DD_TOPT_MAX_WAIT_SEC). Set to 0 to skip waiting when no payloads are present."),
-        "fail_on_error": attr.bool(default = False, doc = "Exit with error if no payloads found when tests ran"),
+        "fail_on_error": attr.bool(default = False, doc = "Exit with error when tests appear to have run but no payloads are found"),
         "debug": attr.bool(default = False, doc = "Enable debug logging"),
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TOPT_KEEP_PAYLOADS)"),
         "filter_prefix": attr.bool(default = False, doc = "Only upload files matching span_events_*.json or coverage_*.json (env: DD_TOPT_FILTER_PREFIX)"),
@@ -4233,6 +4377,28 @@ Uploads CI Visibility test and coverage payloads to Datadog.
 
 This rule discovers all test.outputs directories in bazel-testlogs (created by
 TEST_UNDECLARED_OUTPUTS_DIR), waits for quiescence, and uploads payloads.
+
+Behavior model:
+    1) Resolve payload roots:
+       - TESTLOGS_DIR (if explicitly set and valid) wins.
+       - Otherwise auto-discover bazel-testlogs from BUILD_WORKSPACE_DIRECTORY
+         or current directory.
+    2) Wait policy:
+       - Poll for payload files until quiescent for quiescent_sec, or until
+         max_wait_sec budget is exhausted.
+       - If max_wait_sec=0 and no payloads are present, decide immediately.
+    3) Upload mode selection:
+       - Agentless mode when DD_TRACE_AGENT_URL is unset (requires DD_API_KEY).
+       - EVP mode when DD_TRACE_AGENT_URL is set (uses EVP subdomain headers).
+    4) Per-file best-effort semantics:
+       - Continue uploading remaining files after individual failures.
+       - Aggregate failures into final process exit code.
+       - `fail_on_error=True` escalates "tests ran but no payloads" to failure.
+
+Path resolution notes:
+    - Runtime scripts resolve optional artifacts (context/schema/validator)
+      via direct artifact path first, then runfiles lookup.
+    - Runfiles lookup supports both directory runfiles and manifest-only mode.
 
 Usage:
     # In BUILD.bazel at workspace root

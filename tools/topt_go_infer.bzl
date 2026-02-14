@@ -30,6 +30,28 @@ Maintenance notes:
 load("@rules_go//go/private:providers.bzl", "GoArchive", "GoInfo")
 load("//tools:common_utils.bzl", "sanitize_label_fragment")
 
+def _select_module_group_name(importpath, module_group_names, include_per_module, module_label_override = None):
+    """Choose the per-module filegroup name for an importpath.
+
+    Returns an empty string when per-module selection is disabled or when no
+    module_<sanitized> group matches, signaling callers to use full bundle
+    fallback behavior.
+    """
+    if not include_per_module:
+        # Coarse feature gate from macro; selector still returns full bundle.
+        return ""
+    sanitized = module_label_override or sanitize_label_fragment(importpath or "")
+    if not sanitized:
+        return ""
+    expected_name = "module_%s" % sanitized
+    for name in module_group_names:
+        if name == expected_name:
+            return name
+    return ""
+
+# Public alias for unit tests.
+select_module_group_name_for_tests = _select_module_group_name
+
 # Provider carrying the inferred importpath string
 ToptGoImportpathInfo = provider(
     doc = "Provider carrying the inferred Go package importpath from rules_go.",
@@ -87,30 +109,40 @@ _importpath_aspect = aspect(
 )
 
 def _topt_go_payloads_selector_impl(ctx):
+    """Rule implementation that exposes selected payload files as runfiles.
+
+    This keeps selection logic in analysis phase while presenting a simple
+    `DefaultInfo` data target for consuming macros (`dd_topt_go_test`).
+    """
     # Decide which payload files to expose as runfiles based on the inferred importpath.
     # This rule deliberately returns a plain DefaultInfo so downstream macros
     # can treat it like a normal data dependency.
     ip = ctx.attr.explicit_importpath or ""
     if not ip:
+        # Prefer provider-derived importpath when available from embedded deps.
         for dep in ctx.attr.embeds:
             if ToptGoImportpathInfo in dep:
                 ip = dep[ToptGoImportpathInfo].importpath or ""
                 if ip:
                     break
     if not ip:
+        # Final fallback comes from macro-computed module/package synthesis.
         ip = ctx.attr.fallback_importpath or ""
 
-    # Optional override when caller knows better
-    if ctx.attr.module_label_override:
-        sanitized = ctx.attr.module_label_override
-    else:
-        sanitized = sanitize_label_fragment(ip)
-
+    module_group_names = [m.label.name for m in ctx.attr.module_groups]
+    # Compute target name first, then resolve to actual label object below.
+    selected_name = _select_module_group_name(
+        ip,
+        module_group_names,
+        ctx.attr.include_per_module,
+        ctx.attr.module_label_override,
+    )
     chosen = None
-    if ctx.attr.include_per_module and sanitized:
-        expected_name = "module_%s" % sanitized
+    if selected_name:
+        # Resolve selected name back to its label to preserve runfiles/files
+        # providers exactly as exported by upstream generated targets.
         for m in ctx.attr.module_groups:
-            if m.label.name == expected_name:
+            if m.label.name == selected_name:
                 chosen = m
                 break
 
@@ -120,6 +152,8 @@ def _topt_go_payloads_selector_impl(ctx):
 
     # Expose selected files via runfiles.
     # Using a single selector target keeps consuming macros simple.
+    # `default_runfiles` preserves any symlink mapping behavior from the chosen
+    # upstream filegroup/rule instead of rebuilding runfiles manually here.
     src_default = source[DefaultInfo]
     runfiles = src_default.default_runfiles
     files = src_default.files

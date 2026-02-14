@@ -1,17 +1,24 @@
 # Unit tests for sync utilities (DD_SITE normalization + module label mapping).
-load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools:test_optimization_sync.bzl",
     "build_module_label_map_for_tests",
+    "decode_json_object_or_fail_for_tests",
     "compute_dd_api_base_for_tests",
     "dirname_for_tests",
+    "http_execute_timeout_buffer_seconds_for_tests",
+    "http_execute_timeout_seconds_for_tests",
+    "http_max_time_seconds_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
     "render_export_bzl_for_tests",
+    "http_retry_attempts_for_tests",
+    "http_retry_delay_seconds_for_tests",
     "resolve_dd_api_base_for_tests",
 )
 
 def _dd_site_normalization_test(ctx):
+    """Validate DD_SITE normalization into canonical API base URL."""
     env = unittest.begin(ctx)
     asserts.equals(env, "https://api.datadoghq.com", compute_dd_api_base_for_tests("datadoghq.com"))
     asserts.equals(env, "https://api.datadoghq.com", compute_dd_api_base_for_tests("app.datadoghq.com"))
@@ -25,6 +32,7 @@ def _dd_site_normalization_test(ctx):
     return unittest.end(env)
 
 def _resolve_dd_api_base_test(ctx):
+    """Validate DD_TOPT_API_BASE override precedence."""
     env = unittest.begin(ctx)
     # Ensure overrides take precedence over DD_SITE-derived defaults.
     asserts.equals(
@@ -50,6 +58,7 @@ def _resolve_dd_api_base_test(ctx):
     return unittest.end(env)
 
 def _module_label_map_collision_test(ctx):
+    """Validate deterministic dedup when module labels collide."""
     env = unittest.begin(ctx)
     label_map = build_module_label_map_for_tests(["Foo-Bar"], ["Foo_Bar"])
     asserts.equals(env, 2, len(label_map))
@@ -74,6 +83,7 @@ def _module_label_map_collision_test(ctx):
     return unittest.end(env)
 
 def _normalize_ref_test(ctx):
+    """Validate ref-prefix normalization helper."""
     env = unittest.begin(ctx)
     asserts.equals(env, "main", normalize_ref_for_tests("refs/heads/main"))
     asserts.equals(env, "v1.2.3", normalize_ref_for_tests("refs/tags/v1.2.3"))
@@ -82,6 +92,7 @@ def _normalize_ref_test(ctx):
     return unittest.end(env)
 
 def _parse_go_module_path_test(ctx):
+    """Validate go.mod module path extraction helper."""
     env = unittest.begin(ctx)
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("module github.com/foo/bar"))
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("module\tgithub.com/foo/bar"))
@@ -92,6 +103,7 @@ def _parse_go_module_path_test(ctx):
     return unittest.end(env)
 
 def _dirname_test(ctx):
+    """Validate dirname helper behavior across path forms."""
     env = unittest.begin(ctx)
     asserts.equals(env, "foo/bar", dirname_for_tests("foo/bar/baz.txt"))
     asserts.equals(env, "foo", dirname_for_tests("/foo/bar"))
@@ -101,6 +113,7 @@ def _dirname_test(ctx):
     return unittest.end(env)
 
 def _export_bzl_manifest_path_test(ctx):
+    """Validate manifest_path emission in generated export.bzl."""
     env = unittest.begin(ctx)
     content = render_export_bzl_for_tests(
         "repo",
@@ -114,6 +127,75 @@ def _export_bzl_manifest_path_test(ctx):
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
     return unittest.end(env)
 
+def _http_execute_timeout_seconds_test(ctx):
+    """Guard execute-timeout derivation against retry-policy drift."""
+    env = unittest.begin(ctx)
+    # Keep execute timeout derived from retry policy + explicit buffer instead
+    # of a magic number to avoid accidentally clipping retries in CI.
+    expected = (
+        (http_retry_attempts_for_tests * http_max_time_seconds_for_tests) +
+        ((http_retry_attempts_for_tests - 1) * http_retry_delay_seconds_for_tests) +
+        http_execute_timeout_buffer_seconds_for_tests
+    )
+    asserts.equals(env, expected, http_execute_timeout_seconds_for_tests)
+    asserts.true(env, http_execute_timeout_seconds_for_tests > (http_retry_attempts_for_tests * http_max_time_seconds_for_tests))
+    return unittest.end(env)
+
+def _decode_json_object_valid_test(ctx):
+    """Validate JSON decode helper success path."""
+    env = unittest.begin(ctx)
+    obj = decode_json_object_or_fail_for_tests(
+        "{\"data\": {\"attributes\": {\"marker\": \"ok\"}}}",
+        "settings.json",
+    )
+    asserts.equals(env, "dict", type(obj))
+    attrs = ((obj.get("data") or {}).get("attributes") or {})
+    asserts.equals(env, "ok", attrs.get("marker"))
+    return unittest.end(env)
+
+def _decode_json_object_empty_target_impl(_ctx):
+    """Target expected to fail on empty JSON payload."""
+    decode_json_object_or_fail_for_tests("", "settings.json")
+    return []
+
+def _decode_json_object_non_json_target_impl(_ctx):
+    """Target expected to fail on non-JSON payload."""
+    decode_json_object_or_fail_for_tests("NOT_JSON", "settings.json")
+    return []
+
+def _decode_json_object_array_target_impl(_ctx):
+    """Target expected to fail when top-level JSON is an array."""
+    decode_json_object_or_fail_for_tests("[]", "settings.json")
+    return []
+
+decode_json_object_empty_target_rule = rule(
+    implementation = _decode_json_object_empty_target_impl,
+)
+decode_json_object_non_json_target_rule = rule(
+    implementation = _decode_json_object_non_json_target_impl,
+)
+decode_json_object_array_target_rule = rule(
+    implementation = _decode_json_object_array_target_impl,
+)
+
+def _decode_json_object_empty_failure_test_impl(ctx):
+    """Assert empty-response failure message remains actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response is empty; expected JSON object")
+    return analysistest.end(env)
+
+def _decode_json_object_non_json_failure_test_impl(ctx):
+    """Assert non-JSON failure message remains actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response is not JSON")
+    return analysistest.end(env)
+
+def _decode_json_object_array_failure_test_impl(ctx):
+    """Assert non-object JSON failure message remains actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response must be a JSON object")
+    return analysistest.end(env)
+
 dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
 resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
@@ -121,3 +203,17 @@ normalize_ref_test = unittest.make(_normalize_ref_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
+http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
+decode_json_object_valid_test = unittest.make(_decode_json_object_valid_test)
+decode_json_object_empty_failure_test = analysistest.make(
+    _decode_json_object_empty_failure_test_impl,
+    expect_failure = True,
+)
+decode_json_object_non_json_failure_test = analysistest.make(
+    _decode_json_object_non_json_failure_test_impl,
+    expect_failure = True,
+)
+decode_json_object_array_failure_test = analysistest.make(
+    _decode_json_object_array_failure_test_impl,
+    expect_failure = True,
+)

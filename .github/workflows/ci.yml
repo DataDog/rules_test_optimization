@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -33,3 +33,74 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
+
+  shell-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Lint integration shell scripts
+        shell: bash
+        run: shellcheck --severity=error tools/tests/integration/*.sh
+
+  schema-sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify schema files are in sync
+        shell: bash
+        run: python3 tools/schemas/sync_agentless_schema.py --check
+
+  powershell-lint:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {
+              Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+            }
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
+          }
+
+      - name: Lint integration PowerShell scripts
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path "tools/tests/integration/*.ps1" -Severity Error
+          if ($results) {
+            $results | Format-Table -AutoSize
+            throw "PSScriptAnalyzer found lint errors."
+          }
+
+  bazel-tests-hermetic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Bazel tests (hermetic lane)
+        shell: bash
+        run: >
+          ./bazelw test //tools/...
+          --spawn_strategy=sandboxed
+          --strategy=TestRunner=sandboxed
+          --sandbox_default_allow_network=false
+          --modify_execution_info=TestRunner=+block-network
+          --test_env=TZ=UTC
+          --test_env=LANG=C
+          --test_env=LC_ALL=C
+          --enable_runfiles

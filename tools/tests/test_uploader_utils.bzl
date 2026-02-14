@@ -2,6 +2,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tools:test_optimization_uploader.bzl",
+    "bash_curl_retry_flags_for_tests",
     "build_codeowners_lookup_order_for_tests",
     "compile_codeowners_regex_for_tests",
     "glob_to_regex_for_tests",
@@ -16,7 +17,19 @@ load(
     "strip_workspace_prefix_powershell_for_tests",
 )
 
+def _bash_curl_retry_flags_test(ctx):
+    """Validate baseline uploader curl retry flags."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        ["--retry", "3", "--retry-delay", "2", "--retry-connrefused"],
+        bash_curl_retry_flags_for_tests(),
+    )
+    asserts.false(env, "--retry-all-errors" in bash_curl_retry_flags_for_tests())
+    return unittest.end(env)
+
 def _render_template_substitution_test(ctx):
+    """Validate template placeholder substitution and brace unescaping."""
     env = unittest.begin(ctx)
     template = "A {x} B {{y}} C {z}"
     out = render_template_for_tests(template, {"x": 1, "z": "Z"})
@@ -24,6 +37,7 @@ def _render_template_substitution_test(ctx):
     return unittest.end(env)
 
 def _render_template_unescape_only_test(ctx):
+    """Validate template renderer when only brace-unescaping is needed."""
     env = unittest.begin(ctx)
     template = "hello {{world}}"
     out = render_template_for_tests(template, {})
@@ -31,6 +45,7 @@ def _render_template_unescape_only_test(ctx):
     return unittest.end(env)
 
 def _render_template_missing_placeholder_test(ctx):
+    """Validate missing placeholders remain literal in rendered output."""
     env = unittest.begin(ctx)
     template = "X {missing} Y {value} Z"
     out = render_template_for_tests(template, {"value": "V"})
@@ -38,6 +53,7 @@ def _render_template_missing_placeholder_test(ctx):
     return unittest.end(env)
 
 def _codeowners_glob_to_regex_test(ctx):
+    """Validate common CODEOWNERS glob-to-regex translations."""
     env = unittest.begin(ctx)
     # `**/` should match from repo root or nested directories.
     asserts.equals(env, "(.*/)?foo\\.cs", glob_to_regex_for_tests("**/foo.cs"))
@@ -57,6 +73,7 @@ def _codeowners_glob_to_regex_test(ctx):
     return unittest.end(env)
 
 def _codeowners_glob_to_regex_edge_cases_test(ctx):
+    """Validate edge-case glob translations (classes, escapes, ** combos)."""
     env = unittest.begin(ctx)
     # Class negation and escaped class literals.
     asserts.equals(env, "[^ab]\\.cs", glob_to_regex_for_tests("[!ab].cs"))
@@ -72,6 +89,7 @@ def _codeowners_glob_to_regex_edge_cases_test(ctx):
     return unittest.end(env)
 
 def _codeowners_compile_regex_test(ctx):
+    """Validate compiled CODEOWNERS regex for representative patterns."""
     env = unittest.begin(ctx)
     # Non-anchored patterns can match anywhere in the repo path.
     asserts.equals(env, "(^|.*/)foo($|/.*)", compile_codeowners_regex_for_tests("foo"))
@@ -96,6 +114,7 @@ def _codeowners_compile_regex_test(ctx):
     return unittest.end(env)
 
 def _codeowners_compile_regex_edge_cases_test(ctx):
+    """Validate compiled regex behavior for edge-case patterns."""
     env = unittest.begin(ctx)
     # Directory ownership preserves root anchoring with slash-containing patterns.
     asserts.equals(env, "^foo/.*$", compile_codeowners_regex_for_tests("/foo/"))
@@ -112,6 +131,7 @@ def _codeowners_compile_regex_edge_cases_test(ctx):
     return unittest.end(env)
 
 def _codeowners_section_header_classification_test(ctx):
+    """Validate GitLab section-header classification rules."""
     env = unittest.begin(ctx)
     # GitLab headers with spaces should be recognized.
     asserts.true(env, is_gitlab_section_header_pattern_for_tests("[Core Team]"))
@@ -137,6 +157,7 @@ def _codeowners_section_header_classification_test(ctx):
     return unittest.end(env)
 
 def _codeowners_section_header_powershell_parity_test(ctx):
+    """Validate Starlark and PowerShell header detection parity."""
     env = unittest.begin(ctx)
     cases = [
         ("[Core Team]", True),
@@ -159,6 +180,7 @@ def _codeowners_section_header_powershell_parity_test(ctx):
     return unittest.end(env)
 
 def _codeowners_derived_candidate_filter_test(ctx):
+    """Validate derived/external source candidate filtering."""
     env = unittest.begin(ctx)
     # Derived external paths should be excluded from ownership resolution.
     main_external = "_main/" + "external/rules_go/pkg/file.go"
@@ -172,6 +194,7 @@ def _codeowners_derived_candidate_filter_test(ctx):
     return unittest.end(env)
 
 def _strip_workspace_prefix_powershell_windows_test(ctx):
+    """Validate workspace-prefix stripping and Windows case behavior."""
     env = unittest.begin(ctx)
     # Windows path matching should ignore path case.
     asserts.equals(
@@ -209,6 +232,7 @@ def _strip_workspace_prefix_powershell_windows_test(ctx):
     return unittest.end(env)
 
 def _runfile_manifest_bash_resolution_test(ctx):
+    """Validate Bash-style runfile manifest resolution logic."""
     env = unittest.begin(ctx)
     lines = [
         "\\ufeff_main/context.json /ctx/path.json",
@@ -257,6 +281,7 @@ def _runfile_manifest_bash_resolution_test(ctx):
     return unittest.end(env)
 
 def _runfile_manifest_powershell_resolution_test(ctx):
+    """Validate PowerShell-style runfile manifest resolution logic."""
     env = unittest.begin(ctx)
     # PowerShell trims path whitespace around manifest values.
     lines = [
@@ -297,6 +322,7 @@ def _runfile_manifest_powershell_resolution_test(ctx):
     return unittest.end(env)
 
 def _runfile_manifest_parser_parity_test(ctx):
+    """Validate parity between Bash and PowerShell manifest parsers."""
     env = unittest.begin(ctx)
     # Canonical fixtures where both Bash and PowerShell parsers should agree.
     lines = [
@@ -313,6 +339,7 @@ def _runfile_manifest_parser_parity_test(ctx):
     return unittest.end(env)
 
 def _codeowners_lookup_order_test(ctx):
+    """Validate CODEOWNERS lookup precedence ordering."""
     env = unittest.begin(ctx)
     with_context = build_codeowners_lookup_order_for_tests("/ctx/ws", "/repo/ws", "/script")
     asserts.equals(
@@ -351,6 +378,7 @@ def _codeowners_lookup_order_test(ctx):
     return unittest.end(env)
 
 def _codeowners_lookup_order_empty_script_dir_test(ctx):
+    """Validate CODEOWNERS lookup ordering when script dir is empty."""
     env = unittest.begin(ctx)
     without_script = build_codeowners_lookup_order_for_tests("", "/repo/ws", "")
     asserts.equals(
@@ -368,6 +396,7 @@ def _codeowners_lookup_order_empty_script_dir_test(ctx):
     )
     return unittest.end(env)
 
+bash_curl_retry_flags_test = unittest.make(_bash_curl_retry_flags_test)
 render_template_substitution_test = unittest.make(_render_template_substitution_test)
 render_template_unescape_only_test = unittest.make(_render_template_unescape_only_test)
 render_template_missing_placeholder_test = unittest.make(_render_template_missing_placeholder_test)

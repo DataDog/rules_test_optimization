@@ -13,9 +13,12 @@ set -euo pipefail
 # 1) Start local mock Datadog server and collect all requests.
 # 2) Generate ephemeral MODULE/BUILD files in a temp workspace.
 # 3) Run sync + writer test + uploader and verify API coverage/snapshots.
-# 4) Validate CODEOWNERS enrichment behavior (injection, preservation, edge
+# 4) Validate malformed sync responses fail with actionable diagnostics.
+# 5) Validate multi-service extension wiring + macro service-key resolution.
+# 6) Validate CODEOWNERS enrichment behavior (injection, preservation, edge
 #    cases, runfiles/execroot normalization).
-# 5) Force manifest-only runfile fallback and verify context/schema resolution.
+# 7) Validate EVP-mode uploads (evp_proxy endpoints + EVP headers).
+# 8) Force manifest-only runfile fallback and verify context/schema resolution.
 #
 # Debugging tips:
 # - Set KEEP_TMP=1 to inspect the generated temp workspace after failures.
@@ -47,6 +50,9 @@ if [[ "${KEEP_TMP:-0}" == "1" ]]; then
 fi
 
 cleanup() {
+  # Best-effort teardown that prioritizes deterministic cleanup over strict
+  # failures. Integration runs can leave transient Bazel/Java locks behind,
+  # especially on Windows, so this helper is intentionally defensive.
   if [[ -n "${SERVER_PID:-}" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
   fi
@@ -107,12 +113,24 @@ mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 
 to_mixed_path() {
+  # Convert a local path to mixed-style form (C:/...) when cygpath is
+  # available. This keeps PowerShell + Git Bash path handoff predictable.
   local value="$1"
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -m "$value" 2>/dev/null || printf '%s\n' "$value"
     return
   fi
   printf '%s\n' "$value"
+}
+
+log_line_count() {
+  # Return current mock server log line count. Used as an offset marker so
+  # per-scenario assertions only inspect newly produced request records.
+  if [[ -f "$LOG_FILE" ]]; then
+    wc -l < "$LOG_FILE" | tr -d '[:space:]'
+  else
+    echo 0
+  fi
 }
 
 # Pass an explicit workspace path to uploader runs so CODEOWNERS lookup stays
@@ -218,6 +236,10 @@ mkdir -p "$out/tests" "$out/coverage"
 fixture_name="citestcycle_payload.json"
 
 resolve_from_manifest() {
+  # Resolve a runfile from RUNFILES_MANIFEST_FILE using:
+  # 1) exact key match
+  # 2) suffix-key match ("repo-prefix/<key>")
+  # and UTF-8 BOM stripping parity with uploader logic.
   local key="$1"
   local manifest="${RUNFILES_MANIFEST_FILE:-}"
   [[ -z "$manifest" || ! -f "$manifest" ]] && return 1
@@ -320,6 +342,11 @@ REPO_ENVS=(
   --repo_env=DD_GIT_TAG=v1.0.0
 )
 
+# ---------------------------------------------------------------------------
+# Scenario: baseline sync + uploader run (agentless) with fixture assertions.
+# ---------------------------------------------------------------------------
+# This is the "known-good" path. Later scenarios intentionally mutate one
+# variable at a time and reuse these repo env defaults.
 "$BAZEL" "${BAZEL_FLAGS[@]}" build @test_optimization_data//:test_optimization_files \
   "${REPO_ENVS[@]}"
 
@@ -375,6 +402,7 @@ unset DD_TRACE_AGENT_URL
 # Use Bazel's testlogs location to find payloads for the uploader.
 TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
 
+BASE_UPLOAD_LOG_START="$(log_line_count)"
 UPLOADER_LOG="$TMP_WS/uploader.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
@@ -432,7 +460,7 @@ if missing:
     sys.exit(1)
 PY
 
-UPLOADER_LOG="$UPLOADER_LOG" "$PYTHON" - <<'PY'
+UPLOADER_LOG="$UPLOADER_LOG" BASE_UPLOAD_LOG_START="$BASE_UPLOAD_LOG_START" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
@@ -443,6 +471,7 @@ from email.policy import default
 
 log_path = os.environ["LOG_FILE"]
 snapshot_dir = os.environ["SNAPSHOT_DIR"]
+base_upload_log_start = int(os.environ.get("BASE_UPLOAD_LOG_START", "0") or "0")
 # When set, snapshot files are rewritten instead of compared.
 update = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 
@@ -495,26 +524,34 @@ def write_snap(path, data):
 # Keep all records so later checks can inspect both first and subsequent runs.
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
-    for line in handle:
+    for idx, line in enumerate(handle):
+        if idx < base_upload_log_start:
+            continue
         try:
             records.append(json.loads(line))
         except Exception:
             continue
 
-def find_last(path):
+def find_latest_cycle_for_resource(resource):
     for rec in reversed(records):
-        if rec.get("path") == path:
-            return rec
-    return None
+        if rec.get("path") != "/api/v2/citestcycle":
+            continue
+        try:
+            payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+        except Exception:
+            continue
+        for evt in payload.get("events", []):
+            content = evt.get("content") or {}
+            if content.get("resource") == resource:
+                return rec, payload
+    return None, None
 
-cycle = find_last("/api/v2/citestcycle")
-cov = find_last("/api/v2/citestcov")
-if not cycle or not cov:
+cycle, cycle_json = find_latest_cycle_for_resource("Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest")
+cov = next((rec for rec in reversed(records) if rec.get("path") == "/api/v2/citestcov"), None)
+if not cycle or cycle_json is None or not cov:
     print("error: missing payload logs for snapshotting")
     sys.exit(1)
 
-cycle_body = base64.b64decode(cycle.get("body_b64", ""))
-cycle_json = json.loads(cycle_body.decode("utf-8"))
 cycle_norm = normalize_citestcycle(cycle_json)
 
 def find_event(event_type, resource = None):
@@ -720,29 +757,326 @@ with tempfile.TemporaryDirectory() as td:
         sys.exit(1)
 PY
 
-CYCLE_COUNT_BEFORE_CONTEXT=$("$PYTHON" - <<'PY'
-import json
-import os
+# Scenario: malformed/empty sync responses should fail with actionable diagnostics.
+run_malformed_sync_case() {
+  # Execute a failing sync scenario in an isolated workspace and assert both:
+  # - a stable context hint (for example settings/known_tests/test_management)
+  # - an actionable error substring
+  #
+  # Params:
+  #   $1 ws_name
+  #   $2 repo_name
+  #   $3 service_name
+  #   $4 expected_context_substring
+  #   $5 expected_error_substring
+  #   $6+ optional extra --repo_env flags
+  local ws_name="$1"
+  local repo_name="$2"
+  local service_name="$3"
+  local expected_context="$4"
+  local expected_error="$5"
+  shift 5
+  local extra_repo_envs=("$@")
 
-log_path = os.environ["LOG_FILE"]
-count = 0
-try:
-    with open(log_path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("path") == "/api/v2/citestcycle":
-                count += 1
-except FileNotFoundError:
-    pass
-print(count)
-PY
+  local ws_path="$TMP_WS/$ws_name"
+  local log_path="$TMP_WS/${ws_name}.log"
+  mkdir -p "$ws_path"
+
+  cat > "$ws_path/MODULE.bazel" <<MODULE_MALFORMED_EOF
+module(name = "topt-${ws_name}", version = "0.0.0")
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = ${ESCAPED_REPO_ROOT},
 )
 
-# Capture current cycle count so we can isolate uploads produced specifically
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "${repo_name}",
+    service = "${service_name}",
+    runtime_name = "go",
+    runtime_version = "1.2.3",
+)
+
+use_repo(test_optimization_sync, "${repo_name}")
+MODULE_MALFORMED_EOF
+
+  cat > "$ws_path/BUILD.bazel" <<'BUILD_MALFORMED_EOF'
+filegroup(
+    name = "noop",
+    srcs = [],
+)
+BUILD_MALFORMED_EOF
+
+  local cmd=("$BAZEL" "${BAZEL_FLAGS[@]}" build "@${repo_name}//:test_optimization_files" "${REPO_ENVS[@]}")
+  if (( ${#extra_repo_envs[@]} )); then
+    cmd+=("${extra_repo_envs[@]}")
+  fi
+  if (
+    cd "$ws_path" && \
+    "${cmd[@]}" >"$log_path" 2>&1
+  ); then
+    echo "error: malformed sync scenario unexpectedly succeeded for $ws_name"
+    cat "$log_path" || true
+    exit 1
+  fi
+
+  # Assert both content and context fragments so errors stay actionable
+  # even when surrounding wording changes.
+  if ! grep -q "$expected_error" "$log_path"; then
+    echo "error: malformed sync scenario missing expected error '$expected_error' for $ws_name"
+    cat "$log_path" || true
+    exit 1
+  fi
+  if ! grep -q "$expected_context" "$log_path"; then
+    echo "error: malformed sync scenario missing expected context '$expected_context' for $ws_name"
+    cat "$log_path" || true
+    exit 1
+  fi
+}
+
+run_malformed_sync_case \
+  "ws_malformed_settings" \
+  "test_optimization_data_bad_settings" \
+  "malformed-settings-service" \
+  "settings.json" \
+  "response is not JSON"
+
+run_malformed_sync_case \
+  "ws_empty_settings" \
+  "test_optimization_data_empty_settings" \
+  "empty-settings-service" \
+  "settings.json" \
+  "response is empty; expected JSON object"
+
+run_malformed_sync_case \
+  "ws_malformed_known_tests" \
+  "test_optimization_data_bad_known_tests" \
+  "malformed-known-tests-service" \
+  "known_tests.json" \
+  "response is not JSON"
+
+run_malformed_sync_case \
+  "ws_malformed_test_management" \
+  "test_optimization_data_bad_test_management" \
+  "mock-service" \
+  "test_management.json" \
+  "response is not JSON" \
+  "--repo_env=DD_GIT_COMMIT_MESSAGE=malformed-test-management-commit-message" \
+  "--repo_env=DD_GIT_HEAD_MESSAGE=malformed-test-management-commit-message"
+
+# Scenario: multi-service extension wiring + deduped sanitized service keys.
+# This block verifies both repository-rule fanout and macro-level service key
+# resolution semantics (including collision-safe explicit key selection).
+MULTI_WS="$TMP_WS/ws_multi"
+mkdir -p "$MULTI_WS"
+cat > "$MULTI_WS/MODULE.bazel" <<MODULE_MULTI_EOF
+module(name = "topt-multi-integration", version = "0.0.0")
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = ${ESCAPED_REPO_ROOT},
+)
+
+topt_multi = use_extension(
+    "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
+    "test_optimization_multi_sync_extension",
+)
+
+topt_multi.test_optimization_multi_sync(
+    name = "test_optimization_data",
+    services = ["go-service", "go_service"],
+    out_dir = "custom_topt",
+    runtime_name = "go",
+    runtime_version = "1.2.3",
+)
+
+use_repo(
+    topt_multi,
+    "test_optimization_data",
+    "test_optimization_data_go_service",
+    "test_optimization_data_go_service_2",
+)
+MODULE_MULTI_EOF
+
+cat > "$MULTI_WS/BUILD.bazel" <<'BUILD_MULTI_EOF'
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
+load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
+load("//:macro_probe.bzl", "fake_go_test")
+
+filegroup(
+    name = "multi_sync_smoke",
+    srcs = [
+        "@test_optimization_data//:test_optimization_files_go_service",
+        "@test_optimization_data//:test_optimization_files_go_service_2",
+        "@test_optimization_data//:module_go_service_modulea",
+        "@test_optimization_data//:module_go_service_2_modulea",
+        "@test_optimization_data_go_service//:test_optimization_files",
+        "@test_optimization_data_go_service_2//:test_optimization_files",
+    ],
+)
+
+dd_topt_go_test(
+    name = "macro_service_probe",
+    go_test_rule = fake_go_test,
+    topt_data = {
+        "go_service": topt_data_go_service,
+        "go_service_2": topt_data_go_service_2,
+    },
+    topt_service = "go_service_2",
+)
+
+dd_topt_go_test(
+    name = "macro_data_none_probe",
+    go_test_rule = fake_go_test,
+    topt_data = {
+        "go_service": topt_data_go_service,
+        "go_service_2": topt_data_go_service_2,
+    },
+    topt_service = "go_service",
+    data = None,
+)
+BUILD_MULTI_EOF
+
+cat > "$MULTI_WS/macro_probe.bzl" <<'MACRO_PROBE_EOF'
+def fake_go_test(name, data = [], env = {}, **kwargs):
+    _ = env
+    _ = kwargs
+    native.filegroup(
+        name = name,
+        srcs = data,
+    )
+MACRO_PROBE_EOF
+
+mkdir -p "$MULTI_WS/invalid"
+cat > "$MULTI_WS/invalid/BUILD.bazel" <<'BUILD_MULTI_INVALID_EOF'
+load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
+load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
+load("//:macro_probe.bzl", "fake_go_test")
+
+dd_topt_go_test(
+    name = "macro_service_probe_invalid",
+    go_test_rule = fake_go_test,
+    topt_data = {
+        "go_service": topt_data_go_service,
+        "go_service_2": topt_data_go_service_2,
+    },
+    topt_service = "missing_service",
+)
+BUILD_MULTI_INVALID_EOF
+
+MULTI_LOG_START="$(log_line_count)"
+(
+  cd "$MULTI_WS"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke //:macro_service_probe //:macro_data_none_probe \
+    "${REPO_ENVS[@]}"
+)
+
+MULTI_MACRO_CQUERY=$(
+  cd "$MULTI_WS" && \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe --output=build "${REPO_ENVS[@]}"
+)
+# The selected manifest label is the strongest end-to-end macro assertion:
+# it proves the chosen service mapping and out_dir propagation simultaneously.
+if ! printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service_2//:custom_topt/manifest.txt"; then
+  echo "error: dd_topt_go_test multi-service probe did not resolve to go_service_2 custom out_dir manifest"
+  echo "$MULTI_MACRO_CQUERY"
+  exit 1
+fi
+if printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service//:custom_topt/manifest.txt"; then
+  echo "error: dd_topt_go_test multi-service probe unexpectedly resolved to go_service custom out_dir manifest"
+  echo "$MULTI_MACRO_CQUERY"
+  exit 1
+fi
+
+MULTI_INVALID_LOG="$TMP_WS/multi_invalid_service.log"
+if (
+  # Build from the package directory to avoid //pkg:label path conversion
+  # quirks under Git Bash on Windows.
+  cd "$MULTI_WS/invalid" && \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build :macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
+); then
+  echo "error: dd_topt_go_test invalid-service scenario unexpectedly succeeded"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "topt_service 'missing_service' not found" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing topt_service not found message"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "Available:" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing available-services hint"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "go_service" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing go_service key in message"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+if ! grep -q "go_service_2" "$MULTI_INVALID_LOG"; then
+  echo "error: invalid-service scenario missing go_service_2 key in message"
+  cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+
+MULTI_LOG_START="$MULTI_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("MULTI_LOG_START", "0") or "0")
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+setting_requests = [rec for rec in records if rec.get("path") == "/api/v2/libraries/tests/services/setting"]
+if len(setting_requests) < 2:
+    print("error: multi-service scenario expected at least two settings requests")
+    sys.exit(1)
+
+services = set()
+for rec in setting_requests:
+    try:
+        body = base64.b64decode(rec.get("body_b64", "")).decode("utf-8")
+        payload = json.loads(body)
+    except Exception:
+        continue
+    attrs = ((payload.get("data") or {}).get("attributes") or {})
+    service = attrs.get("service")
+    if isinstance(service, str) and service:
+        services.add(service)
+
+missing = {"go-service", "go_service"} - services
+if missing:
+    print("error: multi-service scenario missing expected service settings requests")
+    print("missing:", sorted(missing))
+    print("seen:", sorted(services))
+    sys.exit(1)
+PY
+
+# Capture current log offset so we can isolate uploads produced specifically
 # by the context-enriched uploader run below.
+LOG_LINES_BEFORE_CONTEXT="$(log_line_count)"
 UPLOADER_CONTEXT_LOG="$TMP_WS/uploader_with_context.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
@@ -760,63 +1094,51 @@ DD_TRACE_AGENT_URL= \
   exit 1
 fi
 
-export CYCLE_COUNT_BEFORE_CONTEXT
-
-"$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_CONTEXT="$LOG_LINES_BEFORE_CONTEXT" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
-start_count = int(os.environ.get("CYCLE_COUNT_BEFORE_CONTEXT", "0") or "0")
+start_line = int(os.environ.get("LOG_LINES_BEFORE_CONTEXT", "0") or "0")
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
-    for line in handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
         try:
             records.append(json.loads(line))
         except Exception:
             continue
 
-cycle_records = [rec for rec in records if rec.get("path") == "/api/v2/citestcycle"]
-new_cycle_records = cycle_records[start_count:]
-if len(new_cycle_records) < 1:
-    print("error: expected at least one new /api/v2/citestcycle upload for context-enriched run")
-    sys.exit(1)
-cycle = None
-for rec in reversed(new_cycle_records):
-    try:
-        obj = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
-    except Exception:
-        continue
-    found_context_tag = False
-    for evt in obj.get("events", []):
-        if evt.get("type") != "test":
-            continue
-        meta = ((evt.get("content") or {}).get("meta") or {})
-        if "test.bazel.rule_name" in meta and "test.bazel.rule_version" in meta:
-            found_context_tag = True
-            break
-    if found_context_tag:
-        cycle = rec
-        break
-if cycle is None:
-    cycle = new_cycle_records[-1]
-if not cycle:
-    print("error: missing /api/v2/citestcycle upload after context run")
+if not records:
+    print("error: expected context-enriched uploader run to add log records")
     sys.exit(1)
 
-cycle_payload = json.loads(base64.b64decode(cycle.get("body_b64", "")).decode("utf-8"))
+target_resource = "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"
 target_evt = None
-for evt in cycle_payload.get("events", []):
-    if evt.get("type") != "test":
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
         continue
-    content = evt.get("content") or {}
-    if content.get("resource") == "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest":
-        target_evt = evt
+    try:
+        cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except Exception:
+        continue
+    for evt in cycle_payload.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        content = evt.get("content") or {}
+        if content.get("resource") != target_resource:
+            continue
+        evt_meta = content.get("meta") or {}
+        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
+            target_evt = evt
+            break
+    if target_evt is not None:
         break
-if not target_evt:
-    print("error: could not find target test event in context-enriched payload")
+if target_evt is None:
+    print("error: missing context-enriched test event after context run")
     sys.exit(1)
 
 meta = ((target_evt.get("content") or {}).get("meta") or {})
@@ -838,6 +1160,8 @@ ORIG_CODEOWNERS="$WORKSPACE/CODEOWNERS.orig"
 cp "$WORKSPACE/CODEOWNERS" "$ORIG_CODEOWNERS"
 
 # Scenario: missing CODEOWNERS file must not fail uploads and must not inject new owners.
+# This guards the "best effort enrichment" contract: uploader success must not
+# depend on CODEOWNERS availability.
 mv "$WORKSPACE/CODEOWNERS" "$WORKSPACE/CODEOWNERS.bak"
 MANUAL_NO_CO="$TESTLOGS_DIR/manual_no_codeowners/test.outputs"
 mkdir -p "$MANUAL_NO_CO/tests" "$MANUAL_NO_CO/coverage"
@@ -936,6 +1260,8 @@ PY
 mv "$WORKSPACE/CODEOWNERS.bak" "$WORKSPACE/CODEOWNERS"
 
 # Scenario: empty-owner rule should not set test.codeowners while preserving fallback/source-key behavior.
+# This is intentionally broad and table-driven: each synthetic resource maps to
+# one parser/normalization edge case so regressions are easy to localize.
 cat > "$WORKSPACE/CODEOWNERS" <<'CODEOWNERS_EOF'
 [CoreTeam]
 [Core Team] @org/section-space
@@ -1510,8 +1836,118 @@ if failures:
     sys.exit(1)
 PY
 
+# Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
+# This validates mode switching behavior: EVP must use evp_proxy routes and
+# EVP subdomain headers, and must not send DD-API-KEY.
+MANUAL_EVP="$TESTLOGS_DIR/manual_evp_mode/test.outputs"
+mkdir -p "$MANUAL_EVP/tests" "$MANUAL_EVP/coverage"
+cat > "$MANUAL_EVP/tests/manual_evp_mode.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.0.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.EvpMode",
+        "meta": {
+          "test.source.file": "manual/owned.cs"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+echo '{}' > "$MANUAL_EVP/coverage/manual_evp_mode_cov.json"
+
+EVP_LOG_START="$(log_line_count)"
+UPLOADER_EVP_LOG="$TMP_WS/uploader_evp.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_API_KEY= \
+DD_SITE= \
+DD_TOPT_KEEP_PAYLOADS=1 \
+DD_TOPT_MAX_WAIT_SEC=30 \
+DD_TOPT_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL="http://127.0.0.1:$PORT" \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_EVP_LOG" 2>&1; then
+  echo "error: uploader EVP-mode run failed"
+  cat "$UPLOADER_EVP_LOG" || true
+  exit 1
+fi
+
+EVP_LOG_START="$EVP_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("EVP_LOG_START", "0") or "0")
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+def lower_headers(record):
+    return {str(k).lower(): v for k, v in ((record.get("headers") or {}).items())}
+
+cycle_record = None
+for rec in reversed(records):
+    if rec.get("path") != "/evp_proxy/v2/api/v2/citestcycle":
+        continue
+    try:
+        payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except Exception:
+        continue
+    for evt in payload.get("events", []):
+        if (evt.get("content") or {}).get("resource") == "Manual.EvpMode":
+            cycle_record = rec
+            break
+    if cycle_record is not None:
+        break
+
+if cycle_record is None:
+    print("error: EVP-mode run missing Manual.EvpMode test upload")
+    sys.exit(1)
+
+cycle_headers = lower_headers(cycle_record)
+if cycle_headers.get("x-datadog-evp-subdomain") != "citestcycle-intake":
+    print("error: EVP-mode test upload missing expected X-Datadog-EVP-Subdomain header")
+    sys.exit(1)
+if "dd-api-key" in cycle_headers:
+    print("error: EVP-mode test upload unexpectedly included DD-API-KEY header")
+    sys.exit(1)
+
+cov_record = next((rec for rec in reversed(records) if rec.get("path") == "/evp_proxy/v2/api/v2/citestcov"), None)
+if cov_record is None:
+    print("error: EVP-mode run missing coverage upload")
+    sys.exit(1)
+
+cov_headers = lower_headers(cov_record)
+if cov_headers.get("x-datadog-evp-subdomain") != "citestcov-intake":
+    print("error: EVP-mode coverage upload missing expected X-Datadog-EVP-Subdomain header")
+    sys.exit(1)
+if "dd-api-key" in cov_headers:
+    print("error: EVP-mode coverage upload unexpectedly included DD-API-KEY header")
+    sys.exit(1)
+PY
+
 # Scenario: force context.json resolution through RUNFILES_MANIFEST_FILE only.
 # This validates BOM/tab exact-key matching and suffix-key fallback end-to-end.
+# The manifest is intentionally constructed with both exact and suffix-key
+# forms to cover both resolver branches deterministically.
 UPLOADER_CQUERY=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:dd_upload_payloads_with_context --output=files \
   "${REPO_ENVS[@]}")
 UPLOADER_SCRIPT_PATH=$(echo "$UPLOADER_CQUERY" | awk 'NF { print; exit }')
@@ -1681,6 +2117,7 @@ if [[ "$MANIFEST_UPLOADER_KIND" == "powershell" ]]; then
 fi
 
 write_manifest_payload() {
+  # Create one test + one coverage payload for manifest-fallback uploader tests.
   local outputs_dir="$1"
   local resource_name="$2"
   mkdir -p "$outputs_dir/tests" "$outputs_dir/coverage"
@@ -1709,6 +2146,8 @@ JSON_EOF
 }
 
 run_manifest_uploader() {
+  # Run uploader with RUNFILES_MANIFEST_FILE-only resolution enabled and fail
+  # fast with captured logs when any manifest-key scenario regresses.
   local manifest_file="$1"
   local output_log="$2"
   local scenario_label="$3"

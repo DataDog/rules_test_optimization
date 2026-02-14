@@ -108,6 +108,11 @@ Tests remain hermetic with network blocked. They write payloads to Bazel's built
 
 No secrets are written to disk; all credentials are passed via environment variables.
 
+Contributor note: CI includes a dedicated hermetic lane (`bazel-tests-hermetic`
+in `.github/workflows/ci.yml`) that runs `./bazelw test //tools/...` with
+sandboxed execution and network access disabled. Keep this lane in mind when
+adding tests or tooling that might accidentally rely on host network state.
+
 ## Architecture diagram
 
 ```mermaid

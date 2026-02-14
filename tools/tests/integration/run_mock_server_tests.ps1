@@ -16,6 +16,11 @@ $ErrorActionPreference = "Stop"
   tools/tests/integration/run_mock_server_tests.sh so Linux/macOS/Windows
   execute the same assertions. On Windows, Bazel resolves dd_upload_payloads
   to the .bat launcher, which exercises the PowerShell uploader implementation.
+
+.NOTES
+  Maintainers: keep this wrapper intentionally thin. The canonical scenario
+  logic must stay in the Bash harness to avoid cross-platform drift and
+  duplicated assertions.
 #>
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -36,6 +41,8 @@ try {
   ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
   foreach ($candidate in $gitBashCandidates) {
+    # Prefer an explicit Git Bash binary so CI does not accidentally invoke
+    # a WSL/System32 shim with incompatible path semantics.
     if (Test-Path -LiteralPath $candidate -PathType Leaf) {
       $bashPath = $candidate
       break
@@ -59,6 +66,7 @@ try {
 
   $bashArgs = @($integrationSh)
   if ($null -ne $ForwardArgs -and $ForwardArgs.Count -gt 0) {
+    # Forward extra args so local debugging mirrors direct Bash invocation.
     $bashArgs += $ForwardArgs
   }
 
