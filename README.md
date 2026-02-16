@@ -93,7 +93,7 @@ filegroup(
 )
 
 # If you need file paths at test time, use rlocationpaths on the selector target
-# provided by the dd_topt_go_test macro (see tools/topt_go_test.bzl).
+# provided by the dd_topt_go_test macro (see tools/go/topt_go_test.bzl).
 ```
 
 ## Installation (Bzlmod)
@@ -109,7 +109,7 @@ local_path_override(
     path = "/absolute/path/to/datadog-rules-test-optimization",
 )
 
-test_optimization_sync = use_extension("@datadog-rules-test-optimization//tools:test_optimization_sync.bzl", "test_optimization_sync_extension")
+test_optimization_sync = use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")
 
 # Minimal usage: defaults to writing under .testoptimization and creating the filegroup
 test_optimization_sync.test_optimization_sync(
@@ -121,6 +121,17 @@ use_repo(test_optimization_sync, "test_optimization_data")
 
 Note: This module declares a dependency on `rules_go` solely to load provider definitions for Go importpath inference. It does not configure any Go toolchains. Consumers still need to set up `rules_go` and the Go SDK as usual to build and run Go targets.
 
+### Planned split for optional `rules_go`
+
+The current module keeps `rules_go` as a repository dependency because Go
+orchestration lives in-tree (`//tools/go:*`). A planned follow-up split is:
+
+- core module/package: sync + uploader + shared orchestration helpers (no `rules_go` dependency)
+- Go companion module/package: Go macro/aspect/selector (`dd_topt_go_test`) with `rules_go` dependency
+
+This would let non-Go consumers depend only on the core module while Go users
+add the Go companion module explicitly.
+
 ### Multi-service usage (Bzlmod)
 
 Fetch multiple services with one extension and select per-service data by label:
@@ -128,7 +139,7 @@ Fetch multiple services with one extension and select per-service data by label:
 ```bzl
 # MODULE.bazel
 topt_multi = use_extension(
-    "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
+    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
     "test_optimization_multi_sync_extension",
 )
 
@@ -172,7 +183,7 @@ Additional helper file exported by the generated repository:
   - `manifest_path`: path to `manifest.txt` inside the generated repo (defaults to `.testoptimization/manifest.txt`, respects `out_dir`)
   - `labels`: list of available per-module sanitized labels
   - `set`: dict-as-set keyed by sanitized labels for fast membership checks
-  - `go`: nested object with:
+  - `runtimes["go"]`: nested object with:
     - `module_path`: detected Go module path (may be empty)
     - `sanitized_module_path`: sanitized label fragment for `module_path`
     - `module_included`: boolean; true when the detected Go module has a matching per-module filegroup. The `dd_topt_go_test` macro uses this flag only when falling back to `<module_path>/<bazel package>`; it is ignored when `importpath` is inferred via `embed` or explicitly provided.
@@ -237,7 +248,7 @@ If your mirror repackages archives, adjust `strip_prefix` to the archive's actua
 ### 2) Instantiate the repository rule in `WORKSPACE`
 
 ```bzl
-load("@datadog_rules_test_optimization//tools:test_optimization_sync.bzl", "test_optimization_sync")
+load("@datadog_rules_test_optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 
 test_optimization_sync(
     name = "test_optimization_data",
@@ -270,7 +281,7 @@ Create a single uploader target at your workspace root:
 
 ```bzl
 # In root BUILD.bazel
-load("@datadog_rules_test_optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog_rules_test_optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -344,7 +355,7 @@ bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${
 
 ```bzl
 # In BUILD.bazel at workspace root
-load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -469,11 +480,43 @@ dd_topt_go_test(
 )
 ```
 
+## Adding a New Language Orchestration Module
+
+Use this checklist when adding `dd_topt_<language>_test` support:
+
+1. **Wrapper macro**
+   - Add a language wrapper under `tools/<language>/` that accepts:
+     - `name`
+     - `topt_data` (single-service dict or multi-service mapping)
+     - `topt_service` (optional for multi-service selection)
+     - language test-rule symbol injection (similar to `go_test_rule`)
+   - Ensure it appends selector + manifest labels to `data` and sets:
+     - `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
+     - `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
+
+2. **Selector / inference rule**
+   - Add analysis-time selection logic in `tools/<language>/`:
+     - precedence: explicit identifier -> inferred identifier -> fallback identifier -> full bundle
+     - module label resolution should match `module_<sanitized>` names from sync outputs
+   - Keep fallback-to-full-bundle behavior non-fatal.
+
+3. **Runtime metadata keys**
+   - Extend sync-exported runtime metadata under:
+     - `topt_data["runtimes"]["<language>"]`
+   - Keep core keys stable (`repo_name`, `manifest_path`, `labels`, `set`) and avoid changing generated public label names.
+
+4. **Tests**
+   - Add unit tests for:
+     - macro service-selection and data/env wiring
+     - selector precedence + fallback behavior
+     - sync export shape for runtime metadata
+   - Extend integration harness coverage if language runtime inference/selection adds new branches.
+
 ### Basic usage
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
 go_library(
@@ -505,13 +548,13 @@ The macro auto-selects the correct per-module payloads by inferring the Go packa
 - Precedence:
   1) `importpath` explicitly set on your `go_test` invocation (if provided in kwargs)
   2) Inference via `embed = [":<go_library>"]` by reading `GoArchive.importpath` from rules_go (recommended)
-  3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo's exported `topt_data["go"]["module_path"]`
+  3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo's exported `topt_data["runtimes"]["go"]["module_path"]`
 
 ### Multi-service usage
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_test")
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 dd_topt_go_test(
@@ -826,18 +869,18 @@ harness on each OS; when changing targets outside `//tools/...`, run
 
 The source of truth for the uploader payload schema is:
 
-- `tools/schemas/agentless-schema.yaml`
+- `tools/core/schemas/agentless-schema.yaml`
 
 Regenerate the runtime JSON schema after YAML edits:
 
 ```sh
-python3 tools/schemas/sync_agentless_schema.py
+python3 tools/core/schemas/sync_agentless_schema.py
 ```
 
 Check whether both files are in sync (CI/pre-commit friendly):
 
 ```sh
-python3 tools/schemas/sync_agentless_schema.py --check
+python3 tools/core/schemas/sync_agentless_schema.py --check
 ```
 
 The helper uses PyYAML when available and falls back to Ruby's built-in YAML parser.

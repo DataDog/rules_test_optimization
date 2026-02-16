@@ -12,3 +12,9 @@ bazel_dep(name = "rules_go", version = "0.59.0")
 
 # Test utilities for Starlark unit tests
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+# Dev-only stub repository so //examples/... can be analyzed from this root
+# workspace without fetching real Datadog data.
+example_stub_repo = use_extension("//tools/tests:example_stub_repo.bzl", "example_stub_repo_extension")
+example_stub_repo.example_stub_repo(name = "test_optimization_data")
+use_repo(example_stub_repo, "test_optimization_data")

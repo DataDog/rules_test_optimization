@@ -2,8 +2,8 @@
 """Synchronize agentless schema JSON from YAML source.
 
 Usage:
-  python3 tools/schemas/sync_agentless_schema.py
-  python3 tools/schemas/sync_agentless_schema.py --check
+  python3 tools/core/schemas/sync_agentless_schema.py
+  python3 tools/core/schemas/sync_agentless_schema.py --check
 """
 
 from __future__ import annotations
@@ -18,15 +18,15 @@ from typing import Any
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def _default_yaml_path() -> Path:
-    return _repo_root() / "tools" / "schemas" / "agentless-schema.yaml"
+    return _repo_root() / "tools" / "core" / "schemas" / "agentless-schema.yaml"
 
 
 def _default_json_path() -> Path:
-    return _repo_root() / "tools" / "schemas" / "agentless-schema.json"
+    return _repo_root() / "tools" / "core" / "schemas" / "agentless-schema.json"
 
 
 def _load_yaml_with_pyyaml(path: Path) -> Any:
@@ -82,7 +82,7 @@ def render_json(data: Any) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sync tools/schemas/agentless-schema.json from YAML source."
+        description="Sync tools/core/schemas/agentless-schema.json from YAML source."
     )
     parser.add_argument(
         "--yaml",

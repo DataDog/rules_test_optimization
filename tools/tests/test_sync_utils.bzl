@@ -1,7 +1,9 @@
 # Unit tests for sync utilities (DD_SITE normalization + module label mapping).
+"""Unit tests for sync utility helpers."""
+
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
-    "//tools:test_optimization_sync.bzl",
+    "//tools/core:test_optimization_sync.bzl",
     "build_module_label_map_for_tests",
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
@@ -128,6 +130,9 @@ def _export_bzl_manifest_path_test(ctx):
         ".testoptimization/manifest.txt",
     )
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
+    asserts.true(env, "\"runtimes\": {" in content)
+    asserts.true(env, "\"go\": {" in content)
+    asserts.false(env, "\n    \"go\": {\n" in content)
     return unittest.end(env)
 
 def _http_execute_timeout_seconds_test(ctx):

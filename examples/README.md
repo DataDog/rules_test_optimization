@@ -24,7 +24,7 @@ bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
 
 test_optimization_sync = use_extension(
-    "@datadog-rules-test-optimization//tools:test_optimization_sync.bzl",
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
 )
 
@@ -36,7 +36,7 @@ BUILD.bazel (inference via embed):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
 go_library(
@@ -56,7 +56,7 @@ dd_topt_go_test(
 Root BUILD.bazel (ONE uploader per workspace):
 
 ```bzl
-load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -91,7 +91,7 @@ bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
 
 topt_multi = use_extension(
-    "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
+    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
     "test_optimization_multi_sync_extension",
 )
 
@@ -112,7 +112,7 @@ BUILD.bazel — Option A (explicit selection, inference via embed):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 go_library(
@@ -133,7 +133,7 @@ BUILD.bazel — Option B (mapping + key, inference via embed):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 go_library(
@@ -155,7 +155,7 @@ dd_topt_go_test(
 Notes on importpath inference:
 - Preferred: inference via `embed` above (reads rules_go provider).
 - Optional: explicit `importpath` on `go_test` takes precedence when set.
-- Fallback: if neither is available, the macro computes `<module_path>/<bazel package>` using the exported `topt_data["go"]["module_path"]` and the current Bazel package path.
+- Fallback: if neither is available, the macro computes `<module_path>/<bazel package>` using the exported `topt_data["runtimes"]["go"]["module_path"]` and the current Bazel package path.
 
 Per-module filegroup (aggregator):
 

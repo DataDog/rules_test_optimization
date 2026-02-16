@@ -1,0 +1,12 @@
+exports_files([
+    "common_utils.bzl",
+    "schemas/agentless-schema.json",
+    "schemas/agentless-schema.yaml",
+    "schemas/sync_agentless_schema.py",
+    "test_optimization_sync.bzl",
+    "test_optimization_multi_sync.bzl",
+    "test_optimization_uploader.bzl",
+    "topt_macro_utils.bzl",
+    "topt_selection_utils.bzl",
+    "validate_payload_schema.py",
+])

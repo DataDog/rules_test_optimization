@@ -32,61 +32,21 @@ Maintenance notes:
   multi-service (`topt_data_by_service`) exports.
 """
 
-load("//tools:topt_go_infer.bzl", "topt_go_payloads_selector")
-load("//tools:common_utils.bzl", "sanitize_label_fragment")
+load("//tools/go:topt_go_infer.bzl", "topt_go_payloads_selector")
+load(
+    "//tools/core:topt_macro_utils.bzl",
+    "is_dict",
+    "normalize_user_data",
+    "resolve_topt_service_key",
+    "service_mapping_entries",
+)
 
-def _is_dict(value):
-    """Return True when value is a Starlark dict.
-
-    Keep this tiny helper instead of repeating `type(x) == type({})` so intent
-    remains obvious in validation branches.
-    """
-    return type(value) == type({})
-
-def _service_mapping_entries(topt_data):
-    """Extract service-shaped entries from an aggregator mapping.
-
-    The multi-service export may contain helper/meta keys. A service entry is
-    identified by a dict value that includes `repo_name`.
-    """
-    entries = {}
-    for key, value in topt_data.items():
-        if _is_dict(value) and value.get("repo_name"):
-            entries[key] = value
-    return entries
-
-def _normalize_user_data(user_data):
-    """Normalize caller-provided `data` into a mutable list.
-
-    Accepts None/list/tuple and always returns a list to avoid surprising
-    type-specific behavior when appending selector/manifest labels.
-    """
-    return list(user_data or [])
+_is_dict = is_dict
+_service_mapping_entries = service_mapping_entries
+_normalize_user_data = normalize_user_data
 
 def _resolve_topt_service_key(service_entries, topt_service):
-    """Resolve a requested service key within a multi-service mapping.
-
-    Resolution order:
-    1) If `topt_service` is omitted and there is exactly one service, use it.
-    2) Prefer exact key match for deterministic, collision-safe selection.
-    3) Fall back to sanitized key lookup for ergonomic raw-service input.
-    """
-    keys = sorted(service_entries.keys())
-    if topt_service == None:
-        if len(keys) == 1:
-            return keys[0]
-        fail("dd_topt_go_test: topt_data looks like a multi-service mapping; please pass topt_service (one of: %s)" % ", ".join(keys))
-
-    # Prefer exact key match first, then sanitized fallback.
-    # This allows callers to pass explicit deduped keys such as "go_service_2".
-    if service_entries.get(topt_service) != None:
-        return topt_service
-
-    sk = sanitize_label_fragment(topt_service)
-    if service_entries.get(sk) != None:
-        return sk
-
-    fail("dd_topt_go_test: topt_service '%s' not found. Available: %s" % (topt_service, ", ".join(keys)))
+    return resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_go_test")
 
 # Public aliases for unit tests.
 service_mapping_entries_for_tests = _service_mapping_entries
@@ -138,7 +98,7 @@ def dd_topt_go_test(
         fail("dd_topt_go_test: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
 
     # Support both shapes:
-    # 1) Single-service dict with keys: repo_name, labels, set, go
+    # 1) Single-service dict with keys: repo_name, labels, set, runtimes
     # 2) Aggregator mapping dict: { <svc_key>: single-service dict, ... }
     if topt_data.get("repo_name"):
         # Single-service shape: caller already selected the service by choosing
@@ -178,8 +138,12 @@ def dd_topt_go_test(
 
     # Decide whether to include per-module files:
     # - When inferring (explicit importpath or embed provided), always attempt per-module selection
-    # - When falling back to go.mod + Bazel package, gate by modules.go.module_included
-    _go = _svc.get("go") or {}
+    # - When falling back to go.mod + Bazel package, gate by
+    #   topt_data["runtimes"]["go"]["module_included"].
+    _runtimes = _svc.get("runtimes") or {}
+    _go = _runtimes.get("go") if _is_dict(_runtimes) else {}
+    if not _is_dict(_go):
+        _go = {}
     uses_inference = bool(explicit_importpath) or bool(embed_labels)
     if uses_inference:
         # When we can infer importpath, always allow per-module selection.

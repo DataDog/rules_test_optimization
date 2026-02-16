@@ -4373,8 +4373,8 @@ dd_payload_uploader = rule(
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
         # Schema + validator bundled for best-effort payload validation
-        "_schema": attr.label(default = "//tools:schemas/agentless-schema.json", allow_single_file = True),
-        "_schema_validator": attr.label(default = "//tools:validate_payload_schema.py", allow_single_file = True),
+        "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
+        "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),
         # Private attribute to detect Windows platform
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
@@ -4409,7 +4409,7 @@ Path resolution notes:
 
 Usage:
     # In BUILD.bazel at workspace root
-    load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+    load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
     dd_payload_uploader(
         name = "dd_upload_payloads",

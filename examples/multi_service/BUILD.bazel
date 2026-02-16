@@ -1,4 +1,4 @@
-load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 # ONE uploader target per workspace - discovers and uploads all test payloads
 dd_payload_uploader(

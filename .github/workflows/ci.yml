@@ -58,7 +58,7 @@ jobs:
 
       - name: Verify schema files are in sync
         shell: bash
-        run: python3 tools/schemas/sync_agentless_schema.py --check
+        run: python3 tools/core/schemas/sync_agentless_schema.py --check
 
   powershell-lint:
     runs-on: windows-latest

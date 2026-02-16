@@ -1,6 +1,6 @@
 # Unit tests for common_utils helpers (sanitization, deduping, validation).
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load("//tools:common_utils.bzl", "dedup_keys", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
+load("//tools/core:common_utils.bzl", "dedup_keys", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
 
 def _sanitize_label_fragment_test(ctx):
     """Validate label sanitization rules and fallback behavior."""

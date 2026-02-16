@@ -27,9 +27,9 @@ Maintenance notes:
   downstream BUILD files.
 """
 
-load("//tools:test_optimization_sync.bzl", "test_optimization_sync")
+load("//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 load(
-    "//tools:common_utils.bzl",
+    "//tools/core:common_utils.bzl",
     "dedup_keys",
     "sanitize_label_fragment",
 )

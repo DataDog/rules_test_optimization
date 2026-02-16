@@ -1,7 +1,7 @@
 # Unit tests for multi-service extension helper utilities.
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
-    "//tools:test_optimization_multi_sync.bzl",
+    "//tools/core:test_optimization_multi_sync.bzl",
     "compute_multi_repo_names_for_tests",
     "compute_multi_service_keys_for_tests",
     "record_multi_repo_owner_or_fail_for_tests",

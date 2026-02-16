@@ -169,7 +169,7 @@ local_path_override(
 )
 
 test_optimization_sync = use_extension(
-    "@datadog-rules-test-optimization//tools:test_optimization_sync.bzl",
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
 )
 
@@ -185,7 +185,7 @@ MODULE_EOF
 
 cat > BUILD.bazel <<BUILD_EOF
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 sh_test(
     name = "write_payloads_test",
@@ -702,7 +702,7 @@ import sys
 import tempfile
 
 repo_root = os.environ["REPO_ROOT"]
-validator = os.path.join(repo_root, "tools", "validate_payload_schema.py")
+validator = os.path.join(repo_root, "tools", "core", "validate_payload_schema.py")
 if not os.path.exists(validator):
     print(f"error: schema validator not found: {validator}")
     sys.exit(1)
@@ -801,7 +801,7 @@ local_path_override(
 )
 
 test_optimization_sync = use_extension(
-    "@datadog-rules-test-optimization//tools:test_optimization_sync.bzl",
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
 )
 
@@ -895,7 +895,7 @@ local_path_override(
 )
 
 topt_multi = use_extension(
-    "@datadog-rules-test-optimization//tools:test_optimization_multi_sync.bzl",
+    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
     "test_optimization_multi_sync_extension",
 )
 
@@ -916,7 +916,7 @@ use_repo(
 MODULE_MULTI_EOF
 
 cat > "$MULTI_WS/BUILD.bazel" <<'BUILD_MULTI_EOF'
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
 load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
 load("//:macro_probe.bzl", "fake_go_test")
@@ -967,7 +967,7 @@ MACRO_PROBE_EOF
 
 mkdir -p "$MULTI_WS/invalid"
 cat > "$MULTI_WS/invalid/BUILD.bazel" <<'BUILD_MULTI_INVALID_EOF'
-load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
 load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
 load("//:macro_probe.bzl", "fake_go_test")

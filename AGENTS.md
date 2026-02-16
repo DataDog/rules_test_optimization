@@ -17,12 +17,12 @@ Agents: start with the Overview, then `README.md` for current operational behavi
 
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources:
-  - `common_utils.bzl` — shared utilities for logging, sanitization, validation, and deduplication used across multiple rule files.
-  - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/cache/http/settings.json`, per‑module files, and `.testoptimization/context.json`.
-  - `test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
-  - `test_optimization_uploader.bzl` — workspace-level uploader rule (normal rule, not test; runs via `bazel run`).
-  - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
-  - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
+  - `core/common_utils.bzl` — shared utilities for logging, sanitization, validation, and deduplication used across multiple rule files.
+  - `core/test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/cache/http/settings.json`, per‑module files, and `.testoptimization/context.json`.
+  - `core/test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
+  - `core/test_optimization_uploader.bzl` — workspace-level uploader rule (normal rule, not test; runs via `bazel run`).
+  - `go/topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
+  - `go/topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
@@ -75,25 +75,25 @@ The sync rule creates `@test_optimization_data//` containing:
 - Create ONE uploader target per workspace at the root BUILD.bazel.
 
 ## Consumer Tips (bzlmod + Go)
-- In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)`, `use_extension("@datadog-rules-test-optimization//tools:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
+- In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)`, `use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
 - In root `BUILD.bazel`: create the workspace-level uploader:
   ```bzl
-  load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+  load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
   dd_payload_uploader(
       name = "dd_upload_payloads",
       data = ["@test_optimization_data//:test_optimization_context"],
   )
   ```
-- In test `BUILD.bazel` files: `load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
+- In test `BUILD.bazel` files: `load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
 - Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
-- Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
+- Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["runtimes"]["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
 - Tests can read `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the manifest directory (via `filepath.Dir()`) and access synced payloads.
 
 Note: This repository declares a `bazel_dep` on `rules_go` to load provider definitions for Go importpath inference. It does not configure Go toolchains; consumers must still configure `rules_go` (SDK, toolchains) in their own `MODULE.bazel`.
 
 ## Multi‑Service Usage
-- Use `test_optimization_multi_sync_extension` (`@...//tools:test_optimization_multi_sync.bzl`) with `services = ["<svc1>", "<svc2>"]` to fetch multiple services at once.
+- Use `test_optimization_multi_sync_extension` (`@...//tools/core:test_optimization_multi_sync.bzl`) with `services = ["<svc1>", "<svc2>"]` to fetch multiple services at once.
 - Aggregator repo exposes per‑service labels:
   - `@test_optimization_data//:test_optimization_files_<svc>`
   - `@test_optimization_data//:module_<svc>_<module_label>` (example: `:module_go_service_core`).
