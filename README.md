@@ -24,6 +24,13 @@ Optional tooling:
 - **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
 - **python3** - Used for uploader payload schema validation. If missing, uploads proceed without schema validation.
 
+### Contract gate checklist
+
+Before rollout in a consumer repository, confirm the tracer/runtime implementation:
+- resolves `DD_TEST_OPTIMIZATION_MANIFEST_FILE` through Bazel runfiles
+- enables file-mode output when `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`
+- writes JSON payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests` and `TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage`
+
 The extension performs these HTTP POST transactions (via host HTTP tooling: curl on Unix/macOS, PowerShell on Windows):
 
 - Settings: always executed. Parses feature flags from response.
