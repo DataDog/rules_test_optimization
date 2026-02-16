@@ -1,6 +1,6 @@
 # Examples
 
-This folder shows concise usage patterns for single-service and multi-service setups. These are snippets meant to be copied into your repo; they are not runnable here.
+This folder shows concise usage patterns for single-service and multi-service setups. These snippets are meant to be copied into your repo; in this repository we also keep them buildable (`//examples/...`) as a regression guard.
 
 Tip: commands use `bazel` for portability in consumer repos. In this
 repository, use `./bazelw` for local development convenience.

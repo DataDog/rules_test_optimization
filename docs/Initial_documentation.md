@@ -34,7 +34,7 @@ The steps are:
 
 The `dd_topt_go_test` macro automatically selects the correct per‑module payloads by inferring the Go package `importpath` using `rules_go` providers, mirroring how `go_test` computes it.
 
-- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoInfo` from `@rules_go//go/private:providers.bzl` via a Starlark aspect walking `embed`.
+- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoInfo` from `@rules_go//go:def.bzl` via a Starlark aspect walking `embed`.
 - Precedence for determining importpath:
   1) `importpath` explicitly set on the `go_test` invocation (if provided via kwargs)
   2) Provider‑based inference via `embed`
