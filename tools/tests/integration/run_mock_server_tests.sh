@@ -232,7 +232,7 @@ cat > payload_writer.sh <<'PAYLOAD_EOF'
 set -euo pipefail
 
 out="${TEST_UNDECLARED_OUTPUTS_DIR:?}"
-mkdir -p "$out/tests" "$out/coverage"
+mkdir -p "$out/payloads/tests" "$out/payloads/coverage"
 fixture_name="citestcycle_payload.json"
 
 resolve_from_manifest() {
@@ -319,8 +319,8 @@ if [[ ! -f "$template" ]]; then
   exit 1
 fi
 
-cp "$template" "$out/tests/test1.json"
-echo '{}' > "$out/coverage/cov1.json"
+cp "$template" "$out/payloads/tests/test1.json"
+echo '{}' > "$out/payloads/coverage/cov1.json"
 PAYLOAD_EOF
 chmod +x payload_writer.sh
 
@@ -331,7 +331,7 @@ BAZEL_FLAGS=(--output_base="$OUT_BASE")
 # Provide deterministic repo metadata for fixtures + payload enrichment.
 REPO_ENVS=(
   --repo_env=DD_API_KEY=mock
-  --repo_env=DD_TOPT_API_BASE=http://127.0.0.1:$PORT
+  --repo_env=DD_TEST_OPTIMIZATION_API_BASE=http://127.0.0.1:$PORT
   --repo_env=DD_ENV=ci
   --repo_env=DD_GIT_REPOSITORY_URL=https://example.com/repo.git
   --repo_env=DD_GIT_BRANCH=main
@@ -357,7 +357,7 @@ EXECROOT="$("$BAZEL" "${BAZEL_FLAGS[@]}" info execution_root "${REPO_ENVS[@]}" 2
 # Resolve settings.json location from cquery output for validation.
 # Depending on Bazel output mode/platform, the cquery path can be relative to
 # output_base, execution_root, or workspace. Probe each base in order.
-SETTINGS_PATH=$(echo "$CQUERY_OUT" | grep -E '[\\/]\.testoptimization[\\/]settings\.json$' | head -n1 || true)
+SETTINGS_PATH=$(echo "$CQUERY_OUT" | grep -E '[\\/]\.testoptimization[\\/]cache[\\/]http[\\/]settings\.json$' | head -n1 || true)
 if [[ -z "$SETTINGS_PATH" ]]; then
   echo "error: failed to resolve settings.json path"
   echo "$CQUERY_OUT"
@@ -380,8 +380,16 @@ if [[ ! -f "$SETTINGS_PATH" ]]; then
   exit 1
 fi
 
-TOPT_DIR="$(dirname "$SETTINGS_PATH")"
-for name in settings.json known_tests.json test_management.json manifest.txt; do
+TOPT_HTTP_DIR="$(dirname "$SETTINGS_PATH")"
+TOPT_CACHE_DIR="$(dirname "$TOPT_HTTP_DIR")"
+TOPT_DIR="$(dirname "$TOPT_CACHE_DIR")"
+for name in settings.json known_tests.json test_management.json; do
+  if [[ ! -f "$TOPT_HTTP_DIR/$name" ]]; then
+    echo "error: missing $name in $TOPT_HTTP_DIR"
+    exit 1
+  fi
+done
+for name in manifest.txt context.json; do
   if [[ ! -f "$TOPT_DIR/$name" ]]; then
     echo "error: missing $name in $TOPT_DIR"
     exit 1
@@ -406,13 +414,13 @@ BASE_UPLOAD_LOG_START="$(log_line_count)"
 UPLOADER_LOG="$TMP_WS/uploader.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
-DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
 DD_API_KEY=mock \
-DD_TOPT_KEEP_PAYLOADS=1 \
-DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
-DD_TOPT_MAX_WAIT_SEC=30 \
-DD_TOPT_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
 "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
   "${REPO_ENVS[@]}" >"$UPLOADER_LOG" 2>&1; then
@@ -1080,12 +1088,12 @@ LOG_LINES_BEFORE_CONTEXT="$(log_line_count)"
 UPLOADER_CONTEXT_LOG="$TMP_WS/uploader_with_context.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
 DD_API_KEY=mock \
-DD_TOPT_KEEP_PAYLOADS=1 \
-DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
-DD_TOPT_MAX_WAIT_SEC=30 \
-DD_TOPT_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
 "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
   "${REPO_ENVS[@]}" >"$UPLOADER_CONTEXT_LOG" 2>&1; then
@@ -1164,8 +1172,8 @@ cp "$WORKSPACE/CODEOWNERS" "$ORIG_CODEOWNERS"
 # depend on CODEOWNERS availability.
 mv "$WORKSPACE/CODEOWNERS" "$WORKSPACE/CODEOWNERS.bak"
 MANUAL_NO_CO="$TESTLOGS_DIR/manual_no_codeowners/test.outputs"
-mkdir -p "$MANUAL_NO_CO/tests" "$MANUAL_NO_CO/coverage"
-cat > "$MANUAL_NO_CO/tests/manual_no_codeowners.json" <<'JSON_EOF'
+mkdir -p "$MANUAL_NO_CO/payloads/tests" "$MANUAL_NO_CO/payloads/coverage"
+cat > "$MANUAL_NO_CO/payloads/tests/manual_no_codeowners.json" <<'JSON_EOF'
 {
   "metadata": {
     "*": {
@@ -1186,17 +1194,17 @@ cat > "$MANUAL_NO_CO/tests/manual_no_codeowners.json" <<'JSON_EOF'
   ]
 }
 JSON_EOF
-echo '{}' > "$MANUAL_NO_CO/coverage/manual_no_codeowners_cov.json"
+echo '{}' > "$MANUAL_NO_CO/payloads/coverage/manual_no_codeowners_cov.json"
 
 UPLOADER_NO_CO_LOG="$TMP_WS/uploader_no_codeowners.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
 DD_API_KEY=mock \
-DD_TOPT_KEEP_PAYLOADS=1 \
-DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
-DD_TOPT_MAX_WAIT_SEC=30 \
-DD_TOPT_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
 "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
   "${REPO_ENVS[@]}" >"$UPLOADER_NO_CO_LOG" 2>&1; then
@@ -1301,8 +1309,8 @@ CODEOWNERS_EOF
 printf '/manual/tab_sep.cs\t@org/tab-owner\n' >> "$WORKSPACE/CODEOWNERS"
 
 MANUAL_EMPTY_OWNER="$TESTLOGS_DIR/manual_empty_owner/test.outputs"
-mkdir -p "$MANUAL_EMPTY_OWNER/tests" "$MANUAL_EMPTY_OWNER/coverage"
-cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
+mkdir -p "$MANUAL_EMPTY_OWNER/payloads/tests" "$MANUAL_EMPTY_OWNER/payloads/coverage"
+cat > "$MANUAL_EMPTY_OWNER/payloads/tests/manual_empty_owner.json" <<'JSON_EOF'
 {
   "metadata": {
     "*": {
@@ -1705,17 +1713,17 @@ cat > "$MANUAL_EMPTY_OWNER/tests/manual_empty_owner.json" <<'JSON_EOF'
   ]
 }
 JSON_EOF
-echo '{}' > "$MANUAL_EMPTY_OWNER/coverage/manual_empty_owner_cov.json"
+echo '{}' > "$MANUAL_EMPTY_OWNER/payloads/coverage/manual_empty_owner_cov.json"
 
 UPLOADER_EMPTY_OWNER_LOG="$TMP_WS/uploader_empty_owner.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
 DD_API_KEY=mock \
-DD_TOPT_KEEP_PAYLOADS=1 \
-DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
-DD_TOPT_MAX_WAIT_SEC=30 \
-DD_TOPT_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL= \
 "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
   "${REPO_ENVS[@]}" >"$UPLOADER_EMPTY_OWNER_LOG" 2>&1; then
@@ -1840,8 +1848,8 @@ PY
 # This validates mode switching behavior: EVP must use evp_proxy routes and
 # EVP subdomain headers, and must not send DD-API-KEY.
 MANUAL_EVP="$TESTLOGS_DIR/manual_evp_mode/test.outputs"
-mkdir -p "$MANUAL_EVP/tests" "$MANUAL_EVP/coverage"
-cat > "$MANUAL_EVP/tests/manual_evp_mode.json" <<'JSON_EOF'
+mkdir -p "$MANUAL_EVP/payloads/tests" "$MANUAL_EVP/payloads/coverage"
+cat > "$MANUAL_EVP/payloads/tests/manual_evp_mode.json" <<'JSON_EOF'
 {
   "metadata": {
     "*": {
@@ -1862,18 +1870,18 @@ cat > "$MANUAL_EVP/tests/manual_evp_mode.json" <<'JSON_EOF'
   ]
 }
 JSON_EOF
-echo '{}' > "$MANUAL_EVP/coverage/manual_evp_mode_cov.json"
+echo '{}' > "$MANUAL_EVP/payloads/coverage/manual_evp_mode_cov.json"
 
 EVP_LOG_START="$(log_line_count)"
 UPLOADER_EVP_LOG="$TMP_WS/uploader_evp.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
 DD_API_KEY= \
 DD_SITE= \
-DD_TOPT_KEEP_PAYLOADS=1 \
-DD_TOPT_MAX_WAIT_SEC=30 \
-DD_TOPT_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
 DD_TRACE_AGENT_URL="http://127.0.0.1:$PORT" \
 "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
   "${REPO_ENVS[@]}" >"$UPLOADER_EVP_LOG" 2>&1; then
@@ -2151,8 +2159,8 @@ write_manifest_payload() {
   # Create one test + one coverage payload for manifest-fallback uploader tests.
   local outputs_dir="$1"
   local resource_name="$2"
-  mkdir -p "$outputs_dir/tests" "$outputs_dir/coverage"
-  cat > "$outputs_dir/tests/${resource_name}.json" <<JSON_EOF
+  mkdir -p "$outputs_dir/payloads/tests" "$outputs_dir/payloads/coverage"
+  cat > "$outputs_dir/payloads/tests/${resource_name}.json" <<JSON_EOF
 {
   "metadata": {
     "*": {
@@ -2173,7 +2181,7 @@ write_manifest_payload() {
   ]
 }
 JSON_EOF
-  echo '{}' > "$outputs_dir/coverage/${resource_name}_cov.json"
+  echo '{}' > "$outputs_dir/payloads/coverage/${resource_name}_cov.json"
 }
 
 run_manifest_uploader() {
@@ -2184,15 +2192,15 @@ run_manifest_uploader() {
   local scenario_label="$3"
   if ! TESTLOGS_DIR="$TESTLOGS_DIR_FOR_MANIFEST" \
   BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
-  DD_TOPT_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
   RUNFILES_MANIFEST_FILE="$manifest_file" \
   RUNFILES_DIR= \
   DD_API_KEY=mock \
-  DD_TOPT_KEEP_PAYLOADS=0 \
-  DD_TOPT_DEBUG="$HARNESS_UPLOADER_DEBUG" \
-  DD_TOPT_INTAKE_BASE="http://127.0.0.1:$PORT" \
-  DD_TOPT_MAX_WAIT_SEC=30 \
-  DD_TOPT_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=0 \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
   DD_TRACE_AGENT_URL= \
   "${MANIFEST_UPLOADER_CMD[@]}" >"$output_log" 2>&1; then
     echo "error: manifest $scenario_label uploader run failed"

@@ -21,9 +21,9 @@ _STATS = {
 
 
 def _debug_enabled() -> bool:
-    val = os.getenv("DD_TOPT_SCHEMA_DEBUG")
+    val = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_DEBUG")
     if val is None:
-        val = os.getenv("DD_TOPT_DEBUG")
+        val = os.getenv("DD_TEST_OPTIMIZATION_DEBUG")
     if val is None:
         return False
     return str(val).strip().lower() in _DEBUG_TRUTHY

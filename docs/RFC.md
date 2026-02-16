@@ -122,7 +122,7 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 
 - Phase 2 — Hermetic test execution:
 
-  - Tests run without network and can optionally read the synced JSONs from runfiles (e.g., via `TEST_OPTIMIZATION_MANIFEST_FILE`).
+  - Tests run without network and can optionally read the synced JSONs from runfiles (e.g., via `DD_TEST_OPTIMIZATION_MANIFEST_FILE`).
   - Instrumented tests write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. No `--sandbox_writable_path` or custom environment variables needed.
 
 
@@ -146,46 +146,46 @@ Why this solves the problem
 
 ### Required Library Changes
 
-Under Bazel, tracing libraries must avoid all network calls for Test Optimization and operate entirely on files. Libraries detect Bazel mode via `TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`, consume pre‑fetched JSONs from runfiles (resolved via `TEST_OPTIMIZATION_MANIFEST_FILE`), and write test and coverage payloads to `$TEST_UNDECLARED_OUTPUTS_DIR` for the uploader to send. Outside Bazel, libraries retain the same current behavior, fetching and accessing the network directly.
+Under Bazel, tracing libraries must avoid all network calls for Test Optimization and operate entirely on files. Libraries detect Bazel mode via `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`, consume pre‑fetched JSONs from runfiles (resolved via `DD_TEST_OPTIMIZATION_MANIFEST_FILE`), and write test and coverage payloads to `$TEST_UNDECLARED_OUTPUTS_DIR` for the uploader to send. Outside Bazel, libraries retain the same current behavior, fetching and accessing the network directly.
 
 Common behavior:
 
 - Detection:
-  - If `TEST_OPTIMIZATION_MANIFEST_FILE` is set and non‑empty, read optimization data from files (Bazel mode for inputs).
-  - If `TEST_OPTIMIZATION_PAYLOADS_IN_FILES` is set to `"true"`, write payloads to `TEST_UNDECLARED_OUTPUTS_DIR` instead of network (Bazel mode for outputs).
+  - If `DD_TEST_OPTIMIZATION_MANIFEST_FILE` is set and non‑empty, read optimization data from files (Bazel mode for inputs).
+  - If `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES` is set to `"true"`, write payloads to `TEST_UNDECLARED_OUTPUTS_DIR` instead of network (Bazel mode for outputs).
   - Both are typically set together by the `dd_topt_go_test` macro.
 - Inputs (read‑only):
-  - Resolve `TEST_OPTIMIZATION_MANIFEST_FILE` to a real file path via standard Bazel runfiles resolution:
+  - Resolve `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to a real file path via standard Bazel runfiles resolution:
     - If `RUNFILES_MANIFEST_FILE` exists, scan it to map the logical path to a real path.
     - Else, if `TEST_SRCDIR` or `RUNFILES_DIR` exists, join with the manifest path and test for existence.
     - Else, if the value is already an absolute path and exists, use it as‑is.
-  - Call `filepath.Dir()` (or equivalent) on the resolved manifest path to get the `.testoptimization` directory.
+  - Call `filepath.Dir()` (or equivalent) on the resolved manifest path to get the manifest directory.
   - From that directory, load:
-    - `settings.json`
-    - Any number of `known_tests*.json` files (combined known tests)
-    - Any number of `test_management*.json` files (combined test management tests)
+    - `cache/http/settings.json`
+    - Any number of `cache/http/known_tests*.json` files (combined known tests)
+    - Any number of `cache/http/test_management*.json` files (combined test management tests)
   - Accept both "combined" shapes (e.g., `known_tests.json` with `data.attributes.tests`) and per‑module shapes, exposed under canonical file names via per‑module targets. Merge by unioning entries; empty stubs are valid and should be treated as "no data".
-- Outputs (write‑only, when `TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`):
+- Outputs (write‑only, when `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`):
   - Use `TEST_UNDECLARED_OUTPUTS_DIR` (Bazel's built-in writable directory for undeclared test outputs).
-  - Ensure `$TEST_UNDECLARED_OUTPUTS_DIR/tests` and `$TEST_UNDECLARED_OUTPUTS_DIR/coverage` exist (create if needed, handling concurrent processes safely).
-  - Serialize test payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/tests/*.json` (JSON only; do not use msgpack in Bazel mode).
-  - Serialize coverage payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/coverage/*.json` (one file per logical coverage unit; uploader will wrap as multipart with a generated `event.json`).
+  - Ensure `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests` and `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage` exist (create if needed, handling concurrent processes safely).
+  - Serialize test payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests/*.json` (JSON only; do not use msgpack in Bazel mode).
+  - Serialize coverage payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json` (one file per logical coverage unit; uploader will wrap as multipart with a generated `event.json`).
   - Use unique, deterministic file names to avoid clashes across shards (e.g., include PID/TID/timestamp/random suffix). Flush and fsync where appropriate for durability.
   - Bazel automatically collects these outputs to `bazel-testlogs/<package>/<target>/test.outputs/` after the test completes.
 - Network: In Bazel mode, do not perform any HTTP calls (for metadata fetch or uploads). All remote interactions are delegated to the repository rule (metadata) and the uploader (shipping via `bazel run`).
 - Config precedence: Honor `settings.json` feature flags (e.g., known tests enabled, test management enabled). If missing, default to conservative behavior (features disabled) rather than reaching the network.
-- Logging: Emit a clear startup line noting "Bazel mode enabled via TEST\_OPTIMIZATION\_MANIFEST\_FILE" and list resolved directory for troubleshooting.
+- Logging: Emit a clear startup line noting "Bazel mode enabled via DD\_TEST\_OPTIMIZATION\_MANIFEST\_FILE" and list resolved directory for troubleshooting.
 
 Test data contracts (minimum viable)
 
-- settings.json: full server response preferred; if absent, treat features as disabled and do not attempt network requests.  
+- cache/http/settings.json: full server response preferred; if absent, treat features as disabled and do not attempt network requests.  
 - known tests: accept combined (`data.attributes.tests`) or per‑module canonical files (`known_tests.json` scoped per target) → module key → test identifiers. Merge by union.  
 - test management tests: accept combined (`data.attributes.modules`) or per‑module canonical files (`test_management.json` scoped per target) → module key → test states. Merge by union.  
 - Forward compatibility: ignore unknown keys; fail closed (no network) on parse errors in Bazel mode.
 
 Backwards compatibility
 
-- Outside Bazel (no `TEST_OPTIMIZATION_MANIFEST_FILE`), preserve current behavior: live metadata fetch (settings/known tests) and direct uploads according to existing environment variables.
+- Outside Bazel (no `DD_TEST_OPTIMIZATION_MANIFEST_FILE`), preserve current behavior: live metadata fetch (settings/known tests) and direct uploads according to existing environment variables.
 
 ### Detailed Design
 
@@ -197,15 +197,15 @@ Repository Rule and Module Extension
   - `known_tests`, `test_management`: local kill‑switches to skip specific feature requests and emit minimal stubs while adjusting `settings.json` accordingly.  
   - `debug`: increases logging verbosity and writes additional artifacts (e.g., request JSONs) for troubleshooting.  
 - The repository rule performs:  
-  1. Settings request: always issued; response persisted to `settings.json`.  
-  2. Known Tests request: gated by settings and `known_tests` attribute; persisted to `known_tests.json` and split by module (canonical per‑module files exposed by targets).  
-  3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `test_management.json` and split by module (canonical per‑module files exposed by targets).  
+  1. Settings request: always issued; response persisted to `cache/http/settings.json`.  
+  2. Known Tests request: gated by settings and `known_tests` attribute; persisted to `cache/http/known_tests.json` and split by module (canonical per‑module files exposed by targets).  
+  3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `cache/http/test_management.json` and split by module (canonical per‑module files exposed by targets).  
   4. `context.json`: built locally from CI/git/OS/runtime information — non‑secret and safe to ship as runfiles.  
   5. A generated `BUILD` file that exposes:  
-     - `:test_optimization_files` → includes `settings.json` and `manifest.txt` (stable bundle for most uses).  
+     - `:test_optimization_files` → includes `cache/http/settings.json` and `manifest.txt` (stable bundle for most uses).  
      - `:test_optimization_context` → `context.json` (opt‑in for enrichment).  
      - `:module_<sanitized>` → per‑module bundle of settings \+ module‑specific JSONs.  
-     - Per‑module targets expose canonical runfile names under `.testoptimization/` regardless of the physical `out_dir`.  
+     - Per‑module targets expose canonical runfile names rooted at the manifest directory (`<out_dir>/...`, default `.testoptimization/...`) regardless of the physical split-file locations.  
   6. An `export.bzl` with `topt_data` describing labels, the resolved `manifest_path`, and language‑specific hints (e.g., Go module path inclusion).  
 - HTTP behavior uses `curl` with fail‑fast and retries; `DD_SITE` is normalized; Windows and non‑Windows paths are handled. The rule declares all relevant env vars in `environ` so changes lead to re‑execution and fresh outputs.
 
@@ -234,13 +234,13 @@ Runtime Uploader
 Language Macros
 
 - Provide macros per language to:
-  - Attach runfiles and env (`TEST_OPTIMIZATION_MANIFEST_FILE`, `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`).
+  - Attach runfiles and env (`DD_TEST_OPTIMIZATION_MANIFEST_FILE`, `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`).
   - Configure payloads to write to `TEST_UNDECLARED_OUTPUTS_DIR` automatically.
   - Surface reasonable defaults and allow overrides.
 - Note: Macros no longer create per-test uploaders. Users create ONE uploader target per workspace.  
 - Go importpath inference:  
   - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
-  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_path>)` using `topt_data["manifest_path"]`, so custom `out_dir` values are supported.  
+  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_path>)` using `topt_data["manifest_path"]`, so custom `out_dir` values are supported.  
   - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
   - The exported `topt_data["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
 - Module dependency: this repository declares a `bazel_dep("rules_go", <version>)` to make the provider load visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.

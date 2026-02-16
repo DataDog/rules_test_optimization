@@ -33,7 +33,7 @@ try {
   # WSL's System32 bash.exe when both are installed.
   $bashPath = $null
   $gitBashCandidates = @(
-    $env:DD_TOPT_GIT_BASH,
+    $env:DD_TEST_OPTIMIZATION_GIT_BASH,
     "C:\Program Files\Git\bin\bash.exe",
     "C:\Program Files\Git\usr\bin\bash.exe",
     "C:\Program Files (x86)\Git\bin\bash.exe",

@@ -254,15 +254,16 @@ def dd_topt_go_test(
     # Add manifest file reference for deriving the working directory.
     # Keep this dynamic via export metadata so custom out_dir values continue
     # to work without macro changes.
-    # Library can resolve this path and call filepath.Dir() to get the .testoptimization directory
+    # Library can resolve this path and call filepath.Dir() to get the
+    # directory containing manifest + cached metadata files.
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
     data.append(manifest_label)
-    env["TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
+    env["DD_TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
 
     # Signal to the library that payloads should be written to files (TEST_UNDECLARED_OUTPUTS_DIR)
     # Always set - the library will write to TEST_UNDECLARED_OUTPUTS_DIR when this is true
-    env["TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
+    env["DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
     # Keeping this explicit avoids hidden repository dependencies in the macro.

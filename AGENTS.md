@@ -18,7 +18,7 @@ Agents: start with the Overview, then `README.md` for current operational behavi
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources:
   - `common_utils.bzl` — shared utilities for logging, sanitization, validation, and deduplication used across multiple rule files.
-  - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/settings.json`, per‑module files, and `.testoptimization/context.json`.
+  - `test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/cache/http/settings.json`, per‑module files, and `.testoptimization/context.json`.
   - `test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
   - `test_optimization_uploader.bzl` — workspace-level uploader rule (normal rule, not test; runs via `bazel run`).
   - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
@@ -30,7 +30,7 @@ Agents: start with the Overview, then `README.md` for current operational behavi
 The sync rule creates `@test_optimization_data//` containing:
 - `BUILD` with public filegroups (`:test_optimization_files`, `:test_optimization_context`, `:module_<sanitized>`).
 - `export.bzl` exporting the `topt_data` dict for macros.
-- `.testoptimization/settings.json`, `known_tests.json`, `test_management.json`, `manifest.txt`, `context.json`.
+- `.testoptimization/cache/http/settings.json`, `.testoptimization/cache/http/known_tests.json`, `.testoptimization/cache/http/test_management.json`, `.testoptimization/manifest.txt`, `.testoptimization/context.json`.
 - `.testoptimization/module_<sanitized>/` per-module splits for cache efficiency.
 
 ## Key Design Patterns
@@ -64,11 +64,11 @@ The sync rule creates `@test_optimization_data//` containing:
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.
 - Public labels are stable — do not rename `test_optimization_files`, `test_optimization_context`, or `module_<sanitized>`.
-- Outputs under `.testoptimization/` are fixed: `settings.json`, `manifest.txt`, `known_tests.json`, `test_management.json`, per‑module canonical files exposed via `:module_<sanitized>` targets (runfiles under `.testoptimization/`), and `context.json`.
+- Outputs under `.testoptimization/` are fixed: `manifest.txt`, `context.json`, `cache/http/settings.json`, `cache/http/known_tests.json`, `cache/http/test_management.json`, and per‑module canonical files exposed via `:module_<sanitized>` targets (runfiles rooted under the manifest directory).
 
 ## Testing Guidelines
 - Prefer `./bazelw test //...` for running tests.
-- Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/{tests,coverage}` (Bazel's built-in writable directory).
+- Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
 - Use `./bazelw run //:dd_upload_payloads` after tests complete to upload payloads.
 - For Go, use `dd_topt_go_test` to set up the test with correct environment variables.
@@ -88,7 +88,7 @@ The sync rule creates `@test_optimization_data//` containing:
 - In test `BUILD.bazel` files: `load("@datadog-rules-test-optimization//tools:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
 - Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
-- Tests can read `TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the `.testoptimization` directory (via `filepath.Dir()`) and access synced payloads.
+- Tests can read `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the manifest directory (via `filepath.Dir()`) and access synced payloads.
 
 Note: This repository declares a `bazel_dep` on `rules_go` to load provider definitions for Go importpath inference. It does not configure Go toolchains; consumers must still configure `rules_go` (SDK, toolchains) in their own `MODULE.bazel`.
 
@@ -113,6 +113,6 @@ Note: This repository declares a `bazel_dep` on `rules_go` to load provider defi
 ## Security & Configuration Tips
 - Never write secrets to disk. Pass `DD_API_KEY`, `DD_SITE` via environment when running the uploader.
 - `context.json` is non‑secret; include it via `@<repo>//:test_optimization_context` in the uploader's data.
-- If CODEOWNERS auto-discovery is not reliable in your environment, set `DD_TOPT_CODEOWNERS_FILE` explicitly to a checked-in CODEOWNERS path.
+- If CODEOWNERS auto-discovery is not reliable in your environment, set `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` explicitly to a checked-in CODEOWNERS path.
 - Agentless uploads require `DD_API_KEY` and `DD_SITE`; EVP proxy requires `DD_TRACE_AGENT_URL` (EVP headers handled by the rule).
 - Uploader credentials are passed at runtime: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //:dd_upload_payloads`

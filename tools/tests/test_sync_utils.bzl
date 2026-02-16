@@ -14,6 +14,7 @@ load(
     "partition_unix_headers_for_tests",
     "record_sync_extension_repo_owner_or_fail_for_tests",
     "render_export_bzl_for_tests",
+    "render_module_runfiles_bzl_for_tests",
     "http_retry_attempts_for_tests",
     "http_retry_delay_seconds_for_tests",
     "resolve_dd_api_base_for_tests",
@@ -34,7 +35,7 @@ def _dd_site_normalization_test(ctx):
     return unittest.end(env)
 
 def _resolve_dd_api_base_test(ctx):
-    """Validate DD_TOPT_API_BASE override precedence."""
+    """Validate DD_TEST_OPTIMIZATION_API_BASE override precedence."""
     env = unittest.begin(ctx)
     # Ensure overrides take precedence over DD_SITE-derived defaults.
     asserts.equals(
@@ -141,6 +142,22 @@ def _http_execute_timeout_seconds_test(ctx):
     )
     asserts.equals(env, expected, http_execute_timeout_seconds_for_tests)
     asserts.true(env, http_execute_timeout_seconds_for_tests > (http_retry_attempts_for_tests * http_max_time_seconds_for_tests))
+    return unittest.end(env)
+
+def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
+    """Validate module runfile symlink roots follow manifest root/out_dir."""
+    env = unittest.begin(ctx)
+    default_content = render_module_runfiles_bzl_for_tests(".testoptimization")
+    asserts.true(env, 'syms[".testoptimization/cache/http/settings.json"] = ctx.file.settings' in default_content)
+    asserts.true(env, 'syms[".testoptimization/manifest.txt"] = ctx.file.manifest' in default_content)
+    asserts.true(env, 'syms[".testoptimization/cache/http/known_tests.json"] = kt' in default_content)
+    asserts.true(env, 'syms[".testoptimization/cache/http/test_management.json"] = tm' in default_content)
+
+    custom_content = render_module_runfiles_bzl_for_tests("custom_topt")
+    asserts.true(env, 'syms["custom_topt/cache/http/settings.json"] = ctx.file.settings' in custom_content)
+    asserts.true(env, 'syms["custom_topt/manifest.txt"] = ctx.file.manifest' in custom_content)
+    asserts.true(env, 'syms["custom_topt/cache/http/known_tests.json"] = kt' in custom_content)
+    asserts.true(env, 'syms["custom_topt/cache/http/test_management.json"] = tm' in custom_content)
     return unittest.end(env)
 
 def _partition_unix_headers_test(ctx):
@@ -276,6 +293,7 @@ parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
+render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)
 record_sync_extension_repo_owner_success_test = unittest.make(_record_sync_extension_repo_owner_success_test)
 decode_json_object_valid_test = unittest.make(_decode_json_object_valid_test)

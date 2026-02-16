@@ -12,7 +12,7 @@ This repository provides Bazel integrations that fetch Datadog Test Optimization
 ## Requirements
 
 - **Bazel 5.0+** - Required for `TEST_UNDECLARED_OUTPUTS_DIR` support used by payload collection
-- **dd-trace-go v1.72.0+** (or equivalent tracer version) - Required for file-based payload output via `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
+- **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
 - **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
 - **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; normalized to `https://api.<site>`
 - **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
@@ -36,14 +36,14 @@ All outputs are written under a configurable directory (default: `.testoptimizat
 
 Given an external repository name `<repo_name>` created by the extension, the generated BUILD inside the external repo contains:
 
-- A core filegroup target named `test_optimization_files` which includes `settings.json` and `manifest.txt`
+- A core filegroup target named `test_optimization_files` which includes `cache/http/settings.json` and `manifest.txt`
 - Files (always created; some may be minimal stubs if the corresponding feature is disabled):
-  - `settings.json` (Settings API response)
+  - `cache/http/settings.json` (Settings API response)
   - `manifest.txt` (Payload manifest; version marker for change tracking, currently `version=1`)
-  - `known_tests.json` (Known Tests API response or minimal stub)
-  - Per-module Known Tests/Test Management (via filegroups): each module has a target exposing canonical runfiles under `.testoptimization/` with `known_tests.json` and `test_management.json`, scoped to that module. Physical files are stored under `<out_dir>/module_<sanitized>/known_tests.json` and `<out_dir>/module_<sanitized>/test_management.json` (default `<out_dir>` is `.testoptimization`).
-  - `test_management.json` (Test Management Tests API response or minimal stub)
+  - `cache/http/known_tests.json` (Known Tests API response or minimal stub)
+  - `cache/http/test_management.json` (Test Management Tests API response or minimal stub)
   - `context.json` (Non-secret CI/Git/OS/runtime tags)
+  - Per-module Known Tests/Test Management (via filegroups): each module has a target exposing canonical runfiles under `<manifest_dir>/cache/http/` with `known_tests.json` and `test_management.json`, scoped to that module. Physical files are stored under `<out_dir>/module_<sanitized>/known_tests.json` and `<out_dir>/module_<sanitized>/test_management.json` (default `<out_dir>` is `.testoptimization`).
 
 Reference settings with a single label:
 
@@ -56,13 +56,13 @@ Reference settings with a single label:
 When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public target per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`:
 
 - Each module target exposes canonical runfiles (stable names, regardless of `out_dir`):
-  - `.testoptimization/known_tests.json` (module-scoped; same shape as combined)
-  - `.testoptimization/test_management.json` (module-scoped; same shape as combined)
+  - `<manifest_dir>/cache/http/known_tests.json` (module-scoped; same shape as combined)
+  - `<manifest_dir>/cache/http/test_management.json` (module-scoped; same shape as combined)
 - Each module also becomes a public target: `:module_<sanitized_module>` that includes:
-  - `.testoptimization/settings.json`
-  - `.testoptimization/manifest.txt`
-  - `.testoptimization/known_tests.json` (always present; stub when empty)
-  - `.testoptimization/test_management.json` (always present; stub when empty)
+  - `<manifest_dir>/cache/http/settings.json`
+  - `<manifest_dir>/manifest.txt`
+  - `<manifest_dir>/cache/http/known_tests.json` (always present; stub when empty)
+  - `<manifest_dir>/cache/http/test_management.json` (always present; stub when empty)
 - These per-module files are not bundled into `:test_optimization_files`
 
 Sanitization rules for `<sanitized_module>` (file paths and target labels):
@@ -278,7 +278,7 @@ dd_payload_uploader(
 # Repository rule (module/repo phase) — affects refetch
 common --repo_env=DD_API_KEY
 common --repo_env=DD_SITE
-common --repo_env=DD_TOPT_API_BASE  # Optional override for Datadog API base URL (test/dev)
+common --repo_env=DD_TEST_OPTIMIZATION_API_BASE  # Optional override for Datadog API base URL (test/dev)
 common --repo_env=DD_SERVICE
 common --repo_env=DD_ENV
 common --repo_env=DD_GIT_REPOSITORY_URL
@@ -299,7 +299,7 @@ common --repo_env=GO_MODULE_PATH
 test --test_env=DD_API_KEY
 test --test_env=DD_SITE
 test --test_env=DD_TRACE_AGENT_URL
-test --test_env=DD_TOPT_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
+test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
 ```
 
 Security note: keep secret *values* out of `.bazelrc`. Forward variable names with
@@ -311,7 +311,7 @@ The uploader is a normal Bazel rule (not a test) that runs via `bazel run` after
 
 ### How it works
 
-1. Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/tests/*.json` and `$TEST_UNDECLARED_OUTPUTS_DIR/coverage/*.json`
+1. Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests/*.json` and `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`
 2. Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`
 3. After tests complete, run the uploader via `bazel run`
 4. The uploader discovers all `test.outputs/` directories, waits for quiescence, uploads, and deletes files
@@ -382,14 +382,14 @@ bazel run //:dd_upload_payloads
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DD_TOPT_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
-| `DD_TOPT_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
-| `DD_TOPT_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
-| `DD_TOPT_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
-| `DD_TOPT_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
-| `DD_TOPT_QUIESCENT_SEC` | `10` | Override quiescence wait time |
-| `DD_TOPT_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
-| `DD_TOPT_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
+| `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
+| `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
+| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
+| `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
+| `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
+| `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
+| `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
+| `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
 
 ### Endpoints and headers
@@ -398,7 +398,7 @@ bazel run //:dd_upload_payloads
   - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
   - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
   - Requires `DD_API_KEY`
-  - Test/dev override: set `DD_TOPT_INTAKE_BASE` to use a custom base URL (agentless only)
+  - Test/dev override: set `DD_TEST_OPTIMIZATION_INTAKE_BASE` to use a custom base URL (agentless only)
 - EVP proxy (when `DD_TRACE_AGENT_URL` set):
   - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
   - Adds `X-Datadog-EVP-Subdomain` per endpoint
@@ -433,8 +433,8 @@ bazel run //:dd_upload_payloads
 
 The macro sets the following environment variables for instrumented tests:
 
-- `TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. The macro uses `topt_data["manifest_path"]` so custom `out_dir` values are supported. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the directory containing all synced payload files (settings, known tests, etc.).
-- `TEST_OPTIMIZATION_PAYLOADS_IN_FILES`: Always set to `"true"`. Signals to the library that payloads should be written to `TEST_UNDECLARED_OUTPUTS_DIR`.
+- `DD_TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. The macro uses `topt_data["manifest_path"]` so custom `out_dir` values are supported. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the directory containing synced files (`manifest.txt`, `context.json`, and `cache/http/*`).
+- `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`: Always set to `"true"`. Signals to the library that payloads should be written to `TEST_UNDECLARED_OUTPUTS_DIR`.
 
 ### Critical requirements
 
@@ -563,14 +563,14 @@ dd_topt_go_test(
 1. **Check if tests wrote payloads**:
    ```bash
    find bazel-testlogs -name "test.outputs" -type d
-   ls bazel-testlogs/*/test.outputs/tests/
+   ls bazel-testlogs/*/test.outputs/payloads/tests/
    ```
 
-2. **Verify dd-trace-go version**: Ensure you're using dd-trace-go v1.72.0+ (see [Requirements](#requirements))
+2. **Verify tracer support**: Ensure your tracer/runtime supports file mode via `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES` and manifest discovery via `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
 
-3. **Check TEST_OPTIMIZATION_PAYLOADS_IN_FILES**: The macro should set this to "true". Verify your test's environment:
+3. **Check DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES**: The macro should set this to "true". Verify your test's environment:
    ```bash
-   bazel test //your:test --test_output=all 2>&1 | grep TEST_OPTIMIZATION
+   bazel test //your:test --test_output=all 2>&1 | grep DD_TEST_OPTIMIZATION
    ```
 
 4. **For RBE users**: Add `--remote_download_outputs=all` to download test outputs locally
@@ -790,12 +790,12 @@ tools\tests\integration\run_mock_server_tests.cmd
 ```
 
 The Windows PowerShell entrypoint reuses the same Bash harness for parity and
-prefers Git for Windows `bash.exe` (or `DD_TOPT_GIT_BASH` when set).
+prefers Git for Windows `bash.exe` (or `DD_TEST_OPTIMIZATION_GIT_BASH` when set).
 
 This starts a local mock HTTP server and uses the following test-only overrides:
 
-- `DD_TOPT_API_BASE` to redirect sync requests
-- `DD_TOPT_INTAKE_BASE` to redirect uploader requests (agentless only)
+- `DD_TEST_OPTIMIZATION_API_BASE` to redirect sync requests
+- `DD_TEST_OPTIMIZATION_INTAKE_BASE` to redirect uploader requests (agentless only)
 - The harness asserts CODEOWNERS enrichment/preservation and runfile manifest
   fallback behavior (including BOM/tab exact keys and suffix-key resolution).
 - On assertion failures, it prints focused uploader diagnostics plus manifest
