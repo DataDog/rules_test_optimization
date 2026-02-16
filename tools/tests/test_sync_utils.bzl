@@ -3,14 +3,16 @@ load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools:test_optimization_sync.bzl",
     "build_module_label_map_for_tests",
-    "decode_json_object_or_fail_for_tests",
     "compute_dd_api_base_for_tests",
+    "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
     "http_execute_timeout_buffer_seconds_for_tests",
     "http_execute_timeout_seconds_for_tests",
     "http_max_time_seconds_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
+    "partition_unix_headers_for_tests",
+    "record_sync_extension_repo_owner_or_fail_for_tests",
     "render_export_bzl_for_tests",
     "http_retry_attempts_for_tests",
     "http_retry_delay_seconds_for_tests",
@@ -141,6 +143,32 @@ def _http_execute_timeout_seconds_test(ctx):
     asserts.true(env, http_execute_timeout_seconds_for_tests > (http_retry_attempts_for_tests * http_max_time_seconds_for_tests))
     return unittest.end(env)
 
+def _partition_unix_headers_test(ctx):
+    """Validate Unix header partitioning keeps DD-API-KEY out of public headers."""
+    env = unittest.begin(ctx)
+    out = partition_unix_headers_for_tests({
+        "DD-API-KEY": "super-secret",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    })
+    asserts.true(env, out.get("has_dd_api_key"))
+    asserts.equals(env, "super-secret", out.get("dd_api_key"))
+    public_headers = out.get("public_headers") or {}
+    asserts.equals(env, None, public_headers.get("DD-API-KEY"))
+    asserts.equals(env, "application/json", public_headers.get("Accept"))
+    asserts.equals(env, "application/json", public_headers.get("Content-Type"))
+    return unittest.end(env)
+
+def _record_sync_extension_repo_owner_success_test(ctx):
+    """Validate sync-extension repo owner tracking success path."""
+    env = unittest.begin(ctx)
+    seen = {}
+    record_sync_extension_repo_owner_or_fail_for_tests(seen, "repo_a", "module_a")
+    record_sync_extension_repo_owner_or_fail_for_tests(seen, "repo_b", "module_a")
+    asserts.equals(env, "module_a", seen.get("repo_a"))
+    asserts.equals(env, "module_a", seen.get("repo_b"))
+    return unittest.end(env)
+
 def _decode_json_object_valid_test(ctx):
     """Validate JSON decode helper success path."""
     env = unittest.begin(ctx)
@@ -168,6 +196,23 @@ def _decode_json_object_array_target_impl(_ctx):
     decode_json_object_or_fail_for_tests("[]", "settings.json")
     return []
 
+def _decode_json_object_malformed_object_target_impl(_ctx):
+    """Target expected to fail on deterministic malformed object-like JSON."""
+    decode_json_object_or_fail_for_tests("{bad", "settings.json")
+    return []
+
+def _decode_json_object_malformed_array_target_impl(_ctx):
+    """Target expected to fail on deterministic malformed array-like JSON."""
+    decode_json_object_or_fail_for_tests("[bad", "settings.json")
+    return []
+
+def _record_sync_extension_repo_owner_duplicate_target_impl(_ctx):
+    """Target expected to fail when sync extension repo names collide."""
+    seen = {}
+    record_sync_extension_repo_owner_or_fail_for_tests(seen, "repo_a", "module_a")
+    record_sync_extension_repo_owner_or_fail_for_tests(seen, "repo_a", "module_b")
+    return []
+
 decode_json_object_empty_target_rule = rule(
     implementation = _decode_json_object_empty_target_impl,
 )
@@ -176,6 +221,15 @@ decode_json_object_non_json_target_rule = rule(
 )
 decode_json_object_array_target_rule = rule(
     implementation = _decode_json_object_array_target_impl,
+)
+decode_json_object_malformed_object_target_rule = rule(
+    implementation = _decode_json_object_malformed_object_target_impl,
+)
+decode_json_object_malformed_array_target_rule = rule(
+    implementation = _decode_json_object_malformed_array_target_impl,
+)
+record_sync_extension_repo_owner_duplicate_target_rule = rule(
+    implementation = _record_sync_extension_repo_owner_duplicate_target_impl,
 )
 
 def _decode_json_object_empty_failure_test_impl(ctx):
@@ -196,6 +250,24 @@ def _decode_json_object_array_failure_test_impl(ctx):
     asserts.expect_failure(env, "settings.json response must be a JSON object")
     return analysistest.end(env)
 
+def _decode_json_object_malformed_object_failure_test_impl(ctx):
+    """Assert malformed object-like JSON gets actionable diagnostics."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response appears malformed JSON object")
+    return analysistest.end(env)
+
+def _decode_json_object_malformed_array_failure_test_impl(ctx):
+    """Assert malformed array-like JSON gets actionable diagnostics."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "settings.json response appears malformed JSON array")
+    return analysistest.end(env)
+
+def _record_sync_extension_repo_owner_duplicate_failure_test_impl(ctx):
+    """Assert sync extension duplicate-repo failure remains actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "duplicate repository name 'repo_a' declared")
+    return analysistest.end(env)
+
 dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
 resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
@@ -204,6 +276,8 @@ parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
+partition_unix_headers_test = unittest.make(_partition_unix_headers_test)
+record_sync_extension_repo_owner_success_test = unittest.make(_record_sync_extension_repo_owner_success_test)
 decode_json_object_valid_test = unittest.make(_decode_json_object_valid_test)
 decode_json_object_empty_failure_test = analysistest.make(
     _decode_json_object_empty_failure_test_impl,
@@ -215,5 +289,17 @@ decode_json_object_non_json_failure_test = analysistest.make(
 )
 decode_json_object_array_failure_test = analysistest.make(
     _decode_json_object_array_failure_test_impl,
+    expect_failure = True,
+)
+decode_json_object_malformed_object_failure_test = analysistest.make(
+    _decode_json_object_malformed_object_failure_test_impl,
+    expect_failure = True,
+)
+decode_json_object_malformed_array_failure_test = analysistest.make(
+    _decode_json_object_malformed_array_failure_test_impl,
+    expect_failure = True,
+)
+record_sync_extension_repo_owner_duplicate_failure_test = analysistest.make(
+    _record_sync_extension_repo_owner_duplicate_failure_test_impl,
     expect_failure = True,
 )

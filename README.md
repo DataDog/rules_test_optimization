@@ -804,7 +804,13 @@ This starts a local mock HTTP server and uses the following test-only overrides:
 CI note: `.github/workflows/ci.yml` also runs a dedicated hermetic lane
 (`bazel-tests-hermetic`) on Linux with sandboxed execution and network blocking.
 This is intentional: it catches hidden host/network dependencies that can pass
-in normal local runs but fail in locked-down CI environments.
+in normal local runs but fail in locked-down CI environments. By policy, this
+lane is Linux-only for now; macOS/Windows remain covered by the normal
+`bazel-tests` matrix plus the mock-server integration harness.
+
+Reproducibility policy: this repository tracks both `.bazelversion` and
+`MODULE.bazel.lock` in git to reduce local/CI toolchain and module-resolution
+drift over time.
 Current PR CI gates `./bazelw test //tools/...` plus the mock-server integration
 harness on each OS; when changing targets outside `//tools/...`, run
 `./bazelw test //...` locally before opening the PR.

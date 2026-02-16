@@ -2115,9 +2115,15 @@ build_common_headers() {{
     -H "Datadog-Meta-Tracer-Version: $tracer_version"
     -H "Accept: application/json"
   )
-  if (( AGENTLESS == 1 )); then
-    COMMON_HDRS+=( -H "DD-API-KEY: $DD_API_KEY" )
+}}
+
+# Execute curl in agentless mode while sending DD-API-KEY via stdin (`-H @-`).
+# This avoids exposing raw credentials in process arguments.
+curl_agentless() {{
+  if [[ -z "${{DD_API_KEY:-}}" ]]; then
+    return 2
   fi
+  printf 'DD-API-KEY: %s\n' "$DD_API_KEY" | curl "$@" -H @-
 }}
 
 # Optional check: verify fetch-time API key fingerprint matches uploader API key.
@@ -2356,7 +2362,7 @@ upload_single_test() {{
         fi
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
+      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{TEST_URL}}" "${{COMMON_HDRS[@]}}" "${{ce_hdr[@]+${{ce_hdr[@]}}}}" -H "Content-Type: application/json" --data-binary @"${{payload_file}}" -o "$resp" -w "%{{http_code}}")
     else
       http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
@@ -2406,7 +2412,7 @@ upload_single_coverage() {{
         dbg "headers: multipart/form-data (event + coveragex)"
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
+      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${{CURL_RETRY_FLAGS[@]}}" \\
         -X POST "${{COV_URL}}" "${{COMMON_HDRS[@]}}" \\
         -F "event=@${{eventjson}};type=application/json;filename=fileevent.json" \\
         -F "coveragex=@${{file}};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{{http_code}}")

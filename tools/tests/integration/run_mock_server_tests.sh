@@ -1997,6 +1997,37 @@ if [[ -z "$RESOLVED_UPLOADER_SCRIPT_PATH" ]]; then
 fi
 UPLOADER_SCRIPT_PATH="$RESOLVED_UPLOADER_SCRIPT_PATH"
 
+# Verify generated Bash uploader keeps DD-API-KEY out of argv by using stdin
+# header transport (`curl ... -H @-`).
+if [[ "$UPLOADER_SCRIPT_PATH" == *.sh ]]; then
+  UPLOADER_SCRIPT_PATH="$UPLOADER_SCRIPT_PATH" "$PYTHON" - <<'PY'
+import os
+import sys
+
+path = os.environ["UPLOADER_SCRIPT_PATH"]
+with open(path, "r", encoding="utf-8") as handle:
+    content = handle.read()
+
+required = [
+    "curl_agentless() {",
+    "curl \"$@\" -H @-",
+]
+for snippet in required:
+    if snippet not in content:
+        print(f"error: generated uploader script missing expected hardening snippet: {snippet!r}")
+        sys.exit(1)
+
+if "DD-API-KEY:" not in content:
+    print("error: generated uploader script missing DD-API-KEY stdin-header materialization")
+    sys.exit(1)
+
+forbidden = 'COMMON_HDRS+=( -H "DD-API-KEY: $DD_API_KEY" )'
+if forbidden in content:
+    print("error: generated uploader script still adds DD-API-KEY directly to COMMON_HDRS")
+    sys.exit(1)
+PY
+fi
+
 MANIFEST_UPLOADER_KIND=""
 MANIFEST_UPLOADER=""
 if [[ "$UPLOADER_SCRIPT_PATH" == *.sh ]]; then
