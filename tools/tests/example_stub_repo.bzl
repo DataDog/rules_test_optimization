@@ -17,6 +17,13 @@ def _example_stub_repo_impl(ctx):
     ctx.file(test_management, '{"data": {"attributes": {"modules": {}}}}\n')
     ctx.file(context, "{}\n")
 
+    service_keys = list(ctx.attr.service_keys or [])
+    if not service_keys:
+        service_keys = ["go_service", "ruby_service"]
+    mapping_lines = []
+    for key in service_keys:
+        mapping_lines.append('    "%s": topt_data,\n' % key)
+
     export = (
         "topt_data = {\n" +
         '    "repo_name": "%s",\n' % ctx.attr.repo_alias +
@@ -32,8 +39,7 @@ def _example_stub_repo_impl(ctx):
         '    },\n' +
         "}\n\n" +
         "topt_data_by_service = {\n" +
-        '    "go_service": topt_data,\n' +
-        '    "ruby_service": topt_data,\n' +
+        "".join(mapping_lines) +
         "}\n"
     )
     ctx.file("export.bzl", export)
@@ -57,6 +63,7 @@ example_stub_repo = repository_rule(
     implementation = _example_stub_repo_impl,
     attrs = {
         "repo_alias": attr.string(mandatory = True),
+        "service_keys": attr.string_list(),
     },
 )
 
@@ -66,6 +73,7 @@ def _example_stub_repo_extension_impl(module_ctx):
             example_stub_repo(
                 name = call.name,
                 repo_alias = call.name,
+                service_keys = list(call.service_keys or []),
             )
 
 example_stub_repo_extension = module_extension(
@@ -73,6 +81,7 @@ example_stub_repo_extension = module_extension(
     tag_classes = {
         "example_stub_repo": tag_class(attrs = {
             "name": attr.string(mandatory = True),
+            "service_keys": attr.string_list(),
         }),
     },
 )

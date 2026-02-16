@@ -22,6 +22,11 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/...
 
+      - name: Build examples (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./bazelw build //examples/...
+
       # Exercises the uploader end-to-end against a local mock server.
       - name: Run mock server integration tests (Linux/macOS)
         if: runner.os != 'Windows'
