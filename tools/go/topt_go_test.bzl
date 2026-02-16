@@ -30,6 +30,9 @@ Maintenance notes:
 - Avoid hardcoding labels outside values exported by `@<repo>//:export.bzl`.
 - Preserve compatibility with both single-service (`topt_data`) and
   multi-service (`topt_data_by_service`) exports.
+- Keep macro contracts aligned with `//tools/tests/go:test_macro.bzl`, which
+  validates env/data wiring, default/custom rundir behavior, and
+  multi-service service-key resolution.
 """
 
 load("//tools/go:topt_go_infer.bzl", "topt_go_payloads_selector")

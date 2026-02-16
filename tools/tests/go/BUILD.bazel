@@ -1,0 +1,100 @@
+load(
+    "//tools/tests/go:test_macro.bzl",
+    "go_macro_multi_service_target",
+    "go_macro_multi_service_wiring_test",
+    "go_macro_single_service_target",
+    "go_macro_single_service_wiring_test",
+    "resolve_topt_service_key_missing_failure_test",
+    "resolve_topt_service_key_missing_target_rule",
+    "resolve_topt_service_key_unknown_failure_test",
+    "resolve_topt_service_key_unknown_target_rule",
+)
+load(
+    "//tools/tests/go:test_selection_utils.bzl",
+    "normalize_user_data_handles_none_test",
+    "resolve_topt_service_key_prefers_exact_then_sanitized_test",
+    "select_module_group_name_test",
+    "service_mapping_entries_filters_non_service_test",
+)
+
+# Go-specific Starlark tests for orchestration selection and macro wiring.
+service_mapping_entries_filters_non_service_test(
+    name = "service_mapping_entries_filters_non_service_test",
+    size = "small",
+    timeout = "short",
+)
+
+resolve_topt_service_key_prefers_exact_then_sanitized_test(
+    name = "resolve_topt_service_key_prefers_exact_then_sanitized_test",
+    size = "small",
+    timeout = "short",
+)
+
+select_module_group_name_test(
+    name = "select_module_group_name_test",
+    size = "small",
+    timeout = "short",
+)
+
+normalize_user_data_handles_none_test(
+    name = "normalize_user_data_handles_none_test",
+    size = "small",
+    timeout = "short",
+)
+
+# Macro analysis tests use manual target-under-test labels to avoid running the
+# synthetic capture targets directly. Only the analysistest wrappers belong in
+# the suite below.
+go_macro_single_service_target(
+    name = "go_macro_single_service_target",
+    tags = ["manual"],
+)
+
+go_macro_single_service_wiring_test(
+    name = "go_macro_single_service_wiring_test",
+    target_under_test = ":go_macro_single_service_target",
+)
+
+go_macro_multi_service_target(
+    name = "go_macro_multi_service_target",
+    tags = ["manual"],
+)
+
+go_macro_multi_service_wiring_test(
+    name = "go_macro_multi_service_wiring_test",
+    target_under_test = ":go_macro_multi_service_target",
+)
+
+resolve_topt_service_key_missing_target_rule(
+    name = "resolve_topt_service_key_missing_target",
+    tags = ["manual"],
+)
+
+resolve_topt_service_key_missing_failure_test(
+    name = "resolve_topt_service_key_missing_failure_test",
+    target_under_test = ":resolve_topt_service_key_missing_target",
+)
+
+resolve_topt_service_key_unknown_target_rule(
+    name = "resolve_topt_service_key_unknown_target",
+    tags = ["manual"],
+)
+
+resolve_topt_service_key_unknown_failure_test(
+    name = "resolve_topt_service_key_unknown_failure_test",
+    target_under_test = ":resolve_topt_service_key_unknown_target",
+)
+
+test_suite(
+    name = "tests",
+    tests = [
+        ":service_mapping_entries_filters_non_service_test",
+        ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
+        ":select_module_group_name_test",
+        ":normalize_user_data_handles_none_test",
+        ":go_macro_single_service_wiring_test",
+        ":go_macro_multi_service_wiring_test",
+        ":resolve_topt_service_key_missing_failure_test",
+        ":resolve_topt_service_key_unknown_failure_test",
+    ],
+)

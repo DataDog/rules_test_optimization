@@ -1,4 +1,4 @@
-# Unit tests for Go macro/rule selection helpers.
+"""Unit tests for Go-specific selection and macro helper functions."""
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tools/go:topt_go_infer.bzl",

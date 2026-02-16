@@ -482,7 +482,7 @@ def _uploader_impl(ctx):
     # 4) return DefaultInfo exposing the correct executable for the target OS
     #
     # Keep template substitutions explicit and centralized. If new placeholders
-    # are introduced, add tests in `tools/tests/test_uploader_utils.bzl` to
+    # are introduced, add tests in `tools/tests/core/test_uploader_utils.bzl` to
     # lock behavior and avoid cross-platform drift.
     # ------------------------------------------------------------------
     # Phase 1: Read rule attributes and discover optional runfile artifacts.

@@ -1,5 +1,5 @@
 load(
-    "//tools/tests:test_common_utils.bzl",
+    "//tools/tests/core:test_common_utils.bzl",
     "dedup_keys_test",
     "sanitize_label_fragment_test",
     "validate_api_key_missing_failure_test",
@@ -18,14 +18,7 @@ load(
     "validate_service_name_whitespace_target_rule",
 )
 load(
-    "//tools/tests:test_go_selection_utils.bzl",
-    "normalize_user_data_handles_none_test",
-    "resolve_topt_service_key_prefers_exact_then_sanitized_test",
-    "select_module_group_name_test",
-    "service_mapping_entries_filters_non_service_test",
-)
-load(
-    "//tools/tests:test_multi_sync_utils.bzl",
+    "//tools/tests/core:test_multi_sync_utils.bzl",
     "compute_repo_names_test",
     "compute_service_keys_dedups_collisions_test",
     "record_multi_repo_owner_duplicate_failure_test",
@@ -36,7 +29,7 @@ load(
     "render_multi_aggregate_bzl_mismatch_target_rule",
 )
 load(
-    "//tools/tests:test_sync_utils.bzl",
+    "//tools/tests/core:test_sync_utils.bzl",
     "decode_json_object_array_failure_test",
     "decode_json_object_array_target_rule",
     "decode_json_object_empty_failure_test",
@@ -63,7 +56,7 @@ load(
     "resolve_dd_api_base_test",
 )
 load(
-    "//tools/tests:test_uploader_utils.bzl",
+    "//tools/tests/core:test_uploader_utils.bzl",
     "bash_curl_retry_flags_test",
     "codeowners_compile_regex_edge_cases_test",
     "codeowners_compile_regex_test",
@@ -211,30 +204,6 @@ validate_service_name_too_long_target_rule(
 validate_service_name_too_long_failure_test(
     name = "validate_service_name_too_long_failure_test",
     target_under_test = ":validate_service_name_too_long_target",
-)
-
-service_mapping_entries_filters_non_service_test(
-    name = "service_mapping_entries_filters_non_service_test",
-    size = "small",
-    timeout = "short",
-)
-
-resolve_topt_service_key_prefers_exact_then_sanitized_test(
-    name = "resolve_topt_service_key_prefers_exact_then_sanitized_test",
-    size = "small",
-    timeout = "short",
-)
-
-select_module_group_name_test(
-    name = "select_module_group_name_test",
-    size = "small",
-    timeout = "short",
-)
-
-normalize_user_data_handles_none_test(
-    name = "normalize_user_data_handles_none_test",
-    size = "small",
-    timeout = "short",
 )
 
 compute_service_keys_dedups_collisions_test(
@@ -473,6 +442,8 @@ codeowners_lookup_order_empty_script_dir_test(
     timeout = "short",
 )
 
+# Keep `//tools/tests:tests` as the stable CI entrypoint while delegating
+# language-specific coverage to subpackages (for now: `//tools/tests/go:tests`).
 test_suite(
     name = "tests",
     tests = [
@@ -494,10 +465,7 @@ test_suite(
         ":validate_service_name_missing_failure_test",
         ":validate_service_name_whitespace_failure_test",
         ":validate_service_name_too_long_failure_test",
-        ":service_mapping_entries_filters_non_service_test",
-        ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
-        ":select_module_group_name_test",
-        ":normalize_user_data_handles_none_test",
+        "//tools/tests/go:tests",
         ":compute_service_keys_dedups_collisions_test",
         ":compute_repo_names_test",
         ":record_multi_repo_owner_success_test",
