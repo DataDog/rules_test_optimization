@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// Demonstrates reading test optimization files using TEST_OPTIMIZATION_MANIFEST_FILE
+// Demonstrates reading test optimization files using DD_TEST_OPTIMIZATION_MANIFEST_FILE.
 func TestMain(m *testing.M) {
 	// Print all environment variables for debugging
 	fmt.Println("=== ENVIRONMENT VARIABLES ===")
@@ -22,9 +22,9 @@ func TestMain(m *testing.M) {
 	fmt.Println()
 
 	// Get the manifest file path and derive the working directory
-	manifestRloc := os.Getenv("TEST_OPTIMIZATION_MANIFEST_FILE")
+	manifestRloc := os.Getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
 	if manifestRloc == "" {
-		fmt.Println("TEST_OPTIMIZATION_MANIFEST_FILE not set")
+		fmt.Println("DD_TEST_OPTIMIZATION_MANIFEST_FILE not set")
 		os.Exit(m.Run())
 	}
 
@@ -34,15 +34,19 @@ func TestMain(m *testing.M) {
 	fmt.Println("Test optimization directory:", toptDir)
 	fmt.Println()
 
-	// Read the test optimization files from the directory
-	files := []string{"settings.json", "known_tests.json", "test_management.json"}
-	for _, filename := range files {
-		path := filepath.Join(toptDir, filename)
+	// Read synced HTTP metadata from cache/http under the manifest directory.
+	files := []string{
+		filepath.Join("cache", "http", "settings.json"),
+		filepath.Join("cache", "http", "known_tests.json"),
+		filepath.Join("cache", "http", "test_management.json"),
+	}
+	for _, relPath := range files {
+		path := filepath.Join(toptDir, relPath)
 		fmt.Println("--------------------------------")
-		fmt.Println(filename)
+		fmt.Println(relPath)
 		content, err := os.ReadFile(path)
 		if err != nil {
-			fmt.Printf("read %s: %v\n", filename, err)
+			fmt.Printf("read %s: %v\n", relPath, err)
 			continue
 		}
 		fmt.Println(string(content))

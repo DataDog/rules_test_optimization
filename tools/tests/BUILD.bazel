@@ -59,6 +59,7 @@ load(
     "record_sync_extension_repo_owner_duplicate_failure_test",
     "record_sync_extension_repo_owner_duplicate_target_rule",
     "record_sync_extension_repo_owner_success_test",
+    "render_module_runfiles_bzl_respects_manifest_root_test",
     "resolve_dd_api_base_test",
 )
 load(
@@ -89,7 +90,7 @@ dd_site_normalization_test(
     timeout = "short",
 )
 
-# Validate DD_TOPT_API_BASE override behavior.
+# Validate DD_TEST_OPTIMIZATION_API_BASE override behavior.
 resolve_dd_api_base_test(
     name = "resolve_dd_api_base_test",
     size = "small",
@@ -282,6 +283,12 @@ record_multi_repo_owner_duplicate_failure_test(
 
 http_execute_timeout_seconds_test(
     name = "http_execute_timeout_seconds_test",
+    size = "small",
+    timeout = "short",
+)
+
+render_module_runfiles_bzl_respects_manifest_root_test(
+    name = "render_module_runfiles_bzl_respects_manifest_root_test",
     size = "small",
     timeout = "short",
 )
@@ -498,6 +505,7 @@ test_suite(
         ":render_multi_aggregate_bzl_mismatch_failure_test",
         ":record_multi_repo_owner_duplicate_failure_test",
         ":http_execute_timeout_seconds_test",
+        ":render_module_runfiles_bzl_respects_manifest_root_test",
         ":partition_unix_headers_test",
         ":record_sync_extension_repo_owner_success_test",
         ":decode_json_object_valid_test",

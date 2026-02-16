@@ -33,7 +33,7 @@ Developer navigation:
 # - Supports sharded tests (shard_N_of_M/) and retries (run_N_of_M/)
 # - Uploads test payloads to CI Test Cycle intake
 # - Uploads coverage payloads to Code Coverage intake
-# - Deletes payloads after successful upload (unless DD_TOPT_KEEP_PAYLOADS=1)
+# - Deletes payloads after successful upload (unless DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1)
 # - Uses workspace-level lock to prevent concurrent uploaders
 # - Enriches payloads with context.json metadata
 
@@ -562,7 +562,7 @@ set -euo pipefail
 # Logging functions (defined first so other functions can use them)
 # DEBUG is set later, so we use a function that checks the variable at runtime
 log() {{ echo "[dd-uploader] $1"; }}
-DEBUG_BOOTSTRAP=$(echo "${{DD_TOPT_DEBUG:-0}}" | tr '[:upper:]' '[:lower:]')
+DEBUG_BOOTSTRAP=$(echo "${{DD_TEST_OPTIMIZATION_DEBUG:-0}}" | tr '[:upper:]' '[:lower:]')
 dbg() {{
     local dbg_val="${{DEBUG:-$DEBUG_BOOTSTRAP}}"
     dbg_val=$(echo "$dbg_val" | tr '[:upper:]' '[:lower:]')
@@ -874,25 +874,25 @@ fnv1a_32() {{
 }}
 
 # Rule attributes (can be overridden via environment variables)
-QUIESCENT_SEC=${{DD_TOPT_QUIESCENT_SEC:-{quiescent_sec}}}
-MAX_WAIT_SEC=${{DD_TOPT_MAX_WAIT_SEC:-{max_wait_sec}}}
+QUIESCENT_SEC=${{DD_TEST_OPTIMIZATION_QUIESCENT_SEC:-{quiescent_sec}}}
+MAX_WAIT_SEC=${{DD_TEST_OPTIMIZATION_MAX_WAIT_SEC:-{max_wait_sec}}}
 FAIL_ON_ERROR=$(normalize_bool "{fail_on_error}")
-KEEP_PAYLOADS=$(normalize_bool "${{DD_TOPT_KEEP_PAYLOADS:-{keep_payloads}}}")
-FILTER_PREFIX=$(normalize_bool "${{DD_TOPT_FILTER_PREFIX:-{filter_prefix}}}")
-DEBUG=$(normalize_bool "${{DD_TOPT_DEBUG:-{debug}}}")
-GZIP_PAYLOADS=$(normalize_bool "${{DD_TOPT_GZIP:-{gzip_payloads}}}")
+KEEP_PAYLOADS=$(normalize_bool "${{DD_TEST_OPTIMIZATION_KEEP_PAYLOADS:-{keep_payloads}}}")
+FILTER_PREFIX=$(normalize_bool "${{DD_TEST_OPTIMIZATION_FILTER_PREFIX:-{filter_prefix}}}")
+DEBUG=$(normalize_bool "${{DD_TEST_OPTIMIZATION_DEBUG:-{debug}}}")
+GZIP_PAYLOADS=$(normalize_bool "${{DD_TEST_OPTIMIZATION_GZIP:-{gzip_payloads}}}")
 RULES_VERSION="{rules_version}"
 RUNTIME_ID=$(generate_uuid)
 
 # Validate numeric environment variables
 validate_numeric "QUIESCENT_SEC" "$QUIESCENT_SEC"
 validate_numeric "MAX_WAIT_SEC" "$MAX_WAIT_SEC"
-if [[ -n "${{DD_TOPT_MAX_DEPTH:-}}" ]]; then
-    validate_numeric "DD_TOPT_MAX_DEPTH" "$DD_TOPT_MAX_DEPTH"
+if [[ -n "${{DD_TEST_OPTIMIZATION_MAX_DEPTH:-}}" ]]; then
+    validate_numeric "DD_TEST_OPTIMIZATION_MAX_DEPTH" "$DD_TEST_OPTIMIZATION_MAX_DEPTH"
 fi
 if [[ "$GZIP_PAYLOADS" == "1" ]]; then
     if ! command -v gzip >/dev/null 2>&1; then
-        log "warning: DD_TOPT_GZIP=1 but gzip not found; disabling gzip"
+        log "warning: DD_TEST_OPTIMIZATION_GZIP=1 but gzip not found; disabling gzip"
         GZIP_PAYLOADS=0
     fi
 fi
@@ -1094,8 +1094,8 @@ else
 fi
 
 # Find all test.outputs directories
-# Supports DD_TOPT_MAX_DEPTH to limit search depth for large testlogs trees
-MAX_DEPTH=${{DD_TOPT_MAX_DEPTH:-0}}
+# Supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth for large testlogs trees
+MAX_DEPTH=${{DD_TEST_OPTIMIZATION_MAX_DEPTH:-0}}
 find_test_outputs() {{
     local depth_args=()
     if (( MAX_DEPTH > 0 )); then
@@ -1109,7 +1109,7 @@ find_test_outputs() {{
 # Note: Must be called AFTER cache_test_outputs to use the cache
 check_depth_warning() {{
     if [[ -z "$TEST_OUTPUTS_CACHE" ]] && (( MAX_DEPTH > 0 )); then
-        log "warning: DD_TOPT_MAX_DEPTH=$MAX_DEPTH may be too shallow"
+        log "warning: DD_TEST_OPTIMIZATION_MAX_DEPTH=$MAX_DEPTH may be too shallow"
         log "hint: typical test.outputs paths require depth 3-5; try increasing or removing the limit"
     fi
 }}
@@ -1123,13 +1123,13 @@ if stat -c %Y / >/dev/null 2>&1; then
 fi
 dbg "stat detection: STAT_FLAVOR=$STAT_FLAVOR (uname=$(uname -s))"
 
-# Get latest mtime across tests/ and coverage/ subdirs in all test.outputs directories
+# Get latest mtime across payloads/tests and payloads/coverage in test.outputs.
 # Note: Only scans payload directories, not all files under test.outputs
 latest_mtime_all() {{
     local max_mtime=0
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        for subdir in "tests" "coverage"; do
+        for subdir in "payloads/tests" "payloads/coverage"; do
             local dir="$outputs_dir/$subdir"
             [[ -d "$dir" ]] || continue
             local mt
@@ -1147,13 +1147,13 @@ latest_mtime_all() {{
     echo "$max_mtime"
 }}
 
-# Count total payload files across all test.outputs (only tests/ and coverage/ subdirs)
+# Count total payload files across all test.outputs payload directories.
 count_payload_files() {{
     local count=0
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        local tests_dir="$outputs_dir/tests"
-        local cov_dir="$outputs_dir/coverage"
+        local tests_dir="$outputs_dir/payloads/tests"
+        local cov_dir="$outputs_dir/payloads/coverage"
         if [[ -d "$tests_dir" ]]; then
             local tests_count
             tests_count=$(find "$tests_dir" -name "*.json" 2>/dev/null | wc -l)
@@ -1207,7 +1207,7 @@ while true; do
         if (( MAX_WAIT_SEC == 0 )); then
             if tests_executed; then
                 log "warning: tests ran but no payload files found"
-                log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
                 if [[ "$FAIL_ON_ERROR" == "1" ]]; then
                     log "error: FAIL_ON_ERROR is set; failing due to missing payloads"
                     exit 1
@@ -1220,7 +1220,7 @@ while true; do
         if (( elapsed > MAX_WAIT_SEC )); then
             if tests_executed; then
                 log "warning: tests ran but no payload files found"
-                log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
                 if [[ "$FAIL_ON_ERROR" == "1" ]]; then
                     log "error: FAIL_ON_ERROR is set; failing due to missing payloads"
                     exit 1
@@ -1256,7 +1256,7 @@ done
 
 # Build endpoints
 DD_SITE="${{DD_SITE:-datadoghq.com}}"
-INTAKE_BASE="${{DD_TOPT_INTAKE_BASE:-}}"
+INTAKE_BASE="${{DD_TEST_OPTIMIZATION_INTAKE_BASE:-}}"
 if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
   # Agentless mode: direct public intake URLs (or explicit override base).
   AGENTLESS=1
@@ -1265,7 +1265,7 @@ if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
     BASE="${{INTAKE_BASE%/}}"
     TEST_URL="${{BASE}}/api/v2/citestcycle"
     COV_URL="${{BASE}}/api/v2/citestcov"
-    dbg "DD_TOPT_INTAKE_BASE override active: $BASE"
+    dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE override active: $BASE"
   else
     TEST_URL="https://citestcycle-intake.${{DD_SITE}}/api/v2/citestcycle"
     COV_URL="https://citestcov-intake.${{DD_SITE}}/api/v2/citestcov"
@@ -1276,7 +1276,7 @@ else
   TEST_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcycle"
   COV_URL="${{DD_TRACE_AGENT_URL}}/evp_proxy/v2/api/v2/citestcov"
   if [[ -n "$INTAKE_BASE" ]]; then
-    dbg "DD_TOPT_INTAKE_BASE ignored in EVP mode"
+    dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE ignored in EVP mode"
   fi
 fi
 dbg "mode: AGENTLESS=$AGENTLESS DD_SITE=$DD_SITE"
@@ -1858,14 +1858,14 @@ init_codeowners() {{
     CODEOWNERS_CONTEXT_WORKSPACE=$(jq -r '."ci.workspace_path" // empty' "$CONTEXT_JSON" 2>/dev/null || true)
   fi
 
-  local explicit_codeowners="${{DD_TOPT_CODEOWNERS_FILE:-}}"
+  local explicit_codeowners="${{DD_TEST_OPTIMIZATION_CODEOWNERS_FILE:-}}"
   if [[ -n "$explicit_codeowners" ]]; then
     [[ "$DEBUG" == "1" ]] && dbg "codeowners: explicit path candidate '$explicit_codeowners'"
     if [[ -f "$explicit_codeowners" && -r "$explicit_codeowners" ]]; then
       CODEOWNERS_FILE="$explicit_codeowners"
       dbg "codeowners: using explicit CODEOWNERS file '$CODEOWNERS_FILE'"
     else
-      dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicit_codeowners' (falling back to discovery)"
+      dbg "codeowners: DD_TEST_OPTIMIZATION_CODEOWNERS_FILE is set but not readable: '$explicit_codeowners' (falling back to discovery)"
     fi
   fi
 
@@ -2444,7 +2444,7 @@ upload_all_tests() {{
     # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        local tests_dir="$outputs_dir/tests"
+        local tests_dir="$outputs_dir/payloads/tests"
         [[ -d "$tests_dir" ]] || continue
 
         for f in "$tests_dir"/*.json; do
@@ -2484,7 +2484,7 @@ upload_all_coverage() {{
     # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        local cov_dir="$outputs_dir/coverage"
+        local cov_dir="$outputs_dir/payloads/coverage"
         [[ -d "$cov_dir" ]] || continue
 
         for f in "$cov_dir"/*.json; do
@@ -2728,8 +2728,8 @@ function Resolve-ArtifactPath {{
 # Logging functions (defined early so other functions can use them)
 # Note: $Debug is set later, so Dbg checks the variable at runtime
 $script:DebugMode = $false  # Will be set properly after Normalize-Bool is defined
-if ($env:DD_TOPT_DEBUG) {{
-    switch ($env:DD_TOPT_DEBUG.ToLower()) {{
+if ($env:DD_TEST_OPTIMIZATION_DEBUG) {{
+    switch ($env:DD_TEST_OPTIMIZATION_DEBUG.ToLower()) {{
         {{ $_ -in '1', 'true', 'yes' }} {{ $script:DebugMode = $true }}
     }}
 }}
@@ -2925,9 +2925,9 @@ function Get-Fnv1a32Hex([string]$value) {{
 }}
 
 # Rule attributes (can be overridden via environment variables)
-$QuiescentSec = if ($env:DD_TOPT_QUIESCENT_SEC) {{ $env:DD_TOPT_QUIESCENT_SEC }} else {{ "{quiescent_sec}" }}
-$MaxWaitSec = if ($env:DD_TOPT_MAX_WAIT_SEC) {{ $env:DD_TOPT_MAX_WAIT_SEC }} else {{ "{max_wait_sec}" }}
-$MaxDepth = if ($env:DD_TOPT_MAX_DEPTH) {{ $env:DD_TOPT_MAX_DEPTH }} else {{ "0" }}
+$QuiescentSec = if ($env:DD_TEST_OPTIMIZATION_QUIESCENT_SEC) {{ $env:DD_TEST_OPTIMIZATION_QUIESCENT_SEC }} else {{ "{quiescent_sec}" }}
+$MaxWaitSec = if ($env:DD_TEST_OPTIMIZATION_MAX_WAIT_SEC) {{ $env:DD_TEST_OPTIMIZATION_MAX_WAIT_SEC }} else {{ "{max_wait_sec}" }}
+$MaxDepth = if ($env:DD_TEST_OPTIMIZATION_MAX_DEPTH) {{ $env:DD_TEST_OPTIMIZATION_MAX_DEPTH }} else {{ "0" }}
 
 # Validate numeric values before conversion
 Validate-Numeric "QUIESCENT_SEC" $QuiescentSec
@@ -2939,10 +2939,10 @@ $MaxWaitSec = [int]$MaxWaitSec
 $MaxDepth = [int]$MaxDepth
 
 $FailOnError = Normalize-Bool "{fail_on_error}"
-$KeepPayloads = if ($env:DD_TOPT_KEEP_PAYLOADS) {{ Normalize-Bool $env:DD_TOPT_KEEP_PAYLOADS }} else {{ Normalize-Bool "{keep_payloads}" }}
-$FilterPrefix = if ($env:DD_TOPT_FILTER_PREFIX) {{ Normalize-Bool $env:DD_TOPT_FILTER_PREFIX }} else {{ Normalize-Bool "{filter_prefix}" }}
-$Debug = if ($env:DD_TOPT_DEBUG) { Normalize-Bool $env:DD_TOPT_DEBUG } else { Normalize-Bool "{debug}" }
-$GzipPayloads = if ($env:DD_TOPT_GZIP) {{ Normalize-Bool $env:DD_TOPT_GZIP }} else {{ Normalize-Bool "{gzip_payloads}" }}
+$KeepPayloads = if ($env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS) {{ Normalize-Bool $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS }} else {{ Normalize-Bool "{keep_payloads}" }}
+$FilterPrefix = if ($env:DD_TEST_OPTIMIZATION_FILTER_PREFIX) {{ Normalize-Bool $env:DD_TEST_OPTIMIZATION_FILTER_PREFIX }} else {{ Normalize-Bool "{filter_prefix}" }}
+$Debug = if ($env:DD_TEST_OPTIMIZATION_DEBUG) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_DEBUG } else { Normalize-Bool "{debug}" }
+$GzipPayloads = if ($env:DD_TEST_OPTIMIZATION_GZIP) {{ Normalize-Bool $env:DD_TEST_OPTIMIZATION_GZIP }} else {{ Normalize-Bool "{gzip_payloads}" }}
 
 # Now that $Debug is set, update the script-level debug mode for Dbg function
 $script:DebugMode = $Debug
@@ -3062,7 +3062,7 @@ if ($env:TESTLOGS_DIR) {{
     Dbg "auto-discovered TestlogsDir=$TestlogsDir"
 }}
 
-# Find all test.outputs directories (supports DD_TOPT_MAX_DEPTH to limit search depth)
+# Find all test.outputs directories (supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth)
 # Note: -Depth parameter requires PowerShell 7+; on older versions, depth limiting is ignored
 function Find-TestOutputs {{
     $params = @{{
@@ -3078,7 +3078,7 @@ function Find-TestOutputs {{
             $params['Depth'] = $MaxDepth
             Dbg "limiting search depth to $MaxDepth"
         }} else {{
-            Dbg "warning: DD_TOPT_MAX_DEPTH ignored (requires PowerShell 7+, have $($PSVersionTable.PSVersion))"
+            Dbg "warning: DD_TEST_OPTIMIZATION_MAX_DEPTH ignored (requires PowerShell 7+, have $($PSVersionTable.PSVersion))"
         }}
     }}
     Get-ChildItem @params
@@ -3093,7 +3093,7 @@ function Update-TestOutputsCache {{
 function Get-LatestMTimeAll {{
     $maxTime = [DateTime]::MinValue
     foreach ($outputsDir in $script:TestOutputsCache) {{
-        foreach ($subdir in @("tests", "coverage")) {{
+        foreach ($subdir in @("payloads/tests", "payloads/coverage")) {{
             $dir = Join-Path $outputsDir.FullName $subdir
             if (-not (Test-Path -LiteralPath $dir)) {{ continue }}
             $files = Get-ChildItem -Path $dir -Filter "*.json" -File -ErrorAction SilentlyContinue
@@ -3110,8 +3110,8 @@ function Get-LatestMTimeAll {{
 function Count-PayloadFiles {{
     $count = 0
     foreach ($outputsDir in $script:TestOutputsCache) {{
-        $testsDir = Join-Path $outputsDir.FullName "tests"
-        $covDir = Join-Path $outputsDir.FullName "coverage"
+        $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
+        $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
         if (Test-Path -LiteralPath $testsDir) {{
             $count += @(Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
         }}
@@ -3150,7 +3150,7 @@ while ($true) {{
         if ($MaxWaitSec -eq 0) {{
             if (Test-ExecutedTests) {{
                 Log "warning: tests ran but no payload files found"
-                Log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                Log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
                 if ($FailOnError) {{
                     Log "error: FailOnError is set; failing due to missing payloads"
                     Release-Lock
@@ -3165,7 +3165,7 @@ while ($true) {{
         if ($elapsed -gt $MaxWaitSec) {{
             if (Test-ExecutedTests) {{
                 Log "warning: tests ran but no payload files found"
-                Log "hint: check that TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
+                Log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
                 if ($FailOnError) {{
                     Log "error: FailOnError is set; failing due to missing payloads"
                     Release-Lock
@@ -3205,14 +3205,14 @@ while ($true) {{
 $Agentless = [string]::IsNullOrEmpty($env:DD_TRACE_AGENT_URL)
 $DD_Site = if ([string]::IsNullOrEmpty($env:DD_SITE)) {{ 'datadoghq.com' }} else {{ $env:DD_SITE }}
 # Allow tests/dev to override intake base without changing DD_SITE.
-$IntakeBase = $env:DD_TOPT_INTAKE_BASE
+$IntakeBase = $env:DD_TEST_OPTIMIZATION_INTAKE_BASE
 if ($Agentless) {{
   # Agentless mode posts directly to Datadog intake hosts.
   if (-not [string]::IsNullOrEmpty($IntakeBase)) {{
     $Base = $IntakeBase.TrimEnd('/')
     $TestUrl = "$Base/api/v2/citestcycle"
     $CovUrl = "$Base/api/v2/citestcov"
-    Dbg "DD_TOPT_INTAKE_BASE override active: $Base"
+    Dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE override active: $Base"
   }} else {{
     $TestUrl = "https://citestcycle-intake.$DD_Site/api/v2/citestcycle"
     $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
@@ -3221,7 +3221,7 @@ if ($Agentless) {{
   # EVP mode tunnels through agent endpoint and requires EVP subdomain headers.
   $TestUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcycle"
   $CovUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcov"
-  if (-not [string]::IsNullOrEmpty($IntakeBase)) {{ Dbg "DD_TOPT_INTAKE_BASE ignored in EVP mode" }}
+  if (-not [string]::IsNullOrEmpty($IntakeBase)) {{ Dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE ignored in EVP mode" }}
 }}
 Dbg "mode: Agentless=$Agentless Site=$DD_Site"
 Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl"
@@ -3706,14 +3706,14 @@ function Initialize-CodeOwnersRules {{
   }} else {{
     $workspace = (Get-Location).Path
   }}
-  $explicitCodeOwners = $env:DD_TOPT_CODEOWNERS_FILE
+  $explicitCodeOwners = $env:DD_TEST_OPTIMIZATION_CODEOWNERS_FILE
   if (-not [string]::IsNullOrEmpty($explicitCodeOwners)) {{
     Dbg "codeowners: explicit path candidate '$explicitCodeOwners'"
     if (Test-Path -LiteralPath $explicitCodeOwners -PathType Leaf) {{
       $script:CodeOwnersPath = $explicitCodeOwners
       Dbg "codeowners: using explicit CODEOWNERS file '$script:CodeOwnersPath'"
     }} else {{
-      Dbg "codeowners: DD_TOPT_CODEOWNERS_FILE is set but not readable: '$explicitCodeOwners' (falling back to discovery)"
+      Dbg "codeowners: DD_TEST_OPTIMIZATION_CODEOWNERS_FILE is set but not readable: '$explicitCodeOwners' (falling back to discovery)"
     }}
   }}
   $compatWorkspace = if ($script:ContextObj) {{ $script:ContextObj.'ci.workspace_path' }} else {{ $null }}
@@ -4218,7 +4218,7 @@ function Upload-AllTests {{
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {{
-        $testsDir = Join-Path $outputsDir.FullName "tests"
+        $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
         if (-not (Test-Path -LiteralPath $testsDir)) {{ continue }}
         $files = Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue
         foreach ($f in $files) {{
@@ -4249,7 +4249,7 @@ function Upload-AllCoverage {{
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {{
-        $covDir = Join-Path $outputsDir.FullName "coverage"
+        $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
         if (-not (Test-Path -LiteralPath $covDir)) {{ continue }}
         $files = Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue
         foreach ($f in $files) {{
@@ -4363,13 +4363,13 @@ dd_payload_uploader = rule(
     implementation = _uploader_impl,
     executable = True,  # Makes it runnable via `bazel run`
     attrs = {
-        "quiescent_sec": attr.int(default = 10, doc = "Seconds to wait for filesystem to settle before uploading (env: DD_TOPT_QUIESCENT_SEC)"),
-        "max_wait_sec": attr.int(default = 300, doc = "Maximum seconds to wait for payloads (env: DD_TOPT_MAX_WAIT_SEC). Set to 0 to skip waiting when no payloads are present."),
+        "quiescent_sec": attr.int(default = 10, doc = "Seconds to wait for filesystem to settle before uploading (env: DD_TEST_OPTIMIZATION_QUIESCENT_SEC)"),
+        "max_wait_sec": attr.int(default = 300, doc = "Maximum seconds to wait for payloads (env: DD_TEST_OPTIMIZATION_MAX_WAIT_SEC). Set to 0 to skip waiting when no payloads are present."),
         "fail_on_error": attr.bool(default = False, doc = "Exit with error when tests appear to have run but no payloads are found"),
         "debug": attr.bool(default = False, doc = "Enable debug logging"),
-        "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TOPT_KEEP_PAYLOADS)"),
-        "filter_prefix": attr.bool(default = False, doc = "Only upload files matching span_events_*.json or coverage_*.json (env: DD_TOPT_FILTER_PREFIX)"),
-        "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TOPT_GZIP)"),
+        "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TEST_OPTIMIZATION_KEEP_PAYLOADS)"),
+        "filter_prefix": attr.bool(default = False, doc = "Only upload files matching span_events_*.json or coverage_*.json (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
+        "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
         # Schema + validator bundled for best-effort payload validation
@@ -4382,7 +4382,8 @@ dd_payload_uploader = rule(
 Uploads CI Visibility test and coverage payloads to Datadog.
 
 This rule discovers all test.outputs directories in bazel-testlogs (created by
-TEST_UNDECLARED_OUTPUTS_DIR), waits for quiescence, and uploads payloads.
+TEST_UNDECLARED_OUTPUTS_DIR), reads payload JSONs from `payloads/tests` and
+`payloads/coverage`, waits for quiescence, and uploads payloads.
 
 Behavior model:
     1) Resolve payload roots:
@@ -4431,11 +4432,11 @@ Required environment variables for upload:
 
 Optional environment variables:
     TESTLOGS_DIR - Override testlogs directory (for non-standard setups)
-    DD_TOPT_INTAKE_BASE - Override intake base URL (agentless only, test/dev)
-    DD_TOPT_KEEP_PAYLOADS=1 - Retain payloads after upload
-    DD_TOPT_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json
-    DD_TOPT_MAX_WAIT_SEC - Override max wait time (0 skips waiting when no payloads are present)
-    DD_TOPT_QUIESCENT_SEC - Override quiescence wait time
-    DD_TOPT_MAX_DEPTH - Limit find depth for large testlogs trees
+    DD_TEST_OPTIMIZATION_INTAKE_BASE - Override intake base URL (agentless only, test/dev)
+    DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 - Retain payloads after upload
+    DD_TEST_OPTIMIZATION_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json
+    DD_TEST_OPTIMIZATION_MAX_WAIT_SEC - Override max wait time (0 skips waiting when no payloads are present)
+    DD_TEST_OPTIMIZATION_QUIESCENT_SEC - Override quiescence wait time
+    DD_TEST_OPTIMIZATION_MAX_DEPTH - Limit find depth for large testlogs trees
 """,
 )

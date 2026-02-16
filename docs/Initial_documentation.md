@@ -11,17 +11,17 @@ The steps are:
 
 1. **Module/repository sync**:  
    A module extension instantiates a repository rule that performs authenticated HTTP requests to Datadog (settings, known tests, and test‑management tests when enabled). It materializes JSON outputs under a configurable directory (default: `.testoptimization/`), writes a non‑secret `context.json`, and exposes public filegroups:
-   - `@<repo>//:test_optimization_files` (core bundle, includes `settings.json`)
+   - `@<repo>//:test_optimization_files` (core bundle, includes `cache/http/settings.json`)
    - `@<repo>//:test_optimization_context` (the `context.json` only)
-   - `@<repo>//:module_<sanitized>` (per‑module bundle: `settings.json` + that module’s known/test‑management files)
-   The sync also emits an `export.bzl` helper describing available module labels, the resolved `manifest_path`, and detected runtime/module hints for consumers. Per‑module targets expose canonical runfile names under `.testoptimization/` regardless of the physical `out_dir`.  
+   - `@<repo>//:module_<sanitized>` (per‑module bundle: `cache/http/settings.json` + that module’s known/test‑management files)
+   The sync also emits an `export.bzl` helper describing available module labels, the resolved `manifest_path`, and detected runtime/module hints for consumers. Per‑module targets expose canonical runfile names rooted at the manifest directory (`<out_dir>/...`, default `.testoptimization/...`) regardless of where split files are stored physically.  
    Notes:
    - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; it is normalized to `https://api.<site>`.
    - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
    Reference implementation: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
 
 2. **Test instrumentation**:
-   Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (e.g., through `TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to a writable path.
+   Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (for example through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to a writable path.
 
 3. **Payload reporting**:
    A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).
@@ -98,7 +98,7 @@ It also exports a mapping so macros can select a service by key without consumer
 
 ## Runtime uploads and hermetic tests
 
-Tests remain hermetic with network blocked. They write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. A single workspace-level uploader (via `bazel run`) then:
+Tests remain hermetic with network blocked. They write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. A single workspace-level uploader (via `bazel run`) then:
 
 - Discovers all `test.outputs/` directories in `bazel-testlogs/`,
 - Waits for filesystem quiescence,
@@ -125,7 +125,7 @@ flowchart TD
     A2 -->|POST Settings| D1[Datadog Settings API]
     A2 -->|POST Known Tests (if enabled)| D2[Known Tests API]
     A2 -->|POST Test Mgmt (if enabled)| D3[Test Management Tests API]
-    A2 --> A3[.testoptimization (default)\n settings.json\n manifest.txt\n known_tests.json\n (per-module targets expose canonical files)\n test_management.json\n (per-module targets expose canonical files)\n context.json]
+    A2 --> A3[.testoptimization (default)\n manifest.txt\n context.json\n cache/http/settings.json\n cache/http/known_tests.json\n (per-module targets expose canonical files)\n cache/http/test_management.json\n (per-module targets expose canonical files)]
     A2 --> A4[export.bzl + BUILD\n filegroups per module]
   end
 
@@ -142,7 +142,7 @@ flowchart TD
   %% Test execution: hermetic, offline
   subgraph T[Test Execution (Hermetic)]
     T1[Tests (instrumented)]
-    P1[bazel-testlogs/.../test.outputs/\n  tests/*.json\n  coverage/*.json]
+    P1[bazel-testlogs/.../test.outputs/\n  payloads/tests/*.json\n  payloads/coverage/*.json]
     T1 -->|read runfiles| A3
     T1 -->|write to TEST_UNDECLARED_OUTPUTS_DIR| P1
   end
@@ -173,11 +173,11 @@ Module/Repo Resolution
             |                |-- POST Test Mgmt (if enabled) --> (Test Mgmt Tests API)
             |                v
             |        .testoptimization/ (default out_dir)
-            |          - settings.json
             |          - manifest.txt
-            |          - known_tests.json (+ per-module)
-            |          - test_management.json (+ per-module)
             |          - context.json
+            |          - cache/http/settings.json
+            |          - cache/http/known_tests.json (+ per-module)
+            |          - cache/http/test_management.json (+ per-module)
             |        export.bzl + BUILD (filegroups)
             v
 Build Graph
@@ -187,7 +187,7 @@ Build Graph
 
 Test Execution (Hermetic)
   [tests (instrumented)] --read runfiles--> synced JSONs
-                         --write payloads--> TEST_UNDECLARED_OUTPUTS_DIR (-> bazel-testlogs/.../test.outputs/)
+                         --write payloads--> TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage} (-> bazel-testlogs/.../test.outputs/)
 
 Upload (via bazel run)
   [uploader rule] --enrich--> context.json

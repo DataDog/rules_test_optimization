@@ -525,7 +525,7 @@ def _resolve_dd_api_base(env_data, debug):
     if override:
         # Allow tests/dev to point sync requests at a mock server without changing DD_SITE.
         base = override.rstrip("/")
-        log_debug(debug, "http", "DD_TOPT_API_BASE override set: %s" % base)
+        log_debug(debug, "http", "DD_TEST_OPTIMIZATION_API_BASE override set: %s" % base)
         return base
     return _compute_dd_api_base(env_data.get("dd_site"))
 
@@ -551,7 +551,7 @@ def _decode_json_object_or_fail(content, context):
         fail(
             (
                 "test_optimization: %s response is not JSON (starts with: %s). " +
-                "Check DD_SITE/DD_TOPT_API_BASE, credentials, and endpoint routing."
+                "Check DD_SITE/DD_TEST_OPTIMIZATION_API_BASE, credentials, and endpoint routing."
             ) %
             (context, repr(sample)),
         )
@@ -661,6 +661,40 @@ def _render_export_bzl(repo_name, labels, set_literal, go_module_path, sanitized
         "}\n"
     )
 
+def _render_module_runfiles_bzl(manifest_root):
+    """Render helper rule exposing module payloads under manifest-rooted runfiles.
+
+    Maintainers: keep runfile keys rooted under `manifest_root` so custom
+    `out_dir` layouts remain consistent with `manifest_path`.
+    """
+    settings_rloc = "%s/cache/http/settings.json" % manifest_root
+    manifest_rloc = "%s/manifest.txt" % manifest_root
+    known_tests_rloc = "%s/cache/http/known_tests.json" % manifest_root
+    test_management_rloc = "%s/cache/http/test_management.json" % manifest_root
+    return (
+        "def _topt_module_files_impl(ctx):\n" +
+        "    syms = {}\n" +
+        ('    syms["%s"] = ctx.file.settings\n' % settings_rloc) +
+        ('    syms["%s"] = ctx.file.manifest\n' % manifest_rloc) +
+        "    kt = getattr(ctx.file, \"known_tests\", None)\n" +
+        "    if kt:\n" +
+        ('        syms["%s"] = kt\n' % known_tests_rloc) +
+        "    tm = getattr(ctx.file, \"test_management\", None)\n" +
+        "    if tm:\n" +
+        ('        syms["%s"] = tm\n' % test_management_rloc) +
+        "    return DefaultInfo(runfiles = ctx.runfiles(symlinks = syms))\n" +
+        "\n" +
+        "topt_module_files = rule(\n" +
+        "    implementation = _topt_module_files_impl,\n" +
+        "    attrs = {\n" +
+        "        \"settings\": attr.label(allow_single_file = True, mandatory = True),\n" +
+        "        \"manifest\": attr.label(allow_single_file = True, mandatory = True),\n" +
+        "        \"known_tests\": attr.label(allow_single_file = True),\n" +
+        "        \"test_management\": attr.label(allow_single_file = True),\n" +
+        "    },\n" +
+        ")\n"
+    )
+
 def _partition_unix_headers(headers):
     """Split public headers from DD-API-KEY for secure Unix curl transport."""
     public_headers = {}
@@ -746,9 +780,9 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             header_value = str(hv)
             if header_key.lower() == "dd-api-key":
                 # Keep API keys out of generated script files; inject at execute-time only.
-                ps_env["DD_TOPT_API_KEY"] = header_value
-                lines.append("$apiKey = $env:DD_TOPT_API_KEY")
-                lines.append("if ([string]::IsNullOrEmpty($apiKey)) { Write-Error 'missing DD_TOPT_API_KEY for DD-API-KEY header'; exit 2 }")
+                ps_env["DD_TEST_OPTIMIZATION_API_KEY"] = header_value
+                lines.append("$apiKey = $env:DD_TEST_OPTIMIZATION_API_KEY")
+                lines.append("if ([string]::IsNullOrEmpty($apiKey)) { Write-Error 'missing DD_TEST_OPTIMIZATION_API_KEY for DD-API-KEY header'; exit 2 }")
                 lines.append("$Headers['%s'] = $apiKey" % header_key.replace("'", "''"))
             else:
                 lines.append("$Headers['%s'] = '%s'" % (header_key.replace("'", "''"), header_value.replace("'", "''")))
@@ -805,10 +839,10 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             unix_env = {}
             for env_key, env_value in ctx.os.environ.items():
                 unix_env[env_key] = env_value
-            unix_env["DD_TOPT_API_KEY"] = split_headers.get("dd_api_key") or ""
+            unix_env["DD_TEST_OPTIMIZATION_API_KEY"] = split_headers.get("dd_api_key") or ""
 
             result = ctx.execute(
-                ["/bin/sh", "-c", "printf 'DD-API-KEY: %s\\n' \"$DD_TOPT_API_KEY\" | curl \"$@\"", "curl"] + args_with_stdin_header[1:],
+                ["/bin/sh", "-c", "printf 'DD-API-KEY: %s\\n' \"$DD_TEST_OPTIMIZATION_API_KEY\" | curl \"$@\"", "curl"] + args_with_stdin_header[1:],
                 environment = unix_env,
                 timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
             )
@@ -933,6 +967,7 @@ http_execute_timeout_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_SECONDS
 decode_json_object_or_fail_for_tests = _decode_json_object_or_fail
 partition_unix_headers_for_tests = _partition_unix_headers
 record_sync_extension_repo_owner_or_fail_for_tests = _record_sync_extension_repo_owner_or_fail
+render_module_runfiles_bzl_for_tests = _render_module_runfiles_bzl
 
 # ##########################################################################
 # CI environment detection
@@ -949,7 +984,7 @@ def _collect_env(ctx):
     env_data = {
         "dd_site": ctx.os.environ.get("DD_SITE") or "",
         # Optional override to point API calls at a mock server (tests/dev).
-        "dd_api_base": ctx.os.environ.get("DD_TOPT_API_BASE") or "",
+        "dd_api_base": ctx.os.environ.get("DD_TEST_OPTIMIZATION_API_BASE") or "",
         # Service can be provided via attr first, then DD_SERVICE, else default
         "service": (getattr(ctx.attr, "service", None) or ctx.os.environ.get("DD_SERVICE") or "unnamed-service"),
         "environment": ctx.os.environ.get("DD_ENV") or "CI",
@@ -1534,14 +1569,16 @@ def _impl(ctx):
 
     # Perform the settings request (compute and ensure directories exist for outputs)
     out_dir = ctx.attr.out_dir or TEST_OPT_DIR
-    settings_file = "%s/%s" % (out_dir, "settings.json")
-    known_tests_file = "%s/%s" % (out_dir, "known_tests.json")
-    test_management_file = "%s/%s" % (out_dir, "test_management.json")
+    settings_file = "%s/%s" % (out_dir, "cache/http/settings.json")
+    known_tests_file = "%s/%s" % (out_dir, "cache/http/known_tests.json")
+    test_management_file = "%s/%s" % (out_dir, "cache/http/test_management.json")
     manifest_file = "%s/%s" % (out_dir, "manifest.txt")
+    context_file = "%s/%s" % (out_dir, "context.json")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, known_tests_file, debug)
     _ensure_parent_directory(ctx, test_management_file, debug)
     _ensure_parent_directory(ctx, manifest_file, debug)
+    _ensure_parent_directory(ctx, context_file, debug)
 
     log_info("Settings file: %s" % settings_file)
     ctx.report_progress("test_optimization_sync: downloading")
@@ -1678,9 +1715,10 @@ def _impl(ctx):
     module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = label_map)
     module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug, label_map = label_map)
 
-    # Build and write context.json (non-secret metadata) in the same repo
+    # Build and write context.json (non-secret metadata) under `out_dir`
+    # so all manifest-relative payload files share a single root.
     context_tags = _build_context_tags(ctx, env_data, api_key, debug)
-    ctx.file("context.json", json.encode(context_tags) + "\n")
+    ctx.file(context_file, json.encode(context_tags) + "\n")
 
     # Emit a small helper .bzl with detected Go module path (if any) for downstream macros
     go_module_path = _detect_go_module_path(ctx, debug)
@@ -1725,29 +1763,7 @@ def _impl(ctx):
     # Rule to present per-module files with canonical runfile names via symlinks
     # We generate this helper rule as source text to keep repository-rule output
     # self-contained and avoid hard-coding additional checked-in helper files.
-    module_runfiles_bzl = (
-        "def _topt_module_files_impl(ctx):\n" +
-        "    syms = {}\n" +
-        "    syms[\".testoptimization/settings.json\"] = ctx.file.settings\n" +
-        "    syms[\".testoptimization/manifest.txt\"] = ctx.file.manifest\n" +
-        "    kt = getattr(ctx.file, \"known_tests\", None)\n" +
-        "    if kt:\n" +
-        "        syms[\".testoptimization/known_tests.json\"] = kt\n" +
-        "    tm = getattr(ctx.file, \"test_management\", None)\n" +
-        "    if tm:\n" +
-        "        syms[\".testoptimization/test_management.json\"] = tm\n" +
-        "    return DefaultInfo(runfiles = ctx.runfiles(symlinks = syms))\n" +
-        "\n" +
-        "topt_module_files = rule(\n" +
-        "    implementation = _topt_module_files_impl,\n" +
-        "    attrs = {\n" +
-        "        \"settings\": attr.label(allow_single_file = True, mandatory = True),\n" +
-        "        \"manifest\": attr.label(allow_single_file = True, mandatory = True),\n" +
-        "        \"known_tests\": attr.label(allow_single_file = True),\n" +
-        "        \"test_management\": attr.label(allow_single_file = True),\n" +
-        "    },\n" +
-        ")\n"
-    )
+    module_runfiles_bzl = _render_module_runfiles_bzl(_dirname(manifest_file))
     ctx.file("module_runfiles.bzl", module_runfiles_bzl)
 
     # 6. Create a BUILD file with two public filegroup targets.
@@ -1763,7 +1779,7 @@ def _impl(ctx):
         ")\n\n" +
         "filegroup(\n" +
         '    name = "test_optimization_context",\n' +
-        '    srcs = ["context.json"],\n' +
+        ("    srcs = %s,\n" % repr([context_file])) +
         '    visibility = ["//visibility:public"],\n' +
         ")\n" +
         ('\nexports_files(["export.bzl", %s])\n' % repr(manifest_file))
@@ -1869,7 +1885,7 @@ test_optimization_sync = repository_rule(
         # Environment variables treated as rule inputs
         "DD_API_KEY",  # Required: Datadog API key for authentication
         "DD_SITE",  # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
-        "DD_TOPT_API_BASE",  # Optional: override Datadog API base URL (test/dev)
+        "DD_TEST_OPTIMIZATION_API_BASE",  # Optional: override Datadog API base URL (test/dev)
         "FETCH_SALT",  # Optional: cache-busting salt to force re-fetch
         "GIT_DIRTY",  # Optional: working tree state; triggers refetch on change
         "GO_MODULE_PATH",  # Optional: explicit Go module path override for export.bzl
