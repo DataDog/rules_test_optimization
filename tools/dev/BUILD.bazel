@@ -1,0 +1,3 @@
+exports_files([
+    "go_bootstrap.bzl",
+])

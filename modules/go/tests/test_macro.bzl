@@ -14,7 +14,7 @@ assert behavior at analysis time without compiling Go code.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load(
-    "//tools/go:topt_go_test.bzl",
+    "//:topt_go_test.bzl",
     "dd_topt_go_test",
     "resolve_topt_service_key_for_tests",
 )
@@ -125,7 +125,7 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
-    asserts.equals(env, "tools/tests/go", captured.rundir)
+    asserts.equals(env, "tests", captured.rundir)
     return analysistest.end(env)
 
 def _go_macro_multi_service_wiring_test_impl(ctx):

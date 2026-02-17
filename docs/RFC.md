@@ -243,9 +243,9 @@ Language Macros
   - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_path>)` using `topt_data["manifest_path"]`, so custom `out_dir` values are supported.  
   - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
   - The exported `topt_data["runtimes"]["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
-- Module dependency: this repository declares a `bazel_dep("rules_go", <version>)` to make the provider load visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.
+- Module dependency: the Go companion module (`datadog-rules-test-optimization-go`) declares `bazel_dep("rules_go", <version>)` to make provider loads visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.
 
-- [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](https://github.com/DataDog/rules_test_optimization/blob/main/tools/go/topt_go_test.bzl)
+- [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](https://github.com/DataDog/rules_test_optimization/blob/main/modules/go/topt_go_test.bzl)
 
 Security Considerations
 

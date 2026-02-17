@@ -22,6 +22,13 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/...
 
+      - name: Run Bazel tests (go companion module)
+        shell: bash
+        run: >
+          cd modules/go &&
+          ../../bazelw test //...
+          --override_module=datadog-rules-test-optimization=../..
+
       - name: Build examples (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -104,6 +111,21 @@ jobs:
         shell: bash
         run: >
           ./bazelw test //tools/...
+          --spawn_strategy=sandboxed
+          --strategy=TestRunner=sandboxed
+          --sandbox_default_allow_network=false
+          --modify_execution_info=TestRunner=+block-network
+          --test_env=TZ=UTC
+          --test_env=LANG=C
+          --test_env=LC_ALL=C
+          --enable_runfiles
+
+      - name: Run Bazel tests (go companion hermetic lane)
+        shell: bash
+        run: >
+          cd modules/go &&
+          ../../bazelw test //...
+          --override_module=datadog-rules-test-optimization=../..
           --spawn_strategy=sandboxed
           --strategy=TestRunner=sandboxed
           --sandbox_default_allow_network=false

@@ -29,6 +29,8 @@ The steps are:
 
 4. **Language macros (optional)**:
    Thin wrappers (e.g., for Go) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
+   - Core module (`datadog-rules-test-optimization`) stays runtime-agnostic.
+   - Go orchestration lives in companion module (`datadog-rules-test-optimization-go`).
 
 ### Go macro and import path inference
 
@@ -43,7 +45,10 @@ The `dd_topt_go_test` macro automatically selects the correct per‑module paylo
   - When using (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if the module isn’t present.
   - When using (3), the macro consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if false, it uses the full bundle.
 
-Note: This repository declares a `bazel_dep("rules_go", "0.59.0")` to load provider definitions only. It does not configure any Go toolchains; consumers still set up `rules_go` and the Go SDK in their `MODULE.bazel`.
+Note: The core module no longer declares `rules_go`. The companion module
+`datadog-rules-test-optimization-go` declares `rules_go` for provider
+definitions only. Consumers still configure Go toolchains/SDK in their own
+`MODULE.bazel`.
 
 ## Why a repository extension?
 

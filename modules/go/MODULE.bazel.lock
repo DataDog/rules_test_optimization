@@ -156,40 +156,16 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
-    "//tools/dev:go_bootstrap.bzl%go_bootstrap_extension": {
+    "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "5lakp7mFZf5K39DACLZd7qkXRo0Ds7T32MhZ93mqCu4=",
-        "usagesDigest": "I49nlLmxFAi9sxg6Rt6fFb2QozkvTD1YIVSV5M8BXhM=",
-        "recordedFileInputs": {},
-        "recordedDirentsInputs": {},
-        "envVariables": {},
-        "generatedRepoSpecs": {
-          "datadog-rules-test-optimization-go": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:local.bzl%local_repository",
-            "attributes": {
-              "path": "modules/go"
-            }
-          }
-        },
-        "recordedRepoMappingEntries": [
-          [
-            "",
-            "bazel_tools",
-            "bazel_tools"
-          ]
-        ]
-      }
-    },
-    "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
-      "general": {
-        "bzlTransitiveDigest": "TEvVnjWS55B7iurLAXA4BuzWkkL86/a7PZf8uGe8j2M=",
-        "usagesDigest": "XsrGIwV6f2LnU06owJNbMouQ+/gMiw6hxMQqdC32pHE=",
+        "bzlTransitiveDigest": "HANL8YoMXvD+JWfBybO/ZzNFAFijvsz72CUId5c7Lss=",
+        "usagesDigest": "a1wQerCK9quAagJ4aWUcSvy9i58+wzoosGKCp8Tjsgo=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
         "generatedRepoSpecs": {
           "test_optimization_data": {
-            "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "repoRuleId": "@@//tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
               "repo_alias": "test_optimization_data",
               "service_keys": [

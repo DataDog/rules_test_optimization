@@ -1,4 +1,9 @@
-"""Shared helpers for selecting per-module payload groups."""
+"""Shared helpers for selecting per-module payload groups.
+
+Maintainers:
+- Core-owned helper shared by language companion modules.
+- Keep this file dependency-light and free of language-specific provider loads.
+"""
 
 load("//tools/core:common_utils.bzl", "sanitize_label_fragment")
 

@@ -26,18 +26,20 @@ Macro design constraints:
   - Fall back to full bundle safely when module matching is unavailable.
 
 Maintenance notes:
+- This file belongs to the Go companion module and should be the only macro
+  surface depending on rules_go behavior.
 - Keep this macro repository-agnostic by requiring `go_test_rule` injection.
 - Avoid hardcoding labels outside values exported by `@<repo>//:export.bzl`.
 - Preserve compatibility with both single-service (`topt_data`) and
   multi-service (`topt_data_by_service`) exports.
-- Keep macro contracts aligned with `//tools/tests/go:test_macro.bzl`, which
-  validates env/data wiring, default/custom rundir behavior, and
-  multi-service service-key resolution.
+- Keep macro contracts aligned with `//tests:test_macro.bzl`, which validates
+  env/data wiring, default/custom rundir behavior, and multi-service
+  service-key resolution.
 """
 
-load("//tools/go:topt_go_infer.bzl", "topt_go_payloads_selector")
+load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 load(
-    "//tools/core:topt_macro_utils.bzl",
+    "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "is_dict",
     "normalize_user_data",
     "resolve_topt_service_key",

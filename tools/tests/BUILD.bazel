@@ -2,11 +2,9 @@
 #
 # Package-scoped suites:
 # - core: //tools/tests/core:tests
-# - go:   //tools/tests/go:tests
 test_suite(
     name = "tests",
     tests = [
         "//tools/tests/core:tests",
-        "//tools/tests/go:tests",
     ],
 )

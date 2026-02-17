@@ -442,8 +442,8 @@ codeowners_lookup_order_empty_script_dir_test(
     timeout = "short",
 )
 
-# Core-only suite. Language suites are defined in sibling subpackages such as
-# `//tools/tests/go:tests`.
+# Core-only suite. Language suites now live in companion modules, for example:
+# `@datadog-rules-test-optimization-go//tests:tests`.
 test_suite(
     name = "tests",
     tests = [

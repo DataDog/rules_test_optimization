@@ -1,4 +1,10 @@
-"""Shared helpers for language-specific Test Optimization macros."""
+"""Shared helpers for language-specific Test Optimization macros.
+
+Maintainers:
+- This is core-owned shared logic and must stay language-rule agnostic.
+- Keep this file free from `rules_<lang>` imports; companion modules depend on
+  core helpers, not the other way around.
+"""
 
 load("//tools/core:common_utils.bzl", "sanitize_label_fragment")
 

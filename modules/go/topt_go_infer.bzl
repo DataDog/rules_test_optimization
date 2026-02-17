@@ -19,6 +19,8 @@ Selection model:
 5) fallback to full bundle when no module match exists
 
 Maintenance notes:
+- This file belongs to the Go companion module and is the only place that
+  should read rules_go providers for orchestration selection.
 - Keep provider access defensive (`getattr` / `hasattr`) because rules_go
   provider internals can vary across versions.
 - Never make selection failure fatal; always preserve the safe fallback to the
@@ -28,7 +30,10 @@ Maintenance notes:
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
 # GoArchive still exists separately.
 load("@rules_go//go:def.bzl", "GoArchive", "GoInfo")
-load("//tools/core:topt_selection_utils.bzl", "select_module_group_name")
+load(
+    "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
+    "select_module_group_name",
+)
 
 _select_module_group_name = select_module_group_name
 

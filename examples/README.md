@@ -9,6 +9,7 @@ repository, use `./bazelw` for local development convenience.
 
 - Add module dependencies before `use_extension(...)`:
   - `bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")`
+- `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")` for Go macro usage
   - `bazel_dep(name = "rules_go", ...)` for Go examples shown below
 - Configure Go toolchains/SDK in your repo if you build Go targets.
 - Provide sync credentials via environment and forward them to repository rules:
@@ -21,6 +22,7 @@ MODULE.bazel:
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
 
 test_optimization_sync = use_extension(
@@ -36,7 +38,7 @@ BUILD.bazel (inference via embed):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
 go_library(
@@ -88,6 +90,7 @@ MODULE.bazel:
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
 
 topt_multi = use_extension(
@@ -112,7 +115,7 @@ BUILD.bazel — Option A (explicit selection, inference via embed):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 go_library(
@@ -133,7 +136,7 @@ BUILD.bazel — Option B (mapping + key, inference via embed):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 go_library(

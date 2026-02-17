@@ -93,7 +93,7 @@ filegroup(
 )
 
 # If you need file paths at test time, use rlocationpaths on the selector target
-# provided by the dd_topt_go_test macro (see tools/go/topt_go_test.bzl).
+# provided by the dd_topt_go_test macro (see modules/go/topt_go_test.bzl).
 ```
 
 ## Installation (Bzlmod)
@@ -102,11 +102,17 @@ In your `MODULE.bazel`:
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")  # only if using dd_topt_go_test
+bazel_dep(name = "rules_go", version = "0.59.0")  # configure toolchains in your repo as usual
 
 # Optional: develop locally
 local_path_override(
     module_name = "datadog-rules-test-optimization",
     path = "/absolute/path/to/datadog-rules-test-optimization",
+)
+local_path_override(
+    module_name = "datadog-rules-test-optimization-go",
+    path = "/absolute/path/to/datadog-rules-test-optimization/modules/go",
 )
 
 test_optimization_sync = use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")
@@ -119,18 +125,38 @@ test_optimization_sync.test_optimization_sync(
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
-Note: This module declares a dependency on `rules_go` solely to load provider definitions for Go importpath inference. It does not configure any Go toolchains. Consumers still need to set up `rules_go` and the Go SDK as usual to build and run Go targets.
+Core module note: `datadog-rules-test-optimization` is runtime-agnostic and does
+not declare `rules_go`. Go-specific orchestration lives in the companion module
+`datadog-rules-test-optimization-go`, which depends on `rules_go` for provider
+types only (toolchains are still configured by consumers).
 
-### Planned split for optional `rules_go`
+### Go companion module (implemented)
 
-The current module keeps `rules_go` as a repository dependency because Go
-orchestration lives in-tree (`//tools/go:*`). A planned follow-up split is:
+Go macro/aspect entrypoints now come from the companion module:
 
-- core module/package: sync + uploader + shared orchestration helpers (no `rules_go` dependency)
-- Go companion module/package: Go macro/aspect/selector (`dd_topt_go_test`) with `rules_go` dependency
+```bzl
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+```
 
-This would let non-Go consumers depend only on the core module while Go users
-add the Go companion module explicitly.
+Migration note:
+- Old (removed): `load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")`
+- New: `load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")`
+
+### Core-only consumer (no Go companion)
+
+If your repository only needs sync + uploader integration (no Go macro), depend
+on the core module only:
+
+```bzl
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+test_optimization_sync.test_optimization_sync(name = "test_optimization_data")
+use_repo(test_optimization_sync, "test_optimization_data")
+```
 
 ### Multi-service usage (Bzlmod)
 
@@ -206,6 +232,12 @@ filegroup(
 ## Installation (WORKSPACE)
 
 If your project uses legacy WORKSPACE mode instead of Bzlmod, use the repository rule directly.
+
+WORKSPACE note (split-era Go users):
+- Core sync/uploader usage remains supported as documented below.
+- Go macro usage is Bzlmod-first; if you stay on WORKSPACE, load from
+  `@datadog_rules_test_optimization//modules/go:topt_go_test.bzl` and ensure
+  `rules_go` is configured in your workspace.
 
 ### 1) Add this repository in `WORKSPACE`
 
@@ -485,7 +517,7 @@ dd_topt_go_test(
 Use this checklist when adding `dd_topt_<language>_test` support:
 
 1. **Wrapper macro**
-   - Add a language wrapper under `tools/<language>/` that accepts:
+   - Add a companion module under `modules/<language>/` with a wrapper macro that accepts:
      - `name`
      - `topt_data` (single-service dict or multi-service mapping)
      - `topt_service` (optional for multi-service selection)
@@ -495,17 +527,22 @@ Use this checklist when adding `dd_topt_<language>_test` support:
      - `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
 
 2. **Selector / inference rule**
-   - Add analysis-time selection logic in `tools/<language>/`:
+   - Add analysis-time selection logic in `modules/<language>/`:
      - precedence: explicit identifier -> inferred identifier -> fallback identifier -> full bundle
      - module label resolution should match `module_<sanitized>` names from sync outputs
    - Keep fallback-to-full-bundle behavior non-fatal.
 
-3. **Runtime metadata keys**
+3. **Companion module dependency policy**
+   - Keep root core module (`datadog-rules-test-optimization`) free of language-specific rule dependencies.
+   - Put language-specific dependencies (for example `rules_go`, `rules_python`, etc.) in the companion module only.
+   - Use repo-qualified loads back to core shared helpers when needed.
+
+4. **Runtime metadata keys**
    - Extend sync-exported runtime metadata under:
      - `topt_data["runtimes"]["<language>"]`
    - Keep core keys stable (`repo_name`, `manifest_path`, `labels`, `set`) and avoid changing generated public label names.
 
-4. **Tests**
+5. **Tests**
    - Add unit tests for:
      - macro service-selection and data/env wiring
      - selector precedence + fallback behavior
@@ -516,7 +553,7 @@ Use this checklist when adding `dd_topt_<language>_test` support:
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
 go_library(
@@ -554,7 +591,7 @@ The macro auto-selects the correct per-module payloads by inferring the Go packa
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_test")
-load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 dd_topt_go_test(
@@ -717,6 +754,28 @@ If issues persist:
    - Sanitized logs (remove API keys before sharing)
 
 3. **File an issue** at: https://github.com/DataDog/rules_test_optimization/issues
+
+## Engineering Runbook
+
+Maintainer/contributor quick checks (split-aware):
+
+- Core rules/tests from repo root:
+  - `./bazelw test //tools/...`
+- Go companion tests from module root:
+  - `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- Integration harness:
+  - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
+  - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
+- Hermetic lane parity (local smoke):
+  - run the same test commands with sandbox/network-blocking flags used in CI.
+
+Troubleshooting bootstrap resolution:
+- Root workspace should resolve `@datadog-rules-test-optimization-go` via the
+  dev bootstrap extension in `tools/dev/go_bootstrap.bzl`.
+- Do not add a root `bazel_dep` edge from core to go companion; that creates a
+  dependency cycle (`core -> go -> core`).
+- Schema ownership remains in core:
+  - `tools/core/schemas/*` and `tools/core/validate_payload_schema.py`.
 
 ## Configuration and attributes
 

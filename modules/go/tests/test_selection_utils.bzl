@@ -1,11 +1,11 @@
 """Unit tests for Go-specific selection and macro helper functions."""
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
-    "//tools/go:topt_go_infer.bzl",
+    "//:topt_go_infer.bzl",
     "select_module_group_name_for_tests",
 )
 load(
-    "//tools/go:topt_go_test.bzl",
+    "//:topt_go_test.bzl",
     "normalize_user_data_for_tests",
     "resolve_topt_service_key_for_tests",
     "service_mapping_entries_for_tests",

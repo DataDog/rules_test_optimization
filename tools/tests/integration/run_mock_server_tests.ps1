@@ -20,7 +20,8 @@ $ErrorActionPreference = "Stop"
 .NOTES
   Maintainers: keep this wrapper intentionally thin. The canonical scenario
   logic must stay in the Bash harness to avoid cross-platform drift and
-  duplicated assertions.
+  duplicated assertions. The Bash harness also owns dual-module Go wiring
+  (core + go companion + rules_go + local overrides).
 #>
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path

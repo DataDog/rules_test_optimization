@@ -6,12 +6,23 @@ module(
 # Platforms is needed for cross-platform test execution detection
 bazel_dep(name = "platforms", version = "1.0.0")
 
-# Optional dependency needed to load rules_go providers for Go importpath inference.
-# Consumers typically already depend on rules_go; Bzlmod will select a single version.
-bazel_dep(name = "rules_go", version = "0.59.0")
-
 # Test utilities for Starlark unit tests
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+# Dev-only dependency for in-repo example builds that compile Go targets.
+bazel_dep(name = "rules_go", version = "0.59.0", dev_dependency = True)
+
+# Dev-only local wiring for companion module loads from this repository root.
+go_bootstrap = use_extension(
+    "//tools/dev:go_bootstrap.bzl",
+    "go_bootstrap_extension",
+    dev_dependency = True,
+)
+go_bootstrap.local_go_companion(
+    name = "datadog-rules-test-optimization-go",
+    path = "modules/go",
+)
+use_repo(go_bootstrap, "datadog-rules-test-optimization-go")
 
 # Dev-only stub repository so //examples/... can be analyzed from this root
 # workspace without fetching real Datadog data.

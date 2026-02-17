@@ -21,8 +21,11 @@ Agents: start with the Overview, then `README.md` for current operational behavi
   - `core/test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/cache/http/settings.json`, per‑module files, and `.testoptimization/context.json`.
   - `core/test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
   - `core/test_optimization_uploader.bzl` — workspace-level uploader rule (normal rule, not test; runs via `bazel run`).
-  - `go/topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
-  - `go/topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
+  - `dev/go_bootstrap.bzl` — dev-only bootstrap extension wiring the local Go companion repo from this workspace.
+- `modules/go/` — Go companion module sources:
+  - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
+  - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
+  - `tests/` — Go-specific Starlark tests and local stub extension for `@test_optimization_data`.
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
@@ -60,6 +63,7 @@ The sync rule creates `@test_optimization_data//` containing:
   cat $(bazel info output_base)/external/test_optimization_data/export.bzl
   ```
 - Typical workflow: edit Starlark, then `./bazelw test //tools/...`.
+- Companion Go workflow: `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`.
 
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.
@@ -75,7 +79,7 @@ The sync rule creates `@test_optimization_data//` containing:
 - Create ONE uploader target per workspace at the root BUILD.bazel.
 
 ## Consumer Tips (bzlmod + Go)
-- In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)`, `use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
+- In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)` and `bazel_dep("datadog-rules-test-optimization-go", ...)`, then `use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
 - In root `BUILD.bazel`: create the workspace-level uploader:
   ```bzl
   load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
@@ -85,12 +89,27 @@ The sync rule creates `@test_optimization_data//` containing:
       data = ["@test_optimization_data//:test_optimization_context"],
   )
   ```
-- In test `BUILD.bazel` files: `load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
+- In test `BUILD.bazel` files: `load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
 - Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["runtimes"]["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
 - Tests can read `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the manifest directory (via `filepath.Dir()`) and access synced payloads.
 
-Note: This repository declares a `bazel_dep` on `rules_go` to load provider definitions for Go importpath inference. It does not configure Go toolchains; consumers must still configure `rules_go` (SDK, toolchains) in their own `MODULE.bazel`.
+Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go companion module declares the `rules_go` dependency to load provider definitions; consumers still configure Go SDK/toolchains in their own `MODULE.bazel`.
+
+## Maintainer Architecture Map
+- Core ownership (`tools/core/*`): runtime-agnostic sync + uploader + shared helpers; keep it free from language-rule dependencies.
+- Go ownership (`modules/go/*`): Go macro/aspect/selector and Go-specific tests.
+- Bootstrap ownership (`tools/dev/go_bootstrap.bzl`): dev-only local repo wiring for root workspace testing; do not convert it into a module dependency edge.
+- Invariants:
+  - root module must not `bazel_dep` the Go companion module (avoid `core -> go -> core` cycle),
+  - Go companion must depend on core and `rules_go`,
+  - public generated labels in synced repos remain stable (`test_optimization_files`, `test_optimization_context`, `module_<sanitized>`).
+
+## Bootstrap Troubleshooting
+- Symptom: `@datadog-rules-test-optimization-go` not found from repo root.
+  - Verify root `MODULE.bazel` still wires `//tools/dev:go_bootstrap.bzl` with `dev_dependency = True` and `use_repo(...)`.
+- Symptom: companion tests resolve released core instead of local core.
+  - Run companion tests with `--override_module=datadog-rules-test-optimization=../..`.
 
 ## Multi‑Service Usage
 - Use `test_optimization_multi_sync_extension` (`@...//tools/core:test_optimization_multi_sync.bzl`) with `services = ["<svc1>", "<svc2>"]` to fetch multiple services at once.

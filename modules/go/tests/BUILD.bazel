@@ -1,5 +1,5 @@
 load(
-    "//tools/tests/go:test_macro.bzl",
+    "//tests:test_macro.bzl",
     "go_macro_multi_service_target",
     "go_macro_multi_service_wiring_test",
     "go_macro_single_service_target",
@@ -10,7 +10,7 @@ load(
     "resolve_topt_service_key_unknown_target_rule",
 )
 load(
-    "//tools/tests/go:test_selection_utils.bzl",
+    "//tests:test_selection_utils.bzl",
     "normalize_user_data_handles_none_test",
     "resolve_topt_service_key_prefers_exact_then_sanitized_test",
     "select_module_group_name_test",
