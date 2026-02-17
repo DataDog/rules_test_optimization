@@ -4,18 +4,6 @@ This repository provides Bazel integrations that fetch Datadog Test Optimization
 
 > First release status: module metadata currently uses `1.0.0`, but Bazel Central Registry publication is still pending. Until BCR entries are published, install with `git_override` (Bzlmod) or commit-pinned `git_repository` / `http_archive` (WORKSPACE).
 
-## Documentation map
-
-- [`README.md`](README.md) (this file): setup, usage, runtime behavior, and troubleshooting
-- [`docs/Initial_documentation.md`](docs/Initial_documentation.md): architecture and data-flow deep dive
-- [`docs/RFC.md`](docs/RFC.md): design rationale, trade-offs, and historical proposal context
-- [`docs/Installation_Reference.md`](docs/Installation_Reference.md): complete Bzlmod/WORKSPACE setup reference
-- [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md): complete uploader/runtime behavior reference
-- [`docs/Troubleshooting.md`](docs/Troubleshooting.md): full troubleshooting playbook
-- [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md): full attribute and environment reference
-- [`docs/Maintainers.md`](docs/Maintainers.md): maintainer workflows, CI/release checks, and repository internals
-- [`examples/README.md`](examples/README.md): copy/paste snippets for single-service and multi-service setup
-
 ## Onboarding paths
 
 Pick the path that matches your repository:
