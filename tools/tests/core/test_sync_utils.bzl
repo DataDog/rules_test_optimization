@@ -3,11 +3,16 @@
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
+    "//tools/tests:example_stub_repo.bzl",
+    "render_stub_build_for_tests",
+)
+load(
     "//tools/core:test_optimization_sync.bzl",
     "build_module_label_map_for_tests",
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
+    "normalize_out_dir_or_fail_for_tests",
     "http_execute_timeout_buffer_seconds_for_tests",
     "http_execute_timeout_seconds_for_tests",
     "http_max_time_seconds_for_tests",
@@ -117,6 +122,15 @@ def _dirname_test(ctx):
     asserts.equals(env, "", dirname_for_tests(""))
     return unittest.end(env)
 
+def _normalize_out_dir_or_fail_test(ctx):
+    """Validate out_dir normalization and accepted relative-path forms."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, ".testoptimization", normalize_out_dir_or_fail_for_tests(".testoptimization"))
+    asserts.equals(env, "custom_topt", normalize_out_dir_or_fail_for_tests(" custom_topt "))
+    asserts.equals(env, "foo/bar", normalize_out_dir_or_fail_for_tests("./foo//bar/"))
+    asserts.equals(env, "foo/bar", normalize_out_dir_or_fail_for_tests("foo\\bar"))
+    return unittest.end(env)
+
 def _export_bzl_manifest_path_test(ctx):
     """Validate manifest_path emission in generated export.bzl."""
     env = unittest.begin(ctx)
@@ -133,6 +147,33 @@ def _export_bzl_manifest_path_test(ctx):
     asserts.true(env, "\"runtimes\": {" in content)
     asserts.true(env, "\"go\": {" in content)
     asserts.false(env, "\n    \"go\": {\n" in content)
+    return unittest.end(env)
+
+def _example_stub_includes_manifest_in_files_test(ctx):
+    """Ensure stub test_optimization_files includes manifest for contract parity."""
+    env = unittest.begin(ctx)
+    settings = ".testoptimization/cache/http/settings.json"
+    manifest = ".testoptimization/manifest.txt"
+    known_tests = ".testoptimization/cache/http/known_tests.json"
+    test_management = ".testoptimization/cache/http/test_management.json"
+    context = ".testoptimization/context.json"
+
+    content = render_stub_build_for_tests(
+        settings,
+        manifest,
+        known_tests,
+        test_management,
+        context,
+    )
+    filegroup_start = content.find('name = "test_optimization_files"')
+    context_group_start = content.find('name = "test_optimization_context"')
+    asserts.true(env, filegroup_start >= 0)
+    asserts.true(env, context_group_start > filegroup_start)
+    filegroup_block = content[filegroup_start:context_group_start]
+    asserts.true(env, settings in filegroup_block)
+    asserts.true(env, manifest in filegroup_block)
+    asserts.true(env, known_tests in filegroup_block)
+    asserts.true(env, test_management in filegroup_block)
     return unittest.end(env)
 
 def _http_execute_timeout_seconds_test(ctx):
@@ -208,6 +249,26 @@ def _decode_json_object_empty_target_impl(_ctx):
     decode_json_object_or_fail_for_tests("", "settings.json")
     return []
 
+def _normalize_out_dir_empty_target_impl(_ctx):
+    """Target expected to fail when out_dir is empty/whitespace."""
+    normalize_out_dir_or_fail_for_tests("   ")
+    return []
+
+def _normalize_out_dir_absolute_target_impl(_ctx):
+    """Target expected to fail when out_dir is absolute."""
+    normalize_out_dir_or_fail_for_tests("/tmp/out")
+    return []
+
+def _normalize_out_dir_traversal_target_impl(_ctx):
+    """Target expected to fail when out_dir includes traversal segments."""
+    normalize_out_dir_or_fail_for_tests("foo/../bar")
+    return []
+
+def _normalize_out_dir_windows_drive_target_impl(_ctx):
+    """Target expected to fail when out_dir includes a drive prefix."""
+    normalize_out_dir_or_fail_for_tests("C:/tmp/out")
+    return []
+
 def _decode_json_object_non_json_target_impl(_ctx):
     """Target expected to fail on non-JSON payload."""
     decode_json_object_or_fail_for_tests("NOT_JSON", "settings.json")
@@ -238,6 +299,18 @@ def _record_sync_extension_repo_owner_duplicate_target_impl(_ctx):
 decode_json_object_empty_target_rule = rule(
     implementation = _decode_json_object_empty_target_impl,
 )
+normalize_out_dir_empty_target_rule = rule(
+    implementation = _normalize_out_dir_empty_target_impl,
+)
+normalize_out_dir_absolute_target_rule = rule(
+    implementation = _normalize_out_dir_absolute_target_impl,
+)
+normalize_out_dir_traversal_target_rule = rule(
+    implementation = _normalize_out_dir_traversal_target_impl,
+)
+normalize_out_dir_windows_drive_target_rule = rule(
+    implementation = _normalize_out_dir_windows_drive_target_impl,
+)
 decode_json_object_non_json_target_rule = rule(
     implementation = _decode_json_object_non_json_target_impl,
 )
@@ -258,6 +331,30 @@ def _decode_json_object_empty_failure_test_impl(ctx):
     """Assert empty-response failure message remains actionable."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "settings.json response is empty; expected JSON object")
+    return analysistest.end(env)
+
+def _normalize_out_dir_empty_failure_test_impl(ctx):
+    """Assert empty out_dir failure keeps guidance explicit."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "out_dir must be a non-empty relative path")
+    return analysistest.end(env)
+
+def _normalize_out_dir_absolute_failure_test_impl(ctx):
+    """Assert absolute out_dir failure stays actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "absolute paths are not allowed")
+    return analysistest.end(env)
+
+def _normalize_out_dir_traversal_failure_test_impl(ctx):
+    """Assert traversal out_dir failure stays actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "must not contain '..' path traversal segments")
+    return analysistest.end(env)
+
+def _normalize_out_dir_windows_drive_failure_test_impl(ctx):
+    """Assert drive-prefixed out_dir failure stays actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "must not include a Windows drive prefix")
     return analysistest.end(env)
 
 def _decode_json_object_non_json_failure_test_impl(ctx):
@@ -296,7 +393,9 @@ module_label_map_collision_test = unittest.make(_module_label_map_collision_test
 normalize_ref_test = unittest.make(_normalize_ref_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
+normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
+example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_includes_manifest_in_files_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)
@@ -304,6 +403,22 @@ record_sync_extension_repo_owner_success_test = unittest.make(_record_sync_exten
 decode_json_object_valid_test = unittest.make(_decode_json_object_valid_test)
 decode_json_object_empty_failure_test = analysistest.make(
     _decode_json_object_empty_failure_test_impl,
+    expect_failure = True,
+)
+normalize_out_dir_empty_failure_test = analysistest.make(
+    _normalize_out_dir_empty_failure_test_impl,
+    expect_failure = True,
+)
+normalize_out_dir_absolute_failure_test = analysistest.make(
+    _normalize_out_dir_absolute_failure_test_impl,
+    expect_failure = True,
+)
+normalize_out_dir_traversal_failure_test = analysistest.make(
+    _normalize_out_dir_traversal_failure_test_impl,
+    expect_failure = True,
+)
+normalize_out_dir_windows_drive_failure_test = analysistest.make(
+    _normalize_out_dir_windows_drive_failure_test_impl,
     expect_failure = True,
 )
 decode_json_object_non_json_failure_test = analysistest.make(

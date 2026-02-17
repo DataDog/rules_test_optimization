@@ -1,2 +1,6 @@
 .bazel_output
 .bazel_root
+modules/go/bazel-bin
+modules/go/bazel-out
+modules/go/bazel-testlogs
+modules/go/bazel-go

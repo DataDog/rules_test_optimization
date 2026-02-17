@@ -863,7 +863,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
   - `name`: external repository name to create
 
 - Optional
-  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `test_management.json` under `out_dir`). The actual manifest path is exported via `topt_data["manifest_path"]`.
+  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `test_management.json` under `out_dir`). Must be a non-empty relative path (absolute paths and `..` traversal segments are rejected). The actual manifest path is exported via `topt_data["manifest_path"]`.
   - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
   - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
   - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
@@ -955,7 +955,7 @@ FETCH_SALT_TTL=3600 ./bazelw build //...
 DD_GIT_REPOSITORY_URL=https://github.com/acme/api.git \
 DD_GIT_BRANCH=main \
 DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
-./bazelw test //...
+./bazelw test //tools/...
 ```
 
 ## Integration tests (mock server)
@@ -1000,7 +1000,15 @@ Reproducibility policy: this repository tracks both `.bazelversion` and
 drift over time.
 Current PR CI gates `./bazelw test //tools/...` plus the mock-server integration
 harness on each OS; when changing targets outside `//tools/...`, run
-`./bazelw test //...` locally before opening the PR.
+both split test workflows locally before opening the PR:
+
+```sh
+./bazelw test //tools/...
+cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
+```
+
+Split workflows are canonical for this repository because `modules/go` is also
+validated as an independent Bazel module root in CI.
 
 ## Schema sync helper
 

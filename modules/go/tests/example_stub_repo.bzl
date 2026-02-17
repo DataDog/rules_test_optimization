@@ -5,6 +5,25 @@ public API surface while still letting `cd modules/go && bazel test //...`
 resolve `@test_optimization_data` labels used by macro analysis tests.
 """
 
+def _render_stub_build(settings, manifest, known_tests, test_management, context):
+    """Render BUILD content for stub repo targets."""
+    return (
+        "filegroup(\n" +
+        '    name = "test_optimization_files",\n' +
+        ("    srcs = %s,\n" % repr([settings, manifest, known_tests, test_management])) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n\n" +
+        "filegroup(\n" +
+        '    name = "test_optimization_context",\n' +
+        ("    srcs = %s,\n" % repr([context])) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n\n" +
+        ('exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest))
+    )
+
+# Public alias for tests.
+render_stub_build_for_tests = _render_stub_build
+
 def _example_stub_repo_impl(ctx):
     manifest = ".testoptimization/manifest.txt"
     settings = ".testoptimization/cache/http/settings.json"
@@ -45,18 +64,12 @@ def _example_stub_repo_impl(ctx):
     )
     ctx.file("export.bzl", export)
 
-    build = (
-        "filegroup(\n" +
-        '    name = "test_optimization_files",\n' +
-        ("    srcs = %s,\n" % repr([settings, known_tests, test_management])) +
-        '    visibility = ["//visibility:public"],\n' +
-        ")\n\n" +
-        "filegroup(\n" +
-        '    name = "test_optimization_context",\n' +
-        ("    srcs = %s,\n" % repr([context])) +
-        '    visibility = ["//visibility:public"],\n' +
-        ")\n\n" +
-        ('exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest))
+    build = _render_stub_build(
+        settings,
+        manifest,
+        known_tests,
+        test_management,
+        context,
     )
     ctx.file("BUILD", build)
 
