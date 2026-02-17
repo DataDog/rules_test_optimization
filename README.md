@@ -141,7 +141,6 @@ load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test"
 Migration note:
 - Old (removed): `load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")`
 - New: `load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")`
-- Full migration checklist: `docs/MIGRATION.md`
 
 ### Core-only consumer (no Go companion)
 

@@ -4,7 +4,6 @@
 
 - Create a feature branch for each change.
 - Keep pull requests focused (core-only, go-companion-only, or docs-only when possible).
-- For split-era Go migration updates, keep `docs/MIGRATION.md` in sync with README snippets.
 - Preserve public label contracts from sync outputs:
   - `:test_optimization_files`
   - `:test_optimization_context`
