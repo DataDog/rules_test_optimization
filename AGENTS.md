@@ -9,11 +9,12 @@ The solution separates concerns into three phases:
 3. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //:dd_upload_payloads`) discovers and uploads payloads from `bazel-testlogs/<target>/test.outputs/`.
 
 ## Documentation
+- User-facing onboarding and command flow: see `README.md` (use its `Reference links` section for deep references).
 - Overview: see `docs/Initial_documentation.md` for how the solution works (architecture, data flow, and operational notes).
 - Problem statement & proposal: see `docs/RFC.md` for background rationale and trade-offs (historical context).
 - Usage snippets: see `examples/README.md` for copy/paste single-service and multi-service examples.
 
-Agents: start with the Overview, then `README.md` for current operational behavior. Use the RFC when you need design rationale or trade-off context.
+Agents: start with `README.md` for current operational behavior, then use the overview and RFC when you need architecture details or design rationale/trade-off context.
 
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources:
@@ -54,7 +55,9 @@ The sync rule creates `@test_optimization_data//` containing:
   ```
 - Force refetch of test optimization data:
   ```bash
-  bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s)
+  bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=<timestamp>
+  # If Bazel reports WORKSPACE-disabled sync errors, retry with:
+  bazel sync --enable_workspace --only=test_optimization_data --repo_env=FETCH_SALT=<timestamp>
   ```
 - Inspect generated repo files:
   ```bash
