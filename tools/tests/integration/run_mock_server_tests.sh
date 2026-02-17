@@ -1886,6 +1886,7 @@ fi
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_DEBUG=1 \
 DD_API_KEY=mock \
 DD_TEST_OPTIMIZATION_FILTER_PREFIX=1 \
 DD_TEST_OPTIMIZATION_GZIP=1 \
@@ -1906,12 +1907,14 @@ import base64
 import gzip
 import json
 import os
+import re
 import sys
 
 log_path = os.environ["LOG_FILE"]
 start_line = int(os.environ.get("FILTER_GZIP_LOG_START", "0") or "0")
 have_gzip = os.environ.get("FILTER_GZIP_HAVE_GZIP") == "1"
 uploader_log_path = os.environ.get("UPLOADER_FILTER_GZIP_LOG", "")
+uploader_log = ""
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for idx, line in enumerate(handle):
@@ -1924,6 +1927,28 @@ with open(log_path, "r", encoding="utf-8") as handle:
 
 if not records:
     print("error: expected filter/gzip scenario to add log records")
+    sys.exit(1)
+
+if uploader_log_path:
+    with open(uploader_log_path, "r", encoding="utf-8", errors="replace") as handle:
+        uploader_log = handle.read()
+
+uploaded_test_keep = bool(re.search(r"uploaded test payload: .*span_events_manual_filter_keep\.json", uploader_log))
+uploaded_cov_keep = bool(re.search(r"uploaded coverage payload: .*coverage_manual_filter_keep\.json", uploader_log))
+uploaded_test_skip = bool(re.search(r"uploaded test payload: .*manual_filter_skip\.json", uploader_log))
+uploaded_cov_skip = bool(re.search(r"uploaded coverage payload: .*manual_filter_skip_cov\.json", uploader_log))
+
+if not uploaded_test_keep:
+    print("error: expected uploader log to include uploaded span_events_manual_filter_keep.json")
+    sys.exit(1)
+if not uploaded_cov_keep:
+    print("error: expected uploader log to include uploaded coverage_manual_filter_keep.json")
+    sys.exit(1)
+if uploaded_test_skip:
+    print("error: expected uploader log to exclude uploaded manual_filter_skip.json")
+    sys.exit(1)
+if uploaded_cov_skip:
+    print("error: expected uploader log to exclude uploaded manual_filter_skip_cov.json")
     sys.exit(1)
 
 def lower_headers(record):
@@ -1939,11 +1964,21 @@ def decode_body(record):
 gzip_header_seen = False
 cycle_seen = False
 coverage_seen = False
+gzip_hint_seen = "content-encoding=gzip" in uploader_log.lower()
+test_paths = {
+    "/api/v2/citestcycle",
+    "/evp_proxy/v2/api/v2/citestcycle",
+}
+coverage_paths = {
+    "/api/v2/citestcov",
+    "/evp_proxy/v2/api/v2/citestcov",
+}
 
 for rec in records:
-    if rec.get("path") != "/api/v2/citestcycle":
-        if rec.get("path") == "/api/v2/citestcov":
-            coverage_seen = True
+    path = (rec.get("path") or "").rstrip("/")
+    if path in coverage_paths:
+        coverage_seen = True
+    if path not in test_paths:
         continue
     cycle_seen = True
     try:
@@ -1960,29 +1995,9 @@ if not cycle_seen:
 if not coverage_seen:
     print("error: filter_prefix scenario did not produce citestcov uploads")
     sys.exit(1)
-if have_gzip and not gzip_header_seen:
+if have_gzip and not (gzip_header_seen or gzip_hint_seen):
     print("error: gzip scenario expected at least one gzipped citestcycle upload")
     sys.exit(1)
-
-if uploader_log_path:
-    with open(uploader_log_path, "r", encoding="utf-8", errors="replace") as handle:
-        out = handle.read()
-    must_include = [
-        "span_events_manual_filter_keep.json",
-        "coverage_manual_filter_keep.json",
-    ]
-    must_exclude = [
-        "manual_filter_skip.json",
-        "manual_filter_skip_cov.json",
-    ]
-    for token in must_include:
-        if token not in out:
-            print(f"error: expected uploader log to include {token!r}")
-            sys.exit(1)
-    for token in must_exclude:
-        if token in out:
-            print(f"error: expected uploader log to exclude {token!r}")
-            sys.exit(1)
 PY
 
 # Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
