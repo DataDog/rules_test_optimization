@@ -232,9 +232,10 @@ filegroup(
 )
 ```
 
-## Installation (WORKSPACE)
+## Installation (WORKSPACE / Bazel without Bzlmod)
 
-If your project uses legacy WORKSPACE mode instead of Bzlmod, use the repository rule directly.
+If your project uses legacy WORKSPACE mode (for example older Bazel versions or
+environments where Bzlmod is disabled), use the repository rule path below.
 
 WORKSPACE note (split-era Go users):
 - Core sync/uploader usage remains supported as documented below.
@@ -250,7 +251,8 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 git_repository(
     name = "datadog_rules_test_optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "29d783764facb90967134e84ca0585c0e41b8ba0",  # Example: pin to an existing commit.
+    # Pin to a split-era revision that includes modules/go/ entrypoints.
+    commit = "<split-era-commit-or-tag>",
 )
 
 # Or:
@@ -261,6 +263,8 @@ git_repository(
 ```
 
 Prefer release tags once published. Until tags are available, pin an existing commit SHA.
+For WORKSPACE Go macro usage, pin a revision that contains
+`modules/go/topt_go_test.bzl` (split-era layout).
 
 If your environment requires `http_archive`, use an internal mirror and pin all three
 values (`urls`, `strip_prefix`, and `sha256`). Example format:
@@ -271,11 +275,11 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "datadog_rules_test_optimization",
     urls = [
-        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/29d783764facb90967134e84ca0585c0e41b8ba0.tar.gz",
+        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<split-era-commit-or-tag>.tar.gz",
     ],
-    # Match your mirrored archive layout. For commit archives, this is typically
+    # Match your mirrored archive layout. For commit archives this is typically:
     # "rules_test_optimization-<full_commit_sha>".
-    strip_prefix = "rules_test_optimization-29d783764facb90967134e84ca0585c0e41b8ba0",
+    strip_prefix = "rules_test_optimization-<split-era-commit-or-tag>",
     sha256 = "<sha256-for-archive>",
 )
 ```
@@ -359,6 +363,64 @@ test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE  # Optional override for intake
 
 Security note: keep secret *values* out of `.bazelrc`. Forward variable names with
 `--repo_env=DD_API_KEY` and provide values via your shell/CI secret store at runtime.
+
+### 6) Configure Go support in WORKSPACE (for `dd_topt_go_test`)
+
+If your repository already configures `rules_go`, keep your existing setup and
+skip to the BUILD snippet below.
+
+In `WORKSPACE`:
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "io_bazel_rules_go",
+    urls = [
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
+    ],
+    sha256 = "<rules_go_sha256>",
+)
+
+http_archive(
+    name = "bazel_gazelle",
+    urls = [
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.0/bazel-gazelle-v0.39.0.tar.gz",
+    ],
+    sha256 = "<bazel_gazelle_sha256>",
+)
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+go_rules_dependencies()
+go_register_toolchains(version = "1.24.0")
+
+load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+gazelle_dependencies()
+```
+
+Then in your Go package `BUILD.bazel`:
+
+```bzl
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("@datadog_rules_test_optimization//modules/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+go_library(
+    name = "pkg_lib",
+    srcs = ["*.go"],
+)
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],  # Enables provider-based importpath inference
+    topt_data = topt_data,
+    go_test_rule = go_test,
+)
+```
+
+Note: in WORKSPACE mode, repository names in labels use underscores
+(`@datadog_rules_test_optimization`) and not Bzlmod module names with hyphens.
 
 ## Uploading test and coverage payloads
 
