@@ -71,6 +71,8 @@ def _importpath_aspect_impl(target, ctx):
         # Some versions nest importpath under a 'source' or 'library' field
         if (not ip) and hasattr(arch, "source"):
             ip = getattr(arch.source, "importpath", None)
+        if (not ip) and hasattr(arch, "library"):
+            ip = getattr(arch.library, "importpath", None)
         if ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 

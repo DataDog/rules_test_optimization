@@ -14,6 +14,7 @@ Key behavior toggles:
 
 import argparse
 import base64
+import gzip
 import json
 import os
 import sys
@@ -236,8 +237,15 @@ class _Handler(BaseHTTPRequestHandler):
         content_type = _require_header(self.headers, "Content-Type") or ""
         if "application/json" not in content_type:
             return "expected Content-Type application/json"
+        body_for_json = body
+        content_encoding = (_require_header(self.headers, "Content-Encoding") or "").lower()
+        if "gzip" in content_encoding:
+            try:
+                body_for_json = gzip.decompress(body)
+            except Exception:
+                return "invalid gzip body"
         try:
-            payload = json.loads(body.decode("utf-8"))
+            payload = json.loads(body_for_json.decode("utf-8"))
         except Exception:
             return "invalid JSON body"
         metadata = payload.get("metadata") if isinstance(payload, dict) else None

@@ -7,6 +7,7 @@ repository, use `./bazelw` for local development convenience.
 
 ## Prerequisites
 
+- Until BCR publication, install with `git_override(...)` as shown in the root `README.md`.
 - Add module dependencies before `use_extension(...)`:
   - `bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")`
 - `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")` for Go macro usage
@@ -85,7 +86,9 @@ exit $test_status
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-# Assumes DD_API_KEY and DD_SITE are already set in environment
+# Set once per shell session before first run:
+# $env:DD_API_KEY = "<your-api-key>"
+# $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 exit $testStatus
 
@@ -119,7 +122,7 @@ topt_multi.test_optimization_multi_sync(
     name = "test_optimization_data",
     services = ["go-service", "ruby-service"],
     runtime_name = "go",
-    runtime_version = "1.24",
+    runtime_version = "1.24.0",
 )
 
 use_repo(

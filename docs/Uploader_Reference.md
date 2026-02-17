@@ -34,7 +34,9 @@ bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-# Assumes DD_API_KEY and DD_SITE are already set in environment
+# Set once per shell session before first run:
+# $env:DD_API_KEY = "<your-api-key>"
+# $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 exit $testStatus
 
@@ -91,7 +93,9 @@ bazel run //:dd_upload_payloads
 ```
 
 ```powershell
-# Option 1: Agentless mode - environment already set (recommended for CI)
+# Option 1: Agentless mode
+$env:DD_API_KEY = "<your-api-key>"
+$env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 
 # Option 2: Agent/EVP mode

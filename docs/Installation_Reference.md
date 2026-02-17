@@ -279,13 +279,16 @@ common --repo_env=DD_GIT_COMMIT_MESSAGE
 common --repo_env=DD_GIT_HEAD_MESSAGE
 # Optional: override detected Go module path for export.bzl
 common --repo_env=GO_MODULE_PATH
-# Optional TTL: common --repo_env=FETCH_SALT
+# Optional: force refetch once (example)
+# common --repo_env=FETCH_SALT=<timestamp>
 
 # Uploader (bazel run, pass credentials inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
 #   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 # PowerShell equivalent:
-#   # Assumes DD_API_KEY and DD_SITE are already set in environment
+#   # Set once per shell session before first run:
+#   # $env:DD_API_KEY = "<your-api-key>"
+#   # $env:DD_SITE = "datadoghq.com"
 #   bazel run //:dd_upload_payloads
 
 # Tests (runtime)
