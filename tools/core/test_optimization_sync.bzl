@@ -49,7 +49,7 @@ Troubleshooting guidance for maintainers:
 # - Repository entrypoint: `_impl`
 
 load(
-    "//tools:common_utils.bzl",
+    "//tools/core:common_utils.bzl",
     "dedup_keys",
     "log_debug",
     "log_info",
@@ -653,10 +653,12 @@ def _render_export_bzl(repo_name, labels, set_literal, go_module_path, sanitized
         "    \"manifest_path\": \"%s\",\n" % manifest_file +
         "    \"labels\": %s,\n" % repr(labels) +
         "    \"set\": %s,\n" % set_literal +
-        "    \"go\": {\n" +
-        "        \"module_path\": \"%s\",\n" % (go_module_path or "") +
-        "        \"sanitized_module_path\": \"%s\",\n" % sanitized_go_module_path +
-        "        \"module_included\": %s,\n" % ("True" if go_module_included else "False") +
+        "    \"runtimes\": {\n" +
+        "        \"go\": {\n" +
+        "            \"module_path\": \"%s\",\n" % (go_module_path or "") +
+        "            \"sanitized_module_path\": \"%s\",\n" % sanitized_go_module_path +
+        "            \"module_included\": %s,\n" % ("True" if go_module_included else "False") +
+        "        },\n" +
         "    },\n" +
         "}\n"
     )

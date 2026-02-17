@@ -1,7 +1,7 @@
 # Unit tests for uploader template rendering (placeholder and brace handling).
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
-    "//tools:test_optimization_uploader.bzl",
+    "//tools/core:test_optimization_uploader.bzl",
     "bash_curl_retry_flags_for_tests",
     "build_codeowners_lookup_order_for_tests",
     "compile_codeowners_regex_for_tests",

@@ -21,29 +21,34 @@ The steps are:
    Reference implementation: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
 
 2. **Test instrumentation**:
-   Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (for example through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to a writable path.
+   Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (for example through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
 
 3. **Payload reporting**:
    A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).
-   Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status`
+   Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 4. **Language macros (optional)**:
    Thin wrappers (e.g., for Go) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
+   - Core module (`datadog-rules-test-optimization`) stays runtime-agnostic.
+   - Go orchestration lives in companion module (`datadog-rules-test-optimization-go`).
 
 ### Go macro and import path inference
 
 The `dd_topt_go_test` macro automatically selects the correct per‑module payloads by inferring the Go package `importpath` using `rules_go` providers, mirroring how `go_test` computes it.
 
-- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoInfo` from `@rules_go//go/private:providers.bzl` via a Starlark aspect walking `embed`.
+- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoInfo` from `@rules_go//go:def.bzl` via a Starlark aspect walking `embed`.
 - Precedence for determining importpath:
   1) `importpath` explicitly set on the `go_test` invocation (if provided via kwargs)
   2) Provider‑based inference via `embed`
-  3) Fallback to `<go module path>/<bazel package>`, where the module path is exported by the sync repo in `topt_data["go"]["module_path"]`
+  3) Fallback to `<go module path>/<bazel package>`, where the module path is exported by the sync repo in `topt_data["runtimes"]["go"]["module_path"]`
 - Per‑module selection:
   - When using (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if the module isn’t present.
-  - When using (3), the macro consults `topt_data["go"]["module_included"]` as a coarse gate; if false, it uses the full bundle.
+  - When using (3), the macro consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if false, it uses the full bundle.
 
-Note: This repository declares a `bazel_dep("rules_go", "0.59.0")` to load provider definitions only. It does not configure any Go toolchains; consumers still set up `rules_go` and the Go SDK in their `MODULE.bazel`.
+Note: The core module no longer declares `rules_go`. The companion module
+`datadog-rules-test-optimization-go` declares `rules_go` for provider
+definitions only. Consumers still configure Go toolchains/SDK in their own
+`MODULE.bazel`.
 
 ## Why a repository extension?
 
@@ -90,9 +95,9 @@ This feature depends on a JSON list of flaky tests and their statuses (e.g. disa
 
 Some repositories host multiple logical services. The multi‑service module extension instantiates one sync per service and creates an aggregator repository that exposes per‑service labels:
 
-- `@test_optimization_data//:test_optimization_files_<service>`  
-- `@test_optimization_data//:test_optimization_context_<service>`  
-- `@test_optimization_data//:module_<service>_<sanitized_module>`  
+- `@test_optimization_data//:test_optimization_files_<sanitized_service>` (for example `go_service` for `go-service`)  
+- `@test_optimization_data//:test_optimization_context_<sanitized_service>`  
+- `@test_optimization_data//:module_<sanitized_service>_<sanitized_module>` (for example `:module_go_service_core`)  
 
 It also exports a mapping so macros can select a service by key without consumers having to hardcode repo aliases.
 

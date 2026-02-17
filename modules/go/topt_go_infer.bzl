@@ -19,6 +19,8 @@ Selection model:
 5) fallback to full bundle when no module match exists
 
 Maintenance notes:
+- This file belongs to the Go companion module and is the only place that
+  should read rules_go providers for orchestration selection.
 - Keep provider access defensive (`getattr` / `hasattr`) because rules_go
   provider internals can vary across versions.
 - Never make selection failure fatal; always preserve the safe fallback to the
@@ -27,27 +29,13 @@ Maintenance notes:
 
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
 # GoArchive still exists separately.
-load("@rules_go//go/private:providers.bzl", "GoArchive", "GoInfo")
-load("//tools:common_utils.bzl", "sanitize_label_fragment")
+load("@rules_go//go:def.bzl", "GoArchive", "GoInfo")
+load(
+    "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
+    "select_module_group_name",
+)
 
-def _select_module_group_name(importpath, module_group_names, include_per_module, module_label_override = None):
-    """Choose the per-module filegroup name for an importpath.
-
-    Returns an empty string when per-module selection is disabled or when no
-    module_<sanitized> group matches, signaling callers to use full bundle
-    fallback behavior.
-    """
-    if not include_per_module:
-        # Coarse feature gate from macro; selector still returns full bundle.
-        return ""
-    sanitized = module_label_override or sanitize_label_fragment(importpath or "")
-    if not sanitized:
-        return ""
-    expected_name = "module_%s" % sanitized
-    for name in module_group_names:
-        if name == expected_name:
-            return name
-    return ""
+_select_module_group_name = select_module_group_name
 
 # Public alias for unit tests.
 select_module_group_name_for_tests = _select_module_group_name

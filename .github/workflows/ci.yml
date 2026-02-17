@@ -22,11 +22,22 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/...
 
+      - name: Run Bazel tests (go companion module)
+        shell: bash
+        run: >
+          cd modules/go &&
+          ../../bazelw test //...
+          --override_module=datadog-rules-test-optimization=../..
+
+      - name: Build examples
+        shell: bash
+        run: ./bazelw build //examples/...
+
       # Exercises the uploader end-to-end against a local mock server.
       - name: Run mock server integration tests (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: tools/tests/integration/run_mock_server_tests.sh
+        run: ./tools/tests/integration/run_mock_server_tests.sh
 
       # Runs the same integration harness on Windows.
       - name: Run mock server integration tests (Windows)
@@ -56,9 +67,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify core/go module versions are aligned
+        shell: bash
+        run: python3 tools/dev/check_module_versions.py
+
       - name: Verify schema files are in sync
         shell: bash
-        run: python3 tools/schemas/sync_agentless_schema.py --check
+        run: python3 tools/core/schemas/sync_agentless_schema.py --check
 
   powershell-lint:
     runs-on: windows-latest
@@ -99,6 +114,21 @@ jobs:
         shell: bash
         run: >
           ./bazelw test //tools/...
+          --spawn_strategy=sandboxed
+          --strategy=TestRunner=sandboxed
+          --sandbox_default_allow_network=false
+          --modify_execution_info=TestRunner=+block-network
+          --test_env=TZ=UTC
+          --test_env=LANG=C
+          --test_env=LC_ALL=C
+          --enable_runfiles
+
+      - name: Run Bazel tests (go companion hermetic lane)
+        shell: bash
+        run: >
+          cd modules/go &&
+          ../../bazelw test //...
+          --override_module=datadog-rules-test-optimization=../..
           --spawn_strategy=sandboxed
           --strategy=TestRunner=sandboxed
           --sandbox_default_allow_network=false

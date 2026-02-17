@@ -15,6 +15,8 @@ Maintenance notes:
 - Any change here can affect sync, multi-sync, uploader, and test helpers.
   Favor additive changes and preserve backwards compatibility of helper
   contracts (inputs/outputs).
+- Keep this module rules-engine neutral (`rules_go`, etc. must not be loaded
+  from core utilities).
 - Validation helpers return normalized values and may call `fail(...)` when
   invariants are violated.
 - Logging helpers should never print secrets.

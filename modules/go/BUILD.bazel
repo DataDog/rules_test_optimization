@@ -1,0 +1,4 @@
+exports_files([
+    "topt_go_test.bzl",
+    "topt_go_infer.bzl",
+])

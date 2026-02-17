@@ -26,7 +26,7 @@ Developer navigation:
 """
 
 # Usage pattern:
-#   bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
+#   bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 #
 # Key features:
 # - Discovers all test.outputs/ directories in bazel-testlogs automatically
@@ -482,7 +482,7 @@ def _uploader_impl(ctx):
     # 4) return DefaultInfo exposing the correct executable for the target OS
     #
     # Keep template substitutions explicit and centralized. If new placeholders
-    # are introduced, add tests in `tools/tests/test_uploader_utils.bzl` to
+    # are introduced, add tests in `tools/tests/core/test_uploader_utils.bzl` to
     # lock behavior and avoid cross-platform drift.
     # ------------------------------------------------------------------
     # Phase 1: Read rule attributes and discover optional runfile artifacts.
@@ -4373,8 +4373,8 @@ dd_payload_uploader = rule(
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
         # Schema + validator bundled for best-effort payload validation
-        "_schema": attr.label(default = "//tools:schemas/agentless-schema.json", allow_single_file = True),
-        "_schema_validator": attr.label(default = "//tools:validate_payload_schema.py", allow_single_file = True),
+        "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
+        "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),
         # Private attribute to detect Windows platform
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
@@ -4409,7 +4409,7 @@ Path resolution notes:
 
 Usage:
     # In BUILD.bazel at workspace root
-    load("@datadog-rules-test-optimization//tools:test_optimization_uploader.bzl", "dd_payload_uploader")
+    load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
     dd_payload_uploader(
         name = "dd_upload_payloads",
@@ -4417,7 +4417,7 @@ Usage:
     )
 
     # After running tests:
-    bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
+    bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 
 Exit codes:
     0 - All payloads uploaded successfully (or no payloads found)
