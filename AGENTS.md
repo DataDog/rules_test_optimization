@@ -11,6 +11,7 @@ The solution separates concerns into three phases:
 ## Documentation
 - Overview: see `docs/Initial_documentation.md` for how the solution works (architecture, data flow, and operational notes).
 - Problem statement & proposal: see `docs/RFC.md` for background rationale and trade-offs (historical context).
+- Migration steps: see `docs/MIGRATION.md` for split-era Go load path and module dependency updates.
 - Usage snippets: see `examples/README.md` for copy/paste single-service and multi-service examples.
 
 Agents: start with the Overview, then `README.md` for current operational behavior. Use the RFC when you need design rationale or trade-off context.
@@ -64,6 +65,7 @@ The sync rule creates `@test_optimization_data//` containing:
   ```
 - Typical workflow: edit Starlark, then `./bazelw test //tools/...`.
 - Companion Go workflow: `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`.
+- Release guard: `python3 tools/dev/check_module_versions.py` (core/go version alignment).
 
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.

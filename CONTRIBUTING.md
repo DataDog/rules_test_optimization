@@ -4,6 +4,7 @@
 
 - Create a feature branch for each change.
 - Keep pull requests focused (core-only, go-companion-only, or docs-only when possible).
+- For split-era Go migration updates, keep `docs/MIGRATION.md` in sync with README snippets.
 - Preserve public label contracts from sync outputs:
   - `:test_optimization_files`
   - `:test_optimization_context`
@@ -17,6 +18,8 @@
   - `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
 - Build examples from root:
   - `./bazelw build //examples/...`
+- Verify core/go module version alignment:
+  - `python3 tools/dev/check_module_versions.py`
 - Integration harness:
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
   - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
@@ -29,11 +32,12 @@
   - core tests (`//tools/...`) on Linux/macOS/Windows
   - go companion tests (`modules/go`) on Linux/macOS/Windows
   - integration harness on Linux/macOS (`.sh`) and Windows (`.ps1`)
-  - examples build on Linux
+  - examples build on Linux/macOS/Windows
 - `bazel-tests-hermetic`:
   - core tests with hermetic flags
   - go companion tests with hermetic flags
-- Lint lanes:
+- Utility/lint lanes:
+  - module version alignment check (`tools/dev/check_module_versions.py`)
   - shell scripts, PowerShell, schema sync checks
 
 ## Maintainer Invariants
@@ -56,12 +60,19 @@
 ## Release Runbook (Core + Go Companion)
 
 - Version alignment:
-  - Publish core and go companion with aligned versions for initial rollout.
+  - Keep root `MODULE.bazel` and `modules/go/MODULE.bazel` versions aligned.
+  - Keep the Go companion dependency on core aligned with the same version.
+  - Run `python3 tools/dev/check_module_versions.py` before every release cut.
 - Publication order:
   1. Publish core module metadata/artifacts.
   2. Publish go companion metadata/artifacts (depends on core).
 - Companion source mapping:
   - Ensure release metadata maps companion sources to `modules/go` (strip-prefix/subdirectory strategy).
+- BCR metadata checklist (performed in the Bazel Central Registry repo):
+  - Core module entry includes `MODULE.bazel`, `metadata.json`, and `source.json`.
+  - Go companion entry includes `MODULE.bazel`, `metadata.json`, and `source.json`.
+  - Companion `source.json` uses a `strip_prefix` that resolves to `modules/go` at archive root.
+  - Generate scaffolding with BCR helper tooling (for example `bazel run //tools:add_module`) and then verify each generated file.
 - Pre-announce validation:
   - core tests, go companion tests, examples build, integration harness, hermetic lane all green.
 - Rollback notes:

@@ -26,7 +26,12 @@ def service_mapping_entries(topt_data):
 
 def normalize_user_data(user_data):
     """Normalize caller-provided `data` into a mutable list."""
-    return list(user_data or [])
+    if user_data == None:
+        return []
+    # A single label can be passed as a string; keep it atomic.
+    if type(user_data) == type(""):
+        return [user_data]
+    return list(user_data)
 
 def resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_macro"):
     """Resolve a requested service key within a multi-service mapping."""

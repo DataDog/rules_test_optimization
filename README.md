@@ -141,6 +141,7 @@ load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test"
 Migration note:
 - Old (removed): `load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")`
 - New: `load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")`
+- Full migration checklist: `docs/MIGRATION.md`
 
 ### Core-only consumer (no Go companion)
 
@@ -189,8 +190,10 @@ use_repo(
 # Consuming labels (aggregator):
 #  - All files for one service
 #    @test_optimization_data//:test_optimization_files_go_service
-#  - One module for one service (module label sanitized by the single-service repo)
+#  - One module for one service (service + module label in the aggregator repo)
 #    @test_optimization_data//:module_go_service_core
+# Per-service repos are primarily used for per-service exports like:
+#   load("@test_optimization_data_go_service//:export.bzl", "topt_data")
 
 # Macros that expect "topt_data" can use either:
 # 1) Select explicitly:
@@ -247,7 +250,7 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 git_repository(
     name = "datadog_rules_test_optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "3107bb94a9adbc6523cfe90901824ca2e7b6a6d2",
+    commit = "29d783764facb90967134e84ca0585c0e41b8ba0",  # Example: pin to an existing commit.
 )
 
 # Or:
@@ -257,7 +260,7 @@ git_repository(
 # )
 ```
 
-Use a commit or release tag that exists in this repository and keep it up to date with your dependency policy.
+Prefer release tags once published. Until tags are available, pin an existing commit SHA.
 
 If your environment requires `http_archive`, use an internal mirror and pin all three
 values (`urls`, `strip_prefix`, and `sha256`). Example format:
@@ -268,10 +271,12 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "datadog_rules_test_optimization",
     urls = [
-        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/3107bb94a9adbc6523cfe90901824ca2e7b6a6d2.tar.gz",
+        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/29d783764facb90967134e84ca0585c0e41b8ba0.tar.gz",
     ],
-    strip_prefix = "rules_test_optimization-3107bb94a9adbc6523cfe90901824ca2e7b6a6d2",
-    sha256 = "<internal-mirror-sha256>",
+    # Match your mirrored archive layout. For commit archives, this is typically
+    # "rules_test_optimization-<full_commit_sha>".
+    strip_prefix = "rules_test_optimization-29d783764facb90967134e84ca0585c0e41b8ba0",
+    sha256 = "<sha256-for-archive>",
 )
 ```
 
@@ -720,6 +725,7 @@ bazel @BazelFlags run //:dd_upload_payloads
    ```bzl
    dd_topt_go_test(
        name = "my_test",
+       go_test_rule = go_test,
        module_label_override = "my_expected_module",  # Matches :module_my_expected_module
        ...
    )
@@ -768,6 +774,8 @@ Maintainer/contributor quick checks (split-aware):
   - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
 - Hermetic lane parity (local smoke):
   - run the same test commands with sandbox/network-blocking flags used in CI.
+- Version alignment guard:
+  - `python3 tools/dev/check_module_versions.py`
 
 Troubleshooting bootstrap resolution:
 - Root workspace should resolve `@datadog-rules-test-optimization-go` via the
@@ -776,6 +784,15 @@ Troubleshooting bootstrap resolution:
   dependency cycle (`core -> go -> core`).
 - Schema ownership remains in core:
   - `tools/core/schemas/*` and `tools/core/validate_payload_schema.py`.
+
+BCR publication note (performed in the Bazel Central Registry repo):
+- Publish entries for both modules:
+  - `datadog-rules-test-optimization`
+  - `datadog-rules-test-optimization-go`
+- Each module entry must include `MODULE.bazel`, `metadata.json`, and
+  `source.json`.
+- Companion `source.json` must map archive root to `modules/go` via
+  `strip_prefix`.
 
 ## Configuration and attributes
 

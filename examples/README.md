@@ -113,6 +113,13 @@ use_repo(
 )
 ```
 
+Repository roles in multi-service mode:
+- `@test_optimization_data//...` (aggregator) exposes combined per-service labels
+  such as `:test_optimization_files_<service>` and
+  `:module_<service>_<module_label>`.
+- `@test_optimization_data_<service>//...` (per-service repos) are useful when
+  loading a service-specific export dictionary directly.
+
 BUILD.bazel — Option A (explicit selection, inference via embed):
 
 ```bzl

@@ -58,6 +58,21 @@ service_mapping_entries_for_tests = _service_mapping_entries
 resolve_topt_service_key_for_tests = _resolve_topt_service_key
 normalize_user_data_for_tests = _normalize_user_data
 
+def _build_module_labels(sync_repo_name, labels):
+    if labels == None:
+        return []
+    if type(labels) != type([]) and type(labels) != type(()):
+        fail("dd_topt_go_test: selected service topt_data['labels'] must be a list or tuple")
+
+    module_labels = []
+    for lab in labels:
+        if type(lab) != type(""):
+            fail("dd_topt_go_test: selected service topt_data['labels'] entries must be strings")
+        module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
+    return module_labels
+
+build_module_labels_for_tests = _build_module_labels
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
@@ -176,10 +191,7 @@ def dd_topt_go_test(
     # Build the list of per-module groups once (if any were exported)
     # Use exported sanitized labels directly to avoid re-deriving naming policy
     # in the macro and drifting from sync-side label generation.
-    module_labels = []
-    _labels = _svc.get("labels") or []
-    for lab in _labels:
-        module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
+    module_labels = _build_module_labels(sync_repo_name, _svc.get("labels"))
 
     # Fallback importpath when providers are unavailable: go_module_path + Bazel package
     pkg_path = native.package_name()

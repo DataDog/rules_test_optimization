@@ -67,6 +67,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify core/go module versions are aligned
+        shell: bash
+        run: python3 tools/dev/check_module_versions.py
+
       - name: Verify schema files are in sync
         shell: bash
         run: python3 tools/core/schemas/sync_agentless_schema.py --check
