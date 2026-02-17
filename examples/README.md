@@ -80,6 +80,23 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 exit $test_status
 ```
 
+```powershell
+# Run tests (preserving exit code) then upload payloads
+bazel test //...
+$testStatus = $LASTEXITCODE
+if ($null -eq $testStatus) { $testStatus = 0 }
+# Assumes DD_API_KEY and DD_SITE are already set in environment
+bazel run //:dd_upload_payloads
+exit $testStatus
+
+# RBE users: download outputs so uploader can discover payload files
+bazel test //... --remote_download_outputs=all
+$testStatus = $LASTEXITCODE
+if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_upload_payloads
+exit $testStatus
+```
+
 Notes:
 - The sequence above intentionally preserves the test exit code.
 - Uploader failures are still reported in uploader logs/output; monitor those in CI.

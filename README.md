@@ -2,14 +2,199 @@
 
 This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
 
+> First release status: module metadata currently uses `1.0.0`, but Bazel Central Registry publication is still pending. Until BCR entries are published, install with `git_override` (Bzlmod) or commit-pinned `git_repository` / `http_archive` (WORKSPACE).
+
 ## Documentation map
 
 - `README.md` (this file): setup, usage, runtime behavior, and troubleshooting
 - `docs/Initial_documentation.md`: architecture and data-flow deep dive
 - `docs/RFC.md`: design rationale, trade-offs, and historical proposal context
+- `docs/Installation_Reference.md`: complete Bzlmod/WORKSPACE setup reference
+- `docs/Uploader_Reference.md`: complete uploader/runtime behavior reference
+- `docs/Troubleshooting.md`: full troubleshooting playbook
+- `docs/Configuration_Reference.md`: full attribute and environment reference
+- `docs/Maintainers.md`: maintainer workflows, CI/release checks, and repository internals
 - `examples/README.md`: copy/paste snippets for single-service and multi-service setup
 
+## Onboarding paths
+
+Pick the path that matches your repository:
+
+- **Bzlmod + core only (any language):** sync + uploader integration without language-specific macros
+- **Bzlmod + Go companion:** `dd_topt_go_test` macro with importpath inference
+- **Bzlmod + multi-service monorepo:** one sync extension, per-service labels/exports
+- **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled
+- **Other languages:** use core sync/uploader now; add a companion orchestration module when needed (see "Other languages (without companion macro)")
+
+## First-run checklist (all scenarios)
+
+Use this checklist before your first CI rollout:
+
+1. Keep the generated repo name as `test_optimization_data` (or consistently replace it in labels/commands if you choose another name).
+2. Forward required environment variable names in `.bazelrc`:
+   - `common --repo_env=DD_API_KEY`
+   - `common --repo_env=DD_SITE`
+   - `test --test_env=DD_API_KEY`
+   - `test --test_env=DD_SITE`
+3. Create exactly one uploader target at workspace root:
+   - `//:dd_upload_payloads` via `dd_payload_uploader(...)`
+4. Run tests, then uploader, while preserving test exit code.
+5. If using remote execution, add `--remote_download_outputs=all` on test runs.
+
+## Quickstart by scenario
+
+### Bzlmod + core only (any language)
+
+Use this when you do not need `dd_topt_go_test`:
+
+```bzl
+# MODULE.bazel
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+)
+
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+test_optimization_sync.test_optimization_sync(name = "test_optimization_data")
+use_repo(test_optimization_sync, "test_optimization_data")
+```
+
+```bzl
+# BUILD.bazel (workspace root)
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
+```
+
+```bash
+bazel test //... || test_status=$?; test_status=${test_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+exit $test_status
+```
+
+```powershell
+bazel test //...
+$testStatus = $LASTEXITCODE
+if ($null -eq $testStatus) { $testStatus = 0 }
+# Assumes DD_API_KEY and DD_SITE are already set in environment
+bazel run //:dd_upload_payloads
+exit $testStatus
+```
+
+### Bzlmod + Go companion (`dd_topt_go_test`)
+
+Start from the core-only quickstart above, then add these extra module
+dependencies:
+
+```bzl
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/go",
+)
+bazel_dep(name = "rules_go", version = "0.59.0")
+```
+
+Then use `dd_topt_go_test` in your package:
+
+```bzl
+load("@rules_go//go:def.bzl", "go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    topt_data = topt_data,
+    go_test_rule = go_test,
+)
+```
+
+### Bzlmod + multi-service monorepo
+
+```bzl
+topt_multi = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
+    "test_optimization_multi_sync_extension",
+)
+
+topt_multi.test_optimization_multi_sync(
+    name = "test_optimization_data",
+    services = ["go-service", "ruby-service"],
+    runtime_name = "go",
+    runtime_version = "1.24.0",
+)
+
+use_repo(
+    topt_multi,
+    "test_optimization_data",
+    "test_optimization_data_go_service",
+    "test_optimization_data_ruby_service",
+)
+```
+
+For macro consumers, load `topt_data_by_service` from
+`@test_optimization_data//:export.bzl` and select by `topt_service`.
+
+### WORKSPACE mode
+
+WORKSPACE remains supported for v1. Minimal setup:
+
+```bzl
+# WORKSPACE
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "datadog_rules_test_optimization",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+)
+
+load("@datadog_rules_test_optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+
+test_optimization_sync(name = "test_optimization_data")
+```
+
+Use `docs/Installation_Reference.md` for mirrored `http_archive`, Go toolchain
+setup, uploader wiring, and full WORKSPACE details.
+
+### Other languages
+
+Use the core-only path above, then wire your language test rule/macro so it:
+
+1. Includes `@test_optimization_data//:test_optimization_files` in `data`
+2. Sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to the manifest runfile path
+3. Sets `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
+4. Writes payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
+5. Adds `@test_optimization_data//:test_optimization_context` to uploader `data`
+
+For a generic wrapper pattern, see "Other languages (without companion macro)".
+
 ## Requirements
+
+### Command convention
+
+- Consumer repository commands in this README use `bazel`
+- Repository-maintainer workflows in this repo use `./bazelw` (see `docs/Maintainers.md`)
+
+### Compatibility snapshot
+
+| Component | Recommended baseline | Notes |
+|-----------|----------------------|-------|
+| Bazel | `5.0+` | Needed for `TEST_UNDECLARED_OUTPUTS_DIR` payload collection path |
+| rules_go (Go users) | `0.59.0` | README examples use this version; importpath inference requires `0.51.0+` |
+| Go toolchain (example) | `1.24.0` | Consumer repositories may use another supported version |
+| Module versions | `1.0.0` metadata | BCR publication is pending; use commit pin/override install paths |
 
 - **Bazel 5.0+** - Required for `TEST_UNDECLARED_OUTPUTS_DIR` support used by payload collection
 - **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
@@ -96,330 +281,14 @@ filegroup(
 # provided by the dd_topt_go_test macro (see modules/go/topt_go_test.bzl).
 ```
 
-## Installation (Bzlmod)
+## Advanced installation and setup
 
-In your `MODULE.bazel`:
+The quickstarts above cover the most common onboarding paths.
 
-```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")  # only if using dd_topt_go_test
-bazel_dep(name = "rules_go", version = "0.59.0")  # configure toolchains in your repo as usual
+For complete setup matrices and advanced options, use:
 
-# Optional: develop locally
-local_path_override(
-    module_name = "datadog-rules-test-optimization",
-    path = "/absolute/path/to/datadog-rules-test-optimization",
-)
-local_path_override(
-    module_name = "datadog-rules-test-optimization-go",
-    path = "/absolute/path/to/datadog-rules-test-optimization/modules/go",
-)
-
-test_optimization_sync = use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")
-
-# Minimal usage: defaults to writing under .testoptimization and creating the filegroup
-test_optimization_sync.test_optimization_sync(
-    name = "test_optimization_data",
-)
-
-use_repo(test_optimization_sync, "test_optimization_data")
-```
-
-Core module note: `datadog-rules-test-optimization` is runtime-agnostic and does
-not declare `rules_go`. Go-specific orchestration lives in the companion module
-`datadog-rules-test-optimization-go`, which depends on `rules_go` for provider
-types only (toolchains are still configured by consumers).
-
-### Go companion module (implemented)
-
-Go macro/aspect entrypoints now come from the companion module:
-
-```bzl
-load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
-```
-
-Migration note:
-- Old (removed): `load("@datadog-rules-test-optimization//tools/go:topt_go_test.bzl", "dd_topt_go_test")`
-- New: `load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")`
-
-### Core-only consumer (no Go companion)
-
-If your repository only needs sync + uploader integration (no Go macro), depend
-on the core module only:
-
-```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-
-test_optimization_sync = use_extension(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
-    "test_optimization_sync_extension",
-)
-test_optimization_sync.test_optimization_sync(name = "test_optimization_data")
-use_repo(test_optimization_sync, "test_optimization_data")
-```
-
-### Multi-service usage (Bzlmod)
-
-Fetch multiple services with one extension and select per-service data by label:
-
-```bzl
-# MODULE.bazel
-topt_multi = use_extension(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
-    "test_optimization_multi_sync_extension",
-)
-
-topt_multi.test_optimization_multi_sync(
-    name = "test_optimization_data",
-    services = ["go-service", "ruby-service"],
-    runtime_name = "go",
-    runtime_version = "1.24",
-    debug = True,
-)
-
-use_repo(
-    topt_multi,
-    # Aggregator repo
-    "test_optimization_data",
-    # Per-service repos (auto-created, names include sanitized service key)
-    "test_optimization_data_go_service",
-    "test_optimization_data_ruby_service",
-)
-
-# Consuming labels (aggregator):
-#  - All files for one service
-#    @test_optimization_data//:test_optimization_files_go_service
-#  - One module for one service (service + module label in the aggregator repo)
-#    @test_optimization_data//:module_go_service_core
-# Per-service repos are primarily used for per-service exports like:
-#   load("@test_optimization_data_go_service//:export.bzl", "topt_data")
-
-# Macros that expect "topt_data" can use either:
-# 1) Select explicitly:
-#    load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-#    dd_topt_go_test(..., topt_data = topt_data_by_service["go_service"], go_test_rule = go_test)
-# 2) Pass the mapping and choose via topt_service (keeps BUILD simpler):
-#    dd_topt_go_test(..., topt_data = topt_data_by_service, topt_service = "go_service", go_test_rule = go_test)
-#    When service names sanitize to the same key, pass the deduped key shown in
-#    the available list (for example "go_service_2").
-```
-
-Additional helper file exported by the generated repository:
-
-- `export.bzl` with a single dictionary `topt_data` containing:
-  - `repo_name`: external repository name created by the sync rule (e.g., `test_optimization_data`)
-  - `manifest_path`: path to `manifest.txt` inside the generated repo (defaults to `.testoptimization/manifest.txt`, respects `out_dir`)
-  - `labels`: list of available per-module sanitized labels
-  - `set`: dict-as-set keyed by sanitized labels for fast membership checks
-  - `runtimes["go"]`: nested object with:
-    - `module_path`: detected Go module path (may be empty)
-    - `sanitized_module_path`: sanitized label fragment for `module_path`
-    - `module_included`: boolean; true when the detected Go module has a matching per-module filegroup. The `dd_topt_go_test` macro uses this flag only when falling back to `<module_path>/<bazel package>`; it is ignored when `importpath` is inferred via `embed` or explicitly provided.
-
-Then in any BUILD file:
-
-```bzl
-filegroup(
-    name = "dd_test_opt_files",
-    srcs = ["@test_optimization_data//:test_optimization_files"],
-)
-
-# Access context.json separately (for the uploader)
-filegroup(
-    name = "dd_test_opt_context",
-    srcs = ["@test_optimization_data//:test_optimization_context"],
-)
-```
-
-## Installation (WORKSPACE / Bazel without Bzlmod)
-
-If your project uses legacy WORKSPACE mode (for example older Bazel versions or
-environments where Bzlmod is disabled), use the repository rule path below.
-
-WORKSPACE note (split-era Go users):
-- Core sync/uploader usage remains supported as documented below.
-- Go macro usage is Bzlmod-first; if you stay on WORKSPACE, load from
-  `@datadog_rules_test_optimization//modules/go:topt_go_test.bzl` and ensure
-  `rules_go` is configured in your workspace.
-
-### 1) Add this repository in `WORKSPACE`
-
-```bzl
-load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-
-git_repository(
-    name = "datadog_rules_test_optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    # Pin to a split-era revision that includes modules/go/ entrypoints.
-    commit = "<split-era-commit-or-tag>",
-)
-
-# Or:
-# local_repository(
-#     name = "datadog_rules_test_optimization",
-#     path = "/absolute/path/to/rules_test_optimization",
-# )
-```
-
-Prefer release tags once published. Until tags are available, pin an existing commit SHA.
-For WORKSPACE Go macro usage, pin a revision that contains
-`modules/go/topt_go_test.bzl` (split-era layout).
-
-If your environment requires `http_archive`, use an internal mirror and pin all three
-values (`urls`, `strip_prefix`, and `sha256`). Example format:
-
-```bzl
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "datadog_rules_test_optimization",
-    urls = [
-        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<split-era-commit-or-tag>.tar.gz",
-    ],
-    # Match your mirrored archive layout. For commit archives this is typically:
-    # "rules_test_optimization-<full_commit_sha>".
-    strip_prefix = "rules_test_optimization-<split-era-commit-or-tag>",
-    sha256 = "<sha256-for-archive>",
-)
-```
-
-If your mirror repackages archives, adjust `strip_prefix` to the archive's actual top-level directory.
-
-### 2) Instantiate the repository rule in `WORKSPACE`
-
-```bzl
-load("@datadog_rules_test_optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
-
-test_optimization_sync(
-    name = "test_optimization_data",
-    # Optional:
-    # service = "my-service",
-    # runtime_name = "go",
-    # runtime_version = "go1.22",
-    # known_tests = True,
-    # test_management = True,
-)
-```
-
-### 3) Depend on the generated files in BUILD files
-
-```bzl
-filegroup(
-    name = "dd_test_opt_files",
-    srcs = ["@test_optimization_data//:test_optimization_files"],
-)
-
-filegroup(
-    name = "dd_test_opt_context",
-    srcs = ["@test_optimization_data//:test_optimization_context"],
-)
-```
-
-### 4) Add the uploader target (ONE per workspace)
-
-Create a single uploader target at your workspace root:
-
-```bzl
-# In root BUILD.bazel
-load("@datadog_rules_test_optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    # Provide context.json via runfiles so enrichment can occur
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-```
-
-### 5) Forward environment variables in `.bazelrc`
-
-```bash
-# Repository rule (module/repo phase) — affects refetch
-common --repo_env=DD_API_KEY
-common --repo_env=DD_SITE
-common --repo_env=DD_TEST_OPTIMIZATION_API_BASE  # Optional override for Datadog API base URL (test/dev)
-common --repo_env=DD_SERVICE
-common --repo_env=DD_ENV
-common --repo_env=DD_GIT_REPOSITORY_URL
-common --repo_env=DD_GIT_BRANCH
-common --repo_env=DD_GIT_COMMIT_SHA
-common --repo_env=DD_GIT_HEAD_COMMIT
-common --repo_env=DD_GIT_COMMIT_MESSAGE
-common --repo_env=DD_GIT_HEAD_MESSAGE
-# Optional: override detected Go module path for export.bzl
-common --repo_env=GO_MODULE_PATH
-# Optional TTL: common --repo_env=FETCH_SALT
-
-# Uploader (bazel run, pass credentials inline or export before run)
-# DD_API_KEY and DD_SITE are passed when running the uploader:
-#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-
-# Tests (runtime)
-test --test_env=DD_API_KEY
-test --test_env=DD_SITE
-test --test_env=DD_TRACE_AGENT_URL
-test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
-```
-
-Security note: keep secret *values* out of `.bazelrc`. Forward variable names with
-`--repo_env=DD_API_KEY` and provide values via your shell/CI secret store at runtime.
-
-### 6) Configure Go support in WORKSPACE (for `dd_topt_go_test`)
-
-If your repository already configures `rules_go`, keep your existing setup and
-skip to the BUILD snippet below.
-
-In `WORKSPACE`:
-
-```bzl
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "io_bazel_rules_go",
-    urls = [
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
-    ],
-    sha256 = "<rules_go_sha256>",
-)
-
-http_archive(
-    name = "bazel_gazelle",
-    urls = [
-        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.0/bazel-gazelle-v0.39.0.tar.gz",
-    ],
-    sha256 = "<bazel_gazelle_sha256>",
-)
-
-load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
-go_rules_dependencies()
-go_register_toolchains(version = "1.24.0")
-
-load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
-gazelle_dependencies()
-```
-
-Then in your Go package `BUILD.bazel`:
-
-```bzl
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog_rules_test_optimization//modules/go:topt_go_test.bzl", "dd_topt_go_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
-
-go_library(
-    name = "pkg_lib",
-    srcs = ["*.go"],
-)
-
-dd_topt_go_test(
-    name = "pkg_go_test",
-    srcs = ["*_test.go"],
-    embed = [":pkg_lib"],  # Enables provider-based importpath inference
-    topt_data = topt_data,
-    go_test_rule = go_test,
-)
-```
-
-Note: in WORKSPACE mode, repository names in labels use underscores
-(`@datadog_rules_test_optimization`) and not Bzlmod module names with hyphens.
+- `docs/Installation_Reference.md` for full Bzlmod/WORKSPACE flows
+- `docs/Configuration_Reference.md` for attribute and environment details
 
 ## Uploading test and coverage payloads
 
@@ -447,173 +316,49 @@ bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$
 bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 ```
 
+```powershell
+# RECOMMENDED: Run tests, then upload payloads (preserves test exit code)
+bazel test //...
+$testStatus = $LASTEXITCODE
+if ($null -eq $testStatus) { $testStatus = 0 }
+# Assumes DD_API_KEY and DD_SITE are already set in environment
+bazel run //:dd_upload_payloads
+exit $testStatus
+
+# REMOTE EXECUTION (RBE) - add flag to download outputs:
+bazel test //... --remote_download_outputs=all
+$testStatus = $LASTEXITCODE
+if ($null -eq $testStatus) { $testStatus = 0 }
+# Assumes DD_API_KEY and DD_SITE are already set in environment
+bazel run //:dd_upload_payloads
+exit $testStatus
+```
+
 **IMPORTANT**: Always preserve the test exit code! Using plain `;` causes CI to report success even when tests fail.
 
-### Add the uploader target
+### Important runtime requirements
 
-```bzl
-# In BUILD.bazel at workspace root
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+1. Use `bazel run` (not `bazel test`) for uploader execution.
+2. Use a single uploader target per workspace (do not run concurrent uploaders).
+3. Tests must run locally, or use `--remote_download_outputs=all`.
+4. Run uploader on the same machine/workspace where tests executed.
 
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    # Provide context.json via runfiles so enrichment can occur
-    data = ["@test_optimization_data//:test_optimization_context"],
-    # Optional settings:
-    # quiescent_sec = 10,      # Wait for filesystem to settle (default: 10)
-    # max_wait_sec = 300,      # Max wait before proceeding (default: 300)
-    # fail_on_error = False,   # Fail if no payloads found when tests ran
-    # debug = False,           # Enable debug logging
-    # gzip_payloads = False,   # Gzip test payloads before upload
-)
-```
+### Full uploader reference
 
-### Upload modes
+For complete uploader details, use `docs/Uploader_Reference.md`, including:
 
-- **Agentless mode (default):** Requires `DD_API_KEY` and `DD_SITE`; uploads directly to Datadog intake
-- **Agent/EVP mode:** Requires `DD_TRACE_AGENT_URL`; uploads via local agent or EVP proxy
-
-### Passing credentials
-
-```bash
-# Option 1: Agentless mode - Inline (recommended for CI)
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-
-# Option 2: Agent/EVP mode
-DD_TRACE_AGENT_URL="http://localhost:8126" bazel run //:dd_upload_payloads
-
-# Option 3: Export before run
-export DD_API_KEY="your-api-key"
-export DD_SITE="datadoghq.com"
-bazel run //:dd_upload_payloads
-```
-
-### Exit codes
-
-- `0` - All payloads uploaded successfully (or no payloads found)
-- `1` - One or more uploads failed (partial success: successfully uploaded files are still deleted)
-- `2` - Configuration error (invalid TESTLOGS_DIR, missing credentials, etc.)
-
-### Optional environment variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
-| `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
-| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
-| `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip **test** payloads before upload (adds `Content-Encoding: gzip`) |
-| `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
-| `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
-| `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
-| `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
-| `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
-
-### Endpoints and headers
-
-- Agentless (when `DD_TRACE_AGENT_URL` unset):
-  - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
-  - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
-  - Requires `DD_API_KEY`
-  - Test/dev override: set `DD_TEST_OPTIMIZATION_INTAKE_BASE` to use a custom base URL (agentless only)
-- EVP proxy (when `DD_TRACE_AGENT_URL` set):
-  - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
-  - Adds `X-Datadog-EVP-Subdomain` per endpoint
-- Test payloads are JSON (msgpack not available in Starlark). Coverage is multipart with `event` and `coveragex` parts.
-
-### Reliability
-
-- HTTP requests use a 60-second timeout
-- Failed requests are retried up to 3 times with a 2-second delay between attempts
-- Both transient errors (connection issues) and HTTP errors (4xx/5xx) trigger retries
-- Behavior is consistent across Linux/macOS (bash/curl) and Windows (PowerShell)
-
-### Metadata enrichment (context.json)
-
-- When `context.json` is present in runfiles (provided via the `data` attribute), the uploader enriches each test payload by merging all non-null keys from `context.json` into the payload under `metadata.*`.
-- If `context.json` is not present (or if `jq` is unavailable on Unix), test payloads are uploaded as-is.
-- The `context.json` file is produced by the sync extension and contains non-secret CI/Git/OS/runtime tags suitable for reuse at test time.
-- Bazel rule identity is included as stable tags: `test.bazel.rule_name` and `test.bazel.rule_version`.
-- `test`, `test_suite_end`, `test_module_end`, and `test_session_end` events are also enriched with `test.codeowners` when a source file can be resolved, owners are found, and the field is not already present.
-- CODEOWNERS lookup order is: `<ci.workspace_path>/CODEOWNERS`, `<ci.workspace_path>/.github/CODEOWNERS`, `<ci.workspace_path>/.gitlab/CODEOWNERS`, `<ci.workspace_path>/docs/CODEOWNERS`, `<ci.workspace_path>/.docs/CODEOWNERS`, then `<workspace>/...` equivalents, then `./CODEOWNERS`, and finally `<script_dir>/CODEOWNERS`.
-- Matching uses GitHub-style glob semantics with "last matching rule wins". The stored value is a JSON-array string (for example: `["@team/a","@team/b"]` as string content in `test.codeowners`).
-- Absolute source paths outside repository-derived roots are ignored for CODEOWNERS fallback matching.
-- CODEOWNERS enrichment is best-effort: parse/lookup failures and misses do not fail uploads; debug mode logs counters and skip reasons.
-
-### Payload schema validation (best effort)
-
-- Test payload schema validation runs only when all of the following are available in runfiles/environment: the bundled schema JSON, the validator script, and `python3`.
-- If any validation dependency is unavailable, validation is skipped and uploads continue.
-- If validation runs and fails, the uploader logs a warning and continues uploading.
-
-### Test-time environment variables
-
-The macro sets the following environment variables for instrumented tests:
-
-- `DD_TEST_OPTIMIZATION_MANIFEST_FILE`: Runfile path to `manifest.txt` in the synced repo. The macro uses `topt_data["manifest_path"]` so custom `out_dir` values are supported. Libraries resolve this via Bazel runfiles and call `filepath.Dir()` to derive the directory containing synced files (`manifest.txt`, `context.json`, and `cache/http/*`).
-- `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`: Always set to `"true"`. Signals to the library that payloads should be written to `TEST_UNDECLARED_OUTPUTS_DIR`.
-
-### Critical requirements
-
-1. **Use `bazel run` (not `bazel test`)** - The uploader is a normal rule, not a test
-2. **Use a SINGLE uploader target per workspace** - Do NOT run multiple uploaders concurrently (enforced via lock file)
-3. **Tests must run locally OR use `--remote_download_outputs=all`** - Remote execution without downloading outputs leaves `bazel-testlogs/` empty
-4. **Same workspace/machine requirement** - The uploader MUST run on the same machine and workspace where tests executed
+- uploader target attributes and optional environment variables
+- agentless vs EVP credential modes and endpoint behavior
+- retry/reliability semantics and exit codes
+- metadata enrichment (`context.json`, CODEOWNERS) and schema validation
 
 ## Convenience macro: dd_topt_go_test
 
-The `dd_topt_go_test` macro simplifies setting up Go tests with Datadog Test Optimization. It creates a go_test target with the necessary environment variables and data dependencies.
+The `dd_topt_go_test` macro creates a `go_test` target with Datadog Test
+Optimization data/env wiring included.
 
-By default, the macro also:
-- Sets `rundir` to the current Bazel package when not explicitly provided
-
-If tests read local fixtures (for example under `testdata/`), declare them explicitly in `data`:
-
-```bzl
-dd_topt_go_test(
-    name = "pkg_go_test",
-    srcs = ["*_test.go"],
-    data = glob(["testdata/**"]),
-    topt_data = topt_data,
-    go_test_rule = go_test,
-)
-```
-
-## Adding a New Language Orchestration Module
-
-Use this checklist when adding `dd_topt_<language>_test` support:
-
-1. **Wrapper macro**
-   - Add a companion module under `modules/<language>/` with a wrapper macro that accepts:
-     - `name`
-     - `topt_data` (single-service dict or multi-service mapping)
-     - `topt_service` (optional for multi-service selection)
-     - language test-rule symbol injection (similar to `go_test_rule`)
-   - Ensure it appends selector + manifest labels to `data` and sets:
-     - `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
-     - `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
-
-2. **Selector / inference rule**
-   - Add analysis-time selection logic in `modules/<language>/`:
-     - precedence: explicit identifier -> inferred identifier -> fallback identifier -> full bundle
-     - module label resolution should match `module_<sanitized>` names from sync outputs
-   - Keep fallback-to-full-bundle behavior non-fatal.
-
-3. **Companion module dependency policy**
-   - Keep root core module (`datadog-rules-test-optimization`) free of language-specific rule dependencies.
-   - Put language-specific dependencies (for example `rules_go`, `rules_python`, etc.) in the companion module only.
-   - Use repo-qualified loads back to core shared helpers when needed.
-
-4. **Runtime metadata keys**
-   - Extend sync-exported runtime metadata under:
-     - `topt_data["runtimes"]["<language>"]`
-   - Keep core keys stable (`repo_name`, `manifest_path`, `labels`, `set`) and avoid changing generated public label names.
-
-5. **Tests**
-   - Add unit tests for:
-     - macro service-selection and data/env wiring
-     - selector precedence + fallback behavior
-     - sync export shape for runtime metadata
-   - Extend integration harness coverage if language runtime inference/selection adds new branches.
+By default, it also sets `rundir` to the current Bazel package when not
+explicitly provided.
 
 ### Basic usage
 
@@ -630,7 +375,7 @@ go_library(
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
-    embed = [":pkg_lib"],    # enables provider-based importpath inference
+    embed = [":pkg_lib"],  # enables provider-based importpath inference
     topt_data = topt_data,
     go_test_rule = go_test,
 )
@@ -642,6 +387,29 @@ Then run tests and upload:
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 exit $test_status
+```
+
+```powershell
+bazel test //...
+$testStatus = $LASTEXITCODE
+if ($null -eq $testStatus) { $testStatus = 0 }
+# Assumes DD_API_KEY and DD_SITE are already set in environment
+bazel run //:dd_upload_payloads
+exit $testStatus
+```
+
+### If tests use local fixtures
+
+Declare fixture files explicitly in `data`:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    data = glob(["testdata/**"]),
+    topt_data = topt_data,
+    go_test_rule = go_test,
+)
 ```
 
 ### Import path inference
@@ -669,366 +437,70 @@ dd_topt_go_test(
 )
 ```
 
+## Other languages (without companion macro)
+
+Core sync + uploader support is runtime-agnostic and works for any language
+runtime that honors the file-mode contract.
+
+### Generic wrapper pattern
+
+For non-Go rules, wire the same env/data contract in your own test macro:
+
+```bzl
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+my_lang_test(
+    name = "my_lang_test",
+    srcs = ["test_file.ext"],
+    data = ["@test_optimization_data//:test_optimization_files"],
+    env = {
+        "DD_TEST_OPTIMIZATION_MANIFEST_FILE": topt_data["manifest_path"],
+        "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+    },
+)
+```
+
+Depending on your rule set, the exact attributes may differ (`env`, `data`,
+args, wrapper script, etc.), but the required contract is always:
+
+1. Resolve `DD_TEST_OPTIMIZATION_MANIFEST_FILE` via runfiles
+2. Set `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
+3. Write payloads to `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
+
+### Building a first-class companion module
+
+If you want `dd_topt_<language>_test`-style first-class support in this repo,
+follow the maintainer checklist in `docs/Maintainers.md`.
+
 ## Troubleshooting
 
-### Repository rule not fetching data
+Use the quick triage map and detailed playbook in `docs/Troubleshooting.md`.
 
-**Symptom**: Build succeeds but test optimization files are empty or stale.
+Fast checks before diving deep:
 
-**Solutions**:
+- Verify env forwarding (`DD_API_KEY`, `DD_SITE`) and force refetch:
+  - `bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
+  - If Bazel reports WORKSPACE-disabled sync errors, retry with:
+    `bazel sync --enable_workspace --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
+- Confirm payload files exist under `bazel-testlogs/*/test.outputs/`
+- For RBE, rerun tests with `--remote_download_outputs=all`
+- Enable debug logging on sync/uploader rules for richer diagnostics
+- If needed, file an issue with sanitized logs:
+  - https://github.com/DataDog/rules_test_optimization/issues
 
-1. **Verify DD_API_KEY is set**:
-   ```bash
-   bazel info --repo_env | grep DD_API_KEY
-   ```
-   If not set, add to `.bazelrc`:
-   ```
-   common --repo_env=DD_API_KEY
-   ```
+## Maintainer and engineering docs
 
-2. **Force refetch** with a cache-busting salt:
-   ```bash
-   bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s)
-   ```
+Maintainer/contributor workflows are documented in `docs/Maintainers.md`,
+including CI parity checks, integration harness usage, schema sync, and release
+publishing steps.
 
-3. **Check repository cache** to see if the rule ran:
-   ```bash
-   # Find the external repository directory
-   bazel info output_base
-   # Repository contents at: $(bazel info output_base)/external/test_optimization_data
-   ls -la $(bazel info output_base)/external/test_optimization_data/.testoptimization/
-   ```
+## Full configuration reference
 
-4. **Enable debug logging** in your `MODULE.bazel`:
-   ```bzl
-   test_optimization_sync.test_optimization_sync(
-       name = "test_optimization_data",
-       debug = True,  # Verbose logging
-   )
-   ```
+For complete attribute/environment reference and fetch behavior details, see
+`docs/Configuration_Reference.md`.
 
-### Uploader not finding payloads
-
-**Symptom**: Uploader runs but says "no payload files found".
-
-**Solutions**:
-
-1. **Check if tests wrote payloads**:
-   ```bash
-   find bazel-testlogs -name "test.outputs" -type d
-   ls bazel-testlogs/*/test.outputs/payloads/tests/
-   ```
-
-2. **Verify tracer support**: Ensure your tracer/runtime supports file mode via `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES` and manifest discovery via `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
-
-3. **Check DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES**: The macro should set this to "true". Verify your test's environment:
-   ```bash
-   bazel test //your:test --test_output=all 2>&1 | grep DD_TEST_OPTIMIZATION
-   ```
-
-4. **For RBE users**: Add `--remote_download_outputs=all` to download test outputs locally
-
-### Non-standard bazel-testlogs location
-
-**Symptom**: Uploader can't find `bazel-testlogs` directory.
-
-**Solution**: Set `TESTLOGS_DIR` explicitly using the same Bazel flags:
-
-```bash
-# Bash - use array for multiple flags
-BAZEL_FLAGS=("--output_base=/custom/base")
-TESTLOGS_DIR=$(bazel "${BAZEL_FLAGS[@]}" info bazel-testlogs) bazel "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads
-```
-
-```powershell
-# PowerShell
-$BazelFlags = @("--output_base=/custom/base")
-$env:TESTLOGS_DIR = (bazel @BazelFlags info bazel-testlogs)
-bazel @BazelFlags run //:dd_upload_payloads
-```
-
-### Tests not uploading (network errors)
-
-**Symptom**: Uploader fails with network errors.
-
-**Solutions**:
-
-1. **Verify credentials**:
-   - Agentless mode requires: `DD_API_KEY`, `DD_SITE`
-   - Agent mode requires: `DD_TRACE_AGENT_URL`
-
-2. **Check firewall/proxy** allows HTTPS to:
-   - `https://citestcycle-intake.datadoghq.com`
-   - `https://citestcov-intake.datadoghq.com`
-   (or equivalent for your DD_SITE)
-
-3. **Enable debug logging**:
-   ```bzl
-   dd_payload_uploader(
-       name = "dd_upload_payloads",
-       debug = True,
-       ...
-   )
-   ```
-
-### Per-module files not found
-
-**Symptom**: `dd_topt_go_test` fails with "module_X not found" or falls back to full bundle.
-
-**Solutions**:
-
-1. **List available modules**:
-   ```bash
-   bazel query 'kind(".*", @test_optimization_data//...)' | grep module_
-   ```
-
-2. **Override module label** explicitly (as workaround):
-   ```bzl
-   dd_topt_go_test(
-       name = "my_test",
-       go_test_rule = go_test,
-       module_label_override = "my_expected_module",  # Matches :module_my_expected_module
-       ...
-   )
-   ```
-
-### Windows-specific issues
-
-**Symptom**: PowerShell errors or path issues.
-
-**Solutions**:
-
-1. **Verify PowerShell execution policy**:
-   ```powershell
-   Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-   ```
-
-2. **Check paths use forward slashes** in Starlark/Bazel contexts (backward slashes are auto-converted).
-
-### Getting help
-
-If issues persist:
-
-1. **Enable debug mode** and capture full output:
-   ```bash
-   bazel sync --only=test_optimization_data --repo_env=FETCH_SALT=$(date +%s) 2>&1 | tee debug.log
-   ```
-
-2. **Collect diagnostic info**:
-   - Bazel version: `bazel version`
-   - OS: `uname -a` (Linux/macOS) or `systeminfo` (Windows)
-   - Repository rule outputs (as shown above)
-   - Sanitized logs (remove API keys before sharing)
-
-3. **File an issue** at: https://github.com/DataDog/rules_test_optimization/issues
-
-## Engineering Runbook
-
-Maintainer/contributor quick checks (split-aware):
-
-- Core rules/tests from repo root:
-  - `./bazelw test //tools/...`
-- Go companion tests from module root:
-  - `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
-- Integration harness:
-  - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
-  - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
-- Hermetic lane parity (local smoke):
-  - run the same test commands with sandbox/network-blocking flags used in CI.
-- Version alignment guard:
-  - `python3 tools/dev/check_module_versions.py`
-
-Troubleshooting bootstrap resolution:
-- Root workspace should resolve `@datadog-rules-test-optimization-go` via the
-  dev bootstrap extension in `tools/dev/go_bootstrap.bzl`.
-- Do not add a root `bazel_dep` edge from core to go companion; that creates a
-  dependency cycle (`core -> go -> core`).
-- Schema ownership remains in core:
-  - `tools/core/schemas/*` and `tools/core/validate_payload_schema.py`.
-
-BCR publication note (performed in the Bazel Central Registry repo):
-- Publish entries for both modules:
-  - `datadog-rules-test-optimization`
-  - `datadog-rules-test-optimization-go`
-- Each module entry must include `MODULE.bazel`, `metadata.json`, and
-  `source.json`.
-- Companion `source.json` must map archive root to `modules/go` via
-  `strip_prefix`.
-
-## Configuration and attributes
-
-Extension tag: `test_optimization_sync.test_optimization_sync(...)`
-
-- Required
-  - `name`: external repository name to create
-
-- Optional
-  - `out_dir` (string): base output directory. Defaults to `.testoptimization` (settings and test management output file names are fixed as `settings.json` and `test_management.json` under `out_dir`). Must be a non-empty relative path (absolute paths and `..` traversal segments are rejected). The actual manifest path is exported via `topt_data["manifest_path"]`.
-  - `service` (string): overrides service name. Precedence: `service` attr > `DD_SERVICE` env > `"unnamed-service"`
-  - `runtime_name` (string): optional runtime name to include in configurations (e.g. `go`)
-  - `runtime_version` (string): optional runtime version to include in configurations (e.g. `go1.22`)
-  - `runtime_arch` (string): optional runtime architecture. Defaults to auto-detected `os.architecture` when not provided
-  - `known_tests` (bool, default `True`): local kill-switch for Known Tests. When `False`, the Known Tests request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `known_tests_enabled: false`.
-  - `test_management` (bool, default `True`): local kill-switch for Test Management Tests. When `False`, the Test Management request is skipped and a minimal stub is written. The downloaded `settings.json` is also updated to set `test_management.enabled: false`.
-  - `debug` (bool): default `False`. Enables verbose logging
-
-Notes:
-- If optional file attributes are omitted, defaults are used under `out_dir` and do not affect the repository rule cache key.
-- Parent directories are created automatically for all output paths.
-
-## Uploader attributes
-
-Rule: `dd_payload_uploader(...)`
-
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | string | required | Target name |
-| `quiescent_sec` | int | `10` | Seconds to wait for filesystem to settle before uploading |
-| `max_wait_sec` | int | `300` | Maximum seconds to wait for payloads (`0` skips waiting when no payloads are present) |
-| `fail_on_error` | bool | `False` | Exit with error if no payloads found when tests ran |
-| `debug` | bool | `False` | Enable debug logging |
-| `keep_payloads` | bool | `False` | Keep payload files after successful upload |
-| `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
-| `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
-| `data` | label_list | `[]` | Data files to include (e.g., context.json for enrichment) |
-
-## How data is fetched
-
-The rule executes curl with timeouts and retries to these Datadog endpoints:
-
-- Settings: `https://api.<DD_SITE>/api/v2/libraries/tests/services/setting`
-- Known Tests: `https://api.<DD_SITE>/api/v2/ci/libraries/tests`
-- Test Management Tests: `https://api.<DD_SITE>/api/v2/test/libraries/test-management/tests`
-
-Settings response attributes determine which follow-up requests are sent:
-
-- `known_tests_enabled` → triggers Known Tests
-- `test_management.enabled` → triggers Test Management Tests
-
-If a feature is disabled, the rule still writes a minimal stub JSON for that output file so consumers can always depend on the filegroup.
-
-## Environment variables
-
-The rule uses the following environment variables (they are declared in `environ`, and thus affect the repository rule cache key). The extension auto-detects CI providers and maps their environment variables to unified fields (repository URL, branch, SHA, etc.). Datadog-specific `DD_*` variables override provider-derived values.
-
-### Datadog and generic inputs
-
-- `DD_API_KEY` (required): Datadog API key
-- `DD_SITE` (optional): site domain (e.g., `datadoghq.com`, `datadoghq.eu`). If a value like `app.datadoghq.com` is provided, it is normalized to use `api.<site>`
-- `FETCH_SALT` (optional): use to force re-fetch, e.g., `--repo_env=FETCH_SALT=$(date +%s)`
-- `GO_MODULE_PATH` (optional): explicit Go module path override used when emitting `export.bzl`
-
-### Datadog Git overrides (highest precedence)
-
-- `DD_GIT_REPOSITORY_URL`
-- `DD_GIT_BRANCH`
-- `DD_GIT_COMMIT_SHA`
-- `DD_GIT_HEAD_COMMIT`
-- `DD_GIT_COMMIT_MESSAGE`
-- `DD_GIT_HEAD_MESSAGE`
-
-### CI provider detection
-
-The extension auto-detects these CI providers and maps their environment variables:
-
-- GitHub Actions, GitLab CI, Jenkins, CircleCI, Azure Pipelines, Buildkite, Travis CI, Bitbucket, AppVeyor, TeamCity, Bitrise, Codefresh, AWS CodeBuild, Drone
-
-All detection variables are declared in `environ` to ensure changes re-run the repository rule. Extra CI metadata inputs include `APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH`, `CI_PROJECT_PATH`, `GITHUB_WORKFLOW`, `TRAVIS_JOB_WEB_URL`, and `BUILD_URL`.
-
-## Wrapper script (bazelw)
-
-This repo provides a `bazelw` wrapper to simplify running with the right `--repo_env` variables:
-
-- Computes Git metadata when a Git repo is present and forwards via `--repo_env`
-- Precedence: if you export any `DD_GIT_*` variables in your shell, they override the computed ones
-
-Examples:
-
-```sh
-# Refresh only on git environment variables
-./bazelw build //...
-
-# Refresh on an hourly TTL
-FETCH_SALT_TTL=3600 ./bazelw build //...
-
-# Override computed Git metadata
-DD_GIT_REPOSITORY_URL=https://github.com/acme/api.git \
-DD_GIT_BRANCH=main \
-DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
-./bazelw test //tools/...
-```
-
-## Integration tests (mock server)
-
-For a full end-to-end flow (sync + uploader) without hitting Datadog, run:
-
-```sh
-tools/tests/integration/run_mock_server_tests.sh
-```
-
-On Windows, use the PowerShell entrypoint (or the `cmd.exe` wrapper):
-
-```powershell
-.\tools\tests\integration\run_mock_server_tests.ps1
-```
-
-```bat
-tools\tests\integration\run_mock_server_tests.cmd
-```
-
-The Windows PowerShell entrypoint reuses the same Bash harness for parity and
-prefers Git for Windows `bash.exe` (or `DD_TEST_OPTIMIZATION_GIT_BASH` when set).
-
-This starts a local mock HTTP server and uses the following test-only overrides:
-
-- `DD_TEST_OPTIMIZATION_API_BASE` to redirect sync requests
-- `DD_TEST_OPTIMIZATION_INTAKE_BASE` to redirect uploader requests (agentless only)
-- The harness asserts CODEOWNERS enrichment/preservation and runfile manifest
-  fallback behavior (including BOM/tab exact keys and suffix-key resolution).
-- On assertion failures, it prints focused uploader diagnostics plus manifest
-  uploader log tails to speed up cross-platform triage.
-
-CI note: `.github/workflows/ci.yml` also runs a dedicated hermetic lane
-(`bazel-tests-hermetic`) on Linux with sandboxed execution and network blocking.
-This is intentional: it catches hidden host/network dependencies that can pass
-in normal local runs but fail in locked-down CI environments. By policy, this
-lane is Linux-only for now; macOS/Windows remain covered by the normal
-`bazel-tests` matrix plus the mock-server integration harness.
-
-Reproducibility policy: this repository tracks both `.bazelversion` and
-`MODULE.bazel.lock` in git to reduce local/CI toolchain and module-resolution
-drift over time.
-Current PR CI gates `./bazelw test //tools/...` plus the mock-server integration
-harness on each OS; when changing targets outside `//tools/...`, run
-both split test workflows locally before opening the PR:
-
-```sh
-./bazelw test //tools/...
-cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
-```
-
-Split workflows are canonical for this repository because `modules/go` is also
-validated as an independent Bazel module root in CI.
-
-## Schema sync helper
-
-The source of truth for the uploader payload schema is:
-
-- `tools/core/schemas/agentless-schema.yaml`
-
-Regenerate the runtime JSON schema after YAML edits:
-
-```sh
-python3 tools/core/schemas/sync_agentless_schema.py
-```
-
-Check whether both files are in sync (CI/pre-commit friendly):
-
-```sh
-python3 tools/core/schemas/sync_agentless_schema.py --check
-```
-
-The helper uses PyYAML when available and falls back to Ruby's built-in YAML parser.
+For full uploader runtime options and semantics, see
+`docs/Uploader_Reference.md`.
 
 ## Tips
 
