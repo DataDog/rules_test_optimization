@@ -11,6 +11,10 @@ load(
     "resolve_topt_service_key_for_tests",
     "service_mapping_entries_for_tests",
 )
+load(
+    "//tests:example_stub_repo.bzl",
+    "render_stub_build_for_tests",
+)
 
 def _service_mapping_entries_filters_non_service_test(ctx):
     """Validate filtering of non-service entries in aggregator mappings."""
@@ -107,6 +111,33 @@ def _build_module_labels_valid_test(ctx):
     )
     return unittest.end(env)
 
+def _go_stub_includes_manifest_in_files_test(ctx):
+    """Ensure companion stub test_optimization_files includes manifest."""
+    env = unittest.begin(ctx)
+    settings = ".testoptimization/cache/http/settings.json"
+    manifest = ".testoptimization/manifest.txt"
+    known_tests = ".testoptimization/cache/http/known_tests.json"
+    test_management = ".testoptimization/cache/http/test_management.json"
+    context = ".testoptimization/context.json"
+
+    content = render_stub_build_for_tests(
+        settings,
+        manifest,
+        known_tests,
+        test_management,
+        context,
+    )
+    filegroup_start = content.find('name = "test_optimization_files"')
+    context_group_start = content.find('name = "test_optimization_context"')
+    asserts.true(env, filegroup_start >= 0)
+    asserts.true(env, context_group_start > filegroup_start)
+    filegroup_block = content[filegroup_start:context_group_start]
+    asserts.true(env, settings in filegroup_block)
+    asserts.true(env, manifest in filegroup_block)
+    asserts.true(env, known_tests in filegroup_block)
+    asserts.true(env, test_management in filegroup_block)
+    return unittest.end(env)
+
 def _build_module_labels_invalid_shape_target_impl(_ctx):
     build_module_labels_for_tests("repo_name", "mod_a")
     return []
@@ -140,6 +171,7 @@ resolve_topt_service_key_prefers_exact_then_sanitized_test = unittest.make(_reso
 select_module_group_name_test = unittest.make(_select_module_group_name_test)
 normalize_user_data_handles_none_test = unittest.make(_normalize_user_data_handles_none_test)
 build_module_labels_valid_test = unittest.make(_build_module_labels_valid_test)
+go_stub_includes_manifest_in_files_test = unittest.make(_go_stub_includes_manifest_in_files_test)
 build_module_labels_invalid_shape_failure_test = analysistest.make(
     _build_module_labels_invalid_shape_failure_test_impl,
     expect_failure = True,

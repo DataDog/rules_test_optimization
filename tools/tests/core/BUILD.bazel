@@ -43,6 +43,16 @@ load(
     "decode_json_object_valid_test",
     "dd_site_normalization_test",
     "dirname_test",
+    "example_stub_includes_manifest_in_files_test",
+    "normalize_out_dir_or_fail_test",
+    "normalize_out_dir_empty_failure_test",
+    "normalize_out_dir_empty_target_rule",
+    "normalize_out_dir_absolute_failure_test",
+    "normalize_out_dir_absolute_target_rule",
+    "normalize_out_dir_traversal_failure_test",
+    "normalize_out_dir_traversal_target_rule",
+    "normalize_out_dir_windows_drive_failure_test",
+    "normalize_out_dir_windows_drive_target_rule",
     "export_bzl_manifest_path_test",
     "http_execute_timeout_seconds_test",
     "module_label_map_collision_test",
@@ -114,8 +124,20 @@ dirname_test(
     timeout = "short",
 )
 
+normalize_out_dir_or_fail_test(
+    name = "normalize_out_dir_or_fail_test",
+    size = "small",
+    timeout = "short",
+)
+
 export_bzl_manifest_path_test(
     name = "export_bzl_manifest_path_test",
+    size = "small",
+    timeout = "short",
+)
+
+example_stub_includes_manifest_in_files_test(
+    name = "example_stub_includes_manifest_in_files_test",
     size = "small",
     timeout = "short",
 )
@@ -290,6 +312,46 @@ decode_json_object_empty_failure_test(
     target_under_test = ":decode_json_object_empty_target",
 )
 
+normalize_out_dir_empty_target_rule(
+    name = "normalize_out_dir_empty_target",
+    tags = ["manual"],
+)
+
+normalize_out_dir_empty_failure_test(
+    name = "normalize_out_dir_empty_failure_test",
+    target_under_test = ":normalize_out_dir_empty_target",
+)
+
+normalize_out_dir_absolute_target_rule(
+    name = "normalize_out_dir_absolute_target",
+    tags = ["manual"],
+)
+
+normalize_out_dir_absolute_failure_test(
+    name = "normalize_out_dir_absolute_failure_test",
+    target_under_test = ":normalize_out_dir_absolute_target",
+)
+
+normalize_out_dir_traversal_target_rule(
+    name = "normalize_out_dir_traversal_target",
+    tags = ["manual"],
+)
+
+normalize_out_dir_traversal_failure_test(
+    name = "normalize_out_dir_traversal_failure_test",
+    target_under_test = ":normalize_out_dir_traversal_target",
+)
+
+normalize_out_dir_windows_drive_target_rule(
+    name = "normalize_out_dir_windows_drive_target",
+    tags = ["manual"],
+)
+
+normalize_out_dir_windows_drive_failure_test(
+    name = "normalize_out_dir_windows_drive_failure_test",
+    target_under_test = ":normalize_out_dir_windows_drive_target",
+)
+
 decode_json_object_non_json_target_rule(
     name = "decode_json_object_non_json_target",
     tags = ["manual"],
@@ -453,7 +515,9 @@ test_suite(
         ":normalize_ref_test",
         ":parse_go_module_path_test",
         ":dirname_test",
+        ":normalize_out_dir_or_fail_test",
         ":export_bzl_manifest_path_test",
+        ":example_stub_includes_manifest_in_files_test",
         ":sanitize_label_fragment_test",
         ":dedup_keys_test",
         ":validate_service_name_test",
@@ -477,6 +541,10 @@ test_suite(
         ":record_sync_extension_repo_owner_success_test",
         ":decode_json_object_valid_test",
         ":decode_json_object_empty_failure_test",
+        ":normalize_out_dir_empty_failure_test",
+        ":normalize_out_dir_absolute_failure_test",
+        ":normalize_out_dir_traversal_failure_test",
+        ":normalize_out_dir_windows_drive_failure_test",
         ":decode_json_object_non_json_failure_test",
         ":decode_json_object_array_failure_test",
         ":decode_json_object_malformed_object_failure_test",

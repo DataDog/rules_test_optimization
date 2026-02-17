@@ -196,6 +196,31 @@ def _dirname(path):
         return ""
     return "/".join(segs[:-1])
 
+def _normalize_out_dir_or_fail(out_dir):
+    """Validate and normalize sync `out_dir` into a safe relative path."""
+    # Keep output paths predictable and avoid traversal/absolute path inputs.
+    raw = (out_dir or "").strip()
+    if not raw:
+        fail("test_optimization_sync: out_dir must be a non-empty relative path")
+
+    normalized = raw.replace("\\", "/")
+    if normalized.startswith("/"):
+        fail("test_optimization_sync: out_dir must be relative (absolute paths are not allowed): %s" % repr(out_dir))
+    if len(normalized) >= 2 and normalized[1] == ":":
+        fail("test_optimization_sync: out_dir must not include a Windows drive prefix: %s" % repr(out_dir))
+
+    segments = []
+    for seg in normalized.split("/"):
+        if seg == "" or seg == ".":
+            continue
+        if seg == "..":
+            fail("test_optimization_sync: out_dir must not contain '..' path traversal segments: %s" % repr(out_dir))
+        segments.append(seg)
+
+    if not segments:
+        fail("test_optimization_sync: out_dir must resolve to a non-empty relative path: %s" % repr(out_dir))
+    return "/".join(segments)
+
 def _try_read_abs_file(ctx, abs_path):
     """Best-effort absolute file read on host, returning empty string on miss."""
     # _try_read_abs_file: best-effort read of a file at an absolute path using host tools.
@@ -959,6 +984,7 @@ build_module_label_map_for_tests = _build_module_label_map
 normalize_ref_for_tests = _normalize_ref
 parse_go_module_path_for_tests = _parse_go_module_path
 dirname_for_tests = _dirname
+normalize_out_dir_or_fail_for_tests = _normalize_out_dir_or_fail
 render_export_bzl_for_tests = _render_export_bzl
 http_connect_timeout_seconds_for_tests = HTTP_CONNECT_TIMEOUT_SECONDS
 http_max_time_seconds_for_tests = HTTP_MAX_TIME_SECONDS
@@ -1570,7 +1596,7 @@ def _impl(ctx):
     log_info("GIT_DIRTY: %s" % (git_dirty if git_dirty else "<unset>"))
 
     # Perform the settings request (compute and ensure directories exist for outputs)
-    out_dir = ctx.attr.out_dir or TEST_OPT_DIR
+    out_dir = _normalize_out_dir_or_fail(ctx.attr.out_dir or TEST_OPT_DIR)
     settings_file = "%s/%s" % (out_dir, "cache/http/settings.json")
     known_tests_file = "%s/%s" % (out_dir, "cache/http/known_tests.json")
     test_management_file = "%s/%s" % (out_dir, "cache/http/test_management.json")
