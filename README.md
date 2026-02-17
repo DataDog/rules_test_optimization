@@ -6,15 +6,15 @@ This repository provides Bazel integrations that fetch Datadog Test Optimization
 
 ## Documentation map
 
-- `README.md` (this file): setup, usage, runtime behavior, and troubleshooting
-- `docs/Initial_documentation.md`: architecture and data-flow deep dive
-- `docs/RFC.md`: design rationale, trade-offs, and historical proposal context
-- `docs/Installation_Reference.md`: complete Bzlmod/WORKSPACE setup reference
-- `docs/Uploader_Reference.md`: complete uploader/runtime behavior reference
-- `docs/Troubleshooting.md`: full troubleshooting playbook
-- `docs/Configuration_Reference.md`: full attribute and environment reference
-- `docs/Maintainers.md`: maintainer workflows, CI/release checks, and repository internals
-- `examples/README.md`: copy/paste snippets for single-service and multi-service setup
+- [`README.md`](README.md) (this file): setup, usage, runtime behavior, and troubleshooting
+- [`docs/Initial_documentation.md`](docs/Initial_documentation.md): architecture and data-flow deep dive
+- [`docs/RFC.md`](docs/RFC.md): design rationale, trade-offs, and historical proposal context
+- [`docs/Installation_Reference.md`](docs/Installation_Reference.md): complete Bzlmod/WORKSPACE setup reference
+- [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md): complete uploader/runtime behavior reference
+- [`docs/Troubleshooting.md`](docs/Troubleshooting.md): full troubleshooting playbook
+- [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md): full attribute and environment reference
+- [`docs/Maintainers.md`](docs/Maintainers.md): maintainer workflows, CI/release checks, and repository internals
+- [`examples/README.md`](examples/README.md): copy/paste snippets for single-service and multi-service setup
 
 ## Onboarding paths
 
@@ -24,7 +24,7 @@ Pick the path that matches your repository:
 - **Bzlmod + Go companion:** `dd_topt_go_test` macro with importpath inference
 - **Bzlmod + multi-service monorepo:** one sync extension, per-service labels/exports
 - **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled
-- **Other languages:** use core sync/uploader now; add a companion orchestration module when needed (see "Other languages (without companion macro)")
+- **Other languages:** use core sync/uploader now; add a companion orchestration module when needed (see [Other languages (without companion macro)](#other-languages-without-companion-macro))
 
 ## First-run checklist (all scenarios)
 
@@ -165,7 +165,7 @@ load("@datadog_rules_test_optimization//tools/core:test_optimization_sync.bzl", 
 test_optimization_sync(name = "test_optimization_data")
 ```
 
-Use `docs/Installation_Reference.md` for mirrored `http_archive`, Go toolchain
+Use [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for mirrored `http_archive`, Go toolchain
 setup, uploader wiring, and full WORKSPACE details.
 
 ### Other languages
@@ -178,14 +178,14 @@ Use the core-only path above, then wire your language test rule/macro so it:
 4. Writes payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
 5. Adds `@test_optimization_data//:test_optimization_context` to uploader `data`
 
-For a generic wrapper pattern, see "Other languages (without companion macro)".
+For a generic wrapper pattern, see [Other languages (without companion macro)](#other-languages-without-companion-macro).
 
 ## Requirements
 
 ### Command convention
 
 - Consumer repository commands in this README use `bazel`
-- Repository-maintainer workflows in this repo use `./bazelw` (see `docs/Maintainers.md`)
+- Repository-maintainer workflows in this repo use `./bazelw` (see [`docs/Maintainers.md`](docs/Maintainers.md))
 
 ### Compatibility snapshot
 
@@ -278,7 +278,7 @@ filegroup(
 )
 
 # If you need file paths at test time, use rlocationpaths on the selector target
-# provided by the dd_topt_go_test macro (see modules/go/topt_go_test.bzl).
+# provided by the dd_topt_go_test macro (see [`modules/go/topt_go_test.bzl`](modules/go/topt_go_test.bzl)).
 ```
 
 ## Advanced installation and setup
@@ -287,8 +287,8 @@ The quickstarts above cover the most common onboarding paths.
 
 For complete setup matrices and advanced options, use:
 
-- `docs/Installation_Reference.md` for full Bzlmod/WORKSPACE flows
-- `docs/Configuration_Reference.md` for attribute and environment details
+- [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for full Bzlmod/WORKSPACE flows
+- [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md) for attribute and environment details
 
 ## Uploading test and coverage payloads
 
@@ -345,7 +345,7 @@ exit $testStatus
 
 ### Full uploader reference
 
-For complete uploader details, use `docs/Uploader_Reference.md`, including:
+For complete uploader details, use [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md), including:
 
 - uploader target attributes and optional environment variables
 - agentless vs EVP credential modes and endpoint behavior
@@ -470,11 +470,11 @@ args, wrapper script, etc.), but the required contract is always:
 ### Building a first-class companion module
 
 If you want `dd_topt_<language>_test`-style first-class support in this repo,
-follow the maintainer checklist in `docs/Maintainers.md`.
+follow the maintainer checklist in [`docs/Maintainers.md`](docs/Maintainers.md).
 
 ## Troubleshooting
 
-Use the quick triage map and detailed playbook in `docs/Troubleshooting.md`.
+Use the quick triage map and detailed playbook in [`docs/Troubleshooting.md`](docs/Troubleshooting.md).
 
 Fast checks before diving deep:
 
@@ -488,19 +488,13 @@ Fast checks before diving deep:
 - If needed, file an issue with sanitized logs:
   - https://github.com/DataDog/rules_test_optimization/issues
 
-## Maintainer and engineering docs
+## Reference links
 
-Maintainer/contributor workflows are documented in `docs/Maintainers.md`,
-including CI parity checks, integration harness usage, schema sync, and release
-publishing steps.
-
-## Full configuration reference
-
-For complete attribute/environment reference and fetch behavior details, see
-`docs/Configuration_Reference.md`.
-
-For full uploader runtime options and semantics, see
-`docs/Uploader_Reference.md`.
+- Maintainer/contributor workflows: [`docs/Maintainers.md`](docs/Maintainers.md)
+- Full installation reference: [`docs/Installation_Reference.md`](docs/Installation_Reference.md)
+- Full troubleshooting playbook: [`docs/Troubleshooting.md`](docs/Troubleshooting.md)
+- Configuration and fetch behavior reference: [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md)
+- Uploader runtime reference: [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md)
 
 ## Tips
 
