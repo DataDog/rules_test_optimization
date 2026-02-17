@@ -101,6 +101,8 @@ topt_multi = use_extension(
 topt_multi.test_optimization_multi_sync(
     name = "test_optimization_data",
     services = ["go-service", "ruby-service"],
+    runtime_name = "go",
+    runtime_version = "1.24",
 )
 
 use_repo(

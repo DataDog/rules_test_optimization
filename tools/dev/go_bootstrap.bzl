@@ -21,6 +21,7 @@ def _go_bootstrap_extension_impl(module_ctx):
 
 go_bootstrap_extension = module_extension(
     implementation = _go_bootstrap_extension_impl,
+    doc = "Dev-only extension exposing local Go companion repo via local_go_companion tags.",
     tag_classes = {
         "local_go_companion": tag_class(attrs = {
             "name": attr.string(mandatory = True),

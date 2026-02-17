@@ -130,7 +130,7 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 
   - A single workspace-level uploader target (normal rule, not test) runs via `bazel run` after tests complete.
   - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TRACE_AGENT_URL`), and deletes successfully uploaded files.
-  - Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status`
+  - Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 
 - [Multi‑service monorepos](https://github.com/DataDog/rules_test_optimization/blob/main/tools/core/test_optimization_multi_sync.bzl):  
@@ -228,7 +228,7 @@ Runtime Uploader
 - Since `bazel run` executes locally with full host access, no sandbox workarounds are needed. The uploader runs after all tests complete, discovering payloads that Bazel collected from `TEST_UNDECLARED_OUTPUTS_DIR`.
 - Recommended invocation preserves test exit code:
   ```bash
-  bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
+  bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
   ```
 
 Language Macros

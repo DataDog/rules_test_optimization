@@ -97,11 +97,12 @@ The sync rule creates `@test_optimization_data//` containing:
 Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go companion module declares the `rules_go` dependency to load provider definitions; consumers still configure Go SDK/toolchains in their own `MODULE.bazel`.
 
 ## Maintainer Architecture Map
-- Core ownership (`tools/core/*`): runtime-agnostic sync + uploader + shared helpers; keep it free from language-rule dependencies.
+- Core ownership (`tools/core/*`): runtime-agnostic sync + uploader + shared helpers; keep it free from non-dev language-rule dependencies.
 - Go ownership (`modules/go/*`): Go macro/aspect/selector and Go-specific tests.
 - Bootstrap ownership (`tools/dev/go_bootstrap.bzl`): dev-only local repo wiring for root workspace testing; do not convert it into a module dependency edge.
 - Invariants:
   - root module must not `bazel_dep` the Go companion module (avoid `core -> go -> core` cycle),
+  - root module keeps `rules_go` as dev-only for in-repo examples (not consumer-facing core behavior),
   - Go companion must depend on core and `rules_go`,
   - public generated labels in synced repos remain stable (`test_optimization_files`, `test_optimization_context`, `module_<sanitized>`).
 

@@ -78,7 +78,7 @@ def dd_topt_go_test(
 
     After running tests, use a single workspace-level uploader target to upload
     all payloads:
-        bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
+        bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 
     Args:
       name: Test target name.

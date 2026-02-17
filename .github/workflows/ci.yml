@@ -29,8 +29,7 @@ jobs:
           ../../bazelw test //...
           --override_module=datadog-rules-test-optimization=../..
 
-      - name: Build examples (Linux)
-        if: runner.os == 'Linux'
+      - name: Build examples
         shell: bash
         run: ./bazelw build //examples/...
 
@@ -38,7 +37,7 @@ jobs:
       - name: Run mock server integration tests (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        run: tools/tests/integration/run_mock_server_tests.sh
+        run: ./tools/tests/integration/run_mock_server_tests.sh
 
       # Runs the same integration harness on Windows.
       - name: Run mock server integration tests (Windows)

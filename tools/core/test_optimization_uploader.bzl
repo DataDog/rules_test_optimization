@@ -26,7 +26,7 @@ Developer navigation:
 """
 
 # Usage pattern:
-#   bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
+#   bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 #
 # Key features:
 # - Discovers all test.outputs/ directories in bazel-testlogs automatically
@@ -4417,7 +4417,7 @@ Usage:
     )
 
     # After running tests:
-    bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_upload_payloads; exit $test_status
+    bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 
 Exit codes:
     0 - All payloads uploaded successfully (or no payloads found)

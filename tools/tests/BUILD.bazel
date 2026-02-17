@@ -2,6 +2,10 @@
 #
 # Package-scoped suites:
 # - core: //tools/tests/core:tests
+exports_files([
+    "example_stub_repo.bzl",
+])
+
 test_suite(
     name = "tests",
     tests = [

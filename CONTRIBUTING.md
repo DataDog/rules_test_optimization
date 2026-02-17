@@ -38,7 +38,9 @@
 
 ## Maintainer Invariants
 
-- Root module (`MODULE.bazel`) must stay runtime-agnostic and rules-go free.
+- Root module (`MODULE.bazel`) must stay runtime-agnostic and avoid non-dev
+  language-rule dependencies. (`rules_go` is allowed only as `dev_dependency`
+  for in-repo example builds.)
 - Root module must not declare `bazel_dep(name = "datadog-rules-test-optimization-go", ...)`.
 - Go-specific orchestration stays isolated in `modules/go`.
 - Dev bootstrap wiring in `tools/dev/go_bootstrap.bzl` is dev-only and cycle-safe.
