@@ -1502,7 +1502,7 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
   $retryDelay = 2
   if (-not (Ensure-HttpClientTypes)) {{
     Log "upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
-    return $false
+    return [bool]$false
   }}
   for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {{
     $client = $null
@@ -1511,7 +1511,11 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
       # request state or headers across attempts.
       $client = New-Object System.Net.Http.HttpClient
       $client.Timeout = [TimeSpan]::FromSeconds(60)
-      foreach ($k in $headers.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$headers[$k]) }}
+      foreach ($k in $headers.Keys) {{
+        # Add() returns bool; suppress pipeline output so callers receive only
+        # the explicit boolean return from this function.
+        $null = $client.DefaultRequestHeaders.Add($k, [string]$headers[$k])
+      }}
       Dbg "Send-PostJson: POST $url (file '$file'; attempt $attempt/$maxRetries)"
       if ($script:GzipPayloads) {{
         # Inline gzip keeps implementation dependency-free on Windows hosts.
@@ -1523,7 +1527,7 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
         $compressed = $ms.ToArray()
         $content = New-Object System.Net.Http.ByteArrayContent($compressed)
         $content.Headers.ContentType = 'application/json'
-        $content.Headers.ContentEncoding.Add('gzip')
+        $null = $content.Headers.ContentEncoding.Add('gzip')
         Dbg "Send-PostJson: Content-Type=application/json; Content-Encoding=gzip (bytes=$($compressed.Length))"
       }} else {{
         $content = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8))
@@ -1536,21 +1540,21 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
           $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
           if ($body) {{ Dbg "Send-PostJson response: $body" }}
         }}
-        return $true
+        return [bool]$true
       }} else {{
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Dbg "Send-PostJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
         if ($attempt -eq $maxRetries) {{
           # Emit user-facing failure only after retry budget is exhausted.
           Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
-          return $false
+          return [bool]$false
         }}
       }}
     }} catch {{
       Dbg "Send-PostJson: Exception on attempt $attempt - $_"
       if ($attempt -eq $maxRetries) {{
         Log "upload failed: $_"
-        return $false
+        return [bool]$false
       }}
     }} finally {{
       # Dispose HttpClient each attempt to release sockets promptly in long runs.
@@ -1559,7 +1563,7 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
     # Fixed retry delay keeps behavior deterministic across hosts/CI lanes.
     Start-Sleep -Seconds $retryDelay
   }}
-  return $false
+  return [bool]$false
 }}
 
 function Upload-SingleTest([string]$FilePath) {{
@@ -1576,10 +1580,10 @@ function Upload-SingleTest([string]$FilePath) {{
         Dbg-Headers "common" $hdrs
         Log-StartTimeStats $body
     }}
-    $result = Send-PostJson $TestUrl $hdrs $body
+    $result = [bool](Send-PostJson $TestUrl $hdrs $body)
     # Enriched temp payload is always ephemeral.
     Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
-    return $result
+    return [bool]$result
 }}
 
 function Upload-SingleCoverage([string]$FilePath) {{
@@ -1597,13 +1601,16 @@ function Upload-SingleCoverage([string]$FilePath) {{
     try {{
         if (-not (Ensure-HttpClientTypes)) {{
             Log "coverage upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
-            return $false
+            return [bool]$false
         }}
         $covHeaders = Get-CommonHeaders $null
         $client = New-Object System.Net.Http.HttpClient
         $client.Timeout = [TimeSpan]::FromSeconds(60)
-        foreach ($k in $covHeaders.Keys) {{ $client.DefaultRequestHeaders.Add($k, [string]$covHeaders[$k]) }}
-        if (-not $Agentless) {{ $client.DefaultRequestHeaders.Add('X-Datadog-EVP-Subdomain','citestcov-intake') }}
+        foreach ($k in $covHeaders.Keys) {{
+            # Add() returns bool; suppress pipeline output to preserve boolean semantics.
+            $null = $client.DefaultRequestHeaders.Add($k, [string]$covHeaders[$k])
+        }}
+        if (-not $Agentless) {{ $null = $client.DefaultRequestHeaders.Add('X-Datadog-EVP-Subdomain','citestcov-intake') }}
         if ($script:DebugMode) {{
             Dbg "request: POST $CovUrl"
             Dbg-Headers "common" $covHeaders
@@ -1654,7 +1661,7 @@ function Upload-SingleCoverage([string]$FilePath) {{
         if ($client) {{ $client.Dispose() }}
         Remove-Item -LiteralPath $eventFile -Force -ErrorAction SilentlyContinue
     }}
-    return $uploaded
+    return [bool]$uploaded
 }}
 
 function Upload-AllTests {{
