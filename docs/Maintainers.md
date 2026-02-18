@@ -26,14 +26,17 @@ This document is for contributors and maintainers of
 - Schema ownership remains in core:
   - `tools/core/schemas/*`
   - `tools/core/validate_payload_schema.py`
+- Keep `tools/` runtime-agnostic (`tools/core`, `tools/tests`, `tools/dev`);
+  do not add placeholder language packages under `tools/<language>`.
+  Language-specific orchestration belongs in `modules/<language>/`.
 
 ## Adding a language companion module
 
 Use this checklist when adding `dd_topt_<language>_test` support.
 
 1. **Wrapper macro**
-   - Add a companion module under `modules/<language>/` with a wrapper macro that
-     accepts:
+   - Add a companion module under `modules/<language>/` with a wrapper macro
+     (no `tools/<language>` placeholder package) that accepts:
      - `name`
      - `topt_data` (single-service dict or multi-service mapping)
      - `topt_service` (optional for multi-service selection)
