@@ -376,24 +376,60 @@ REPO_ENVS=(
 CQUERY_OUT=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_files --output=files \
   "${REPO_ENVS[@]}")
 EXECROOT="$("$BAZEL" "${BAZEL_FLAGS[@]}" info execution_root "${REPO_ENVS[@]}" 2>/dev/null || true)"
+EXECROOT="${EXECROOT//$'\r'/}"
+
+path_exists() {
+  # Cross-platform file existence probe that accepts mixed path separators.
+  # This avoids false negatives on Windows where Bash/Python path styles differ.
+  "$PYTHON" - "$1" <<'PY'
+import os
+import sys
+
+path = (sys.argv[1] if len(sys.argv) > 1 else "").strip().rstrip("\r")
+if not path:
+    raise SystemExit(1)
+
+candidates = [path]
+if "\\" in path:
+    candidates.append(path.replace("\\", "/"))
+if "/" in path:
+    candidates.append(path.replace("/", "\\"))
+
+# Git Bash often uses /c/... while Bazel emits C:/... (or vice versa).
+if len(path) >= 3 and path[1] == ":" and path[2] in ("/", "\\"):
+    drive = path[0].lower()
+    rest = path[2:].replace("\\", "/")
+    candidates.append("/%s%s" % (drive, rest))
+
+for cand in candidates:
+    if os.path.isfile(cand):
+        print(cand)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
 
 # Resolve settings.json location from cquery output for validation.
 # Depending on Bazel output mode/platform, the cquery path can be relative to
 # output_base, execution_root, or workspace. Probe each base in order.
 SETTINGS_PATH=""
 while IFS= read -r candidate; do
+  candidate="${candidate//$'\r'/}"
   [[ -z "$candidate" ]] && continue
   if [[ "$candidate" == /* || "$candidate" =~ ^[A-Za-z]:[\\/] ]]; then
-    if [[ -f "$candidate" ]]; then
-      SETTINGS_PATH="$candidate"
+    if resolved="$(path_exists "$candidate" 2>/dev/null)"; then
+      SETTINGS_PATH="$resolved"
       break
     fi
     continue
   fi
-  for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
+  for base in "$OUT_BASE" "$OUT_BASE/execroot/_main" "$EXECROOT" "$WORKSPACE"; do
     [[ -z "$base" ]] && continue
-    if [[ -f "$base/$candidate" ]]; then
-      SETTINGS_PATH="$base/$candidate"
+    base_clean="${base//$'\r'/}"
+    joined="${base_clean%/}/$candidate"
+    if resolved="$(path_exists "$joined" 2>/dev/null)"; then
+      SETTINGS_PATH="$resolved"
       break
     fi
   done
@@ -409,6 +445,8 @@ for line in sys.stdin.read().splitlines():
 
 if [[ -z "$SETTINGS_PATH" ]]; then
   echo "error: failed to resolve settings.json path"
+  echo "resolution bases:"
+  printf '  - %s\n' "$OUT_BASE" "$OUT_BASE/execroot/_main" "$EXECROOT" "$WORKSPACE"
   echo "$CQUERY_OUT"
   exit 1
 fi
