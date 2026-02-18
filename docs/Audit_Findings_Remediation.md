@@ -36,7 +36,7 @@ The following remediation validation matrix was executed after applying fixes:
 |---|---|---|---|---|---|---|---|---|
 | F001 | F10-H1 | Multi-sync extension missing HTTP policy attrs parity with single-sync | confirmed | fix_now | 1 | closed | bazel core test suite | TBD |
 | F002 | F10-H2 | `dd_payload_uploader` explicit visibility not set | confirmed | fix_now | 1 | closed | uploader macro default visibility | TBD |
-| F003 | F10-H3, F11-M5 | Uploader implementation concentrated in very large monolithic template/file | confirmed | fix_now | 4 | closed | helper extraction + expanded uploader utility/integration coverage | TBD |
+| F003 | F10-H3, F11-M5 | Uploader implementation concentrated in very large monolithic template/file | confirmed | fix_now | 4 | closed | uploader templates extracted into dedicated modules + expanded uploader utility/integration coverage | TBD |
 | F004 | F10-H4 | Go infer importpath typing edge case not hardened | partial | fix_now | 4 | closed | type-guarded importpath inference + tests | TBD |
 | F005 | F10-C3 | `validate_payload_schema.py` internals lack direct unit tests | confirmed | fix_now | 3 | closed | direct helper/unit coverage added | TBD |
 | F006 | F10-C4, F10-C8 | Missing comprehensive uploader failure/retry integration scenarios | partial | fix_now | 2 | closed | new 4xx/5xx/unreachable/coverage retry scenarios | TBD |
@@ -94,7 +94,7 @@ The following remediation validation matrix was executed after applying fixes:
 | F058 | F10-M42 | `.cmd` wrapper error clarity can be improved | confirmed | fix_now | 2 | closed | explicit powershell presence check in .cmd | TBD |
 | F059 | F10-M43, F11-M3 | Integration tests outside Bazel suite graph | confirmed | fix_now | 1 | closed | explicit policy documented in tools/tests BUILD | TBD |
 | F060 | F10-M44, F10-M45, F10-L38 | `check_module_versions.py` parsing/path assumptions brittle | confirmed | fix_now | 4 | closed | parser/dep extraction hardened + tests | TBD |
-| F061 | F10-M46 | `go_bootstrap` path existence validation not explicit | partial | fix_now | 4 | closed | bootstrap path validation for empty/absolute/traversal paths | TBD |
+| F061 | F10-M46 | `go_bootstrap` path existence validation not explicit | partial | fix_now | 4 | closed | bootstrap path validation now enforces non-empty relative path and verifies `MODULE.bazel` exists at target path | TBD |
 | F062 | F10-M49 | Fixture schema expectations undocumented/inconsistent | confirmed | fix_now | 5 | closed | fixture contract documented + strict snapshot assertions | TBD |
 | F063 | F10-M50 | Mixed analysistest/unittest style consistency note | confirmed | no_action | 0 | closed | style preference; no defect | N/A |
 | F064 | F10-M51 | Trailing-newline JSON render test does not validate parseability | confirmed | fix_now | 3 | closed | JSON parseability assertion added | TBD |

@@ -22,7 +22,8 @@ This document is for contributors and maintainers of
 - Root workspace resolves `@datadog-rules-test-optimization-go` through
   `tools/dev/go_bootstrap.bzl` (dev-only wiring).
 - `go_bootstrap.local_go_companion(path = "...")` must stay repository-relative
-  (no absolute paths or `..` traversal).
+  (no absolute paths, drive prefixes, or `..` traversal) and must point to a
+  real module root containing `MODULE.bazel`.
 - Do not add a root `bazel_dep` edge from core to the Go companion; that creates
   a dependency cycle (`core -> go -> core`).
 - Schema ownership remains in core:
