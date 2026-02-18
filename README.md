@@ -48,7 +48,10 @@ test_optimization_sync = use_extension(
     "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
 )
-test_optimization_sync.test_optimization_sync(name = "test_optimization_data")
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data",
+    service = "my-service",  # or set DD_SERVICE via --repo_env
+)
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
@@ -72,7 +75,9 @@ exit $test_status
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-# Assumes DD_API_KEY and DD_SITE are already set in environment
+# Set once per shell session before first run:
+# $env:DD_API_KEY = "<your-api-key>"
+# $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 exit $testStatus
 ```
@@ -309,7 +314,9 @@ bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-# Assumes DD_API_KEY and DD_SITE are already set in environment
+# Set once per shell session before first run:
+# $env:DD_API_KEY = "<your-api-key>"
+# $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 exit $testStatus
 
@@ -317,7 +324,6 @@ exit $testStatus
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-# Assumes DD_API_KEY and DD_SITE are already set in environment
 bazel run //:dd_upload_payloads
 exit $testStatus
 ```
@@ -381,7 +387,9 @@ exit $test_status
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-# Assumes DD_API_KEY and DD_SITE are already set in environment
+# Set once per shell session before first run:
+# $env:DD_API_KEY = "<your-api-key>"
+# $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 exit $testStatus
 ```
@@ -437,12 +445,17 @@ For non-Go rules, wire the same env/data contract in your own test macro:
 ```bzl
 load("@test_optimization_data//:export.bzl", "topt_data")
 
+manifest_label = "@%s//:%s" % (topt_data["repo_name"], topt_data["manifest_path"])
+
 my_lang_test(
     name = "my_lang_test",
     srcs = ["test_file.ext"],
-    data = ["@test_optimization_data//:test_optimization_files"],
+    data = [
+        "@test_optimization_data//:test_optimization_files",
+        manifest_label,
+    ],
     env = {
-        "DD_TEST_OPTIMIZATION_MANIFEST_FILE": topt_data["manifest_path"],
+        "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
         "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
     },
 )
@@ -486,5 +499,5 @@ Fast checks before diving deep:
 
 ## Tips
 
-- You can set a TTL via `FETCH_SALT_TTL`.
+- Maintainers: this repository's `./bazelw` supports `FETCH_SALT_TTL` (for example: `FETCH_SALT_TTL=3600 ./bazelw build //...`).
 - For debugging, set `debug = True` when calling the extension to get verbose logs, including request bodies and detected OS info.

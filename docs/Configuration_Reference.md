@@ -75,6 +75,10 @@ changes can invalidate fetch cache entries as expected.
 | `FETCH_SALT` | No | Manual refetch trigger (example: `--repo_env=FETCH_SALT=<timestamp>`) |
 | `GO_MODULE_PATH` | No | Explicit Go module path override used when emitting `export.bzl` |
 
+Note: `FETCH_SALT_TTL` is a convenience variable for this repository's `./bazelw`
+wrapper (not a repository-rule input itself). It periodically derives
+`--repo_env=FETCH_SALT=...` for local maintainer workflows.
+
 ### Datadog Git metadata overrides (highest precedence)
 
 When set, these override auto-detected CI/git metadata:

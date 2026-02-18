@@ -12,4 +12,3 @@ build:hermetic --enable_runfiles
 # Uncomment and provide values via shell/CI secret store:
 # common --repo_env=DD_API_KEY
 # common --repo_env=DD_SITE
-

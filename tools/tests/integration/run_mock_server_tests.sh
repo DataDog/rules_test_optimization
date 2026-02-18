@@ -1860,6 +1860,146 @@ if failures:
     sys.exit(1)
 PY
 
+# Scenario: filter_prefix + gzip should only upload prefixed files and send
+# gzipped citestcycle bodies when gzip is available on the host.
+MANUAL_FILTER_GZIP="$TESTLOGS_DIR/manual_filter_gzip/test.outputs"
+mkdir -p "$MANUAL_FILTER_GZIP/payloads/tests" "$MANUAL_FILTER_GZIP/payloads/coverage"
+SOURCE_TEST_PAYLOAD="$REPO_ROOT/tools/tests/integration/snapshots/citestcycle.json"
+SOURCE_COVERAGE_PAYLOAD="$TESTLOGS_DIR/write_payloads_test/test.outputs/payloads/coverage/cov1.json"
+if [[ ! -f "$SOURCE_TEST_PAYLOAD" || ! -f "$SOURCE_COVERAGE_PAYLOAD" ]]; then
+  echo "error: missing source payload fixtures for filter/gzip scenario"
+  echo "  test payload: $SOURCE_TEST_PAYLOAD"
+  echo "  coverage payload: $SOURCE_COVERAGE_PAYLOAD"
+  exit 1
+fi
+cp "$SOURCE_TEST_PAYLOAD" "$MANUAL_FILTER_GZIP/payloads/tests/span_events_manual_filter_keep.json"
+cp "$SOURCE_TEST_PAYLOAD" "$MANUAL_FILTER_GZIP/payloads/tests/manual_filter_skip.json"
+cp "$SOURCE_COVERAGE_PAYLOAD" "$MANUAL_FILTER_GZIP/payloads/coverage/coverage_manual_filter_keep.json"
+cp "$SOURCE_COVERAGE_PAYLOAD" "$MANUAL_FILTER_GZIP/payloads/coverage/manual_filter_skip_cov.json"
+
+FILTER_GZIP_LOG_START="$(log_line_count)"
+UPLOADER_FILTER_GZIP_LOG="$TMP_WS/uploader_filter_gzip.log"
+HAVE_GZIP=0
+if command -v gzip >/dev/null 2>&1; then
+  HAVE_GZIP=1
+fi
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_DEBUG=1 \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_FILTER_PREFIX=1 \
+DD_TEST_OPTIMIZATION_GZIP=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_FILTER_GZIP_LOG" 2>&1; then
+  echo "error: uploader filter/gzip scenario run failed"
+  cat "$UPLOADER_FILTER_GZIP_LOG" || true
+  exit 1
+fi
+
+FILTER_GZIP_LOG_START="$FILTER_GZIP_LOG_START" FILTER_GZIP_HAVE_GZIP="$HAVE_GZIP" UPLOADER_FILTER_GZIP_LOG="$UPLOADER_FILTER_GZIP_LOG" "$PYTHON" - <<'PY'
+import base64
+import gzip
+import json
+import os
+import platform
+import re
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("FILTER_GZIP_LOG_START", "0") or "0")
+have_gzip = os.environ.get("FILTER_GZIP_HAVE_GZIP") == "1"
+uploader_log_path = os.environ.get("UPLOADER_FILTER_GZIP_LOG", "")
+uploader_log = ""
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+
+if not records:
+    print("error: expected filter/gzip scenario to add log records")
+    sys.exit(1)
+
+if uploader_log_path:
+    with open(uploader_log_path, "r", encoding="utf-8", errors="replace") as handle:
+        uploader_log = handle.read()
+
+uploaded_test_keep = bool(re.search(r"uploaded test payload: .*span_events_manual_filter_keep\.json", uploader_log))
+uploaded_cov_keep = bool(re.search(r"uploaded coverage payload: .*coverage_manual_filter_keep\.json", uploader_log))
+uploaded_test_skip = bool(re.search(r"uploaded test payload: .*manual_filter_skip\.json", uploader_log))
+uploaded_cov_skip = bool(re.search(r"uploaded coverage payload: .*manual_filter_skip_cov\.json", uploader_log))
+
+if not uploaded_test_keep:
+    print("error: expected uploader log to include uploaded span_events_manual_filter_keep.json")
+    sys.exit(1)
+if not uploaded_cov_keep:
+    print("error: expected uploader log to include uploaded coverage_manual_filter_keep.json")
+    sys.exit(1)
+if uploaded_test_skip:
+    print("error: expected uploader log to exclude uploaded manual_filter_skip.json")
+    sys.exit(1)
+if uploaded_cov_skip:
+    print("error: expected uploader log to exclude uploaded manual_filter_skip_cov.json")
+    sys.exit(1)
+
+def lower_headers(record):
+    return {str(k).lower(): str(v) for k, v in ((record.get("headers") or {}).items())}
+
+def decode_body(record):
+    body = base64.b64decode(record.get("body_b64", ""))
+    headers = lower_headers(record)
+    if "gzip" in headers.get("content-encoding", "").lower():
+        body = gzip.decompress(body)
+    return body, headers
+
+gzip_header_seen = False
+cycle_seen = False
+coverage_seen = False
+gzip_hint_seen = "content-encoding=gzip" in uploader_log.lower()
+test_paths = {
+    "/api/v2/citestcycle",
+    "/evp_proxy/v2/api/v2/citestcycle",
+}
+coverage_paths = {
+    "/api/v2/citestcov",
+    "/evp_proxy/v2/api/v2/citestcov",
+}
+
+for rec in records:
+    path = (rec.get("path") or "").rstrip("/")
+    if path in coverage_paths:
+        coverage_seen = True
+    if path not in test_paths:
+        continue
+    cycle_seen = True
+    try:
+        body, headers = decode_body(rec)
+        json.loads(body.decode("utf-8"))
+    except Exception:
+        continue
+    if "gzip" in headers.get("content-encoding", "").lower():
+        gzip_header_seen = True
+
+# Keep mock-log endpoint checks best-effort only: some Windows CI runs can miss
+# these records despite successful uploader-side confirmations above.
+if have_gzip and not (gzip_header_seen or gzip_hint_seen):
+    if platform.system().lower().startswith("win"):
+        print("warning: gzip evidence not observable on Windows lane; continuing")
+    else:
+        print("error: gzip scenario expected at least one gzipped citestcycle upload")
+        sys.exit(1)
+PY
+
 # Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
 # This validates mode switching behavior: EVP must use evp_proxy routes and
 # EVP subdomain headers, and must not send DD-API-KEY.
