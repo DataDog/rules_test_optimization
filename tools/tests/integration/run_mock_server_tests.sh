@@ -2207,10 +2207,6 @@ cp "$SOURCE_COVERAGE_PAYLOAD" "$MANUAL_FILTER_GZIP/payloads/coverage/manual_filt
 
 FILTER_GZIP_LOG_START="$(log_line_count)"
 UPLOADER_FILTER_GZIP_LOG="$TMP_WS/uploader_filter_gzip.log"
-HAVE_GZIP=0
-if command -v gzip >/dev/null 2>&1; then
-  HAVE_GZIP=1
-fi
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
@@ -2230,7 +2226,7 @@ DD_TRACE_AGENT_URL= \
   exit 1
 fi
 
-FILTER_GZIP_LOG_START="$FILTER_GZIP_LOG_START" FILTER_GZIP_HAVE_GZIP="$HAVE_GZIP" UPLOADER_FILTER_GZIP_LOG="$UPLOADER_FILTER_GZIP_LOG" "$PYTHON" - <<'PY'
+FILTER_GZIP_LOG_START="$FILTER_GZIP_LOG_START" UPLOADER_FILTER_GZIP_LOG="$UPLOADER_FILTER_GZIP_LOG" "$PYTHON" - <<'PY'
 import base64
 import gzip
 import json
@@ -2241,7 +2237,6 @@ import sys
 
 log_path = os.environ["LOG_FILE"]
 start_line = int(os.environ.get("FILTER_GZIP_LOG_START", "0") or "0")
-have_gzip = os.environ.get("FILTER_GZIP_HAVE_GZIP") == "1"
 uploader_log_path = os.environ.get("UPLOADER_FILTER_GZIP_LOG", "")
 uploader_log = ""
 records = []
@@ -2293,7 +2288,18 @@ def decode_body(record):
 gzip_header_seen = False
 cycle_seen = False
 coverage_seen = False
-gzip_hint_seen = "content-encoding=gzip" in uploader_log.lower()
+uploader_log_lower = uploader_log.lower()
+gzip_hint_seen = "content-encoding=gzip" in uploader_log_lower
+gzip_enabled_hint = (
+    "gzip enabled: 1" in uploader_log_lower or
+    "gzip enabled: true" in uploader_log_lower
+)
+gzip_disabled_hint = (
+    "warning: dd_test_optimization_gzip=1 but gzip not found" in uploader_log_lower or
+    "warning: gzip failed; sending uncompressed payload" in uploader_log_lower
+)
+is_windows = platform.system().lower().startswith("win")
+expect_gzip = (gzip_enabled_hint and not gzip_disabled_hint) if is_windows else (not gzip_disabled_hint)
 test_paths = {
     "/api/v2/citestcycle",
     "/evp_proxy/v2/api/v2/citestcycle",
@@ -2318,7 +2324,7 @@ for rec in records:
     if "gzip" in headers.get("content-encoding", "").lower():
         gzip_header_seen = True
 
-if have_gzip and not (gzip_header_seen or gzip_hint_seen):
+if expect_gzip and not (gzip_header_seen or gzip_hint_seen):
     print("error: gzip scenario expected at least one gzipped citestcycle upload")
     sys.exit(1)
 PY

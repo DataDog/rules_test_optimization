@@ -17,11 +17,19 @@ from unittest import mock
 def _runfile(rel_path: str) -> Path:
     test_srcdir = os.environ.get("TEST_SRCDIR", "")
     test_workspace = os.environ.get("TEST_WORKSPACE", "")
+    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
     candidates = []
     if test_srcdir and test_workspace:
         candidates.append(Path(test_srcdir) / test_workspace / rel_path)
     if test_srcdir:
         candidates.append(Path(test_srcdir) / rel_path)
+    if workspace_dir:
+        candidates.append(Path(workspace_dir) / rel_path)
+
+    # Non-Bazel fallback: allow direct execution from a checked-out repository.
+    # This keeps the tests usable by lightweight CI coverage probes.
+    repo_root = Path(__file__).resolve().parents[3]
+    candidates.append(repo_root / rel_path)
 
     for cand in candidates:
         if cand.exists():

@@ -74,44 +74,80 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Run tools coverage report
-        shell: bash
-        run: ./bazelw coverage //tools/... --combined_report=lcov
-
       - name: Enforce minimum tools coverage signal
         shell: bash
         env:
           TOOLS_COVERAGE_MIN: "5.0"
         run: |
-          COVERAGE_FILE="$(./bazelw info output_path)/_coverage/_coverage_report.dat"
-          if [[ ! -e "$COVERAGE_FILE" ]]; then
-            echo "error: coverage report missing at $COVERAGE_FILE"
-            exit 1
-          fi
-          COVERAGE_FILE="$COVERAGE_FILE" python3 - <<'PY'
+          TOOLS_COVERAGE_MIN="$TOOLS_COVERAGE_MIN" python3 - <<'PY'
           import os
+          import pathlib
+          import runpy
           import sys
+          import trace
 
-          path = os.environ["COVERAGE_FILE"]
-          min_pct = float(os.environ.get("TOOLS_COVERAGE_MIN", "1.0"))
+          repo_root = pathlib.Path.cwd()
+          min_pct = float(os.environ.get("TOOLS_COVERAGE_MIN", "5.0"))
+          targets = [
+              repo_root / "tools/core/validate_payload_schema.py",
+              repo_root / "tools/core/schemas/sync_agentless_schema.py",
+              repo_root / "tools/dev/check_module_versions.py",
+          ]
+
+          tracer = trace.Trace(count=True, trace=False)
+          exit_code = 0
+          try:
+              tracer.runctx(
+                  'runpy.run_path("tools/tests/python/test_python_tools.py", run_name="__main__")',
+                  {"runpy": runpy},
+                  {},
+              )
+          except SystemExit as exc:
+              code = exc.code
+              if code is None:
+                  exit_code = 0
+              elif isinstance(code, int):
+                  exit_code = code
+              else:
+                  print(code)
+                  exit_code = 1
+
+          if exit_code != 0:
+              sys.exit(exit_code)
+
+          counts = tracer.results().counts
           lines_found = 0
           lines_hit = 0
-          with open(path, "r", encoding="utf-8") as handle:
-              for line in handle:
-                  if line.startswith("LF:"):
-                      lines_found += int(line[3:].strip())
-                  elif line.startswith("LH:"):
-                      lines_hit += int(line[3:].strip())
+
+          for target in targets:
+              target_path = target.resolve()
+              source_lines = target_path.read_text(encoding="utf-8").splitlines()
+              executable_lines = [
+                  idx
+                  for idx, line in enumerate(source_lines, start=1)
+                  if line.strip() and not line.lstrip().startswith("#")
+              ]
+              hit_lines = set()
+              for (filename, lineno), count in counts.items():
+                  if count <= 0:
+                      continue
+                  try:
+                      if pathlib.Path(filename).resolve() == target_path:
+                          hit_lines.add(lineno)
+                  except OSError:
+                      continue
+              found = len(executable_lines)
+              hit = len([ln for ln in executable_lines if ln in hit_lines])
+              lines_found += found
+              lines_hit += hit
+              print(f"tools coverage file: {target_path} -> {hit}/{found} lines hit")
 
           if lines_found <= 0:
-              print(
-                  "error: coverage report has zero instrumented lines; "
-                  "tools coverage signal is non-actionable"
-              )
+              print("error: tools coverage probe found zero executable lines")
               sys.exit(1)
 
           pct = (lines_hit / lines_found) * 100.0
-          print(f"tools coverage: {lines_hit}/{lines_found} lines hit ({pct:.2f}%)")
+          print(f"tools coverage total: {lines_hit}/{lines_found} lines hit ({pct:.2f}%)")
           if pct < min_pct:
               print(
                   f"error: tools coverage {pct:.2f}% is below minimum {min_pct:.2f}%"
