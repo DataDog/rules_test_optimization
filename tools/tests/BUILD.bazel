@@ -3,6 +3,10 @@
 # Package-scoped suites:
 # - core: //tools/tests/core:tests
 # - python: //tools/tests/python:tests
+# - integration: intentionally executed outside Bazel test sandbox via
+#   tools/tests/integration/run_mock_server_tests.sh(.ps1) because the harness
+#   bootstraps a nested Bazel workspace and validates uploader runtime launchers.
+#   CI runs this harness explicitly in .github/workflows/ci.yml.
 exports_files([
     "example_stub_repo.bzl",
 ], visibility = ["//visibility:public"])

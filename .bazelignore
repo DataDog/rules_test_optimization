@@ -1,5 +1,8 @@
 .bazel_output
 .bazel_root
+bazel-bin
+bazel-out
+bazel-testlogs
 modules/go/bazel-bin
 modules/go/bazel-out
 modules/go/bazel-testlogs

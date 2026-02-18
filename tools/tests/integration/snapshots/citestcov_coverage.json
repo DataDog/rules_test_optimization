@@ -1,1 +1,17 @@
-{}
+{
+  "files": [
+    {
+      "filename": "tracer/test/test-applications/integrations/Samples.XUnitTests/TestSuite.cs",
+      "segments": [
+        [
+          1,
+          0,
+          1,
+          0,
+          0
+        ]
+      ]
+    }
+  ],
+  "version": "1"
+}

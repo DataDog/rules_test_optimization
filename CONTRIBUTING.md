@@ -66,9 +66,13 @@
 ## PR Checklist
 
 - [ ] Updated tests for changed behavior.
+- [ ] For parser/tooling edits, added malformed-input coverage and verified
+  error diagnostics remain actionable.
 - [ ] Ran split-aware validation commands relevant to changed files.
 - [ ] Updated docs/snippets for any load-path, module, or API changes.
-- [ ] Confirmed no stale references to removed legacy paths (for example `//tools/go:*`).
+- [ ] Confirmed no stale references to removed legacy paths (for example
+  `//tools/go:*`, replaced by `modules/go/...` targets).
+- [ ] Reviewed timeout metadata when adding new slow tests (`--test_verbose_timeout_warnings`).
 - [ ] Included rationale and risk notes in PR description.
 
 ## Release Runbook (Core + Go Companion)

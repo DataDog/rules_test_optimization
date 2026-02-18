@@ -30,7 +30,7 @@ git_override(
 bazel_dep(name = "rules_go", version = "0.59.0")
 ```
 
-Use the same commit SHA for core and companion modules.
+Use the same full commit SHA (40 chars) for core and companion modules.
 
 ### Option B: local development overrides
 
@@ -259,6 +259,18 @@ dd_payload_uploader(
     name = "dd_upload_payloads",
     # Provide context.json via runfiles so enrichment can occur
     data = ["@test_optimization_data//:test_optimization_context"],
+)
+```
+
+Multi-service aggregator variant:
+
+```bzl
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = [
+        "@test_optimization_data//:test_optimization_context_go_service",
+        "@test_optimization_data//:test_optimization_context_ruby_service",
+    ],
 )
 ```
 

@@ -14,9 +14,18 @@ def _go_bootstrap_extension_impl(module_ctx):
     """Create local companion-module repositories declared by root dev config."""
     for mod in module_ctx.modules:
         for call in mod.tags.local_go_companion:
+            path = call.path
+            if not path:
+                fail("go_bootstrap: local_go_companion.path must be non-empty")
+            if path.startswith("/") or path.startswith("\\"):
+                fail("go_bootstrap: local_go_companion.path must be relative, got '%s'" % path)
+            if len(path) >= 3 and path[1] == ":" and (path[2] == "/" or path[2] == "\\"):
+                fail("go_bootstrap: local_go_companion.path must not include drive prefix, got '%s'" % path)
+            if "/../" in path or "\\..\\" in path or path == ".." or path.endswith("/..") or path.endswith("\\.."):
+                fail("go_bootstrap: local_go_companion.path must not include '..' traversal segments, got '%s'" % path)
             local_repository(
                 name = call.name,
-                path = call.path,
+                path = path,
             )
 
 go_bootstrap_extension = module_extension(

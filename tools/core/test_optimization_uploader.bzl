@@ -62,6 +62,39 @@ def _bool_to_str(value):
     """Return Starlark bool as title-cased string for template injection."""
     return "True" if value else "False"
 
+def _base_template_substitutions(
+        quiescent_sec,
+        max_wait_sec,
+        fail_on_error,
+        debug,
+        keep_payloads,
+        filter_prefix_enabled,
+        gzip_payloads,
+        context_json_rloc,
+        context_json_path,
+        schema_json_rloc,
+        schema_json_path,
+        schema_validator_rloc,
+        schema_validator_path):
+    """Build shared template substitutions for Bash/PowerShell scripts."""
+    return {
+        "quiescent_sec": quiescent_sec,
+        "max_wait_sec": max_wait_sec,
+        "fail_on_error": _bool_to_str(fail_on_error),
+        "debug": _bool_to_str(debug),
+        "keep_payloads": _bool_to_str(keep_payloads),
+        "filter_prefix": _bool_to_str(filter_prefix_enabled),
+        "gzip_payloads": _bool_to_str(gzip_payloads),
+        "uploader_version": UPLOADER_VERSION,
+        "context_json_rloc": context_json_rloc,
+        "context_json_path": context_json_path,
+        "schema_json_rloc": schema_json_rloc,
+        "schema_json_path": schema_json_path,
+        "schema_validator_rloc": schema_validator_rloc,
+        "schema_validator_path": schema_validator_path,
+        "rules_version": RULES_VERSION,
+    }
+
 def _bash_curl_retry_flags_for_tests():
     """Expose uploader curl retry defaults for unit tests."""
     # Keep the baseline retry behavior compatible with older curl releases.
@@ -455,6 +488,9 @@ skip_derived_source_candidate_for_tests = _skip_derived_source_candidate_for_tes
 is_gitlab_section_header_pattern_powershell_for_tests = _is_gitlab_section_header_pattern_powershell_for_tests
 strip_workspace_prefix_bash_for_tests = _strip_workspace_prefix_bash_for_tests
 strip_workspace_prefix_powershell_for_tests = _strip_workspace_prefix_powershell_for_tests
+first_ascii_whitespace_index_for_tests = _first_ascii_whitespace_index_for_tests
+trim_ascii_whitespace_for_tests = _trim_ascii_whitespace_for_tests
+strip_bom_prefix_for_tests = _strip_bom_prefix_for_tests
 resolve_runfile_manifest_bash_for_tests = _resolve_runfile_manifest_bash_for_tests
 resolve_runfile_manifest_powershell_for_tests = _resolve_runfile_manifest_powershell_for_tests
 
@@ -485,7 +521,7 @@ def _uploader_impl(ctx):
     fail_on_error = ctx.attr.fail_on_error
     debug = ctx.attr.debug
     keep_payloads = ctx.attr.keep_payloads
-    filter_prefixed_payloads = ctx.attr.filter_prefix
+    filter_prefix_enabled = ctx.attr.filter_prefix
     gzip_payloads = ctx.attr.gzip_payloads
 
     # Find context.json in data files (supports any repo alias)
@@ -509,14 +545,14 @@ def _uploader_impl(ctx):
     log_debug(
         debug,
         "config",
-        "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefixed_payloads=%s, gzip_payloads=%s" %
+        "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefix=%s, gzip_payloads=%s" %
         (
             quiescent_sec,
             max_wait_sec,
             fail_on_error,
             debug,
             keep_payloads,
-            filter_prefixed_payloads,
+            filter_prefix_enabled,
             gzip_payloads,
         ),
     )
@@ -2526,27 +2562,23 @@ else
 fi
 """
 
-    bash_script = _render_template(
-        bash_template,
-        {
-            "quiescent_sec": quiescent_sec,
-            "max_wait_sec": max_wait_sec,
-            "fail_on_error": _bool_to_str(fail_on_error),
-            "debug": _bool_to_str(debug),
-            "keep_payloads": _bool_to_str(keep_payloads),
-            "filter_prefix": _bool_to_str(filter_prefixed_payloads),
-            "gzip_payloads": _bool_to_str(gzip_payloads),
-            "uploader_version": UPLOADER_VERSION,
-            "context_json_rloc": context_json_rloc,
-            "context_json_path": context_json_path,
-            "schema_json_rloc": schema_json_rloc,
-            "schema_json_path": schema_json_path,
-            "schema_validator_rloc": schema_validator_rloc,
-            "schema_validator_path": schema_validator_path,
-            "rules_version": RULES_VERSION,
-            "curl_retry_flags": " ".join(_bash_curl_retry_flags_for_tests()),
-        },
+    bash_substitutions = _base_template_substitutions(
+        quiescent_sec,
+        max_wait_sec,
+        fail_on_error,
+        debug,
+        keep_payloads,
+        filter_prefix_enabled,
+        gzip_payloads,
+        context_json_rloc,
+        context_json_path,
+        schema_json_rloc,
+        schema_json_path,
+        schema_validator_rloc,
+        schema_validator_path,
     )
+    bash_substitutions["curl_retry_flags"] = " ".join(_bash_curl_retry_flags_for_tests())
+    bash_script = _render_template(bash_template, bash_substitutions)
     log_debug(debug, "render", "Bash script rendered (bytes=%d)" % len(bash_script))
 
     # PowerShell implementation (Windows)
@@ -4294,23 +4326,21 @@ try {{
     # ------------------------------------------------------------------
     ps_script = _render_template(
         ps_template,
-        {
-            "quiescent_sec": quiescent_sec,
-            "max_wait_sec": max_wait_sec,
-            "fail_on_error": _bool_to_str(fail_on_error),
-            "debug": _bool_to_str(debug),
-            "keep_payloads": _bool_to_str(keep_payloads),
-            "filter_prefix": _bool_to_str(filter_prefixed_payloads),
-            "gzip_payloads": _bool_to_str(gzip_payloads),
-            "uploader_version": UPLOADER_VERSION,
-            "context_json_rloc": context_json_rloc,
-            "context_json_path": context_json_path,
-            "schema_json_rloc": schema_json_rloc,
-            "schema_json_path": schema_json_path,
-            "schema_validator_rloc": schema_validator_rloc,
-            "schema_validator_path": schema_validator_path,
-            "rules_version": RULES_VERSION,
-        },
+        _base_template_substitutions(
+            quiescent_sec,
+            max_wait_sec,
+            fail_on_error,
+            debug,
+            keep_payloads,
+            filter_prefix_enabled,
+            gzip_payloads,
+            context_json_rloc,
+            context_json_path,
+            schema_json_rloc,
+            schema_json_path,
+            schema_validator_rloc,
+            schema_validator_path,
+        ),
     )
     log_debug(debug, "render", "PowerShell script rendered (bytes=%d)" % len(ps_script))
 
@@ -4348,12 +4378,13 @@ exit /b %ERRORLEVEL%
     runfiles = ctx.runfiles(files = [ps_file, bat_file] + ctx.files.data + extra_files)
     log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
-    # Use platform detection to return .bat on Windows, .sh on Unix
+    # Use target-platform constraints (ConstraintValueInfo) so executable
+    # selection is analysis-time deterministic across host operating systems.
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     executable = bat_file if is_windows else bash_file
     return [DefaultInfo(executable = executable, runfiles = runfiles)]
 
-dd_payload_uploader = rule(
+_dd_payload_uploader_rule = rule(
     implementation = _uploader_impl,
     executable = True,  # Makes it runnable via `bazel run`
     attrs = {
@@ -4434,3 +4465,14 @@ Optional environment variables:
     DD_TEST_OPTIMIZATION_MAX_DEPTH - Limit find depth for large testlogs trees
 """,
 )
+
+def dd_payload_uploader(name, visibility = None, **kwargs):
+    """Macro wrapper around uploader rule with a stable visibility default.
+
+    Most consumer repos define the uploader target at workspace root and invoke
+    it from CI entrypoints that may live in other packages. Defaulting to
+    `//visibility:public` avoids accidental package-default lock-down.
+    """
+    if visibility == None:
+        visibility = ["//visibility:public"]
+    _dd_payload_uploader_rule(name = name, visibility = visibility, **kwargs)

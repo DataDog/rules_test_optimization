@@ -9,6 +9,12 @@ if not exist "%PS_SCRIPT%" (
   exit /b 1
 )
 
+where powershell.exe >nul 2>&1
+if errorlevel 1 (
+  echo error: powershell.exe not found in PATH
+  exit /b 1
+)
+
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PS_SCRIPT%" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 exit /b %EXIT_CODE%

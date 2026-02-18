@@ -21,6 +21,8 @@ This document is for contributors and maintainers of
 
 - Root workspace resolves `@datadog-rules-test-optimization-go` through
   `tools/dev/go_bootstrap.bzl` (dev-only wiring).
+- `go_bootstrap.local_go_companion(path = "...")` must stay repository-relative
+  (no absolute paths or `..` traversal).
 - Do not add a root `bazel_dep` edge from core to the Go companion; that creates
   a dependency cycle (`core -> go -> core`).
 - Schema ownership remains in core:
@@ -87,10 +89,10 @@ Examples:
 
 ```sh
 # Refresh only on git environment variables
-./bazelw build //...
+./bazelw build //tools/... //examples/...
 
 # Refresh on an hourly TTL
-FETCH_SALT_TTL=3600 ./bazelw build //...
+FETCH_SALT_TTL=3600 ./bazelw build //tools/... //examples/...
 
 # Override computed Git metadata
 DD_GIT_REPOSITORY_URL=https://github.com/acme/api.git \
@@ -101,11 +103,11 @@ DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
 
 ```powershell
 # Refresh only on git environment variables
-.\bazelw build //...
+.\bazelw build //tools/... //examples/...
 
 # Refresh on an hourly TTL
 $env:FETCH_SALT_TTL = "3600"
-.\bazelw build //...
+.\bazelw build //tools/... //examples/...
 
 # Override computed Git metadata
 $env:DD_GIT_REPOSITORY_URL = "https://github.com/acme/api.git"
@@ -147,6 +149,11 @@ Notes:
   - `DD_TEST_OPTIMIZATION_INTAKE_BASE` (uploader, agentless path)
 - The harness asserts CODEOWNERS enrichment/preservation and runfile manifest
   fallback behavior, and prints focused diagnostics on assertion failures.
+- The harness requires `jq` for snapshot/enrichment assertions.
+- Snapshot fixture contract:
+  - `citestcov_event.json` remains a JSON object with a non-empty `events` list.
+  - `citestcov_coverage.json` remains a JSON object with `version` and a
+    non-empty `files` list containing `filename` + `segments`.
 - CODEOWNERS discovery intentionally checks both `docs/CODEOWNERS` and
   `.docs/CODEOWNERS`; the `.docs` path is retained as a legacy compatibility
   fallback for repositories that still keep ownership files there.
@@ -173,8 +180,12 @@ Notes:
   line-coverage artifacts are generated and stay above a minimum floor.
 - Shell linting scope includes integration harnesses, `bazelw`, and example
   `runtests.sh` scripts.
+- CI runs example `runtests.sh` scripts in `RUNTESTS_DRY_RUN=1` mode to verify
+  wiring without requiring Datadog credentials in PR checks.
 - Repository tracks both `.bazelversion` and `MODULE.bazel.lock` in git to
   reduce local/CI drift.
+- `.bazelversion` is intentionally duplicated at repository root and
+  `modules/go/` so either workspace entrypoint resolves the same Bazel line.
 - Current PR baseline checks:
 
 ```sh

@@ -21,6 +21,8 @@ import os
 import sys
 import threading
 import time
+from email.parser import BytesParser
+from email.policy import default
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlsplit
 
@@ -46,6 +48,10 @@ MALFORMED_TEST_MANAGEMENT_COMMIT_MESSAGE = "malformed-test-management-commit-mes
 RETRY_TEST_MANAGEMENT_COMMIT_MESSAGE = "retry-test-management-commit-message"
 MALFORMED_TEST_MANAGEMENT_BODY = b"NOT_JSON_TEST_MANAGEMENT_RESPONSE"
 RETRY_AGENTLESS_RESOURCE = "Manual.RetryAgentless"
+FAIL_AGENTLESS_RESOURCE = "Manual.AlwaysFailAgentless"
+BAD_REQUEST_AGENTLESS_RESOURCE = "Manual.BadRequestAgentless"
+COVERAGE_RETRY_MARKER = "retry_once"
+COVERAGE_ALWAYS_FAIL_MARKER = "always_fail"
 
 
 class _ServerState:
@@ -82,6 +88,11 @@ class _ServerState:
                 self.retry_counters[key] = count + 1
                 return True
         return False
+
+    def reset_retry_counters(self):
+        """Reset all retry counters to keep scenarios isolated."""
+        with self.retry_lock:
+            self.retry_counters = {}
 
 
 def _normalize_headers(headers):
@@ -335,6 +346,28 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return payload if isinstance(payload, dict) else None
 
+    def _decode_uploader_coverage_payload(self, body):
+        """Decode coveragex multipart JSON payload when present."""
+        content_type = _require_header(self.headers, "Content-Type") or ""
+        if "boundary=" not in content_type:
+            return None
+        try:
+            header = ("Content-Type: %s\r\n\r\n" % content_type).encode("utf-8")
+            msg = BytesParser(policy = default).parsebytes(header + body)
+        except Exception:
+            return None
+        for part in msg.iter_parts():
+            name = part.get_param("name", header = "Content-Disposition")
+            if name != "coveragex":
+                continue
+            raw = part.get_payload(decode = True) or b""
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return None
+            return data if isinstance(data, dict) else None
+        return None
+
     def _payload_contains_resource(self, payload, resource):
         """Return True when payload events contain a specific resource."""
         events = payload.get("events") if isinstance(payload, dict) else None
@@ -370,6 +403,10 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         body = self._read_body()
         self._log_and_validate(path, body)
+        if path == "/__mock/reset_retries":
+            self.server.state.reset_retry_counters()
+            self._send_json(200, {"ok": True})
+            return
         if self._maybe_apply_response_overrides():
             return
 
@@ -390,7 +427,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if service == DELAY_SETTINGS_SERVICE:
                 time.sleep(0.2)
-            if service == RETRY_SETTINGS_SERVICE and self.server.state.should_fail_n_times("settings_retry", 1):
+            if service == RETRY_SETTINGS_SERVICE and self.server.state.should_fail_n_times("sync_settings_retry", 1):
                 self._send_json(
                     503,
                     {"errors": [{"status": "503", "title": "mock transient settings failure"}]},
@@ -410,7 +447,7 @@ class _Handler(BaseHTTPRequestHandler):
             if self._extract_service(body) == MALFORMED_KNOWN_TESTS_SERVICE:
                 self._send_text(200, MALFORMED_KNOWN_TESTS_BODY)
                 return
-            if self._extract_service(body) == RETRY_KNOWN_TESTS_SERVICE and self.server.state.should_fail_n_times("known_tests_retry", 1):
+            if self._extract_service(body) == RETRY_KNOWN_TESTS_SERVICE and self.server.state.should_fail_n_times("sync_known_tests_retry", 1):
                 self._send_json(
                     429,
                     {"errors": [{"status": "429", "title": "mock transient known-tests rate limit"}]},
@@ -430,7 +467,7 @@ class _Handler(BaseHTTPRequestHandler):
             if self._extract_commit_message(body) == MALFORMED_TEST_MANAGEMENT_COMMIT_MESSAGE:
                 self._send_text(200, MALFORMED_TEST_MANAGEMENT_BODY)
                 return
-            if self._extract_commit_message(body) == RETRY_TEST_MANAGEMENT_COMMIT_MESSAGE and self.server.state.should_fail_n_times("test_management_retry", 1):
+            if self._extract_commit_message(body) == RETRY_TEST_MANAGEMENT_COMMIT_MESSAGE and self.server.state.should_fail_n_times("sync_test_management_retry", 1):
                 self._send_json(
                     503,
                     {"errors": [{"status": "503", "title": "mock transient test-management failure"}]},
@@ -450,6 +487,19 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(400, _json_error(err))
                 return
             payload = self._decode_uploader_test_payload(body)
+            if payload and self._payload_contains_resource(payload, BAD_REQUEST_AGENTLESS_RESOURCE):
+                self._send_json(
+                    400,
+                    {"errors": [{"status": "400", "title": "mock uploader test bad request"}]},
+                )
+                return
+            if payload and self._payload_contains_resource(payload, FAIL_AGENTLESS_RESOURCE):
+                self._send_json(
+                    503,
+                    {"errors": [{"status": "503", "title": "mock uploader test sustained failure"}]},
+                    extra_headers = {"Retry-After": "1"},
+                )
+                return
             if payload and self._payload_contains_resource(payload, RETRY_AGENTLESS_RESOURCE) and self.server.state.should_fail_n_times("uploader_cycle_retry", 1):
                 self._send_json(
                     503,
@@ -466,6 +516,25 @@ class _Handler(BaseHTTPRequestHandler):
             err = self._validate_uploader_cov(evp_subdomain = evp_subdomain)
             if err:
                 self._send_json(400, _json_error(err))
+                return
+            coverage_payload = self._decode_uploader_coverage_payload(body)
+            marker = ""
+            if isinstance(coverage_payload, dict):
+                val = coverage_payload.get("mock_mode")
+                marker = val if isinstance(val, str) else ""
+            if marker == COVERAGE_ALWAYS_FAIL_MARKER:
+                self._send_json(
+                    503,
+                    {"errors": [{"status": "503", "title": "mock uploader coverage sustained failure"}]},
+                    extra_headers = {"Retry-After": "1"},
+                )
+                return
+            if marker == COVERAGE_RETRY_MARKER and self.server.state.should_fail_n_times("uploader_cov_retry", 1):
+                self._send_json(
+                    503,
+                    {"errors": [{"status": "503", "title": "mock uploader coverage transient failure"}]},
+                    extra_headers = {"Retry-After": "1"},
+                )
                 return
             self._send_json(200, {})
             return

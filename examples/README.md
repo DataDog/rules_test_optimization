@@ -8,6 +8,8 @@ repository, use `./bazelw` for local development convenience.
 ## Prerequisites
 
 - Until BCR publication, install with `git_override(...)` as shown in the root `README.md`.
+  If you are consuming a published release, keep the `bazel_dep(...)` lines and
+  omit override blocks.
 - Add module dependencies before `use_extension(...)`:
   - `bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")`
 - `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")` for Go macro usage
@@ -115,6 +117,7 @@ exit $testStatus
 Notes:
 - The sequence above intentionally preserves the test exit code.
 - Uploader failures are still reported in uploader logs/output; monitor those in CI.
+- Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
 
 ## Multi-service (aggregator)
 
@@ -220,5 +223,19 @@ Per-module filegroup (aggregator):
 filegroup(
   name = "dd_mod_core_go",
   srcs = ["@test_optimization_data//:module_go_service_core"],
+)
+```
+
+Root BUILD.bazel uploader (multi-service):
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_payload_uploader(
+  name = "dd_upload_payloads",
+  data = [
+    "@test_optimization_data//:test_optimization_context_go_service",
+    "@test_optimization_data//:test_optimization_context_ruby_service",
+  ],
 )
 ```

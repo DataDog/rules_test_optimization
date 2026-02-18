@@ -7,6 +7,9 @@ on:
       - main
       - "feature/**"
 
+permissions:
+  contents: read
+
 jobs:
   bazel-tests:
     strategy:
@@ -43,10 +46,14 @@ jobs:
 
       - name: Exercise single-service runtests script (dry-run)
         shell: bash
+        # Keep CI deterministic and secret-free: this validates script wiring
+        # and command construction without requiring live Datadog credentials.
         run: RUNTESTS_DRY_RUN=1 bash ./examples/single_service/runtests.sh
 
       - name: Exercise multi-service runtests script (dry-run)
         shell: bash
+        # Keep CI deterministic and secret-free: this validates script wiring
+        # and command construction without requiring live Datadog credentials.
         run: RUNTESTS_DRY_RUN=1 bash ./examples/multi_service/runtests.sh
 
       # Exercises the uploader end-to-end against a local mock server.
@@ -74,7 +81,7 @@ jobs:
       - name: Enforce minimum tools coverage signal
         shell: bash
         env:
-          TOOLS_COVERAGE_MIN: "1.0"
+          TOOLS_COVERAGE_MIN: "5.0"
         run: |
           COVERAGE_FILE="$(./bazelw info output_path)/_coverage/_coverage_report.dat"
           if [[ ! -e "$COVERAGE_FILE" ]]; then
@@ -97,8 +104,11 @@ jobs:
                       lines_hit += int(line[3:].strip())
 
           if lines_found <= 0:
-              print("warning: coverage report has zero instrumented lines; skipping threshold check")
-              sys.exit(0)
+              print(
+                  "error: coverage report has zero instrumented lines; "
+                  "tools coverage signal is non-actionable"
+              )
+              sys.exit(1)
 
           pct = (lines_hit / lines_found) * 100.0
           print(f"tools coverage: {lines_hit}/{lines_found} lines hit ({pct:.2f}%)")

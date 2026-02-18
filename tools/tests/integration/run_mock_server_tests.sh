@@ -119,7 +119,7 @@ if [[ -z "$PORT" ]]; then
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
-  echo "error: jq is required for snapshot enrichment tests"
+  echo "error: jq is required for this integration harness (snapshot enrichment assertions)"
   exit 1
 fi
 
@@ -154,13 +154,34 @@ log_line_count() {
 WORKSPACE_FOR_UPLOADER="$(to_mixed_path "$WORKSPACE")"
 HARNESS_UPLOADER_DEBUG="${HARNESS_UPLOADER_DEBUG:-}"
 if [[ -z "$HARNESS_UPLOADER_DEBUG" ]]; then
-  UNAME_LC="$(uname -s | tr 'A-Z' 'a-z')"
-  if [[ "$UNAME_LC" == *mingw* || "$UNAME_LC" == *msys* || "$UNAME_LC" == *cygwin* ]]; then
-    HARNESS_UPLOADER_DEBUG=1
-  else
-    HARNESS_UPLOADER_DEBUG=0
-  fi
+  HARNESS_UPLOADER_DEBUG=0
 fi
+
+reset_mock_retries() {
+  # Keep per-scenario retry assertions isolated from earlier scenario state.
+  MOCK_PORT="$PORT" "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+port = os.environ["MOCK_PORT"]
+req = urllib.request.Request(
+    "http://127.0.0.1:%s/__mock/reset_retries" % port,
+    data = b"{}",
+    method = "POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout = 5) as resp:
+        body = resp.read().decode("utf-8")
+        payload = json.loads(body or "{}")
+        if resp.status != 200 or payload.get("ok") != True:
+            raise RuntimeError("unexpected reset response")
+except Exception as exc:
+    print("error: failed to reset mock retry counters: %s" % exc)
+    sys.exit(1)
+PY
+}
 
 # JSON-escape REPO_ROOT for safe insertion into MODULE.bazel.
 ESCAPED_REPO_ROOT=$("$PYTHON" - <<'PY'
@@ -343,7 +364,17 @@ if [[ ! -f "$template" ]]; then
 fi
 
 cp "$template" "$out/payloads/tests/test1.json"
-echo '{}' > "$out/payloads/coverage/cov1.json"
+cat > "$out/payloads/coverage/cov1.json" <<'JSON_EOF'
+{
+  "version": "1",
+  "files": [
+    {
+      "filename": "tracer/test/test-applications/integrations/Samples.XUnitTests/TestSuite.cs",
+      "segments": [[1, 0, 1, 0, 0]]
+    }
+  ]
+}
+JSON_EOF
 PAYLOAD_EOF
 chmod +x payload_writer.sh
 
@@ -746,6 +777,24 @@ if missing_parts:
     sys.exit(1)
 event_json = json.loads(parts.get("event", b"{}").decode("utf-8"))
 coverage_json = json.loads(parts.get("coveragex", b"{}").decode("utf-8"))
+
+if event_json != {"dummy": True}:
+    print("error: coverage multipart event payload drifted from expected uploader contract")
+    print(json.dumps(event_json, indent=2, sort_keys=True))
+    sys.exit(1)
+if not isinstance(coverage_json, dict):
+    print("error: coverage multipart payload must decode to an object")
+    sys.exit(1)
+files = coverage_json.get("files")
+if not isinstance(files, list) or not files:
+    print("error: coverage payload is missing non-empty files list")
+    print(json.dumps(coverage_json, indent=2, sort_keys=True))
+    sys.exit(1)
+first = files[0] if files else {}
+if not isinstance(first, dict) or not isinstance(first.get("filename"), str):
+    print("error: coverage payload first file entry missing filename")
+    print(json.dumps(coverage_json, indent=2, sort_keys=True))
+    sys.exit(1)
 
 snapshots = {
     "citestcycle.json": cycle_norm,
@@ -2269,14 +2318,9 @@ for rec in records:
     if "gzip" in headers.get("content-encoding", "").lower():
         gzip_header_seen = True
 
-# Keep mock-log endpoint checks best-effort only: some Windows CI runs can miss
-# these records despite successful uploader-side confirmations above.
 if have_gzip and not (gzip_header_seen or gzip_hint_seen):
-    if platform.system().lower().startswith("win"):
-        print("warning: gzip evidence not observable on Windows lane; continuing")
-    else:
-        print("error: gzip scenario expected at least one gzipped citestcycle upload")
-        sys.exit(1)
+    print("error: gzip scenario expected at least one gzipped citestcycle upload")
+    sys.exit(1)
 PY
 
 # Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
@@ -2759,11 +2803,11 @@ PY
 
 mv "$ORIG_CODEOWNERS" "$WORKSPACE/CODEOWNERS"
 
-# Scenario: uploader retries transient test-upload failures and eventually succeeds.
-LOG_LINES_BEFORE_RETRY_UPLOADER="$(log_line_count)"
-MANUAL_RETRY_AGENTLESS="$TESTLOGS_DIR/manual_retry_agentless/test.outputs"
-mkdir -p "$MANUAL_RETRY_AGENTLESS/payloads/tests" "$MANUAL_RETRY_AGENTLESS/payloads/coverage"
-cat > "$MANUAL_RETRY_AGENTLESS/payloads/tests/manual_retry_agentless.json" <<'JSON_EOF'
+write_manual_test_payload() {
+  local outputs_dir="$1"
+  local resource_name="$2"
+  mkdir -p "$outputs_dir/payloads/tests" "$outputs_dir/payloads/coverage"
+  cat > "$outputs_dir/payloads/tests/${resource_name}.json" <<JSON_EOF
 {
   "metadata": {
     "*": {
@@ -2775,8 +2819,8 @@ cat > "$MANUAL_RETRY_AGENTLESS/payloads/tests/manual_retry_agentless.json" <<'JS
     {
       "type": "test",
       "content": {
-        "resource": "Manual.RetryAgentless",
-        "name": "Manual.RetryAgentless",
+        "resource": "$resource_name",
+        "name": "$resource_name",
         "status": "pass",
         "meta": {}
       }
@@ -2784,6 +2828,46 @@ cat > "$MANUAL_RETRY_AGENTLESS/payloads/tests/manual_retry_agentless.json" <<'JS
   ]
 }
 JSON_EOF
+}
+
+write_manual_coverage_payload() {
+  local outputs_dir="$1"
+  local file_name="$2"
+  local mock_mode="${3:-}"
+  mkdir -p "$outputs_dir/payloads/coverage"
+  if [[ -z "$mock_mode" ]]; then
+    cat > "$outputs_dir/payloads/coverage/${file_name}" <<'JSON_EOF'
+{
+  "version": "1",
+  "files": [
+    {
+      "filename": "manual/coverage.cs",
+      "segments": [[1, 0, 1, 0, 0]]
+    }
+  ]
+}
+JSON_EOF
+    return
+  fi
+  cat > "$outputs_dir/payloads/coverage/${file_name}" <<JSON_EOF
+{
+  "version": "1",
+  "mock_mode": "$mock_mode",
+  "files": [
+    {
+      "filename": "manual/coverage.cs",
+      "segments": [[1, 0, 1, 0, 0]]
+    }
+  ]
+}
+JSON_EOF
+}
+
+# Scenario: uploader retries transient test-upload failures and eventually succeeds.
+reset_mock_retries
+LOG_LINES_BEFORE_RETRY_UPLOADER="$(log_line_count)"
+MANUAL_RETRY_AGENTLESS="$TESTLOGS_DIR/manual_retry_agentless/test.outputs"
+write_manual_test_payload "$MANUAL_RETRY_AGENTLESS" "Manual.RetryAgentless"
 
 UPLOADER_RETRY_AGENTLESS_LOG="$TMP_WS/uploader_retry_agentless.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
@@ -2833,5 +2917,292 @@ with open(log_path, "r", encoding="utf-8") as handle:
 
 if attempts < 2:
     print(f"error: expected retry uploader scenario to issue >=2 attempts, got {attempts}")
+    sys.exit(1)
+PY
+
+# Scenario: sustained 5xx errors should fail uploader after retry budget.
+reset_mock_retries
+LOG_LINES_BEFORE_FAIL_503="$(log_line_count)"
+FAIL_503_TESTLOGS="$TMP_WS/testlogs_fail_503"
+MANUAL_FAIL_503="$FAIL_503_TESTLOGS/manual_fail_agentless_503/test.outputs"
+write_manual_test_payload "$MANUAL_FAIL_503" "Manual.AlwaysFailAgentless"
+UPLOADER_FAIL_503_LOG="$TMP_WS/uploader_fail_503.log"
+if TESTLOGS_DIR="$FAIL_503_TESTLOGS" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_FAIL_503_LOG" 2>&1; then
+  echo "error: sustained 5xx scenario unexpectedly succeeded"
+  cat "$UPLOADER_FAIL_503_LOG" || true
+  exit 1
+fi
+LOG_FILE="$LOG_FILE" LOG_START="$LOG_LINES_BEFORE_FAIL_503" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start = int(os.environ.get("LOG_START", "0") or "0")
+target_resource = "Manual.AlwaysFailAgentless"
+attempts = 0
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("path") != "/api/v2/citestcycle":
+            continue
+        try:
+            payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+        except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        for evt in payload.get("events", []):
+            content = evt.get("content") or {}
+            if content.get("resource") == target_resource:
+                attempts += 1
+                break
+if attempts < 2:
+    print(f"error: sustained 5xx scenario expected retries, got attempts={attempts}")
+    sys.exit(1)
+PY
+
+# Scenario: explicit 4xx intake errors should fail uploader.
+reset_mock_retries
+LOG_LINES_BEFORE_FAIL_400="$(log_line_count)"
+FAIL_400_TESTLOGS="$TMP_WS/testlogs_fail_400"
+MANUAL_FAIL_400="$FAIL_400_TESTLOGS/manual_fail_agentless_400/test.outputs"
+write_manual_test_payload "$MANUAL_FAIL_400" "Manual.BadRequestAgentless"
+UPLOADER_FAIL_400_LOG="$TMP_WS/uploader_fail_400.log"
+if TESTLOGS_DIR="$FAIL_400_TESTLOGS" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_DEBUG=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_FAIL_400_LOG" 2>&1; then
+  echo "error: 4xx scenario unexpectedly succeeded"
+  cat "$UPLOADER_FAIL_400_LOG" || true
+  exit 1
+fi
+LOG_FILE="$LOG_FILE" LOG_START="$LOG_LINES_BEFORE_FAIL_400" UPLOADER_FAIL_400_LOG="$UPLOADER_FAIL_400_LOG" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start = int(os.environ.get("LOG_START", "0") or "0")
+uploader_log = os.environ["UPLOADER_FAIL_400_LOG"]
+target_resource = "Manual.BadRequestAgentless"
+attempts = 0
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("path") != "/api/v2/citestcycle":
+            continue
+        try:
+            payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+        except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        for evt in payload.get("events", []):
+            content = evt.get("content") or {}
+            if content.get("resource") == target_resource:
+                attempts += 1
+                break
+if attempts < 1:
+    print("error: 4xx scenario did not issue any test upload attempts")
+    sys.exit(1)
+with open(uploader_log, "r", encoding="utf-8", errors="replace") as handle:
+    content = handle.read()
+if "HTTP 400" not in content and "http code 400" not in content.lower():
+    print("error: uploader log does not expose HTTP 400 diagnostics in 4xx scenario")
+    sys.exit(1)
+PY
+
+# Scenario: unreachable intake endpoint should fail with connection errors.
+UNREACHABLE_TESTLOGS="$TMP_WS/testlogs_unreachable"
+MANUAL_UNREACHABLE="$UNREACHABLE_TESTLOGS/manual_unreachable/test.outputs"
+write_manual_test_payload "$MANUAL_UNREACHABLE" "Manual.UnreachableIntake"
+UPLOADER_UNREACHABLE_LOG="$TMP_WS/uploader_unreachable.log"
+if TESTLOGS_DIR="$UNREACHABLE_TESTLOGS" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:1" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_UNREACHABLE_LOG" 2>&1; then
+  echo "error: unreachable intake scenario unexpectedly succeeded"
+  cat "$UPLOADER_UNREACHABLE_LOG" || true
+  exit 1
+fi
+
+# Scenario: coverage upload retries transient failures and eventually succeeds.
+reset_mock_retries
+LOG_LINES_BEFORE_COV_RETRY="$(log_line_count)"
+COV_RETRY_TESTLOGS="$TMP_WS/testlogs_cov_retry"
+MANUAL_COV_RETRY="$COV_RETRY_TESTLOGS/manual_cov_retry/test.outputs"
+write_manual_test_payload "$MANUAL_COV_RETRY" "Manual.CoverageRetry"
+write_manual_coverage_payload "$MANUAL_COV_RETRY" "manual_cov_retry.json" "retry_once"
+UPLOADER_COV_RETRY_LOG="$TMP_WS/uploader_cov_retry.log"
+if ! TESTLOGS_DIR="$COV_RETRY_TESTLOGS" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_COV_RETRY_LOG" 2>&1; then
+  echo "error: coverage retry scenario failed"
+  cat "$UPLOADER_COV_RETRY_LOG" || true
+  exit 1
+fi
+LOG_FILE="$LOG_FILE" LOG_START="$LOG_LINES_BEFORE_COV_RETRY" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+from email.parser import BytesParser
+from email.policy import default
+
+log_path = os.environ["LOG_FILE"]
+start = int(os.environ.get("LOG_START", "0") or "0")
+attempts = 0
+
+def parse_marker(record):
+    headers = {str(k).lower(): str(v) for k, v in ((record.get("headers") or {}).items())}
+    ct = headers.get("content-type", "")
+    if "boundary=" not in ct:
+        return ""
+    try:
+        body = base64.b64decode(record.get("body_b64", ""))
+    except base64.binascii.Error:
+        return ""
+    try:
+        msg = BytesParser(policy=default).parsebytes(("Content-Type: %s\r\n\r\n" % ct).encode("utf-8") + body)
+    except Exception:
+        return ""
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="Content-Disposition")
+        if name != "coveragex":
+            continue
+        raw = part.get_payload(decode=True) or b""
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return ""
+        val = payload.get("mock_mode") if isinstance(payload, dict) else ""
+        return val if isinstance(val, str) else ""
+    return ""
+
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("path") != "/api/v2/citestcov":
+            continue
+        if parse_marker(rec) == "retry_once":
+            attempts += 1
+
+if attempts < 2:
+    print(f"error: expected coverage retry scenario to issue >=2 attempts, got {attempts}")
+    sys.exit(1)
+PY
+
+# Scenario: sustained coverage 5xx should fail uploader after retry budget.
+reset_mock_retries
+LOG_LINES_BEFORE_COV_FAIL="$(log_line_count)"
+COV_FAIL_TESTLOGS="$TMP_WS/testlogs_cov_fail"
+MANUAL_COV_FAIL="$COV_FAIL_TESTLOGS/manual_cov_fail/test.outputs"
+write_manual_test_payload "$MANUAL_COV_FAIL" "Manual.CoverageAlwaysFail"
+write_manual_coverage_payload "$MANUAL_COV_FAIL" "manual_cov_fail.json" "always_fail"
+UPLOADER_COV_FAIL_LOG="$TMP_WS/uploader_cov_fail.log"
+if TESTLOGS_DIR="$COV_FAIL_TESTLOGS" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_COV_FAIL_LOG" 2>&1; then
+  echo "error: sustained coverage 5xx scenario unexpectedly succeeded"
+  cat "$UPLOADER_COV_FAIL_LOG" || true
+  exit 1
+fi
+LOG_FILE="$LOG_FILE" LOG_START="$LOG_LINES_BEFORE_COV_FAIL" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+from email.parser import BytesParser
+from email.policy import default
+
+log_path = os.environ["LOG_FILE"]
+start = int(os.environ.get("LOG_START", "0") or "0")
+attempts = 0
+
+def parse_marker(record):
+    headers = {str(k).lower(): str(v) for k, v in ((record.get("headers") or {}).items())}
+    ct = headers.get("content-type", "")
+    if "boundary=" not in ct:
+        return ""
+    try:
+        body = base64.b64decode(record.get("body_b64", ""))
+    except base64.binascii.Error:
+        return ""
+    try:
+        msg = BytesParser(policy=default).parsebytes(("Content-Type: %s\r\n\r\n" % ct).encode("utf-8") + body)
+    except Exception:
+        return ""
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="Content-Disposition")
+        if name != "coveragex":
+            continue
+        raw = part.get_payload(decode=True) or b""
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return ""
+        val = payload.get("mock_mode") if isinstance(payload, dict) else ""
+        return val if isinstance(val, str) else ""
+    return ""
+
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("path") != "/api/v2/citestcov":
+            continue
+        if parse_marker(rec) == "always_fail":
+            attempts += 1
+if attempts < 2:
+    print(f"error: sustained coverage 5xx scenario expected retries, got attempts={attempts}")
     sys.exit(1)
 PY

@@ -96,13 +96,23 @@ def go_macro_single_service_target(name, tags = None):
     )
 
 def go_macro_multi_service_target(name, tags = None):
-    """Target-under-test: sanitized service-key selection + custom rundir."""
+    """Target-under-test: sanitized service-key selection wiring."""
     dd_topt_go_test(
         name = name,
         topt_data = _multi_service_topt_data(),
         topt_service = "go-service",
         go_test_rule = _go_test_capture_rule,
         importpath = "example.com/override/pkg",
+        # Keep default rundir behavior when caller does not set it.
+        tags = tags,
+    )
+
+def go_macro_rundir_mismatch_target(name, tags = None):
+    """Target expected to fail when rundir drifts from package name."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
         rundir = "custom/rundir",
         tags = tags,
     )
@@ -138,7 +148,15 @@ def _go_macro_multi_service_wiring_test_impl(ctx):
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_fragment(captured.data_labels, ".testoptimization/manifest.txt"))
     asserts.equals(env, "example.com/override/pkg", captured.importpath)
-    asserts.equals(env, "custom/rundir", captured.rundir)
+    asserts.equals(env, "tests", captured.rundir)
+    return analysistest.end(env)
+
+def _go_macro_rundir_mismatch_wiring_test_impl(ctx):
+    """Assert custom rundir is normalized back to package default."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.equals(env, "tests", captured.rundir)
     return analysistest.end(env)
 
 def _resolve_topt_service_key_missing_target_impl(_ctx):
@@ -190,6 +208,9 @@ go_macro_single_service_wiring_test = analysistest.make(
 )
 go_macro_multi_service_wiring_test = analysistest.make(
     _go_macro_multi_service_wiring_test_impl,
+)
+go_macro_rundir_mismatch_wiring_test = analysistest.make(
+    _go_macro_rundir_mismatch_wiring_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

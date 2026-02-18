@@ -2,6 +2,7 @@ load(
     "//tools/tests/core:test_common_utils.bzl",
     "dedup_keys_test",
     "sanitize_label_fragment_test",
+    "log_helpers_and_is_dict_test",
     "validate_api_key_missing_failure_test",
     "validate_api_key_normalization_test",
     "validate_api_key_missing_target_rule",
@@ -43,10 +44,13 @@ load(
     "decode_json_object_non_json_target_rule",
     "decode_json_object_valid_test",
     "clone_payload_with_detached_attributes_test",
+    "clone_payload_with_nested_structure_test",
+    "collect_env_ctx_wrapper_test",
     "collect_env_from_environ_provider_mapping_test",
     "dd_site_normalization_test",
     "dirname_test",
     "example_stub_includes_manifest_in_files_test",
+    "example_stub_service_keys_targets_test",
     "export_bzl_escaping_test",
     "normalize_out_dir_or_fail_test",
     "normalize_out_dir_empty_failure_test",
@@ -60,11 +64,14 @@ load(
     "export_bzl_manifest_path_test",
     "http_execute_timeout_seconds_test",
     "module_label_map_collision_test",
+    "module_label_map_empty_inputs_test",
+    "normalize_ref_edge_cases_test",
     "normalize_ref_test",
     "fnv1a_symbol_distinguishes_common_symbols_test",
     "read_abs_file_command_escaping_test",
     "parse_go_module_path_test",
     "partition_unix_headers_test",
+    "partition_unix_headers_without_api_key_test",
     "record_sync_extension_repo_owner_duplicate_failure_test",
     "record_sync_extension_repo_owner_duplicate_target_rule",
     "record_sync_extension_repo_owner_success_test",
@@ -83,7 +90,9 @@ load(
     "codeowners_lookup_order_test",
     "codeowners_section_header_powershell_parity_test",
     "codeowners_section_header_classification_test",
+    "manifest_trim_and_bom_helpers_test",
     "runfile_manifest_bash_resolution_test",
+    "runfile_manifest_not_found_parity_test",
     "runfile_manifest_parser_parity_test",
     "runfile_manifest_powershell_resolution_test",
     "render_template_missing_placeholder_test",
@@ -112,14 +121,32 @@ module_label_map_collision_test(
     timeout = "short",
 )
 
+module_label_map_empty_inputs_test(
+    name = "module_label_map_empty_inputs_test",
+    size = "small",
+    timeout = "short",
+)
+
 normalize_ref_test(
     name = "normalize_ref_test",
     size = "small",
     timeout = "short",
 )
 
+normalize_ref_edge_cases_test(
+    name = "normalize_ref_edge_cases_test",
+    size = "small",
+    timeout = "short",
+)
+
 collect_env_from_environ_provider_mapping_test(
     name = "collect_env_from_environ_provider_mapping_test",
+    size = "small",
+    timeout = "short",
+)
+
+collect_env_ctx_wrapper_test(
+    name = "collect_env_ctx_wrapper_test",
     size = "small",
     timeout = "short",
 )
@@ -172,8 +199,20 @@ clone_payload_with_detached_attributes_test(
     timeout = "short",
 )
 
+clone_payload_with_nested_structure_test(
+    name = "clone_payload_with_nested_structure_test",
+    size = "small",
+    timeout = "short",
+)
+
 example_stub_includes_manifest_in_files_test(
     name = "example_stub_includes_manifest_in_files_test",
+    size = "small",
+    timeout = "short",
+)
+
+example_stub_service_keys_targets_test(
+    name = "example_stub_service_keys_targets_test",
     size = "small",
     timeout = "short",
 )
@@ -186,6 +225,12 @@ sanitize_label_fragment_test(
 
 dedup_keys_test(
     name = "dedup_keys_test",
+    size = "small",
+    timeout = "short",
+)
+
+log_helpers_and_is_dict_test(
+    name = "log_helpers_and_is_dict_test",
     size = "small",
     timeout = "short",
 )
@@ -328,6 +373,12 @@ render_module_runfiles_bzl_respects_manifest_root_test(
 
 partition_unix_headers_test(
     name = "partition_unix_headers_test",
+    size = "small",
+    timeout = "short",
+)
+
+partition_unix_headers_without_api_key_test(
+    name = "partition_unix_headers_without_api_key_test",
     size = "small",
     timeout = "short",
 )
@@ -530,6 +581,18 @@ runfile_manifest_powershell_resolution_test(
 
 runfile_manifest_parser_parity_test(
     name = "runfile_manifest_parser_parity_test",
+    size = "small",
+    timeout = "short",
+)
+
+runfile_manifest_not_found_parity_test(
+    name = "runfile_manifest_not_found_parity_test",
+    size = "small",
+    timeout = "short",
+)
+
+manifest_trim_and_bom_helpers_test(
+    name = "manifest_trim_and_bom_helpers_test",
     size = "small",
     timeout = "short",
 )

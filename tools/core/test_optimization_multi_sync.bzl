@@ -231,6 +231,13 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                     runtime_name = call.runtime_name,
                     runtime_version = call.runtime_version,
                     runtime_arch = call.runtime_arch,
+                    # Optional HTTP timeout/retry policy overrides.
+                    # Use -1 to keep default/env behavior.
+                    http_connect_timeout_seconds = call.http_connect_timeout_seconds,
+                    http_max_time_seconds = call.http_max_time_seconds,
+                    http_retry_attempts = call.http_retry_attempts,
+                    http_retry_delay_seconds = call.http_retry_delay_seconds,
+                    http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
                     known_tests = call.known_tests,
                     test_management = call.test_management,
                     debug = call.debug,
@@ -256,6 +263,13 @@ test_optimization_multi_sync_extension = module_extension(
             "runtime_name": attr.string(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            # Optional HTTP timeout/retry policy overrides propagated to each
+            # per-service sync repo. Use -1 to keep default/env behavior.
+            "http_connect_timeout_seconds": attr.int(default = -1),
+            "http_max_time_seconds": attr.int(default = -1),
+            "http_retry_attempts": attr.int(default = -1),
+            "http_retry_delay_seconds": attr.int(default = -1),
+            "http_execute_timeout_buffer_seconds": attr.int(default = -1),
             # Kill-switches propagated to each per-service repo
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),

@@ -51,6 +51,15 @@ exit $testStatus
 Always preserve the test exit code. Using plain `;` can make CI report success
 when tests failed.
 
+Credential handling:
+
+- Pass `DD_API_KEY`, `DD_SITE`, and `DD_TRACE_AGENT_URL` at runtime via
+  environment variables only.
+- Do not hardcode secrets in `BUILD.bazel`, scripts committed to git, or CI
+  logs.
+- The generated uploader scripts read env vars directly (no shell `eval`
+  expansion of credential values).
+
 ## Add the uploader target
 
 ```bzl
@@ -67,6 +76,18 @@ dd_payload_uploader(
     # fail_on_error = False,   # Fail if no payloads found when tests ran
     # debug = False,           # Enable debug logging
     # gzip_payloads = False,   # Gzip test payloads before upload
+)
+```
+
+Multi-service aggregator variant (include each service context):
+
+```bzl
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = [
+        "@test_optimization_data//:test_optimization_context_go_service",
+        "@test_optimization_data//:test_optimization_context_ruby_service",
+    ],
 )
 ```
 
@@ -120,7 +141,7 @@ bazel run //:dd_upload_payloads
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
-| `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | Set to `1` to only upload files matching `span_events_*.json` or `coverage_*.json` |
+| `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | `0` uploads all payload files; set to `1` to only upload `span_events_*.json` or `coverage_*.json` |
 | `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
 | `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip test payloads before upload (adds `Content-Encoding: gzip`) |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |

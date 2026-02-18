@@ -147,6 +147,14 @@ def _build_module_labels_invalid_entry_target_impl(_ctx):
     build_module_labels_for_tests("repo_name", ["mod_a", 7])
     return []
 
+def _build_module_labels_empty_entry_target_impl(_ctx):
+    build_module_labels_for_tests("repo_name", [""])
+    return []
+
+def _build_module_labels_unsanitized_entry_target_impl(_ctx):
+    build_module_labels_for_tests("repo_name", ["mod-a"])
+    return []
+
 def _normalize_user_data_invalid_type_target_impl(_ctx):
     normalize_user_data_for_tests({"bad": "shape"})
     return []
@@ -157,6 +165,14 @@ build_module_labels_invalid_shape_target_rule = rule(
 
 build_module_labels_invalid_entry_target_rule = rule(
     implementation = _build_module_labels_invalid_entry_target_impl,
+)
+
+build_module_labels_empty_entry_target_rule = rule(
+    implementation = _build_module_labels_empty_entry_target_impl,
+)
+
+build_module_labels_unsanitized_entry_target_rule = rule(
+    implementation = _build_module_labels_unsanitized_entry_target_impl,
 )
 
 normalize_user_data_invalid_type_target_rule = rule(
@@ -173,6 +189,18 @@ def _build_module_labels_invalid_entry_failure_test_impl(ctx):
     """Assert malformed labels entries fail with direct guidance."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "topt_data['labels'] entries must be strings")
+    return analysistest.end(env)
+
+def _build_module_labels_empty_entry_failure_test_impl(ctx):
+    """Assert empty label entries fail with explicit guidance."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "topt_data['labels'] entries must be non-empty")
+    return analysistest.end(env)
+
+def _build_module_labels_unsanitized_entry_failure_test_impl(ctx):
+    """Assert unsanitized label entries fail with explicit guidance."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "topt_data['labels'] entries must be sanitized")
     return analysistest.end(env)
 
 def _normalize_user_data_invalid_type_failure_test_impl(ctx):
@@ -193,6 +221,14 @@ build_module_labels_invalid_shape_failure_test = analysistest.make(
 )
 build_module_labels_invalid_entry_failure_test = analysistest.make(
     _build_module_labels_invalid_entry_failure_test_impl,
+    expect_failure = True,
+)
+build_module_labels_empty_entry_failure_test = analysistest.make(
+    _build_module_labels_empty_entry_failure_test_impl,
+    expect_failure = True,
+)
+build_module_labels_unsanitized_entry_failure_test = analysistest.make(
+    _build_module_labels_unsanitized_entry_failure_test_impl,
     expect_failure = True,
 )
 normalize_user_data_invalid_type_failure_test = analysistest.make(

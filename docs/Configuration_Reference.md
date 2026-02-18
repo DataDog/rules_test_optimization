@@ -30,6 +30,8 @@ Notes:
 - Parent directories are created automatically for all output paths.
 - Omitted optional attributes keep default behavior and avoid unnecessary
   cache-key churn.
+- For HTTP numeric overrides, `-1` means "do not pin here"; resolution falls
+  back to environment overrides first, then the rule default.
 
 ## Multi-sync extension attributes
 
@@ -43,6 +45,11 @@ Extension tag: `test_optimization_multi_sync.test_optimization_multi_sync(...)`
 | `runtime_name` | string | empty | Optional runtime name propagated to each per-service sync repo |
 | `runtime_version` | string | empty | Optional runtime version propagated to each per-service sync repo |
 | `runtime_arch` | string | auto-detected | Optional runtime arch propagated to each per-service sync repo |
+| `http_connect_timeout_seconds` | int | `10` | Optional connect-timeout override propagated to each per-service sync repo (`-1` keeps default/env behavior) |
+| `http_max_time_seconds` | int | `60` | Optional per-request max-time override propagated to each per-service sync repo (`-1` keeps default/env behavior) |
+| `http_retry_attempts` | int | `3` | Optional retry-attempt override propagated to each per-service sync repo (`-1` keeps default/env behavior) |
+| `http_retry_delay_seconds` | int | `2` | Optional retry-delay override propagated to each per-service sync repo (`-1` keeps default/env behavior) |
+| `http_execute_timeout_buffer_seconds` | int | `60` | Optional outer execute-timeout buffer override propagated to each per-service sync repo (`-1` keeps default/env behavior) |
 | `known_tests` | bool | `True` | Known Tests kill-switch propagated to each per-service sync repo |
 | `test_management` | bool | `True` | Test Management kill-switch propagated to each per-service sync repo |
 | `debug` | bool | `False` | Enables verbose logging for generated per-service sync repos |
@@ -157,7 +164,7 @@ The uploader rule reads these variables at `bazel run` time:
 | `DD_TRACE_AGENT_URL` | Enables EVP proxy mode |
 | `DD_TEST_OPTIMIZATION_INTAKE_BASE` | Optional agentless intake base override for test/dev setups |
 | `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | Keep payload files after successful upload |
-| `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | Upload only prefixed payload filenames |
+| `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` uploads all payloads; `1` restricts to `span_events_*.json` / `coverage_*.json` |
 | `DD_TEST_OPTIMIZATION_DEBUG` | Enable verbose uploader logs |
 | `DD_TEST_OPTIMIZATION_GZIP` | Gzip test payloads before upload |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | Override uploader max wait |
