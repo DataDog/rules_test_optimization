@@ -1083,9 +1083,9 @@ BUILD_RETRY_EOF
     exit 1
   fi
 
-  # Prevent MSYS path-conversion from rewriting "/api/..." into a host path
-  # when running the inline Python checker on Windows (Git Bash).
-  MSYS2_ARG_CONV_EXCL="*" LOG_FILE="$LOG_FILE" LOG_START="$log_start" EXPECTED_PATH="$expected_path" FILTER_ATTR="$filter_attr" FILTER_VALUE="$filter_value" MIN_COUNT="$min_count" "$PYTHON" - <<'PY'
+  # Prevent MSYS path/env conversion from rewriting "/api/..." into a host
+  # path when running the inline Python checker on Windows (Git Bash).
+  MSYS2_ARG_CONV_EXCL="*" MSYS2_ENV_CONV_EXCL="EXPECTED_PATH" LOG_FILE="$LOG_FILE" LOG_START="$log_start" EXPECTED_PATH="$expected_path" FILTER_ATTR="$filter_attr" FILTER_VALUE="$filter_value" MIN_COUNT="$min_count" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
