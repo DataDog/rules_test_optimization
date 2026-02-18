@@ -1582,7 +1582,13 @@ function Upload-SingleTest([string]$FilePath) {{
         Dbg-Headers "common" $hdrs
         Log-StartTimeStats $body
     }}
-    $result = [bool](Send-PostJson $TestUrl $hdrs $body)
+    # Native command / .NET call paths can emit incidental pipeline items.
+    # Consume the stream and treat the final emitted value as the boolean result.
+    $resultStream = @(Send-PostJson $TestUrl $hdrs $body)
+    $result = $false
+    if ($resultStream.Count -gt 0) {{
+        $result = [bool]$resultStream[-1]
+    }}
     # Enriched temp payload is always ephemeral.
     Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
     return [bool]$result
@@ -1680,7 +1686,11 @@ function Upload-AllTests {{
                 $skipped++
                 continue
             }}
-            $uploaded = (Upload-SingleTest $f.FullName) -eq $true
+            $uploadedResult = @(Upload-SingleTest $f.FullName)
+            $uploaded = $false
+            if ($uploadedResult.Count -gt 0) {{
+                $uploaded = [bool]$uploadedResult[-1]
+            }}
             if ($uploaded) {{
                 Log "uploaded test payload: $($f.FullName)"
                 Remove-PayloadFile $f.FullName
@@ -1712,7 +1722,11 @@ function Upload-AllCoverage {{
                 $skipped++
                 continue
             }}
-            $uploaded = (Upload-SingleCoverage $f.FullName) -eq $true
+            $uploadedResult = @(Upload-SingleCoverage $f.FullName)
+            $uploaded = $false
+            if ($uploadedResult.Count -gt 0) {{
+                $uploaded = [bool]$uploadedResult[-1]
+            }}
             if ($uploaded) {{
                 Log "uploaded coverage payload: $($f.FullName)"
                 Remove-PayloadFile $f.FullName
