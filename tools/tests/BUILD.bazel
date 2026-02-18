@@ -2,6 +2,7 @@
 #
 # Package-scoped suites:
 # - core: //tools/tests/core:tests
+# - python: //tools/tests/python:tests
 exports_files([
     "example_stub_repo.bzl",
 ], visibility = ["//visibility:public"])
@@ -10,5 +11,6 @@ test_suite(
     name = "tests",
     tests = [
         "//tools/tests/core:tests",
+        "//tools/tests/python:tests",
     ],
 )

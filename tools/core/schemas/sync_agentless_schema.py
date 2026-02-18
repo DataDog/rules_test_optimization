@@ -36,7 +36,7 @@ def _default_json_path() -> Path:
 def _load_yaml_with_pyyaml(path: Path) -> Any:
     try:
         import yaml  # type: ignore
-    except Exception as exc:
+    except ImportError as exc:
         raise RuntimeError("PyYAML is not available") from exc
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
@@ -137,7 +137,7 @@ def main() -> int:
             return 1
         try:
             json_data = load_json(json_path)
-        except Exception as exc:
+        except (OSError, json.JSONDecodeError) as exc:
             print(f"error: failed to parse JSON schema: {exc}", file=sys.stderr)
             return 2
 

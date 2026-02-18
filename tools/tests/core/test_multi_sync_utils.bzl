@@ -19,6 +19,13 @@ def _compute_service_keys_dedups_collisions_test(ctx):
     asserts.equals(env, ["go_service", "go_service_2", "team_api"], keys)
     return unittest.end(env)
 
+def _compute_service_keys_edge_cases_test(ctx):
+    """Validate empty and single-service key generation edge cases."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, [], compute_multi_service_keys_for_tests([]))
+    asserts.equals(env, ["go_service"], compute_multi_service_keys_for_tests(["go-service"]))
+    return unittest.end(env)
+
 def _compute_repo_names_test(ctx):
     """Validate deterministic per-service repository naming."""
     env = unittest.begin(ctx)
@@ -92,6 +99,7 @@ def _record_multi_repo_owner_duplicate_failure_test_impl(ctx):
     return analysistest.end(env)
 
 compute_service_keys_dedups_collisions_test = unittest.make(_compute_service_keys_dedups_collisions_test)
+compute_service_keys_edge_cases_test = unittest.make(_compute_service_keys_edge_cases_test)
 compute_repo_names_test = unittest.make(_compute_repo_names_test)
 record_multi_repo_owner_success_test = unittest.make(_record_multi_repo_owner_success_test)
 render_multi_aggregate_bzl_contains_expected_targets_test = unittest.make(_render_multi_aggregate_bzl_contains_expected_targets_test)

@@ -80,6 +80,8 @@ This repository includes `bazelw` to forward repo env vars consistently:
 
 - Computes Git metadata when a Git repo is present and forwards via `--repo_env`.
 - Exported `DD_GIT_*` values override computed metadata.
+- Repository policy: keep root `.bazelrc` absent; prefer explicit flags in CI
+  and example-local `.bazelrc` files.
 
 Examples:
 
@@ -120,6 +122,12 @@ Run full sync + uploader flow locally (without hitting Datadog):
 tools/tests/integration/run_mock_server_tests.sh
 ```
 
+Update integration snapshots intentionally when payload shape changes:
+
+```sh
+UPDATE_SNAPSHOTS=1 tools/tests/integration/run_mock_server_tests.sh
+```
+
 Windows entrypoints:
 
 ```powershell
@@ -139,12 +147,32 @@ Notes:
   - `DD_TEST_OPTIMIZATION_INTAKE_BASE` (uploader, agentless path)
 - The harness asserts CODEOWNERS enrichment/preservation and runfile manifest
   fallback behavior, and prints focused diagnostics on assertion failures.
+- CODEOWNERS discovery intentionally checks both `docs/CODEOWNERS` and
+  `.docs/CODEOWNERS`; the `.docs` path is retained as a legacy compatibility
+  fallback for repositories that still keep ownership files there.
+
+## Runtime metadata/version invariants
+
+- `WORKSPACE` is intentionally present in sync env discovery/forwarding lists
+  (alongside `GITHUB_WORKSPACE`, `CI_PROJECT_DIR`, etc.) to preserve workspace
+  root resolution in heterogeneous CI environments.
+- `UPLOADER_VERSION` and `RULES_VERSION` are intentionally independent:
+  uploader script/runtime evolution can ship without forcing a rules contract
+  bump, while payload metadata still carries both values for observability.
 
 ## CI and reproducibility policy
 
 - CI includes a Linux hermetic lane (`bazel-tests-hermetic`) with sandboxed
   execution and network blocking, plus cross-platform `bazel-tests` and mock
   server integration coverage.
+- CI intentionally stays cacheless for Bazel execution in `bazel-tests`.
+  - Rationale: each run should re-evaluate repository rules from a fresh state.
+  - Guardrail: do not add Bazel cache steps (`actions/cache`, disk cache,
+    remote cache) without explicit maintainer approval.
+- CI includes a lightweight tools coverage signal (`coverage-tools`) to ensure
+  line-coverage artifacts are generated and stay above a minimum floor.
+- Shell linting scope includes integration harnesses, `bazelw`, and example
+  `runtests.sh` scripts.
 - Repository tracks both `.bazelversion` and `MODULE.bazel.lock` in git to
   reduce local/CI drift.
 - Current PR baseline checks:

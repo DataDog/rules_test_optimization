@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import os
 import re
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-MAX_ERRORS = 20
+DEFAULT_MAX_ERRORS = 20
 _DEBUG_TRUTHY = {"1", "true", "yes", "on"}
 _STATS = {
     "nodes": 0,
@@ -18,6 +19,7 @@ _STATS = {
     "else": 0,
     "type_checks": 0,
 }
+_DEBUG = False
 
 
 def _debug_enabled() -> bool:
@@ -29,24 +31,55 @@ def _debug_enabled() -> bool:
     return str(val).strip().lower() in _DEBUG_TRUTHY
 
 
-_DEBUG = _debug_enabled()
-
-
 def _debug(msg: str) -> None:
     if _DEBUG:
         print(f"[schema-validator][dbg] {msg}", file=sys.stderr)
 
 
 def _stat_inc(key: str, n: int = 1) -> None:
-    if _DEBUG:
-        _STATS[key] = _STATS.get(key, 0) + n
+    _STATS[key] = _STATS.get(key, 0) + n
 
 
-def _safe_size(path: str) -> str:
+def _safe_size(path: str) -> Optional[int]:
     try:
-        return str(os.path.getsize(path))
-    except Exception as exc:
-        return f"unknown ({exc})"
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+def _format_size(size: Optional[int]) -> str:
+    if size is None:
+        return "unknown"
+    return str(size)
+
+
+def _max_errors_from_env() -> int:
+    raw = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_MAX_ERRORS")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_MAX_ERRORS
+    try:
+        value = int(raw.strip())
+    except ValueError as exc:
+        raise ValueError("DD_TEST_OPTIMIZATION_SCHEMA_MAX_ERRORS must be an integer") from exc
+    if value <= 0:
+        raise ValueError("DD_TEST_OPTIMIZATION_SCHEMA_MAX_ERRORS must be > 0")
+    return value
+
+
+def _parse_args(argv: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog = "validate_payload_schema.py",
+        description = "Validate payload JSON against a schema JSON file.",
+    )
+    parser.add_argument("schema_path")
+    parser.add_argument("payload_path")
+    parser.add_argument(
+        "--max-errors",
+        type = int,
+        default = None,
+        help = "Maximum number of validation errors to record/print",
+    )
+    return parser.parse_args(argv)
 
 
 def _sample_keys(value: Any, limit: int = 12) -> str:
@@ -112,9 +145,16 @@ def _path_key(path: str, key: str) -> str:
     return f"{path}['{safe}']"
 
 
-def _validate(value: Any, schema: Dict[str, Any], root: Dict[str, Any], path: str, errors: List[str]) -> None:
+def _validate(
+    value: Any,
+    schema: Dict[str, Any],
+    root: Dict[str, Any],
+    path: str,
+    errors: List[str],
+    max_errors: int,
+) -> None:
     _stat_inc("nodes")
-    if len(errors) >= MAX_ERRORS:
+    if len(errors) >= max_errors:
         return
     if not isinstance(schema, dict):
         return
@@ -125,19 +165,19 @@ def _validate(value: Any, schema: Dict[str, Any], root: Dict[str, Any], path: st
         except ValueError as exc:
             errors.append(f"{path}: {exc}")
             return
-        _validate(value, ref_schema, root, path, errors)
+        _validate(value, ref_schema, root, path, errors, max_errors)
         return
 
     for subschema in schema.get("allOf", []):
-        _validate(value, subschema, root, path, errors)
-        if len(errors) >= MAX_ERRORS:
+        _validate(value, subschema, root, path, errors, max_errors)
+        if len(errors) >= max_errors:
             return
 
     if "anyOf" in schema:
         _stat_inc("anyof")
         for subschema in schema["anyOf"]:
             sub_errors: List[str] = []
-            _validate(value, subschema, root, path, sub_errors)
+            _validate(value, subschema, root, path, sub_errors, max_errors)
             if not sub_errors:
                 _stat_inc("anyof_matched")
                 break
@@ -149,15 +189,15 @@ def _validate(value: Any, schema: Dict[str, Any], root: Dict[str, Any], path: st
     if "if" in schema:
         _stat_inc("if")
         cond_errors: List[str] = []
-        _validate(value, schema["if"], root, path, cond_errors)
+        _validate(value, schema["if"], root, path, cond_errors, max_errors)
         if not cond_errors:
             if "then" in schema:
                 _stat_inc("then")
-                _validate(value, schema["then"], root, path, errors)
+                _validate(value, schema["then"], root, path, errors, max_errors)
         else:
             if "else" in schema:
                 _stat_inc("else")
-                _validate(value, schema["else"], root, path, errors)
+                _validate(value, schema["else"], root, path, errors, max_errors)
 
     if "type" in schema:
         _stat_inc("type_checks")
@@ -189,7 +229,7 @@ def _validate(value: Any, schema: Dict[str, Any], root: Dict[str, Any], path: st
         for key in required:
             if key not in value:
                 errors.append(f"{path}: missing required property '{key}'")
-                if len(errors) >= MAX_ERRORS:
+                if len(errors) >= max_errors:
                     return
 
         props = schema.get("properties", {})
@@ -200,53 +240,66 @@ def _validate(value: Any, schema: Dict[str, Any], root: Dict[str, Any], path: st
             matched = False
             if key in props:
                 matched = True
-                _validate(val, props[key], root, _path_key(path, key), errors)
+                _validate(val, props[key], root, _path_key(path, key), errors, max_errors)
             for regex, subschema in patterns:
                 if regex.search(key):
                     matched = True
-                    _validate(val, subschema, root, _path_key(path, key), errors)
+                    _validate(val, subschema, root, _path_key(path, key), errors, max_errors)
             if not matched:
                 addl = schema.get("additionalProperties", True)
                 if addl is False:
                     errors.append(f"{path}: additional property '{key}' not allowed")
                 elif isinstance(addl, dict):
-                    _validate(val, addl, root, _path_key(path, key), errors)
+                    _validate(val, addl, root, _path_key(path, key), errors, max_errors)
 
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
             for idx, item in enumerate(value):
-                _validate(item, items, root, f"{path}[{idx}]", errors)
+                _validate(item, items, root, f"{path}[{idx}]", errors, max_errors)
         elif isinstance(items, list):
             for idx, item in enumerate(value):
                 if idx < len(items):
-                    _validate(item, items[idx], root, f"{path}[{idx}]", errors)
+                    _validate(item, items[idx], root, f"{path}[{idx}]", errors, max_errors)
                 else:
                     additional_items = schema.get("additionalItems", True)
                     if additional_items is False:
                         errors.append(f"{path}[{idx}]: additional item not allowed")
                     elif isinstance(additional_items, dict):
-                        _validate(item, additional_items, root, f"{path}[{idx}]", errors)
+                        _validate(item, additional_items, root, f"{path}[{idx}]", errors, max_errors)
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: validate_payload_schema.py <schema.json> <payload.json>", file=sys.stderr)
+    global _DEBUG
+    _DEBUG = _debug_enabled()
+    try:
+        args = _parse_args(sys.argv[1:])
+    except SystemExit as exc:
+        return int(exc.code) if isinstance(exc.code, int) else 2
+
+    schema_path = args.schema_path
+    payload_path = args.payload_path
+    try:
+        env_max_errors = _max_errors_from_env()
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    max_errors = args.max_errors if args.max_errors is not None else env_max_errors
+    if max_errors <= 0:
+        print("error: --max-errors must be > 0", file=sys.stderr)
         return 2
 
-    schema_path = sys.argv[1]
-    payload_path = sys.argv[2]
     _debug(f"schema path: {schema_path}")
     _debug(f"payload path: {payload_path}")
-    _debug(f"max errors: {MAX_ERRORS}")
+    _debug(f"max errors: {max_errors}")
 
     try:
         with open(schema_path, "r", encoding="utf-8-sig") as f:
             schema = json.load(f)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         print(f"error: failed to read schema: {exc}", file=sys.stderr)
         return 2
-    _debug(f"schema bytes: {_safe_size(schema_path)}")
+    _debug(f"schema bytes: {_format_size(_safe_size(schema_path))}")
     if isinstance(schema, dict):
         if "$id" in schema:
             _debug(f"schema $id: {schema.get('$id')}")
@@ -260,10 +313,10 @@ def main() -> int:
     try:
         with open(payload_path, "r", encoding="utf-8-sig") as f:
             payload = json.load(f)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         print(f"error: failed to read payload JSON: {exc}", file=sys.stderr)
         return 2
-    _debug(f"payload bytes: {_safe_size(payload_path)}")
+    _debug(f"payload bytes: {_format_size(_safe_size(payload_path))}")
     _debug(f"payload type: {type(payload).__name__}")
     if isinstance(payload, dict):
         _debug(f"payload keys: {len(payload)}")
@@ -273,14 +326,14 @@ def main() -> int:
 
     errors: List[str] = []
     _debug("validation start")
-    _validate(payload, schema, schema, "$", errors)
+    _validate(payload, schema, schema, "$", errors, max_errors)
 
     if errors:
         print("schema validation failed:", file=sys.stderr)
-        for err in errors[:MAX_ERRORS]:
+        for err in errors[:max_errors]:
             print(f"- {err}", file=sys.stderr)
-        if len(errors) > MAX_ERRORS:
-            print(f"- ... and {len(errors) - MAX_ERRORS} more", file=sys.stderr)
+        if len(errors) > max_errors:
+            print(f"- ... and {len(errors) - max_errors} more", file=sys.stderr)
         _debug(f"validation result: failed ({len(errors)} error(s))")
         if _DEBUG:
             _debug(

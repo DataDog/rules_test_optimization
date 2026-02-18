@@ -37,19 +37,12 @@ Developer navigation:
 # - Uses workspace-level lock to prevent concurrent uploaders
 # - Enriches payloads with context.json metadata
 
+load("//tools/core:common_utils.bzl", "log_debug", "log_info")
+
 # Version identifier sent in Datadog-Meta-Tracer-Version header
 UPLOADER_VERSION = "2.0.0"
 # Rules version used for payload metadata defaults
 RULES_VERSION = "1.0.0"
-
-def log_info(message):
-    """Emit user-facing uploader progress log line."""
-    print("dd_payload_uploader: %s" % message)
-
-def log_debug(debug_enabled, message):
-    """Emit debug log line when uploader debugging is enabled."""
-    if debug_enabled:
-        print("dd_payload_uploader: %s" % message)
 
 def _render_template(template, substitutions):
     """Render script template placeholders with literal-brace support."""
@@ -515,6 +508,7 @@ def _uploader_impl(ctx):
     log_info("Generating uploader scripts (Option 2: TEST_UNDECLARED_OUTPUTS_DIR)")
     log_debug(
         debug,
+        "config",
         "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefixed_payloads=%s, gzip_payloads=%s" %
         (
             quiescent_sec,
@@ -527,25 +521,25 @@ def _uploader_impl(ctx):
         ),
     )
     if context_json_rloc:
-        log_debug(debug, "context.json found at: %s" % context_json_rloc)
-        log_debug(debug, "context.json artifact path: %s" % context_json_path)
+        log_debug(debug, "inputs", "context.json found at: %s" % context_json_rloc)
+        log_debug(debug, "inputs", "context.json artifact path: %s" % context_json_path)
     else:
         # Runtime script treats missing context as best-effort disablement.
-        log_debug(debug, "context.json not found in data files; enrichment disabled")
+        log_debug(debug, "inputs", "context.json not found in data files; enrichment disabled")
     if schema_json_rloc:
-        log_debug(debug, "schema found at: %s" % schema_json_rloc)
-        log_debug(debug, "schema artifact path: %s" % schema_json_path)
+        log_debug(debug, "inputs", "schema found at: %s" % schema_json_rloc)
+        log_debug(debug, "inputs", "schema artifact path: %s" % schema_json_path)
     else:
-        log_debug(debug, "schema not found in data files; validation disabled")
+        log_debug(debug, "inputs", "schema not found in data files; validation disabled")
     if schema_validator_rloc:
-        log_debug(debug, "schema validator found at: %s" % schema_validator_rloc)
-        log_debug(debug, "schema validator artifact path: %s" % schema_validator_path)
+        log_debug(debug, "inputs", "schema validator found at: %s" % schema_validator_rloc)
+        log_debug(debug, "inputs", "schema validator artifact path: %s" % schema_validator_path)
     else:
-        log_debug(debug, "schema validator not found in data files; validation disabled")
+        log_debug(debug, "inputs", "schema validator not found in data files; validation disabled")
     if ctx.files.data:
-        log_debug(debug, "Data files count: %d" % len(ctx.files.data))
+        log_debug(debug, "inputs", "Data files count: %d" % len(ctx.files.data))
         for f in ctx.files.data:
-            log_debug(debug, "  data file: %s (%s)" % (f.basename, f.short_path))
+            log_debug(debug, "inputs", "  data file: %s (%s)" % (f.basename, f.short_path))
 
     # ------------------------------------------------------------------
     # Phase 2: Render Bash runtime implementation.
@@ -2553,7 +2547,7 @@ fi
             "curl_retry_flags": " ".join(_bash_curl_retry_flags_for_tests()),
         },
     )
-    log_debug(debug, "Bash script rendered (bytes=%d)" % len(bash_script))
+    log_debug(debug, "render", "Bash script rendered (bytes=%d)" % len(bash_script))
 
     # PowerShell implementation (Windows)
     ps_template = """
@@ -4318,7 +4312,7 @@ try {{
             "rules_version": RULES_VERSION,
         },
     )
-    log_debug(debug, "PowerShell script rendered (bytes=%d)" % len(ps_script))
+    log_debug(debug, "render", "PowerShell script rendered (bytes=%d)" % len(ps_script))
 
     # ------------------------------------------------------------------
     # Phase 4: Materialize executable/script artifacts.
@@ -4339,7 +4333,7 @@ exit /b %ERRORLEVEL%
     bat_script = bat_template.replace("{ps_name}", ps_file.basename)
     bat_file = ctx.actions.declare_file(ctx.label.name + ".bat")
     ctx.actions.write(output = bat_file, content = bat_script, is_executable = True)
-    log_debug(debug, "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
+    log_debug(debug, "outputs", "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
 
     # ------------------------------------------------------------------
     # Phase 5: Build runfiles set and choose platform-specific executable.
@@ -4352,7 +4346,7 @@ exit /b %ERRORLEVEL%
     if ctx.file._schema_validator:
         extra_files.append(ctx.file._schema_validator)
     runfiles = ctx.runfiles(files = [ps_file, bat_file] + ctx.files.data + extra_files)
-    log_debug(debug, "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
+    log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
     # Use platform detection to return .bat on Windows, .sh on Unix
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])

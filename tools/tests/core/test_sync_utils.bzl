@@ -11,10 +11,12 @@ load(
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
     "build_module_label_map_for_tests",
+    "clone_payload_with_detached_attributes_for_tests",
     "collect_env_from_environ_for_tests",
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
+    "fnv1a_32_for_tests",
     "normalize_out_dir_or_fail_for_tests",
     "http_execute_timeout_buffer_seconds_for_tests",
     "http_execute_timeout_seconds_for_tests",
@@ -227,6 +229,68 @@ def _export_bzl_manifest_path_test(ctx):
     asserts.true(env, "\"runtimes\": {" in content)
     asserts.true(env, "\"go\": {" in content)
     asserts.false(env, "\n    \"go\": {\n" in content)
+    return unittest.end(env)
+
+def _export_bzl_escaping_test(ctx):
+    """Validate generated export.bzl escapes quote/backslash safely."""
+    env = unittest.begin(ctx)
+    content = render_export_bzl_for_tests(
+        "repo\"name",
+        ["a"],
+        "{}",
+        "go\"mod",
+        "sanitized\\path",
+        True,
+        "path\\to\\manifest.txt",
+    )
+    asserts.true(env, "\"repo_name\": \"repo\\\"name\"" in content)
+    asserts.true(env, "\"manifest_path\": \"path\\\\to\\\\manifest.txt\"" in content)
+    asserts.true(env, "\"module_path\": \"go\\\"mod\"" in content)
+    asserts.true(env, "\"sanitized_module_path\": \"sanitized\\\\path\"" in content)
+    return unittest.end(env)
+
+def _fnv1a_symbol_distinguishes_common_symbols_test(ctx):
+    """Validate common symbols do not collapse to digit-zero hash path."""
+    env = unittest.begin(ctx)
+    base = fnv1a_32_for_tests("abc0def")
+    asserts.true(env, fnv1a_32_for_tests("abc=def") != base)
+    asserts.true(env, fnv1a_32_for_tests("abc@def") != base)
+    asserts.true(env, fnv1a_32_for_tests("abc#def") != base)
+    return unittest.end(env)
+
+def _clone_payload_with_detached_attributes_test(ctx):
+    """Validate module-specific mutations do not leak to source payload."""
+    env = unittest.begin(ctx)
+    original = {
+        "data": {
+            "attributes": {
+                "tests": {
+                    "module_a": {"suite_a": ["test_a"]},
+                },
+                "modules": {
+                    "module_a": {"suite_a": {"test_a": {"properties": {"quarantined": False}}}},
+                },
+            },
+            "id": "source-data",
+        },
+        "meta": {"source": "fixture"},
+    }
+    cloned = clone_payload_with_detached_attributes_for_tests(original)
+    cloned_attrs = ((cloned.get("data") or {}).get("attributes") or {})
+    cloned_attrs["tests"] = {
+        "module_b": {"suite_b": ["test_b"]},
+    }
+    cloned_attrs["modules"] = {
+        "module_b": {"suite_b": {}},
+    }
+
+    original_attrs = ((original.get("data") or {}).get("attributes") or {})
+    original_tests = original_attrs.get("tests") or {}
+    original_modules = original_attrs.get("modules") or {}
+    asserts.true(env, original_tests.get("module_a") != None)
+    asserts.equals(env, None, original_tests.get("module_b"))
+    asserts.true(env, original_modules.get("module_a") != None)
+    asserts.equals(env, None, original_modules.get("module_b"))
     return unittest.end(env)
 
 def _example_stub_includes_manifest_in_files_test(ctx):
@@ -481,6 +545,9 @@ parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
+export_bzl_escaping_test = unittest.make(_export_bzl_escaping_test)
+fnv1a_symbol_distinguishes_common_symbols_test = unittest.make(_fnv1a_symbol_distinguishes_common_symbols_test)
+clone_payload_with_detached_attributes_test = unittest.make(_clone_payload_with_detached_attributes_test)
 example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_includes_manifest_in_files_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)

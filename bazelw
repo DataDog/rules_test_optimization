@@ -44,15 +44,6 @@ if [[ -z "${cmd}" ]]; then
   cmd="help"
 fi
 
-# Only inject the repo_env for commands that may trigger repo fetching
-case "${cmd}" in
-  build|test|run|sync|fetch|query|cquery|aquery|coverage|info)
-    ;;
-  *)
-    # No special handling
-    ;;
-esac
-
 # Build final command line safely without expanding empty arrays
 cmdline=("${bazel_cmd}")
 if (( ${#startup_args[@]} )); then

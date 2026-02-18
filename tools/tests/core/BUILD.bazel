@@ -21,6 +21,7 @@ load(
     "//tools/tests/core:test_multi_sync_utils.bzl",
     "compute_repo_names_test",
     "compute_service_keys_dedups_collisions_test",
+    "compute_service_keys_edge_cases_test",
     "record_multi_repo_owner_duplicate_failure_test",
     "record_multi_repo_owner_duplicate_target_rule",
     "record_multi_repo_owner_success_test",
@@ -41,10 +42,12 @@ load(
     "decode_json_object_non_json_failure_test",
     "decode_json_object_non_json_target_rule",
     "decode_json_object_valid_test",
+    "clone_payload_with_detached_attributes_test",
     "collect_env_from_environ_provider_mapping_test",
     "dd_site_normalization_test",
     "dirname_test",
     "example_stub_includes_manifest_in_files_test",
+    "export_bzl_escaping_test",
     "normalize_out_dir_or_fail_test",
     "normalize_out_dir_empty_failure_test",
     "normalize_out_dir_empty_target_rule",
@@ -58,6 +61,7 @@ load(
     "http_execute_timeout_seconds_test",
     "module_label_map_collision_test",
     "normalize_ref_test",
+    "fnv1a_symbol_distinguishes_common_symbols_test",
     "read_abs_file_command_escaping_test",
     "parse_go_module_path_test",
     "partition_unix_headers_test",
@@ -146,6 +150,24 @@ normalize_out_dir_or_fail_test(
 
 export_bzl_manifest_path_test(
     name = "export_bzl_manifest_path_test",
+    size = "small",
+    timeout = "short",
+)
+
+export_bzl_escaping_test(
+    name = "export_bzl_escaping_test",
+    size = "small",
+    timeout = "short",
+)
+
+fnv1a_symbol_distinguishes_common_symbols_test(
+    name = "fnv1a_symbol_distinguishes_common_symbols_test",
+    size = "small",
+    timeout = "short",
+)
+
+clone_payload_with_detached_attributes_test(
+    name = "clone_payload_with_detached_attributes_test",
     size = "small",
     timeout = "short",
 )
@@ -244,6 +266,12 @@ validate_service_name_too_long_failure_test(
 
 compute_service_keys_dedups_collisions_test(
     name = "compute_service_keys_dedups_collisions_test",
+    size = "small",
+    timeout = "short",
+)
+
+compute_service_keys_edge_cases_test(
+    name = "compute_service_keys_edge_cases_test",
     size = "small",
     timeout = "short",
 )
@@ -533,6 +561,9 @@ test_suite(
         ":dirname_test",
         ":normalize_out_dir_or_fail_test",
         ":export_bzl_manifest_path_test",
+        ":export_bzl_escaping_test",
+        ":fnv1a_symbol_distinguishes_common_symbols_test",
+        ":clone_payload_with_detached_attributes_test",
         ":example_stub_includes_manifest_in_files_test",
         ":sanitize_label_fragment_test",
         ":dedup_keys_test",
@@ -546,6 +577,7 @@ test_suite(
         ":validate_service_name_whitespace_failure_test",
         ":validate_service_name_too_long_failure_test",
         ":compute_service_keys_dedups_collisions_test",
+        ":compute_service_keys_edge_cases_test",
         ":compute_repo_names_test",
         ":record_multi_repo_owner_success_test",
         ":render_multi_aggregate_bzl_contains_expected_targets_test",

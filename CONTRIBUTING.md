@@ -4,6 +4,8 @@
 
 - Create a feature branch for each change.
 - Keep pull requests focused (core-only, go-companion-only, or docs-only when possible).
+- Keep repository-level Bazel config explicit in scripts/workflows: this repo
+  intentionally has no root `.bazelrc` (example workspaces own local `.bazelrc`).
 - Preserve public label contracts from sync outputs:
   - `:test_optimization_files`
   - `:test_optimization_context`
@@ -19,6 +21,10 @@
   - `./bazelw build //examples/...`
 - Verify core/go module version alignment:
   - `python3 tools/dev/check_module_versions.py`
+- Python tooling tests:
+  - `./bazelw test //tools/tests/python:python_tools_test`
+- Optional Python syntax smoke check when editing tooling:
+  - `python3 -m py_compile tools/core/validate_payload_schema.py tools/core/schemas/sync_agentless_schema.py tools/tests/integration/mock_dd_server.py`
 - Integration harness:
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
   - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
@@ -37,7 +43,16 @@
   - go companion tests with hermetic flags
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
-  - shell scripts, PowerShell, schema sync checks
+  - shell scripts, PowerShell, schema sync checks, and Python tooling tests
+
+## Snapshot Updates
+
+- Integration snapshots are updated intentionally (never by default).
+- Linux/macOS:
+  - `UPDATE_SNAPSHOTS=1 tools/tests/integration/run_mock_server_tests.sh`
+- Windows PowerShell:
+  - `$env:UPDATE_SNAPSHOTS = "1"; ./tools/tests/integration/run_mock_server_tests.ps1`
+- Always review snapshot diffs before committing to ensure they reflect expected behavioral changes.
 
 ## Maintainer Invariants
 
