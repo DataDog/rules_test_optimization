@@ -31,7 +31,9 @@ def normalize_user_data(user_data):
     # A single label can be passed as a string; keep it atomic.
     if type(user_data) == type(""):
         return [user_data]
-    return list(user_data)
+    if type(user_data) == type([]) or type(user_data) == type(()):
+        return list(user_data)
+    fail("normalize_user_data: expected None, string, list, or tuple; got %s" % type(user_data))
 
 def resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_macro"):
     """Resolve a requested service key within a multi-service mapping."""

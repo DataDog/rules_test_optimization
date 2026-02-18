@@ -101,6 +101,7 @@ def _build_module_labels_valid_test(ctx):
     """Validate module label expansion for valid input shapes."""
     env = unittest.begin(ctx)
     asserts.equals(env, [], build_module_labels_for_tests("repo_name", None))
+    asserts.equals(env, [], build_module_labels_for_tests("repo_name", []))
     asserts.equals(
         env,
         [
@@ -146,12 +147,20 @@ def _build_module_labels_invalid_entry_target_impl(_ctx):
     build_module_labels_for_tests("repo_name", ["mod_a", 7])
     return []
 
+def _normalize_user_data_invalid_type_target_impl(_ctx):
+    normalize_user_data_for_tests({"bad": "shape"})
+    return []
+
 build_module_labels_invalid_shape_target_rule = rule(
     implementation = _build_module_labels_invalid_shape_target_impl,
 )
 
 build_module_labels_invalid_entry_target_rule = rule(
     implementation = _build_module_labels_invalid_entry_target_impl,
+)
+
+normalize_user_data_invalid_type_target_rule = rule(
+    implementation = _normalize_user_data_invalid_type_target_impl,
 )
 
 def _build_module_labels_invalid_shape_failure_test_impl(ctx):
@@ -166,6 +175,12 @@ def _build_module_labels_invalid_entry_failure_test_impl(ctx):
     asserts.expect_failure(env, "topt_data['labels'] entries must be strings")
     return analysistest.end(env)
 
+def _normalize_user_data_invalid_type_failure_test_impl(ctx):
+    """Assert unsupported `data` containers fail with direct guidance."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "normalize_user_data: expected None, string, list, or tuple")
+    return analysistest.end(env)
+
 service_mapping_entries_filters_non_service_test = unittest.make(_service_mapping_entries_filters_non_service_test)
 resolve_topt_service_key_prefers_exact_then_sanitized_test = unittest.make(_resolve_topt_service_key_prefers_exact_then_sanitized_test)
 select_module_group_name_test = unittest.make(_select_module_group_name_test)
@@ -178,5 +193,9 @@ build_module_labels_invalid_shape_failure_test = analysistest.make(
 )
 build_module_labels_invalid_entry_failure_test = analysistest.make(
     _build_module_labels_invalid_entry_failure_test_impl,
+    expect_failure = True,
+)
+normalize_user_data_invalid_type_failure_test = analysistest.make(
+    _normalize_user_data_invalid_type_failure_test_impl,
     expect_failure = True,
 )

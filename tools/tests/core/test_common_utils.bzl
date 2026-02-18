@@ -9,12 +9,16 @@ def _sanitize_label_fragment_test(ctx):
     asserts.equals(env, "foo_bar", sanitize_label_fragment("Foo--Bar"))
     asserts.equals(env, "foo", sanitize_label_fragment("-Foo-"))
     asserts.equals(env, "module", sanitize_label_fragment("___"))
+    asserts.equals(env, "module", sanitize_label_fragment("ééé"))
+    asserts.equals(env, "a" * 256, sanitize_label_fragment("A" * 256))
     asserts.equals(env, "module", sanitize_label_fragment(""))
     return unittest.end(env)
 
 def _dedup_keys_test(ctx):
     """Validate deterministic duplicate key suffixing semantics."""
     env = unittest.begin(ctx)
+    asserts.equals(env, [], dedup_keys([]))
+    asserts.equals(env, ["solo"], dedup_keys(["solo"]))
     asserts.equals(env, ["a", "a_2", "b", "a_3"], dedup_keys(["a", "a", "b", "a"]))
     asserts.equals(env, ["x", "y"], dedup_keys(["x", "y"]))
     return unittest.end(env)

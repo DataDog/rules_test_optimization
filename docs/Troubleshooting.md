@@ -127,7 +127,7 @@ bazel @BazelFlags run //:dd_upload_payloads
 
 1. **Verify credentials**:
    - Agentless mode requires: `DD_API_KEY`, `DD_SITE`
-   - Agent mode requires: `DD_TRACE_AGENT_URL`
+   - EVP proxy mode requires: `DD_TRACE_AGENT_URL`
 
 2. **Check firewall/proxy** allows HTTPS to:
    - `https://citestcycle-intake.datadoghq.com`

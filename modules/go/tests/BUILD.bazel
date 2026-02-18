@@ -18,6 +18,8 @@ load(
     "build_module_labels_valid_test",
     "go_stub_includes_manifest_in_files_test",
     "normalize_user_data_handles_none_test",
+    "normalize_user_data_invalid_type_failure_test",
+    "normalize_user_data_invalid_type_target_rule",
     "resolve_topt_service_key_prefers_exact_then_sanitized_test",
     "select_module_group_name_test",
     "service_mapping_entries_filters_non_service_test",
@@ -62,6 +64,16 @@ normalize_user_data_handles_none_test(
     name = "normalize_user_data_handles_none_test",
     size = "small",
     timeout = "short",
+)
+
+normalize_user_data_invalid_type_target_rule(
+    name = "normalize_user_data_invalid_type_target",
+    tags = ["manual"],
+)
+
+normalize_user_data_invalid_type_failure_test(
+    name = "normalize_user_data_invalid_type_failure_test",
+    target_under_test = ":normalize_user_data_invalid_type_target",
 )
 
 build_module_labels_valid_test(
@@ -208,6 +220,7 @@ test_suite(
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":select_module_group_name_test",
         ":normalize_user_data_handles_none_test",
+        ":normalize_user_data_invalid_type_failure_test",
         ":build_module_labels_valid_test",
         ":go_stub_includes_manifest_in_files_test",
         ":go_macro_single_service_wiring_test",

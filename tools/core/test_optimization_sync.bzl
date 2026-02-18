@@ -80,12 +80,97 @@ HTTP_EXECUTE_TIMEOUT_SECONDS = (
     ((HTTP_RETRY_ATTEMPTS - 1) * HTTP_RETRY_DELAY_SECONDS) +
     HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS
 )
+# Sentinel value used by optional integer attrs where 0 can be meaningful.
+HTTP_POLICY_ATTR_UNSET = -1
 
 # ##########################################################################
 # Tools functions
 # ##########################################################################
 
-def _curl_base_args():
+def _parse_int_from_env_or_fail(env_key, raw_value):
+    """Parse a base-10 integer from an environment variable value."""
+    s = (raw_value or "").strip()
+    if not s:
+        fail("test_optimization_sync: %s must be a non-empty integer when set" % env_key)
+    start = 1 if s.startswith("-") else 0
+    if start == len(s):
+        fail("test_optimization_sync: %s must be a valid integer, got %s" % (env_key, repr(raw_value)))
+    for i in range(start, len(s)):
+        ch = s[i]
+        if ch < "0" or ch > "9":
+            fail("test_optimization_sync: %s must be a valid integer, got %s" % (env_key, repr(raw_value)))
+    return int(s)
+
+def _resolve_http_int_setting(ctx, attr_name, env_key, default_value, allow_zero = False):
+    """Resolve one HTTP policy integer from attr/env/default with validation."""
+    attr_value = getattr(ctx.attr, attr_name, HTTP_POLICY_ATTR_UNSET)
+    if attr_value != HTTP_POLICY_ATTR_UNSET:
+        value = attr_value
+        source = "attribute %s" % attr_name
+    else:
+        env_value = (ctx.os.environ.get(env_key) or "").strip()
+        if env_value:
+            value = _parse_int_from_env_or_fail(env_key, env_value)
+            source = "environment %s" % env_key
+        else:
+            value = default_value
+            source = "default"
+    if allow_zero:
+        if value < 0:
+            fail("test_optimization_sync: %s must be >= 0 (from %s), got %d" % (attr_name, source, value))
+    elif value <= 0:
+        fail("test_optimization_sync: %s must be > 0 (from %s), got %d" % (attr_name, source, value))
+    return value
+
+def _resolve_http_policy(ctx):
+    """Resolve effective HTTP timeout/retry policy from attrs/env/defaults."""
+    connect_timeout_seconds = _resolve_http_int_setting(
+        ctx,
+        "http_connect_timeout_seconds",
+        "DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS",
+        HTTP_CONNECT_TIMEOUT_SECONDS,
+    )
+    max_time_seconds = _resolve_http_int_setting(
+        ctx,
+        "http_max_time_seconds",
+        "DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS",
+        HTTP_MAX_TIME_SECONDS,
+    )
+    retry_attempts = _resolve_http_int_setting(
+        ctx,
+        "http_retry_attempts",
+        "DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS",
+        HTTP_RETRY_ATTEMPTS,
+    )
+    retry_delay_seconds = _resolve_http_int_setting(
+        ctx,
+        "http_retry_delay_seconds",
+        "DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS",
+        HTTP_RETRY_DELAY_SECONDS,
+        allow_zero = True,
+    )
+    execute_timeout_buffer_seconds = _resolve_http_int_setting(
+        ctx,
+        "http_execute_timeout_buffer_seconds",
+        "DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS",
+        HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS,
+        allow_zero = True,
+    )
+    execute_timeout_seconds = (
+        (retry_attempts * max_time_seconds) +
+        ((retry_attempts - 1) * retry_delay_seconds) +
+        execute_timeout_buffer_seconds
+    )
+    return {
+        "connect_timeout_seconds": connect_timeout_seconds,
+        "max_time_seconds": max_time_seconds,
+        "retry_attempts": retry_attempts,
+        "retry_delay_seconds": retry_delay_seconds,
+        "execute_timeout_buffer_seconds": execute_timeout_buffer_seconds,
+        "execute_timeout_seconds": execute_timeout_seconds,
+    }
+
+def _curl_base_args(policy):
     """Return the shared curl argument baseline for sync API calls.
 
     Keep this in one helper so timeout/retry policy stays consistent across
@@ -100,13 +185,13 @@ def _curl_base_args():
         "-f",
         "-sS",
         "--connect-timeout",
-        str(HTTP_CONNECT_TIMEOUT_SECONDS),
+        str(policy["connect_timeout_seconds"]),
         "--max-time",
-        str(HTTP_MAX_TIME_SECONDS),
+        str(policy["max_time_seconds"]),
         "--retry",
-        str(HTTP_RETRY_ATTEMPTS),
+        str(policy["retry_attempts"]),
         "--retry-delay",
-        str(HTTP_RETRY_DELAY_SECONDS),
+        str(policy["retry_delay_seconds"]),
         "--retry-connrefused",
     ]
 
@@ -116,6 +201,10 @@ def _is_windows(ctx):
     os_env = (ctx.os.environ.get("OS") or "").lower()
     comspec = (ctx.os.environ.get("ComSpec") or ctx.os.environ.get("COMSPEC") or "").lower()
     return ("windows" in os_env) or comspec.endswith("cmd.exe")
+
+def _is_dict(value):
+    """Return True when value is a dict."""
+    return type(value) == type({})
 
 _FINGERPRINT_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
 
@@ -164,8 +253,9 @@ def _ensure_parent_directory(ctx, path, debug):
     if not path:
         return
 
+    normalized_path = path.replace("\\", "/")
     # Normalize path segments and drop empty/"." parts
-    segments = [s for s in path.split("/") if (s != "" and s != ".")]
+    segments = [s for s in normalized_path.split("/") if (s != "" and s != ".")]
     if len(segments) <= 1:
         return
     dirp = "/".join(segments[:-1])
@@ -228,22 +318,36 @@ def _try_read_abs_file(ctx, abs_path):
     if not abs_path:
         return ""
     if _is_windows(ctx):
+        ps_cmd = _build_windows_read_abs_file_command(abs_path)
         cmd = [
             "powershell.exe",
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "$p = '%s'; if (Test-Path -LiteralPath $p) { Get-Content -Raw -LiteralPath $p }" % abs_path.replace("'", "''"),
+            ps_cmd,
         ]
         res = ctx.execute(cmd)
         if res.return_code == 0 and res.stdout:
             return res.stdout
         return ""
     else:
-        res = ctx.execute(["/bin/sh", "-c", "[ -f '" + abs_path.replace("'", "'\\''") + "' ] && cat '" + abs_path.replace("'", "'\\''") + "'"])
+        sh_cmd = _build_unix_read_abs_file_command(abs_path)
+        res = ctx.execute(["/bin/sh", "-c", sh_cmd])
         if res.return_code == 0 and res.stdout:
             return res.stdout
         return ""
+
+def _build_windows_read_abs_file_command(abs_path):
+    """Build PowerShell command string for `_try_read_abs_file` reads."""
+    # Security note: single quotes are doubled for PowerShell literal strings.
+    return "$p = '%s'; if (Test-Path -LiteralPath $p) { Get-Content -Raw -LiteralPath $p }" % abs_path.replace("'", "''")
+
+def _build_unix_read_abs_file_command(abs_path):
+    """Build shell command string for `_try_read_abs_file` reads."""
+    # Security note: single quotes are escaped using the POSIX '\'' pattern.
+    # The escaping contract is covered by `read_abs_file_command_escaping_test`.
+    escaped = abs_path.replace("'", "'\\''")
+    return "[ -f '" + escaped + "' ] && cat '" + escaped + "'"
 
 def _parse_go_module_path(go_mod_content):
     """Extract `module <path>` value from go.mod content."""
@@ -343,7 +447,7 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None)
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     tests_obj = attrs_obj.get("tests") or {}
-    if type(tests_obj) != "dict":
+    if not _is_dict(tests_obj):
         return specs
 
     base_dir = _dirname(known_tests_file)
@@ -364,7 +468,7 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None)
         suites_map = tests_obj.get(module_name)
 
         # Guard against non-dict anomalies
-        if type(suites_map) != "dict":
+        if not _is_dict(suites_map):
             continue
 
         # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
@@ -377,11 +481,11 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None)
         for _k in obj.keys():
             new_obj[_k] = obj.get(_k)
         data_obj2 = new_obj.get("data")
-        if type(data_obj2) != "dict":
+        if not _is_dict(data_obj2):
             data_obj2 = {}
             new_obj["data"] = data_obj2
         attrs_obj2 = data_obj2.get("attributes")
-        if type(attrs_obj2) != "dict":
+        if not _is_dict(attrs_obj2):
             attrs_obj2 = {}
             data_obj2["attributes"] = attrs_obj2
         attrs_obj2["tests"] = {module_name: suites_map}
@@ -419,7 +523,7 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     modules_obj = attrs_obj.get("modules") or {}
-    if type(modules_obj) != "dict":
+    if not _is_dict(modules_obj):
         return specs
 
     base_dir = _dirname(test_management_file)
@@ -437,7 +541,7 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         label = deduped_labels[i]
         module_content = modules_obj.get(module_name)
         
-        if type(module_content) != "dict":
+        if not _is_dict(module_content):
             continue
 
         # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
@@ -450,11 +554,11 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         for _k in obj.keys():
             new_obj[_k] = obj.get(_k)
         data_obj2 = new_obj.get("data")
-        if type(data_obj2) != "dict":
+        if not _is_dict(data_obj2):
             data_obj2 = {}
             new_obj["data"] = data_obj2
         attrs_obj2 = data_obj2.get("attributes")
-        if type(attrs_obj2) != "dict":
+        if not _is_dict(attrs_obj2):
             attrs_obj2 = {}
             data_obj2["attributes"] = attrs_obj2
         attrs_obj2["modules"] = {module_name: module_content}
@@ -604,7 +708,7 @@ def _decode_json_object_or_fail(content, context):
         )
 
     obj = json.decode(trimmed)
-    if type(obj) != "dict":
+    if not _is_dict(obj):
         fail("test_optimization: %s response must be a JSON object, got %s" % (context, type(obj)))
     return obj
 
@@ -619,7 +723,7 @@ def _collect_known_tests_modules(ctx, known_tests_file):
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     tests_obj = attrs_obj.get("tests") or {}
-    if type(tests_obj) != "dict":
+    if not _is_dict(tests_obj):
         return []
     modules = []
     for k in tests_obj.keys():
@@ -638,7 +742,7 @@ def _collect_test_management_modules(ctx, test_management_file):
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
     modules_obj = attrs_obj.get("modules") or {}
-    if type(modules_obj) != "dict":
+    if not _is_dict(modules_obj):
         return []
     modules = []
     for k in modules_obj.keys():
@@ -783,6 +887,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
 
     is_win = _is_windows(ctx)
     http_method = method or "GET"
+    policy = _resolve_http_policy(ctx)
 
     # Avoid logging secrets; only log method and URL
     log_info("http %s %s" % (http_method, url))
@@ -819,20 +924,20 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             # Keep body on disk and pass `-InFile` to avoid quoting/encoding
             # drift for JSON payloads that may contain special characters.
             lines.append("$BodyFile = '%s'" % data_file.replace("'", "''"))
-        lines.append("$max = %d; $attempt = 0" % HTTP_RETRY_ATTEMPTS)
+        lines.append("$max = %d; $attempt = 0" % policy["retry_attempts"])
         lines.append("while ($true) {")
         lines.append("  try {")
         if data_file:
-            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -InFile $BodyFile -OutFile $OutFile -ContentType 'application/json' -TimeoutSec %d" % HTTP_MAX_TIME_SECONDS)
+            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -InFile $BodyFile -OutFile $OutFile -ContentType 'application/json' -TimeoutSec %d" % policy["max_time_seconds"])
         else:
-            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -OutFile $OutFile -TimeoutSec %d" % HTTP_MAX_TIME_SECONDS)
+            lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -OutFile $OutFile -TimeoutSec %d" % policy["max_time_seconds"])
 
         # Emulate curl -f: treat HTTP >= 400 as failure
         lines.append("    $code = if ($resp.StatusCode) { [int]$resp.StatusCode } else { 200 }")
         lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned for ' + $Url) -f $code; exit 1 }")
         lines.append("    Write-Output $code")
         lines.append("    exit 0")
-        lines.append("  } catch { if ($attempt -lt ($max - 1)) { Start-Sleep -Seconds %d; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }" % HTTP_RETRY_DELAY_SECONDS)
+        lines.append("  } catch { if ($attempt -lt ($max - 1)) { Start-Sleep -Seconds %d; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }" % policy["retry_delay_seconds"])
         lines.append("}")
         script_content = "\n".join(lines) + "\n"
         ctx.file(script_name, script_content)
@@ -840,17 +945,17 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             result = ctx.execute(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name],
                 environment = ps_env,
-                timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
+                timeout = policy["execute_timeout_seconds"],
             )
         else:
             result = ctx.execute(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script_name],
-                timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
+                timeout = policy["execute_timeout_seconds"],
             )
     else:
         # Unix path: keep curl invocation centralized and aligned with
         # `_curl_base_args()` so timeout/retry behavior stays consistent.
-        args = [] + _curl_base_args()
+        args = [] + _curl_base_args(policy)
         if http_method and http_method != "GET":
             args.extend(["-X", http_method])
         split_headers = _partition_unix_headers(headers)
@@ -871,10 +976,10 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             result = ctx.execute(
                 ["/bin/sh", "-c", "printf 'DD-API-KEY: %s\\n' \"$DD_TEST_OPTIMIZATION_API_KEY\" | curl \"$@\"", "curl"] + args_with_stdin_header[1:],
                 environment = unix_env,
-                timeout = HTTP_EXECUTE_TIMEOUT_SECONDS,
+                timeout = policy["execute_timeout_seconds"],
             )
         else:
-            result = ctx.execute(args, timeout = HTTP_EXECUTE_TIMEOUT_SECONDS)
+            result = ctx.execute(args, timeout = policy["execute_timeout_seconds"])
 
     # Parse HTTP status code captured by tool stdout. On network errors it may be empty.
     http_status = (result.stdout or "").strip() or "000"
@@ -966,15 +1071,36 @@ def _first_env(ctx, keys):
             return v
     return ""
 
+def _first_env_from_environ(environ, keys):
+    """Return first non-empty env value from a plain dict-like mapping."""
+    for k in keys:
+        v = environ.get(k)
+        if v:
+            return v
+    return ""
+
 def _normalize_ref(name):
     """Normalize branch/tag refs by removing common prefix forms."""
     # _normalize_ref: removes common ref prefixes from branch/tag names
     if not name:
         return name
-    prefixes = ["refs/heads/", "refs/", "origin/", "tags/"]
-    for p in prefixes:
-        if name.startswith(p):
-            name = name[len(p):]
+    prefixes = [
+        "refs/remotes/origin/",
+        "refs/heads/",
+        "refs/tags/",
+        "refs/",
+        "remotes/origin/",
+        "origin/",
+        "tags/",
+    ]
+    for _ in range(len(prefixes)):
+        changed = False
+        for p in prefixes:
+            if name.startswith(p):
+                name = name[len(p):]
+                changed = True
+        if not changed:
+            break
     return name
 
 # Public aliases for tests (avoid importing private symbols)
@@ -1001,21 +1127,15 @@ render_module_runfiles_bzl_for_tests = _render_module_runfiles_bzl
 # CI environment detection
 # ##########################################################################
 
-def _collect_env(ctx):
-    """Collect CI/git/service context into a normalized metadata dict.
-
-    Provider-specific environment variables are mapped into stable keys so
-    request builders and context generation do not need provider branching.
-    """
-    # _collect_env: reads CI provider env once and returns a unified dict used
-    # by request helpers. Detection order mirrors Datadog's providers list.
+def _collect_env_from_environ(environ, attr_service = None):
+    """Collect CI/git/service context from a plain env mapping."""
     env_data = {
-        "dd_site": ctx.os.environ.get("DD_SITE") or "",
+        "dd_site": environ.get("DD_SITE") or "",
         # Optional override to point API calls at a mock server (tests/dev).
-        "dd_api_base": ctx.os.environ.get("DD_TEST_OPTIMIZATION_API_BASE") or "",
+        "dd_api_base": environ.get("DD_TEST_OPTIMIZATION_API_BASE") or "",
         # Service can be provided via attr first, then DD_SERVICE, else default
-        "service": (getattr(ctx.attr, "service", None) or ctx.os.environ.get("DD_SERVICE") or "unnamed-service"),
-        "environment": ctx.os.environ.get("DD_ENV") or "CI",
+        "service": (attr_service or environ.get("DD_SERVICE") or "unnamed-service"),
+        "environment": environ.get("DD_ENV") or "CI",
         "repository_url": "",
         "branch": "",
         "sha": "",
@@ -1032,104 +1152,104 @@ def _collect_env(ctx):
     # - Prefer provider-native variables first; user DD_* overrides are applied
     #   afterwards in one explicit precedence layer below.
     provider = ""
-    if ctx.os.environ.get("APPVEYOR"):
+    if environ.get("APPVEYOR"):
         # AppVeyor can represent non-GitHub providers; preserve raw repo name
         # unless provider explicitly indicates GitHub.
         provider = "appveyor"
-        repo_name = ctx.os.environ.get("APPVEYOR_REPO_NAME") or ""
-        if (ctx.os.environ.get("APPVEYOR_REPO_PROVIDER") or "") == "github" and repo_name:
+        repo_name = environ.get("APPVEYOR_REPO_NAME") or ""
+        if (environ.get("APPVEYOR_REPO_PROVIDER") or "") == "github" and repo_name:
             env_data["repository_url"] = "https://github.com/%s.git" % repo_name
         else:
             env_data["repository_url"] = repo_name
-        env_data["sha"] = ctx.os.environ.get("APPVEYOR_REPO_COMMIT") or ""
-        env_data["branch"] = _first_env(ctx, ["APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH", "APPVEYOR_REPO_BRANCH"]) or ""
-    elif ctx.os.environ.get("TF_BUILD"):
+        env_data["sha"] = environ.get("APPVEYOR_REPO_COMMIT") or ""
+        env_data["branch"] = _first_env_from_environ(environ, ["APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH", "APPVEYOR_REPO_BRANCH"]) or ""
+    elif environ.get("TF_BUILD"):
         # Azure Pipelines branch often arrives as full ref path.
         provider = "azure_pipelines"
-        env_data["repository_url"] = ctx.os.environ.get("BUILD_REPOSITORY_URI") or ""
-        env_data["sha"] = ctx.os.environ.get("BUILD_SOURCEVERSION") or ""
-        env_data["branch"] = ctx.os.environ.get("BUILD_SOURCEBRANCH") or ""
-        env_data["commit_message"] = ctx.os.environ.get("BUILD_SOURCEVERSIONMESSAGE") or ""
-    elif ctx.os.environ.get("BITBUCKET_COMMIT"):
+        env_data["repository_url"] = environ.get("BUILD_REPOSITORY_URI") or ""
+        env_data["sha"] = environ.get("BUILD_SOURCEVERSION") or ""
+        env_data["branch"] = environ.get("BUILD_SOURCEBRANCH") or ""
+        env_data["commit_message"] = environ.get("BUILD_SOURCEVERSIONMESSAGE") or ""
+    elif environ.get("BITBUCKET_COMMIT"):
         # Prefer explicit origin URL, else synthesize canonical slug URL.
         provider = "bitbucket"
         env_data["repository_url"] = (
-            ctx.os.environ.get("BITBUCKET_GIT_HTTP_ORIGIN") or
-            ("https://bitbucket.org/%s.git" % (ctx.os.environ.get("BITBUCKET_REPO_SLUG") or ""))
+            environ.get("BITBUCKET_GIT_HTTP_ORIGIN") or
+            ("https://bitbucket.org/%s.git" % (environ.get("BITBUCKET_REPO_SLUG") or ""))
         )
-        env_data["sha"] = ctx.os.environ.get("BITBUCKET_COMMIT") or ""
-        env_data["branch"] = ctx.os.environ.get("BITBUCKET_BRANCH") or ""
-    elif ctx.os.environ.get("BUDDY"):
+        env_data["sha"] = environ.get("BITBUCKET_COMMIT") or ""
+        env_data["branch"] = environ.get("BITBUCKET_BRANCH") or ""
+    elif environ.get("BUDDY"):
         provider = "buddy"
         # Buddy variables vary; keep placeholders
 
-    elif ctx.os.environ.get("BUILDKITE"):
+    elif environ.get("BUILDKITE"):
         # Buildkite exposes direct message and branch fields used by settings/TM.
         provider = "buildkite"
-        env_data["repository_url"] = ctx.os.environ.get("BUILDKITE_REPO") or ""
-        env_data["sha"] = ctx.os.environ.get("BUILDKITE_COMMIT") or ""
-        env_data["branch"] = ctx.os.environ.get("BUILDKITE_BRANCH") or ""
-        env_data["commit_message"] = ctx.os.environ.get("BUILDKITE_MESSAGE") or ""
-    elif ctx.os.environ.get("CIRCLECI"):
+        env_data["repository_url"] = environ.get("BUILDKITE_REPO") or ""
+        env_data["sha"] = environ.get("BUILDKITE_COMMIT") or ""
+        env_data["branch"] = environ.get("BUILDKITE_BRANCH") or ""
+        env_data["commit_message"] = environ.get("BUILDKITE_MESSAGE") or ""
+    elif environ.get("CIRCLECI"):
         provider = "circleci"
-        env_data["repository_url"] = ctx.os.environ.get("CIRCLE_REPOSITORY_URL") or ""
-        env_data["sha"] = ctx.os.environ.get("CIRCLE_SHA1") or ""
-        env_data["branch"] = ctx.os.environ.get("CIRCLE_BRANCH") or ""
-    elif ctx.os.environ.get("GITHUB_SHA"):
+        env_data["repository_url"] = environ.get("CIRCLE_REPOSITORY_URL") or ""
+        env_data["sha"] = environ.get("CIRCLE_SHA1") or ""
+        env_data["branch"] = environ.get("CIRCLE_BRANCH") or ""
+    elif environ.get("GITHUB_SHA"):
         # GitHub Actions exposes repository and server separately.
         provider = "github_actions"
-        gh_repo = ctx.os.environ.get("GITHUB_REPOSITORY") or ""
-        gh_server = ctx.os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
+        gh_repo = environ.get("GITHUB_REPOSITORY") or ""
+        gh_server = environ.get("GITHUB_SERVER_URL") or "https://github.com"
         if gh_repo:
             env_data["repository_url"] = "%s/%s.git" % (gh_server, gh_repo)
-        env_data["sha"] = ctx.os.environ.get("GITHUB_SHA") or ""
-        env_data["branch"] = _normalize_ref(ctx.os.environ.get("GITHUB_REF") or "")
-    elif ctx.os.environ.get("GITLAB_CI"):
+        env_data["sha"] = environ.get("GITHUB_SHA") or ""
+        env_data["branch"] = _normalize_ref(environ.get("GITHUB_REF") or "")
+    elif environ.get("GITLAB_CI"):
         # GitLab MR pipelines may provide source branch head SHA separately.
         provider = "gitlab"
-        env_data["repository_url"] = ctx.os.environ.get("CI_REPOSITORY_URL") or ""
-        env_data["sha"] = ctx.os.environ.get("CI_COMMIT_SHA") or ""
-        env_data["branch"] = ctx.os.environ.get("CI_COMMIT_BRANCH") or ""
-        env_data["commit_message"] = ctx.os.environ.get("CI_COMMIT_MESSAGE") or ""
-        env_data["head_sha"] = ctx.os.environ.get("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA") or ""
-    elif ctx.os.environ.get("JENKINS_URL"):
+        env_data["repository_url"] = environ.get("CI_REPOSITORY_URL") or ""
+        env_data["sha"] = environ.get("CI_COMMIT_SHA") or ""
+        env_data["branch"] = environ.get("CI_COMMIT_BRANCH") or ""
+        env_data["commit_message"] = environ.get("CI_COMMIT_MESSAGE") or ""
+        env_data["head_sha"] = environ.get("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA") or ""
+    elif environ.get("JENKINS_URL"):
         # Jenkins plugin variants expose git URL under multiple key names.
         provider = "jenkins"
-        env_data["repository_url"] = _first_env(ctx, ["GIT_URL", "GIT_URL_1"]) or ""
-        env_data["sha"] = ctx.os.environ.get("GIT_COMMIT") or ""
-        env_data["branch"] = ctx.os.environ.get("GIT_BRANCH") or ""
-    elif ctx.os.environ.get("TEAMCITY_VERSION"):
+        env_data["repository_url"] = _first_env_from_environ(environ, ["GIT_URL", "GIT_URL_1"]) or ""
+        env_data["sha"] = environ.get("GIT_COMMIT") or ""
+        env_data["branch"] = environ.get("GIT_BRANCH") or ""
+    elif environ.get("TEAMCITY_VERSION"):
         provider = "teamcity"
-        env_data["repository_url"] = ctx.os.environ.get("GIT_URL") or ""
-        env_data["sha"] = ctx.os.environ.get("GIT_COMMIT") or ""
-        env_data["branch"] = ctx.os.environ.get("GIT_BRANCH") or ""
-    elif ctx.os.environ.get("TRAVIS"):
+        env_data["repository_url"] = environ.get("GIT_URL") or ""
+        env_data["sha"] = environ.get("GIT_COMMIT") or ""
+        env_data["branch"] = environ.get("GIT_BRANCH") or ""
+    elif environ.get("TRAVIS"):
         # Travis branch precedence: PR head branch > build branch.
         provider = "travisci"
-        slug = ctx.os.environ.get("TRAVIS_REPO_SLUG") or ""
+        slug = environ.get("TRAVIS_REPO_SLUG") or ""
         if slug:
             env_data["repository_url"] = "https://github.com/%s.git" % slug
-        env_data["sha"] = ctx.os.environ.get("TRAVIS_COMMIT") or ""
-        env_data["branch"] = _first_env(ctx, ["TRAVIS_PULL_REQUEST_BRANCH", "TRAVIS_BRANCH"]) or ""
-        env_data["commit_message"] = ctx.os.environ.get("TRAVIS_COMMIT_MESSAGE") or ""
-    elif ctx.os.environ.get("BITRISE_BUILD_SLUG"):
+        env_data["sha"] = environ.get("TRAVIS_COMMIT") or ""
+        env_data["branch"] = _first_env_from_environ(environ, ["TRAVIS_PULL_REQUEST_BRANCH", "TRAVIS_BRANCH"]) or ""
+        env_data["commit_message"] = environ.get("TRAVIS_COMMIT_MESSAGE") or ""
+    elif environ.get("BITRISE_BUILD_SLUG"):
         provider = "bitrise"
-        env_data["repository_url"] = ctx.os.environ.get("BITRISE_GIT_REPOSITORY_URL") or ""
-        env_data["sha"] = ctx.os.environ.get("BITRISE_GIT_COMMIT") or ""
-        env_data["branch"] = ctx.os.environ.get("BITRISE_GIT_BRANCH") or ""
-    elif ctx.os.environ.get("CF_BUILD_ID"):
+        env_data["repository_url"] = environ.get("BITRISE_GIT_REPOSITORY_URL") or ""
+        env_data["sha"] = environ.get("BITRISE_GIT_COMMIT") or ""
+        env_data["branch"] = environ.get("BITRISE_GIT_BRANCH") or ""
+    elif environ.get("CF_BUILD_ID"):
         provider = "codefresh"
-        env_data["branch"] = ctx.os.environ.get("CF_BRANCH") or ""
-    elif ctx.os.environ.get("CODEBUILD_INITIATOR"):
+        env_data["branch"] = environ.get("CF_BRANCH") or ""
+    elif environ.get("CODEBUILD_INITIATOR"):
         provider = "awscodepipeline"
         # Limited extraction by default
 
-    elif ctx.os.environ.get("DRONE"):
+    elif environ.get("DRONE"):
         provider = "drone"
-        env_data["repository_url"] = ctx.os.environ.get("DRONE_GIT_HTTP_URL") or ""
-        env_data["sha"] = ctx.os.environ.get("DRONE_COMMIT_SHA") or ""
-        env_data["branch"] = ctx.os.environ.get("DRONE_BRANCH") or ""
-        env_data["commit_message"] = ctx.os.environ.get("DRONE_COMMIT_MESSAGE") or ""
+        env_data["repository_url"] = environ.get("DRONE_GIT_HTTP_URL") or ""
+        env_data["sha"] = environ.get("DRONE_COMMIT_SHA") or ""
+        env_data["branch"] = environ.get("DRONE_BRANCH") or ""
+        env_data["commit_message"] = environ.get("DRONE_COMMIT_MESSAGE") or ""
 
     # Normalize ref formats
     # Some providers emit refs as "refs/heads/main" while others emit "main".
@@ -1140,12 +1260,12 @@ def _collect_env(ctx):
     # Overlay with user-specific DD_* overrides when present (highest precedence)
     # This allows local debugging and CI customization without changing provider
     # mapping logic above.
-    dd_repo = ctx.os.environ.get("DD_GIT_REPOSITORY_URL") or ""
-    dd_branch = ctx.os.environ.get("DD_GIT_BRANCH") or ""
-    dd_sha = ctx.os.environ.get("DD_GIT_COMMIT_SHA") or ""
-    dd_head_sha = ctx.os.environ.get("DD_GIT_HEAD_COMMIT") or ""
-    dd_commit_msg = ctx.os.environ.get("DD_GIT_COMMIT_MESSAGE") or ""
-    dd_head_msg = ctx.os.environ.get("DD_GIT_HEAD_MESSAGE") or ""
+    dd_repo = environ.get("DD_GIT_REPOSITORY_URL") or ""
+    dd_branch = environ.get("DD_GIT_BRANCH") or ""
+    dd_sha = environ.get("DD_GIT_COMMIT_SHA") or ""
+    dd_head_sha = environ.get("DD_GIT_HEAD_COMMIT") or ""
+    dd_commit_msg = environ.get("DD_GIT_COMMIT_MESSAGE") or ""
+    dd_head_msg = environ.get("DD_GIT_HEAD_MESSAGE") or ""
     if dd_repo:
         env_data["repository_url"] = dd_repo
     if dd_branch:
@@ -1162,6 +1282,15 @@ def _collect_env(ctx):
     # Expose provider name to callers (e.g., for context tags and diagnostics).
     env_data["ci_provider_name"] = provider
     return env_data
+
+def _collect_env(ctx):
+    """Collect CI/git/service context into a normalized metadata dict."""
+    return _collect_env_from_environ(ctx.os.environ, getattr(ctx.attr, "service", None))
+
+# Public aliases for tests (helpers defined after the first alias section).
+collect_env_from_environ_for_tests = _collect_env_from_environ
+build_windows_read_abs_file_command_for_tests = _build_windows_read_abs_file_command
+build_unix_read_abs_file_command_for_tests = _build_unix_read_abs_file_command
 
 def _build_configurations_json(ctx, debug):
     """Build Datadog `configurations` payload from OS/runtime attributes."""
@@ -1660,11 +1789,11 @@ def _impl(ctx):
         known_tests_enabled = False
 
         # Ensure attributes dict exists and update the flag
-        if type(data_obj) != "dict":
+        if not _is_dict(data_obj):
             settings_obj["data"] = {"attributes": {}}
             data_obj = settings_obj["data"]
             attrs_obj = data_obj["attributes"]
-        elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
+        elif ("attributes" not in data_obj) or (not _is_dict(data_obj.get("attributes"))):
             data_obj["attributes"] = {}
             attrs_obj = data_obj["attributes"]
         # Persist explicit disablement so downstream consumers relying on
@@ -1673,17 +1802,17 @@ def _impl(ctx):
 
     if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
         test_management_enabled = False
-        if type(data_obj) != "dict":
+        if not _is_dict(data_obj):
             settings_obj["data"] = {"attributes": {}}
             data_obj = settings_obj["data"]
             attrs_obj = data_obj["attributes"]
-        elif ("attributes" not in data_obj) or (type(data_obj.get("attributes")) != "dict"):
+        elif ("attributes" not in data_obj) or (not _is_dict(data_obj.get("attributes"))):
             data_obj["attributes"] = {}
             attrs_obj = data_obj["attributes"]
 
         # Ensure nested test_management object exists and set enabled=false
         tm_mut = attrs_obj.get("test_management")
-        if type(tm_mut) != "dict":
+        if not _is_dict(tm_mut):
             tm_mut = {}
         # Mirror settings API shape: `test_management` is nested object.
         tm_mut["enabled"] = False
@@ -1810,7 +1939,7 @@ def _impl(ctx):
         ("    srcs = %s,\n" % repr([context_file])) +
         '    visibility = ["//visibility:public"],\n' +
         ")\n" +
-        ('\nexports_files(["export.bzl", %s])\n' % repr(manifest_file))
+        ('\nexports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest_file))
     )
 
     # Append one filegroup per module so consumers can depend on individual modules
@@ -1898,6 +2027,13 @@ test_optimization_sync = repository_rule(
         "runtime_name": attr.string(),
         "runtime_version": attr.string(),
         "runtime_arch": attr.string(),
+        # Optional HTTP timeout/retry policy overrides.
+        # Use -1 to keep default/env behavior.
+        "http_connect_timeout_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+        "http_max_time_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+        "http_retry_attempts": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+        "http_retry_delay_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+        "http_execute_timeout_buffer_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
         # Kill-switches for feature requests
         # - known_tests: when False, do not request Known Tests and write a minimal stub; also set
         #               settings.data.attributes.known_tests_enabled=false in the settings file.
@@ -1914,6 +2050,11 @@ test_optimization_sync = repository_rule(
         "DD_API_KEY",  # Required: Datadog API key for authentication
         "DD_SITE",  # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
         "DD_TEST_OPTIMIZATION_API_BASE",  # Optional: override Datadog API base URL (test/dev)
+        "DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS",  # Optional: override connect timeout
+        "DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS",  # Optional: override request max time
+        "DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS",  # Optional: override retry attempts
+        "DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS",  # Optional: override retry delay
+        "DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS",  # Optional: override outer timeout buffer
         "FETCH_SALT",  # Optional: cache-busting salt to force re-fetch
         "GIT_DIRTY",  # Optional: working tree state; triggers refetch on change
         "GO_MODULE_PATH",  # Optional: explicit Go module path override for export.bzl
@@ -2114,6 +2255,11 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
+                http_connect_timeout_seconds = test_optimization_call.http_connect_timeout_seconds,
+                http_max_time_seconds = test_optimization_call.http_max_time_seconds,
+                http_retry_attempts = test_optimization_call.http_retry_attempts,
+                http_retry_delay_seconds = test_optimization_call.http_retry_delay_seconds,
+                http_execute_timeout_buffer_seconds = test_optimization_call.http_execute_timeout_buffer_seconds,
                 known_tests = test_optimization_call.known_tests,
                 test_management = test_optimization_call.test_management,
                 debug = call_debug,
@@ -2133,6 +2279,13 @@ test_optimization_sync_extension = module_extension(
             "runtime_name": attr.string(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            # Optional HTTP timeout/retry policy overrides.
+            # Use -1 to keep default/env behavior.
+            "http_connect_timeout_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+            "http_max_time_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+            "http_retry_attempts": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+            "http_retry_delay_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
+            "http_execute_timeout_buffer_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
             # Optional kill-switches (default True keeps server behavior; False disables feature locally)
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),

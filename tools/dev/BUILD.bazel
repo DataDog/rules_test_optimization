@@ -1,4 +1,4 @@
 exports_files([
     "check_module_versions.py",
     "go_bootstrap.bzl",
-])
+], visibility = ["//visibility:public"])

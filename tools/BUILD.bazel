@@ -1,4 +1,6 @@
 # Root tools package.
+# Intentionally comment-only: this file acts as a package marker and ownership
+# map for subpackages. Keep it present even when no top-level rules are needed.
 #
 # Runtime-agnostic entrypoints live in subpackages:
 # - //tools/core:...

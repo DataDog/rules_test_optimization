@@ -10,6 +10,7 @@ Key behavior toggles:
 - Service names can trigger malformed/empty sync responses.
 - Commit message can trigger malformed test-management response.
 - EVP proxy paths enforce EVP-specific headers and forbid DD-API-KEY usage.
+- Request headers can force delay/rate-limit/status overrides for retry tests.
 """
 
 import argparse
@@ -19,6 +20,7 @@ import json
 import os
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlsplit
 
@@ -111,12 +113,15 @@ def _require_attrs(data, keys):
 class _Handler(BaseHTTPRequestHandler):
     server_version = "MockDD/1.0"
 
-    def _send_json(self, code, payload):
+    def _send_json(self, code, payload, extra_headers = None):
         """Write JSON response payload with explicit content headers."""
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if extra_headers:
+            for key, value in extra_headers.items():
+                self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -147,6 +152,44 @@ class _Handler(BaseHTTPRequestHandler):
         # Capture requests for snapshot tests and assertions.
         headers = _normalize_headers(self.headers)
         self.server.state.log_request(path, self.command, headers, body)
+
+    def _maybe_apply_response_overrides(self):
+        """Apply optional mock behavior overrides from request headers."""
+        delay_ms_raw = _require_header(self.headers, "X-Mock-Delay-Ms")
+        if delay_ms_raw:
+            try:
+                delay_ms = int(delay_ms_raw)
+            except ValueError:
+                self._send_json(400, _json_error("invalid X-Mock-Delay-Ms header"))
+                return True
+            if delay_ms < 0:
+                self._send_json(400, _json_error("X-Mock-Delay-Ms must be >= 0"))
+                return True
+            if delay_ms > 0:
+                time.sleep(delay_ms / 1000.0)
+
+        if _require_header(self.headers, "X-Mock-Rate-Limit") == "1":
+            self._send_json(
+                429,
+                {"errors": [{"status": "429", "title": "mock rate limit"}]},
+                extra_headers = {"Retry-After": "1"},
+            )
+            return True
+
+        status_override = _require_header(self.headers, "X-Mock-Status-Code")
+        if status_override:
+            try:
+                status_code = int(status_override)
+            except ValueError:
+                self._send_json(400, _json_error("invalid X-Mock-Status-Code header"))
+                return True
+            if status_code < 100 or status_code > 599:
+                self._send_json(400, _json_error("X-Mock-Status-Code must be between 100 and 599"))
+                return True
+            payload = {} if status_code < 400 else {"errors": [{"status": str(status_code), "title": "mock status override"}]}
+            self._send_json(status_code, payload)
+            return True
+        return False
 
     def _validate_settings(self, body):
         """Validate sync settings request payload and required headers."""
@@ -281,6 +324,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         body = self._read_body()
         self._log_and_validate(path, body)
+        if self._maybe_apply_response_overrides():
+            return
 
         # Sync settings endpoint.
         # Supports malformed/empty body toggles keyed by service name so

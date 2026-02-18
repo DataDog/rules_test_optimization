@@ -74,7 +74,7 @@ dd_payload_uploader(
 
 - **Agentless mode (default):** Requires `DD_API_KEY` and `DD_SITE`; uploads
   directly to Datadog intake
-- **Agent/EVP mode:** Requires `DD_TRACE_AGENT_URL`; uploads via local agent or
+- **EVP proxy mode:** Requires `DD_TRACE_AGENT_URL`; uploads via local agent or
   EVP proxy
 
 ## Passing credentials
@@ -83,7 +83,7 @@ dd_payload_uploader(
 # Option 1: Agentless mode - Inline (recommended for CI)
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 
-# Option 2: Agent/EVP mode
+# Option 2: EVP proxy mode
 DD_TRACE_AGENT_URL="http://localhost:8126" bazel run //:dd_upload_payloads
 
 # Option 3: Export before run
@@ -98,7 +98,7 @@ $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 
-# Option 2: Agent/EVP mode
+# Option 2: EVP proxy mode
 $env:DD_TRACE_AGENT_URL = "http://localhost:8126"
 bazel run //:dd_upload_payloads
 

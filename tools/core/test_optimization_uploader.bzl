@@ -492,7 +492,7 @@ def _uploader_impl(ctx):
     fail_on_error = ctx.attr.fail_on_error
     debug = ctx.attr.debug
     keep_payloads = ctx.attr.keep_payloads
-    filter_prefix = ctx.attr.filter_prefix
+    filter_prefixed_payloads = ctx.attr.filter_prefix
     gzip_payloads = ctx.attr.gzip_payloads
 
     # Find context.json in data files (supports any repo alias)
@@ -515,14 +515,14 @@ def _uploader_impl(ctx):
     log_info("Generating uploader scripts (Option 2: TEST_UNDECLARED_OUTPUTS_DIR)")
     log_debug(
         debug,
-        "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefix=%s, gzip_payloads=%s" %
+        "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefixed_payloads=%s, gzip_payloads=%s" %
         (
             quiescent_sec,
             max_wait_sec,
             fail_on_error,
             debug,
             keep_payloads,
-            filter_prefix,
+            filter_prefixed_payloads,
             gzip_payloads,
         ),
     )
@@ -921,11 +921,11 @@ compute_workspace_hash() {{
     local workspace="${{BUILD_WORKSPACE_DIRECTORY:-$(pwd)}}"
     # Try md5sum (Linux), then md5 -q (macOS), then shasum, then fallback
     if command -v md5sum >/dev/null 2>&1; then
-        echo -n "$workspace" | md5sum | cut -c1-8
+        printf "%s" "$workspace" | md5sum | cut -c1-8
     elif command -v md5 >/dev/null 2>&1; then
-        echo -n "$workspace" | md5 -q | cut -c1-8
+        printf "%s" "$workspace" | md5 -q | cut -c1-8
     elif command -v shasum >/dev/null 2>&1; then
-        echo -n "$workspace" | shasum -a 256 | cut -c1-8
+        printf "%s" "$workspace" | shasum -a 256 | cut -c1-8
     else
         echo "default"
     fi
@@ -2540,7 +2540,7 @@ fi
             "fail_on_error": _bool_to_str(fail_on_error),
             "debug": _bool_to_str(debug),
             "keep_payloads": _bool_to_str(keep_payloads),
-            "filter_prefix": _bool_to_str(filter_prefix),
+            "filter_prefix": _bool_to_str(filter_prefixed_payloads),
             "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
@@ -4306,7 +4306,7 @@ try {{
             "fail_on_error": _bool_to_str(fail_on_error),
             "debug": _bool_to_str(debug),
             "keep_payloads": _bool_to_str(keep_payloads),
-            "filter_prefix": _bool_to_str(filter_prefix),
+            "filter_prefix": _bool_to_str(filter_prefixed_payloads),
             "gzip_payloads": _bool_to_str(gzip_payloads),
             "uploader_version": UPLOADER_VERSION,
             "context_json_rloc": context_json_rloc,
@@ -4368,7 +4368,7 @@ dd_payload_uploader = rule(
         "fail_on_error": attr.bool(default = False, doc = "Exit with error when tests appear to have run but no payloads are found"),
         "debug": attr.bool(default = False, doc = "Enable debug logging"),
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TEST_OPTIMIZATION_KEEP_PAYLOADS)"),
-        "filter_prefix": attr.bool(default = False, doc = "Only upload files matching span_events_*.json or coverage_*.json (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
+        "filter_prefix": attr.bool(default = False, doc = "Boolean gate: only upload files matching span_events_*.json or coverage_*.json (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),

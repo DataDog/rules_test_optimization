@@ -44,8 +44,12 @@ The sync rule creates `@test_optimization_data//` containing:
 - **Cross-platform uploader**: Unix uses Bash/curl; Windows uses PowerShell and .NET `HttpClient`.
 
 ## Build, Test, and Development Commands
-- Build all: `./bazelw build //...` — compiles and validates Starlark targets.
-- Run tests then upload payloads:
+- Repository-local build matrix (root `//...` does not work in this repo because `modules/go/tests` loads module-root `.bzl` labels):
+ ```bash
+ ./bazelw build //tools/... //examples/...
+ cd modules/go && ../../bazelw build //... --override_module=datadog-rules-test-optimization=../..
+ ```
+- Consumer-workspace command pattern (this repository root does **not** define `//:dd_upload_payloads`):
   ```bash
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
@@ -75,10 +79,14 @@ The sync rule creates `@test_optimization_data//` containing:
 - Outputs under `.testoptimization/` are fixed: `manifest.txt`, `context.json`, `cache/http/settings.json`, `cache/http/known_tests.json`, `cache/http/test_management.json`, and per‑module canonical files exposed via `:module_<sanitized>` targets (runfiles rooted under the manifest directory).
 
 ## Testing Guidelines
-- Prefer `./bazelw test //...` for running tests.
+- Repository-local test matrix:
+  - `./bazelw test //tools/...`
+  - `./bazelw test //examples/...`
+  - `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- In consumer workspaces, prefer `./bazelw test //...` when package layout permits.
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
-- Use `./bazelw run //:dd_upload_payloads` after tests complete to upload payloads.
+- In consumer workspaces, use `./bazelw run //:dd_upload_payloads` after tests complete to upload payloads.
 - For Go, use `dd_topt_go_test` to set up the test with correct environment variables.
 - Create ONE uploader target per workspace at the root BUILD.bazel.
 

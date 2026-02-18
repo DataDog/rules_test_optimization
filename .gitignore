@@ -31,3 +31,18 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# Patch/merge and editor backup artifacts
+*.orig
+*.rej
+*.bak
+*.backup

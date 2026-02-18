@@ -158,14 +158,14 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "ePWA+sAv8mD7xvMoqauvqZhTYvRd39msFl1QwMRQ66w=",
+        "bzlTransitiveDigest": "COFqGVWAS61/pywm4uxyYx09ZW9IHtebKSvI4RwUKcs=",
         "usagesDigest": "a1wQerCK9quAagJ4aWUcSvy9i58+wzoosGKCp8Tjsgo=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
         "generatedRepoSpecs": {
           "test_optimization_data": {
-            "repoRuleId": "@@//tests:example_stub_repo.bzl%example_stub_repo",
+            "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
               "repo_alias": "test_optimization_data",
               "service_keys": [
@@ -175,7 +175,13 @@
             }
           }
         },
-        "recordedRepoMappingEntries": []
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "datadog-rules-test-optimization",
+            "datadog-rules-test-optimization+"
+          ]
+        ]
       }
     },
     "@@rules_kotlin+//src/main/starlark/core/repositories:bzlmod_setup.bzl%rules_kotlin_extensions": {
