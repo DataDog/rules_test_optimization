@@ -26,6 +26,26 @@ def _runfile(rel_path: str) -> Path:
     for cand in candidates:
         if cand.exists():
             return cand
+
+    # Manifest-mode fallback (common on Windows).
+    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
+    if manifest_path:
+        manifest = Path(manifest_path)
+        if manifest.exists():
+            keys = [rel_path]
+            if test_workspace:
+                keys.insert(0, f"{test_workspace}/{rel_path}")
+            with manifest.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.rstrip("\n")
+                    if not line:
+                        continue
+                    key, sep, value = line.partition(" ")
+                    if not sep:
+                        continue
+                    if key in keys and value:
+                        return Path(value)
+
     raise FileNotFoundError(f"runfile not found: {rel_path} (checked: {candidates})")
 
 
