@@ -1,8 +1,8 @@
 # RFC: Bazel Support for Datadog Test Optimization via Module Extension and Uploader
 
 Author: Tony Redondo
-Date: Sep 17, 2025  
-Status: Draft
+Date: Feb 18, 2026  
+Status: Implemented (v1)
 
 This document outlines a proposed method for integrating Datadog Test Optimization with Bazel. The approach involves using a module extension and repository rule to gather metadata during module/repository resolution, and a runtime uploader to transmit test and coverage data back to the backend. The document details the rationale behind this design, current behaviors, limitations, and a strategy for widespread adoption across various services and programming languages.
 
@@ -249,7 +249,7 @@ Language Macros
 
 Security Considerations
 
-- Secrets are passed via `--repo_env`/`--test_env` and not written to disk. The repo rule’s HTTP calls rely on `DD_API_KEY` at fetch time; the uploader uses either `DD_API_KEY` or `DD_TRACE_AGENT_URL` at test time.  
+- Secrets are passed via `--repo_env`/`--test_env` and not written to disk. The repo rule’s HTTP calls rely on `DD_API_KEY` at fetch time; the uploader uses either `DD_API_KEY` or `DD_TRACE_AGENT_URL` at upload time (`bazel run` step).  
 - `context.json` contains only non‑secret metadata and is safe to include as runfiles.  
 - Consumers should configure sandboxing and network blocking for tests (`--config=hermetic`, `--sandbox_default_allow_network=false`) and make only the payload directory writable.
 

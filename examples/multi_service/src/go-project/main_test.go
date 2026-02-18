@@ -13,14 +13,6 @@ import (
 
 // Demonstrates reading test optimization files using DD_TEST_OPTIMIZATION_MANIFEST_FILE.
 func TestMain(m *testing.M) {
-	// Print all environment variables for debugging
-	fmt.Println("=== ENVIRONMENT VARIABLES ===")
-	for _, env := range os.Environ() {
-		fmt.Println(env)
-	}
-	fmt.Println("=== END ENVIRONMENT VARIABLES ===")
-	fmt.Println()
-
 	// Get the manifest file path and derive the working directory
 	manifestRloc := os.Getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
 	if manifestRloc == "" {
@@ -98,13 +90,28 @@ func TestGreeting(t *testing.T) {
 
 func TestMainOutput(t *testing.T) {
 	old := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Stdout = old
+		_ = r.Close()
+		_ = w.Close()
+	})
 	os.Stdout = w
 	main()
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	os.Stdout = old
 	var buf bytes.Buffer
-	io.Copy(&buf, r)
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if buf.String() != "Hello, World!\n" {
 		t.Fatal("unexpected output")
 	}

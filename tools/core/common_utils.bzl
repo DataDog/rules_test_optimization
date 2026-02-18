@@ -32,6 +32,9 @@ Maintenance notes:
 #
 # Keep log messages short and actionable because they appear in Bazel output.
 
+SERVICE_NAME_MAX_LEN = 200
+RUNTIME_VALUE_WARN_LEN = 100
+
 def log_info(message):
     """Print user-facing progress messages."""
     print("test_optimization: %s" % message)
@@ -46,6 +49,10 @@ def log_debug(debug_enabled, category, message):
     """
     if debug_enabled:
         print("test_optimization[%s]: %s" % (category, message))
+
+def is_dict(value):
+    """Return True when value is a Starlark dict."""
+    return type(value) == type({})
 
 # ##########################################################################
 # Sanitization utilities
@@ -134,12 +141,12 @@ Please provide a service name via:
     if not trimmed:
         fail("test_optimization: service name cannot be empty or whitespace-only: '%s'" % service)
     
-    if len(trimmed) > 200:
+    if len(trimmed) > SERVICE_NAME_MAX_LEN:
         fail("""
-test_optimization: service name is too long (max 200 characters): '%s'
+test_optimization: service name is too long (max %d characters): '%s'
 
 Please use a shorter service name.
-""" % trimmed)
+""" % (SERVICE_NAME_MAX_LEN, trimmed))
     
     # Warn about potential issues
     if " " in trimmed:
@@ -205,7 +212,7 @@ def validate_runtime_name(name, debug = False):
     if not trimmed:
         return "unknown"
 
-    if len(trimmed) > 100:
+    if len(trimmed) > RUNTIME_VALUE_WARN_LEN:
         log_debug(debug, "validation", "WARNING: runtime name is unusually long: '%s'" % trimmed)
 
     return trimmed
@@ -227,7 +234,7 @@ def validate_runtime_version(version, debug = False):
     if not trimmed:
         return "unknown"
 
-    if len(trimmed) > 100:
+    if len(trimmed) > RUNTIME_VALUE_WARN_LEN:
         log_debug(debug, "validation", "WARNING: runtime version is unusually long: '%s'" % trimmed)
 
     return trimmed

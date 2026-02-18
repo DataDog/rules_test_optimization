@@ -28,6 +28,8 @@ def _validate_service_name_test(ctx):
     env = unittest.begin(ctx)
     asserts.equals(env, "svc", validate_service_name("svc"))
     asserts.equals(env, "svc", validate_service_name("  svc  ", debug = True))
+    asserts.equals(env, "servicio-eu", validate_service_name(" servicio-eu "))
+    asserts.equals(env, "servicio_ñ", validate_service_name(" servicio_ñ "))
     return unittest.end(env)
 
 def _validate_runtime_version_test(ctx):
@@ -52,6 +54,8 @@ def _validate_api_key_normalization_test(ctx):
     """Validate API key trimming on valid input."""
     env = unittest.begin(ctx)
     asserts.equals(env, "abcd1234", validate_api_key(" abcd1234 "))
+    asserts.equals(env, "abc%def", validate_api_key(" abc%def "))
+    asserts.equals(env, "line1\nline2", validate_api_key("\nline1\nline2\n"))
     return unittest.end(env)
 
 def _validate_api_key_missing_target_impl(_ctx):

@@ -29,9 +29,9 @@ Use this checklist before your first CI rollout:
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS`
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS`
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS`
-   - `test --test_env=DD_API_KEY`
-   - `test --test_env=DD_SITE`
-   - Optional uploader/runtime env forwarding:
+   - Keep `DD_API_KEY` and `DD_SITE` out of test runtime by default.
+     In Bazel file-mode, tests do not need uploader credentials.
+   - Optional test runtime forwarding only when your tracer/test harness needs it:
      - `test --test_env=DD_TRACE_AGENT_URL`
      - `test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE`
 3. Create exactly one uploader target at workspace root:
@@ -189,17 +189,21 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 
 - Consumer repository commands in this README use `bazel`
 - Repository-maintainer workflows in this repo use `./bazelw` (see [`docs/Maintainers.md`](docs/Maintainers.md))
+- This repository intentionally does not define a root `.bazelrc`.
+  Example workspaces keep local `.bazelrc` files; CI and maintainer docs provide
+  canonical flags.
 
 ### Compatibility snapshot
 
 | Component | Recommended baseline | Notes |
 |-----------|----------------------|-------|
-| Bazel | `5.0+` | Needed for `TEST_UNDECLARED_OUTPUTS_DIR` payload collection path |
+| Bazel | `8.5.1` | Current repository CI/pinned baseline (`.bazelversion`) |
 | rules_go (Go users) | `0.59.0` | README examples use this version; importpath inference requires `0.51.0+` |
 | Go toolchain (example) | `1.24.0` | Consumer repositories may use another supported version |
 | Module versions | `1.0.0` metadata | BCR publication is pending; use commit pin/override install paths |
 
-- **Bazel 5.0+** - Required for `TEST_UNDECLARED_OUTPUTS_DIR` support used by payload collection
+- **Bazel 8.5.1 (repo baseline)** - Matches this repository's CI and `.bazelversion`
+- **Bazel 5.0+ minimum capability** - Earliest Bazel line with required `TEST_UNDECLARED_OUTPUTS_DIR` payload support
 - **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
 - **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
 - **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; normalized to `https://api.<site>`

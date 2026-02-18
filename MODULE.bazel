@@ -9,6 +9,9 @@ bazel_dep(name = "platforms", version = "1.0.0")
 # Test utilities for Starlark unit tests
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
+# Dev-only dependency for shell-based unit tests in this repository.
+bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
+
 # Dev-only dependency for in-repo example builds that compile Go targets.
 # Consumer-facing core usage remains rules_go-free.
 bazel_dep(name = "rules_go", version = "0.59.0", dev_dependency = True)

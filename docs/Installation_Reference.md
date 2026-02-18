@@ -297,14 +297,19 @@ common --repo_env=GO_MODULE_PATH
 #   bazel run //:dd_upload_payloads
 
 # Tests (runtime)
-test --test_env=DD_API_KEY
-test --test_env=DD_SITE
+# Keep uploader credentials out of test runtime by default.
 test --test_env=DD_TRACE_AGENT_URL
 test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
 ```
 
 Security note: keep secret values out of `.bazelrc`. Forward variable names
 with `--repo_env=DD_API_KEY` and provide values via shell/CI secret stores.
+In Bazel file-mode workflows, tests do not require `DD_API_KEY`/`DD_SITE`;
+those credentials are only needed for the post-test uploader step.
+
+Repository policy note: this repository intentionally has no root `.bazelrc`.
+Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags
+from `README.md` and `docs/Maintainers.md`.
 
 ### 6) Configure Go support in WORKSPACE (for `dd_topt_go_test`)
 

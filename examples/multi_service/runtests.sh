@@ -21,7 +21,7 @@ echo "--- hermetic run"
 run_cmd bazel test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic || test_status=$?
 
 echo "--- uploading payloads"
-# Requires DD_API_KEY and DD_SITE environment variables
+# Requires DD_API_KEY and DD_SITE environment variables.
 if ! DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd bazel run //:dd_upload_payloads; then
   echo "warning: payload upload failed; preserving test exit code (${test_status})." >&2
 fi

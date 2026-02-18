@@ -532,7 +532,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:
         try:
             record = json.loads(line)
-        except Exception:
+        except json.JSONDecodeError:
             continue
         path = record.get("path")
         if path:
@@ -614,7 +614,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
             continue
         try:
             records.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 def find_latest_cycle_for_resource(resource):
@@ -623,7 +623,7 @@ def find_latest_cycle_for_resource(resource):
             continue
         try:
             payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
-        except Exception:
+        except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
             continue
         for evt in payload.get("events", []):
             content = evt.get("content") or {}
@@ -666,7 +666,7 @@ def parse_owners(value):
         return None
     try:
         return json.loads(value)
-    except Exception:
+    except json.JSONDecodeError:
         return "__invalid__"
 
 def print_uploader_log_tail():
@@ -1007,6 +1007,162 @@ run_malformed_sync_case \
   "--repo_env=DD_GIT_COMMIT_MESSAGE=malformed-test-management-commit-message" \
   "--repo_env=DD_GIT_HEAD_MESSAGE=malformed-test-management-commit-message"
 
+# Scenario: retry/backoff sync behavior for transient delay/rate-limit/status errors.
+run_retry_sync_case() {
+  # Execute a successful sync scenario in an isolated workspace and assert that
+  # a specific endpoint was hit the expected number of times for a filtered
+  # attribute value (used to prove retry/backoff behavior).
+  #
+  # Params:
+  #   $1 ws_name
+  #   $2 repo_name
+  #   $3 service_name
+  #   $4 expected_path
+  #   $5 filter_attr
+  #   $6 filter_value
+  #   $7 min_count
+  #   $8+ optional extra --repo_env flags
+  local ws_name="$1"
+  local repo_name="$2"
+  local service_name="$3"
+  local expected_path="$4"
+  local filter_attr="$5"
+  local filter_value="$6"
+  local min_count="$7"
+  shift 7
+  local extra_repo_envs=("$@")
+
+  local ws_path="$TMP_WS/$ws_name"
+  local build_log_path="$TMP_WS/${ws_name}.log"
+  local log_start
+  log_start="$(log_line_count)"
+  mkdir -p "$ws_path"
+
+  cat > "$ws_path/MODULE.bazel" <<MODULE_RETRY_EOF
+module(name = "topt-${ws_name}", version = "0.0.0")
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = ${ESCAPED_REPO_ROOT},
+)
+
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "${repo_name}",
+    service = "${service_name}",
+    runtime_name = "go",
+    runtime_version = "1.2.3",
+)
+
+use_repo(test_optimization_sync, "${repo_name}")
+MODULE_RETRY_EOF
+
+  cat > "$ws_path/BUILD.bazel" <<'BUILD_RETRY_EOF'
+filegroup(
+    name = "noop",
+    srcs = [],
+)
+BUILD_RETRY_EOF
+
+  local cmd=("$BAZEL" "${BAZEL_FLAGS[@]}" build "@${repo_name}//:test_optimization_files" "${REPO_ENVS[@]}")
+  if (( ${#extra_repo_envs[@]} )); then
+    cmd+=("${extra_repo_envs[@]}")
+  fi
+  if ! (
+    cd "$ws_path" && \
+    "${cmd[@]}" >"$build_log_path" 2>&1
+  ); then
+    echo "error: retry sync scenario failed unexpectedly for $ws_name"
+    cat "$build_log_path" || true
+    exit 1
+  fi
+
+  LOG_FILE="$LOG_FILE" LOG_START="$log_start" EXPECTED_PATH="$expected_path" FILTER_ATTR="$filter_attr" FILTER_VALUE="$filter_value" MIN_COUNT="$min_count" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start = int(os.environ["LOG_START"])
+expected_path = os.environ["EXPECTED_PATH"]
+filter_attr = os.environ["FILTER_ATTR"]
+filter_value = os.environ["FILTER_VALUE"]
+min_count = int(os.environ["MIN_COUNT"])
+
+count = 0
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("path") != expected_path:
+            continue
+        try:
+            payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+        except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        attrs = ((payload.get("data") or {}).get("attributes") or {})
+        if attrs.get(filter_attr) != filter_value:
+            continue
+        count += 1
+
+if count < min_count:
+    print(
+        f"error: expected at least {min_count} requests for path={expected_path}, "
+        f"{filter_attr}={filter_value}; got {count}"
+    )
+    sys.exit(1)
+PY
+}
+
+run_retry_sync_case \
+  "ws_delay_settings" \
+  "test_optimization_data_delay_settings" \
+  "delay-settings-service" \
+  "/api/v2/libraries/tests/services/setting" \
+  "service" \
+  "delay-settings-service" \
+  1
+
+run_retry_sync_case \
+  "ws_retry_settings" \
+  "test_optimization_data_retry_settings" \
+  "retry-settings-service" \
+  "/api/v2/libraries/tests/services/setting" \
+  "service" \
+  "retry-settings-service" \
+  2
+
+run_retry_sync_case \
+  "ws_retry_known_tests" \
+  "test_optimization_data_retry_known_tests" \
+  "retry-known-tests-service" \
+  "/api/v2/ci/libraries/tests" \
+  "service" \
+  "retry-known-tests-service" \
+  2
+
+run_retry_sync_case \
+  "ws_retry_test_management" \
+  "test_optimization_data_retry_test_management" \
+  "mock-service" \
+  "/api/v2/test/libraries/test-management/tests" \
+  "commit_message" \
+  "retry-test-management-commit-message" \
+  2 \
+  "--repo_env=DD_GIT_COMMIT_MESSAGE=retry-test-management-commit-message" \
+  "--repo_env=DD_GIT_HEAD_MESSAGE=retry-test-management-commit-message"
+
 # Scenario: multi-service extension wiring + deduped sanitized service keys.
 # This block verifies both repository-rule fanout and macro-level service key
 # resolution semantics (including collision-safe explicit key selection).
@@ -1191,7 +1347,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
             continue
         try:
             records.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 setting_requests = [rec for rec in records if rec.get("path") == "/api/v2/libraries/tests/services/setting"]
@@ -1204,7 +1360,7 @@ for rec in setting_requests:
     try:
         body = base64.b64decode(rec.get("body_b64", "")).decode("utf-8")
         payload = json.loads(body)
-    except Exception:
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
         continue
     attrs = ((payload.get("data") or {}).get("attributes") or {})
     service = attrs.get("service")
@@ -1254,7 +1410,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
             continue
         try:
             records.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 if not records:
@@ -1268,7 +1424,7 @@ for rec in reversed(records):
         continue
     try:
         cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
-    except Exception:
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
         continue
     for evt in cycle_payload.get("events", []):
         if evt.get("type") != "test":
@@ -1290,7 +1446,7 @@ meta = ((target_evt.get("content") or {}).get("meta") or {})
 owners_raw = meta.get("test.codeowners")
 try:
     owners = json.loads(owners_raw) if owners_raw is not None else None
-except Exception:
+except json.JSONDecodeError:
     owners = "__invalid__"
 if owners != ["@DataDog/ci-app-libraries-dotnet"]:
     print("error: expected CODEOWNERS value missing in context-enriched payload")
@@ -1365,7 +1521,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:
         try:
             rows.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 for rec in reversed(rows):
@@ -1374,7 +1530,7 @@ for rec in reversed(rows):
     try:
         body = base64.b64decode(rec.get("body_b64", ""))
         obj = json.loads(body.decode("utf-8"))
-    except Exception:
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
         continue
     for evt in obj.get("events", []):
         content = evt.get("content") or {}
@@ -1883,7 +2039,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:
         try:
             records.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 for rec in reversed(records):
@@ -1891,7 +2047,7 @@ for rec in reversed(records):
         continue
     try:
         obj = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
-    except Exception:
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
         continue
     for evt in obj.get("events", []):
         if (evt.get("content") or {}).get("resource") == target_resource:
@@ -1914,7 +2070,7 @@ def owners_for(resource):
             return None
         try:
             return json.loads(raw)
-        except Exception:
+        except json.JSONDecodeError:
             return "__invalid__"
     return None
 
@@ -2044,7 +2200,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
             continue
         try:
             records.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 if not records:
@@ -2106,7 +2262,7 @@ for rec in records:
     try:
         body, headers = decode_body(rec)
         json.loads(body.decode("utf-8"))
-    except Exception:
+    except (base64.binascii.Error, OSError, UnicodeDecodeError, json.JSONDecodeError):
         continue
     if "gzip" in headers.get("content-encoding", "").lower():
         gzip_header_seen = True
@@ -2182,7 +2338,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
             continue
         try:
             records.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 def lower_headers(record):
@@ -2194,7 +2350,7 @@ for rec in reversed(records):
         continue
     try:
         payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
-    except Exception:
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
         continue
     for evt in payload.get("events", []):
         if (evt.get("content") or {}).get("resource") == "Manual.EvpMode":
@@ -2525,7 +2681,7 @@ with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:
         try:
             records.append(json.loads(line))
-        except Exception:
+        except json.JSONDecodeError:
             continue
 
 def owners_for(meta):
@@ -2534,7 +2690,7 @@ def owners_for(meta):
         return None
     try:
         return json.loads(raw)
-    except Exception:
+    except json.JSONDecodeError:
         return "__invalid__"
 
 def print_manifest_logs():
@@ -2562,7 +2718,7 @@ def assert_manifest_resource(resource):
             continue
         try:
             obj = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
-        except Exception:
+        except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
             continue
         for evt in obj.get("events", []):
             content = evt.get("content") or {}
@@ -2600,3 +2756,80 @@ assert_manifest_resource("Manual.ManifestSuffixKey")
 PY
 
 mv "$ORIG_CODEOWNERS" "$WORKSPACE/CODEOWNERS"
+
+# Scenario: uploader retries transient test-upload failures and eventually succeeds.
+LOG_LINES_BEFORE_RETRY_UPLOADER="$(log_line_count)"
+MANUAL_RETRY_AGENTLESS="$TESTLOGS_DIR/manual_retry_agentless/test.outputs"
+mkdir -p "$MANUAL_RETRY_AGENTLESS/payloads/tests" "$MANUAL_RETRY_AGENTLESS/payloads/coverage"
+cat > "$MANUAL_RETRY_AGENTLESS/payloads/tests/manual_retry_agentless.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.0.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Manual.RetryAgentless",
+        "name": "Manual.RetryAgentless",
+        "status": "pass",
+        "meta": {}
+      }
+    }
+  ]
+}
+JSON_EOF
+
+UPLOADER_RETRY_AGENTLESS_LOG="$TMP_WS/uploader_retry_agentless.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_RETRY_AGENTLESS_LOG" 2>&1; then
+  echo "error: uploader retry agentless scenario failed"
+  cat "$UPLOADER_RETRY_AGENTLESS_LOG" || true
+  exit 1
+fi
+
+LOG_FILE="$LOG_FILE" LOG_START="$LOG_LINES_BEFORE_RETRY_UPLOADER" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start = int(os.environ.get("LOG_START", "0") or "0")
+target_resource = "Manual.RetryAgentless"
+attempts = 0
+
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("path") != "/api/v2/citestcycle":
+            continue
+        try:
+            payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+        except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        for evt in payload.get("events", []):
+            content = evt.get("content") or {}
+            if content.get("resource") == target_resource:
+                attempts += 1
+                break
+
+if attempts < 2:
+    print(f"error: expected retry uploader scenario to issue >=2 attempts, got {attempts}")
+    sys.exit(1)
+PY

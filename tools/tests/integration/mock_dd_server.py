@@ -37,10 +37,15 @@ def _json_error(message):
 
 MALFORMED_SETTINGS_SERVICE = "malformed-settings-service"
 EMPTY_SETTINGS_SERVICE = "empty-settings-service"
+DELAY_SETTINGS_SERVICE = "delay-settings-service"
+RETRY_SETTINGS_SERVICE = "retry-settings-service"
 MALFORMED_KNOWN_TESTS_SERVICE = "malformed-known-tests-service"
+RETRY_KNOWN_TESTS_SERVICE = "retry-known-tests-service"
 MALFORMED_KNOWN_TESTS_BODY = b"NOT_JSON_KNOWN_TESTS_RESPONSE"
 MALFORMED_TEST_MANAGEMENT_COMMIT_MESSAGE = "malformed-test-management-commit-message"
+RETRY_TEST_MANAGEMENT_COMMIT_MESSAGE = "retry-test-management-commit-message"
 MALFORMED_TEST_MANAGEMENT_BODY = b"NOT_JSON_TEST_MANAGEMENT_RESPONSE"
+RETRY_AGENTLESS_RESOURCE = "Manual.RetryAgentless"
 
 
 class _ServerState:
@@ -49,6 +54,8 @@ class _ServerState:
         self.fixtures = fixtures
         self.log_path = log_path
         self.log_lock = threading.Lock()
+        self.retry_lock = threading.Lock()
+        self.retry_counters = {}
 
     def log_request(self, path, method, headers, body):
         # Persist request bodies in base64 so multipart uploads can be snapshotted.
@@ -64,6 +71,17 @@ class _ServerState:
             with open(self.log_path, "a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
                 handle.flush()
+
+    def should_fail_n_times(self, key, failures):
+        """Return True until `failures` attempts have been observed for key."""
+        if failures <= 0:
+            return False
+        with self.retry_lock:
+            count = self.retry_counters.get(key, 0)
+            if count < failures:
+                self.retry_counters[key] = count + 1
+                return True
+        return False
 
 
 def _normalize_headers(headers):
@@ -198,7 +216,7 @@ class _Handler(BaseHTTPRequestHandler):
             return "missing DD-API-KEY"
         try:
             data = json.loads(body.decode("utf-8"))
-        except Exception:
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return "invalid JSON body"
         err = _require_type(data, "ci_app_test_service_libraries_settings")
         if err:
@@ -215,7 +233,7 @@ class _Handler(BaseHTTPRequestHandler):
             return "missing DD-API-KEY"
         try:
             data = json.loads(body.decode("utf-8"))
-        except Exception:
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return "invalid JSON body"
         err = _require_type(data, "ci_app_libraries_tests_request")
         if err:
@@ -232,7 +250,7 @@ class _Handler(BaseHTTPRequestHandler):
         """Extract a string attribute from request body; return empty on miss."""
         try:
             data = json.loads(body.decode("utf-8"))
-        except Exception:
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return ""
         attrs = data.get("data", {}).get("attributes", {})
         service = attrs.get(key)
@@ -253,7 +271,7 @@ class _Handler(BaseHTTPRequestHandler):
             return "missing DD-API-KEY"
         try:
             data = json.loads(body.decode("utf-8"))
-        except Exception:
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return "invalid JSON body"
         err = _require_type(data, "ci_app_libraries_tests_request")
         if err:
@@ -285,11 +303,11 @@ class _Handler(BaseHTTPRequestHandler):
         if "gzip" in content_encoding:
             try:
                 body_for_json = gzip.decompress(body)
-            except Exception:
+            except (OSError, gzip.BadGzipFile):
                 return "invalid gzip body"
         try:
             payload = json.loads(body_for_json.decode("utf-8"))
-        except Exception:
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return "invalid JSON body"
         metadata = payload.get("metadata") if isinstance(payload, dict) else None
         star = metadata.get("*") if isinstance(metadata, dict) else None
@@ -301,6 +319,34 @@ class _Handler(BaseHTTPRequestHandler):
             if expected_tracer and tracer_hdr != expected_tracer:
                 return "Datadog-Meta-Tracer-Version does not match metadata.*.library_version"
         return None
+
+    def _decode_uploader_test_payload(self, body):
+        """Decode uploader test payload JSON, handling optional gzip."""
+        body_for_json = body
+        content_encoding = (_require_header(self.headers, "Content-Encoding") or "").lower()
+        if "gzip" in content_encoding:
+            try:
+                body_for_json = gzip.decompress(body)
+            except (OSError, gzip.BadGzipFile):
+                return None
+        try:
+            payload = json.loads(body_for_json.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _payload_contains_resource(self, payload, resource):
+        """Return True when payload events contain a specific resource."""
+        events = payload.get("events") if isinstance(payload, dict) else None
+        if not isinstance(events, list):
+            return False
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            content = evt.get("content") or {}
+            if isinstance(content, dict) and content.get("resource") == resource:
+                return True
+        return False
 
     def _validate_uploader_cov(self, evp_subdomain = None):
         """Validate uploader coverage payload request (agentless or EVP mode)."""
@@ -342,6 +388,15 @@ class _Handler(BaseHTTPRequestHandler):
             if service == EMPTY_SETTINGS_SERVICE:
                 self._send_text(200, b"")
                 return
+            if service == DELAY_SETTINGS_SERVICE:
+                time.sleep(0.2)
+            if service == RETRY_SETTINGS_SERVICE and self.server.state.should_fail_n_times("settings_retry", 1):
+                self._send_json(
+                    503,
+                    {"errors": [{"status": "503", "title": "mock transient settings failure"}]},
+                    extra_headers = {"Retry-After": "1"},
+                )
+                return
             self._send_json(200, self.server.state.fixtures["settings"])
             return
 
@@ -354,6 +409,13 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self._extract_service(body) == MALFORMED_KNOWN_TESTS_SERVICE:
                 self._send_text(200, MALFORMED_KNOWN_TESTS_BODY)
+                return
+            if self._extract_service(body) == RETRY_KNOWN_TESTS_SERVICE and self.server.state.should_fail_n_times("known_tests_retry", 1):
+                self._send_json(
+                    429,
+                    {"errors": [{"status": "429", "title": "mock transient known-tests rate limit"}]},
+                    extra_headers = {"Retry-After": "1"},
+                )
                 return
             self._send_json(200, self.server.state.fixtures["known_tests"])
             return
@@ -368,6 +430,13 @@ class _Handler(BaseHTTPRequestHandler):
             if self._extract_commit_message(body) == MALFORMED_TEST_MANAGEMENT_COMMIT_MESSAGE:
                 self._send_text(200, MALFORMED_TEST_MANAGEMENT_BODY)
                 return
+            if self._extract_commit_message(body) == RETRY_TEST_MANAGEMENT_COMMIT_MESSAGE and self.server.state.should_fail_n_times("test_management_retry", 1):
+                self._send_json(
+                    503,
+                    {"errors": [{"status": "503", "title": "mock transient test-management failure"}]},
+                    extra_headers = {"Retry-After": "1"},
+                )
+                return
             self._send_json(200, self.server.state.fixtures["test_management"])
             return
 
@@ -379,6 +448,14 @@ class _Handler(BaseHTTPRequestHandler):
             err = self._validate_uploader_test(body, evp_subdomain = evp_subdomain)
             if err:
                 self._send_json(400, _json_error(err))
+                return
+            payload = self._decode_uploader_test_payload(body)
+            if payload and self._payload_contains_resource(payload, RETRY_AGENTLESS_RESOURCE) and self.server.state.should_fail_n_times("uploader_cycle_retry", 1):
+                self._send_json(
+                    503,
+                    {"errors": [{"status": "503", "title": "mock transient uploader test failure"}]},
+                    extra_headers = {"Retry-After": "1"},
+                )
                 return
             self._send_json(200, {})
             return
