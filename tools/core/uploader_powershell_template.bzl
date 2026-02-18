@@ -1527,7 +1527,8 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {{
         $gz.Write($bytes, 0, $bytes.Length)
         $gz.Close()
         $compressed = $ms.ToArray()
-        $content = New-Object System.Net.Http.ByteArrayContent($compressed)
+        # New-Object treats byte[] as a list of constructor args unless wrapped.
+        $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $compressed)
         $content.Headers.ContentType = 'application/json'
         $null = $content.Headers.ContentEncoding.Add('gzip')
         Dbg "Send-PostJson: Content-Type=application/json; Content-Encoding=gzip (bytes=$($compressed.Length))"
