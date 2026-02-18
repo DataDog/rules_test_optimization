@@ -1466,7 +1466,9 @@ function Validate-Payload([string]$FilePath) {{
     }}
     Dbg "schema validate: python3 $script:SchemaValidator $script:SchemaJson $FilePath"
     try {{
-        & $py.Source $script:SchemaValidator $script:SchemaJson $FilePath | Out-Null
+        # Suppress validator stdout/stderr so upload boolean control flow is not
+        # polluted by non-empty command output streams.
+        & $py.Source $script:SchemaValidator $script:SchemaJson $FilePath 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {{
             # Warning-only contract: validation should not block uploads.
             Log "warning: schema validation failed for payload: $FilePath"
@@ -1678,7 +1680,8 @@ function Upload-AllTests {{
                 $skipped++
                 continue
             }}
-            if (Upload-SingleTest $f.FullName) {{
+            $uploaded = (Upload-SingleTest $f.FullName) -eq $true
+            if ($uploaded) {{
                 Log "uploaded test payload: $($f.FullName)"
                 Remove-PayloadFile $f.FullName
                 $total++
@@ -1709,7 +1712,8 @@ function Upload-AllCoverage {{
                 $skipped++
                 continue
             }}
-            if (Upload-SingleCoverage $f.FullName) {{
+            $uploaded = (Upload-SingleCoverage $f.FullName) -eq $true
+            if ($uploaded) {{
                 Log "uploaded coverage payload: $($f.FullName)"
                 Remove-PayloadFile $f.FullName
                 $total++
