@@ -24,14 +24,22 @@ jobs:
 
       - name: Run Bazel tests (go companion module)
         shell: bash
-        run: >
+        run: |
           cd modules/go &&
-          ../../bazelw test //...
+          ../../bazelw test //... \
           --override_module=datadog-rules-test-optimization=../..
 
       - name: Build examples
         shell: bash
         run: ./bazelw build //examples/...
+
+      - name: Test examples
+        shell: bash
+        run: ./bazelw test //examples/...
+
+      - name: Exercise single-service runtests script (dry-run)
+        shell: bash
+        run: RUNTESTS_DRY_RUN=1 bash ./examples/single_service/runtests.sh
 
       # Exercises the uploader end-to-end against a local mock server.
       - name: Run mock server integration tests (Linux/macOS)
@@ -112,28 +120,28 @@ jobs:
 
       - name: Run Bazel tests (hermetic lane)
         shell: bash
-        run: >
-          ./bazelw test //tools/...
-          --spawn_strategy=sandboxed
-          --strategy=TestRunner=sandboxed
-          --sandbox_default_allow_network=false
-          --modify_execution_info=TestRunner=+block-network
-          --test_env=TZ=UTC
-          --test_env=LANG=C
-          --test_env=LC_ALL=C
+        run: |
+          ./bazelw test //tools/... \
+          --spawn_strategy=sandboxed \
+          --strategy=TestRunner=sandboxed \
+          --sandbox_default_allow_network=false \
+          --modify_execution_info=TestRunner=+block-network \
+          --test_env=TZ=UTC \
+          --test_env=LANG=C \
+          --test_env=LC_ALL=C \
           --enable_runfiles
 
       - name: Run Bazel tests (go companion hermetic lane)
         shell: bash
-        run: >
+        run: |
           cd modules/go &&
-          ../../bazelw test //...
-          --override_module=datadog-rules-test-optimization=../..
-          --spawn_strategy=sandboxed
-          --strategy=TestRunner=sandboxed
-          --sandbox_default_allow_network=false
-          --modify_execution_info=TestRunner=+block-network
-          --test_env=TZ=UTC
-          --test_env=LANG=C
-          --test_env=LC_ALL=C
+          ../../bazelw test //... \
+          --override_module=datadog-rules-test-optimization=../.. \
+          --spawn_strategy=sandboxed \
+          --strategy=TestRunner=sandboxed \
+          --sandbox_default_allow_network=false \
+          --modify_execution_info=TestRunner=+block-network \
+          --test_env=TZ=UTC \
+          --test_env=LANG=C \
+          --test_env=LC_ALL=C \
           --enable_runfiles

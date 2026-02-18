@@ -97,8 +97,6 @@ def sanitize_label_fragment(name):
     # Reverse scan without a negative-step range
     for k in range(n):
         j = n - 1 - k
-        if j < 0:
-            break
         if out[j] != "_":
             end = j + 1
             break

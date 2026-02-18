@@ -3,5 +3,5 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 # ONE uploader target per workspace - discovers and uploads all test payloads
 dd_payload_uploader(
     name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
+    data = ["@test_optimization_data//:test_optimization_context_go_service"],
 )

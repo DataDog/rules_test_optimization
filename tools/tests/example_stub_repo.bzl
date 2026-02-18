@@ -4,21 +4,38 @@ This exists so `bazel build //examples/...` can analyze from this repository's
 root workspace without requiring network fetches or external env vars.
 """
 
-def _render_stub_build(settings, manifest, known_tests, test_management, context):
+def _render_stub_build(settings, manifest, known_tests, test_management, context, service_keys = None):
     """Render BUILD content for stub repo targets."""
-    return (
+    lines = []
+    lines.append(
         "filegroup(\n" +
         '    name = "test_optimization_files",\n' +
         ("    srcs = %s,\n" % repr([settings, manifest, known_tests, test_management])) +
         '    visibility = ["//visibility:public"],\n' +
-        ")\n\n" +
+        ")\n\n"
+    )
+    lines.append(
         "filegroup(\n" +
         '    name = "test_optimization_context",\n' +
         ("    srcs = %s,\n" % repr([context])) +
         '    visibility = ["//visibility:public"],\n' +
-        ")\n\n" +
-        ('exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest))
+        ")\n\n"
     )
+    for key in list(service_keys or []):
+        lines.append(
+            "filegroup(\n" +
+            ('    name = "test_optimization_files_%s",\n' % key) +
+            ("    srcs = %s,\n" % repr([settings, manifest, known_tests, test_management])) +
+            '    visibility = ["//visibility:public"],\n' +
+            ")\n\n" +
+            "filegroup(\n" +
+            ('    name = "test_optimization_context_%s",\n' % key) +
+            ("    srcs = %s,\n" % repr([context])) +
+            '    visibility = ["//visibility:public"],\n' +
+            ")\n\n"
+        )
+    lines.append('exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest))
+    return "".join(lines)
 
 # Public alias for tests.
 render_stub_build_for_tests = _render_stub_build
@@ -32,7 +49,7 @@ def _example_stub_repo_impl(ctx):
 
     ctx.file(manifest, manifest + "\n")
     ctx.file(settings, "{}\n")
-    ctx.file(known_tests, '{"data": {"attributes": {"modules": {}}}}\n')
+    ctx.file(known_tests, '{"data": {"attributes": {"tests": {}}}}\n')
     ctx.file(test_management, '{"data": {"attributes": {"modules": {}}}}\n')
     ctx.file(context, "{}\n")
 
@@ -69,6 +86,7 @@ def _example_stub_repo_impl(ctx):
         known_tests,
         test_management,
         context,
+        service_keys = service_keys,
     )
     ctx.file("BUILD", build)
 

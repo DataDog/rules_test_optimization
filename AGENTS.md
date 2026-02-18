@@ -45,7 +45,7 @@ The sync rule creates `@test_optimization_data//` containing:
 
 ## Build, Test, and Development Commands
 - Build all: `./bazelw build //...` — compiles and validates Starlark targets.
-- Run tests then upload payloads:
+- Consumer-workspace command pattern (this repository root does **not** define `//:dd_upload_payloads`):
   ```bash
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/

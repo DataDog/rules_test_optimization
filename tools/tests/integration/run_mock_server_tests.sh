@@ -54,7 +54,18 @@ cleanup() {
   # failures. Integration runs can leave transient Bazel/Java locks behind,
   # especially on Windows, so this helper is intentionally defensive.
   if [[ -n "${SERVER_PID:-}" ]]; then
-    kill "$SERVER_PID" 2>/dev/null || true
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+      kill "$SERVER_PID" 2>/dev/null || true
+      for _ in {1..10}; do
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+          break
+        fi
+        sleep 0.2
+      done
+      if kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -9 "$SERVER_PID" 2>/dev/null || true
+      fi
+    fi
   fi
   # Bazel can keep files under output_base open on Windows for a short time.
   # Best-effort shutdown avoids cleanup flakiness from locked JVM logs.
@@ -82,18 +93,23 @@ SERVER_PID=$!
 # Wait for the server to bind to a random port and emit it.
 PORT=""
 # Keep this tunable because slower CI workers can need extra startup time.
-MAX_WAIT_LOOPS="${MOCK_SERVER_MAX_WAIT_LOOPS:-200}"
-for ((i = 1; i <= MAX_WAIT_LOOPS; i++)); do
+START_TIMEOUT_SECONDS="${MOCK_SERVER_START_TIMEOUT_SECONDS:-30}"
+POLL_INTERVAL_SECONDS="${MOCK_SERVER_POLL_INTERVAL_SECONDS:-0.1}"
+START_TS="$(date +%s)"
+while true; do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "error: mock server process died before binding"
     cat "$SERVER_OUT" || true
     exit 1
   fi
-  if grep -q "^PORT=" "$SERVER_OUT"; then
-    PORT="$(grep '^PORT=' "$SERVER_OUT" | head -n1 | cut -d= -f2)"
+  PORT="$(awk -F= '/^PORT=/{print $2; exit}' "$SERVER_OUT" 2>/dev/null || true)"
+  if [[ -n "$PORT" ]]; then
     break
   fi
-  sleep 0.1
+  if (( "$(date +%s)" - START_TS >= START_TIMEOUT_SECONDS )); then
+    break
+  fi
+  sleep "$POLL_INTERVAL_SECONDS"
 done
 
 if [[ -z "$PORT" ]]; then
@@ -364,21 +380,37 @@ EXECROOT="$("$BAZEL" "${BAZEL_FLAGS[@]}" info execution_root "${REPO_ENVS[@]}" 2
 # Resolve settings.json location from cquery output for validation.
 # Depending on Bazel output mode/platform, the cquery path can be relative to
 # output_base, execution_root, or workspace. Probe each base in order.
-SETTINGS_PATH=$(echo "$CQUERY_OUT" | grep -E '[\\/]\.testoptimization[\\/]cache[\\/]http[\\/]settings\.json$' | head -n1 || true)
+SETTINGS_PATH=""
+while IFS= read -r candidate; do
+  [[ -z "$candidate" ]] && continue
+  if [[ "$candidate" == /* || "$candidate" =~ ^[A-Za-z]:[\\/] ]]; then
+    if [[ -f "$candidate" ]]; then
+      SETTINGS_PATH="$candidate"
+      break
+    fi
+    continue
+  fi
+  for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
+    [[ -z "$base" ]] && continue
+    if [[ -f "$base/$candidate" ]]; then
+      SETTINGS_PATH="$base/$candidate"
+      break
+    fi
+  done
+  [[ -n "$SETTINGS_PATH" ]] && break
+done < <(printf "%s\n" "$CQUERY_OUT" | "$PYTHON" -c '
+import sys
+
+for line in sys.stdin.read().splitlines():
+    normalized = line.replace("\\\\", "/")
+    if normalized.endswith("/.testoptimization/cache/http/settings.json"):
+        print(line)
+')
+
 if [[ -z "$SETTINGS_PATH" ]]; then
   echo "error: failed to resolve settings.json path"
   echo "$CQUERY_OUT"
   exit 1
-fi
-
-if [[ "$SETTINGS_PATH" != /* && ! "$SETTINGS_PATH" =~ ^[A-Za-z]:[\\/] ]]; then
-  for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
-    [[ -z "$base" ]] && continue
-    if [[ -f "$base/$SETTINGS_PATH" ]]; then
-      SETTINGS_PATH="$base/$SETTINGS_PATH"
-      break
-    fi
-  done
 fi
 
 if [[ ! -f "$SETTINGS_PATH" ]]; then
@@ -769,6 +801,57 @@ with tempfile.TemporaryDirectory() as td:
         if proc_invalid.stderr:
             print("stderr:")
             print(proc_invalid.stderr)
+        sys.exit(1)
+
+    # Tuple-style `items` regression checks.
+    tuple_schema = {
+        "type": "array",
+        "items": [
+            {"type": "string"},
+            {"type": "integer"},
+        ],
+        "additionalItems": False,
+    }
+    with open(schema_path, "w", encoding="utf-8") as f:
+        json.dump(tuple_schema, f)
+
+    with open(payload_path, "w", encoding="utf-8") as f:
+        json.dump(["ok", 42], f)
+    tuple_ok = subprocess.run(
+        [sys.executable, validator, schema_path, payload_path],
+        capture_output=True,
+        text=True,
+    )
+    if tuple_ok.returncode != 0:
+        print("error: schema validator rejected valid tuple-style items payload")
+        if tuple_ok.stdout:
+            print("stdout:")
+            print(tuple_ok.stdout)
+        if tuple_ok.stderr:
+            print("stderr:")
+            print(tuple_ok.stderr)
+        sys.exit(1)
+
+    with open(payload_path, "w", encoding="utf-8") as f:
+        json.dump(["ok", 42, True], f)
+    tuple_extra = subprocess.run(
+        [sys.executable, validator, schema_path, payload_path],
+        capture_output=True,
+        text=True,
+    )
+    if tuple_extra.returncode == 0:
+        print("error: schema validator accepted tuple payload with additional items")
+        sys.exit(1)
+
+    with open(payload_path, "w", encoding="utf-8") as f:
+        json.dump(["ok", "wrong"], f)
+    tuple_wrong_type = subprocess.run(
+        [sys.executable, validator, schema_path, payload_path],
+        capture_output=True,
+        text=True,
+    )
+    if tuple_wrong_type.returncode == 0:
+        print("error: schema validator accepted tuple payload with wrong item type")
         sys.exit(1)
 PY
 

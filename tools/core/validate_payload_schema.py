@@ -217,6 +217,16 @@ def _validate(value: Any, schema: Dict[str, Any], root: Dict[str, Any], path: st
         if isinstance(items, dict):
             for idx, item in enumerate(value):
                 _validate(item, items, root, f"{path}[{idx}]", errors)
+        elif isinstance(items, list):
+            for idx, item in enumerate(value):
+                if idx < len(items):
+                    _validate(item, items[idx], root, f"{path}[{idx}]", errors)
+                else:
+                    additional_items = schema.get("additionalItems", True)
+                    if additional_items is False:
+                        errors.append(f"{path}[{idx}]: additional item not allowed")
+                    elif isinstance(additional_items, dict):
+                        _validate(item, additional_items, root, f"{path}[{idx}]", errors)
 
 
 def main() -> int:

@@ -8,7 +8,10 @@ load(
 )
 load(
     "//tools/core:test_optimization_sync.bzl",
+    "build_unix_read_abs_file_command_for_tests",
+    "build_windows_read_abs_file_command_for_tests",
     "build_module_label_map_for_tests",
+    "collect_env_from_environ_for_tests",
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
@@ -98,7 +101,71 @@ def _normalize_ref_test(ctx):
     asserts.equals(env, "main", normalize_ref_for_tests("refs/heads/main"))
     asserts.equals(env, "v1.2.3", normalize_ref_for_tests("refs/tags/v1.2.3"))
     asserts.equals(env, "feature/foo", normalize_ref_for_tests("origin/feature/foo"))
+    asserts.equals(env, "main", normalize_ref_for_tests("origin/refs/heads/main"))
+    asserts.equals(env, "main", normalize_ref_for_tests("refs/remotes/origin/main"))
     asserts.equals(env, "main", normalize_ref_for_tests("main"))
+    asserts.equals(env, "", normalize_ref_for_tests(""))
+    return unittest.end(env)
+
+def _collect_env_from_environ_provider_mapping_test(ctx):
+    """Validate provider extraction and DD_* override precedence."""
+    env = unittest.begin(ctx)
+
+    github = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITHUB_SHA": "abc123",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_SERVER_URL": "https://github.example",
+        "GITHUB_REF": "refs/heads/main",
+    }, None)
+    asserts.equals(env, "github_actions", github.get("ci_provider_name"))
+    asserts.equals(env, "https://github.example/org/repo.git", github.get("repository_url"))
+    asserts.equals(env, "main", github.get("branch"))
+    asserts.equals(env, "abc123", github.get("sha"))
+    asserts.equals(env, "unnamed-service", github.get("service"))
+
+    overridden = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "DD_SERVICE": "service-from-env",
+        "GITHUB_SHA": "abc123",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_REF": "refs/heads/main",
+        "DD_GIT_REPOSITORY_URL": "https://override/repo.git",
+        "DD_GIT_BRANCH": "refs/remotes/origin/release",
+        "DD_GIT_COMMIT_SHA": "deadbeef",
+    }, "service-from-attr")
+    asserts.equals(env, "service-from-attr", overridden.get("service"))
+    asserts.equals(env, "https://override/repo.git", overridden.get("repository_url"))
+    asserts.equals(env, "release", overridden.get("branch"))
+    asserts.equals(env, "deadbeef", overridden.get("sha"))
+
+    appveyor = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "APPVEYOR": "True",
+        "APPVEYOR_REPO_PROVIDER": "github",
+        "APPVEYOR_REPO_NAME": "team/repo",
+        "APPVEYOR_REPO_COMMIT": "cafebabe",
+        "APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH": "refs/heads/pr-branch",
+        "APPVEYOR_REPO_BRANCH": "refs/heads/fallback",
+    }, None)
+    asserts.equals(env, "appveyor", appveyor.get("ci_provider_name"))
+    asserts.equals(env, "https://github.com/team/repo.git", appveyor.get("repository_url"))
+    asserts.equals(env, "pr-branch", appveyor.get("branch"))
+    asserts.equals(env, "cafebabe", appveyor.get("sha"))
+    return unittest.end(env)
+
+def _read_abs_file_command_escaping_test(ctx):
+    """Validate read-command construction escapes single quotes safely."""
+    env = unittest.begin(ctx)
+    unix_cmd = build_unix_read_abs_file_command_for_tests("/tmp/it's/test.txt")
+    asserts.true(env, "'\\''" in unix_cmd)
+    asserts.true(env, unix_cmd.startswith("[ -f '"))
+    asserts.true(env, "&& cat '" in unix_cmd)
+
+    ps_cmd = build_windows_read_abs_file_command_for_tests("C:\\tmp\\it's\\file.txt")
+    asserts.true(env, "''" in ps_cmd)
+    asserts.true(env, "$p = '" in ps_cmd)
+    asserts.true(env, "Get-Content -Raw -LiteralPath $p" in ps_cmd)
     return unittest.end(env)
 
 def _parse_go_module_path_test(ctx):
@@ -174,6 +241,10 @@ def _example_stub_includes_manifest_in_files_test(ctx):
     asserts.true(env, manifest in filegroup_block)
     asserts.true(env, known_tests in filegroup_block)
     asserts.true(env, test_management in filegroup_block)
+    exports_start = content.find("exports_files(")
+    asserts.true(env, exports_start > context_group_start)
+    context_group_block = content[context_group_start:exports_start]
+    asserts.true(env, context in context_group_block)
     return unittest.end(env)
 
 def _http_execute_timeout_seconds_test(ctx):
@@ -391,6 +462,8 @@ dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
 resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
 normalize_ref_test = unittest.make(_normalize_ref_test)
+collect_env_from_environ_provider_mapping_test = unittest.make(_collect_env_from_environ_provider_mapping_test)
+read_abs_file_command_escaping_test = unittest.make(_read_abs_file_command_escaping_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)

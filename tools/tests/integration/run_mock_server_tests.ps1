@@ -33,6 +33,7 @@ try {
   # Prefer known Git for Windows bash locations to avoid accidentally resolving
   # WSL's System32 bash.exe when both are installed.
   $bashPath = $null
+  $probeNotes = New-Object System.Collections.Generic.List[string]
   $gitBashCandidates = @(
     $env:DD_TEST_OPTIMIZATION_GIT_BASH,
     "C:\Program Files\Git\bin\bash.exe",
@@ -44,8 +45,10 @@ try {
   foreach ($candidate in $gitBashCandidates) {
     # Prefer an explicit Git Bash binary so CI does not accidentally invoke
     # a WSL/System32 shim with incompatible path semantics.
+    $probeNotes.Add("candidate: $candidate")
     if (Test-Path -LiteralPath $candidate -PathType Leaf) {
       $bashPath = $candidate
+      $probeNotes.Add("selected candidate: $candidate")
       break
     }
   }
@@ -54,11 +57,17 @@ try {
     $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
     if ($null -ne $bashCmd) {
       $bashPath = $bashCmd.Source
+      $probeNotes.Add("selected from PATH: $bashPath")
     }
   }
 
   if ($null -eq $bashPath) {
-    throw "bash not found. Install Git for Windows or ensure bash is on PATH."
+    $details = ($probeNotes -join "; ")
+    throw "bash not found. Set DD_TEST_OPTIMIZATION_GIT_BASH or install Git for Windows. Probe details: $details"
+  }
+
+  if ($bashPath -match "System32\\bash\.exe$") {
+    Write-Warning "Resolved bash to System32 shim ($bashPath). Set DD_TEST_OPTIMIZATION_GIT_BASH to a Git Bash binary for predictable path behavior."
   }
 
   if (-not (Test-Path -LiteralPath $integrationSh -PathType Leaf)) {

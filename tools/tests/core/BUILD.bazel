@@ -41,6 +41,7 @@ load(
     "decode_json_object_non_json_failure_test",
     "decode_json_object_non_json_target_rule",
     "decode_json_object_valid_test",
+    "collect_env_from_environ_provider_mapping_test",
     "dd_site_normalization_test",
     "dirname_test",
     "example_stub_includes_manifest_in_files_test",
@@ -57,6 +58,7 @@ load(
     "http_execute_timeout_seconds_test",
     "module_label_map_collision_test",
     "normalize_ref_test",
+    "read_abs_file_command_escaping_test",
     "parse_go_module_path_test",
     "partition_unix_headers_test",
     "record_sync_extension_repo_owner_duplicate_failure_test",
@@ -108,6 +110,18 @@ module_label_map_collision_test(
 
 normalize_ref_test(
     name = "normalize_ref_test",
+    size = "small",
+    timeout = "short",
+)
+
+collect_env_from_environ_provider_mapping_test(
+    name = "collect_env_from_environ_provider_mapping_test",
+    size = "small",
+    timeout = "short",
+)
+
+read_abs_file_command_escaping_test(
+    name = "read_abs_file_command_escaping_test",
     size = "small",
     timeout = "short",
 )
@@ -513,6 +527,8 @@ test_suite(
         ":resolve_dd_api_base_test",
         ":module_label_map_collision_test",
         ":normalize_ref_test",
+        ":collect_env_from_environ_provider_mapping_test",
+        ":read_abs_file_command_escaping_test",
         ":parse_go_module_path_test",
         ":dirname_test",
         ":normalize_out_dir_or_fail_test",

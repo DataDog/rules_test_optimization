@@ -18,7 +18,11 @@ from typing import Any
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    here = Path(__file__).resolve().parent
+    for candidate in [here] + list(here.parents):
+        if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
+            return candidate
+    raise RuntimeError("unable to locate repository root from script path")
 
 
 def _default_yaml_path() -> Path:

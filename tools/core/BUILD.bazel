@@ -9,4 +9,4 @@ exports_files([
     "topt_macro_utils.bzl",
     "topt_selection_utils.bzl",
     "validate_payload_schema.py",
-])
+], visibility = ["//visibility:public"])

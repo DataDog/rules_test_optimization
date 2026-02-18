@@ -22,8 +22,18 @@ Use this checklist before your first CI rollout:
 2. Forward required environment variable names in `.bazelrc`:
    - `common --repo_env=DD_API_KEY`
    - `common --repo_env=DD_SITE`
+   - Optional sync overrides when needed:
+     - `common --repo_env=DD_TEST_OPTIMIZATION_API_BASE`
+     - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS`
+     - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS`
+     - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS`
+     - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS`
+     - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS`
    - `test --test_env=DD_API_KEY`
    - `test --test_env=DD_SITE`
+   - Optional uploader/runtime env forwarding:
+     - `test --test_env=DD_TRACE_AGENT_URL`
+     - `test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE`
 3. Create exactly one uploader target at workspace root:
    - `//:dd_upload_payloads` via `dd_payload_uploader(...)`
 4. Run tests, then uploader, while preserving test exit code.

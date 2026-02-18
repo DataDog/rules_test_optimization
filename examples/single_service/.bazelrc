@@ -1,7 +1,7 @@
 # Hermetic config (sandbox, stable env, network blocking)
 build:hermetic --incompatible_strict_action_env
 build:hermetic --spawn_strategy=sandboxed
-test:hermetic  --spawn_strategy=sandboxed --strategy=TestRunner=sandboxed
+test:hermetic --spawn_strategy=sandboxed --strategy=TestRunner=sandboxed
 test:hermetic --sandbox_default_allow_network=false
 test:hermetic --modify_execution_info=TestRunner=+block-network
 test:hermetic --test_env=TZ=UTC
