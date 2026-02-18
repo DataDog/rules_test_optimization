@@ -438,6 +438,11 @@ dd_topt_go_test(
 Core sync + uploader support is runtime-agnostic and works for any language
 runtime that honors the file-mode contract.
 
+Repository layout note: keep `tools/` runtime-agnostic (`tools/core`,
+`tools/tests`, `tools/dev`). Add first-class language orchestration under
+`modules/<language>/` companion modules instead of creating `tools/<language>`
+placeholder packages.
+
 ### Generic wrapper pattern
 
 For non-Go rules, wire the same env/data contract in your own test macro:
