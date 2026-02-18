@@ -68,6 +68,17 @@ def _resolve_dd_api_base_test(ctx):
         "https://example.com",
         resolve_dd_api_base_for_tests("datadoghq.com", "https://example.com/"),
     )
+    # None/empty inputs should still resolve to the default site endpoint.
+    asserts.equals(
+        env,
+        "https://api.datadoghq.com",
+        resolve_dd_api_base_for_tests(None, None),
+    )
+    asserts.equals(
+        env,
+        "https://api.datadoghq.com",
+        resolve_dd_api_base_for_tests(None, ""),
+    )
     return unittest.end(env)
 
 def _module_label_map_collision_test(ctx):
@@ -185,6 +196,8 @@ def _dirname_test(ctx):
     asserts.equals(env, "foo/bar", dirname_for_tests("foo/bar/baz.txt"))
     asserts.equals(env, "foo", dirname_for_tests("/foo/bar"))
     asserts.equals(env, "foo", dirname_for_tests("./foo/bar"))
+    asserts.equals(env, "", dirname_for_tests("/"))
+    asserts.equals(env, "", dirname_for_tests(".."))
     asserts.equals(env, "", dirname_for_tests("foo"))
     asserts.equals(env, "", dirname_for_tests(""))
     return unittest.end(env)

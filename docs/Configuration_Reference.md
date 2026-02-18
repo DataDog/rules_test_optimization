@@ -165,3 +165,12 @@ The uploader rule reads these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | Limit payload discovery depth in large trees |
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | Explicit CODEOWNERS path for enrichment |
 | `TESTLOGS_DIR` | Explicit `bazel-testlogs` path for non-standard layouts |
+
+## Integration harness environment variables (maintainer workflows)
+
+These variables are used by repository integration harness scripts (not by the
+sync repository rule or uploader runtime paths above):
+
+| Variable | Purpose |
+|----------|---------|
+| `DD_TEST_OPTIMIZATION_GIT_BASH` | Optional absolute path override for Git Bash in `tools/tests/integration/run_mock_server_tests.ps1` when auto-discovery is not suitable |

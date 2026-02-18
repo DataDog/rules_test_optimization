@@ -101,6 +101,7 @@ def _build_module_labels_valid_test(ctx):
     """Validate module label expansion for valid input shapes."""
     env = unittest.begin(ctx)
     asserts.equals(env, [], build_module_labels_for_tests("repo_name", None))
+    asserts.equals(env, [], build_module_labels_for_tests("repo_name", []))
     asserts.equals(
         env,
         [
