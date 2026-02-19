@@ -33,12 +33,18 @@ def _extract_template(path: Path, variable_name: str) -> str:
     return text[start:end].lstrip("\n")
 
 
-def _normalize_template_for_lint(template: str) -> str:
+def _normalize_bash_template_for_lint(template: str) -> str:
     # Replace format placeholders and unescape doubled braces used in the .bzl
-    # template literals so shellcheck/PowerShell parser see render-equivalent syntax.
+    # template literals so shellcheck sees render-equivalent syntax.
     normalized = _PLACEHOLDER_RE.sub("0", template)
     normalized = normalized.replace("{{", "{").replace("}}", "}")
     return normalized
+
+
+def _normalize_powershell_template_for_lint(template: str) -> str:
+    # Keep variable interpolation valid for parser checks: `${{var}}` in template
+    # should normalize to `${var}`, not `$0`.
+    return template.replace("{{", "{").replace("}}", "}")
 
 
 def _run(cmd: list[str], cwd: Path) -> None:
@@ -70,11 +76,11 @@ def main() -> int:
     repo = _repo_root()
     bash_bzl = repo / "tools/core/uploader_bash_template.bzl"
     ps_bzl = repo / "tools/core/uploader_powershell_template.bzl"
-    bash_template = _normalize_template_for_lint(_extract_template(bash_bzl, "UPLOADER_BASH_TEMPLATE"))
+    bash_template = _normalize_bash_template_for_lint(_extract_template(bash_bzl, "UPLOADER_BASH_TEMPLATE"))
     # The Starlark source encodes escaped parenthesis as "\\(" and "\\)" so
     # shellcheck sees parse-equivalent output to the rendered script.
     bash_template = bash_template.replace("\\\\(", "\\(").replace("\\\\)", "\\)")
-    ps_template = _normalize_template_for_lint(_extract_template(ps_bzl, "UPLOADER_POWERSHELL_TEMPLATE"))
+    ps_template = _normalize_powershell_template_for_lint(_extract_template(ps_bzl, "UPLOADER_POWERSHELL_TEMPLATE"))
 
     with tempfile.TemporaryDirectory(prefix="uploader_template_lint.") as tmp:
         tmp_dir = Path(tmp)
