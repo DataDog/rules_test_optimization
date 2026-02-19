@@ -125,16 +125,33 @@ def _extract_bazel_dep_version(path: Path, dep_name: str) -> str:
         f'{path} is missing bazel_dep(name = "{dep_name}", ...)'
     )
 
+def _extract_starlark_string_constant(path: Path, constant_name: str) -> str:
+    text = _read_text(path)
+    m = re.search(
+        r"^\s*%s\s*=\s*\"([^\"]+)\"\s*$" % re.escape(constant_name),
+        text,
+        re.MULTILINE,
+    )
+    if m is None:
+        raise ValueError(f'{path} is missing {constant_name} = "..."')
+    return m.group(1)
+
+def _is_semver_like(version: str) -> bool:
+    return bool(re.match(r"^\d+\.\d+\.\d+$", version or ""))
+
 
 def main() -> int:
     try:
         repo_root = _repo_root()
         core_module = repo_root / "MODULE.bazel"
         go_module = repo_root / "modules" / "go" / "MODULE.bazel"
+        common_utils = repo_root / "tools" / "core" / "common_utils.bzl"
         if not core_module.exists():
             raise ValueError(f"core module file not found: {core_module}")
         if not go_module.exists():
             raise ValueError(f"go companion module file not found: {go_module}")
+        if not common_utils.exists():
+            raise ValueError(f"common utils file not found: {common_utils}")
 
         core_module_version = _extract_module_version(core_module)
         go_module_version = _extract_module_version(go_module)
@@ -142,6 +159,8 @@ def main() -> int:
             go_module,
             "datadog-rules-test-optimization",
         )
+        rules_version = _extract_starlark_string_constant(common_utils, "RULES_VERSION")
+        uploader_version = _extract_starlark_string_constant(common_utils, "UPLOADER_VERSION")
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -163,6 +182,18 @@ def main() -> int:
             "dependency version mismatch: "
             f'modules/go depends on core version "{go_core_dep_version}" but '
             f'root MODULE.bazel declares "{core_module_version}"'
+        )
+    if rules_version != core_module_version:
+        errors.append(
+            "rules version mismatch: "
+            f'tools/core/common_utils.bzl RULES_VERSION is "{rules_version}" but '
+            f'root MODULE.bazel declares "{core_module_version}"'
+        )
+    if not _is_semver_like(uploader_version):
+        errors.append(
+            "uploader version format mismatch: "
+            f'tools/core/common_utils.bzl UPLOADER_VERSION "{uploader_version}" '
+            "must be semantic version format X.Y.Z"
         )
     for example_module in example_modules:
         try:
@@ -198,7 +229,8 @@ def main() -> int:
     print(
         "Module versions are aligned: "
         f'core="{core_module_version}", go="{go_module_version}", '
-        f'go->core dep="{go_core_dep_version}"'
+        f'go->core dep="{go_core_dep_version}", '
+        f'rules="{rules_version}", uploader="{uploader_version}"'
     )
     return 0
 

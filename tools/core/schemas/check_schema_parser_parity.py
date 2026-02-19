@@ -18,12 +18,20 @@ def main() -> int:
         pyyaml_data = _load_yaml_with_pyyaml(yaml_path)
     except Exception as exc:
         print(f"error: PyYAML parser failed: {exc}", file=sys.stderr)
+        print(
+            "hint: install tooling deps with `python3 -m pip install -r tools/requirements.txt`",
+            file=sys.stderr,
+        )
         return 2
 
     try:
         ruby_data = _load_yaml_with_ruby(yaml_path)
     except Exception as exc:
         print(f"error: Ruby parser failed: {exc}", file=sys.stderr)
+        print(
+            "hint: ensure Ruby is installed and available in PATH for parser parity checks",
+            file=sys.stderr,
+        )
         return 2
 
     if pyyaml_data != ruby_data:

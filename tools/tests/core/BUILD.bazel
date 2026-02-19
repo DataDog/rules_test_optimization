@@ -36,8 +36,11 @@ load(
 )
 load(
     "//tools/tests/core:test_sync_utils.bzl",
+    "apply_dd_git_overrides_test",
     "decode_json_object_array_failure_test",
     "decode_json_object_array_target_rule",
+    "dd_site_invalid_failure_test",
+    "dd_site_invalid_target_rule",
     "decode_json_object_empty_failure_test",
     "decode_json_object_empty_target_rule",
     "decode_json_object_malformed_array_failure_test",
@@ -51,12 +54,15 @@ load(
     "clone_payload_with_nested_structure_test",
     "collect_env_ctx_wrapper_test",
     "collect_env_from_environ_provider_mapping_test",
+    "collect_env_from_environ_empty_test",
     "dd_site_normalization_test",
     "dirname_test",
     "example_stub_includes_manifest_in_files_test",
     "example_stub_export_string_escaping_test",
     "example_stub_service_keys_targets_test",
     "export_bzl_escaping_test",
+    "first_env_ctx_test",
+    "first_env_from_environ_test",
     "normalize_out_dir_or_fail_test",
     "normalize_out_dir_empty_failure_test",
     "normalize_out_dir_empty_target_rule",
@@ -73,15 +79,19 @@ load(
     "normalize_ref_edge_cases_test",
     "normalize_ref_test",
     "fnv1a_symbol_distinguishes_common_symbols_test",
+    "read_abs_file_command_control_chars_failure_test",
+    "read_abs_file_command_control_chars_target_rule",
     "read_abs_file_command_escaping_test",
     "parse_go_module_path_test",
     "partition_unix_headers_test",
     "partition_unix_headers_without_api_key_test",
+    "sanitize_repository_url_test",
     "record_sync_extension_repo_owner_duplicate_failure_test",
     "record_sync_extension_repo_owner_duplicate_target_rule",
     "record_sync_extension_repo_owner_success_test",
     "render_module_runfiles_bzl_respects_manifest_root_test",
     "resolve_dd_api_base_test",
+    "set_context_tag_from_env_test",
 )
 load(
     "//tools/tests/core:test_uploader_utils.bzl",
@@ -112,6 +122,16 @@ dd_site_normalization_test(
     name = "dd_site_normalization_test",
     size = "small",
     timeout = "short",
+)
+
+dd_site_invalid_target_rule(
+    name = "dd_site_invalid_target",
+    tags = ["manual"],
+)
+
+dd_site_invalid_failure_test(
+    name = "dd_site_invalid_failure_test",
+    target_under_test = ":dd_site_invalid_target",
 )
 
 # Validate DD_TEST_OPTIMIZATION_API_BASE override behavior.
@@ -145,8 +165,44 @@ normalize_ref_edge_cases_test(
     timeout = "short",
 )
 
+sanitize_repository_url_test(
+    name = "sanitize_repository_url_test",
+    size = "small",
+    timeout = "short",
+)
+
+first_env_from_environ_test(
+    name = "first_env_from_environ_test",
+    size = "small",
+    timeout = "short",
+)
+
+first_env_ctx_test(
+    name = "first_env_ctx_test",
+    size = "small",
+    timeout = "short",
+)
+
+apply_dd_git_overrides_test(
+    name = "apply_dd_git_overrides_test",
+    size = "small",
+    timeout = "short",
+)
+
+set_context_tag_from_env_test(
+    name = "set_context_tag_from_env_test",
+    size = "small",
+    timeout = "short",
+)
+
 collect_env_from_environ_provider_mapping_test(
     name = "collect_env_from_environ_provider_mapping_test",
+    size = "small",
+    timeout = "short",
+)
+
+collect_env_from_environ_empty_test(
+    name = "collect_env_from_environ_empty_test",
     size = "small",
     timeout = "short",
 )
@@ -161,6 +217,16 @@ read_abs_file_command_escaping_test(
     name = "read_abs_file_command_escaping_test",
     size = "small",
     timeout = "short",
+)
+
+read_abs_file_command_control_chars_target_rule(
+    name = "read_abs_file_command_control_chars_target",
+    tags = ["manual"],
+)
+
+read_abs_file_command_control_chars_failure_test(
+    name = "read_abs_file_command_control_chars_failure_test",
+    target_under_test = ":read_abs_file_command_control_chars_target",
 )
 
 parse_go_module_path_test(
@@ -639,14 +705,22 @@ test_suite(
     name = "tests",
     tests = [
         ":dd_site_normalization_test",
+        ":dd_site_invalid_failure_test",
         ":resolve_dd_api_base_test",
         ":module_label_map_collision_test",
         ":module_label_map_empty_inputs_test",
         ":normalize_ref_test",
         ":normalize_ref_edge_cases_test",
+        ":sanitize_repository_url_test",
+        ":first_env_from_environ_test",
+        ":first_env_ctx_test",
+        ":apply_dd_git_overrides_test",
+        ":set_context_tag_from_env_test",
         ":collect_env_from_environ_provider_mapping_test",
+        ":collect_env_from_environ_empty_test",
         ":collect_env_ctx_wrapper_test",
         ":read_abs_file_command_escaping_test",
+        ":read_abs_file_command_control_chars_failure_test",
         ":parse_go_module_path_test",
         ":dirname_test",
         ":normalize_out_dir_or_fail_test",

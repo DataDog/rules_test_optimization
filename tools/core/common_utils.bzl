@@ -36,6 +36,7 @@ SERVICE_NAME_MAX_LEN = 200
 RUNTIME_VALUE_WARN_LEN = 100
 RULES_VERSION = "1.0.0"
 UPLOADER_VERSION = "2.0.0"
+LABEL_FRAGMENT_ALLOWED_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
 
 def log_info(message):
     """Print user-facing progress messages."""
@@ -51,6 +52,10 @@ def log_debug(debug_enabled, category, message):
     """
     if debug_enabled:
         print("test_optimization[%s]: %s" % (category, message))
+
+def fail_with_prefix(prefix, message):
+    """Raise a failure with a standardized bracketed prefix."""
+    fail("[%s] %s" % (prefix, message))
 
 def is_dict(value):
     """Return True when value is a Starlark dict."""
@@ -85,13 +90,12 @@ def sanitize_label_fragment(name):
       Sanitized string safe for use in Bazel target names
     """
     s = (name or "").lower()
-    allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
     out = []
     last_us = False
     n_s = len(s)
     for i in range(n_s):
         ch = s[i]
-        if ch in allowed:
+        if ch in LABEL_FRAGMENT_ALLOWED_CHARS:
             out.append(ch)
             last_us = (ch == "_")
         elif not last_us:
@@ -127,7 +131,7 @@ def sanitize_label_fragment(name):
             seed = len(s)
             for i in range(len(s)):
                 ch = s[i]
-                idx = allowed.find(ch)
+                idx = LABEL_FRAGMENT_ALLOWED_CHARS.find(ch)
                 if idx < 0:
                     idx = 37
                 seed = ((seed * 33) + idx + i) % 10000

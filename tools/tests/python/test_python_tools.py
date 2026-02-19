@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -151,6 +152,37 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             ):
                 rc = self._run_main(str(schema_path), str(payload_path))
             self.assertEqual(2, rc)
+
+    def test_missing_input_paths_return_usage_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_schema = str(Path(tmp) / "missing-schema.json")
+            missing_payload = str(Path(tmp) / "missing-payload.json")
+            rc = self._run_main(missing_schema, missing_payload)
+            self.assertEqual(2, rc)
+
+    def test_unsupported_keywords_default_to_error(self) -> None:
+        schema = {"oneOf": [{"const": "ok"}]}
+        errors: list[str] = []
+        self.mod._validate("ok", schema, schema, "$", errors, 10)
+        self.assertEqual(1, len(errors))
+        self.assertIn("unsupported JSON Schema keyword 'oneOf'", errors[0])
+
+    def test_unsupported_keywords_warn_mode(self) -> None:
+        schema = {"oneOf": [{"const": "ok"}]}
+        errors: list[str] = []
+        stderr = io.StringIO()
+        with mock.patch.object(self.mod.sys, "stderr", stderr):
+            self.mod._validate(
+                "ok",
+                schema,
+                schema,
+                "$",
+                errors,
+                10,
+                unsupported_policy = "warn",
+            )
+        self.assertEqual([], errors)
+        self.assertIn("unsupported JSON Schema keyword 'oneOf'", stderr.getvalue())
 
     def test_internal_predicates_and_helpers(self) -> None:
         self.assertTrue(self.mod._is_number(3))
@@ -433,6 +465,29 @@ class CheckModuleVersionsTests(unittest.TestCase):
                     "datadog-rules-test-optimization",
                 ),
             )
+
+    def test_extract_starlark_string_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bzl_file = Path(tmp) / "common_utils.bzl"
+            bzl_file.write_text(
+                'RULES_VERSION = "1.2.3"\nUPLOADER_VERSION = "2.0.0"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                "1.2.3",
+                self.mod._extract_starlark_string_constant(bzl_file, "RULES_VERSION"),
+            )
+            self.assertEqual(
+                "2.0.0",
+                self.mod._extract_starlark_string_constant(bzl_file, "UPLOADER_VERSION"),
+            )
+
+    def test_extract_starlark_string_constant_missing_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bzl_file = Path(tmp) / "common_utils.bzl"
+            bzl_file.write_text("RULES_VERSION = 123\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                self.mod._extract_starlark_string_constant(bzl_file, "RULES_VERSION")
 
     def test_extract_module_version_missing_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

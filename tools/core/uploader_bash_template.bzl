@@ -28,6 +28,50 @@ trim_ascii_whitespace() {{
     printf '%s\n' "$value"
 }}
 
+normalize_dd_site_or_fail() {{
+    local raw="$1"
+    local site
+    site=$(trim_ascii_whitespace "$raw")
+    if [[ -z "$site" ]]; then
+        echo "datadoghq.com"
+        return 0
+    fi
+
+    # Keep compatibility with legacy DD_SITE input shapes.
+    if [[ "$site" == *"://"* ]]; then
+        site="${{site#*://}}"
+    fi
+    site="${{site%%/*}}"
+    site="${{site%%\\?*}}"
+    site="${{site%%#*}}"
+    if [[ "$site" == app.* ]]; then site="${{site#app.}}"; fi
+    if [[ "$site" == api.* ]]; then site="${{site#api.}}"; fi
+    site=$(echo "$site" | tr '[:upper:]' '[:lower:]')
+    site=$(trim_ascii_whitespace "$site")
+
+    if [[ -z "$site" ]]; then
+        log "error: DD_SITE resolved to an empty hostname (input: '$raw')"
+        return 1
+    fi
+    if [[ "$site" == *"@"* ]]; then
+        log "error: DD_SITE must not include credentials/userinfo: '$raw'"
+        return 1
+    fi
+    if [[ "$site" == *":"* ]]; then
+        log "error: DD_SITE must be a hostname without an explicit port: '$raw'"
+        return 1
+    fi
+    if [[ "$site" == .* || "$site" == *. || "$site" == *..* ]]; then
+        log "error: DD_SITE must be a valid hostname: '$raw'"
+        return 1
+    fi
+    if [[ ! "$site" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)*$ ]]; then
+        log "error: DD_SITE contains unsupported hostname characters: '$raw'"
+        return 1
+    fi
+    echo "$site"
+}}
+
 # Resolve runfile path for context.json lookup
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 resolve_runfile() {{
@@ -704,7 +748,9 @@ while true; do
 done
 
 # Build endpoints
-DD_SITE="${{DD_SITE:-datadoghq.com}}"
+if ! DD_SITE="$(normalize_dd_site_or_fail "${{DD_SITE:-datadoghq.com}}")"; then
+  exit 2
+fi
 INTAKE_BASE="${{DD_TEST_OPTIMIZATION_INTAKE_BASE:-}}"
 if [[ -z "${{DD_TRACE_AGENT_URL:-}}" ]]; then
   # Agentless mode: direct public intake URLs (or explicit override base).

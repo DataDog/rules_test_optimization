@@ -11,6 +11,8 @@ Key behavior toggles:
 - Commit message can trigger malformed test-management response.
 - EVP proxy paths enforce EVP-specific headers and forbid DD-API-KEY usage.
 - Request headers can force delay/rate-limit/status overrides for retry tests.
+- Request body limit defaults to 10 MiB and is configurable via
+  `MOCK_DD_MAX_BODY_SIZE_BYTES` or `--max-body-size-bytes`.
 """
 
 import argparse
@@ -28,7 +30,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 
-MAX_BODY_SIZE = 10 * 1024 * 1024
+DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024
 
 
 def _read_json(path: str) -> Any:
@@ -60,9 +62,10 @@ COVERAGE_ALWAYS_FAIL_MARKER = "always_fail"
 
 class _ServerState:
     """Shared server state: fixtures and a thread-safe request log."""
-    def __init__(self, fixtures: Dict[str, Any], log_path: str) -> None:
+    def __init__(self, fixtures: Dict[str, Any], log_path: str, max_body_size: int) -> None:
         self.fixtures = fixtures
         self.log_path = log_path
+        self.max_body_size = max_body_size
         self.log_lock = threading.Lock()
         self.retry_lock = threading.Lock()
         self.retry_counters: Dict[str, int] = {}
@@ -189,8 +192,8 @@ class _Handler(BaseHTTPRequestHandler):
             return b"", "Content-Length must be >= 0"
         if length == 0:
             return b"", None
-        if length > MAX_BODY_SIZE:
-            return b"", "Content-Length exceeds mock server body limit"
+        if length > self.server.state.max_body_size:
+            return b"", "Content-Length exceeds mock server body limit (%d bytes)" % self.server.state.max_body_size
         return self.rfile.read(length), None
 
     def _log_and_validate(self, path, body):
@@ -586,12 +589,37 @@ def _load_fixture_or_exit(fixtures_dir: str, filename: str) -> Any:
 
 def main() -> int:
     """Start server, print bound port for harness discovery, and serve forever."""
+    max_body_size_raw = os.environ.get("MOCK_DD_MAX_BODY_SIZE_BYTES", str(DEFAULT_MAX_BODY_SIZE))
+    try:
+        max_body_size_default = int(max_body_size_raw)
+    except ValueError:
+        print(
+            "error: MOCK_DD_MAX_BODY_SIZE_BYTES must be an integer, got %r" % max_body_size_raw,
+            file = sys.stderr,
+        )
+        return 2
+    if max_body_size_default <= 0:
+        print("error: MOCK_DD_MAX_BODY_SIZE_BYTES must be > 0", file = sys.stderr)
+        return 2
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--fixtures", required=True)
     parser.add_argument("--log", required=True)
+    parser.add_argument(
+        "--max-body-size-bytes",
+        type=int,
+        default=max_body_size_default,
+        help=(
+            "Maximum accepted request body size in bytes "
+            "(default: 10 MiB; override with MOCK_DD_MAX_BODY_SIZE_BYTES)"
+        ),
+    )
     args = parser.parse_args()
+    if args.max_body_size_bytes <= 0:
+        print("error: --max-body-size-bytes must be > 0", file = sys.stderr)
+        return 2
 
     fixtures = {
         "settings": _load_fixture_or_exit(args.fixtures, "settings.json"),
@@ -599,7 +627,7 @@ def main() -> int:
         "test_management": _load_fixture_or_exit(args.fixtures, "test_management.json"),
     }
 
-    state = _ServerState(fixtures, args.log)
+    state = _ServerState(fixtures, args.log, args.max_body_size_bytes)
 
     server = _ReusableHTTPServer((args.host, args.port), _Handler)
     server.state = state

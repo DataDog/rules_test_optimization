@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHON_VERSION: "3.11"
+  BUILDIFIER_VERSION: "8.2.1"
+  BUILDIFIER_SHA256_LINUX_AMD64: "6ceb7b0ab7cf66fceccc56a027d21d9cc557a7f34af37d2101edb56b92fcfa1a"
+
 concurrency:
   # Keep one active run per workflow/ref to avoid wasting CI minutes when
   # multiple commits are pushed quickly to the same branch.
@@ -28,15 +33,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       # Fresh-run policy: keep this lane intentionally cacheless so every CI run
       # re-evaluates repository rules from scratch.
       # Guardrail: do not add Bazel cache steps (actions/cache, disk cache,
       # remote cache) here without explicit maintainer approval.
       - name: Run Bazel tests
+        timeout-minutes: 25
         shell: bash
         run: ./bazelw test //tools/...
 
       - name: Run Bazel tests (go companion module)
+        timeout-minutes: 25
         shell: bash
         run: |
           cd modules/go &&
@@ -44,10 +56,12 @@ jobs:
           --override_module=datadog-rules-test-optimization=../..
 
       - name: Build examples
+        timeout-minutes: 10
         shell: bash
         run: ./bazelw build //examples/...
 
       - name: Test examples
+        timeout-minutes: 10
         shell: bash
         run: ./bazelw test //examples/...
 
@@ -66,12 +80,25 @@ jobs:
       # Exercises the uploader end-to-end against a local mock server.
       - name: Run mock server integration tests (Linux/macOS)
         if: runner.os != 'Windows'
+        timeout-minutes: 15
         shell: bash
         run: ./tools/tests/integration/run_mock_server_tests.sh
+
+      - name: Ensure jq is available (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Get-Command jq -ErrorAction SilentlyContinue) {
+            jq --version
+            exit 0
+          }
+          choco install jq --no-progress -y
+          jq --version
 
       # Runs the same integration harness on Windows.
       - name: Run mock server integration tests (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 15
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
@@ -129,6 +156,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - name: Install Python tooling dependencies
         shell: bash
         run: python3 -m pip install -r tools/requirements.txt
@@ -161,6 +193,7 @@ jobs:
               repo_root / "tools/core/validate_payload_schema.py",
               repo_root / "tools/core/schemas/sync_agentless_schema.py",
               repo_root / "tools/dev/check_module_versions.py",
+              repo_root / "tools/dev/lint_uploader_templates.py",
           ]
 
           tracer = trace.Trace(count=True, trace=False)
@@ -230,6 +263,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Buildifier change detection relies on before/after commit ranges.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install ShellCheck
         shell: bash
@@ -240,6 +281,8 @@ jobs:
       - name: Lint repository shell scripts
         shell: bash
         run: |
+          # Keep CI signal focused on correctness-impacting shell issues.
+          # Warnings are tracked separately to avoid noisy cross-platform drift.
           shellcheck --severity=error \
             bazelw \
             examples/single_service/runtests.sh \
@@ -251,17 +294,36 @@ jobs:
       - name: Install Buildifier
         shell: bash
         run: |
-          curl -sSL -o /tmp/buildifier https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-linux-amd64
+          curl -sSL -o /tmp/buildifier "https://github.com/bazelbuild/buildtools/releases/download/v${BUILDIFIER_VERSION}/buildifier-linux-amd64"
+          echo "${BUILDIFIER_SHA256_LINUX_AMD64}  /tmp/buildifier" | sha256sum -c -
           chmod +x /tmp/buildifier
           sudo mv /tmp/buildifier /usr/local/bin/buildifier
 
       - name: Check Starlark formatting with Buildifier
         shell: bash
         run: |
-          base_ref="${GITHUB_BASE_REF:-main}"
-          git fetch --no-tags --depth=1 origin "${base_ref}"
+          diff_range=""
+          if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
+            base_ref="${GITHUB_BASE_REF:-main}"
+            git fetch --no-tags --depth=1 origin "${base_ref}"
+            diff_range="origin/${base_ref}...HEAD"
+          elif [[ "${GITHUB_EVENT_NAME:-}" == "push" ]]; then
+            before_sha="${{ github.event.before }}"
+            current_sha="${GITHUB_SHA:-HEAD}"
+            if [[ -n "$before_sha" && "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
+              diff_range="${before_sha}..${current_sha}"
+            elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              diff_range="HEAD~1..${current_sha}"
+            else
+              diff_range="$(git hash-object -t tree /dev/null)..${current_sha}"
+            fi
+          else
+            base_ref="${GITHUB_BASE_REF:-main}"
+            git fetch --no-tags --depth=1 origin "${base_ref}"
+            diff_range="origin/${base_ref}..HEAD"
+          fi
           mapfile -t starlark_files < <(
-            git diff --name-only --diff-filter=ACMR "origin/${base_ref}..HEAD" -- \
+            git diff --name-only --diff-filter=ACMR "${diff_range}" -- \
               '*.bzl' 'BUILD' 'BUILD.bazel' 'WORKSPACE' 'MODULE.bazel'
           )
           if (( ${#starlark_files[@]} == 0 )); then
@@ -307,6 +369,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - name: Install Python tooling dependencies
         shell: bash
         run: python3 -m pip install -r tools/requirements.txt
@@ -344,6 +411,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - name: Install PSScriptAnalyzer
         shell: pwsh
         run: |
@@ -379,6 +451,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Run Bazel tests (hermetic lane)
+        timeout-minutes: 25
         shell: bash
         run: |
           ./bazelw test //tools/... \
@@ -393,6 +466,7 @@ jobs:
           --enable_runfiles
 
       - name: Run Bazel tests (go companion hermetic lane)
+        timeout-minutes: 25
         shell: bash
         run: |
           cd modules/go &&

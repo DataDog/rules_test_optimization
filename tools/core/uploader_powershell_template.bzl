@@ -220,6 +220,48 @@ function Dbg-Headers([string]$label, $headers) {{
     }}
 }}
 
+function Normalize-DdSiteOrFail {{
+    param([string]$RawSite)
+
+    $site = if ([string]::IsNullOrWhiteSpace($RawSite)) {{ "datadoghq.com" }} else {{ $RawSite.Trim() }}
+    if ($site.Contains("://")) {{
+        $site = $site.Split("://", 2)[1]
+    }}
+    if ($site.Contains("/")) {{
+        $site = $site.Split("/", 2)[0]
+    }}
+    if ($site.Contains("?")) {{
+        $site = $site.Split("?", 2)[0]
+    }}
+    if ($site.Contains("#")) {{
+        $site = $site.Split("#", 2)[0]
+    }}
+    if ($site.StartsWith("app.", [System.StringComparison]::OrdinalIgnoreCase)) {{
+        $site = $site.Substring(4)
+    }}
+    if ($site.StartsWith("api.", [System.StringComparison]::OrdinalIgnoreCase)) {{
+        $site = $site.Substring(4)
+    }}
+    $site = $site.Trim().ToLowerInvariant()
+
+    if ([string]::IsNullOrEmpty($site)) {{
+        throw "DD_SITE resolved to an empty hostname (input: '$RawSite')"
+    }}
+    if ($site.Contains("@")) {{
+        throw "DD_SITE must not include credentials/userinfo (input: '$RawSite')"
+    }}
+    if ($site.Contains(":")) {{
+        throw "DD_SITE must be a hostname without an explicit port (input: '$RawSite')"
+    }}
+    if ($site.StartsWith(".") -or $site.EndsWith(".") -or $site.Contains("..")) {{
+        throw "DD_SITE must be a valid hostname (input: '$RawSite')"
+    }}
+    if ($site -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)*$') {{
+        throw "DD_SITE contains unsupported hostname characters (input: '$RawSite')"
+    }}
+    return $site
+}}
+
 # Emit basic startTime statistics (ms) for debugging.
 function Get-StartTimes($obj, [ref]$acc) {{
     if ($null -eq $obj) {{ return }}
@@ -647,7 +689,13 @@ while ($true) {{
 
 # Build endpoints
 $Agentless = [string]::IsNullOrEmpty($env:DD_TRACE_AGENT_URL)
-$DD_Site = if ([string]::IsNullOrEmpty($env:DD_SITE)) {{ 'datadoghq.com' }} else {{ $env:DD_SITE }}
+try {{
+  $DD_Site = Normalize-DdSiteOrFail $env:DD_SITE
+}} catch {{
+  Log "error: $($_.Exception.Message)"
+  Release-Lock
+  exit 2
+}}
 # Allow tests/dev to override intake base without changing DD_SITE.
 $IntakeBase = $env:DD_TEST_OPTIMIZATION_INTAKE_BASE
 if ($Agentless) {{

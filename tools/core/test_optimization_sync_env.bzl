@@ -4,6 +4,8 @@ This file exists to keep `test_optimization_sync.bzl` focused on orchestration
 and payload generation logic.
 """
 
+_MAX_REF_STRIP_ITERATIONS = 8
+
 def first_env(ctx, keys):
     """Return the first non-empty environment value among candidate keys."""
     for k in keys:
@@ -48,7 +50,9 @@ def normalize_ref(name):
     """Normalize branch/tag refs by removing common prefix forms."""
     if not name:
         return name
-    for _ in range(8):
+
+    # Keep a bounded loop so malformed cyclical prefixes cannot spin forever.
+    for _ in range(_MAX_REF_STRIP_ITERATIONS):
         if name.startswith("refs/remotes/origin/"):
             name = name[len("refs/remotes/origin/"):]
             continue
@@ -199,6 +203,15 @@ def collect_env_from_environ(environ, attr_service = None):
     elif environ.get("CF_BUILD_ID"):
         provider = "codefresh"
         env_data["branch"] = environ.get("CF_BRANCH") or ""
+        env_data["sha"] = environ.get("CF_REVISION") or ""
+        cf_repo_url = environ.get("CF_REPO_URL") or ""
+        if cf_repo_url:
+            env_data["repository_url"] = cf_repo_url
+        else:
+            owner = environ.get("CF_REPO_OWNER") or ""
+            repo = environ.get("CF_REPO_NAME") or ""
+            if owner and repo:
+                env_data["repository_url"] = "https://github.com/%s/%s.git" % (owner, repo)
     elif environ.get("CODEBUILD_INITIATOR"):
         provider = "awscodebuild"
         env_data["repository_url"] = environ.get("CODEBUILD_SOURCE_REPO_URL") or ""

@@ -52,29 +52,63 @@ fi
 source "$REPO_ROOT/tools/tests/integration/run_mock_server_tests_lib.sh"
 trap cleanup EXIT INT TERM HUP
 
+# Reserve an ephemeral localhost port up front, then start the mock server on it.
+# This avoids relying on startup stdout parsing for port discovery.
+PORT="$("$PYTHON" - <<'PY'
+import socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+)"
+if [[ -z "$PORT" ]]; then
+  echo "error: failed to reserve a local port for mock server startup"
+  exit 1
+fi
+
 # Start a mock Datadog API server with fixture responses and request logging.
 "$PYTHON" -u "$REPO_ROOT/tools/tests/integration/mock_dd_server.py" \
   --fixtures "$REPO_ROOT/tools/tests/integration/fixtures" \
   --log "$LOG_FILE" \
-  --port 0 >"$SERVER_OUT" 2>&1 &
+  --port "$PORT" >"$SERVER_OUT" 2>&1 &
 SERVER_PID=$!
 SERVER_PID_FILE="$TMP_WS/mock_server.pid"
 printf '%s\n' "$SERVER_PID" >"$SERVER_PID_FILE"
 
-# Wait for the server to bind to a random port and emit it.
-PORT=""
+# Wait for the server to bind and accept localhost connections.
 # Keep this tunable because slower CI workers can need extra startup time.
 START_TIMEOUT_SECONDS="${MOCK_SERVER_START_TIMEOUT_SECONDS:-30}"
 POLL_INTERVAL_SECONDS="${MOCK_SERVER_POLL_INTERVAL_SECONDS:-0.1}"
 START_TS="$(date +%s)"
+mock_server_listening() {
+  if command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1
+    return $?
+  fi
+  "$PYTHON" - "$PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(0.2)
+try:
+    sock.connect(("127.0.0.1", port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
 while true; do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "error: mock server process died before binding"
     cat "$SERVER_OUT" || true
     exit 1
   fi
-  PORT="$(awk -F= '/^PORT=/{print $2; exit}' "$SERVER_OUT" 2>/dev/null || true)"
-  if [[ -n "$PORT" ]]; then
+  if mock_server_listening; then
     break
   fi
   if (( "$(date +%s)" - START_TS >= START_TIMEOUT_SECONDS )); then
@@ -83,8 +117,9 @@ while true; do
   sleep "$POLL_INTERVAL_SECONDS"
 done
 
-if [[ -z "$PORT" ]]; then
-  echo "error: mock server did not start"
+if ! mock_server_listening; then
+  echo "error: mock server did not start on port $PORT"
+  ps -p "$SERVER_PID" -o pid=,ppid=,stat=,comm=,args= 2>/dev/null || true
   cat "$SERVER_OUT" || true
   exit 1
 fi
@@ -418,6 +453,39 @@ unset DD_TRACE_AGENT_URL
 
 # Use Bazel's testlogs location to find payloads for the uploader.
 TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
+
+# Scenario: max_wait_sec=0 should skip waiting when no payloads are present.
+EMPTY_TESTLOGS_DIR="$TMP_WS/empty_testlogs_nowait"
+mkdir -p "$EMPTY_TESTLOGS_DIR"
+UPLOADER_NOWAIT_LOG="$TMP_WS/uploader_nowait.log"
+NOWAIT_START_EPOCH="$(date +%s)"
+if ! TESTLOGS_DIR="$EMPTY_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_NOWAIT_LOG" 2>&1; then
+  echo "error: uploader max_wait_sec=0 scenario failed"
+  cat "$UPLOADER_NOWAIT_LOG" || true
+  exit 1
+fi
+NOWAIT_ELAPSED_SEC="$(( $(date +%s) - NOWAIT_START_EPOCH ))"
+if (( NOWAIT_ELAPSED_SEC > 12 )); then
+  echo "error: max_wait_sec=0 scenario exceeded expected duration ($NOWAIT_ELAPSED_SEC s)"
+  cat "$UPLOADER_NOWAIT_LOG" || true
+  exit 1
+fi
+if ! grep -q "no payload files found and no test execution detected; nothing to upload" "$UPLOADER_NOWAIT_LOG"; then
+  echo "error: max_wait_sec=0 scenario missing expected no-payload message"
+  cat "$UPLOADER_NOWAIT_LOG" || true
+  exit 1
+fi
 
 BASE_UPLOAD_LOG_START="$(log_line_count)"
 UPLOADER_LOG="$TMP_WS/uploader.log"

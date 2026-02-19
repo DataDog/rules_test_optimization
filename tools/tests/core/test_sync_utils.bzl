@@ -3,6 +3,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_sync.bzl",
+    "apply_dd_git_overrides_for_tests",
     "build_module_label_map_for_tests",
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
@@ -12,6 +13,8 @@ load(
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
+    "first_env_for_tests",
+    "first_env_from_environ_for_tests",
     "fnv1a_32_for_tests",
     "http_execute_timeout_buffer_seconds_for_tests",
     "http_execute_timeout_seconds_for_tests",
@@ -26,12 +29,20 @@ load(
     "render_export_bzl_for_tests",
     "render_module_runfiles_bzl_for_tests",
     "resolve_dd_api_base_for_tests",
+    "sanitize_repository_url_for_tests",
+    "set_context_tag_from_env_for_tests",
 )
 load(
     "//tools/tests:example_stub_repo.bzl",
     "bzl_string_literal_for_tests",
     "render_stub_build_for_tests",
 )
+
+def _contains_stripped_line(lines, expected):
+    for line in lines:
+        if line.strip() == expected:
+            return True
+    return False
 
 def _dd_site_normalization_test(ctx):
     """Validate DD_SITE normalization into canonical API base URL."""
@@ -139,6 +150,94 @@ def _normalize_ref_edge_cases_test(ctx):
     asserts.equals(env, "release/v2", normalize_ref_for_tests("refs/tags/release/v2"))
     asserts.equals(env, "release/v3", normalize_ref_for_tests("origin/refs/tags/release/v3"))
     asserts.equals(env, "hotfix", normalize_ref_for_tests("refs/remotes/origin/hotfix"))
+    return unittest.end(env)
+
+def _sanitize_repository_url_test(ctx):
+    """Validate repository URL userinfo stripping behavior."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "https://github.com/org/repo.git",
+        sanitize_repository_url_for_tests("https://token@github.com/org/repo.git"),
+    )
+    asserts.equals(
+        env,
+        "https://host/repo.git",
+        sanitize_repository_url_for_tests("https://user@domain:pass@host/repo.git"),
+    )
+    asserts.equals(
+        env,
+        "https://host/repo.git",
+        sanitize_repository_url_for_tests("https://user:pa@ss@host/repo.git"),
+    )
+    asserts.equals(
+        env,
+        "git@github.com:org/repo.git",
+        sanitize_repository_url_for_tests("git@github.com:org/repo.git"),
+    )
+    asserts.equals(env, "", sanitize_repository_url_for_tests(""))
+    return unittest.end(env)
+
+def _first_env_from_environ_test(ctx):
+    """Validate dict-based first-non-empty environment lookup."""
+    env = unittest.begin(ctx)
+    vals = {
+        "FIRST": "",
+        "SECOND": "chosen",
+        "THIRD": "backup",
+    }
+    asserts.equals(env, "chosen", first_env_from_environ_for_tests(vals, ["FIRST", "SECOND", "THIRD"]))
+    asserts.equals(env, "", first_env_from_environ_for_tests(vals, ["MISSING_A", "MISSING_B"]))
+    return unittest.end(env)
+
+def _first_env_ctx_test(ctx):
+    """Validate ctx-based first-non-empty environment lookup."""
+    env = unittest.begin(ctx)
+    fake_ctx = struct(os = struct(environ = {
+        "A": "",
+        "B": "value-b",
+    }))
+    asserts.equals(env, "value-b", first_env_for_tests(fake_ctx, ["A", "B"]))
+    asserts.equals(env, "", first_env_for_tests(fake_ctx, ["X", "Y"]))
+    return unittest.end(env)
+
+def _apply_dd_git_overrides_test(ctx):
+    """Validate DD_GIT_* override precedence + normalization behavior."""
+    env = unittest.begin(ctx)
+    data = {
+        "repository_url": "https://github.com/original/repo.git",
+        "branch": "refs/heads/main",
+        "sha": "original-sha",
+        "head_sha": "",
+        "commit_message": "",
+        "head_message": "",
+    }
+    apply_dd_git_overrides_for_tests(data, {
+        "DD_GIT_REPOSITORY_URL": "https://token@github.com/override/repo.git",
+        "DD_GIT_BRANCH": "refs/remotes/origin/release",
+        "DD_GIT_COMMIT_SHA": "override-sha",
+        "DD_GIT_HEAD_COMMIT": "override-head",
+        "DD_GIT_COMMIT_MESSAGE": "override-message",
+        "DD_GIT_HEAD_MESSAGE": "override-head-message",
+    })
+    asserts.equals(env, "https://github.com/override/repo.git", data.get("repository_url"))
+    asserts.equals(env, "release", data.get("branch"))
+    asserts.equals(env, "override-sha", data.get("sha"))
+    asserts.equals(env, "override-head", data.get("head_sha"))
+    asserts.equals(env, "override-message", data.get("commit_message"))
+    asserts.equals(env, "override-head-message", data.get("head_message"))
+    return unittest.end(env)
+
+def _set_context_tag_from_env_test(ctx):
+    """Validate optional context tag extraction from environment."""
+    env = unittest.begin(ctx)
+    tags = {}
+    set_context_tag_from_env_for_tests({"FOO": "bar"}, tags, "FOO", "foo.tag")
+    set_context_tag_from_env_for_tests({"EMPTY": ""}, tags, "EMPTY", "empty.tag")
+    set_context_tag_from_env_for_tests({}, tags, "MISSING", "missing.tag")
+    asserts.equals(env, "bar", tags.get("foo.tag"))
+    asserts.equals(env, None, tags.get("empty.tag"))
+    asserts.equals(env, None, tags.get("missing.tag"))
     return unittest.end(env)
 
 def _collect_env_from_environ_provider_mapping_test(ctx):
@@ -320,9 +419,14 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "DD_SITE": "datadoghq.com",
         "CF_BUILD_ID": "build-1",
         "CF_BRANCH": "refs/heads/cf-main",
+        "CF_REVISION": "cf-rev-1234",
+        "CF_REPO_OWNER": "cf-org",
+        "CF_REPO_NAME": "cf-repo",
     }, None)
     asserts.equals(env, "codefresh", codefresh.get("ci_provider_name"))
     asserts.equals(env, "cf-main", codefresh.get("branch"))
+    asserts.equals(env, "cf-rev-1234", codefresh.get("sha"))
+    asserts.equals(env, "https://github.com/cf-org/cf-repo.git", codefresh.get("repository_url"))
 
     codebuild = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -350,6 +454,18 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
     asserts.equals(env, "beefbeef", drone.get("sha"))
     return unittest.end(env)
 
+def _collect_env_from_environ_empty_test(ctx):
+    """Validate empty/minimal env mapping returns stable defaults."""
+    env = unittest.begin(ctx)
+    empty = collect_env_from_environ_for_tests({}, None)
+    asserts.equals(env, "", empty.get("ci_provider_name"))
+    asserts.equals(env, "", empty.get("repository_url"))
+    asserts.equals(env, "", empty.get("branch"))
+    asserts.equals(env, "", empty.get("sha"))
+    asserts.equals(env, "unnamed-service", empty.get("service"))
+    asserts.equals(env, "CI", empty.get("environment"))
+    return unittest.end(env)
+
 def _collect_env_ctx_wrapper_test(ctx):
     """Validate repository-context wrapper delegates to environ collector."""
     env = unittest.begin(ctx)
@@ -373,8 +489,7 @@ def _read_abs_file_command_escaping_test(ctx):
     env = unittest.begin(ctx)
     unix_cmd = build_unix_read_abs_file_command_for_tests("/tmp/it's/test.txt")
     asserts.true(env, "'\\''" in unix_cmd)
-    asserts.true(env, unix_cmd.startswith("[ -f '"))
-    asserts.true(env, "&& cat '" in unix_cmd)
+    asserts.true(env, unix_cmd.startswith("cat '"))
 
     ps_cmd = build_windows_read_abs_file_command_for_tests("C:\\tmp\\it's\\file.txt")
     asserts.true(env, "''" in ps_cmd)
@@ -455,8 +570,17 @@ def _export_bzl_escaping_test(ctx):
     return unittest.end(env)
 
 def _fnv1a_symbol_distinguishes_common_symbols_test(ctx):
-    """Validate common symbols do not collapse to digit-zero hash path."""
+    """Validate FNV-1a determinism and common-symbol distinction."""
     env = unittest.begin(ctx)
+
+    # Known vector for stable regression protection.
+    asserts.equals(env, 0xc1a2b2aa, fnv1a_32_for_tests("abc"))
+
+    # Determinism: repeated input must yield identical output.
+    first = fnv1a_32_for_tests("abc0def")
+    second = fnv1a_32_for_tests("abc0def")
+    asserts.equals(env, first, second)
+
     base = fnv1a_32_for_tests("abc0def")
     asserts.true(env, fnv1a_32_for_tests("abc=def") != base)
     asserts.true(env, fnv1a_32_for_tests("abc@def") != base)
@@ -552,6 +676,7 @@ def _example_stub_includes_manifest_in_files_test(ctx):
     asserts.true(env, filegroup_start >= 0)
     asserts.true(env, context_group_start > filegroup_start)
     filegroup_block = content[filegroup_start:context_group_start]
+    asserts.true(env, "srcs = [" in filegroup_block)
     asserts.true(env, settings in filegroup_block)
     asserts.true(env, manifest in filegroup_block)
     asserts.true(env, known_tests in filegroup_block)
@@ -674,6 +799,16 @@ def _decode_json_object_empty_target_impl(_ctx):
     decode_json_object_or_fail_for_tests("", "settings.json")
     return []
 
+def _dd_site_invalid_target_impl(_ctx):
+    """Target expected to fail on invalid DD_SITE hostname input."""
+    compute_dd_api_base_for_tests("invalid site value")
+    return []
+
+def _read_abs_file_command_control_chars_target_impl(_ctx):
+    """Target expected to fail when absolute path contains control characters."""
+    build_unix_read_abs_file_command_for_tests("/tmp/bad\nfile.txt")
+    return []
+
 def _normalize_out_dir_empty_target_impl(_ctx):
     """Target expected to fail when out_dir is empty/whitespace."""
     normalize_out_dir_or_fail_for_tests("   ")
@@ -724,6 +859,12 @@ def _record_sync_extension_repo_owner_duplicate_target_impl(_ctx):
 decode_json_object_empty_target_rule = rule(
     implementation = _decode_json_object_empty_target_impl,
 )
+dd_site_invalid_target_rule = rule(
+    implementation = _dd_site_invalid_target_impl,
+)
+read_abs_file_command_control_chars_target_rule = rule(
+    implementation = _read_abs_file_command_control_chars_target_impl,
+)
 normalize_out_dir_empty_target_rule = rule(
     implementation = _normalize_out_dir_empty_target_impl,
 )
@@ -756,6 +897,19 @@ def _decode_json_object_empty_failure_test_impl(ctx):
     """Assert empty-response failure message remains actionable."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "settings.json response is empty; expected JSON object")
+    return analysistest.end(env)
+
+def _dd_site_invalid_failure_test_impl(ctx):
+    """Assert DD_SITE validation rejects malformed hostnames."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "DD_SITE")
+    asserts.expect_failure(env, "hostname")
+    return analysistest.end(env)
+
+def _read_abs_file_command_control_chars_failure_test_impl(ctx):
+    """Assert command builder rejects control characters in absolute paths."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "absolute path contains unsupported control characters")
     return analysistest.end(env)
 
 def _normalize_out_dir_empty_failure_test_impl(ctx):
@@ -820,7 +974,13 @@ module_label_map_collision_test = unittest.make(_module_label_map_collision_test
 module_label_map_empty_inputs_test = unittest.make(_module_label_map_empty_inputs_test)
 normalize_ref_test = unittest.make(_normalize_ref_test)
 normalize_ref_edge_cases_test = unittest.make(_normalize_ref_edge_cases_test)
+sanitize_repository_url_test = unittest.make(_sanitize_repository_url_test)
+first_env_from_environ_test = unittest.make(_first_env_from_environ_test)
+first_env_ctx_test = unittest.make(_first_env_ctx_test)
+apply_dd_git_overrides_test = unittest.make(_apply_dd_git_overrides_test)
+set_context_tag_from_env_test = unittest.make(_set_context_tag_from_env_test)
 collect_env_from_environ_provider_mapping_test = unittest.make(_collect_env_from_environ_provider_mapping_test)
+collect_env_from_environ_empty_test = unittest.make(_collect_env_from_environ_empty_test)
 collect_env_ctx_wrapper_test = unittest.make(_collect_env_ctx_wrapper_test)
 read_abs_file_command_escaping_test = unittest.make(_read_abs_file_command_escaping_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
@@ -842,6 +1002,14 @@ record_sync_extension_repo_owner_success_test = unittest.make(_record_sync_exten
 decode_json_object_valid_test = unittest.make(_decode_json_object_valid_test)
 decode_json_object_empty_failure_test = analysistest.make(
     _decode_json_object_empty_failure_test_impl,
+    expect_failure = True,
+)
+dd_site_invalid_failure_test = analysistest.make(
+    _dd_site_invalid_failure_test_impl,
+    expect_failure = True,
+)
+read_abs_file_command_control_chars_failure_test = analysistest.make(
+    _read_abs_file_command_control_chars_failure_test_impl,
     expect_failure = True,
 )
 normalize_out_dir_empty_failure_test = analysistest.make(

@@ -1,5 +1,7 @@
 load(
     ":test_macro.bzl",
+    "go_macro_env_none_target",
+    "go_macro_env_none_wiring_test",
     "go_macro_multi_service_target",
     "go_macro_multi_service_wiring_test",
     "go_macro_rundir_mismatch_target",
@@ -201,6 +203,16 @@ go_macro_rundir_mismatch_wiring_test(
     target_under_test = ":go_macro_rundir_mismatch_target",
 )
 
+go_macro_env_none_target(
+    name = "go_macro_env_none_target",
+    tags = ["manual"],
+)
+
+go_macro_env_none_wiring_test(
+    name = "go_macro_env_none_wiring_test",
+    target_under_test = ":go_macro_env_none_target",
+)
+
 build_module_labels_invalid_shape_target_rule(
     name = "build_module_labels_invalid_shape_target",
     tags = ["manual"],
@@ -274,6 +286,7 @@ test_suite(
         ":go_macro_single_service_wiring_test",
         ":go_macro_multi_service_wiring_test",
         ":go_macro_rundir_mismatch_wiring_test",
+        ":go_macro_env_none_wiring_test",
         ":build_module_labels_invalid_shape_failure_test",
         ":build_module_labels_invalid_entry_failure_test",
         ":build_module_labels_empty_entry_failure_test",

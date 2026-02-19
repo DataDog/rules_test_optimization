@@ -2,18 +2,15 @@ name: Release
 
 on:
   workflow_dispatch:
-    inputs:
-      run_full_validation:
-        description: "Run full release validation suite"
-        required: true
-        default: true
-        type: boolean
   push:
     tags:
       - "v*"
 
 permissions:
   contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -26,6 +23,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install Python tooling dependencies
         shell: bash
@@ -40,12 +42,10 @@ jobs:
         run: python3 tools/core/schemas/sync_agentless_schema.py --check
 
       - name: Run core Bazel tests
-        if: ${{ github.event_name == 'push' || inputs.run_full_validation }}
         shell: bash
         run: ./bazelw test //tools/...
 
       - name: Run companion Bazel tests
-        if: ${{ github.event_name == 'push' || inputs.run_full_validation }}
         shell: bash
         run: |
           cd modules/go &&
@@ -53,11 +53,15 @@ jobs:
           --override_module=datadog-rules-test-optimization=../..
 
       - name: Build and test examples
-        if: ${{ github.event_name == 'push' || inputs.run_full_validation }}
         shell: bash
         run: |
           ./bazelw build //examples/...
           ./bazelw test //examples/...
+
+      - name: Run mock server integration tests
+        timeout-minutes: 20
+        shell: bash
+        run: ./tools/tests/integration/run_mock_server_tests.sh
 
       - name: Release checklist reminder
         shell: bash
