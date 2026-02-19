@@ -43,7 +43,7 @@ def log_info(message):
 
 def log_debug(debug_enabled, category, message):
     """Print debug messages when debug is enabled.
-    
+
     Args:
       debug_enabled: Boolean flag to enable/disable debug output
       category: String category for the log (e.g., "http", "ci", "validation")
@@ -70,17 +70,17 @@ def is_string(value):
 
 def sanitize_label_fragment(name):
     """Produce a safe Bazel target name fragment from an arbitrary string.
-    
+
     Rules:
     - Lowercase
     - Allowed characters: [a-z0-9_]
     - All other characters become '_'
     - Collapse multiple consecutive underscores
     - Strip leading/trailing underscores
-    
+
     Args:
       name: Input string to sanitize
-      
+
     Returns:
       Sanitized string safe for use in Bazel target names
     """
@@ -134,18 +134,17 @@ def sanitize_label_fragment(name):
             result = "module_%d" % seed
     return result
 
-
 # ##########################################################################
 # Validation utilities
 # ##########################################################################
 
 def validate_service_name(service, debug = False):
     """Validate a service name and fail with helpful error messages.
-    
+
     Args:
       service: The service name to validate
       debug: Whether debug logging is enabled
-      
+
     Returns:
       The validated service name (trimmed)
     """
@@ -158,30 +157,30 @@ Please provide a service name via:
 2. The DD_SERVICE environment variable in .bazelrc:
    common --repo_env=DD_SERVICE=my-service
 """)
-    
+
     trimmed = service.strip()
     if not trimmed:
         fail("test_optimization: service name cannot be empty or whitespace-only: '%s'" % service)
-    
+
     if len(trimmed) > SERVICE_NAME_MAX_LEN:
         fail("""
 test_optimization: service name is too long (max %d characters): '%s'
 
 Please use a shorter service name.
 """ % (SERVICE_NAME_MAX_LEN, trimmed))
-    
+
     # Warn about potential issues
     if " " in trimmed:
         log_info("WARNING: service name contains spaces; this may cause issues: '%s'" % trimmed)
-    
+
     if trimmed != service:
         log_debug(debug, "validation", "Service name trimmed: '%s' -> '%s'" % (service, trimmed))
-    
+
     return trimmed
 
 def validate_api_key(api_key):
     """Validate DD_API_KEY is present and provide helpful error message.
-    
+
     Args:
       api_key: The API key value (may be None/empty)
 
@@ -267,10 +266,10 @@ def validate_runtime_version(version, debug = False):
 
 def dedup_keys(keys):
     """Ensure keys are unique by appending numeric suffixes if needed.
-    
+
     Args:
       keys: List of strings that may contain duplicates
-      
+
     Returns:
       List of unique strings with numeric suffixes (_2, _3, etc.) for duplicates
     """
@@ -290,4 +289,3 @@ def dedup_keys(keys):
         taken[candidate] = True
         out.append(candidate)
     return out
-

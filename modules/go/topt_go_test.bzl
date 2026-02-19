@@ -37,16 +37,16 @@ Maintenance notes:
   service-key resolution.
 """
 
-load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
-    _is_dict = "is_dict",
-    _is_list = "is_list",
-    _is_string = "is_string",
     "normalize_user_data",
     "resolve_topt_service_key",
     "service_mapping_entries",
+    _is_dict = "is_dict",
+    _is_list = "is_list",
+    _is_string = "is_string",
 )
+load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -137,6 +137,7 @@ def dd_topt_go_test(
         service_entries = _service_mapping_entries(topt_data)
         if not service_entries:
             fail("dd_topt_go_test: topt_data mapping did not contain any service entries")
+
         # Explicit `topt_service` is resolved via exact-then-sanitized matching
         # to preserve collision-safe keys while still accepting ergonomic input.
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
@@ -224,6 +225,7 @@ def dd_topt_go_test(
             fallback_importpath = pkg_path
 
     selector_name = name + "_topt_payloads"
+
     # Selector encapsulates importpath inference + module fallback in analysis
     # phase, keeping runtime logic and user callsites simple.
     topt_go_payloads_selector(

@@ -73,6 +73,7 @@ def _log_helpers_and_is_dict_test(ctx):
     asserts.equals(env, False, is_list({}))
     asserts.equals(env, True, is_string("x"))
     asserts.equals(env, False, is_string(1))
+
     # Logging helpers are side-effect only; verify they execute and return None.
     asserts.equals(env, None, log_info("unit-log-info"))
     asserts.equals(env, None, log_debug(False, "unit", "hidden"))

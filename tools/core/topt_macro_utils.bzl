@@ -8,10 +8,10 @@ Maintainers:
 
 load(
     "//tools/core:common_utils.bzl",
+    "sanitize_label_fragment",
     _is_dict = "is_dict",
     _is_list = "is_list",
     _is_string = "is_string",
-    "sanitize_label_fragment",
 )
 
 is_dict = _is_dict
@@ -47,6 +47,7 @@ def normalize_user_data(user_data):
     """
     if user_data == None:
         return []
+
     # A single label can be passed as a string; keep it atomic.
     if is_string(user_data):
         return [user_data]
