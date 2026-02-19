@@ -40,13 +40,12 @@ Maintenance notes:
 load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
-    "is_dict",
+    _is_dict = "is_dict",
     "normalize_user_data",
     "resolve_topt_service_key",
     "service_mapping_entries",
 )
 
-_is_dict = is_dict
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 
@@ -266,10 +265,6 @@ def dd_topt_go_test(
     # Use the package directory as the default runtime working directory when
     # callers do not specify one. This keeps relative fixture paths stable.
     if "rundir" not in kwargs:
-        kwargs["rundir"] = native.package_name()
-    elif kwargs["rundir"] != native.package_name():
-        # Keep test runtime cwd deterministic and aligned with package-relative
-        # fixture expectations used by test optimization payload writers.
         kwargs["rundir"] = native.package_name()
 
     # Create ONLY the go_test - NO uploader, NO test_suite.

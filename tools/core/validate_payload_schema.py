@@ -22,6 +22,11 @@ _STATS = {
 _DEBUG = False
 
 
+def _reset_stats() -> None:
+    for key in list(_STATS.keys()):
+        _STATS[key] = 0
+
+
 def _debug_enabled() -> bool:
     val = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_DEBUG")
     if val is None:
@@ -221,10 +226,12 @@ def _validate(
     if _is_number(value):
         if "minimum" in schema and value < schema["minimum"]:
             errors.append(f"{path}: value {value} < minimum {schema['minimum']}")
+            if len(errors) >= max_errors:
+                return
         if "maximum" in schema and value > schema["maximum"]:
             errors.append(f"{path}: value {value} > maximum {schema['maximum']}")
-        if len(errors) >= max_errors:
-            return
+            if len(errors) >= max_errors:
+                return
 
     # Scalar values have no object/array branches.
     if not isinstance(value, dict) and not isinstance(value, list):
@@ -240,7 +247,13 @@ def _validate(
 
         props = schema.get("properties", {})
         pattern_props = schema.get("patternProperties", {})
-        patterns = [(re.compile(p), s) for p, s in pattern_props.items()]
+        patterns = []
+        for pattern, subschema in pattern_props.items():
+            try:
+                patterns.append((re.compile(pattern), subschema))
+            except re.error as exc:
+                errors.append(f"{path}: invalid patternProperties regex {pattern!r}: {exc}")
+                return
 
         for key, val in value.items():
             matched = False
@@ -278,6 +291,7 @@ def _validate(
 def main() -> int:
     global _DEBUG
     _DEBUG = _debug_enabled()
+    _reset_stats()
     try:
         args = _parse_args(sys.argv[1:])
     except SystemExit as exc:

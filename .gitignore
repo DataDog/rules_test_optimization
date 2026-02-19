@@ -1,6 +1,7 @@
 # Bazel files
 bazel-*
 .bazelrc.user
+# Keep MODULE.bazel.lock tracked intentionally for reproducible dependency state.
 
 # Bazel outputs
 /bazel-bin/

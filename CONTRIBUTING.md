@@ -11,7 +11,10 @@
   - `:test_optimization_context`
   - `:module_<sanitized>`
 
-## Split-Aware Validation Commands
+## Validation Commands
+
+- Canonical full-repo command:
+  - `./bazelw test //...`
 
 - Core module tests (repo root):
   - `./bazelw test //tools/...`
@@ -23,6 +26,8 @@
   - `python3 tools/dev/check_module_versions.py`
 - Python tooling tests:
   - `./bazelw test //tools/tests/python:python_tools_test`
+- Optional Python tooling dependencies (for local script execution):
+  - `python3 -m pip install -r tools/requirements.txt`
 - Optional Python syntax smoke check when editing tooling:
   - `python3 -m py_compile tools/core/validate_payload_schema.py tools/core/schemas/sync_agentless_schema.py tools/tests/integration/mock_dd_server.py`
 - Integration harness:
@@ -44,6 +49,9 @@
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - shell scripts, PowerShell, schema sync checks, and Python tooling tests
+- Workflow dependency pinning:
+  - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.
+  - Use Dependabot (or equivalent) to refresh both SHA and version comment together.
 
 ## Snapshot Updates
 

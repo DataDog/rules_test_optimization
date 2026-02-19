@@ -11,6 +11,12 @@ import (
 	"testing"
 )
 
+var testOptimizationFiles = []string{
+	filepath.Join("cache", "http", "settings.json"),
+	filepath.Join("cache", "http", "known_tests.json"),
+	filepath.Join("cache", "http", "test_management.json"),
+}
+
 // Demonstrates reading test optimization files using DD_TEST_OPTIMIZATION_MANIFEST_FILE.
 func TestMain(m *testing.M) {
 	// Get the manifest file path and derive the working directory
@@ -21,18 +27,17 @@ func TestMain(m *testing.M) {
 	}
 
 	// Resolve the manifest path and get the .testoptimization directory
-	manifestPath := resolveRlocation(manifestRloc)
+	manifestPath, ok := resolveRlocation(manifestRloc)
+	if !ok {
+		fmt.Println("unable to resolve DD_TEST_OPTIMIZATION_MANIFEST_FILE runfile path")
+		os.Exit(m.Run())
+	}
 	toptDir := filepath.Dir(manifestPath)
 	fmt.Println("Test optimization directory:", toptDir)
 	fmt.Println()
 
 	// Read synced HTTP metadata from cache/http under the manifest directory.
-	files := []string{
-		filepath.Join("cache", "http", "settings.json"),
-		filepath.Join("cache", "http", "known_tests.json"),
-		filepath.Join("cache", "http", "test_management.json"),
-	}
-	for _, relPath := range files {
+	for _, relPath := range testOptimizationFiles {
 		path := filepath.Join(toptDir, relPath)
 		fmt.Println("--------------------------------")
 		fmt.Println(relPath)
@@ -50,14 +55,14 @@ func TestMain(m *testing.M) {
 }
 
 // resolveRlocation resolves a runfile rlocation path to an absolute path.
-func resolveRlocation(p string) string {
+func resolveRlocation(p string) (string, bool) {
 	if _, err := os.Stat(p); err == nil {
-		return p
+		return p, true
 	}
 	if d := os.Getenv("RUNFILES_DIR"); d != "" {
 		cand := filepath.Join(d, p)
 		if _, err := os.Stat(cand); err == nil {
-			return cand
+			return cand, true
 		}
 	}
 	if mf := os.Getenv("RUNFILES_MANIFEST_FILE"); mf != "" {
@@ -68,7 +73,7 @@ func resolveRlocation(p string) string {
 				line := sc.Text()
 				i := strings.IndexByte(line, ' ')
 				if i > 0 && line[:i] == p {
-					return line[i+1:]
+					return line[i+1:], true
 				}
 			}
 		}
@@ -76,10 +81,32 @@ func resolveRlocation(p string) string {
 	if s := os.Getenv("TEST_SRCDIR"); s != "" {
 		cand := filepath.Join(s, p)
 		if _, err := os.Stat(cand); err == nil {
-			return cand
+			return cand, true
 		}
 	}
-	return p
+	return p, false
+}
+
+func TestManifestMetadataFilesPresent(t *testing.T) {
+	manifestRloc := os.Getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+	if manifestRloc == "" {
+		t.Skip("DD_TEST_OPTIMIZATION_MANIFEST_FILE not set in this environment")
+	}
+	manifestPath, ok := resolveRlocation(manifestRloc)
+	if !ok {
+		t.Fatalf("failed to resolve runfile path: %s", manifestRloc)
+	}
+	manifestDir := filepath.Dir(manifestPath)
+	for _, relPath := range testOptimizationFiles {
+		path := filepath.Join(manifestDir, relPath)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", relPath, err)
+		}
+		if len(content) == 0 {
+			t.Fatalf("expected non-empty metadata file: %s", relPath)
+		}
+	}
 }
 
 func TestGreeting(t *testing.T) {

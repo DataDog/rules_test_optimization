@@ -54,6 +54,19 @@ try {
   }
 
   if ($null -eq $bashPath) {
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if ($null -ne $gitCmd) {
+      $gitDir = Split-Path -Parent $gitCmd.Source
+      $derived = Join-Path $gitDir "bash.exe"
+      $probeNotes.Add("derived from git command: $derived")
+      if (Test-Path -LiteralPath $derived -PathType Leaf) {
+        $bashPath = $derived
+        $probeNotes.Add("selected derived git sibling: $derived")
+      }
+    }
+  }
+
+  if ($null -eq $bashPath) {
     $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
     if ($null -ne $bashCmd) {
       $bashPath = $bashCmd.Source

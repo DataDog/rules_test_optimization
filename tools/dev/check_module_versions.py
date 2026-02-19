@@ -12,6 +12,17 @@ import re
 import sys
 
 
+def _repo_root() -> Path:
+    here = Path(__file__).resolve().parent
+    for candidate in [here] + list(here.parents):
+        if (
+            (candidate / "MODULE.bazel").exists() and
+            (candidate / "modules" / "go" / "MODULE.bazel").exists()
+        ):
+            return candidate
+    raise ValueError("unable to locate repository root from script path")
+
+
 def _read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -50,11 +61,15 @@ def _extract_bazel_dep_version(path: Path, dep_name: str) -> str:
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parents[2]
-    core_module = repo_root / "MODULE.bazel"
-    go_module = repo_root / "modules" / "go" / "MODULE.bazel"
-
     try:
+        repo_root = _repo_root()
+        core_module = repo_root / "MODULE.bazel"
+        go_module = repo_root / "modules" / "go" / "MODULE.bazel"
+        if not core_module.exists():
+            raise ValueError(f"core module file not found: {core_module}")
+        if not go_module.exists():
+            raise ValueError(f"go companion module file not found: {go_module}")
+
         core_module_version = _extract_module_version(core_module)
         go_module_version = _extract_module_version(go_module)
         go_core_dep_version = _extract_bazel_dep_version(

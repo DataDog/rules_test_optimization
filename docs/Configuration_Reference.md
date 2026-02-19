@@ -145,6 +145,9 @@ Auto-detection currently maps CI metadata from:
 - AWS CodeBuild
 - Drone
 
+Provider-name note: AWS CodeBuild is emitted as `awscodebuild` in sync
+metadata (`ci.provider.name`).
+
 Additional mapped metadata inputs include:
 
 - `APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH`

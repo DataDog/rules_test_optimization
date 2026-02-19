@@ -17,6 +17,9 @@ def _contains_parent_segment(path):
             return True
     return False
 
+# Public alias for unit tests.
+contains_parent_segment_for_tests = _contains_parent_segment
+
 def _go_bootstrap_extension_impl(module_ctx):
     """Create local companion-module repositories declared by root dev config."""
     for mod in module_ctx.modules:

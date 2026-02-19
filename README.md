@@ -158,14 +158,17 @@ WORKSPACE remains supported for v1. Minimal setup:
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 git_repository(
-    name = "datadog_rules_test_optimization",
+    name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-load("@datadog_rules_test_optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 
-test_optimization_sync(name = "test_optimization_data")
+test_optimization_sync(
+    name = "test_optimization_data",
+    service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
+)
 ```
 
 Use [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for mirrored `http_archive`, Go toolchain
@@ -431,6 +434,21 @@ The macro auto-selects the correct per-module payloads by inferring the Go packa
   1) `importpath` explicitly set on your `go_test` invocation (if provided in kwargs)
   2) Inference via `embed = [":<go_library>"]` by reading `GoArchive.importpath` from rules_go (recommended)
   3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo's exported `topt_data["runtimes"]["go"]["module_path"]`
+
+When automatic per-module selection is close but not exact (for example, custom
+import path layouts), use `module_label_override` to pin the expected sanitized
+module suffix:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    module_label_override = "github_com_example_custom_pkg",
+    topt_data = topt_data,
+    go_test_rule = go_test,
+)
+```
 
 ### Multi-service usage
 

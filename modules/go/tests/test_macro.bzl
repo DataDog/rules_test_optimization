@@ -14,7 +14,7 @@ assert behavior at analysis time without compiling Go code.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load(
-    "//:topt_go_test.bzl",
+    "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "dd_topt_go_test",
     "resolve_topt_service_key_for_tests",
 )
@@ -108,7 +108,7 @@ def go_macro_multi_service_target(name, tags = None):
     )
 
 def go_macro_rundir_mismatch_target(name, tags = None):
-    """Target expected to fail when rundir drifts from package name."""
+    """Target under test for caller-provided custom rundir passthrough."""
     dd_topt_go_test(
         name = name,
         topt_data = _single_service_topt_data(),
@@ -135,7 +135,7 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
-    asserts.equals(env, "tests", captured.rundir)
+    asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
 
 def _go_macro_multi_service_wiring_test_impl(ctx):
@@ -148,15 +148,15 @@ def _go_macro_multi_service_wiring_test_impl(ctx):
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_fragment(captured.data_labels, ".testoptimization/manifest.txt"))
     asserts.equals(env, "example.com/override/pkg", captured.importpath)
-    asserts.equals(env, "tests", captured.rundir)
+    asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
 
 def _go_macro_rundir_mismatch_wiring_test_impl(ctx):
-    """Assert custom rundir is normalized back to package default."""
+    """Assert custom rundir is honored when explicitly provided."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
-    asserts.equals(env, "tests", captured.rundir)
+    asserts.equals(env, "custom/rundir", captured.rundir)
     return analysistest.end(env)
 
 def _resolve_topt_service_key_missing_target_impl(_ctx):

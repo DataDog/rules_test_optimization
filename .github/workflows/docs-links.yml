@@ -10,8 +10,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   links:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
