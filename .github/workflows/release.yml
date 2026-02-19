@@ -58,6 +58,11 @@ jobs:
           ./bazelw build //examples/...
           ./bazelw test //examples/...
 
+      - name: Run mock server integration tests
+        timeout-minutes: 20
+        shell: bash
+        run: ./tools/tests/integration/run_mock_server_tests.sh
+
       - name: Release checklist reminder
         shell: bash
         run: |

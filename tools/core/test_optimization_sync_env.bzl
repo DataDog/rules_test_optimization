@@ -42,7 +42,6 @@ def sanitize_repository_url(url):
     for i in range(len(authority)):
         if authority[i] == "@":
             at_idx = i
-            break
     if at_idx < 0:
         return url
     return url[:auth_start] + authority[at_idx + 1:] + suffix

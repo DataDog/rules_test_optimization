@@ -263,6 +263,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Buildifier change detection relies on before/after commit ranges.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -304,16 +307,20 @@ jobs:
             base_ref="${GITHUB_BASE_REF:-main}"
             git fetch --no-tags --depth=1 origin "${base_ref}"
             diff_range="origin/${base_ref}...HEAD"
-          else
-            before_sha="${GITHUB_EVENT_BEFORE:-}"
+          elif [[ "${GITHUB_EVENT_NAME:-}" == "push" ]]; then
+            before_sha="${{ github.event.before }}"
             current_sha="${GITHUB_SHA:-HEAD}"
             if [[ -n "$before_sha" && "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
               diff_range="${before_sha}..${current_sha}"
+            elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              diff_range="HEAD~1..${current_sha}"
             else
-              base_ref="${GITHUB_BASE_REF:-main}"
-              git fetch --no-tags --depth=1 origin "${base_ref}"
-              diff_range="origin/${base_ref}..HEAD"
+              diff_range="$(git hash-object -t tree /dev/null)..${current_sha}"
             fi
+          else
+            base_ref="${GITHUB_BASE_REF:-main}"
+            git fetch --no-tags --depth=1 origin "${base_ref}"
+            diff_range="origin/${base_ref}..HEAD"
           fi
           mapfile -t starlark_files < <(
             git diff --name-only --diff-filter=ACMR "${diff_range}" -- \

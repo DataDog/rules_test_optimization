@@ -52,17 +52,32 @@ fi
 source "$REPO_ROOT/tools/tests/integration/run_mock_server_tests_lib.sh"
 trap cleanup EXIT INT TERM HUP
 
+# Reserve an ephemeral localhost port up front, then start the mock server on it.
+# This avoids relying on startup stdout parsing for port discovery.
+PORT="$("$PYTHON" - <<'PY'
+import socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+)"
+if [[ -z "$PORT" ]]; then
+  echo "error: failed to reserve a local port for mock server startup"
+  exit 1
+fi
+
 # Start a mock Datadog API server with fixture responses and request logging.
 "$PYTHON" -u "$REPO_ROOT/tools/tests/integration/mock_dd_server.py" \
   --fixtures "$REPO_ROOT/tools/tests/integration/fixtures" \
   --log "$LOG_FILE" \
-  --port 0 >"$SERVER_OUT" 2>&1 &
+  --port "$PORT" >"$SERVER_OUT" 2>&1 &
 SERVER_PID=$!
 SERVER_PID_FILE="$TMP_WS/mock_server.pid"
 printf '%s\n' "$SERVER_PID" >"$SERVER_PID_FILE"
 
-# Wait for the server to bind to a random port and emit it.
-PORT=""
+# Wait for the server to bind and accept localhost connections.
 # Keep this tunable because slower CI workers can need extra startup time.
 START_TIMEOUT_SECONDS="${MOCK_SERVER_START_TIMEOUT_SECONDS:-30}"
 POLL_INTERVAL_SECONDS="${MOCK_SERVER_POLL_INTERVAL_SECONDS:-0.1}"
@@ -73,8 +88,21 @@ while true; do
     cat "$SERVER_OUT" || true
     exit 1
   fi
-  PORT="$(awk -F= '/^PORT=/{print $2; exit}' "$SERVER_OUT" 2>/dev/null || true)"
-  if [[ -n "$PORT" ]]; then
+  if "$PYTHON" - "$PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(0.2)
+try:
+    sock.connect(("127.0.0.1", port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+  then
     break
   fi
   if (( "$(date +%s)" - START_TS >= START_TIMEOUT_SECONDS )); then
@@ -83,8 +111,22 @@ while true; do
   sleep "$POLL_INTERVAL_SECONDS"
 done
 
-if [[ -z "$PORT" ]]; then
-  echo "error: mock server did not start"
+if ! "$PYTHON" - "$PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(0.2)
+try:
+    sock.connect(("127.0.0.1", port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+then
+  echo "error: mock server did not start on port $PORT"
   cat "$SERVER_OUT" || true
   exit 1
 fi

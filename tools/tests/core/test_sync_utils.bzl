@@ -162,8 +162,13 @@ def _sanitize_repository_url_test(ctx):
     )
     asserts.equals(
         env,
-        "https://domain:pass@host/repo.git",
+        "https://host/repo.git",
         sanitize_repository_url_for_tests("https://user@domain:pass@host/repo.git"),
+    )
+    asserts.equals(
+        env,
+        "https://host/repo.git",
+        sanitize_repository_url_for_tests("https://user:pa@ss@host/repo.git"),
     )
     asserts.equals(
         env,
