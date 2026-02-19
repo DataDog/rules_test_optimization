@@ -16,5 +16,4 @@ if errorlevel 1 (
 )
 
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PS_SCRIPT%" %*
-set "EXIT_CODE=%ERRORLEVEL%"
-exit /b %EXIT_CODE%
+exit /b %ERRORLEVEL%

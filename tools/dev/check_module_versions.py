@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import sys
+from typing import List
 
 
 def _repo_root() -> Path:
@@ -30,13 +31,79 @@ def _read_text(path: Path) -> str:
         raise ValueError(f"unable to read {path}: {exc}") from exc
 
 
+def _extract_call_args_blocks(text: str, fn_name: str) -> List[str]:
+    """Extract argument blocks from `fn_name(...)` calls.
+
+    This parser handles multiline calls and nested parentheses while ignoring
+    quoted strings and `#` comments.
+    """
+    blocks: List[str] = []
+    needle = f"{fn_name}("
+    idx = 0
+    n = len(text)
+    while idx < n:
+        start = text.find(needle, idx)
+        if start < 0:
+            break
+        if start > 0:
+            prev = text[start - 1]
+            if prev.isalnum() or prev == "_":
+                idx = start + 1
+                continue
+        i = start + len(needle)
+        depth = 1
+        in_string = ""
+        escape = False
+        while i < n:
+            ch = text[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == in_string:
+                    in_string = ""
+                i += 1
+                continue
+
+            if ch == "#" :
+                newline = text.find("\n", i)
+                if newline < 0:
+                    i = n
+                else:
+                    i = newline + 1
+                continue
+            if ch == '"' or ch == "'":
+                in_string = ch
+                i += 1
+                continue
+            if ch == "(":
+                depth += 1
+                i += 1
+                continue
+            if ch == ")":
+                depth -= 1
+                if depth == 0:
+                    blocks.append(text[start + len(needle):i])
+                    i += 1
+                    break
+                i += 1
+                continue
+            i += 1
+
+        if depth != 0:
+            raise ValueError(f"unterminated {fn_name}(...) block")
+        idx = i
+    return blocks
+
+
 def _extract_module_version(path: Path) -> str:
     text = _read_text(path)
-    module_block = re.search(r"module\(([\s\S]*?)\)", text)
-    if module_block is None:
+    module_blocks = _extract_call_args_blocks(text, "module")
+    if not module_blocks:
         raise ValueError(f"no module(...) declaration found in {path}")
 
-    version_match = re.search(r'version\s*=\s*"([^"]+)"', module_block.group(1))
+    version_match = re.search(r'version\s*=\s*"([^"]+)"', module_blocks[0])
     if version_match is None:
         raise ValueError(f'no module version = "..." found in {path}')
 
@@ -45,8 +112,7 @@ def _extract_module_version(path: Path) -> str:
 
 def _extract_bazel_dep_version(path: Path, dep_name: str) -> str:
     text = _read_text(path)
-    for dep_block in re.finditer(r"bazel_dep\(([\s\S]*?)\)", text):
-        block = dep_block.group(1)
+    for block in _extract_call_args_blocks(text, "bazel_dep"):
         if re.search(r'name\s*=\s*"%s"' % re.escape(dep_name), block):
             version_match = re.search(r'version\s*=\s*"([^"]+)"', block)
             if version_match is None:

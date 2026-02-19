@@ -1024,10 +1024,10 @@ glob_to_regex() {{
       if [[ "$nxt" == "*" ]]; then
         if (( i + 2 < plen )) && [[ "${{pattern:i+2:1}}" == "/" ]]; then
           # CODEOWNERS follows gitignore-style globbing: **/ matches zero or more directories.
-          out="$out(.*/)?"
+          out="${out}(.*/)?"
           i=$((i + 3))
         else
-          out="$out.*"
+          out="${out}.*"
           i=$((i + 2))
         fi
         continue
@@ -1072,29 +1072,29 @@ glob_to_regex() {{
         j=$((j + 1))
       done
       if (( class_closed == 1 )); then
-        out="$out[$class_body]"
+        out="${out}[$class_body]"
         i=$((j + 1))
         continue
       fi
-      out="$out\\\\["
+      out="${out}\\\\["
       i=$((i + 1))
       continue
     fi
     case "$ch" in
       "*")
-        out="$out[^/]*"
+        out="${out}[^/]*"
         ;;
       "?")
-        out="$out[^/]"
+        out="${out}[^/]"
         ;;
       "."|"+"|"("|")"|"{"|"}"|"^"|"$"|"|"|"\\\\")
-        out="$out\\\\$ch"
+        out="${out}\\\\$ch"
         ;;
       "]")
-        out="$out\\\\]"
+        out="${out}\\\\]"
         ;;
       *)
-        out="$out$ch"
+        out="${out}$ch"
         ;;
     esac
     i=$((i + 1))

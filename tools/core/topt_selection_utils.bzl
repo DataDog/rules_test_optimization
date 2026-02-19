@@ -15,6 +15,9 @@ def select_module_group_name(importpath, module_group_names, include_per_module,
     """
     if not include_per_module:
         return ""
+
+    # Intentionally treat empty-string override as equivalent to no override so
+    # historical callsites continue to fall back to importpath sanitization.
     sanitized = module_label_override or sanitize_label_fragment(importpath or "")
     if not sanitized:
         return ""

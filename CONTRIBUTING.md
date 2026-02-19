@@ -28,11 +28,15 @@
   - `./bazelw test //tools/tests/python:python_tools_test`
 - Optional Python tooling dependencies (for local script execution):
   - `python3 -m pip install -r tools/requirements.txt`
+- Optional pre-commit setup:
+  - `python3 -m pip install pre-commit && pre-commit install`
 - Optional Python syntax smoke check when editing tooling:
   - `python3 -m py_compile tools/core/validate_payload_schema.py tools/core/schemas/sync_agentless_schema.py tools/tests/integration/mock_dd_server.py`
 - Integration harness:
+  - Prerequisites: `jq` (Linux/macOS) and Git Bash available in PATH on Windows.
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
-  - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
+  - Windows primary entrypoint: `tools/tests/integration/run_mock_server_tests.ps1`
+  - Windows convenience wrapper: `tools/tests/integration/run_mock_server_tests.cmd`
 - Hermetic smoke (mirror CI flags):
   - run the same test commands with sandbox/network-blocking flags from `.github/workflows/ci.yml`
 
@@ -48,7 +52,7 @@
   - go companion tests with hermetic flags
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
-  - shell scripts, PowerShell, schema sync checks, and Python tooling tests
+  - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.
   - Use Dependabot (or equivalent) to refresh both SHA and version comment together.
@@ -60,6 +64,8 @@
   - `UPDATE_SNAPSHOTS=1 tools/tests/integration/run_mock_server_tests.sh`
 - Windows PowerShell:
   - `$env:UPDATE_SNAPSHOTS = "1"; ./tools/tests/integration/run_mock_server_tests.ps1`
+- Windows CMD wrapper:
+  - `set UPDATE_SNAPSHOTS=1 && tools\\tests\\integration\\run_mock_server_tests.cmd`
 - Always review snapshot diffs before committing to ensure they reflect expected behavioral changes.
 
 ## Maintainer Invariants
@@ -84,6 +90,10 @@
 - [ ] Included rationale and risk notes in PR description.
 
 ## Release Runbook (Core + Go Companion)
+
+- CI release gate:
+  - Trigger `.github/workflows/release.yml` via `workflow_dispatch` (or push a version tag) before publication.
+  - Keep `run_full_validation=true` for normal releases.
 
 - Version alignment:
   - Keep root `MODULE.bazel` and `modules/go/MODULE.bazel` versions aligned.

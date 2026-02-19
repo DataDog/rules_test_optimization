@@ -136,7 +136,7 @@ Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go c
 - Macros: `load("@test_optimization_data//:export.bzl", "topt_data_by_service")` then either pass `topt_data = topt_data_by_service["<svc>"]`, or pass the mapping and set `topt_service = "<svc>"` in `dd_topt_go_test`.
 
 ## Hermetic Config
-- Use `--config=hermetic` to enable sandboxing, stable locale, and network blocking (see `.bazelrc` pattern in the consumer repo).
+- Use `--config=hermetic` to enable sandboxing, stable locale, and network blocking (see `examples/single_service/.bazelrc` and `examples/multi_service/.bazelrc` for the reference pattern).
 - Network: prefer `--sandbox_default_allow_network=false`; alternatively add `--modify_execution_info=TestRunner=+block-network`.
 - No `--sandbox_writable_path` needed — tests use `TEST_UNDECLARED_OUTPUTS_DIR` which is always writable.
 - Windows: consider `--enable_runfiles`; if sandboxing is unavailable, fall back to local strategies for tests.

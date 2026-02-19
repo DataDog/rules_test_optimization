@@ -1,17 +1,11 @@
-# Unit tests for sync utilities (DD_SITE normalization + module label mapping).
 """Unit tests for sync utility helpers."""
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
-    "//tools/tests:example_stub_repo.bzl",
-    "bzl_string_literal_for_tests",
-    "render_stub_build_for_tests",
-)
-load(
     "//tools/core:test_optimization_sync.bzl",
+    "build_module_label_map_for_tests",
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
-    "build_module_label_map_for_tests",
     "clone_payload_with_detached_attributes_for_tests",
     "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
@@ -19,19 +13,24 @@ load(
     "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
     "fnv1a_32_for_tests",
-    "normalize_out_dir_or_fail_for_tests",
     "http_execute_timeout_buffer_seconds_for_tests",
     "http_execute_timeout_seconds_for_tests",
     "http_max_time_seconds_for_tests",
+    "http_retry_attempts_for_tests",
+    "http_retry_delay_seconds_for_tests",
+    "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
     "partition_unix_headers_for_tests",
     "record_sync_extension_repo_owner_or_fail_for_tests",
     "render_export_bzl_for_tests",
     "render_module_runfiles_bzl_for_tests",
-    "http_retry_attempts_for_tests",
-    "http_retry_delay_seconds_for_tests",
     "resolve_dd_api_base_for_tests",
+)
+load(
+    "//tools/tests:example_stub_repo.bzl",
+    "bzl_string_literal_for_tests",
+    "render_stub_build_for_tests",
 )
 
 def _dd_site_normalization_test(ctx):
@@ -51,6 +50,7 @@ def _dd_site_normalization_test(ctx):
 def _resolve_dd_api_base_test(ctx):
     """Validate DD_TEST_OPTIMIZATION_API_BASE override precedence."""
     env = unittest.begin(ctx)
+
     # Ensure overrides take precedence over DD_SITE-derived defaults.
     asserts.equals(
         env,
@@ -72,6 +72,7 @@ def _resolve_dd_api_base_test(ctx):
         "https://example.com",
         resolve_dd_api_base_for_tests("datadoghq.com", "https://example.com/"),
     )
+
     # None/empty inputs should still resolve to the default site endpoint.
     asserts.equals(
         env,
@@ -171,6 +172,15 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
     asserts.equals(env, "https://override/repo.git", overridden.get("repository_url"))
     asserts.equals(env, "release", overridden.get("branch"))
     asserts.equals(env, "deadbeef", overridden.get("sha"))
+
+    overridden_with_token = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITHUB_SHA": "abc123",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_REF": "refs/heads/main",
+        "DD_GIT_REPOSITORY_URL": "https://token@override/repo.git",
+    }, None)
+    asserts.equals(env, "https://override/repo.git", overridden_with_token.get("repository_url"))
 
     appveyor = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -468,7 +478,7 @@ def _clone_payload_with_detached_attributes_test(ctx):
             },
             "id": "source-data",
         },
-        "meta": {"source": "fixture"},
+        "meta": {"source": "fixture", "tags": ["a", "b"]},
     }
     cloned = clone_payload_with_detached_attributes_for_tests(original)
     cloned_attrs = ((cloned.get("data") or {}).get("attributes") or {})
@@ -478,6 +488,9 @@ def _clone_payload_with_detached_attributes_test(ctx):
     cloned_attrs["modules"] = {
         "module_b": {"suite_b": {}},
     }
+    cloned_meta = cloned.get("meta") or {}
+    cloned_meta["source"] = "mutated"
+    cloned_meta["tags"] = ["x"]
 
     original_attrs = ((original.get("data") or {}).get("attributes") or {})
     original_tests = original_attrs.get("tests") or {}
@@ -486,6 +499,9 @@ def _clone_payload_with_detached_attributes_test(ctx):
     asserts.equals(env, None, original_tests.get("module_b"))
     asserts.true(env, original_modules.get("module_a") != None)
     asserts.equals(env, None, original_modules.get("module_b"))
+    original_meta = original.get("meta") or {}
+    asserts.equals(env, "fixture", original_meta.get("source"))
+    asserts.equals(env, ["a", "b"], original_meta.get("tags"))
     return unittest.end(env)
 
 def _clone_payload_with_nested_structure_test(ctx):
@@ -573,6 +589,7 @@ def _example_stub_export_string_escaping_test(ctx):
 def _http_execute_timeout_seconds_test(ctx):
     """Guard execute-timeout derivation against retry-policy drift."""
     env = unittest.begin(ctx)
+
     # Keep execute timeout derived from retry policy + explicit buffer instead
     # of a magic number to avoid accidentally clipping retries in CI.
     expected = (

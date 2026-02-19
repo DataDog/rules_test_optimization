@@ -1,30 +1,55 @@
 #!/usr/bin/env python3
+"""Validate payload JSON against a practical JSON Schema subset.
+
+Supported keywords include: `$ref`, `allOf`, `anyOf`, `if`/`then`/`else`,
+`type`, `const`, `enum`, `minimum`, `maximum`, `required`, `properties`,
+`patternProperties`, `additionalProperties`, `items`, and `additionalItems`.
+
+Unsupported keywords are ignored with a warning at validation time:
+`oneOf`, `not`, `dependencies`, `dependentRequired`, `format`,
+`uniqueItems`, and `contains`.
+"""
+
 import argparse
 import json
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 DEFAULT_MAX_ERRORS = 20
 _DEBUG_TRUTHY = {"1", "true", "yes", "on"}
-_STATS = {
-    "nodes": 0,
-    "refs": 0,
-    "anyof": 0,
-    "anyof_matched": 0,
-    "anyof_failed": 0,
-    "if": 0,
-    "then": 0,
-    "else": 0,
-    "type_checks": 0,
+_UNSUPPORTED_KEYWORDS = {
+    "oneOf",
+    "not",
+    "dependencies",
+    "dependentRequired",
+    "format",
+    "uniqueItems",
+    "contains",
 }
-_DEBUG = False
+
+
+def _new_stats() -> Dict[str, int]:
+    return {
+        "nodes": 0,
+        "refs": 0,
+        "anyof": 0,
+        "anyof_matched": 0,
+        "anyof_failed": 0,
+        "if": 0,
+        "then": 0,
+        "else": 0,
+        "type_checks": 0,
+    }
+
+
+_STATS = _new_stats()
 
 
 def _reset_stats() -> None:
-    for key in list(_STATS.keys()):
-        _STATS[key] = 0
+    global _STATS
+    _STATS = _new_stats()
 
 
 def _debug_enabled() -> bool:
@@ -36,13 +61,13 @@ def _debug_enabled() -> bool:
     return str(val).strip().lower() in _DEBUG_TRUTHY
 
 
-def _debug(msg: str) -> None:
-    if _DEBUG or _debug_enabled():
+def _debug(msg: str, debug: bool = False) -> None:
+    if debug or _debug_enabled():
         print(f"[schema-validator][dbg] {msg}", file=sys.stderr)
 
 
-def _stat_inc(key: str, n: int = 1) -> None:
-    _STATS[key] = _STATS.get(key, 0) + n
+def _stat_inc(stats: Dict[str, int], key: str, n: int = 1) -> None:
+    stats[key] = stats.get(key, 0) + n
 
 
 def _safe_size(path: str) -> Optional[int]:
@@ -118,8 +143,9 @@ def _is_type(value: Any, type_name: str) -> bool:
     return False
 
 
-def _resolve_ref(root: Dict[str, Any], ref: str) -> Dict[str, Any]:
-    _stat_inc("refs")
+def _resolve_ref(root: Dict[str, Any], ref: str, stats: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    if stats is not None:
+        _stat_inc(stats, "refs")
     if not ref.startswith("#/"):
         raise ValueError(f"unsupported ref: {ref}")
     parts = ref[2:].split("/")
@@ -157,55 +183,70 @@ def _validate(
     path: str,
     errors: List[str],
     max_errors: int,
+    stats: Optional[Dict[str, int]] = None,
+    warned_unsupported: Optional[Set[str]] = None,
 ) -> None:
-    _stat_inc("nodes")
+    if stats is None:
+        stats = _new_stats()
+    if warned_unsupported is None:
+        warned_unsupported = set()
+
+    _stat_inc(stats, "nodes")
     if len(errors) >= max_errors:
         return
     if not isinstance(schema, dict):
         return
 
+    for keyword in _UNSUPPORTED_KEYWORDS:
+        if keyword in schema and keyword not in warned_unsupported:
+            print(
+                f"warning: unsupported JSON Schema keyword '{keyword}' at {path} is ignored",
+                file=sys.stderr,
+            )
+            warned_unsupported.add(keyword)
+
     if "$ref" in schema:
         try:
-            ref_schema = _resolve_ref(root, schema["$ref"])
+            ref_schema = _resolve_ref(root, schema["$ref"], stats)
         except ValueError as exc:
             errors.append(f"{path}: {exc}")
             return
-        _validate(value, ref_schema, root, path, errors, max_errors)
+        _validate(value, ref_schema, root, path, errors, max_errors, stats, warned_unsupported)
         return
 
     for subschema in schema.get("allOf", []):
-        _validate(value, subschema, root, path, errors, max_errors)
+        _validate(value, subschema, root, path, errors, max_errors, stats, warned_unsupported)
         if len(errors) >= max_errors:
             return
 
     if "anyOf" in schema:
-        _stat_inc("anyof")
+        _stat_inc(stats, "anyof")
         for subschema in schema["anyOf"]:
             sub_errors: List[str] = []
-            _validate(value, subschema, root, path, sub_errors, max_errors)
+            _validate(value, subschema, root, path, sub_errors, max_errors, stats, warned_unsupported)
             if not sub_errors:
-                _stat_inc("anyof_matched")
+                _stat_inc(stats, "anyof_matched")
                 break
         else:
-            _stat_inc("anyof_failed")
+            _stat_inc(stats, "anyof_failed")
             errors.append(f"{path}: does not match anyOf")
             return
 
     if "if" in schema:
-        _stat_inc("if")
+        _stat_inc(stats, "if")
         cond_errors: List[str] = []
-        _validate(value, schema["if"], root, path, cond_errors, max_errors)
+        _validate(value, schema["if"], root, path, cond_errors, max_errors, stats, warned_unsupported)
         if not cond_errors:
             if "then" in schema:
-                _stat_inc("then")
-                _validate(value, schema["then"], root, path, errors, max_errors)
+                _stat_inc(stats, "then")
+                _validate(value, schema["then"], root, path, errors, max_errors, stats, warned_unsupported)
         else:
             if "else" in schema:
-                _stat_inc("else")
-                _validate(value, schema["else"], root, path, errors, max_errors)
+                _stat_inc(stats, "else")
+                _validate(value, schema["else"], root, path, errors, max_errors, stats, warned_unsupported)
 
     if "type" in schema:
-        _stat_inc("type_checks")
+        _stat_inc(stats, "type_checks")
         type_spec = schema["type"]
         if isinstance(type_spec, list):
             ok = any(_is_type(value, t) for t in type_spec)
@@ -259,38 +300,38 @@ def _validate(
             matched = False
             if key in props:
                 matched = True
-                _validate(val, props[key], root, _path_key(path, key), errors, max_errors)
+                _validate(val, props[key], root, _path_key(path, key), errors, max_errors, stats, warned_unsupported)
             for regex, subschema in patterns:
                 if regex.search(key):
                     matched = True
-                    _validate(val, subschema, root, _path_key(path, key), errors, max_errors)
+                    _validate(val, subschema, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported)
             if not matched:
                 addl = schema.get("additionalProperties", True)
                 if addl is False:
                     errors.append(f"{path}: additional property '{key}' not allowed")
                 elif isinstance(addl, dict):
-                    _validate(val, addl, root, _path_key(path, key), errors, max_errors)
+                    _validate(val, addl, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported)
 
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
             for idx, item in enumerate(value):
-                _validate(item, items, root, f"{path}[{idx}]", errors, max_errors)
+                _validate(item, items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported)
         elif isinstance(items, list):
             for idx, item in enumerate(value):
                 if idx < len(items):
-                    _validate(item, items[idx], root, f"{path}[{idx}]", errors, max_errors)
+                    _validate(item, items[idx], root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported)
                 else:
                     additional_items = schema.get("additionalItems", True)
                     if additional_items is False:
                         errors.append(f"{path}[{idx}]: additional item not allowed")
                     elif isinstance(additional_items, dict):
-                        _validate(item, additional_items, root, f"{path}[{idx}]", errors, max_errors)
+                        _validate(item, additional_items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported)
 
 
 def main() -> int:
-    global _DEBUG
-    _DEBUG = _debug_enabled()
+    global _STATS
+    debug = _debug_enabled()
     _reset_stats()
     try:
         args = _parse_args(sys.argv[1:])
@@ -309,9 +350,9 @@ def main() -> int:
         print("error: --max-errors must be > 0", file=sys.stderr)
         return 2
 
-    _debug(f"schema path: {schema_path}")
-    _debug(f"payload path: {payload_path}")
-    _debug(f"max errors: {max_errors}")
+    _debug(f"schema path: {schema_path}", debug)
+    _debug(f"payload path: {payload_path}", debug)
+    _debug(f"max errors: {max_errors}", debug)
 
     try:
         with open(schema_path, "r", encoding="utf-8-sig") as f:
@@ -319,16 +360,16 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"error: failed to read schema: {exc}", file=sys.stderr)
         return 2
-    _debug(f"schema bytes: {_format_size(_safe_size(schema_path))}")
+    _debug(f"schema bytes: {_format_size(_safe_size(schema_path))}", debug)
     if isinstance(schema, dict):
         if "$id" in schema:
-            _debug(f"schema $id: {schema.get('$id')}")
+            _debug(f"schema $id: {schema.get('$id')}", debug)
         if "$schema" in schema:
-            _debug(f"schema $schema: {schema.get('$schema')}")
+            _debug(f"schema $schema: {schema.get('$schema')}", debug)
         if "type" in schema:
-            _debug(f"schema root type: {schema.get('type')}")
+            _debug(f"schema root type: {schema.get('type')}", debug)
         if "required" in schema and isinstance(schema.get("required"), list):
-            _debug(f"schema required count: {len(schema.get('required', []))}")
+            _debug(f"schema required count: {len(schema.get('required', []))}", debug)
 
     try:
         with open(payload_path, "r", encoding="utf-8-sig") as f:
@@ -336,17 +377,20 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"error: failed to read payload JSON: {exc}", file=sys.stderr)
         return 2
-    _debug(f"payload bytes: {_format_size(_safe_size(payload_path))}")
-    _debug(f"payload type: {type(payload).__name__}")
+    _debug(f"payload bytes: {_format_size(_safe_size(payload_path))}", debug)
+    _debug(f"payload type: {type(payload).__name__}", debug)
     if isinstance(payload, dict):
-        _debug(f"payload keys: {len(payload)}")
+        _debug(f"payload keys: {len(payload)}", debug)
         sample = _sample_keys(payload)
         if sample:
-            _debug(f"payload key sample: {sample}")
+            _debug(f"payload key sample: {sample}", debug)
 
     errors: List[str] = []
-    _debug("validation start")
-    _validate(payload, schema, schema, "$", errors, max_errors)
+    stats = _new_stats()
+    warned_unsupported: Set[str] = set()
+    _debug("validation start", debug)
+    _validate(payload, schema, schema, "$", errors, max_errors, stats, warned_unsupported)
+    _STATS = dict(stats)
 
     if errors:
         print("schema validation failed:", file=sys.stderr)
@@ -354,23 +398,25 @@ def main() -> int:
             print(f"- {err}", file=sys.stderr)
         if len(errors) > max_errors:
             print(f"- ... and {len(errors) - max_errors} more", file=sys.stderr)
-        _debug(f"validation result: failed ({len(errors)} error(s))")
-        if _DEBUG:
+        _debug(f"validation result: failed ({len(errors)} error(s))", debug)
+        if debug:
             _debug(
                 "stats: nodes={nodes} refs={refs} anyof={anyof} anyof_matched={anyof_matched} "
                 "anyof_failed={anyof_failed} if={if} then={then} else={else} type_checks={type_checks}".format(
                     **_STATS
-                )
+                ),
+                debug,
             )
         return 1
 
-    _debug("validation result: ok")
-    if _DEBUG:
+    _debug("validation result: ok", debug)
+    if debug:
         _debug(
             "stats: nodes={nodes} refs={refs} anyof={anyof} anyof_matched={anyof_matched} "
             "anyof_failed={anyof_failed} if={if} then={then} else={else} type_checks={type_checks}".format(
                 **_STATS
-            )
+            ),
+            debug,
         )
     return 0
 

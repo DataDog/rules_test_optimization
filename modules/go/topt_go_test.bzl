@@ -37,14 +37,16 @@ Maintenance notes:
   service-key resolution.
 """
 
-load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
-    _is_dict = "is_dict",
     "normalize_user_data",
     "resolve_topt_service_key",
     "service_mapping_entries",
+    _is_dict = "is_dict",
+    _is_list = "is_list",
+    _is_string = "is_string",
 )
+load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -60,12 +62,12 @@ normalize_user_data_for_tests = _normalize_user_data
 def _build_module_labels(sync_repo_name, labels):
     if labels == None:
         return []
-    if type(labels) != type([]) and type(labels) != type(()):
+    if not _is_list(labels):
         fail("dd_topt_go_test: selected service topt_data['labels'] must be a list or tuple")
 
     module_labels = []
     for lab in labels:
-        if type(lab) != type(""):
+        if not _is_string(lab):
             fail("dd_topt_go_test: selected service topt_data['labels'] entries must be strings")
         if not lab:
             fail("dd_topt_go_test: selected service topt_data['labels'] entries must be non-empty")
@@ -135,6 +137,7 @@ def dd_topt_go_test(
         service_entries = _service_mapping_entries(topt_data)
         if not service_entries:
             fail("dd_topt_go_test: topt_data mapping did not contain any service entries")
+
         # Explicit `topt_service` is resolved via exact-then-sanitized matching
         # to preserve collision-safe keys while still accepting ergonomic input.
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
@@ -222,6 +225,7 @@ def dd_topt_go_test(
             fallback_importpath = pkg_path
 
     selector_name = name + "_topt_payloads"
+
     # Selector encapsulates importpath inference + module fallback in analysis
     # phase, keeping runtime logic and user callsites simple.
     topt_go_payloads_selector(
@@ -247,6 +251,9 @@ def dd_topt_go_test(
     # to work without macro changes.
     # Library can resolve this path and call filepath.Dir() to get the
     # directory containing manifest + cached metadata files.
+    # manifest_path is emitted by sync metadata and may include slashes.
+    # These paths are rooted at the sync repo package, so target syntax remains
+    # @repo//:<path> (for example @test_optimization_data//:.testoptimization/manifest.txt).
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
     data.append(manifest_label)
@@ -258,8 +265,7 @@ def dd_topt_go_test(
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
     # Keeping this explicit avoids hidden repository dependencies in the macro.
-    _go_test = go_test_rule if go_test_rule != None else None
-    if _go_test == None:
+    if go_test_rule == None:
         fail("dd_topt_go_test: you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
 
     # Use the package directory as the default runtime working directory when
@@ -269,7 +275,7 @@ def dd_topt_go_test(
 
     # Create ONLY the go_test - NO uploader, NO test_suite.
     # Users must create ONE uploader target per workspace and run it via `bazel run`.
-    _go_test(
+    go_test_rule(
         name = name,
         data = data,
         env = env,

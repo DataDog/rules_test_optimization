@@ -45,6 +45,7 @@ jobs:
       matrix:
         # Python scans schema/tooling scripts; Actions scans workflow risks.
         # Go code in this repository is limited to tiny examples.
+        # Starlark formatting/lint checks run in CI via Buildifier.
         language: ["python", "actions"]
     steps:
       - name: Checkout

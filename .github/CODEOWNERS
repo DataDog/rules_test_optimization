@@ -1,2 +1,15 @@
-# Default owner for all files in this repository.
+# Core Starlark sync/uploader rules.
+/tools/core/ @DataDog/ci-app-libraries
+
+# Go companion module and tests.
+/modules/go/ @DataDog/ci-app-libraries
+
+# Contributor/maintainer documentation.
+/docs/ @DataDog/ci-app-libraries
+/*.md @DataDog/ci-app-libraries
+
+# CI and repository automation.
+/.github/ @DataDog/ci-app-libraries
+
+# Default owner fallback.
 * @DataDog/ci-app-libraries

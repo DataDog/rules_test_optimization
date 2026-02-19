@@ -159,7 +159,7 @@
   "moduleExtensions": {
     "//tools/dev:go_bootstrap.bzl%go_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "qr+HSyKADglyb1t6FusPvlZ5xP9m9+i+B0M7NhE+DeY=",
+        "bzlTransitiveDigest": "XoO2K7SIdacnEZ6+GtHNefBaRlgLfWslahphi0+g0hY=",
         "usagesDigest": "I49nlLmxFAi9sxg6Rt6fFb2QozkvTD1YIVSV5M8BXhM=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

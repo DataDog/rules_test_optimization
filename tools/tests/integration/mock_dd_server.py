@@ -24,7 +24,7 @@ import time
 from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 
@@ -176,20 +176,22 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_body(self) -> bytes:
-        """Read request body using Content-Length; return empty bytes on miss."""
+    def _read_body(self) -> Tuple[bytes, Optional[str]]:
+        """Read request body and return (body, error_message)."""
         raw_len = self.headers.get("Content-Length")
         if not raw_len:
-            return b""
+            return b"", None
         try:
             length = int(raw_len)
         except ValueError:
-            return b""
-        if length <= 0:
-            return b""
+            return b"", "invalid Content-Length header"
+        if length < 0:
+            return b"", "Content-Length must be >= 0"
+        if length == 0:
+            return b"", None
         if length > MAX_BODY_SIZE:
-            return b""
-        return self.rfile.read(length)
+            return b"", "Content-Length exceeds mock server body limit"
+        return self.rfile.read(length), None
 
     def _log_and_validate(self, path, body):
         """Persist request details to shared JSONL log."""
@@ -416,7 +418,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 (Bazel style)
         """Handle POST routes for sync + uploader integration scenarios."""
         path = urlsplit(self.path).path
-        body = self._read_body()
+        body, body_err = self._read_body()
+        if body_err:
+            self._send_json(400, _json_error(body_err))
+            return
         self._log_and_validate(path, body)
         if path == "/__mock/reset_retries":
             self.server.state.reset_retry_counters()

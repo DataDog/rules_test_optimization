@@ -54,6 +54,7 @@ func TestMain(m *testing.M) {
 }
 
 // resolveRlocation resolves a runfile rlocation path to an absolute path.
+// Duplicated intentionally: each example is a standalone workspace.
 func resolveRlocation(p string) (string, bool) {
 	if _, err := os.Stat(p); err == nil {
 		return p, true
@@ -109,6 +110,7 @@ func TestManifestMetadataFilesPresent(t *testing.T) {
 }
 
 func TestMainOutput(t *testing.T) {
+	// This test intentionally swaps os.Stdout and must not run in parallel.
 	old := os.Stdout
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -134,12 +136,13 @@ func TestMainOutput(t *testing.T) {
 	}
 	output := buf.String()
 	if output != "Hello, World!\n" {
-		t.Errorf("Expected %q, got %q", "Hello, World!\n", output)
+		t.Fatalf("expected %q, got %q", "Hello, World!\n", output)
 	}
 }
 
 func TestGreeting(t *testing.T) {
-	if getGreeting() != "Hello, World!" {
-		t.Errorf("greeting mismatch")
+	got := getGreeting()
+	if got != "Hello, World!" {
+		t.Fatalf("expected %q, got %q", "Hello, World!", got)
 	}
 }

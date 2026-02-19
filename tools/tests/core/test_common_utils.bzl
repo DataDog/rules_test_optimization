@@ -1,6 +1,6 @@
 # Unit tests for common_utils helpers (sanitization, deduping, validation).
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "log_debug", "log_info", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
+load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "is_list", "is_string", "log_debug", "log_info", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
 
 def _sanitize_label_fragment_test(ctx):
     """Validate label sanitization rules and fallback behavior."""
@@ -63,11 +63,17 @@ def _validate_api_key_normalization_test(ctx):
     return unittest.end(env)
 
 def _log_helpers_and_is_dict_test(ctx):
-    """Validate lightweight logging helpers and dict-type detection."""
+    """Validate lightweight logging helpers and type helpers."""
     env = unittest.begin(ctx)
     asserts.equals(env, True, is_dict({}))
     asserts.equals(env, False, is_dict([]))
     asserts.equals(env, False, is_dict("x"))
+    asserts.equals(env, True, is_list([]))
+    asserts.equals(env, True, is_list(()))
+    asserts.equals(env, False, is_list({}))
+    asserts.equals(env, True, is_string("x"))
+    asserts.equals(env, False, is_string(1))
+
     # Logging helpers are side-effect only; verify they execute and return None.
     asserts.equals(env, None, log_info("unit-log-info"))
     asserts.equals(env, None, log_debug(False, "unit", "hidden"))
