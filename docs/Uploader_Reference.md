@@ -150,12 +150,34 @@ bazel run //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
 
+### `DD_TEST_OPTIMIZATION_FILTER_PREFIX` behavior
+
+`DD_TEST_OPTIMIZATION_FILTER_PREFIX=1` is mainly for mixed-output environments
+where non-Test-Optimization payload JSON files can exist next to Datadog payloads
+inside `test.outputs/`. Enabling it narrows uploads to canonical filename
+prefixes:
+- Test events: `span_events_*.json`
+- Coverage: `coverage_*.json`
+
+Leave it at `0` for normal repositories where uploader-managed payload
+directories contain only Datadog files.
+
+### `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` behavior (including `0`)
+
+`DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` controls how long the uploader waits for
+payload discovery/quiescence before proceeding.
+- `> 0`: wait up to the configured budget for payload files to appear and settle.
+- `0`: skip waiting loops immediately. If no payloads are found, uploader exits
+  cleanly with "nothing to upload" semantics.
+
 ## Endpoints and headers
 
 - Agentless (when `DD_TRACE_AGENT_URL` unset):
   - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
   - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
   - Requires `DD_API_KEY`
+  - `DD_SITE` is validated as a hostname (with compatibility normalization for
+    `app.`/`api.` prefixes and URL-shaped inputs); credentials/ports are rejected
   - Test/dev override: set `DD_TEST_OPTIMIZATION_INTAKE_BASE` to use a custom
     base URL (agentless only)
 - EVP proxy (when `DD_TRACE_AGENT_URL` set):

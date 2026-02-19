@@ -46,6 +46,10 @@ load(
     _is_list = "is_list",
     _is_string = "is_string",
 )
+load(
+    "@datadog-rules-test-optimization//tools/core:common_utils.bzl",
+    _LABEL_FRAGMENT_ALLOWED_CHARS = "LABEL_FRAGMENT_ALLOWED_CHARS",
+)
 load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
@@ -71,10 +75,9 @@ def _build_module_labels(sync_repo_name, labels):
             fail("dd_topt_go_test: selected service topt_data['labels'] entries must be strings")
         if not lab:
             fail("dd_topt_go_test: selected service topt_data['labels'] entries must be non-empty")
-        allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
         for i in range(len(lab)):
             ch = lab[i]
-            if ch not in allowed:
+            if ch not in _LABEL_FRAGMENT_ALLOWED_CHARS:
                 fail("dd_topt_go_test: selected service topt_data['labels'] entries must be sanitized ([a-z0-9_]): '%s'" % lab)
         module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
     return module_labels
@@ -198,7 +201,7 @@ def dd_topt_go_test(
     # ------------------------------------------------------------------
     # Prepare env map using a selector rule that infers importpath via aspect
     # Same `pop` pattern keeps final go_test kwargs clean and explicit.
-    user_env = kwargs.pop("env", {})
+    user_env = kwargs.pop("env", None) or {}
     env = dict(user_env)
 
     # Build the list of per-module groups once (if any were exported)

@@ -119,6 +119,10 @@ Notes:
 - Uploader failures are still reported in uploader logs/output; monitor those in CI.
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
 
+Dry-run mode for CI/debugging:
+- Set `RUNTESTS_DRY_RUN=1` when invoking `examples/*/runtests.sh` to print
+  the commands that would run without executing Bazel test/upload operations.
+
 ## Multi-service (aggregator)
 
 MODULE.bazel:

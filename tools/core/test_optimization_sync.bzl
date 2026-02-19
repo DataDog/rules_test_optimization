@@ -63,9 +63,12 @@ load(
 )
 load(
     "//tools/core:test_optimization_sync_env.bzl",
+    _apply_dd_git_overrides = "apply_dd_git_overrides",
     _collect_env_from_environ = "collect_env_from_environ",
     _first_env = "first_env",
+    _first_env_from_environ = "first_env_from_environ",
     _normalize_ref = "normalize_ref",
+    _sanitize_repository_url = "sanitize_repository_url",
     _set_context_tag_from_env = "set_context_tag_from_env",
 )
 
@@ -338,14 +341,39 @@ def _normalize_out_dir_or_fail(out_dir):
         fail("test_optimization_sync: out_dir must resolve to a non-empty relative path: %s" % repr(out_dir))
     return "/".join(segments)
 
-def _try_read_abs_file(ctx, abs_path):
-    """Best-effort absolute file read on host, returning empty string on miss."""
-
-    # _try_read_abs_file: best-effort read of a file at an absolute path using host tools.
-    # Returns file content string on success; empty string otherwise.
+def _validate_abs_path_command_input_or_fail(abs_path):
+    """Fail fast when absolute path contains control characters."""
     if not abs_path:
-        return ""
+        return
+    if ("\n" in abs_path) or ("\r" in abs_path) or ("\t" in abs_path):
+        fail("test_optimization_sync: absolute path contains unsupported control characters: %s" % repr(abs_path))
+
+def _try_read_abs_file(ctx, abs_path, debug):
+    """Best-effort absolute file read with explicit miss/read-error signaling."""
+
+    # Returns a status dict:
+    # - ok: bool (read command succeeded)
+    # - missing: bool (path does not exist)
+    # - value: file content when ok
+    # - error: diagnostic for non-missing failures
+    if not abs_path:
+        return {"ok": False, "missing": True, "value": "", "error": "empty path"}
     if _is_windows(ctx):
+        exists_cmd = _build_windows_exists_abs_file_command(abs_path)
+        exists_res = ctx.execute([
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            exists_cmd,
+        ])
+        if exists_res.return_code == 3:
+            return {"ok": False, "missing": True, "value": "", "error": ""}
+        if exists_res.return_code != 0:
+            err = (exists_res.stderr or "").strip() or ("exists-check failed with exit code %d" % exists_res.return_code)
+            log_info("warning: unable to check file '%s': %s" % (abs_path, err))
+            return {"ok": False, "missing": False, "value": "", "error": err}
+
         ps_cmd = _build_windows_read_abs_file_command(abs_path)
         cmd = [
             "powershell.exe",
@@ -355,29 +383,53 @@ def _try_read_abs_file(ctx, abs_path):
             ps_cmd,
         ]
         res = ctx.execute(cmd)
-        if res.return_code == 0 and res.stdout:
-            return res.stdout
-        return ""
+        if res.return_code == 0:
+            return {"ok": True, "missing": False, "value": res.stdout or "", "error": ""}
+        err = (res.stderr or "").strip() or ("file read failed with exit code %d" % res.return_code)
+        log_info("warning: unable to read file '%s': %s" % (abs_path, err))
+        return {"ok": False, "missing": False, "value": "", "error": err}
     else:
+        exists_cmd = _build_unix_exists_abs_file_command(abs_path)
+        exists_res = ctx.execute(["/bin/sh", "-c", exists_cmd])
+        if exists_res.return_code == 3:
+            return {"ok": False, "missing": True, "value": "", "error": ""}
+        if exists_res.return_code != 0:
+            err = (exists_res.stderr or "").strip() or ("exists-check failed with exit code %d" % exists_res.return_code)
+            log_info("warning: unable to check file '%s': %s" % (abs_path, err))
+            return {"ok": False, "missing": False, "value": "", "error": err}
+
         sh_cmd = _build_unix_read_abs_file_command(abs_path)
         res = ctx.execute(["/bin/sh", "-c", sh_cmd])
-        if res.return_code == 0 and res.stdout:
-            return res.stdout
-        return ""
+        if res.return_code == 0:
+            return {"ok": True, "missing": False, "value": res.stdout or "", "error": ""}
+        err = (res.stderr or "").strip() or ("file read failed with exit code %d" % res.return_code)
+        log_info("warning: unable to read file '%s': %s" % (abs_path, err))
+        return {"ok": False, "missing": False, "value": "", "error": err}
+
+def _build_windows_exists_abs_file_command(abs_path):
+    """Build PowerShell command string for absolute-file existence checks."""
+    _validate_abs_path_command_input_or_fail(abs_path)
+    return "$p = '%s'; if (Test-Path -LiteralPath $p -PathType Leaf) { exit 0 } else { exit 3 }" % abs_path.replace("'", "''")
+
+def _build_unix_exists_abs_file_command(abs_path):
+    """Build POSIX shell command string for absolute-file existence checks."""
+    _validate_abs_path_command_input_or_fail(abs_path)
+    escaped = abs_path.replace("'", "'\\''")
+    return "[ -f '" + escaped + "' ] || exit 3"
 
 def _build_windows_read_abs_file_command(abs_path):
     """Build PowerShell command string for `_try_read_abs_file` reads."""
-
+    _validate_abs_path_command_input_or_fail(abs_path)
     # Security note: single quotes are doubled for PowerShell literal strings.
-    return "$p = '%s'; if (Test-Path -LiteralPath $p) { Get-Content -Raw -LiteralPath $p }" % abs_path.replace("'", "''")
+    return "$p = '%s'; Get-Content -Raw -LiteralPath $p" % abs_path.replace("'", "''")
 
 def _build_unix_read_abs_file_command(abs_path):
     """Build shell command string for `_try_read_abs_file` reads."""
-
+    _validate_abs_path_command_input_or_fail(abs_path)
     # Security note: single quotes are escaped using the POSIX '\'' pattern.
     # The escaping contract is covered by `read_abs_file_command_escaping_test`.
     escaped = abs_path.replace("'", "'\\''")
-    return "[ -f '" + escaped + "' ] && cat '" + escaped + "'"
+    return "cat '" + escaped + "'"
 
 def _parse_go_module_path(go_mod_content):
     """Extract `module <path>` value from go.mod content."""
@@ -431,8 +483,9 @@ def _detect_go_module_path(ctx, debug):
     for root in candidates:
         go_mod_path = root.rstrip("/") + "/go.mod"
         log_debug(debug, "go", "Checking go.mod at: %s" % go_mod_path)
-        content = _try_read_abs_file(ctx, go_mod_path)
-        if content:
+        read_result = _try_read_abs_file(ctx, go_mod_path, debug)
+        if read_result.get("ok"):
+            content = read_result.get("value") or ""
             mp = _parse_go_module_path(content)
             if mp:
                 log_debug(debug, "go", "Detected module path '%s' from %s" % (mp, go_mod_path))
@@ -450,8 +503,9 @@ def _detect_go_module_path(ctx, debug):
     if top:
         go_mod_path = top.rstrip("/") + "/go.mod"
         log_debug(debug, "go", "Checking go.mod at: %s" % go_mod_path)
-        content = _try_read_abs_file(ctx, go_mod_path)
-        if content:
+        read_result = _try_read_abs_file(ctx, go_mod_path, debug)
+        if read_result.get("ok"):
+            content = read_result.get("value") or ""
             mp = _parse_go_module_path(content)
             if mp:
                 log_debug(debug, "go", "Detected module path '%s' from %s" % (mp, go_mod_path))
@@ -459,106 +513,26 @@ def _detect_go_module_path(ctx, debug):
     log_debug(debug, "go", "Go module path not detected; returning empty")
     return ""
 
-def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None):
-    """Split aggregate known-tests payload into one file per module.
+def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_filename, label_map = None):
+    """Split one payload JSON map into per-module canonical files."""
 
-    Each output keeps canonical filename `known_tests.json` under
-    `<base>/module_<label>/` so runfiles paths remain stable for consumers.
-    """
-
-    # _split_known_tests_by_module: from the combined known_tests JSON, produce
-    # one JSON file per module under the same directory as `known_tests_file`.
-    # Returns a list of dicts with keys: module, label, file
     specs = []
-    kt_path = ctx.path(known_tests_file)
-    content = ctx.read(kt_path)
+    src_path = ctx.path(source_file)
+    content = ctx.read(src_path)
     if not content or not content.strip():
         return specs
 
-    # Decode and navigate to data.attributes.tests (map: module -> suites map)
-    obj = _decode_json_object_or_fail(content, known_tests_file)
+    # Decode and navigate to data.attributes.<module_key> (map: module -> content map)
+    obj = _decode_json_object_or_fail(content, source_file)
     data_obj = obj.get("data") or {}
     attrs_obj = data_obj.get("attributes") or {}
-    tests_obj = attrs_obj.get("tests") or {}
-    if not _is_dict(tests_obj):
-        return specs
-
-    base_dir = _dirname(known_tests_file)
-
-    # Ensure deterministic ordering for reproducible BUILD content
-    module_names = sorted([k for k in tests_obj.keys()])
-
-    # Compute sanitized labels and deduplicate (or use provided mapping)
-    if label_map:
-        deduped_labels = [label_map.get(m) or sanitize_label_fragment(m) for m in module_names]
-    else:
-        raw_labels = [sanitize_label_fragment(m) for m in module_names]
-        deduped_labels = dedup_keys(raw_labels)
-
-    for i in range(len(module_names)):
-        module_name = module_names[i]
-        label = deduped_labels[i]
-        suites_map = tests_obj.get(module_name)
-
-        # Guard against non-dict anomalies
-        if not _is_dict(suites_map):
-            continue
-
-        # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
-        per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
-        out_file = per_module_dir + "/known_tests.json"
-
-        # Build a per-module JSON that preserves the full original shape
-        # and only narrows data.attributes.tests to the single module.
-        new_obj = _clone_payload_with_detached_attributes(obj)
-        data_obj2 = new_obj.get("data")
-        if not _is_dict(data_obj2):
-            data_obj2 = {}
-            new_obj["data"] = data_obj2
-        attrs_obj2 = data_obj2.get("attributes")
-        if not _is_dict(attrs_obj2):
-            attrs_obj2 = {}
-            data_obj2["attributes"] = attrs_obj2
-        attrs_obj2["tests"] = {module_name: suites_map}
-        mod_obj = new_obj
-
-        _ensure_parent_directory(ctx, out_file, debug)
-        ctx.file(out_file, json.encode(mod_obj) + "\n")
-        log_debug(debug, "module", "Wrote per-module known tests file '%s' for module '%s'" % (out_file, module_name))
-
-        specs.append({
-            "module": module_name,
-            "label": label,
-            "file": out_file,
-        })
-
-    return specs
-
-def _split_test_management_by_module(ctx, test_management_file, debug, label_map = None):
-    """Split aggregate test-management payload into one file per module.
-
-    Mirrors known-tests splitting so both feature sets share label mapping and
-    canonical runfile names.
-    """
-
-    # _split_test_management_by_module: from the combined test_management JSON, produce
-    # one JSON file per module under the same directory as `test_management_file`.
-    # Returns a list of dicts with keys: module, label, file
-    specs = []
-    tm_path = ctx.path(test_management_file)
-    content = ctx.read(tm_path)
-    if not content or not content.strip():
-        return specs
-
-    # Decode and navigate to data.attributes.modules (map: module -> module suites/tests object)
-    obj = _decode_json_object_or_fail(content, test_management_file)
-    data_obj = obj.get("data") or {}
-    attrs_obj = data_obj.get("attributes") or {}
-    modules_obj = attrs_obj.get("modules") or {}
+    modules_obj = attrs_obj.get(module_key) or {}
     if not _is_dict(modules_obj):
         return specs
 
-    base_dir = _dirname(test_management_file)
+    base_dir = _dirname(source_file)
+
+    # Ensure deterministic ordering for reproducible BUILD content
     module_names = sorted([k for k in modules_obj.keys()])
 
     # Compute sanitized labels and deduplicate (or use provided mapping)
@@ -573,15 +547,16 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         label = deduped_labels[i]
         module_content = modules_obj.get(module_name)
 
+        # Guard against non-dict anomalies
         if not _is_dict(module_content):
             continue
 
         # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
         per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
-        out_file = per_module_dir + "/test_management.json"
+        out_file = per_module_dir + "/" + output_filename
 
         # Build a per-module JSON that preserves the full original shape
-        # and only narrows data.attributes.modules to the single module.
+        # and only narrows data.attributes.<module_key> to the single module.
         new_obj = _clone_payload_with_detached_attributes(obj)
         data_obj2 = new_obj.get("data")
         if not _is_dict(data_obj2):
@@ -591,12 +566,16 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         if not _is_dict(attrs_obj2):
             attrs_obj2 = {}
             data_obj2["attributes"] = attrs_obj2
-        attrs_obj2["modules"] = {module_name: module_content}
+        attrs_obj2[module_key] = {module_name: module_content}
         mod_obj = new_obj
 
         _ensure_parent_directory(ctx, out_file, debug)
         ctx.file(out_file, json.encode(mod_obj) + "\n")
-        log_debug(debug, "module", "Wrote per-module test_management file '%s' for module '%s'" % (out_file, module_name))
+        log_debug(
+            debug,
+            "module",
+            "Wrote per-module %s file '%s' for module '%s'" % (output_filename, out_file, module_name),
+        )
 
         specs.append({
             "module": module_name,
@@ -605,6 +584,28 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         })
 
     return specs
+
+def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None):
+    """Split aggregate known-tests payload into one file per module."""
+    return _split_json_payload_by_module(
+        ctx,
+        known_tests_file,
+        debug,
+        module_key = "tests",
+        output_filename = "known_tests.json",
+        label_map = label_map,
+    )
+
+def _split_test_management_by_module(ctx, test_management_file, debug, label_map = None):
+    """Split aggregate test-management payload into one file per module."""
+    return _split_json_payload_by_module(
+        ctx,
+        test_management_file,
+        debug,
+        module_key = "modules",
+        output_filename = "test_management.json",
+        label_map = label_map,
+    )
 
 def _detect_os_info(ctx, debug):
     """Detect host OS platform/version/arch for request configuration tags."""
@@ -648,6 +649,52 @@ def _detect_os_info(ctx, debug):
     log_debug(debug, "os", "Detected OS → platform='%s', version='%s', arch='%s'" % (platform, version, arch))
     return {"platform": platform, "version": version, "arch": arch}
 
+def _normalize_dd_site_or_fail(site_env):
+    """Normalize DD_SITE-like input into a validated hostname."""
+
+    site = (site_env or "").strip()
+    if not site:
+        return "datadoghq.com"
+
+    # Accept full URLs for compatibility with existing caller behavior.
+    if "://" in site:
+        site = site.split("://", 1)[1]
+    if "/" in site:
+        site = site.split("/", 1)[0]
+    if "?" in site:
+        site = site.split("?", 1)[0]
+    if "#" in site:
+        site = site.split("#", 1)[0]
+
+    if site.startswith("app."):
+        site = site[len("app."):]
+    if site.startswith("api."):
+        site = site[len("api."):]
+
+    site = site.lower()
+    if not site:
+        fail("test_optimization_sync: DD_SITE resolved to an empty hostname: %s" % repr(site_env))
+    if "@" in site:
+        fail("test_optimization_sync: DD_SITE must not include credentials/userinfo: %s" % repr(site_env))
+    if ":" in site:
+        fail("test_optimization_sync: DD_SITE must be a hostname without an explicit port: %s" % repr(site_env))
+    if site.startswith(".") or site.endswith(".") or ".." in site:
+        fail("test_optimization_sync: DD_SITE must be a valid hostname: %s" % repr(site_env))
+
+    labels = site.split(".")
+    for label in labels:
+        if not label:
+            fail("test_optimization_sync: DD_SITE must be a valid hostname: %s" % repr(site_env))
+        if label.startswith("-") or label.endswith("-"):
+            fail("test_optimization_sync: DD_SITE labels must not start/end with '-': %s" % repr(site_env))
+        for i in range(len(label)):
+            ch = label[i]
+            is_alpha = (ch >= "a" and ch <= "z")
+            is_num = (ch >= "0" and ch <= "9")
+            if not (is_alpha or is_num or ch == "-"):
+                fail("test_optimization_sync: DD_SITE contains unsupported hostname character %s in %s" % (repr(ch), repr(site_env)))
+    return site
+
 def _compute_dd_api_base(site_env):
     """Normalize DD_SITE-like input into Datadog API base URL."""
 
@@ -658,25 +705,7 @@ def _compute_dd_api_base(site_env):
     #   site_env = None/""               -> returns https://api.datadoghq.com
     # - Rationale: users frequently set DD_SITE to app.*; Datadog APIs are under
     #   api.*. We normalize here for consistency.
-    site = (site_env or "").strip()
-
-    # Strip scheme if present (e.g., https://app.datadoghq.com)
-    if "://" in site:
-        site = site.split("://", 1)[1]
-
-    # Strip any path/query fragments
-    if "/" in site:
-        site = site.split("/", 1)[0]
-
-    # Normalize common prefixes
-    if site.startswith("app."):
-        site = site[len("app."):]
-    if site.startswith("api."):
-        site = site[len("api."):]
-
-    if not site:
-        # If input was empty or became empty after normalization, fall back to default.
-        site = "datadoghq.com"
+    site = _normalize_dd_site_or_fail(site_env)
     return "https://api.%s" % site
 
 def _resolve_dd_api_base(env_data, debug):
@@ -707,14 +736,14 @@ def _decode_json_object_or_fail(content, context):
     # Parse API/file JSON with actionable guardrails for malformed responses.
     trimmed = (content or "").strip()
     if not trimmed:
-        fail("test_optimization: %s response is empty; expected JSON object" % context)
+        fail("test_optimization_sync: %s response is empty; expected JSON object" % context)
 
     # Catch common non-JSON responses (HTML/text proxy errors) early.
     if not (trimmed.startswith("{") or trimmed.startswith("[")):
         sample = trimmed[:120].replace("\n", " ").replace("\r", " ")
         fail(
             (
-                "test_optimization: %s response is not JSON (starts with: %s). " +
+                "test_optimization_sync: %s response is not JSON (starts with: %s). " +
                 "Check DD_SITE/DD_TEST_OPTIMIZATION_API_BASE, credentials, and endpoint routing."
             ) %
             (context, repr(sample)),
@@ -722,7 +751,7 @@ def _decode_json_object_or_fail(content, context):
 
     obj = json.decode(trimmed)
     if not _is_dict(obj):
-        fail("test_optimization: %s response must be a JSON object, got %s" % (context, type(obj)))
+        fail("test_optimization_sync: %s response must be a JSON object, got %s" % (context, type(obj)))
     return obj
 
 def _collect_known_tests_modules(ctx, known_tests_file):
@@ -1091,6 +1120,11 @@ compute_dd_api_base_for_tests = _compute_dd_api_base
 resolve_dd_api_base_for_tests = _resolve_dd_api_base_for_tests
 build_module_label_map_for_tests = _build_module_label_map
 normalize_ref_for_tests = _normalize_ref
+first_env_for_tests = _first_env
+first_env_from_environ_for_tests = _first_env_from_environ
+sanitize_repository_url_for_tests = _sanitize_repository_url
+apply_dd_git_overrides_for_tests = _apply_dd_git_overrides
+set_context_tag_from_env_for_tests = _set_context_tag_from_env
 parse_go_module_path_for_tests = _parse_go_module_path
 dirname_for_tests = _dirname
 normalize_out_dir_or_fail_for_tests = _normalize_out_dir_or_fail

@@ -173,6 +173,8 @@ Notes:
 - CI includes a Linux hermetic lane (`bazel-tests-hermetic`) with sandboxed
   execution and network blocking, plus cross-platform `bazel-tests` and mock
   server integration coverage.
+- Hermetic scope policy is intentionally Linux-only today to keep CI runtime
+  bounded while preserving one strict sandboxed signal in every PR.
 - CI intentionally stays cacheless for Bazel execution in `bazel-tests`.
   - Rationale: each run should re-evaluate repository rules from a fresh state.
   - Guardrail: do not add Bazel cache steps (`actions/cache`, disk cache,
@@ -187,6 +189,9 @@ Notes:
   reduce local/CI drift.
 - `.bazelversion` is intentionally duplicated at repository root and
   `modules/go/` so either workspace entrypoint resolves the same Bazel line.
+- CI also keeps a dedicated WORKSPACE-compat probe on Bazel `8.4.1` (separate
+  from the `8.5.1` baseline lanes) so legacy `--enable_workspace` behavior is
+  continuously exercised during Bazel 9 migration.
 - Current PR baseline checks:
 
 ```sh
@@ -229,6 +234,18 @@ python3 tools/core/schemas/sync_agentless_schema.py --check
 
 The helper uses PyYAML when available and falls back to Ruby's built-in YAML
 parser.
+
+## Sync file decomposition roadmap
+
+`tools/core/test_optimization_sync.bzl` is intentionally being decomposed in
+guarded slices rather than one large move. Current slices are:
+- shared split-by-module extraction helper (`_split_json_payload_by_module`)
+- env/URL normalization hardening extracted into dedicated helpers
+
+Planned next slices:
+- move HTTP transport/retry helpers into a focused module
+- isolate repository output/rendering helpers
+- keep parity tests green on every slice before removing legacy wrappers
 
 ## Publication checklist (when BCR publication is enabled)
 

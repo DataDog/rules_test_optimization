@@ -419,6 +419,39 @@ unset DD_TRACE_AGENT_URL
 # Use Bazel's testlogs location to find payloads for the uploader.
 TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
 
+# Scenario: max_wait_sec=0 should skip waiting when no payloads are present.
+EMPTY_TESTLOGS_DIR="$TMP_WS/empty_testlogs_nowait"
+mkdir -p "$EMPTY_TESTLOGS_DIR"
+UPLOADER_NOWAIT_LOG="$TMP_WS/uploader_nowait.log"
+NOWAIT_START_EPOCH="$(date +%s)"
+if ! TESTLOGS_DIR="$EMPTY_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_INTAKE_BASE="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TRACE_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_NOWAIT_LOG" 2>&1; then
+  echo "error: uploader max_wait_sec=0 scenario failed"
+  cat "$UPLOADER_NOWAIT_LOG" || true
+  exit 1
+fi
+NOWAIT_ELAPSED_SEC="$(( $(date +%s) - NOWAIT_START_EPOCH ))"
+if (( NOWAIT_ELAPSED_SEC > 12 )); then
+  echo "error: max_wait_sec=0 scenario exceeded expected duration ($NOWAIT_ELAPSED_SEC s)"
+  cat "$UPLOADER_NOWAIT_LOG" || true
+  exit 1
+fi
+if ! grep -q "no payload files found and no test execution detected; nothing to upload" "$UPLOADER_NOWAIT_LOG"; then
+  echo "error: max_wait_sec=0 scenario missing expected no-payload message"
+  cat "$UPLOADER_NOWAIT_LOG" || true
+  exit 1
+fi
+
 BASE_UPLOAD_LOG_START="$(log_line_count)"
 UPLOADER_LOG="$TMP_WS/uploader.log"
 if ! TESTLOGS_DIR="$TESTLOGS_DIR" \

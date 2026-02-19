@@ -36,6 +36,8 @@ jobs:
             README.md
             CONTRIBUTING.md
             AGENTS.md
+            CHANGELOG.md
+            SECURITY.md
             docs/**/*.md
             examples/**/*.md
         env:
