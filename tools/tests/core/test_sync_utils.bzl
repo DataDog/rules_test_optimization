@@ -572,6 +572,7 @@ def _export_bzl_escaping_test(ctx):
 def _fnv1a_symbol_distinguishes_common_symbols_test(ctx):
     """Validate FNV-1a determinism and common-symbol distinction."""
     env = unittest.begin(ctx)
+
     # Known vector for stable regression protection.
     asserts.equals(env, 0xc1a2b2aa, fnv1a_32_for_tests("abc"))
 

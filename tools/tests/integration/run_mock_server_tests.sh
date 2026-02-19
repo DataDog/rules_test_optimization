@@ -82,13 +82,12 @@ printf '%s\n' "$SERVER_PID" >"$SERVER_PID_FILE"
 START_TIMEOUT_SECONDS="${MOCK_SERVER_START_TIMEOUT_SECONDS:-30}"
 POLL_INTERVAL_SECONDS="${MOCK_SERVER_POLL_INTERVAL_SECONDS:-0.1}"
 START_TS="$(date +%s)"
-while true; do
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "error: mock server process died before binding"
-    cat "$SERVER_OUT" || true
-    exit 1
+mock_server_listening() {
+  if command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1
+    return $?
   fi
-  if "$PYTHON" - "$PORT" <<'PY'
+  "$PYTHON" - "$PORT" <<'PY'
 import socket
 import sys
 
@@ -102,7 +101,14 @@ except OSError:
 finally:
     sock.close()
 PY
-  then
+}
+while true; do
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "error: mock server process died before binding"
+    cat "$SERVER_OUT" || true
+    exit 1
+  fi
+  if mock_server_listening; then
     break
   fi
   if (( "$(date +%s)" - START_TS >= START_TIMEOUT_SECONDS )); then
@@ -111,22 +117,9 @@ PY
   sleep "$POLL_INTERVAL_SECONDS"
 done
 
-if ! "$PYTHON" - "$PORT" <<'PY'
-import socket
-import sys
-
-port = int(sys.argv[1])
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.settimeout(0.2)
-try:
-    sock.connect(("127.0.0.1", port))
-except OSError:
-    raise SystemExit(1)
-finally:
-    sock.close()
-PY
-then
+if ! mock_server_listening; then
   echo "error: mock server did not start on port $PORT"
+  ps -p "$SERVER_PID" -o pid=,ppid=,stat=,comm=,args= 2>/dev/null || true
   cat "$SERVER_OUT" || true
   exit 1
 fi

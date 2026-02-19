@@ -50,6 +50,7 @@ def normalize_ref(name):
     """Normalize branch/tag refs by removing common prefix forms."""
     if not name:
         return name
+
     # Keep a bounded loop so malformed cyclical prefixes cannot spin forever.
     for _ in range(_MAX_REF_STRIP_ITERATIONS):
         if name.startswith("refs/remotes/origin/"):

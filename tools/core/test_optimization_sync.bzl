@@ -420,12 +420,14 @@ def _build_unix_exists_abs_file_command(abs_path):
 def _build_windows_read_abs_file_command(abs_path):
     """Build PowerShell command string for `_try_read_abs_file` reads."""
     _validate_abs_path_command_input_or_fail(abs_path)
+
     # Security note: single quotes are doubled for PowerShell literal strings.
     return "$p = '%s'; Get-Content -Raw -LiteralPath $p" % abs_path.replace("'", "''")
 
 def _build_unix_read_abs_file_command(abs_path):
     """Build shell command string for `_try_read_abs_file` reads."""
     _validate_abs_path_command_input_or_fail(abs_path)
+
     # Security note: single quotes are escaped using the POSIX '\'' pattern.
     # The escaping contract is covered by `read_abs_file_command_escaping_test`.
     escaped = abs_path.replace("'", "'\\''")

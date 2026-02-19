@@ -38,6 +38,10 @@ Maintenance notes:
 """
 
 load(
+    "@datadog-rules-test-optimization//tools/core:common_utils.bzl",
+    _LABEL_FRAGMENT_ALLOWED_CHARS = "LABEL_FRAGMENT_ALLOWED_CHARS",
+)
+load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "normalize_user_data",
     "resolve_topt_service_key",
@@ -45,10 +49,6 @@ load(
     _is_dict = "is_dict",
     _is_list = "is_list",
     _is_string = "is_string",
-)
-load(
-    "@datadog-rules-test-optimization//tools/core:common_utils.bzl",
-    _LABEL_FRAGMENT_ALLOWED_CHARS = "LABEL_FRAGMENT_ALLOWED_CHARS",
 )
 load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 
