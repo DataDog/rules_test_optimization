@@ -94,11 +94,16 @@ jobs:
               path = "${GITHUB_WORKSPACE}",
           )
 
+          local_repository(
+              name = "datadog-rules-test-optimization-go",
+              path = "${GITHUB_WORKSPACE}/modules/go",
+          )
+
           load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
           EOF
 
           cat >"$tmp_ws/BUILD.bazel" <<'EOF'
-          load("@datadog-rules-test-optimization//modules/go:topt_go_test.bzl", "dd_topt_go_test")
+          load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
           load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
           filegroup(

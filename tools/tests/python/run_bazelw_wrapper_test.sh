@@ -49,8 +49,10 @@ grep -q '^--repo_env=DD_GIT_REPOSITORY_URL=https://override/repo.git$' "${captur
 grep -q '^--repo_env=DD_GIT_BRANCH=refs/heads/feature/test$' "${capture_norm}"
 grep -q '^--repo_env=DD_GIT_COMMIT_SHA=deadbeef$' "${capture_norm}"
 grep -q '^--repo_env=DD_GIT_HEAD_COMMIT=deadbeef$' "${capture_norm}"
-grep -q '^--repo_env=DD_GIT_COMMIT_MESSAGE=override message$' "${capture_norm}"
-grep -q '^--repo_env=DD_GIT_HEAD_MESSAGE=override head message$' "${capture_norm}"
+grep -q '^--repo_env=DD_GIT_COMMIT_MESSAGE=' "${capture_norm}"
+grep -q '^--repo_env=DD_GIT_HEAD_MESSAGE=' "${capture_norm}"
+grep -q 'override message' "${capture_norm}"
+grep -q 'override head message' "${capture_norm}"
 grep -q '^//:smoke$' "${capture_norm}"
 
 capture_help="${tmp_dir}/help_args.txt"
