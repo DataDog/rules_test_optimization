@@ -18,6 +18,10 @@ sh_test(
     srcs = ["run_bazelw_wrapper_test.sh"],
     data = ["//:bazelw"],
     size = "small",
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     timeout = "short",
 )
 
