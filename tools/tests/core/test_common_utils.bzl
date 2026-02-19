@@ -1,6 +1,6 @@
 # Unit tests for common_utils helpers (sanitization, deduping, validation).
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load("//tools/core:common_utils.bzl", "dedup_keys", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
+load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "log_debug", "log_info", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
 
 def _sanitize_label_fragment_test(ctx):
     """Validate label sanitization rules and fallback behavior."""
@@ -10,6 +10,8 @@ def _sanitize_label_fragment_test(ctx):
     asserts.equals(env, "foo", sanitize_label_fragment("-Foo-"))
     asserts.equals(env, "module", sanitize_label_fragment("___"))
     asserts.equals(env, "module", sanitize_label_fragment("ééé"))
+    asserts.equals(env, "module", sanitize_label_fragment("中文"))
+    asserts.equals(env, "foo_bar_baz", sanitize_label_fragment("Foo/中文/Bar-Baz"))
     asserts.equals(env, "a" * 256, sanitize_label_fragment("A" * 256))
     asserts.equals(env, "module", sanitize_label_fragment(""))
     return unittest.end(env)
@@ -20,6 +22,7 @@ def _dedup_keys_test(ctx):
     asserts.equals(env, [], dedup_keys([]))
     asserts.equals(env, ["solo"], dedup_keys(["solo"]))
     asserts.equals(env, ["a", "a_2", "b", "a_3"], dedup_keys(["a", "a", "b", "a"]))
+    asserts.equals(env, ["a", "b", "a_2", "b_2"], dedup_keys(["a", "b", "a", "b"]))
     asserts.equals(env, ["x", "y"], dedup_keys(["x", "y"]))
     return unittest.end(env)
 
@@ -56,6 +59,18 @@ def _validate_api_key_normalization_test(ctx):
     asserts.equals(env, "abcd1234", validate_api_key(" abcd1234 "))
     asserts.equals(env, "abc%def", validate_api_key(" abc%def "))
     asserts.equals(env, "line1\nline2", validate_api_key("\nline1\nline2\n"))
+    return unittest.end(env)
+
+def _log_helpers_and_is_dict_test(ctx):
+    """Validate lightweight logging helpers and dict-type detection."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, True, is_dict({}))
+    asserts.equals(env, False, is_dict([]))
+    asserts.equals(env, False, is_dict("x"))
+    # Logging helpers are side-effect only; verify they execute and return None.
+    asserts.equals(env, None, log_info("unit-log-info"))
+    asserts.equals(env, None, log_debug(False, "unit", "hidden"))
+    asserts.equals(env, None, log_debug(True, "unit", "visible"))
     return unittest.end(env)
 
 def _validate_api_key_missing_target_impl(_ctx):
@@ -135,6 +150,7 @@ validate_service_name_test = unittest.make(_validate_service_name_test)
 validate_runtime_version_test = unittest.make(_validate_runtime_version_test)
 validate_runtime_name_test = unittest.make(_validate_runtime_name_test)
 validate_api_key_normalization_test = unittest.make(_validate_api_key_normalization_test)
+log_helpers_and_is_dict_test = unittest.make(_log_helpers_and_is_dict_test)
 validate_api_key_missing_failure_test = analysistest.make(
     _validate_api_key_missing_failure_test_impl,
     expect_failure = True,

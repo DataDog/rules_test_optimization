@@ -68,6 +68,13 @@ def _build_module_labels(sync_repo_name, labels):
     for lab in labels:
         if type(lab) != type(""):
             fail("dd_topt_go_test: selected service topt_data['labels'] entries must be strings")
+        if not lab:
+            fail("dd_topt_go_test: selected service topt_data['labels'] entries must be non-empty")
+        allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
+        for i in range(len(lab)):
+            ch = lab[i]
+            if ch not in allowed:
+                fail("dd_topt_go_test: selected service topt_data['labels'] entries must be sanitized ([a-z0-9_]): '%s'" % lab)
         module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
     return module_labels
 
@@ -175,6 +182,10 @@ def dd_topt_go_test(
             # In fallback mode, `module_included` acts as a coarse gate derived
             # from sync metadata rather than analysis-time provider information.
             include_per_module_files = bool(_inc)
+        else:
+            # Keep fallback behavior practical for older exports that omit the
+            # coarse gate but still expose per-module labels.
+            include_per_module_files = bool(_svc.get("labels"))
 
     # Build labels for files/context based on (possibly derived) sync_repo_name.
     # These labels remain stable public contracts of the generated sync repo.
@@ -255,6 +266,10 @@ def dd_topt_go_test(
     # Use the package directory as the default runtime working directory when
     # callers do not specify one. This keeps relative fixture paths stable.
     if "rundir" not in kwargs:
+        kwargs["rundir"] = native.package_name()
+    elif kwargs["rundir"] != native.package_name():
+        # Keep test runtime cwd deterministic and aligned with package-relative
+        # fixture expectations used by test optimization payload writers.
         kwargs["rundir"] = native.package_name()
 
     # Create ONLY the go_test - NO uploader, NO test_suite.

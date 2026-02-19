@@ -25,32 +25,27 @@ def _extract_module_version(path: Path) -> str:
     if module_block is None:
         raise ValueError(f"no module(...) declaration found in {path}")
 
-    version_match = re.search(
-        r'^\s*version\s*=\s*"([^"]+)"\s*,?\s*$',
-        module_block.group(1),
-        re.MULTILINE,
-    )
+    version_match = re.search(r'version\s*=\s*"([^"]+)"', module_block.group(1))
     if version_match is None:
         raise ValueError(f'no module version = "..." found in {path}')
 
     return version_match.group(1)
 
 
-def _extract_core_dep_version_from_go_module(path: Path) -> str:
+def _extract_bazel_dep_version(path: Path, dep_name: str) -> str:
     text = _read_text(path)
     for dep_block in re.finditer(r"bazel_dep\(([\s\S]*?)\)", text):
         block = dep_block.group(1)
-        if re.search(r'name\s*=\s*"datadog-rules-test-optimization"', block):
+        if re.search(r'name\s*=\s*"%s"' % re.escape(dep_name), block):
             version_match = re.search(r'version\s*=\s*"([^"]+)"', block)
             if version_match is None:
                 raise ValueError(
-                    "go companion MODULE.bazel declares core dep without version"
+                    f'{path} declares bazel_dep(name = "{dep_name}") without version'
                 )
             return version_match.group(1)
 
     raise ValueError(
-        "go companion MODULE.bazel is missing bazel_dep(name = "
-        '"datadog-rules-test-optimization", ...)'
+        f'{path} is missing bazel_dep(name = "{dep_name}", ...)'
     )
 
 
@@ -62,10 +57,18 @@ def main() -> int:
     try:
         core_module_version = _extract_module_version(core_module)
         go_module_version = _extract_module_version(go_module)
-        go_core_dep_version = _extract_core_dep_version_from_go_module(go_module)
+        go_core_dep_version = _extract_bazel_dep_version(
+            go_module,
+            "datadog-rules-test-optimization",
+        )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+
+    example_modules = [
+        repo_root / "examples" / "single_service" / "MODULE.bazel",
+        repo_root / "examples" / "multi_service" / "MODULE.bazel",
+    ]
 
     errors = []
     if core_module_version != go_module_version:
@@ -80,6 +83,30 @@ def main() -> int:
             f'modules/go depends on core version "{go_core_dep_version}" but '
             f'root MODULE.bazel declares "{core_module_version}"'
         )
+    for example_module in example_modules:
+        try:
+            ex_core_dep = _extract_bazel_dep_version(
+                example_module,
+                "datadog-rules-test-optimization",
+            )
+            ex_go_dep = _extract_bazel_dep_version(
+                example_module,
+                "datadog-rules-test-optimization-go",
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+
+        if ex_core_dep != core_module_version:
+            errors.append(
+                f'example dependency mismatch ({example_module}): core dep is "{ex_core_dep}" '
+                f'but root module declares "{core_module_version}"'
+            )
+        if ex_go_dep != go_module_version:
+            errors.append(
+                f'example dependency mismatch ({example_module}): go dep is "{ex_go_dep}" '
+                f'but modules/go declares "{go_module_version}"'
+            )
 
     if errors:
         print("ERROR: module version alignment check failed:", file=sys.stderr)

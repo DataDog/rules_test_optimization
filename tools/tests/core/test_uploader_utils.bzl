@@ -3,6 +3,7 @@ load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_uploader.bzl",
     "bash_curl_retry_flags_for_tests",
+    "first_ascii_whitespace_index_for_tests",
     "build_codeowners_lookup_order_for_tests",
     "compile_codeowners_regex_for_tests",
     "glob_to_regex_for_tests",
@@ -13,8 +14,10 @@ load(
     "resolve_runfile_manifest_powershell_for_tests",
     "render_template_for_tests",
     "skip_derived_source_candidate_for_tests",
+    "strip_bom_prefix_for_tests",
     "strip_workspace_prefix_bash_for_tests",
     "strip_workspace_prefix_powershell_for_tests",
+    "trim_ascii_whitespace_for_tests",
 )
 
 def _bash_curl_retry_flags_test(ctx):
@@ -338,6 +341,32 @@ def _runfile_manifest_parser_parity_test(ctx):
         asserts.equals(env, bash_path, ps_path)
     return unittest.end(env)
 
+def _runfile_manifest_not_found_parity_test(ctx):
+    """Validate both manifest parsers return empty string for not-found key."""
+    env = unittest.begin(ctx)
+    lines = [
+        "_main/context.json /ctx/path.json",
+        "_main/schema.json /schema/path.json",
+    ]
+    existing = ["/ctx/path.json", "/schema/path.json"]
+    bash_path = resolve_runfile_manifest_bash_for_tests(lines, "missing.json", existing)
+    ps_path = resolve_runfile_manifest_powershell_for_tests(lines, "missing.json", existing)
+    asserts.equals(env, "", bash_path)
+    asserts.equals(env, "", ps_path)
+    asserts.equals(env, bash_path, ps_path)
+    return unittest.end(env)
+
+def _manifest_trim_and_bom_helpers_test(ctx):
+    """Validate manifest parser helper behavior for whitespace/BOM handling."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, 3, first_ascii_whitespace_index_for_tests("abc def"))
+    asserts.equals(env, -1, first_ascii_whitespace_index_for_tests("abcdef"))
+    asserts.equals(env, "abc", trim_ascii_whitespace_for_tests(" \t abc \r\n"))
+    asserts.equals(env, "", trim_ascii_whitespace_for_tests(" \t \r\n"))
+    asserts.equals(env, "_main/context.json", strip_bom_prefix_for_tests("\\ufeff_main/context.json"))
+    asserts.equals(env, "_main/context.json", strip_bom_prefix_for_tests("_main/context.json"))
+    return unittest.end(env)
+
 def _codeowners_lookup_order_test(ctx):
     """Validate CODEOWNERS lookup precedence ordering."""
     env = unittest.begin(ctx)
@@ -411,5 +440,7 @@ strip_workspace_prefix_powershell_windows_test = unittest.make(_strip_workspace_
 runfile_manifest_bash_resolution_test = unittest.make(_runfile_manifest_bash_resolution_test)
 runfile_manifest_powershell_resolution_test = unittest.make(_runfile_manifest_powershell_resolution_test)
 runfile_manifest_parser_parity_test = unittest.make(_runfile_manifest_parser_parity_test)
+runfile_manifest_not_found_parity_test = unittest.make(_runfile_manifest_not_found_parity_test)
+manifest_trim_and_bom_helpers_test = unittest.make(_manifest_trim_and_bom_helpers_test)
 codeowners_lookup_order_test = unittest.make(_codeowners_lookup_order_test)
 codeowners_lookup_order_empty_script_dir_test = unittest.make(_codeowners_lookup_order_empty_script_dir_test)

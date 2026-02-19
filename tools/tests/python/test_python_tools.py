@@ -17,11 +17,19 @@ from unittest import mock
 def _runfile(rel_path: str) -> Path:
     test_srcdir = os.environ.get("TEST_SRCDIR", "")
     test_workspace = os.environ.get("TEST_WORKSPACE", "")
+    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
     candidates = []
     if test_srcdir and test_workspace:
         candidates.append(Path(test_srcdir) / test_workspace / rel_path)
     if test_srcdir:
         candidates.append(Path(test_srcdir) / rel_path)
+    if workspace_dir:
+        candidates.append(Path(workspace_dir) / rel_path)
+
+    # Non-Bazel fallback: allow direct execution from a checked-out repository.
+    # This keeps the tests usable by lightweight CI coverage probes.
+    repo_root = Path(__file__).resolve().parents[3]
+    candidates.append(repo_root / rel_path)
 
     for cand in candidates:
         if cand.exists():
@@ -137,6 +145,53 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
                 rc = self._run_main(str(schema_path), str(payload_path))
             self.assertEqual(2, rc)
 
+    def test_internal_predicates_and_helpers(self) -> None:
+        self.assertTrue(self.mod._is_number(3))
+        self.assertTrue(self.mod._is_number(3.14))
+        self.assertFalse(self.mod._is_number(True))
+        self.assertFalse(self.mod._is_number("3"))
+
+        self.assertTrue(self.mod._is_type({"a": 1}, "object"))
+        self.assertTrue(self.mod._is_type([1], "array"))
+        self.assertTrue(self.mod._is_type("x", "string"))
+        self.assertTrue(self.mod._is_type(7, "integer"))
+        self.assertFalse(self.mod._is_type(True, "integer"))
+        self.assertTrue(self.mod._is_type(None, "null"))
+        self.assertFalse(self.mod._is_type({}, "unknown"))
+
+        self.assertEqual("unknown", self.mod._format_size(None))
+        self.assertEqual("42", self.mod._format_size(42))
+        self.assertEqual("a, b", self.mod._sample_keys({"a": 1, "b": 2}))
+
+    def test_resolve_ref_supports_list_indices(self) -> None:
+        root = {
+            "$defs": {
+                "variants": [
+                    {"type": "object", "required": ["ok"]},
+                ],
+            },
+        }
+        resolved = self.mod._resolve_ref(root, "#/$defs/variants/0")
+        self.assertEqual({"type": "object", "required": ["ok"]}, resolved)
+        with self.assertRaises(ValueError):
+            self.mod._resolve_ref(root, "#/$defs/variants/2")
+
+    def test_validate_direct_number_bounds(self) -> None:
+        schema = {"type": "number", "minimum": 10, "maximum": 20}
+        errors: list[str] = []
+        self.mod._validate(7, schema, schema, "$", errors, 10)
+        self.assertIn("value 7 < minimum 10", errors[0])
+
+        errors = []
+        self.mod._validate(42, schema, schema, "$", errors, 10)
+        self.assertIn("value 42 > maximum 20", errors[0])
+
+    def test_parse_args_supports_max_errors(self) -> None:
+        parsed = self.mod._parse_args(["schema.json", "payload.json", "--max-errors", "5"])
+        self.assertEqual("schema.json", parsed.schema_path)
+        self.assertEqual("payload.json", parsed.payload_path)
+        self.assertEqual(5, parsed.max_errors)
+
 
 class SyncAgentlessSchemaTests(unittest.TestCase):
     @classmethod
@@ -150,6 +205,42 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
         out = self.mod.render_json({"a": 1})
         self.assertTrue(out.endswith("\n"))
         self.assertIn('"a": 1', out)
+        self.assertEqual({"a": 1}, json.loads(out))
+
+    def test_load_yaml_prefers_pyyaml_and_falls_back_to_ruby(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = Path(tmp) / "schema.yaml"
+            yaml_path.write_text("a: 1\n", encoding="utf-8")
+
+            with mock.patch.object(
+                self.mod,
+                "_load_yaml_with_pyyaml",
+                side_effect=RuntimeError("no pyyaml"),
+            ), mock.patch.object(
+                self.mod,
+                "_load_yaml_with_ruby",
+                return_value={"a": 1},
+            ) as ruby_loader:
+                out = self.mod.load_yaml(yaml_path)
+                self.assertEqual({"a": 1}, out)
+                ruby_loader.assert_called_once_with(yaml_path)
+
+    def test_load_yaml_raises_when_both_backends_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = Path(tmp) / "schema.yaml"
+            yaml_path.write_text("a: 1\n", encoding="utf-8")
+
+            with mock.patch.object(
+                self.mod,
+                "_load_yaml_with_pyyaml",
+                side_effect=RuntimeError("no pyyaml"),
+            ), mock.patch.object(
+                self.mod,
+                "_load_yaml_with_ruby",
+                side_effect=RuntimeError("no ruby"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    self.mod.load_yaml(yaml_path)
 
     def test_main_check_and_update_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,7 +296,16 @@ class CheckModuleVersionsTests(unittest.TestCase):
             )
             self.assertEqual("1.2.3", self.mod._extract_module_version(module_file))
 
-    def test_extract_core_dep_version_from_go_module(self) -> None:
+    def test_extract_module_version_inline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module_file = Path(tmp) / "MODULE.bazel"
+            module_file.write_text(
+                'module(name = "demo", compatibility_level = 1, version = "2.0.1")\n',
+                encoding="utf-8",
+            )
+            self.assertEqual("2.0.1", self.mod._extract_module_version(module_file))
+
+    def test_extract_bazel_dep_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text(
@@ -219,8 +319,47 @@ class CheckModuleVersionsTests(unittest.TestCase):
             )
             self.assertEqual(
                 "1.2.3",
-                self.mod._extract_core_dep_version_from_go_module(module_file),
+                self.mod._extract_bazel_dep_version(
+                    module_file,
+                    "datadog-rules-test-optimization",
+                ),
             )
+
+    def test_extract_module_version_missing_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module_file = Path(tmp) / "MODULE.bazel"
+            module_file.write_text('module(name = "demo")\n', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                self.mod._extract_module_version(module_file)
+
+    def test_extract_core_dep_missing_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module_file = Path(tmp) / "MODULE.bazel"
+            module_file.write_text(
+                'module(name = "demo-go", version = "1.2.3")\n',
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                self.mod._extract_bazel_dep_version(
+                    module_file,
+                    "datadog-rules-test-optimization",
+                )
+
+    def test_main_reports_version_mismatch(self) -> None:
+        with mock.patch.object(self.mod, "_extract_module_version", side_effect=["1.2.3", "1.2.4"]), mock.patch.object(
+            self.mod,
+            "_extract_bazel_dep_version",
+            side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
+        ):
+            self.assertEqual(1, self.mod.main())
+
+    def test_main_reports_parse_errors(self) -> None:
+        with mock.patch.object(
+            self.mod,
+            "_extract_module_version",
+            side_effect=ValueError("bad module"),
+        ):
+            self.assertEqual(2, self.mod.main())
 
 
 if __name__ == "__main__":

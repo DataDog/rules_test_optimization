@@ -244,9 +244,15 @@ def _clone_payload_with_detached_attributes(obj):
     attrs_obj2 = {}
     if _is_dict(src_attrs):
         for _k in src_attrs.keys():
-            attrs_obj2[_k] = src_attrs.get(_k)
+            attrs_obj2[_k] = _clone_json_like(src_attrs.get(_k))
     data_obj2["attributes"] = attrs_obj2
     return new_obj
+
+def _clone_json_like(value):
+    """Clone dict/list payload nodes via JSON round-trip; scalars pass through."""
+    if _is_dict(value) or type(value) == type([]):
+        return json.decode(json.encode(value))
+    return value
 
 def _hex32(value):
     """Format a 32-bit integer as lowercase 8-char hex."""
@@ -1102,6 +1108,27 @@ def _first_env_from_environ(environ, keys):
             return v
     return ""
 
+def _apply_dd_git_overrides(env_data, environ):
+    """Apply DD_GIT_* overrides with explicit precedence."""
+    dd_repo = environ.get("DD_GIT_REPOSITORY_URL") or ""
+    dd_branch = environ.get("DD_GIT_BRANCH") or ""
+    dd_sha = environ.get("DD_GIT_COMMIT_SHA") or ""
+    dd_head_sha = environ.get("DD_GIT_HEAD_COMMIT") or ""
+    dd_commit_msg = environ.get("DD_GIT_COMMIT_MESSAGE") or ""
+    dd_head_msg = environ.get("DD_GIT_HEAD_MESSAGE") or ""
+    if dd_repo:
+        env_data["repository_url"] = dd_repo
+    if dd_branch:
+        env_data["branch"] = _normalize_ref(dd_branch)
+    if dd_sha:
+        env_data["sha"] = dd_sha
+    if dd_head_sha:
+        env_data["head_sha"] = dd_head_sha
+    if dd_commit_msg:
+        env_data["commit_message"] = dd_commit_msg
+    if dd_head_msg:
+        env_data["head_message"] = dd_head_msg
+
 def _normalize_ref(name):
     """Normalize branch/tag refs by removing common prefix forms."""
     # _normalize_ref: removes common ref prefixes from branch/tag names
@@ -1293,24 +1320,7 @@ def _collect_env_from_environ(environ, attr_service = None):
     # Overlay with user-specific DD_* overrides when present (highest precedence)
     # This allows local debugging and CI customization without changing provider
     # mapping logic above.
-    dd_repo = environ.get("DD_GIT_REPOSITORY_URL") or ""
-    dd_branch = environ.get("DD_GIT_BRANCH") or ""
-    dd_sha = environ.get("DD_GIT_COMMIT_SHA") or ""
-    dd_head_sha = environ.get("DD_GIT_HEAD_COMMIT") or ""
-    dd_commit_msg = environ.get("DD_GIT_COMMIT_MESSAGE") or ""
-    dd_head_msg = environ.get("DD_GIT_HEAD_MESSAGE") or ""
-    if dd_repo:
-        env_data["repository_url"] = dd_repo
-    if dd_branch:
-        env_data["branch"] = _normalize_ref(dd_branch)
-    if dd_sha:
-        env_data["sha"] = dd_sha
-    if dd_head_sha:
-        env_data["head_sha"] = dd_head_sha
-    if dd_commit_msg:
-        env_data["commit_message"] = dd_commit_msg
-    if dd_head_msg:
-        env_data["head_message"] = dd_head_msg
+    _apply_dd_git_overrides(env_data, environ)
 
     # Expose provider name to callers (e.g., for context tags and diagnostics).
     env_data["ci_provider_name"] = provider
@@ -1321,6 +1331,7 @@ def _collect_env(ctx):
     return _collect_env_from_environ(ctx.os.environ, getattr(ctx.attr, "service", None))
 
 # Public aliases for tests (helpers defined after the first alias section).
+collect_env_for_tests = _collect_env
 collect_env_from_environ_for_tests = _collect_env_from_environ
 build_windows_read_abs_file_command_for_tests = _build_windows_read_abs_file_command
 build_unix_read_abs_file_command_for_tests = _build_unix_read_abs_file_command
@@ -2046,12 +2057,14 @@ def _impl(ctx):
         for lab in labels_for_modules:
             # Emit a dedicated target per module so macro consumers can select
             # narrow runfiles while preserving canonical filenames via symlinks.
+            known_tests_file = known_by_label.get(lab)
+            test_management_file = tm_by_label.get(lab)
             build_content += ("\ntopt_module_files(\n" +
                 ('    name = "module_%s",\n' % lab) +
                 ('    settings = "%s",\n' % settings_file) +
                 ('    manifest = "%s",\n' % manifest_file) +
-                (('    known_tests = "%s",\n' % known_by_label.get(lab)) if known_by_label.get(lab) else "") +
-                (('    test_management = "%s",\n' % tm_by_label.get(lab)) if tm_by_label.get(lab) else "") +
+                (('    known_tests = "%s",\n' % known_tests_file) if known_tests_file else "") +
+                (('    test_management = "%s",\n' % test_management_file) if test_management_file else "") +
                 '    visibility = ["//visibility:public"],\n' +
                 ")\n")
     log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)

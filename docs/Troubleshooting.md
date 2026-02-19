@@ -96,6 +96,7 @@ If Bazel reports that sync requires WORKSPACE support, add
    ```powershell
    bazel test //your:test --test_output=all *>&1 | Select-String "DD_TEST_OPTIMIZATION"
    ```
+   PowerShell uses `*>&1` (not Bash `2>&1`) to merge stderr/stdout.
 
 4. **For RBE users**: Add `--remote_download_outputs=all` to download test
    outputs locally.
@@ -181,6 +182,9 @@ full bundle.
 
 2. **Check paths use forward slashes** in Starlark/Bazel contexts (backslashes
    are auto-converted).
+3. **Git Bash path conversion**: when running the integration harness from
+   PowerShell, ensure `cygpath` is available (Git for Windows). The harness
+   falls back to raw paths, but mixed-path conversion improves consistency.
 
 ## Getting help
 

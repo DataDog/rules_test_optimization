@@ -1,5 +1,7 @@
 version: 2
 updates:
+  # This repo does not maintain pip/go/npm manifests; dependency automation is
+  # focused on security-sensitive GitHub Action pins.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

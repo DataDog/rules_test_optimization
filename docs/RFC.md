@@ -223,7 +223,9 @@ Runtime Uploader
 - `dd_payload_uploader` is a normal Bazel rule (not a test) that runs via `bazel run` after tests complete. It discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for quiescence, then uploads and deletes payloads. It supports:
   - Agentless mode (`DD_API_KEY`, `DD_SITE`) posting to `https://citestcycle-intake.<site>/api/v2/citestcycle` and `https://citestcov-intake.<site>/api/v2/citestcov`.
   - EVP proxy mode (`DD_TRACE_AGENT_URL`) posting to `/evp_proxy/v2/...` with subdomain routing headers.
-- A single uploader target per workspace is required (enforced via lock file to prevent concurrent uploaders).
+- A single uploader target per workspace is required (enforced via a runtime
+  uploader lock file to prevent concurrent uploads; unrelated to
+  `MODULE.bazel.lock`).
 - When `context.json` is present in runfiles (supplied via a data dependency on `@<repo>//:test_optimization_context`), test payloads are enriched by merging context keys.
 - Since `bazel run` executes locally with full host access, no sandbox workarounds are needed. The uploader runs after all tests complete, discovering payloads that Bazel collected from `TEST_UNDECLARED_OUTPUTS_DIR`.
 - Recommended invocation preserves test exit code:

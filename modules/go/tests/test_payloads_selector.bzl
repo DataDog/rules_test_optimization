@@ -6,6 +6,7 @@ load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 _COMMON_MODULE_GROUPS = [
     ":module_example_com_explicit_pkg",
     ":module_example_com_embed_pkg",
+    ":module_example_com_deps_pkg",
     ":module_example_com_fallback_pkg",
     ":module_custom_override",
 ]
@@ -35,6 +36,7 @@ _embed_source = rule(
         # Keep attribute names aligned with what _importpath_aspect inspects.
         "importpath": attr.string(),
         "embed": attr.label_list(),
+        "deps": attr.label_list(),
     },
 )
 
@@ -53,6 +55,10 @@ def selector_payload_fixture_targets():
         marker = "module:embed",
     )
     _payload_marker(
+        name = "module_example_com_deps_pkg",
+        marker = "module:deps",
+    )
+    _payload_marker(
         name = "module_example_com_fallback_pkg",
         marker = "module:fallback",
     )
@@ -67,6 +73,14 @@ def selector_payload_fixture_targets():
     _embed_source(
         name = "embed_wrapper",
         embed = [":embed_leaf"],
+    )
+    _embed_source(
+        name = "deps_leaf",
+        importpath = "example.com/deps/pkg",
+    )
+    _embed_source(
+        name = "deps_wrapper",
+        deps = [":deps_leaf"],
     )
 
 def selector_explicit_precedence_target(name, tags = None):
@@ -87,6 +101,18 @@ def selector_embed_precedence_target(name, tags = None):
     topt_go_payloads_selector(
         name = name,
         embeds = [":embed_wrapper"],
+        fallback_importpath = "example.com/fallback/pkg",
+        full_files = ":full_payload",
+        module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_deps_precedence_target(name, tags = None):
+    """deps-traversal importpath is used when embed chain has deps-only path."""
+    topt_go_payloads_selector(
+        name = name,
+        embeds = [":deps_wrapper"],
         fallback_importpath = "example.com/fallback/pkg",
         full_files = ":full_payload",
         module_groups = _COMMON_MODULE_GROUPS,
@@ -172,6 +198,12 @@ def _selector_embed_precedence_test_impl(ctx):
     _assert_selected(env, target, "module_example_com_embed_pkg")
     return analysistest.end(env)
 
+def _selector_deps_precedence_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    _assert_selected(env, target, "module_example_com_deps_pkg")
+    return analysistest.end(env)
+
 def _selector_fallback_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -201,6 +233,9 @@ selector_explicit_precedence_test = analysistest.make(
 )
 selector_embed_precedence_test = analysistest.make(
     _selector_embed_precedence_test_impl,
+)
+selector_deps_precedence_test = analysistest.make(
+    _selector_deps_precedence_test_impl,
 )
 selector_fallback_test = analysistest.make(
     _selector_fallback_test_impl,

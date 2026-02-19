@@ -32,7 +32,7 @@ def _debug_enabled() -> bool:
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
+    if _DEBUG or _debug_enabled():
         print(f"[schema-validator][dbg] {msg}", file=sys.stderr)
 
 
@@ -223,6 +223,12 @@ def _validate(
             errors.append(f"{path}: value {value} < minimum {schema['minimum']}")
         if "maximum" in schema and value > schema["maximum"]:
             errors.append(f"{path}: value {value} > maximum {schema['maximum']}")
+        if len(errors) >= max_errors:
+            return
+
+    # Scalar values have no object/array branches.
+    if not isinstance(value, dict) and not isinstance(value, list):
+        return
 
     if isinstance(value, dict):
         required = schema.get("required", [])

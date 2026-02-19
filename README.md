@@ -177,6 +177,7 @@ Use the core-only path above, then wire your language test rule/macro so it:
 
 1. Includes `@test_optimization_data//:test_optimization_files` in `data`
 2. Sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to the manifest runfile path
+   - At runtime, resolve the payload root as `dirname(DD_TEST_OPTIMIZATION_MANIFEST_FILE)`.
 3. Sets `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
 4. Writes payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
 5. Adds `@test_optimization_data//:test_optimization_context` to uploader `data`
@@ -518,5 +519,5 @@ Fast checks before diving deep:
 
 ## Tips
 
-- Maintainers: this repository's `./bazelw` supports `FETCH_SALT_TTL` (for example: `FETCH_SALT_TTL=3600 ./bazelw build //...`).
+- Maintainers: this repository's `./bazelw` supports `FETCH_SALT_TTL` (for example: `FETCH_SALT_TTL=3600 ./bazelw build //tools/... //examples/...`).
 - For debugging, set `debug = True` when calling the extension to get verbose logs, including request bodies and detected OS info.

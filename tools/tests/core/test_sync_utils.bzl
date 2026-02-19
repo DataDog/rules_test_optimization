@@ -12,6 +12,7 @@ load(
     "build_windows_read_abs_file_command_for_tests",
     "build_module_label_map_for_tests",
     "clone_payload_with_detached_attributes_for_tests",
+    "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
@@ -108,6 +109,15 @@ def _module_label_map_collision_test(ctx):
     asserts.true(env, labels[1] != labels[2])
     return unittest.end(env)
 
+def _module_label_map_empty_inputs_test(ctx):
+    """Validate empty/None module lists do not produce label entries."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, {}, build_module_label_map_for_tests([], []))
+    asserts.equals(env, {}, build_module_label_map_for_tests(None, []))
+    asserts.equals(env, {}, build_module_label_map_for_tests([], None))
+    asserts.equals(env, {}, build_module_label_map_for_tests(None, None))
+    return unittest.end(env)
+
 def _normalize_ref_test(ctx):
     """Validate ref-prefix normalization helper."""
     env = unittest.begin(ctx)
@@ -118,6 +128,15 @@ def _normalize_ref_test(ctx):
     asserts.equals(env, "main", normalize_ref_for_tests("refs/remotes/origin/main"))
     asserts.equals(env, "main", normalize_ref_for_tests("main"))
     asserts.equals(env, "", normalize_ref_for_tests(""))
+    return unittest.end(env)
+
+def _normalize_ref_edge_cases_test(ctx):
+    """Validate additional refs/heads and refs/tags normalization paths."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, "feature/test", normalize_ref_for_tests("refs/heads/feature/test"))
+    asserts.equals(env, "release/v2", normalize_ref_for_tests("refs/tags/release/v2"))
+    asserts.equals(env, "release/v3", normalize_ref_for_tests("origin/refs/tags/release/v3"))
+    asserts.equals(env, "hotfix", normalize_ref_for_tests("refs/remotes/origin/hotfix"))
     return unittest.end(env)
 
 def _collect_env_from_environ_provider_mapping_test(ctx):
@@ -165,6 +184,60 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
     asserts.equals(env, "https://github.com/team/repo.git", appveyor.get("repository_url"))
     asserts.equals(env, "pr-branch", appveyor.get("branch"))
     asserts.equals(env, "cafebabe", appveyor.get("sha"))
+
+    buildkite = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "BUILDKITE": "true",
+        "BUILDKITE_REPO": "https://buildkite.example/org/repo.git",
+        "BUILDKITE_BRANCH": "refs/heads/release",
+        "BUILDKITE_COMMIT": "beadfeed",
+    }, None)
+    asserts.equals(env, "buildkite", buildkite.get("ci_provider_name"))
+    asserts.equals(env, "https://buildkite.example/org/repo.git", buildkite.get("repository_url"))
+    asserts.equals(env, "release", buildkite.get("branch"))
+    asserts.equals(env, "beadfeed", buildkite.get("sha"))
+
+    gitlab = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITLAB_CI": "true",
+        "CI_REPOSITORY_URL": "https://gitlab.example/org/repo.git",
+        "CI_COMMIT_BRANCH": "refs/heads/main",
+        "CI_COMMIT_SHA": "f00dbabe",
+    }, None)
+    asserts.equals(env, "gitlab", gitlab.get("ci_provider_name"))
+    asserts.equals(env, "https://gitlab.example/org/repo.git", gitlab.get("repository_url"))
+    asserts.equals(env, "main", gitlab.get("branch"))
+    asserts.equals(env, "f00dbabe", gitlab.get("sha"))
+
+    jenkins = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "JENKINS_URL": "https://jenkins.example/",
+        "GIT_URL": "https://github.example/org/repo.git",
+        "GIT_BRANCH": "refs/heads/dev",
+        "GIT_COMMIT": "00112233",
+    }, None)
+    asserts.equals(env, "jenkins", jenkins.get("ci_provider_name"))
+    asserts.equals(env, "https://github.example/org/repo.git", jenkins.get("repository_url"))
+    asserts.equals(env, "dev", jenkins.get("branch"))
+    asserts.equals(env, "00112233", jenkins.get("sha"))
+    return unittest.end(env)
+
+def _collect_env_ctx_wrapper_test(ctx):
+    """Validate repository-context wrapper delegates to environ collector."""
+    env = unittest.begin(ctx)
+    fake_ctx = struct(
+        os = struct(environ = {
+            "DD_SITE": "datadoghq.com",
+            "GITHUB_SHA": "abc999",
+            "GITHUB_REPOSITORY": "org/repo",
+            "GITHUB_REF": "refs/heads/main",
+        }),
+        attr = struct(service = "svc-from-ctx"),
+    )
+    collected = collect_env_for_tests(fake_ctx)
+    asserts.equals(env, "svc-from-ctx", collected.get("service"))
+    asserts.equals(env, "github_actions", collected.get("ci_provider_name"))
+    asserts.equals(env, "abc999", collected.get("sha"))
     return unittest.end(env)
 
 def _read_abs_file_command_escaping_test(ctx):
@@ -188,6 +261,10 @@ def _parse_go_module_path_test(ctx):
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("module\tgithub.com/foo/bar"))
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("module \"github.com/foo/bar\""))
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("// comment\nmodule 'github.com/foo/bar'\n"))
+    asserts.equals(env, "github.com/foo/v2", parse_go_module_path_for_tests("module github.com/foo/v2"))
+    asserts.equals(env, "github.com/first/mod", parse_go_module_path_for_tests("module github.com/first/mod\nmodule github.com/second/mod"))
+    asserts.equals(env, "", parse_go_module_path_for_tests("module"))
+    asserts.equals(env, "", parse_go_module_path_for_tests("mod github.com/foo/bar"))
     asserts.equals(env, "", parse_go_module_path_for_tests("// module github.com/foo/bar"))
     asserts.equals(env, "", parse_go_module_path_for_tests(""))
     return unittest.end(env)
@@ -293,6 +370,33 @@ def _clone_payload_with_detached_attributes_test(ctx):
     asserts.equals(env, None, original_modules.get("module_b"))
     return unittest.end(env)
 
+def _clone_payload_with_nested_structure_test(ctx):
+    """Validate detached clone keeps nested structures isolated."""
+    env = unittest.begin(ctx)
+    original = {
+        "data": {
+            "attributes": {
+                "tests": {"module_a": {"suite_a": ["test_a"]}},
+                "modules": {"module_a": {"suite_a": {"test_a": {"properties": {"quarantined": False}}}}},
+            },
+        },
+    }
+    cloned = clone_payload_with_detached_attributes_for_tests(original)
+    cloned_tests = (((cloned.get("data") or {}).get("attributes") or {}).get("tests") or {})
+    cloned_modules = (((cloned.get("data") or {}).get("attributes") or {}).get("modules") or {})
+    cloned_tests["module_a"]["suite_a"].append("test_b")
+    cloned_modules["module_a"]["suite_a"]["test_a"]["properties"]["quarantined"] = True
+
+    original_tests = (((original.get("data") or {}).get("attributes") or {}).get("tests") or {})
+    original_modules = (((original.get("data") or {}).get("attributes") or {}).get("modules") or {})
+    asserts.equals(env, ["test_a"], original_tests.get("module_a").get("suite_a"))
+    asserts.equals(
+        env,
+        False,
+        original_modules.get("module_a").get("suite_a").get("test_a").get("properties").get("quarantined"),
+    )
+    return unittest.end(env)
+
 def _example_stub_includes_manifest_in_files_test(ctx):
     """Ensure stub test_optimization_files includes manifest for contract parity."""
     env = unittest.begin(ctx)
@@ -322,6 +426,23 @@ def _example_stub_includes_manifest_in_files_test(ctx):
     asserts.true(env, exports_start > context_group_start)
     context_group_block = content[context_group_start:exports_start]
     asserts.true(env, context in context_group_block)
+    return unittest.end(env)
+
+def _example_stub_service_keys_targets_test(ctx):
+    """Validate service-suffixed filegroups are emitted for service keys."""
+    env = unittest.begin(ctx)
+    content = render_stub_build_for_tests(
+        ".testoptimization/cache/http/settings.json",
+        ".testoptimization/manifest.txt",
+        ".testoptimization/cache/http/known_tests.json",
+        ".testoptimization/cache/http/test_management.json",
+        ".testoptimization/context.json",
+        service_keys = ["go_service", "ruby_service"],
+    )
+    asserts.true(env, 'name = "test_optimization_files_go_service"' in content)
+    asserts.true(env, 'name = "test_optimization_context_go_service"' in content)
+    asserts.true(env, 'name = "test_optimization_files_ruby_service"' in content)
+    asserts.true(env, 'name = "test_optimization_context_ruby_service"' in content)
     return unittest.end(env)
 
 def _http_execute_timeout_seconds_test(ctx):
@@ -368,6 +489,20 @@ def _partition_unix_headers_test(ctx):
     asserts.equals(env, None, public_headers.get("DD-API-KEY"))
     asserts.equals(env, "application/json", public_headers.get("Accept"))
     asserts.equals(env, "application/json", public_headers.get("Content-Type"))
+    return unittest.end(env)
+
+def _partition_unix_headers_without_api_key_test(ctx):
+    """Validate header partitioning when DD-API-KEY is absent."""
+    env = unittest.begin(ctx)
+    out = partition_unix_headers_for_tests({
+        "Accept": "application/json",
+        "X-Test": "1",
+    })
+    asserts.false(env, out.get("has_dd_api_key"))
+    asserts.equals(env, "", out.get("dd_api_key"))
+    public_headers = out.get("public_headers") or {}
+    asserts.equals(env, "application/json", public_headers.get("Accept"))
+    asserts.equals(env, "1", public_headers.get("X-Test"))
     return unittest.end(env)
 
 def _record_sync_extension_repo_owner_success_test(ctx):
@@ -538,8 +673,11 @@ def _record_sync_extension_repo_owner_duplicate_failure_test_impl(ctx):
 dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
 resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
+module_label_map_empty_inputs_test = unittest.make(_module_label_map_empty_inputs_test)
 normalize_ref_test = unittest.make(_normalize_ref_test)
+normalize_ref_edge_cases_test = unittest.make(_normalize_ref_edge_cases_test)
 collect_env_from_environ_provider_mapping_test = unittest.make(_collect_env_from_environ_provider_mapping_test)
+collect_env_ctx_wrapper_test = unittest.make(_collect_env_ctx_wrapper_test)
 read_abs_file_command_escaping_test = unittest.make(_read_abs_file_command_escaping_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 dirname_test = unittest.make(_dirname_test)
@@ -548,10 +686,13 @@ export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 export_bzl_escaping_test = unittest.make(_export_bzl_escaping_test)
 fnv1a_symbol_distinguishes_common_symbols_test = unittest.make(_fnv1a_symbol_distinguishes_common_symbols_test)
 clone_payload_with_detached_attributes_test = unittest.make(_clone_payload_with_detached_attributes_test)
+clone_payload_with_nested_structure_test = unittest.make(_clone_payload_with_nested_structure_test)
 example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_includes_manifest_in_files_test)
+example_stub_service_keys_targets_test = unittest.make(_example_stub_service_keys_targets_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)
+partition_unix_headers_without_api_key_test = unittest.make(_partition_unix_headers_without_api_key_test)
 record_sync_extension_repo_owner_success_test = unittest.make(_record_sync_extension_repo_owner_success_test)
 decode_json_object_valid_test = unittest.make(_decode_json_object_valid_test)
 decode_json_object_empty_failure_test = analysistest.make(
