@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="${TEST_SRCDIR}/${TEST_WORKSPACE}"
+to_unix_path() {
+  local raw="${1:-}"
+  if [[ -z "${raw}" ]]; then
+    return 0
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "${raw}" 2>/dev/null || printf '%s' "${raw}"
+    return 0
+  fi
+  printf '%s' "${raw}"
+}
+
+test_srcdir="$(to_unix_path "${TEST_SRCDIR}")"
+repo_root="${test_srcdir}/${TEST_WORKSPACE}"
 bazelw="${repo_root}/bazelw"
-if [[ ! -x "${bazelw}" ]]; then
+if [[ ! -f "${bazelw}" ]]; then
   echo "error: bazelw not found at ${bazelw}"
   exit 1
 fi
 
-tmp_parent="${TEST_TMPDIR:-${TMPDIR:-}}"
+tmp_parent="$(to_unix_path "${TEST_TMPDIR:-${TMPDIR:-}}")"
 if [[ -n "${tmp_parent}" && -d "${tmp_parent}" ]]; then
   tmp_dir="$(mktemp -d "${tmp_parent%/}/bazelw_test.XXXXXX")"
 else
@@ -37,7 +50,7 @@ DD_GIT_HEAD_COMMIT="deadbeef" \
 DD_GIT_COMMIT_MESSAGE="override message" \
 DD_GIT_HEAD_MESSAGE="override head message" \
 BAZELW_CAPTURE_FILE="${capture}" \
-"${bazelw}" --nosystem_rc query //:smoke >/dev/null
+bash "${bazelw}" --nosystem_rc query //:smoke >/dev/null
 
 capture_norm="${tmp_dir}/query_args.normalized.txt"
 tr -d '\r' <"${capture}" >"${capture_norm}"
@@ -58,7 +71,7 @@ grep -q '^//:smoke$' "${capture_norm}"
 capture_help="${tmp_dir}/help_args.txt"
 PATH="${fake_bin}:${PATH}" \
 BAZELW_CAPTURE_FILE="${capture_help}" \
-"${bazelw}" help >/dev/null
+bash "${bazelw}" help >/dev/null
 
 capture_help_norm="${tmp_dir}/help_args.normalized.txt"
 tr -d '\r' <"${capture_help}" >"${capture_help_norm}"

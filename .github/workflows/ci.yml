@@ -103,7 +103,7 @@ jobs:
           EOF
 
           cat >"$tmp_ws/BUILD.bazel" <<'EOF'
-          load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+          load("@datadog-rules-test-optimization-go//tests:example_stub_repo.bzl", "render_stub_build_for_tests")
           load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
           filegroup(
