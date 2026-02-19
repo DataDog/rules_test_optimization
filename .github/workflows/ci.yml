@@ -109,7 +109,10 @@ jobs:
 
           (
             cd "$tmp_ws"
-            "${GITHUB_WORKSPACE}/bazelw" --noenable_bzlmod --enable_workspace query //:workspace_smoke
+            # WORKSPACE mode validation is pinned to Bazel 8 because Bazel 9
+            # deprecates/disables this path during the migration window.
+            USE_BAZEL_VERSION=8.4.1 \
+              "${GITHUB_WORKSPACE}/bazelw" query --noenable_bzlmod --enable_workspace //:workspace_smoke
           )
 
   coverage-tools:
