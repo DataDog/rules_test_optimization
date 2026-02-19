@@ -1,8 +1,8 @@
 # Audit Findings Closure Ledger
 
 This ledger tracks closure for all findings from:
-- `/Users/tony.redondo/Downloads/FINDINGS1.md`
-- `/Users/tony.redondo/Downloads/FINDINGS2.md`
+- `FINDINGS1.md` (initial deep analysis report)
+- `FINDINGS2.md` (follow-up deep audit report)
 
 Disposition values:
 - `fixed`

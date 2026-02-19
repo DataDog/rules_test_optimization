@@ -69,12 +69,21 @@ def _load_yaml_with_ruby(path: Path) -> Any:
 
 
 def load_yaml(path: Path) -> Any:
+    pyyaml_error: Exception | None = None
     try:
         return _load_yaml_with_pyyaml(path)
-    except RuntimeError:
-        return _load_yaml_with_ruby(path)
     except Exception as exc:
-        raise RuntimeError(f"PyYAML failed to parse YAML: {exc}") from exc
+        pyyaml_error = exc
+
+    try:
+        return _load_yaml_with_ruby(path)
+    except Exception as ruby_exc:
+        if pyyaml_error is not None:
+            raise RuntimeError(
+                "failed to parse YAML with both PyYAML and Ruby: "
+                f"pyyaml={pyyaml_error}; ruby={ruby_exc}"
+            ) from ruby_exc
+        raise RuntimeError(f"Ruby failed to parse YAML: {ruby_exc}") from ruby_exc
 
 
 def load_json(path: Path) -> Any:
@@ -153,7 +162,6 @@ def main() -> int:
         print(f"in sync: {json_path} matches {yaml_path}")
         return 0
 
-    json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(rendered, encoding="utf-8")
     print(f"updated: {json_path} <- {yaml_path}")
     return 0

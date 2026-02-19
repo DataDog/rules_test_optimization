@@ -1,4 +1,3 @@
-# Unit tests for sync utilities (DD_SITE normalization + module label mapping).
 """Unit tests for sync utility helpers."""
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
@@ -171,6 +170,15 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
     asserts.equals(env, "https://override/repo.git", overridden.get("repository_url"))
     asserts.equals(env, "release", overridden.get("branch"))
     asserts.equals(env, "deadbeef", overridden.get("sha"))
+
+    overridden_with_token = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITHUB_SHA": "abc123",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_REF": "refs/heads/main",
+        "DD_GIT_REPOSITORY_URL": "https://token@override/repo.git",
+    }, None)
+    asserts.equals(env, "https://override/repo.git", overridden_with_token.get("repository_url"))
 
     appveyor = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -468,7 +476,7 @@ def _clone_payload_with_detached_attributes_test(ctx):
             },
             "id": "source-data",
         },
-        "meta": {"source": "fixture"},
+        "meta": {"source": "fixture", "tags": ["a", "b"]},
     }
     cloned = clone_payload_with_detached_attributes_for_tests(original)
     cloned_attrs = ((cloned.get("data") or {}).get("attributes") or {})
@@ -478,6 +486,9 @@ def _clone_payload_with_detached_attributes_test(ctx):
     cloned_attrs["modules"] = {
         "module_b": {"suite_b": {}},
     }
+    cloned_meta = cloned.get("meta") or {}
+    cloned_meta["source"] = "mutated"
+    cloned_meta["tags"] = ["x"]
 
     original_attrs = ((original.get("data") or {}).get("attributes") or {})
     original_tests = original_attrs.get("tests") or {}
@@ -486,6 +497,9 @@ def _clone_payload_with_detached_attributes_test(ctx):
     asserts.equals(env, None, original_tests.get("module_b"))
     asserts.true(env, original_modules.get("module_a") != None)
     asserts.equals(env, None, original_modules.get("module_b"))
+    original_meta = original.get("meta") or {}
+    asserts.equals(env, "fixture", original_meta.get("source"))
+    asserts.equals(env, ["a", "b"], original_meta.get("tags"))
     return unittest.end(env)
 
 def _clone_payload_with_nested_structure_test(ctx):

@@ -9,10 +9,14 @@ Maintainers:
 load(
     "//tools/core:common_utils.bzl",
     _is_dict = "is_dict",
+    _is_list = "is_list",
+    _is_string = "is_string",
     "sanitize_label_fragment",
 )
 
 is_dict = _is_dict
+is_list = _is_list
+is_string = _is_string
 
 def service_mapping_entries(topt_data):
     """Extract service-shaped entries from an aggregator mapping.
@@ -44,9 +48,9 @@ def normalize_user_data(user_data):
     if user_data == None:
         return []
     # A single label can be passed as a string; keep it atomic.
-    if type(user_data) == type(""):
+    if is_string(user_data):
         return [user_data]
-    if type(user_data) == type([]) or type(user_data) == type(()):
+    if is_list(user_data):
         return list(user_data)
     fail("normalize_user_data: expected None, string, list, or tuple; got %s" % type(user_data))
 

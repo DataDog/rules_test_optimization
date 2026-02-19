@@ -61,6 +61,13 @@ load(
     "validate_runtime_version",
     "validate_service_name",
 )
+load(
+    "//tools/core:test_optimization_sync_env.bzl",
+    _collect_env_from_environ = "collect_env_from_environ",
+    _first_env = "first_env",
+    _normalize_ref = "normalize_ref",
+    _set_context_tag_from_env = "set_context_tag_from_env",
+)
 
 # ##########################################################################
 # Constants
@@ -227,29 +234,8 @@ def _fnv1a_32(value):
     return h
 
 def _clone_payload_with_detached_attributes(obj):
-    """Clone payload root and detach `data`/`data.attributes` dictionaries.
-
-    This prevents module-scoped mutations from leaking back into the original
-    decoded object while preserving all other top-level and nested keys.
-    """
-    new_obj = {}
-    for _k in obj.keys():
-        new_obj[_k] = obj.get(_k)
-
-    src_data = obj.get("data")
-    data_obj2 = {}
-    if _is_dict(src_data):
-        for _k in src_data.keys():
-            data_obj2[_k] = src_data.get(_k)
-    new_obj["data"] = data_obj2
-
-    src_attrs = src_data.get("attributes") if _is_dict(src_data) else None
-    attrs_obj2 = {}
-    if _is_dict(src_attrs):
-        for _k in src_attrs.keys():
-            attrs_obj2[_k] = _clone_json_like(src_attrs.get(_k))
-    data_obj2["attributes"] = attrs_obj2
-    return new_obj
+    """Deep-clone payload object so module mutations never leak to source."""
+    return _clone_json_like(obj)
 
 def _clone_json_like(value):
     """Clone dict/list payload nodes via JSON round-trip; scalars pass through."""
@@ -1072,76 +1058,6 @@ def _http_post_json(ctx, url, headers, json_body_str, tmp_body_file, out_file, d
         http_policy = http_policy,
     )
 
-def _first_env(ctx, keys):
-    """Return the first non-empty environment value among candidate keys."""
-    # _first_env: returns the first non-empty environment variable value
-    for k in keys:
-        v = ctx.os.environ.get(k)
-        if v:
-            return v
-    return ""
-
-def _first_env_from_environ(environ, keys):
-    """Return first non-empty env value from a plain dict-like mapping."""
-    for k in keys:
-        v = environ.get(k)
-        if v:
-            return v
-    return ""
-
-def _apply_dd_git_overrides(env_data, environ):
-    """Apply DD_GIT_* overrides with explicit precedence."""
-    dd_repo = environ.get("DD_GIT_REPOSITORY_URL") or ""
-    dd_branch = environ.get("DD_GIT_BRANCH") or ""
-    dd_sha = environ.get("DD_GIT_COMMIT_SHA") or ""
-    dd_head_sha = environ.get("DD_GIT_HEAD_COMMIT") or ""
-    dd_commit_msg = environ.get("DD_GIT_COMMIT_MESSAGE") or ""
-    dd_head_msg = environ.get("DD_GIT_HEAD_MESSAGE") or ""
-    if dd_repo:
-        env_data["repository_url"] = dd_repo
-    if dd_branch:
-        env_data["branch"] = _normalize_ref(dd_branch)
-    if dd_sha:
-        env_data["sha"] = dd_sha
-    if dd_head_sha:
-        env_data["head_sha"] = dd_head_sha
-    if dd_commit_msg:
-        env_data["commit_message"] = dd_commit_msg
-    if dd_head_msg:
-        env_data["head_message"] = dd_head_msg
-
-def _normalize_ref(name):
-    """Normalize branch/tag refs by removing common prefix forms."""
-    # _normalize_ref: removes common ref prefixes from branch/tag names
-    if not name:
-        return name
-    # Starlark has no `while`; iterate a bounded number of times while removing
-    # at most one prefix per pass.
-    for _ in range(8):
-        if name.startswith("refs/remotes/origin/"):
-            name = name[len("refs/remotes/origin/"):]
-            continue
-        if name.startswith("refs/heads/"):
-            name = name[len("refs/heads/"):]
-            continue
-        if name.startswith("refs/tags/"):
-            name = name[len("refs/tags/"):]
-            continue
-        if name.startswith("refs/"):
-            name = name[len("refs/"):]
-            continue
-        if name.startswith("remotes/origin/"):
-            name = name[len("remotes/origin/"):]
-            continue
-        if name.startswith("origin/"):
-            name = name[len("origin/"):]
-            continue
-        if name.startswith("tags/"):
-            name = name[len("tags/"):]
-            continue
-        break
-    return name
-
 # Public aliases for tests (avoid importing private symbols)
 compute_dd_api_base_for_tests = _compute_dd_api_base
 resolve_dd_api_base_for_tests = _resolve_dd_api_base_for_tests
@@ -1167,161 +1083,6 @@ render_module_runfiles_bzl_for_tests = _render_module_runfiles_bzl
 # ##########################################################################
 # CI environment detection
 # ##########################################################################
-
-def _collect_env_from_environ(environ, attr_service = None):
-    """Collect CI/git/service context from a plain env mapping."""
-    env_data = {
-        "dd_site": environ.get("DD_SITE") or "",
-        # Optional override to point API calls at a mock server (tests/dev).
-        "dd_api_base": environ.get("DD_TEST_OPTIMIZATION_API_BASE") or "",
-        # Service can be provided via attr first, then DD_SERVICE, else default
-        "service": (attr_service or environ.get("DD_SERVICE") or "unnamed-service"),
-        "environment": environ.get("DD_ENV") or "CI",
-        "repository_url": "",
-        "branch": "",
-        "sha": "",
-        "head_sha": "",
-        "commit_message": "",
-        "head_message": "",
-    }
-
-    # Provider detection and extraction
-    #
-    # Important maintenance contract:
-    # - Keep this as a single `if/elif` chain so exactly one provider mapping
-    #   wins when multiple CI env signatures are present.
-    # - Prefer provider-native variables first; user DD_* overrides are applied
-    #   afterwards in one explicit precedence layer below.
-    provider = ""
-    if environ.get("APPVEYOR"):
-        # AppVeyor can represent non-GitHub providers; preserve raw repo name
-        # unless provider explicitly indicates GitHub.
-        provider = "appveyor"
-        repo_name = environ.get("APPVEYOR_REPO_NAME") or ""
-        if (environ.get("APPVEYOR_REPO_PROVIDER") or "") == "github" and repo_name:
-            env_data["repository_url"] = "https://github.com/%s.git" % repo_name
-        else:
-            env_data["repository_url"] = repo_name
-        env_data["sha"] = environ.get("APPVEYOR_REPO_COMMIT") or ""
-        env_data["branch"] = _first_env_from_environ(environ, ["APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH", "APPVEYOR_REPO_BRANCH"]) or ""
-    elif environ.get("TF_BUILD"):
-        # Azure Pipelines branch often arrives as full ref path.
-        provider = "azure_pipelines"
-        env_data["repository_url"] = environ.get("BUILD_REPOSITORY_URI") or ""
-        env_data["sha"] = environ.get("BUILD_SOURCEVERSION") or ""
-        env_data["branch"] = environ.get("BUILD_SOURCEBRANCH") or ""
-        env_data["commit_message"] = environ.get("BUILD_SOURCEVERSIONMESSAGE") or ""
-    elif environ.get("BITBUCKET_COMMIT"):
-        # Prefer explicit origin URL, else synthesize canonical slug URL.
-        provider = "bitbucket"
-        env_data["repository_url"] = (
-            environ.get("BITBUCKET_GIT_HTTP_ORIGIN") or
-            ("https://bitbucket.org/%s.git" % (environ.get("BITBUCKET_REPO_SLUG") or ""))
-        )
-        env_data["sha"] = environ.get("BITBUCKET_COMMIT") or ""
-        env_data["branch"] = environ.get("BITBUCKET_BRANCH") or ""
-    elif environ.get("BUDDY"):
-        provider = "buddy"
-        env_data["repository_url"] = _first_env_from_environ(environ, [
-            "BUDDY_SCM_URL",
-            "BUDDY_REPO_URL",
-        ]) or ""
-        env_data["sha"] = _first_env_from_environ(environ, [
-            "BUDDY_EXECUTION_REVISION",
-            "BUDDY_EXECUTION_REVISION_COMMIT_ID",
-        ]) or ""
-        env_data["branch"] = _first_env_from_environ(environ, [
-            "BUDDY_EXECUTION_BRANCH",
-            "BUDDY_EXECUTION_BRANCH_NAME",
-        ]) or ""
-
-    elif environ.get("BUILDKITE"):
-        # Buildkite exposes direct message and branch fields used by settings/TM.
-        provider = "buildkite"
-        env_data["repository_url"] = environ.get("BUILDKITE_REPO") or ""
-        env_data["sha"] = environ.get("BUILDKITE_COMMIT") or ""
-        env_data["branch"] = environ.get("BUILDKITE_BRANCH") or ""
-        env_data["commit_message"] = environ.get("BUILDKITE_MESSAGE") or ""
-    elif environ.get("CIRCLECI"):
-        provider = "circleci"
-        env_data["repository_url"] = environ.get("CIRCLE_REPOSITORY_URL") or ""
-        env_data["sha"] = environ.get("CIRCLE_SHA1") or ""
-        env_data["branch"] = environ.get("CIRCLE_BRANCH") or ""
-    elif environ.get("GITHUB_SHA"):
-        # GitHub Actions exposes repository and server separately.
-        provider = "github_actions"
-        gh_repo = environ.get("GITHUB_REPOSITORY") or ""
-        gh_server = environ.get("GITHUB_SERVER_URL") or "https://github.com"
-        if gh_repo:
-            env_data["repository_url"] = "%s/%s.git" % (gh_server, gh_repo)
-        env_data["sha"] = environ.get("GITHUB_SHA") or ""
-        env_data["branch"] = _normalize_ref(environ.get("GITHUB_REF") or "")
-    elif environ.get("GITLAB_CI"):
-        # GitLab MR pipelines may provide source branch head SHA separately.
-        provider = "gitlab"
-        env_data["repository_url"] = environ.get("CI_REPOSITORY_URL") or ""
-        env_data["sha"] = environ.get("CI_COMMIT_SHA") or ""
-        env_data["branch"] = environ.get("CI_COMMIT_BRANCH") or ""
-        env_data["commit_message"] = environ.get("CI_COMMIT_MESSAGE") or ""
-        env_data["head_sha"] = environ.get("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA") or ""
-    elif environ.get("JENKINS_URL"):
-        # Jenkins plugin variants expose git URL under multiple key names.
-        provider = "jenkins"
-        env_data["repository_url"] = _first_env_from_environ(environ, ["GIT_URL", "GIT_URL_1"]) or ""
-        env_data["sha"] = environ.get("GIT_COMMIT") or ""
-        env_data["branch"] = environ.get("GIT_BRANCH") or ""
-    elif environ.get("TEAMCITY_VERSION"):
-        provider = "teamcity"
-        env_data["repository_url"] = environ.get("GIT_URL") or ""
-        env_data["sha"] = environ.get("GIT_COMMIT") or ""
-        env_data["branch"] = environ.get("GIT_BRANCH") or ""
-    elif environ.get("TRAVIS"):
-        # Travis branch precedence: PR head branch > build branch.
-        provider = "travisci"
-        slug = environ.get("TRAVIS_REPO_SLUG") or ""
-        if slug:
-            env_data["repository_url"] = "https://github.com/%s.git" % slug
-        env_data["sha"] = environ.get("TRAVIS_COMMIT") or ""
-        env_data["branch"] = _first_env_from_environ(environ, ["TRAVIS_PULL_REQUEST_BRANCH", "TRAVIS_BRANCH"]) or ""
-        env_data["commit_message"] = environ.get("TRAVIS_COMMIT_MESSAGE") or ""
-    elif environ.get("BITRISE_BUILD_SLUG"):
-        provider = "bitrise"
-        env_data["repository_url"] = environ.get("BITRISE_GIT_REPOSITORY_URL") or ""
-        env_data["sha"] = environ.get("BITRISE_GIT_COMMIT") or ""
-        env_data["branch"] = environ.get("BITRISE_GIT_BRANCH") or ""
-    elif environ.get("CF_BUILD_ID"):
-        provider = "codefresh"
-        env_data["branch"] = environ.get("CF_BRANCH") or ""
-    elif environ.get("CODEBUILD_INITIATOR"):
-        provider = "awscodebuild"
-        env_data["repository_url"] = environ.get("CODEBUILD_SOURCE_REPO_URL") or ""
-        env_data["sha"] = environ.get("CODEBUILD_RESOLVED_SOURCE_VERSION") or ""
-        env_data["branch"] = _first_env_from_environ(environ, [
-            "CODEBUILD_WEBHOOK_HEAD_REF",
-            "CODEBUILD_SOURCE_VERSION",
-        ]) or ""
-
-    elif environ.get("DRONE"):
-        provider = "drone"
-        env_data["repository_url"] = environ.get("DRONE_GIT_HTTP_URL") or ""
-        env_data["sha"] = environ.get("DRONE_COMMIT_SHA") or ""
-        env_data["branch"] = environ.get("DRONE_BRANCH") or ""
-        env_data["commit_message"] = environ.get("DRONE_COMMIT_MESSAGE") or ""
-
-    # Normalize ref formats
-    # Some providers emit refs as "refs/heads/main" while others emit "main".
-    # We normalize here so request/build-context users can treat branch values
-    # uniformly without extra provider conditionals.
-    env_data["branch"] = _normalize_ref(env_data.get("branch"))
-
-    # Overlay with user-specific DD_* overrides when present (highest precedence)
-    # This allows local debugging and CI customization without changing provider
-    # mapping logic above.
-    _apply_dd_git_overrides(env_data, environ)
-
-    # Expose provider name to callers (e.g., for context tags and diagnostics).
-    env_data["ci_provider_name"] = provider
-    return env_data
 
 def _collect_env(ctx):
     """Collect CI/git/service context into a normalized metadata dict."""
@@ -1359,12 +1120,6 @@ def _build_configurations_json(ctx, debug, osinfo = None):
     conf_json = json.encode(conf)
     log_debug(debug, "config", "Configurations JSON: %s" % conf_json)
     return conf_json
-
-def _set_context_tag_from_env(environ, tags, env_key, tag_key):
-    """Copy one optional environment variable into context tags."""
-    value = environ.get(env_key)
-    if value:
-        tags[tag_key] = value
 
 def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     """Build non-secret context tags stored in generated `context.json`."""

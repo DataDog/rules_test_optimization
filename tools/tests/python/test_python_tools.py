@@ -28,8 +28,11 @@ def _runfile(rel_path: str) -> Path:
 
     # Non-Bazel fallback: allow direct execution from a checked-out repository.
     # This keeps the tests usable by lightweight CI coverage probes.
-    repo_root = Path(__file__).resolve().parents[3]
-    candidates.append(repo_root / rel_path)
+    here = Path(__file__).resolve().parent
+    for candidate in [here] + list(here.parents):
+        if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
+            candidates.append(candidate / rel_path)
+            break
 
     for cand in candidates:
         if cand.exists():
@@ -289,7 +292,7 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     self.mod.load_yaml(yaml_path)
 
-    def test_load_yaml_wraps_non_runtime_pyyaml_errors(self) -> None:
+    def test_load_yaml_falls_back_when_pyyaml_raises_non_runtime_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             yaml_path = Path(tmp) / "schema.yaml"
             yaml_path.write_text("a: 1\n", encoding="utf-8")
@@ -301,10 +304,11 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
             ), mock.patch.object(
                 self.mod,
                 "_load_yaml_with_ruby",
+                return_value={"a": 1},
             ) as ruby_loader:
-                with self.assertRaises(RuntimeError):
-                    self.mod.load_yaml(yaml_path)
-                ruby_loader.assert_not_called()
+                out = self.mod.load_yaml(yaml_path)
+                self.assertEqual({"a": 1}, out)
+                ruby_loader.assert_called_once_with(yaml_path)
 
     def test_main_check_and_update_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -369,6 +373,23 @@ class CheckModuleVersionsTests(unittest.TestCase):
             )
             self.assertEqual("2.0.1", self.mod._extract_module_version(module_file))
 
+    def test_extract_module_version_with_comments_and_nested_parentheses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module_file = Path(tmp) / "MODULE.bazel"
+            module_file.write_text(
+                "\n".join(
+                    [
+                        "module(",
+                        '    name = "demo",  # comment with ) should be ignored',
+                        '    repo_name = "demo(with-paren)",',
+                        '    version = "3.4.5",',
+                        ")",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual("3.4.5", self.mod._extract_module_version(module_file))
+
     def test_extract_bazel_dep_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
@@ -383,6 +404,30 @@ class CheckModuleVersionsTests(unittest.TestCase):
             )
             self.assertEqual(
                 "1.2.3",
+                self.mod._extract_bazel_dep_version(
+                    module_file,
+                    "datadog-rules-test-optimization",
+                ),
+            )
+
+    def test_extract_bazel_dep_version_multiline_with_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module_file = Path(tmp) / "MODULE.bazel"
+            module_file.write_text(
+                "\n".join(
+                    [
+                        'module(name = "demo-go", version = "1.2.3")',
+                        "bazel_dep(",
+                        '    name = "datadog-rules-test-optimization",',
+                        '    # comment with ) should not end the call',
+                        '    version = "9.9.9",',
+                        ")",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                "9.9.9",
                 self.mod._extract_bazel_dep_version(
                     module_file,
                     "datadog-rules-test-optimization",

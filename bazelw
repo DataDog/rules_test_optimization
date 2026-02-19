@@ -20,6 +20,20 @@ else
   bazel_cmd="bazel"
 fi
 
+sanitize_repository_url() {
+  local raw="${1:-}"
+  if [[ -z "${raw}" ]]; then
+    printf '%s' ""
+    return 0
+  fi
+  # Strip URL userinfo when present (for example: https://token@host/repo.git).
+  if [[ "${raw}" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]+@(.*)$ ]]; then
+    printf '%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  printf '%s' "${raw}"
+}
+
 # Split args into startup args (leading dashes) and the command
 startup_args=()
 cmd=""
@@ -74,6 +88,7 @@ if [[ "${cmd}" =~ ^(build|test|run|sync|fetch|query|cquery|aquery|coverage|info)
       fi
       # Datadog-specific vars
       dd_git_repo_url=$(git config --get remote.origin.url 2>/dev/null || true)
+      dd_git_repo_url="$(sanitize_repository_url "${dd_git_repo_url}")"
       # Prefer symbolic ref; fallback to abbrev-ref; on detached HEAD output empty and we'll default later
       dd_git_branch=$(git symbolic-ref --short -q HEAD 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
       if [[ -z "${dd_git_branch}" || "${dd_git_branch}" == "HEAD" ]]; then
@@ -85,6 +100,7 @@ if [[ "${cmd}" =~ ^(build|test|run|sync|fetch|query|cquery|aquery|coverage|info)
   cmdline+=("--repo_env=FETCH_SALT=${salt}")
   # Allow user-provided env to override computed values
   if [[ -n "${DD_GIT_REPOSITORY_URL:-}" ]]; then dd_git_repo_url="${DD_GIT_REPOSITORY_URL}"; fi
+  dd_git_repo_url="$(sanitize_repository_url "${dd_git_repo_url}")"
   if [[ -n "${DD_GIT_BRANCH:-}" ]]; then dd_git_branch="${DD_GIT_BRANCH}"; fi
   if [[ -n "${DD_GIT_COMMIT_SHA:-}" ]]; then dd_git_commit="${DD_GIT_COMMIT_SHA}"; fi
   if [[ -n "${DD_GIT_HEAD_COMMIT:-}" ]]; then dd_git_head_commit="${DD_GIT_HEAD_COMMIT}"; fi

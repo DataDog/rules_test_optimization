@@ -1,7 +1,6 @@
 version: 2
 updates:
-  # This repo does not maintain pip/go/npm manifests; dependency automation is
-  # focused on security-sensitive GitHub Action pins.
+  # Keep workflow pins and Python tooling dependencies updated.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -15,3 +14,16 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "deps(actions)"
+  - package-ecosystem: "pip"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:10"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps(python)"

@@ -56,6 +56,14 @@ def is_dict(value):
     """Return True when value is a Starlark dict."""
     return type(value) == type({})
 
+def is_list(value):
+    """Return True when value is a Starlark list or tuple."""
+    return type(value) == type([]) or type(value) == type(())
+
+def is_string(value):
+    """Return True when value is a Starlark string."""
+    return type(value) == type("")
+
 # ##########################################################################
 # Sanitization utilities
 # ##########################################################################
@@ -282,8 +290,4 @@ def dedup_keys(keys):
         taken[candidate] = True
         out.append(candidate)
     return out
-
-# ##########################################################################
-# JSON utilities
-# ##########################################################################
 

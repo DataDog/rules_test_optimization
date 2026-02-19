@@ -11,6 +11,8 @@ permissions:
   contents: read
 
 concurrency:
+  # Keep one active run per workflow/ref to avoid wasting CI minutes when
+  # multiple commits are pushed quickly to the same branch.
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -127,11 +129,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Install Python tooling dependencies
+        shell: bash
+        run: python3 -m pip install -r tools/requirements.txt
+
+      - name: Verify Python tooling tests through Bazel
+        shell: bash
+        run: ./bazelw test //tools/tests/python:python_tools_test
+
       - name: Enforce minimum tools coverage signal
         shell: bash
         env:
-          TOOLS_COVERAGE_MIN: "30.0"
+          TOOLS_COVERAGE_MIN: "40.0"
         run: |
+          # Coverage is collected via Python's trace module for file-level signal,
+          # while the Bazel step above keeps runtime wiring parity verified.
           TOOLS_COVERAGE_MIN="$TOOLS_COVERAGE_MIN" python3 - <<'PY'
           import os
           import pathlib
@@ -233,12 +245,51 @@ jobs:
             examples/single_service/runtests.sh \
             examples/multi_service/runtests.sh \
             tools/tests/integration/*.sh \
-            tools/tests/python/run_python_tools_test.sh
+            tools/tests/python/run_python_tools_test.sh \
+            tools/tests/python/run_bazelw_wrapper_test.sh
+
+      - name: Install Buildifier
+        shell: bash
+        run: |
+          curl -sSL -o /tmp/buildifier https://github.com/bazelbuild/buildtools/releases/download/v8.2.1/buildifier-linux-amd64
+          chmod +x /tmp/buildifier
+          sudo mv /tmp/buildifier /usr/local/bin/buildifier
+
+      - name: Check Starlark formatting with Buildifier
+        shell: bash
+        run: |
+          mapfile -t starlark_files < <(git ls-files '*.bzl' 'BUILD' 'BUILD.bazel' 'WORKSPACE' 'MODULE.bazel')
+          buildifier -mode=check "${starlark_files[@]}"
+
+      - name: Lint embedded uploader templates (bash)
+        shell: bash
+        run: python3 tools/dev/lint_uploader_templates.py --skip-powershell-parse
 
       - name: Verify example .bazelrc files stay in sync
         shell: bash
         run: |
           cmp --silent examples/single_service/.bazelrc examples/multi_service/.bazelrc
+
+  gofmt-check:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Verify Go files are gofmt formatted
+        shell: bash
+        run: |
+          mapfile -t go_files < <(git ls-files '*.go')
+          if (( ${#go_files[@]} == 0 )); then
+            exit 0
+          fi
+          unformatted="$(gofmt -l "${go_files[@]}")"
+          if [[ -n "${unformatted}" ]]; then
+            echo "error: gofmt found unformatted files:"
+            echo "${unformatted}"
+            exit 1
+          fi
 
   schema-sync-check:
     timeout-minutes: 10
@@ -247,13 +298,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Install Python tooling dependencies
+        shell: bash
+        run: python3 -m pip install -r tools/requirements.txt
+
       - name: Verify core/go module versions are aligned
         shell: bash
         run: python3 tools/dev/check_module_versions.py
 
+      - name: Validate integration fixture and snapshot JSON
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          files = sorted(Path("tools/tests/integration/fixtures").glob("*.json"))
+          files += sorted(Path("tools/tests/integration/snapshots").glob("*.json"))
+          for path in files:
+            with path.open("r", encoding="utf-8") as handle:
+              json.load(handle)
+            print(f"valid json: {path}")
+          PY
+
       - name: Verify schema files are in sync
         shell: bash
         run: python3 tools/core/schemas/sync_agentless_schema.py --check
+
+      - name: Verify schema parser parity (PyYAML vs Ruby)
+        shell: bash
+        run: python3 tools/core/schemas/check_schema_parser_parity.py
 
   powershell-lint:
     timeout-minutes: 15
@@ -281,6 +354,10 @@ jobs:
             $results | Format-Table -AutoSize
             throw "PSScriptAnalyzer found lint errors."
           }
+
+      - name: Lint embedded uploader templates (PowerShell parse)
+        shell: pwsh
+        run: python tools/dev/lint_uploader_templates.py --skip-shellcheck
 
   # Policy: keep the hermetic lane Linux-only for now.
   # Rationale: sandbox/network-blocking semantics are most reliable on Linux;

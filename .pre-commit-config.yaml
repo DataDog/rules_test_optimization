@@ -1,0 +1,28 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck --severity=error
+        language: system
+        files: ^(bazelw|examples/.*/runtests\.sh|tools/tests/.+\.sh)$
+
+      - id: gofmt
+        name: gofmt
+        entry: gofmt -w
+        language: system
+        files: \.go$
+
+      - id: buildifier
+        name: buildifier
+        entry: buildifier
+        language: system
+        files: (^|/)(BUILD(\.bazel)?|WORKSPACE|MODULE\.bazel|.*\.bzl)$

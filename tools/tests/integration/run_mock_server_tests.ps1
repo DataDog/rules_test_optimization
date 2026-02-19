@@ -25,7 +25,19 @@ $ErrorActionPreference = "Stop"
 #>
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = (Resolve-Path (Join-Path $scriptDir "..\..\..")).Path
+$candidate = (Resolve-Path $scriptDir).Path
+$repoRoot = $null
+while ($true) {
+  if ((Test-Path (Join-Path $candidate "MODULE.bazel") -PathType Leaf) -or (Test-Path (Join-Path $candidate ".git"))) {
+    $repoRoot = $candidate
+    break
+  }
+  $parent = Split-Path $candidate -Parent
+  if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $candidate) {
+    throw "unable to locate repository root from script path: $scriptDir"
+  }
+  $candidate = $parent
+}
 $integrationSh = "tools/tests/integration/run_mock_server_tests.sh"
 
 Push-Location $repoRoot

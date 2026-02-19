@@ -34,6 +34,8 @@ def _go_bootstrap_extension_impl(module_ctx):
             if _contains_parent_segment(path):
                 fail("go_bootstrap: local_go_companion.path must not include '..' traversal segments, got '%s'" % path)
             normalized_path = path.replace("\\", "/").strip("/")
+            # Requires Bazel APIs with `Label()` and `module_ctx.path(...).exists`
+            # support (Bazel 7+ in this repository's supported matrix).
             module_bazel = module_ctx.path(Label("//%s:MODULE.bazel" % normalized_path))
             if not module_bazel.exists:
                 fail("go_bootstrap: expected MODULE.bazel under local_go_companion.path: '%s'" % path)
