@@ -55,6 +55,14 @@ def _render_template_missing_placeholder_test(ctx):
     asserts.equals(env, "X {missing} Y V Z", out)
     return unittest.end(env)
 
+def _render_template_no_recursive_substitution_test(ctx):
+    """Validate values containing placeholders are not recursively substituted."""
+    env = unittest.begin(ctx)
+    template = "A {x} B {z}"
+    out = render_template_for_tests(template, {"x": "{z}", "z": "Z"})
+    asserts.equals(env, "A {z} B Z", out)
+    return unittest.end(env)
+
 def _codeowners_glob_to_regex_test(ctx):
     """Validate common CODEOWNERS glob-to-regex translations."""
     env = unittest.begin(ctx)
@@ -429,6 +437,7 @@ bash_curl_retry_flags_test = unittest.make(_bash_curl_retry_flags_test)
 render_template_substitution_test = unittest.make(_render_template_substitution_test)
 render_template_unescape_only_test = unittest.make(_render_template_unescape_only_test)
 render_template_missing_placeholder_test = unittest.make(_render_template_missing_placeholder_test)
+render_template_no_recursive_substitution_test = unittest.make(_render_template_no_recursive_substitution_test)
 codeowners_glob_to_regex_test = unittest.make(_codeowners_glob_to_regex_test)
 codeowners_glob_to_regex_edge_cases_test = unittest.make(_codeowners_glob_to_regex_edge_cases_test)
 codeowners_compile_regex_test = unittest.make(_codeowners_compile_regex_test)

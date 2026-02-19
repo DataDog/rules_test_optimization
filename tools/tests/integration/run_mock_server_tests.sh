@@ -80,8 +80,11 @@ cleanup() {
     chmod -R u+w "$TMP_WS" 2>/dev/null || true
     rm -rf "$TMP_WS" || true
   fi
+  if [[ -n "${SERVER_PID_FILE:-}" && -f "${SERVER_PID_FILE:-}" ]]; then
+    rm -f "${SERVER_PID_FILE:-}" || true
+  fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
 
 # Start a mock Datadog API server with fixture responses and request logging.
 "$PYTHON" -u "$REPO_ROOT/tools/tests/integration/mock_dd_server.py" \
@@ -89,6 +92,8 @@ trap cleanup EXIT
   --log "$LOG_FILE" \
   --port 0 >"$SERVER_OUT" 2>&1 &
 SERVER_PID=$!
+SERVER_PID_FILE="$TMP_WS/mock_server.pid"
+printf '%s\n' "$SERVER_PID" >"$SERVER_PID_FILE"
 
 # Wait for the server to bind to a random port and emit it.
 PORT=""
@@ -401,6 +406,15 @@ REPO_ENVS=(
 # ---------------------------------------------------------------------------
 # This is the "known-good" path. Later scenarios intentionally mutate one
 # variable at a time and reuse these repo env defaults.
+# Dedicated sync smoke: force a fresh repository-rule sync and verify generated
+# labels resolve before any build/test actions consume them.
+SYNC_SALT_VALUE="integration-sync-${RANDOM}-$(date +%s)"
+"$BAZEL" "${BAZEL_FLAGS[@]}" fetch @test_optimization_data//:test_optimization_files \
+  --repo_env=FETCH_SALT="$SYNC_SALT_VALUE" \
+  "${REPO_ENVS[@]}"
+"$BAZEL" "${BAZEL_FLAGS[@]}" query @test_optimization_data//:test_optimization_context \
+  "${REPO_ENVS[@]}" >/dev/null
+
 "$BAZEL" "${BAZEL_FLAGS[@]}" build @test_optimization_data//:test_optimization_files \
   "${REPO_ENVS[@]}"
 
@@ -940,6 +954,65 @@ with tempfile.TemporaryDirectory() as td:
     if tuple_wrong_type.returncode == 0:
         print("error: schema validator accepted tuple payload with wrong item type")
         sys.exit(1)
+
+    # Snapshot contract checks: validate checked-in integration snapshots using
+    # endpoint-shaped schemas to catch accidental drift.
+    snapshot_schemas = {
+        "citestcycle.json": {
+            "type": "object",
+            "required": ["events"],
+            "properties": {
+                "events": {"type": "array"},
+            },
+        },
+        "citestcov_event.json": {
+            "type": "object",
+            "required": ["dummy"],
+            "properties": {
+                "dummy": {"type": "boolean"},
+            },
+        },
+        "citestcov_coverage.json": {
+            "type": "object",
+            "required": ["version", "files"],
+            "properties": {
+                "version": {"type": "string"},
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["filename", "segments"],
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "segments": {"type": "array"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+    snapshot_dir = os.environ["SNAPSHOT_DIR"]
+    for snapshot_name, snapshot_schema in snapshot_schemas.items():
+        snapshot_path = os.path.join(snapshot_dir, snapshot_name)
+        if not os.path.exists(snapshot_path):
+            print(f"error: expected snapshot not found: {snapshot_path}")
+            sys.exit(1)
+        with open(schema_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot_schema, f)
+        schema_check = subprocess.run(
+            [sys.executable, validator, schema_path, snapshot_path],
+            capture_output=True,
+            text=True,
+        )
+        if schema_check.returncode != 0:
+            print(f"error: snapshot failed schema check: {snapshot_name}")
+            if schema_check.stdout:
+                print("stdout:")
+                print(schema_check.stdout)
+            if schema_check.stderr:
+                print("stderr:")
+                print(schema_check.stderr)
+            sys.exit(1)
 PY
 
 # Scenario: malformed/empty sync responses should fail with actionable diagnostics.

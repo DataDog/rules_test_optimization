@@ -1,0 +1,2 @@
+# Root package exists to expose repository-level utility files to tests.
+exports_files(["bazelw"])

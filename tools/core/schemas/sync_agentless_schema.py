@@ -73,6 +73,8 @@ def load_yaml(path: Path) -> Any:
         return _load_yaml_with_pyyaml(path)
     except RuntimeError:
         return _load_yaml_with_ruby(path)
+    except Exception as exc:
+        raise RuntimeError(f"PyYAML failed to parse YAML: {exc}") from exc
 
 
 def load_json(path: Path) -> Any:

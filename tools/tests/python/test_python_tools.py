@@ -114,7 +114,11 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.assertEqual(1, rc_invalid)
 
     def test_safe_size_handles_missing(self) -> None:
-        value = self.mod._safe_size("/tmp/does-not-exist-validate-payload-schema")
+        missing_path = os.path.join(
+            tempfile.gettempdir(),
+            "does-not-exist-validate-payload-schema",
+        )
+        value = self.mod._safe_size(missing_path)
         self.assertIsNone(value)
 
     def test_max_errors_flag_is_supported(self) -> None:
@@ -186,6 +190,49 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.mod._validate(42, schema, schema, "$", errors, 10)
         self.assertIn("value 42 > maximum 20", errors[0])
 
+    def test_validate_number_bounds_stops_at_max_errors(self) -> None:
+        # Deliberately inconsistent schema to force both bounds to fail.
+        schema = {"type": "number", "minimum": 10, "maximum": 5}
+        errors: list[str] = []
+        self.mod._validate(7, schema, schema, "$", errors, 1)
+        self.assertEqual(1, len(errors))
+
+    def test_validate_invalid_pattern_properties_regex(self) -> None:
+        schema = {
+            "type": "object",
+            "patternProperties": {
+                "[": {"type": "string"},
+            },
+        }
+        errors: list[str] = []
+        self.mod._validate({"key": "value"}, schema, schema, "$", errors, 10)
+        self.assertEqual(1, len(errors))
+        self.assertIn("invalid patternProperties regex", errors[0])
+
+    def test_main_resets_stats_between_runs(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        }
+        payload = {"ok": True}
+        with tempfile.TemporaryDirectory() as tmp:
+            schema_path = Path(tmp) / "schema.json"
+            payload_path = Path(tmp) / "payload.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            rc_first = self._run_main(str(schema_path), str(payload_path))
+            self.assertEqual(0, rc_first)
+            nodes_first = self.mod._STATS["nodes"]
+            self.assertGreater(nodes_first, 0)
+
+            rc_second = self._run_main(str(schema_path), str(payload_path))
+            self.assertEqual(0, rc_second)
+            nodes_second = self.mod._STATS["nodes"]
+            self.assertEqual(nodes_first, nodes_second)
+
     def test_parse_args_supports_max_errors(self) -> None:
         parsed = self.mod._parse_args(["schema.json", "payload.json", "--max-errors", "5"])
         self.assertEqual("schema.json", parsed.schema_path)
@@ -241,6 +288,23 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
             ):
                 with self.assertRaises(RuntimeError):
                     self.mod.load_yaml(yaml_path)
+
+    def test_load_yaml_wraps_non_runtime_pyyaml_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            yaml_path = Path(tmp) / "schema.yaml"
+            yaml_path.write_text("a: 1\n", encoding="utf-8")
+
+            with mock.patch.object(
+                self.mod,
+                "_load_yaml_with_pyyaml",
+                side_effect=ValueError("bad yaml"),
+            ), mock.patch.object(
+                self.mod,
+                "_load_yaml_with_ruby",
+            ) as ruby_loader:
+                with self.assertRaises(RuntimeError):
+                    self.mod.load_yaml(yaml_path)
+                ruby_loader.assert_not_called()
 
     def test_main_check_and_update_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

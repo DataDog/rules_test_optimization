@@ -12,9 +12,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dependency-review:
     if: github.event_name == 'pull_request'
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,6 +34,7 @@ jobs:
           fail-on-severity: high
 
   codeql:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
       actions: read

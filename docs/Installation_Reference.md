@@ -181,7 +181,7 @@ WORKSPACE mode is supported for v1 when Bzlmod is disabled.
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 git_repository(
-    name = "datadog_rules_test_optimization",
+    name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     # Use an immutable commit SHA.
     commit = "<commit-sha>",
@@ -189,7 +189,7 @@ git_repository(
 
 # Or:
 # local_repository(
-#     name = "datadog_rules_test_optimization",
+#     name = "datadog-rules-test-optimization",
 #     path = "/absolute/path/to/rules_test_optimization",
 # )
 ```
@@ -205,7 +205,7 @@ three values (`urls`, `strip_prefix`, and `sha256`):
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
-    name = "datadog_rules_test_optimization",
+    name = "datadog-rules-test-optimization",
     urls = [
         "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
     ],
@@ -222,12 +222,12 @@ actual top-level directory.
 ### 2) Instantiate the repository rule in `WORKSPACE`
 
 ```bzl
-load("@datadog_rules_test_optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 
 test_optimization_sync(
     name = "test_optimization_data",
+    service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
     # Optional:
-    # service = "my-service",
     # runtime_name = "go",
     # runtime_version = "1.24.0",
     # known_tests = True,
@@ -253,7 +253,7 @@ filegroup(
 
 ```bzl
 # In root BUILD.bazel
-load("@datadog_rules_test_optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -361,7 +361,7 @@ Then in your Go package `BUILD.bazel`:
 
 ```bzl
 load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog_rules_test_optimization//modules/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@datadog-rules-test-optimization//modules/go:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
 go_library(
@@ -378,5 +378,5 @@ dd_topt_go_test(
 )
 ```
 
-Note: in WORKSPACE mode, repository names in labels use underscores
-(`@datadog_rules_test_optimization`) and not Bzlmod module names with hyphens.
+Note: in WORKSPACE mode for this repository, use the canonical repository name
+`datadog-rules-test-optimization` so companion Go loads resolve consistently.

@@ -13,7 +13,18 @@ sh_test(
     timeout = "short",
 )
 
+sh_test(
+    name = "bazelw_wrapper_test",
+    srcs = ["run_bazelw_wrapper_test.sh"],
+    data = ["//:bazelw"],
+    size = "small",
+    timeout = "short",
+)
+
 test_suite(
     name = "tests",
-    tests = [":python_tools_test"],
+    tests = [
+        ":python_tools_test",
+        ":bazelw_wrapper_test",
+    ],
 )

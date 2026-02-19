@@ -159,7 +159,7 @@
   "moduleExtensions": {
     "//tools/dev:go_bootstrap.bzl%go_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "kUSvQ2HX1kVMV79K1AUVWQXzIAXL67NbUlinbD3wDyo=",
+        "bzlTransitiveDigest": "qr+HSyKADglyb1t6FusPvlZ5xP9m9+i+B0M7NhE+DeY=",
         "usagesDigest": "I49nlLmxFAi9sxg6Rt6fFb2QozkvTD1YIVSV5M8BXhM=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -183,7 +183,7 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "udrQ6o1m+S1JDFB0G7ttW13CIV+EHJyEBD/xiC16AcU=",
+        "bzlTransitiveDigest": "3VyTSl4YGCt3++pBN/edaYl3iIwdbuGQDsPxwqtmNkA=",
         "usagesDigest": "XsrGIwV6f2LnU06owJNbMouQ+/gMiw6hxMQqdC32pHE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

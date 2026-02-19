@@ -31,6 +31,10 @@ load(
     "render_multi_aggregate_bzl_mismatch_target_rule",
 )
 load(
+    "//tools/tests/core:test_go_bootstrap_utils.bzl",
+    "contains_parent_segment_test",
+)
+load(
     "//tools/tests/core:test_sync_utils.bzl",
     "decode_json_object_array_failure_test",
     "decode_json_object_array_target_rule",
@@ -50,6 +54,7 @@ load(
     "dd_site_normalization_test",
     "dirname_test",
     "example_stub_includes_manifest_in_files_test",
+    "example_stub_export_string_escaping_test",
     "example_stub_service_keys_targets_test",
     "export_bzl_escaping_test",
     "normalize_out_dir_or_fail_test",
@@ -96,6 +101,7 @@ load(
     "runfile_manifest_parser_parity_test",
     "runfile_manifest_powershell_resolution_test",
     "render_template_missing_placeholder_test",
+    "render_template_no_recursive_substitution_test",
     "render_template_substitution_test",
     "render_template_unescape_only_test",
     "strip_workspace_prefix_powershell_windows_test",
@@ -217,6 +223,12 @@ example_stub_service_keys_targets_test(
     timeout = "short",
 )
 
+example_stub_export_string_escaping_test(
+    name = "example_stub_export_string_escaping_test",
+    size = "small",
+    timeout = "short",
+)
+
 sanitize_label_fragment_test(
     name = "sanitize_label_fragment_test",
     size = "small",
@@ -323,6 +335,12 @@ compute_service_keys_edge_cases_test(
 
 compute_repo_names_test(
     name = "compute_repo_names_test",
+    size = "small",
+    timeout = "short",
+)
+
+contains_parent_segment_test(
+    name = "contains_parent_segment_test",
     size = "small",
     timeout = "short",
 )
@@ -519,6 +537,12 @@ render_template_missing_placeholder_test(
     timeout = "short",
 )
 
+render_template_no_recursive_substitution_test(
+    name = "render_template_no_recursive_substitution_test",
+    size = "small",
+    timeout = "short",
+)
+
 codeowners_glob_to_regex_test(
     name = "codeowners_glob_to_regex_test",
     size = "small",
@@ -617,8 +641,11 @@ test_suite(
         ":dd_site_normalization_test",
         ":resolve_dd_api_base_test",
         ":module_label_map_collision_test",
+        ":module_label_map_empty_inputs_test",
         ":normalize_ref_test",
+        ":normalize_ref_edge_cases_test",
         ":collect_env_from_environ_provider_mapping_test",
+        ":collect_env_ctx_wrapper_test",
         ":read_abs_file_command_escaping_test",
         ":parse_go_module_path_test",
         ":dirname_test",
@@ -627,8 +654,12 @@ test_suite(
         ":export_bzl_escaping_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",
         ":clone_payload_with_detached_attributes_test",
+        ":clone_payload_with_nested_structure_test",
         ":example_stub_includes_manifest_in_files_test",
+        ":example_stub_export_string_escaping_test",
+        ":example_stub_service_keys_targets_test",
         ":sanitize_label_fragment_test",
+        ":log_helpers_and_is_dict_test",
         ":dedup_keys_test",
         ":validate_service_name_test",
         ":validate_api_key_normalization_test",
@@ -642,6 +673,7 @@ test_suite(
         ":compute_service_keys_dedups_collisions_test",
         ":compute_service_keys_edge_cases_test",
         ":compute_repo_names_test",
+        ":contains_parent_segment_test",
         ":record_multi_repo_owner_success_test",
         ":render_multi_aggregate_bzl_contains_expected_targets_test",
         ":render_multi_aggregate_bzl_mismatch_failure_test",
@@ -649,6 +681,7 @@ test_suite(
         ":http_execute_timeout_seconds_test",
         ":render_module_runfiles_bzl_respects_manifest_root_test",
         ":partition_unix_headers_test",
+        ":partition_unix_headers_without_api_key_test",
         ":record_sync_extension_repo_owner_success_test",
         ":decode_json_object_valid_test",
         ":decode_json_object_empty_failure_test",
@@ -665,6 +698,7 @@ test_suite(
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",
         ":render_template_missing_placeholder_test",
+        ":render_template_no_recursive_substitution_test",
         ":codeowners_glob_to_regex_test",
         ":codeowners_glob_to_regex_edge_cases_test",
         ":codeowners_compile_regex_test",
@@ -676,6 +710,8 @@ test_suite(
         ":runfile_manifest_bash_resolution_test",
         ":runfile_manifest_powershell_resolution_test",
         ":runfile_manifest_parser_parity_test",
+        ":runfile_manifest_not_found_parity_test",
+        ":manifest_trim_and_bom_helpers_test",
         ":codeowners_lookup_order_test",
         ":codeowners_lookup_order_empty_script_dir_test",
     ],

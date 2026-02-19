@@ -24,16 +24,20 @@ import time
 from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import urlsplit
 
 
-def _read_json(path):
+MAX_BODY_SIZE = 10 * 1024 * 1024
+
+
+def _read_json(path: str) -> Any:
     """Load fixture JSON used to respond to sync endpoints."""
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def _json_error(message):
+def _json_error(message: str) -> Dict[str, str]:
     """Return a standard error payload for mock endpoint failures."""
     return {"error": message}
 
@@ -56,14 +60,14 @@ COVERAGE_ALWAYS_FAIL_MARKER = "always_fail"
 
 class _ServerState:
     """Shared server state: fixtures and a thread-safe request log."""
-    def __init__(self, fixtures, log_path):
+    def __init__(self, fixtures: Dict[str, Any], log_path: str) -> None:
         self.fixtures = fixtures
         self.log_path = log_path
         self.log_lock = threading.Lock()
         self.retry_lock = threading.Lock()
-        self.retry_counters = {}
+        self.retry_counters: Dict[str, int] = {}
 
-    def log_request(self, path, method, headers, body):
+    def log_request(self, path: str, method: str, headers: Dict[str, str], body: bytes) -> None:
         # Persist request bodies in base64 so multipart uploads can be snapshotted.
         record = {
             "path": path,
@@ -78,7 +82,7 @@ class _ServerState:
                 handle.write(line + "\n")
                 handle.flush()
 
-    def should_fail_n_times(self, key, failures):
+    def should_fail_n_times(self, key: str, failures: int) -> bool:
         """Return True until `failures` attempts have been observed for key."""
         if failures <= 0:
             return False
@@ -89,15 +93,15 @@ class _ServerState:
                 return True
         return False
 
-    def reset_retry_counters(self):
+    def reset_retry_counters(self) -> None:
         """Reset all retry counters to keep scenarios isolated."""
         with self.retry_lock:
             self.retry_counters = {}
 
 
-def _normalize_headers(headers):
+def _normalize_headers(headers: Mapping[str, str]) -> Dict[str, str]:
     """Normalize request headers for logging while redacting secrets."""
-    out = {}
+    out: Dict[str, str] = {}
     for key, value in headers.items():
         if key.lower() == "dd-api-key":
             # Never log API keys in plaintext.
@@ -107,7 +111,7 @@ def _normalize_headers(headers):
     return out
 
 
-def _require_header(headers, name):
+def _require_header(headers: Mapping[str, str], name: str) -> Optional[str]:
     """Return header value case-insensitively, or None when missing."""
     for key, value in headers.items():
         if key.lower() == name.lower():
@@ -115,7 +119,7 @@ def _require_header(headers, name):
     return None
 
 
-def _require_type(data, expected):
+def _require_type(data: Any, expected: str) -> Optional[str]:
     """Validate top-level Datadog request envelope type."""
     if not isinstance(data, dict):
         return "body is not a JSON object"
@@ -127,7 +131,7 @@ def _require_type(data, expected):
     return None
 
 
-def _require_attrs(data, keys):
+def _require_attrs(data: Any, keys: List[str]) -> Optional[str]:
     """Validate required attribute keys in request envelope."""
     data_obj = data.get("data") or {}
     attrs = data_obj.get("attributes")
@@ -142,7 +146,7 @@ def _require_attrs(data, keys):
 class _Handler(BaseHTTPRequestHandler):
     server_version = "MockDD/1.0"
 
-    def _send_json(self, code, payload, extra_headers = None):
+    def _send_json(self, code: int, payload: Any, extra_headers: Optional[Dict[str, str]] = None) -> None:
         """Write JSON response payload with explicit content headers."""
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
@@ -154,16 +158,25 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_text(self, code, payload):
-        """Write plain-text/bytes response payload."""
-        body = payload.encode("utf-8") if isinstance(payload, str) else payload
+    def _send_text(self, code: int, payload: str) -> None:
+        """Write plain-text response payload."""
+        body = payload.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_body(self):
+    def _send_bytes(self, code: int, payload: bytes) -> None:
+        """Write binary/plain response payload."""
+        body = payload
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_body(self) -> bytes:
         """Read request body using Content-Length; return empty bytes on miss."""
         raw_len = self.headers.get("Content-Length")
         if not raw_len:
@@ -173,6 +186,8 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             return b""
         if length <= 0:
+            return b""
+        if length > MAX_BODY_SIZE:
             return b""
         return self.rfile.read(length)
 
@@ -354,7 +369,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             header = ("Content-Type: %s\r\n\r\n" % content_type).encode("utf-8")
             msg = BytesParser(policy = default).parsebytes(header + body)
-        except Exception:
+        except (TypeError, ValueError):
             return None
         for part in msg.iter_parts():
             name = part.get_param("name", header = "Content-Disposition")
@@ -420,10 +435,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             service = self._extract_service(body)
             if service == MALFORMED_SETTINGS_SERVICE:
-                self._send_text(200, b"NOT_JSON_SETTINGS_RESPONSE")
+                self._send_bytes(200, b"NOT_JSON_SETTINGS_RESPONSE")
                 return
             if service == EMPTY_SETTINGS_SERVICE:
-                self._send_text(200, b"")
+                self._send_bytes(200, b"")
                 return
             if service == DELAY_SETTINGS_SERVICE:
                 time.sleep(0.2)
@@ -445,7 +460,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(400, _json_error(err))
                 return
             if self._extract_service(body) == MALFORMED_KNOWN_TESTS_SERVICE:
-                self._send_text(200, MALFORMED_KNOWN_TESTS_BODY)
+                self._send_bytes(200, MALFORMED_KNOWN_TESTS_BODY)
                 return
             if self._extract_service(body) == RETRY_KNOWN_TESTS_SERVICE and self.server.state.should_fail_n_times("sync_known_tests_retry", 1):
                 self._send_json(
@@ -465,7 +480,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(400, _json_error(err))
                 return
             if self._extract_commit_message(body) == MALFORMED_TEST_MANAGEMENT_COMMIT_MESSAGE:
-                self._send_text(200, MALFORMED_TEST_MANAGEMENT_BODY)
+                self._send_bytes(200, MALFORMED_TEST_MANAGEMENT_BODY)
                 return
             if self._extract_commit_message(body) == RETRY_TEST_MANAGEMENT_COMMIT_MESSAGE and self.server.state.should_fail_n_times("sync_test_management_retry", 1):
                 self._send_json(
@@ -552,7 +567,19 @@ class _ReusableHTTPServer(HTTPServer):
     allow_reuse_address = True
 
 
-def main():
+def _load_fixture_or_exit(fixtures_dir: str, filename: str) -> Any:
+    path = os.path.join(fixtures_dir, filename)
+    if not os.path.exists(path):
+        print("error: fixture not found: %s" % path, file = sys.stderr)
+        raise SystemExit(2)
+    try:
+        return _read_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        print("error: failed to parse fixture %s: %s" % (path, exc), file = sys.stderr)
+        raise SystemExit(2)
+
+
+def main() -> int:
     """Start server, print bound port for harness discovery, and serve forever."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
@@ -562,9 +589,9 @@ def main():
     args = parser.parse_args()
 
     fixtures = {
-        "settings": _read_json(os.path.join(args.fixtures, "settings.json")),
-        "known_tests": _read_json(os.path.join(args.fixtures, "known_tests.json")),
-        "test_management": _read_json(os.path.join(args.fixtures, "test_management.json")),
+        "settings": _load_fixture_or_exit(args.fixtures, "settings.json"),
+        "known_tests": _load_fixture_or_exit(args.fixtures, "known_tests.json"),
+        "test_management": _load_fixture_or_exit(args.fixtures, "test_management.json"),
     }
 
     state = _ServerState(fixtures, args.log)
@@ -578,8 +605,9 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        print("mock server stopped", file = sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -4,6 +4,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools/tests:example_stub_repo.bzl",
+    "bzl_string_literal_for_tests",
     "render_stub_build_for_tests",
 )
 load(
@@ -220,6 +221,123 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
     asserts.equals(env, "https://github.example/org/repo.git", jenkins.get("repository_url"))
     asserts.equals(env, "dev", jenkins.get("branch"))
     asserts.equals(env, "00112233", jenkins.get("sha"))
+
+    azure = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "TF_BUILD": "True",
+        "BUILD_REPOSITORY_URI": "https://dev.azure.com/org/repo",
+        "BUILD_SOURCEVERSION": "aabbccdd",
+        "BUILD_SOURCEBRANCH": "refs/heads/main",
+        "BUILD_SOURCEVERSIONMESSAGE": "merge commit",
+    }, None)
+    asserts.equals(env, "azure_pipelines", azure.get("ci_provider_name"))
+    asserts.equals(env, "https://dev.azure.com/org/repo", azure.get("repository_url"))
+    asserts.equals(env, "main", azure.get("branch"))
+    asserts.equals(env, "aabbccdd", azure.get("sha"))
+
+    bitbucket = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "BITBUCKET_COMMIT": "11223344",
+        "BITBUCKET_REPO_SLUG": "team/repo",
+        "BITBUCKET_BRANCH": "refs/heads/feature/bb",
+    }, None)
+    asserts.equals(env, "bitbucket", bitbucket.get("ci_provider_name"))
+    asserts.equals(env, "https://bitbucket.org/team/repo.git", bitbucket.get("repository_url"))
+    asserts.equals(env, "feature/bb", bitbucket.get("branch"))
+    asserts.equals(env, "11223344", bitbucket.get("sha"))
+
+    buddy = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "BUDDY": "true",
+        "BUDDY_SCM_URL": "https://github.example/org/repo.git",
+        "BUDDY_EXECUTION_REVISION": "cafed00d",
+        "BUDDY_EXECUTION_BRANCH": "refs/heads/buddy",
+    }, None)
+    asserts.equals(env, "buddy", buddy.get("ci_provider_name"))
+    asserts.equals(env, "https://github.example/org/repo.git", buddy.get("repository_url"))
+    asserts.equals(env, "buddy", buddy.get("branch"))
+    asserts.equals(env, "cafed00d", buddy.get("sha"))
+
+    circle = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "CIRCLECI": "true",
+        "CIRCLE_REPOSITORY_URL": "https://github.com/org/repo.git",
+        "CIRCLE_SHA1": "ccddeeff",
+        "CIRCLE_BRANCH": "refs/heads/circle-main",
+    }, None)
+    asserts.equals(env, "circleci", circle.get("ci_provider_name"))
+    asserts.equals(env, "https://github.com/org/repo.git", circle.get("repository_url"))
+    asserts.equals(env, "circle-main", circle.get("branch"))
+    asserts.equals(env, "ccddeeff", circle.get("sha"))
+
+    teamcity = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "TEAMCITY_VERSION": "2025.01",
+        "GIT_URL": "https://tc.example/org/repo.git",
+        "GIT_COMMIT": "feed1234",
+        "GIT_BRANCH": "refs/heads/tc-branch",
+    }, None)
+    asserts.equals(env, "teamcity", teamcity.get("ci_provider_name"))
+    asserts.equals(env, "https://tc.example/org/repo.git", teamcity.get("repository_url"))
+    asserts.equals(env, "tc-branch", teamcity.get("branch"))
+    asserts.equals(env, "feed1234", teamcity.get("sha"))
+
+    travis = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "TRAVIS": "true",
+        "TRAVIS_REPO_SLUG": "org/repo",
+        "TRAVIS_COMMIT": "77889900",
+        "TRAVIS_PULL_REQUEST_BRANCH": "refs/heads/pr-branch",
+    }, None)
+    asserts.equals(env, "travisci", travis.get("ci_provider_name"))
+    asserts.equals(env, "https://github.com/org/repo.git", travis.get("repository_url"))
+    asserts.equals(env, "pr-branch", travis.get("branch"))
+    asserts.equals(env, "77889900", travis.get("sha"))
+
+    bitrise = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "BITRISE_BUILD_SLUG": "build-slug",
+        "BITRISE_GIT_REPOSITORY_URL": "https://github.com/org/repo.git",
+        "BITRISE_GIT_COMMIT": "1234abcd",
+        "BITRISE_GIT_BRANCH": "refs/heads/bitrise-main",
+    }, None)
+    asserts.equals(env, "bitrise", bitrise.get("ci_provider_name"))
+    asserts.equals(env, "https://github.com/org/repo.git", bitrise.get("repository_url"))
+    asserts.equals(env, "bitrise-main", bitrise.get("branch"))
+    asserts.equals(env, "1234abcd", bitrise.get("sha"))
+
+    codefresh = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "CF_BUILD_ID": "build-1",
+        "CF_BRANCH": "refs/heads/cf-main",
+    }, None)
+    asserts.equals(env, "codefresh", codefresh.get("ci_provider_name"))
+    asserts.equals(env, "cf-main", codefresh.get("branch"))
+
+    codebuild = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "CODEBUILD_INITIATOR": "codepipeline/repo",
+        "CODEBUILD_SOURCE_REPO_URL": "https://github.com/org/repo.git",
+        "CODEBUILD_RESOLVED_SOURCE_VERSION": "abcdef12",
+        "CODEBUILD_WEBHOOK_HEAD_REF": "refs/heads/cb-main",
+    }, None)
+    asserts.equals(env, "awscodebuild", codebuild.get("ci_provider_name"))
+    asserts.equals(env, "https://github.com/org/repo.git", codebuild.get("repository_url"))
+    asserts.equals(env, "cb-main", codebuild.get("branch"))
+    asserts.equals(env, "abcdef12", codebuild.get("sha"))
+
+    drone = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "DRONE": "true",
+        "DRONE_GIT_HTTP_URL": "https://github.com/org/repo.git",
+        "DRONE_COMMIT_SHA": "beefbeef",
+        "DRONE_BRANCH": "refs/heads/drone-main",
+        "DRONE_COMMIT_MESSAGE": "drone message",
+    }, None)
+    asserts.equals(env, "drone", drone.get("ci_provider_name"))
+    asserts.equals(env, "https://github.com/org/repo.git", drone.get("repository_url"))
+    asserts.equals(env, "drone-main", drone.get("branch"))
+    asserts.equals(env, "beefbeef", drone.get("sha"))
     return unittest.end(env)
 
 def _collect_env_ctx_wrapper_test(ctx):
@@ -445,6 +563,13 @@ def _example_stub_service_keys_targets_test(ctx):
     asserts.true(env, 'name = "test_optimization_context_ruby_service"' in content)
     return unittest.end(env)
 
+def _example_stub_export_string_escaping_test(ctx):
+    """Validate stub export string literal escaping for unsafe characters."""
+    env = unittest.begin(ctx)
+    escaped = bzl_string_literal_for_tests('repo"\\name\nline')
+    asserts.equals(env, "\"repo\\\"\\\\name\\nline\"", escaped)
+    return unittest.end(env)
+
 def _http_execute_timeout_seconds_test(ctx):
     """Guard execute-timeout derivation against retry-policy drift."""
     env = unittest.begin(ctx)
@@ -655,13 +780,15 @@ def _decode_json_object_array_failure_test_impl(ctx):
 def _decode_json_object_malformed_object_failure_test_impl(ctx):
     """Assert malformed object-like JSON gets actionable diagnostics."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "settings.json response appears malformed JSON object")
+    asserts.expect_failure(env, "Error in decode:")
+    asserts.expect_failure(env, "unexpected character")
     return analysistest.end(env)
 
 def _decode_json_object_malformed_array_failure_test_impl(ctx):
     """Assert malformed array-like JSON gets actionable diagnostics."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "settings.json response appears malformed JSON array")
+    asserts.expect_failure(env, "Error in decode:")
+    asserts.expect_failure(env, "unexpected character")
     return analysistest.end(env)
 
 def _record_sync_extension_repo_owner_duplicate_failure_test_impl(ctx):
@@ -689,6 +816,7 @@ clone_payload_with_detached_attributes_test = unittest.make(_clone_payload_with_
 clone_payload_with_nested_structure_test = unittest.make(_clone_payload_with_nested_structure_test)
 example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_includes_manifest_in_files_test)
 example_stub_service_keys_targets_test = unittest.make(_example_stub_service_keys_targets_test)
+example_stub_export_string_escaping_test = unittest.make(_example_stub_export_string_escaping_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)

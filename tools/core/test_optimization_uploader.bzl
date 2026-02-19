@@ -37,28 +37,63 @@ Developer navigation:
 # - Uses workspace-level lock to prevent concurrent uploaders
 # - Enriches payloads with context.json metadata
 
-load("//tools/core:common_utils.bzl", "log_debug", "log_info")
+load(
+    "//tools/core:common_utils.bzl",
+    "RULES_VERSION",
+    "UPLOADER_VERSION",
+    "log_debug",
+    "log_info",
+)
+
+# NOTE: `UPLOADER_VERSION` and `RULES_VERSION` are intentionally independent.
+# Uploader runtime behavior can evolve without forcing a rules contract bump,
+# while payload metadata still carries both for observability.
 load("//tools/core:uploader_bash_template.bzl", "UPLOADER_BASH_TEMPLATE")
 load("//tools/core:uploader_batch_template.bzl", "UPLOADER_BATCH_TEMPLATE")
 load("//tools/core:uploader_powershell_template.bzl", "UPLOADER_POWERSHELL_TEMPLATE")
 
-# Version identifier sent in Datadog-Meta-Tracer-Version header
-UPLOADER_VERSION = "2.0.0"
-# Rules version used for payload metadata defaults
-RULES_VERSION = "1.0.0"
-
 def _render_template(template, substitutions):
     """Render script template placeholders with literal-brace support."""
-    # Simple template renderer compatible with the existing {key} placeholders.
-    # It also converts doubled braces ({{, }}) into single braces after substitution,
-    # which keeps literal braces used by shell/JSON/PowerShell intact.
-    out = template
-    for k, v in substitutions.items():
-        out = out.replace("{" + k + "}", str(v))
+    # Single-pass renderer:
+    # - Supports {key} placeholders.
+    # - Supports escaped literal braces via {{ and }}.
+    # - Avoids recursive substitutions when values contain "{other_key}".
+    out = []
+    n = len(template)
+    skip = {}
+    for i in range(n):
+        if skip.get(i):
+            continue
+        ch = template[i]
+        if ch == "{":
+            # Escaped opening brace.
+            if i + 1 < n and template[i + 1] == "{":
+                out.append("{")
+                skip[i + 1] = True
+                continue
 
-    # Unescape '{{' and '}}' used to protect literal braces in the template
-    out = out.replace("{{", "{").replace("}}", "}")
-    return out
+            # Placeholder candidate: {key}
+            close = -1
+            for j in range(i + 1, n):
+                if template[j] == "}":
+                    close = j
+                    break
+            if close > i:
+                key = template[i + 1:close]
+                if key in substitutions:
+                    out.append(str(substitutions[key]))
+                    for j in range(i + 1, close + 1):
+                        skip[j] = True
+                    continue
+
+        if ch == "}" and i + 1 < n and template[i + 1] == "}":
+            # Escaped closing brace.
+            out.append("}")
+            skip[i + 1] = True
+            continue
+
+        out.append(ch)
+    return "".join(out)
 
 # Helper to keep template booleans consistent across bash/PowerShell.
 def _bool_to_str(value):

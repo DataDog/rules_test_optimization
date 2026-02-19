@@ -8,11 +8,11 @@ Maintainers:
 
 load(
     "//tools/core:common_utils.bzl",
-    _common_is_dict = "is_dict",
+    _is_dict = "is_dict",
     "sanitize_label_fragment",
 )
 
-is_dict = _common_is_dict
+is_dict = _is_dict
 
 def service_mapping_entries(topt_data):
     """Extract service-shaped entries from an aggregator mapping.

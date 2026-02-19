@@ -4,6 +4,15 @@ This exists so `bazel build //examples/...` can analyze from this repository's
 root workspace without requiring network fetches or external env vars.
 """
 
+def _bzl_string_literal(value):
+    """Return a safely escaped double-quoted Starlark string literal."""
+    s = str(value)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("\"", "\\\"")
+    s = s.replace("\n", "\\n")
+    s = s.replace("\r", "\\r")
+    return "\"" + s + "\""
+
 def _render_stub_build(settings, manifest, known_tests, test_management, context, service_keys = None):
     """Render BUILD content for stub repo targets."""
     lines = []
@@ -39,6 +48,7 @@ def _render_stub_build(settings, manifest, known_tests, test_management, context
 
 # Public alias for tests.
 render_stub_build_for_tests = _render_stub_build
+bzl_string_literal_for_tests = _bzl_string_literal
 
 def _example_stub_repo_impl(ctx):
     manifest = ".testoptimization/manifest.txt"
@@ -58,11 +68,11 @@ def _example_stub_repo_impl(ctx):
         service_keys = ["go_service", "ruby_service"]
     mapping_lines = []
     for key in service_keys:
-        mapping_lines.append('    "%s": topt_data,\n' % key)
+        mapping_lines.append("    %s: topt_data,\n" % _bzl_string_literal(key))
 
     export = (
         "topt_data = {\n" +
-        '    "repo_name": "%s",\n' % ctx.attr.repo_alias +
+        "    \"repo_name\": %s,\n" % _bzl_string_literal(ctx.attr.repo_alias) +
         '    "manifest_path": ".testoptimization/manifest.txt",\n' +
         '    "labels": [],\n' +
         '    "set": {},\n' +

@@ -34,6 +34,8 @@ Maintenance notes:
 
 SERVICE_NAME_MAX_LEN = 200
 RUNTIME_VALUE_WARN_LEN = 100
+RULES_VERSION = "1.0.0"
+UPLOADER_VERSION = "2.0.0"
 
 def log_info(message):
     """Print user-facing progress messages."""
@@ -109,7 +111,19 @@ def sanitize_label_fragment(name):
             break
     result = "".join(out[start:end])
     if not result:
-        result = "module"
+        if not s:
+            result = "module"
+        else:
+            # Keep empty input stable while reducing collisions for all-invalid
+            # non-empty inputs by adding a deterministic suffix.
+            seed = len(s)
+            for i in range(len(s)):
+                ch = s[i]
+                idx = allowed.find(ch)
+                if idx < 0:
+                    idx = 37
+                seed = ((seed * 33) + idx + i) % 10000
+            result = "module_%d" % seed
     return result
 
 
@@ -150,7 +164,7 @@ Please use a shorter service name.
     
     # Warn about potential issues
     if " " in trimmed:
-        log_debug(debug, "validation", "WARNING: service name contains spaces; this may cause issues: '%s'" % trimmed)
+        log_info("WARNING: service name contains spaces; this may cause issues: '%s'" % trimmed)
     
     if trimmed != service:
         log_debug(debug, "validation", "Service name trimmed: '%s' -> '%s'" % (service, trimmed))
@@ -252,12 +266,21 @@ def dedup_keys(keys):
     Returns:
       List of unique strings with numeric suffixes (_2, _3, etc.) for duplicates
     """
-    seen = {}
+    base_counts = {}
+    taken = {}
     out = []
     for k in keys:
-        c = seen.get(k, 0) + 1
-        seen[k] = c
-        out.append(k if c == 1 else ("%s_%d" % (k, c)))
+        c = base_counts.get(k, 0) + 1
+        base_counts[k] = c
+        candidate = k if c == 1 else ("%s_%d" % (k, c))
+        for _ in range(len(keys) + len(taken) + 2):
+            if not taken.get(candidate):
+                break
+            c += 1
+            base_counts[k] = c
+            candidate = "%s_%d" % (k, c)
+        taken[candidate] = True
+        out.append(candidate)
     return out
 
 # ##########################################################################

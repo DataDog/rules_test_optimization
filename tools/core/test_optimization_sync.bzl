@@ -51,6 +51,7 @@ Troubleshooting guidance for maintainers:
 load(
     "//tools/core:common_utils.bzl",
     _is_dict = "is_dict",
+    "RULES_VERSION",
     "dedup_keys",
     "log_debug",
     "log_info",
@@ -67,7 +68,7 @@ load(
 
 TEST_OPT_DIR = ".testoptimization"
 TEST_BAZEL_RULE_NAME = "datadog-rules-test-optimization"
-TEST_BAZEL_RULE_VERSION = "1.0.0"
+TEST_BAZEL_RULE_VERSION = RULES_VERSION
 # Shared HTTP timing/retry policy for both curl and Invoke-WebRequest paths.
 HTTP_CONNECT_TIMEOUT_SECONDS = 10
 HTTP_MAX_TIME_SECONDS = 60
@@ -218,7 +219,9 @@ def _fnv1a_32(value):
         ch = value[i]
         idx = _FINGERPRINT_ALPHABET.find(ch)
         if idx < 0:
-            idx = len(_FINGERPRINT_ALPHABET)
+            # Spread unknown characters across a few deterministic buckets
+            # instead of collapsing all to one index.
+            idx = len(_FINGERPRINT_ALPHABET) + (i % 7)
         h = h ^ idx
         h = (h * 16777619) & 0xffffffff
     return h
@@ -705,28 +708,6 @@ def _decode_json_object_or_fail(content, context):
             (
                 "test_optimization: %s response is not JSON (starts with: %s). " +
                 "Check DD_SITE/DD_TEST_OPTIMIZATION_API_BASE, credentials, and endpoint routing."
-            ) %
-            (context, repr(sample)),
-        )
-
-    # Deterministic malformed-JSON guardrails before decode.
-    # Starlark cannot catch all parser exceptions, so classify common unclosed
-    # object/array responses early with actionable errors.
-    if trimmed.startswith("{") and (not trimmed.endswith("}")):
-        sample = trimmed[:120].replace("\n", " ").replace("\r", " ")
-        fail(
-            (
-                "test_optimization: %s response appears malformed JSON object " +
-                "(missing closing '}'). Starts with: %s"
-            ) %
-            (context, repr(sample)),
-        )
-    if trimmed.startswith("[") and (not trimmed.endswith("]")):
-        sample = trimmed[:120].replace("\n", " ").replace("\r", " ")
-        fail(
-            (
-                "test_optimization: %s response appears malformed JSON array " +
-                "(missing closing ']'). Starts with: %s"
             ) %
             (context, repr(sample)),
         )
@@ -1241,7 +1222,18 @@ def _collect_env_from_environ(environ, attr_service = None):
         env_data["branch"] = environ.get("BITBUCKET_BRANCH") or ""
     elif environ.get("BUDDY"):
         provider = "buddy"
-        # Buddy variables vary; keep placeholders
+        env_data["repository_url"] = _first_env_from_environ(environ, [
+            "BUDDY_SCM_URL",
+            "BUDDY_REPO_URL",
+        ]) or ""
+        env_data["sha"] = _first_env_from_environ(environ, [
+            "BUDDY_EXECUTION_REVISION",
+            "BUDDY_EXECUTION_REVISION_COMMIT_ID",
+        ]) or ""
+        env_data["branch"] = _first_env_from_environ(environ, [
+            "BUDDY_EXECUTION_BRANCH",
+            "BUDDY_EXECUTION_BRANCH_NAME",
+        ]) or ""
 
     elif environ.get("BUILDKITE"):
         # Buildkite exposes direct message and branch fields used by settings/TM.
@@ -1301,8 +1293,13 @@ def _collect_env_from_environ(environ, attr_service = None):
         provider = "codefresh"
         env_data["branch"] = environ.get("CF_BRANCH") or ""
     elif environ.get("CODEBUILD_INITIATOR"):
-        provider = "awscodepipeline"
-        # Limited extraction by default
+        provider = "awscodebuild"
+        env_data["repository_url"] = environ.get("CODEBUILD_SOURCE_REPO_URL") or ""
+        env_data["sha"] = environ.get("CODEBUILD_RESOLVED_SOURCE_VERSION") or ""
+        env_data["branch"] = _first_env_from_environ(environ, [
+            "CODEBUILD_WEBHOOK_HEAD_REF",
+            "CODEBUILD_SOURCE_VERSION",
+        ]) or ""
 
     elif environ.get("DRONE"):
         provider = "drone"
@@ -1363,6 +1360,12 @@ def _build_configurations_json(ctx, debug, osinfo = None):
     log_debug(debug, "config", "Configurations JSON: %s" % conf_json)
     return conf_json
 
+def _set_context_tag_from_env(environ, tags, env_key, tag_key):
+    """Copy one optional environment variable into context tags."""
+    value = environ.get(env_key)
+    if value:
+        tags[tag_key] = value
+
 def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     """Build non-secret context tags stored in generated `context.json`."""
     # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
@@ -1404,34 +1407,27 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     if env_data.get("head_message"):
         tags["git.commit.head.message"] = env_data.get("head_message")
 
-    # Git overrides / extended tags via DD_* env
-    # Keep this helper local so adding a new optional DD_* passthrough key only
-    # requires a single `_opt(...)` line and preserves existing omission behavior.
-    def _opt(env_key, tag_key):
-        v = ctx.os.environ.get(env_key)
-        if v:
-            tags[tag_key] = v
+    # Git overrides / extended tags via DD_* env.
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_TAG", "git.tag")
 
-    _opt("DD_GIT_TAG", "git.tag")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_AUTHOR_NAME", "git.commit.author.name")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_AUTHOR_EMAIL", "git.commit.author.email")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_AUTHOR_DATE", "git.commit.author.date")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_COMMITTER_NAME", "git.commit.committer.name")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_COMMITTER_EMAIL", "git.commit.committer.email")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_COMMITTER_DATE", "git.commit.committer.date")
 
-    _opt("DD_GIT_COMMIT_AUTHOR_NAME", "git.commit.author.name")
-    _opt("DD_GIT_COMMIT_AUTHOR_EMAIL", "git.commit.author.email")
-    _opt("DD_GIT_COMMIT_AUTHOR_DATE", "git.commit.author.date")
-    _opt("DD_GIT_COMMIT_COMMITTER_NAME", "git.commit.committer.name")
-    _opt("DD_GIT_COMMIT_COMMITTER_EMAIL", "git.commit.committer.email")
-    _opt("DD_GIT_COMMIT_COMMITTER_DATE", "git.commit.committer.date")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_AUTHOR_NAME", "git.commit.head.author.name")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_AUTHOR_EMAIL", "git.commit.head.author.email")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_AUTHOR_DATE", "git.commit.head.author.date")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_COMMITTER_NAME", "git.commit.head.committer.name")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_COMMITTER_EMAIL", "git.commit.head.committer.email")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_COMMITTER_DATE", "git.commit.head.committer.date")
 
-    _opt("DD_GIT_HEAD_AUTHOR_NAME", "git.commit.head.author.name")
-    _opt("DD_GIT_HEAD_AUTHOR_EMAIL", "git.commit.head.author.email")
-    _opt("DD_GIT_HEAD_AUTHOR_DATE", "git.commit.head.author.date")
-    _opt("DD_GIT_HEAD_COMMITTER_NAME", "git.commit.head.committer.name")
-    _opt("DD_GIT_HEAD_COMMITTER_EMAIL", "git.commit.head.committer.email")
-    _opt("DD_GIT_HEAD_COMMITTER_DATE", "git.commit.head.committer.date")
-
-    _opt("DD_GIT_PR_BASE_BRANCH", "git.pull_request.base_branch")
-    _opt("DD_GIT_PR_BASE_BRANCH_SHA", "git.pull_request.base_branch_sha")
-    _opt("DD_GIT_PR_BASE_BRANCH_HEAD_SHA", "git.pull_request.base_branch_head_sha")
-    _opt("DD_PR_NUMBER", "pr.number")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_PR_BASE_BRANCH", "git.pull_request.base_branch")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_PR_BASE_BRANCH_SHA", "git.pull_request.base_branch_sha")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_PR_BASE_BRANCH_HEAD_SHA", "git.pull_request.base_branch_head_sha")
+    _set_context_tag_from_env(ctx.os.environ, tags, "DD_PR_NUMBER", "pr.number")
 
     # CI provider/name
     if env_data.get("ci_provider_name"):

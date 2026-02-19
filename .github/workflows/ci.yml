@@ -10,8 +10,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bazel-tests:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +73,47 @@ jobs:
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
+  workspace-compat:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Validate WORKSPACE mode loading
+        shell: bash
+        run: |
+          tmp_ws="$(mktemp -d)"
+          trap 'rm -rf "$tmp_ws"' EXIT
+
+          cat >"$tmp_ws/WORKSPACE" <<EOF
+          load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+
+          local_repository(
+              name = "datadog-rules-test-optimization",
+              path = "${GITHUB_WORKSPACE}",
+          )
+
+          load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+          EOF
+
+          cat >"$tmp_ws/BUILD.bazel" <<'EOF'
+          load("@datadog-rules-test-optimization//modules/go:topt_go_test.bzl", "dd_topt_go_test")
+          load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+          filegroup(
+              name = "workspace_smoke",
+              srcs = [],
+          )
+          EOF
+
+          (
+            cd "$tmp_ws"
+            "${GITHUB_WORKSPACE}/bazelw" --noenable_bzlmod --enable_workspace query //:workspace_smoke
+          )
+
   coverage-tools:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -77,7 +122,7 @@ jobs:
       - name: Enforce minimum tools coverage signal
         shell: bash
         env:
-          TOOLS_COVERAGE_MIN: "5.0"
+          TOOLS_COVERAGE_MIN: "30.0"
         run: |
           TOOLS_COVERAGE_MIN="$TOOLS_COVERAGE_MIN" python3 - <<'PY'
           import os
@@ -87,7 +132,11 @@ jobs:
           import trace
 
           repo_root = pathlib.Path.cwd()
-          min_pct = float(os.environ.get("TOOLS_COVERAGE_MIN", "5.0"))
+          min_raw = os.environ.get("TOOLS_COVERAGE_MIN")
+          if min_raw is None or min_raw.strip() == "":
+              print("error: TOOLS_COVERAGE_MIN must be provided")
+              sys.exit(2)
+          min_pct = float(min_raw)
           targets = [
               repo_root / "tools/core/validate_payload_schema.py",
               repo_root / "tools/core/schemas/sync_agentless_schema.py",
@@ -156,6 +205,7 @@ jobs:
           PY
 
   shell-lint:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -177,7 +227,13 @@ jobs:
             tools/tests/integration/*.sh \
             tools/tests/python/run_python_tools_test.sh
 
+      - name: Verify example .bazelrc files stay in sync
+        shell: bash
+        run: |
+          cmp --silent examples/single_service/.bazelrc examples/multi_service/.bazelrc
+
   schema-sync-check:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -192,6 +248,7 @@ jobs:
         run: python3 tools/core/schemas/sync_agentless_schema.py --check
 
   powershell-lint:
+    timeout-minutes: 15
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -221,6 +278,7 @@ jobs:
   # Rationale: sandbox/network-blocking semantics are most reliable on Linux;
   # macOS/Windows are still covered by the standard test+integration matrix.
   bazel-tests-hermetic:
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -232,6 +290,7 @@ jobs:
           ./bazelw test //tools/... \
           --spawn_strategy=sandboxed \
           --strategy=TestRunner=sandboxed \
+          --incompatible_strict_action_env \
           --sandbox_default_allow_network=false \
           --modify_execution_info=TestRunner=+block-network \
           --test_env=TZ=UTC \
@@ -247,6 +306,7 @@ jobs:
           --override_module=datadog-rules-test-optimization=../.. \
           --spawn_strategy=sandboxed \
           --strategy=TestRunner=sandboxed \
+          --incompatible_strict_action_env \
           --sandbox_default_allow_network=false \
           --modify_execution_info=TestRunner=+block-network \
           --test_env=TZ=UTC \

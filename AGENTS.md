@@ -44,10 +44,14 @@ The sync rule creates `@test_optimization_data//` containing:
 - **Cross-platform uploader**: Unix uses Bash/curl; Windows uses PowerShell and .NET `HttpClient`.
 
 ## Build, Test, and Development Commands
-- Repository-local build matrix (root `//...` does not work in this repo because `modules/go/tests` loads module-root `.bzl` labels):
+- Canonical validation command matrix lives in `CONTRIBUTING.md`; keep this
+  section as a short pointer to avoid drift.
+- Repository-local build matrix (root `//...` is supported):
  ```bash
- ./bazelw build //tools/... //examples/...
- cd modules/go && ../../bazelw build //... --override_module=datadog-rules-test-optimization=../..
+ ./bazelw test //...
+ ./bazelw build //examples/...
+ # Optional focused companion iteration:
+ cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
  ```
 - Consumer-workspace command pattern (this repository root does **not** define `//:dd_upload_payloads`):
   ```bash

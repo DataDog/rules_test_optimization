@@ -1,18 +1,18 @@
 """Unit tests for Go-specific selection and macro helper functions."""
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
-    "//:topt_go_infer.bzl",
+    "@datadog-rules-test-optimization-go//:topt_go_infer.bzl",
     "select_module_group_name_for_tests",
 )
 load(
-    "//:topt_go_test.bzl",
+    "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "build_module_labels_for_tests",
     "normalize_user_data_for_tests",
     "resolve_topt_service_key_for_tests",
     "service_mapping_entries_for_tests",
 )
 load(
-    "//tests:example_stub_repo.bzl",
+    "@datadog-rules-test-optimization-go//tests:example_stub_repo.bzl",
     "render_stub_build_for_tests",
 )
 

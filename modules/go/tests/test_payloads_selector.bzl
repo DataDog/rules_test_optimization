@@ -1,7 +1,7 @@
 """Analysis tests for topt_go_payloads_selector selection behavior."""
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
-load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
+load("@datadog-rules-test-optimization-go//:topt_go_infer.bzl", "topt_go_payloads_selector")
 
 _COMMON_MODULE_GROUPS = [
     ":module_example_com_explicit_pkg",
