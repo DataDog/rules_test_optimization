@@ -71,6 +71,9 @@ def main() -> int:
     bash_bzl = repo / "tools/core/uploader_bash_template.bzl"
     ps_bzl = repo / "tools/core/uploader_powershell_template.bzl"
     bash_template = _normalize_template_for_lint(_extract_template(bash_bzl, "UPLOADER_BASH_TEMPLATE"))
+    # The Starlark source encodes escaped parenthesis as "\\(" and "\\)" so
+    # shellcheck sees parse-equivalent output to the rendered script.
+    bash_template = bash_template.replace("\\\\(", "\\(").replace("\\\\)", "\\)")
     ps_template = _normalize_template_for_lint(_extract_template(ps_bzl, "UPLOADER_POWERSHELL_TEMPLATE"))
 
     with tempfile.TemporaryDirectory(prefix="uploader_template_lint.") as tmp:

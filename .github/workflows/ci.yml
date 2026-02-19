@@ -261,7 +261,7 @@ jobs:
           base_ref="${GITHUB_BASE_REF:-main}"
           git fetch --no-tags --depth=1 origin "${base_ref}"
           mapfile -t starlark_files < <(
-            git diff --name-only --diff-filter=ACMR "origin/${base_ref}...HEAD" -- \
+            git diff --name-only --diff-filter=ACMR "origin/${base_ref}..HEAD" -- \
               '*.bzl' 'BUILD' 'BUILD.bazel' 'WORKSPACE' 'MODULE.bazel'
           )
           if (( ${#starlark_files[@]} == 0 )); then
