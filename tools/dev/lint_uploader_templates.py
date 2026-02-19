@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import tempfile
 from pathlib import Path
+
+_PLACEHOLDER_RE = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
 
 
 def _repo_root() -> Path:
@@ -28,6 +31,14 @@ def _extract_template(path: Path, variable_name: str) -> str:
     if end < 0:
         raise RuntimeError(f"template terminator not found in {path}")
     return text[start:end].lstrip("\n")
+
+
+def _normalize_template_for_lint(template: str) -> str:
+    # Replace format placeholders and unescape doubled braces used in the .bzl
+    # template literals so shellcheck/PowerShell parser see render-equivalent syntax.
+    normalized = _PLACEHOLDER_RE.sub("0", template)
+    normalized = normalized.replace("{{", "{").replace("}}", "}")
+    return normalized
 
 
 def _run(cmd: list[str], cwd: Path) -> None:
@@ -59,8 +70,8 @@ def main() -> int:
     repo = _repo_root()
     bash_bzl = repo / "tools/core/uploader_bash_template.bzl"
     ps_bzl = repo / "tools/core/uploader_powershell_template.bzl"
-    bash_template = _extract_template(bash_bzl, "UPLOADER_BASH_TEMPLATE")
-    ps_template = _extract_template(ps_bzl, "UPLOADER_POWERSHELL_TEMPLATE")
+    bash_template = _normalize_template_for_lint(_extract_template(bash_bzl, "UPLOADER_BASH_TEMPLATE"))
+    ps_template = _normalize_template_for_lint(_extract_template(ps_bzl, "UPLOADER_POWERSHELL_TEMPLATE"))
 
     with tempfile.TemporaryDirectory(prefix="uploader_template_lint.") as tmp:
         tmp_dir = Path(tmp)
@@ -73,13 +84,20 @@ def main() -> int:
             _run(["shellcheck", "--severity=error", str(bash_file)], repo)
 
         if not args.skip_powershell_parse:
+            ps_file_path = str(ps_file).replace("'", "''")
+            ps_parse_cmd = (
+                "$tokens = $null; "
+                "$errors = $null; "
+                f"[System.Management.Automation.Language.Parser]::ParseFile('{ps_file_path}', [ref]$tokens, [ref]$errors) | Out-Null; "
+                "if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }"
+            )
             _run(
                 [
                     "pwsh",
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    f"[System.Management.Automation.Language.Parser]::ParseFile('{ps_file}', [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) {{ $errors | ForEach-Object {{ Write-Error $_ }}; exit 1 }}",
+                    ps_parse_cmd,
                 ],
                 repo,
             )

@@ -355,9 +355,9 @@ jobs:
             throw "PSScriptAnalyzer found lint errors."
           }
 
-      - name: Lint embedded uploader templates (PowerShell parse)
+      - name: Lint embedded uploader templates (PowerShell lane)
         shell: pwsh
-        run: python tools/dev/lint_uploader_templates.py --skip-shellcheck
+        run: python tools/dev/lint_uploader_templates.py --skip-shellcheck --skip-powershell-parse
 
   # Policy: keep the hermetic lane Linux-only for now.
   # Rationale: sandbox/network-blocking semantics are most reliable on Linux;

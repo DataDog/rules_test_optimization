@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Shared helper functions for run_mock_server_tests.sh.
 
 cleanup() {
