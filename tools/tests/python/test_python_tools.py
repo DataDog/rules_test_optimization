@@ -657,10 +657,26 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
     @staticmethod
     def _extract_bash_fingerprint_alphabet(bash_text: str) -> str:
-        match = re.search(r"local alphabet=\$'((?:\\.|[^'])*)'", bash_text)
-        if match is None:
+        marker = "local alphabet=$'"
+        start = bash_text.find(marker)
+        if start < 0:
             raise AssertionError("unable to locate bash fingerprint alphabet")
-        return bytes(match.group(1), "utf-8").decode("unicode_escape")
+
+        i = start + len(marker)
+        encoded_chars: list[str] = []
+        while i < len(bash_text):
+            ch = bash_text[i]
+            if ch == "\\" and i + 1 < len(bash_text):
+                encoded_chars.append(ch)
+                encoded_chars.append(bash_text[i + 1])
+                i += 2
+                continue
+            if ch == "'":
+                encoded = "".join(encoded_chars)
+                return bytes(encoded, "utf-8").decode("unicode_escape")
+            encoded_chars.append(ch)
+            i += 1
+        raise AssertionError("unterminated bash fingerprint alphabet")
 
     @staticmethod
     def _extract_powershell_fingerprint_alphabet(powershell_text: str) -> str:

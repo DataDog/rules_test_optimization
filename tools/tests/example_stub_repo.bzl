@@ -15,20 +15,21 @@ def _bzl_string_literal(value):
 
 def _render_stub_build(settings, manifest, known_tests, test_management, context, service_keys = None):
     """Render BUILD content for stub repo targets."""
+
     def _append_filegroups(name_suffix, srcs):
         lines.append(
             "filegroup(\n" +
             ('    name = "test_optimization_files%s",\n' % name_suffix) +
             ("    srcs = %s,\n" % repr(srcs)) +
             '    visibility = ["//visibility:public"],\n' +
-            ")\n\n"
+            ")\n\n",
         )
         lines.append(
             "filegroup(\n" +
             ('    name = "test_optimization_context%s",\n' % name_suffix) +
             ("    srcs = %s,\n" % repr([context])) +
             '    visibility = ["//visibility:public"],\n' +
-            ")\n\n"
+            ")\n\n",
         )
 
     files_srcs = [settings, manifest, known_tests, test_management]
@@ -74,8 +75,8 @@ def _example_stub_repo_impl(ctx):
         '            "module_path": "example.com/stub",\n' +
         '            "sanitized_module_path": "example_com_stub",\n' +
         '            "module_included": False,\n' +
-        '        },\n' +
-        '    },\n' +
+        "        },\n" +
+        "    },\n" +
         "}\n\n" +
         "topt_data_by_service = {\n" +
         "".join(mapping_lines) +

@@ -162,7 +162,8 @@ try {
   $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS = "1"
 
   # Agentless flow
-  $env:DD_API_KEY = "00000000000000000000000000000000"
+  # Build a deterministic mock key at runtime to avoid committing a secret-like literal.
+  $env:DD_API_KEY = [string]::new("0", 32)
   $env:DD_SITE = "datadoghq.com"
   $env:DD_TEST_OPTIMIZATION_INTAKE_BASE = "http://127.0.0.1:$port"
   Remove-Item Env:DD_TRACE_AGENT_URL -ErrorAction SilentlyContinue

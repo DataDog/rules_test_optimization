@@ -51,6 +51,7 @@ load(
 
 def _render_template(template, substitutions):
     """Render script template placeholders with literal-brace support."""
+
     # Single-pass renderer:
     # - Supports {key} placeholders.
     # - Supports escaped literal braces via {{ and }}.
@@ -138,6 +139,7 @@ def _tokenize_template_substitutions(substitutions):
         for forbidden in ["\n", "\r", "\t"]:
             if forbidden in value_str:
                 fail("dd_payload_uploader: template substitution '%s' contains control characters" % key)
+
         # Guard against shell/script-breaking interpolation primitives.
         for forbidden in ["\"", "$", "`"]:
             if forbidden in value_str:
@@ -147,6 +149,7 @@ def _tokenize_template_substitutions(substitutions):
 
 def _bash_curl_retry_flags_for_tests():
     """Expose uploader curl retry defaults for unit tests."""
+
     # Keep the baseline retry behavior compatible with older curl releases.
     return ["--retry", "3", "--retry-delay", "2", "--retry-connrefused"]
 
@@ -294,6 +297,7 @@ def _is_gitlab_section_header_pattern_for_tests(pattern):
             return True
     if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
         return False
+
     # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
     all_upper_or_digit = True
     for i in range(len(inner)):
@@ -303,6 +307,7 @@ def _is_gitlab_section_header_pattern_for_tests(pattern):
             break
     if all_upper_or_digit:
         return False
+
     # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
     if len(inner) <= 3:
         all_alnum = True
@@ -313,6 +318,7 @@ def _is_gitlab_section_header_pattern_for_tests(pattern):
                 break
         if all_alnum:
             return False
+
     # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
     all_lower_or_digit = True
     for i in range(len(inner)):
@@ -351,12 +357,14 @@ def _is_gitlab_section_header_pattern_powershell_for_tests(pattern):
     inner = pattern[1:-1]
     if not inner or ("[" in inner) or ("]" in inner):
         return False
+
     # Keep PowerShell behavior aligned with script implementation: section
     # headers are detected via space/tab within bracket content.
     if (" " in inner) or ("\t" in inner):
         return True
     if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
         return False
+
     # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
     all_upper_or_digit = True
     for i in range(len(inner)):
@@ -456,6 +464,7 @@ def _trim_ascii_whitespace_for_tests(value):
 
 def _strip_bom_prefix_for_tests(value):
     """Remove UTF-8 BOM marker used in manifest parser test fixtures."""
+
     # Tests use an ASCII marker to represent UTF-8 BOM-prefixed manifest keys.
     bom_marker = "\\ufeff"
     if value.startswith(bom_marker):
@@ -550,6 +559,7 @@ def _uploader_impl(ctx):
     The generated scripts perform runtime payload discovery/enrichment/upload,
     while this function stays analysis-time only (template rendering + runfiles).
     """
+
     # `_uploader_impl` is responsible for generating *all* runtime uploader
     # artifacts. It does not upload anything itself; it emits executable scripts
     # that run during `bazel run`.
@@ -664,19 +674,19 @@ def _uploader_impl(ctx):
         output = ps_file,
         substitutions = _tokenize_template_substitutions(
             _base_template_substitutions(
-            quiescent_sec,
-            max_wait_sec,
-            fail_on_error,
-            debug,
-            keep_payloads,
-            filter_prefix_enabled,
-            gzip_payloads,
-            context_json_rloc,
-            context_json_path,
-            schema_json_rloc,
-            schema_json_path,
-            schema_validator_rloc,
-            schema_validator_path,
+                quiescent_sec,
+                max_wait_sec,
+                fail_on_error,
+                debug,
+                keep_payloads,
+                filter_prefix_enabled,
+                gzip_payloads,
+                context_json_rloc,
+                context_json_path,
+                schema_json_rloc,
+                schema_json_path,
+                schema_validator_rloc,
+                schema_validator_path,
             ),
         ),
         is_executable = False,
