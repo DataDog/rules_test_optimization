@@ -40,6 +40,8 @@ load(
     "selector_deps_precedence_test",
     "selector_explicit_precedence_target",
     "selector_explicit_precedence_test",
+    "selector_empty_importpath_fallback_target",
+    "selector_empty_importpath_fallback_test",
     "selector_fallback_target",
     "selector_fallback_test",
     "selector_include_disabled_target",
@@ -148,6 +150,16 @@ selector_no_match_fallback_target(
 selector_no_match_fallback_test(
     name = "selector_no_match_fallback_test",
     target_under_test = ":selector_no_match_fallback_target",
+)
+
+selector_empty_importpath_fallback_target(
+    name = "selector_empty_importpath_fallback_target",
+    tags = ["manual"],
+)
+
+selector_empty_importpath_fallback_test(
+    name = "selector_empty_importpath_fallback_test",
+    target_under_test = ":selector_empty_importpath_fallback_target",
 )
 
 selector_include_disabled_target(
@@ -298,6 +310,7 @@ test_suite(
         ":selector_deps_precedence_test",
         ":selector_fallback_test",
         ":selector_no_match_fallback_test",
+        ":selector_empty_importpath_fallback_test",
         ":selector_include_disabled_test",
         ":selector_override_test",
     ],

@@ -48,12 +48,10 @@ load(
 # NOTE: `UPLOADER_VERSION` and `RULES_VERSION` are intentionally independent.
 # Uploader runtime behavior can evolve without forcing a rules contract bump,
 # while payload metadata still carries both for observability.
-load("//tools/core:uploader_bash_template.bzl", "UPLOADER_BASH_TEMPLATE")
-load("//tools/core:uploader_batch_template.bzl", "UPLOADER_BATCH_TEMPLATE")
-load("//tools/core:uploader_powershell_template.bzl", "UPLOADER_POWERSHELL_TEMPLATE")
 
 def _render_template(template, substitutions):
     """Render script template placeholders with literal-brace support."""
+
     # Single-pass renderer:
     # - Supports {key} placeholders.
     # - Supports escaped literal braces via {{ and }}.
@@ -133,8 +131,25 @@ def _base_template_substitutions(
         "rules_version": RULES_VERSION,
     }
 
+def _tokenize_template_substitutions(substitutions):
+    """Convert logical substitution keys to template token placeholders."""
+    tokenized = {}
+    for key, value in substitutions.items():
+        value_str = str(value)
+        for forbidden in ["\n", "\r", "\t"]:
+            if forbidden in value_str:
+                fail("dd_payload_uploader: template substitution '%s' contains control characters" % key)
+
+        # Guard against shell/script-breaking interpolation primitives.
+        for forbidden in ["\"", "$", "`"]:
+            if forbidden in value_str:
+                fail("dd_payload_uploader: template substitution '%s' contains unsupported character '%s'" % (key, forbidden))
+        tokenized["__DDTPL_%s__" % key.upper()] = value_str
+    return tokenized
+
 def _bash_curl_retry_flags_for_tests():
     """Expose uploader curl retry defaults for unit tests."""
+
     # Keep the baseline retry behavior compatible with older curl releases.
     return ["--retry", "3", "--retry-delay", "2", "--retry-connrefused"]
 
@@ -282,6 +297,7 @@ def _is_gitlab_section_header_pattern_for_tests(pattern):
             return True
     if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
         return False
+
     # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
     all_upper_or_digit = True
     for i in range(len(inner)):
@@ -291,6 +307,7 @@ def _is_gitlab_section_header_pattern_for_tests(pattern):
             break
     if all_upper_or_digit:
         return False
+
     # Preserve short alnum bracket classes (for example [xy], [ABC], [Abc]).
     if len(inner) <= 3:
         all_alnum = True
@@ -301,6 +318,7 @@ def _is_gitlab_section_header_pattern_for_tests(pattern):
                 break
         if all_alnum:
             return False
+
     # Preserve plain lowercase/digit class sets such as [abc] and [a1b2].
     all_lower_or_digit = True
     for i in range(len(inner)):
@@ -339,12 +357,14 @@ def _is_gitlab_section_header_pattern_powershell_for_tests(pattern):
     inner = pattern[1:-1]
     if not inner or ("[" in inner) or ("]" in inner):
         return False
+
     # Keep PowerShell behavior aligned with script implementation: section
     # headers are detected via space/tab within bracket content.
     if (" " in inner) or ("\t" in inner):
         return True
     if ("-" in inner) or ("!" in inner) or ("^" in inner) or ("\\" in inner):
         return False
+
     # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
     all_upper_or_digit = True
     for i in range(len(inner)):
@@ -444,6 +464,7 @@ def _trim_ascii_whitespace_for_tests(value):
 
 def _strip_bom_prefix_for_tests(value):
     """Remove UTF-8 BOM marker used in manifest parser test fixtures."""
+
     # Tests use an ASCII marker to represent UTF-8 BOM-prefixed manifest keys.
     bom_marker = "\\ufeff"
     if value.startswith(bom_marker):
@@ -538,6 +559,7 @@ def _uploader_impl(ctx):
     The generated scripts perform runtime payload discovery/enrichment/upload,
     while this function stays analysis-time only (template rendering + runfiles).
     """
+
     # `_uploader_impl` is responsible for generating *all* runtime uploader
     # artifacts. It does not upload anything itself; it emits executable scripts
     # that run during `bazel run`.
@@ -616,11 +638,8 @@ def _uploader_impl(ctx):
             log_debug(debug, "inputs", "  data file: %s (%s)" % (f.basename, f.short_path))
 
     # ------------------------------------------------------------------
-    # Phase 2: Render Bash runtime implementation.
+    # Phase 2: Materialize Bash runtime implementation from template file.
     # ------------------------------------------------------------------
-    # Bash implementation (Unix)
-    bash_template = UPLOADER_BASH_TEMPLATE
-
     bash_substitutions = _base_template_substitutions(
         quiescent_sec,
         max_wait_sec,
@@ -637,49 +656,54 @@ def _uploader_impl(ctx):
         schema_validator_path,
     )
     bash_substitutions["curl_retry_flags"] = " ".join(_bash_curl_retry_flags_for_tests())
-    bash_script = _render_template(bash_template, bash_substitutions)
-    log_debug(debug, "render", "Bash script rendered (bytes=%d)" % len(bash_script))
-
-    # PowerShell implementation (Windows)
-    ps_template = UPLOADER_POWERSHELL_TEMPLATE
-
-    # ------------------------------------------------------------------
-    # Phase 3: Render PowerShell runtime implementation.
-    # ------------------------------------------------------------------
-    ps_script = _render_template(
-        ps_template,
-        _base_template_substitutions(
-            quiescent_sec,
-            max_wait_sec,
-            fail_on_error,
-            debug,
-            keep_payloads,
-            filter_prefix_enabled,
-            gzip_payloads,
-            context_json_rloc,
-            context_json_path,
-            schema_json_rloc,
-            schema_json_path,
-            schema_validator_rloc,
-            schema_validator_path,
-        ),
+    bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.expand_template(
+        template = ctx.file._bash_runtime_template,
+        output = bash_file,
+        substitutions = _tokenize_template_substitutions(bash_substitutions),
+        is_executable = True,
     )
-    log_debug(debug, "render", "PowerShell script rendered (bytes=%d)" % len(ps_script))
+    log_debug(debug, "render", "Bash script rendered from template: %s" % ctx.file._bash_runtime_template.short_path)
+
+    # ------------------------------------------------------------------
+    # Phase 3: Materialize PowerShell runtime implementation from template file.
+    # ------------------------------------------------------------------
+    ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
+    ctx.actions.expand_template(
+        template = ctx.file._powershell_runtime_template,
+        output = ps_file,
+        substitutions = _tokenize_template_substitutions(
+            _base_template_substitutions(
+                quiescent_sec,
+                max_wait_sec,
+                fail_on_error,
+                debug,
+                keep_payloads,
+                filter_prefix_enabled,
+                gzip_payloads,
+                context_json_rloc,
+                context_json_path,
+                schema_json_rloc,
+                schema_json_path,
+                schema_validator_rloc,
+                schema_validator_path,
+            ),
+        ),
+        is_executable = False,
+    )
+    log_debug(debug, "render", "PowerShell script rendered from template: %s" % ctx.file._powershell_runtime_template.short_path)
 
     # ------------------------------------------------------------------
     # Phase 4: Materialize executable/script artifacts.
     # ------------------------------------------------------------------
-    # Emit scripts
-    bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
-    ctx.actions.write(output = bash_file, content = bash_script, is_executable = True)
-    ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
-    ctx.actions.write(output = ps_file, content = ps_script, is_executable = False)
-
     # Create a batch file wrapper for native Windows (calls PowerShell)
-    bat_template = UPLOADER_BATCH_TEMPLATE
-    bat_script = bat_template.replace("{ps_name}", ps_file.basename)
     bat_file = ctx.actions.declare_file(ctx.label.name + ".bat")
-    ctx.actions.write(output = bat_file, content = bat_script, is_executable = True)
+    ctx.actions.expand_template(
+        template = ctx.file._batch_runtime_template,
+        output = bat_file,
+        substitutions = _tokenize_template_substitutions({"ps_name": ps_file.basename}),
+        is_executable = True,
+    )
     log_debug(debug, "outputs", "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
 
     # ------------------------------------------------------------------
@@ -717,6 +741,10 @@ _dd_payload_uploader_rule = rule(
         # Schema + validator bundled for best-effort payload validation
         "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
         "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),
+        # Runtime templates (kept as standalone files, not inline Starlark strings)
+        "_bash_runtime_template": attr.label(default = "//tools/core:uploader_bash_runtime.sh.tpl", allow_single_file = True),
+        "_powershell_runtime_template": attr.label(default = "//tools/core:uploader_powershell_runtime.ps1.tpl", allow_single_file = True),
+        "_batch_runtime_template": attr.label(default = "//tools/core:uploader_batch_runtime.bat.tpl", allow_single_file = True),
         # Private attribute to detect Windows platform
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },

@@ -221,6 +221,10 @@ def _is_windows(ctx):
 
 _FINGERPRINT_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+@=#%~!$^*()[]{}<>?,;|\\\"'` "
 
+def _powershell_single_quote_literal(value):
+    """Escape value for safe use inside a single-quoted PowerShell string."""
+    return (value or "").replace("'", "''")
+
 def _fnv1a_32(value):
     """Compute a deterministic non-cryptographic 32-bit hash.
 
@@ -295,7 +299,7 @@ def _ensure_parent_directory(ctx, path, debug):
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "New-Item -ItemType Directory -Force -Path '%s' | Out-Null" % win_dir.replace("'", "''"),
+            "New-Item -ItemType Directory -Force -Path '%s' | Out-Null" % _powershell_single_quote_literal(win_dir),
         ]
         res = ctx.execute(ps_cmd)
     else:
@@ -348,7 +352,7 @@ def _validate_abs_path_command_input_or_fail(abs_path):
     if ("\n" in abs_path) or ("\r" in abs_path) or ("\t" in abs_path):
         fail("test_optimization_sync: absolute path contains unsupported control characters: %s" % repr(abs_path))
 
-def _try_read_abs_file(ctx, abs_path, debug):
+def _try_read_abs_file(ctx, abs_path):
     """Best-effort absolute file read with explicit miss/read-error signaling."""
 
     # Returns a status dict:
@@ -409,7 +413,7 @@ def _try_read_abs_file(ctx, abs_path, debug):
 def _build_windows_exists_abs_file_command(abs_path):
     """Build PowerShell command string for absolute-file existence checks."""
     _validate_abs_path_command_input_or_fail(abs_path)
-    return "$p = '%s'; if (Test-Path -LiteralPath $p -PathType Leaf) { exit 0 } else { exit 3 }" % abs_path.replace("'", "''")
+    return "$p = '%s'; if (Test-Path -LiteralPath $p -PathType Leaf) { exit 0 } else { exit 3 }" % _powershell_single_quote_literal(abs_path)
 
 def _build_unix_exists_abs_file_command(abs_path):
     """Build POSIX shell command string for absolute-file existence checks."""
@@ -422,7 +426,7 @@ def _build_windows_read_abs_file_command(abs_path):
     _validate_abs_path_command_input_or_fail(abs_path)
 
     # Security note: single quotes are doubled for PowerShell literal strings.
-    return "$p = '%s'; Get-Content -Raw -LiteralPath $p" % abs_path.replace("'", "''")
+    return "$p = '%s'; Get-Content -Raw -LiteralPath $p" % _powershell_single_quote_literal(abs_path)
 
 def _build_unix_read_abs_file_command(abs_path):
     """Build shell command string for `_try_read_abs_file` reads."""
@@ -485,7 +489,7 @@ def _detect_go_module_path(ctx, debug):
     for root in candidates:
         go_mod_path = root.rstrip("/") + "/go.mod"
         log_debug(debug, "go", "Checking go.mod at: %s" % go_mod_path)
-        read_result = _try_read_abs_file(ctx, go_mod_path, debug)
+        read_result = _try_read_abs_file(ctx, go_mod_path)
         if read_result.get("ok"):
             content = read_result.get("value") or ""
             mp = _parse_go_module_path(content)
@@ -505,7 +509,7 @@ def _detect_go_module_path(ctx, debug):
     if top:
         go_mod_path = top.rstrip("/") + "/go.mod"
         log_debug(debug, "go", "Checking go.mod at: %s" % go_mod_path)
-        read_result = _try_read_abs_file(ctx, go_mod_path, debug)
+        read_result = _try_read_abs_file(ctx, go_mod_path)
         if read_result.get("ok"):
             content = read_result.get("value") or ""
             mp = _parse_go_module_path(content)
@@ -952,8 +956,8 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         lines = []
         lines.append("$ErrorActionPreference = 'Stop'")
         lines.append("$ProgressPreference = 'SilentlyContinue'")
-        lines.append("$Url = '%s'" % url.replace("'", "''"))
-        lines.append("$OutFile = '%s'" % out_file.replace("'", "''"))
+        lines.append("$Url = '%s'" % _powershell_single_quote_literal(url))
+        lines.append("$OutFile = '%s'" % _powershell_single_quote_literal(out_file))
         lines.append("$Method = '%s'" % http_method)
 
         # Headers hashtable (PowerShell expects IDictionary-like; hashtable is safest)
@@ -967,15 +971,15 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
                 ps_env["DD_TEST_OPTIMIZATION_API_KEY"] = header_value
                 lines.append("$apiKey = $env:DD_TEST_OPTIMIZATION_API_KEY")
                 lines.append("if ([string]::IsNullOrEmpty($apiKey)) { Write-Error 'missing DD_TEST_OPTIMIZATION_API_KEY for DD-API-KEY header'; exit 2 }")
-                lines.append("$Headers['%s'] = $apiKey" % header_key.replace("'", "''"))
+                lines.append("$Headers['%s'] = $apiKey" % _powershell_single_quote_literal(header_key))
             else:
-                lines.append("$Headers['%s'] = '%s'" % (header_key.replace("'", "''"), header_value.replace("'", "''")))
+                lines.append("$Headers['%s'] = '%s'" % (_powershell_single_quote_literal(header_key), _powershell_single_quote_literal(header_value)))
 
         # Optional body file
         if data_file:
             # Keep body on disk and pass `-InFile` to avoid quoting/encoding
             # drift for JSON payloads that may contain special characters.
-            lines.append("$BodyFile = '%s'" % data_file.replace("'", "''"))
+            lines.append("$BodyFile = '%s'" % _powershell_single_quote_literal(data_file))
         lines.append("$max = %d; $attempt = 0" % policy["retry_attempts"])
         lines.append("while ($true) {")
         lines.append("  try {")
@@ -1062,7 +1066,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "$fi = Get-Item -LiteralPath '%s'; if ($fi) { Write-Output $fi.Length }" % out_file.replace("'", "''"),
+                "$fi = Get-Item -LiteralPath '%s'; if ($fi) { Write-Output $fi.Length }" % _powershell_single_quote_literal(out_file),
             ]
             size_result = ctx.execute(size_cmd)
             if size_result.return_code == 0 and size_result.stdout:

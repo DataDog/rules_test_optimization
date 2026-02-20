@@ -56,6 +56,7 @@ _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 
 def _resolve_topt_service_key(service_entries, topt_service):
+    """Implement resolve topt service key behavior."""
     return resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_go_test")
 
 # Public aliases for unit tests.
@@ -64,6 +65,7 @@ resolve_topt_service_key_for_tests = _resolve_topt_service_key
 normalize_user_data_for_tests = _normalize_user_data
 
 def _build_module_labels(sync_repo_name, labels):
+    """Implement build module labels behavior."""
     if labels == None:
         return []
     if not _is_list(labels):
@@ -166,7 +168,9 @@ def dd_topt_go_test(
     include_per_module_files = False
 
     # Resolve sync repo name from selected service
-    sync_repo_name = _svc.get("repo_name") or "test_optimization_data"
+    sync_repo_name = _svc.get("repo_name")
+    if not sync_repo_name:
+        fail("dd_topt_go_test: selected topt_data entry is missing required 'repo_name'")
 
     # Decide whether to include per-module files:
     # - When inferring (explicit importpath or embed provided), always attempt per-module selection

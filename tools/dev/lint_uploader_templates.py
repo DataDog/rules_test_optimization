@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Extract and lint embedded uploader templates from Starlark files."""
+"""Lint standalone uploader runtime template files."""
 
 from __future__ import annotations
 
 import argparse
-import re
 import subprocess
 import tempfile
 from pathlib import Path
 
-_PLACEHOLDER_RE = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
+import re
+
+_TOKEN_RE = re.compile(r"__DDTPL_[A-Z0-9_]+__")
 
 
 def _repo_root() -> Path:
+    """Internal helper for repo root behavior."""
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
         if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
@@ -20,34 +22,34 @@ def _repo_root() -> Path:
     raise RuntimeError("unable to locate repository root from script path")
 
 
-def _extract_template(path: Path, variable_name: str) -> str:
-    marker = f'{variable_name} = """'
-    text = path.read_text(encoding="utf-8")
-    start = text.find(marker)
-    if start < 0:
-        raise RuntimeError(f"template marker not found in {path}: {marker}")
-    start += len(marker)
-    end = text.find('"""', start)
-    if end < 0:
-        raise RuntimeError(f"template terminator not found in {path}")
-    return text[start:end].lstrip("\n")
-
-
 def _normalize_bash_template_for_lint(template: str) -> str:
-    # Replace format placeholders and unescape doubled braces used in the .bzl
-    # template literals so shellcheck sees render-equivalent syntax.
-    normalized = _PLACEHOLDER_RE.sub("0", template)
-    normalized = normalized.replace("{{", "{").replace("}}", "}")
+    # Runtime templates carry __DDTPL_*__ tokens; replace them with deterministic
+    # literals so shellcheck parses render-equivalent syntax.
+    """Internal helper for normalize bash template for lint behavior."""
+    normalized = _TOKEN_RE.sub("0", template)
     return normalized
 
 
 def _normalize_powershell_template_for_lint(template: str) -> str:
-    # Keep variable interpolation valid for parser checks: `${{var}}` in template
-    # should normalize to `${var}`, not `$0`.
-    return template.replace("{{", "{").replace("}}", "}")
+    # Keep parser checks deterministic by replacing token placeholders with
+    # scalar literals.
+    """Internal helper for normalize powershell template for lint behavior."""
+    return _TOKEN_RE.sub("0", template)
+
+
+def _lint_batch_template(template: str) -> None:
+    """Internal helper for lint batch template behavior."""
+    if "__DDTPL_PS_NAME__" not in template:
+        raise RuntimeError("batch template missing __DDTPL_PS_NAME__ placeholder")
+    normalized = _TOKEN_RE.sub("dd_upload_payloads.ps1", template).lower()
+    if "powershell.exe" not in normalized:
+        raise RuntimeError("batch template missing powershell.exe invocation")
+    if "exit /b %errorlevel%" not in normalized:
+        raise RuntimeError("batch template missing exit code propagation (exit /b %ERRORLEVEL%)")
 
 
 def _run(cmd: list[str], cwd: Path) -> None:
+    """Internal helper for run behavior."""
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
     except FileNotFoundError as exc:
@@ -60,7 +62,8 @@ def _run(cmd: list[str], cwd: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Lint uploader template strings")
+    """Run CLI entrypoint logic and return process exit code."""
+    parser = argparse.ArgumentParser(description="Lint uploader runtime template files")
     parser.add_argument(
         "--skip-shellcheck",
         action="store_true",
@@ -74,42 +77,51 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = _repo_root()
-    bash_bzl = repo / "tools/core/uploader_bash_template.bzl"
-    ps_bzl = repo / "tools/core/uploader_powershell_template.bzl"
-    bash_template = _normalize_bash_template_for_lint(_extract_template(bash_bzl, "UPLOADER_BASH_TEMPLATE"))
-    # The Starlark source encodes escaped parenthesis as "\\(" and "\\)" so
-    # shellcheck sees parse-equivalent output to the rendered script.
-    bash_template = bash_template.replace("\\\\(", "\\(").replace("\\\\)", "\\)")
-    ps_template = _normalize_powershell_template_for_lint(_extract_template(ps_bzl, "UPLOADER_POWERSHELL_TEMPLATE"))
+    bash_tpl = repo / "tools/core/uploader_bash_runtime.sh.tpl"
+    ps_tpl = repo / "tools/core/uploader_powershell_runtime.ps1.tpl"
+    batch_tpl = repo / "tools/core/uploader_batch_runtime.bat.tpl"
+    bash_template = _normalize_bash_template_for_lint(bash_tpl.read_text(encoding="utf-8"))
+    ps_template = _normalize_powershell_template_for_lint(ps_tpl.read_text(encoding="utf-8"))
+    batch_template = batch_tpl.read_text(encoding="utf-8")
 
     with tempfile.TemporaryDirectory(prefix="uploader_template_lint.") as tmp:
         tmp_dir = Path(tmp)
         bash_file = tmp_dir / "uploader_template.sh"
         ps_file = tmp_dir / "uploader_template.ps1"
+        ps_parse_file = tmp_dir / "parse_template.ps1"
         bash_file.write_text(bash_template, encoding="utf-8")
         ps_file.write_text(ps_template, encoding="utf-8")
+        ps_parse_file.write_text(
+            (
+                "param([string]$TemplatePath)\n"
+                "$tokens = $null\n"
+                "$errors = $null\n"
+                "[System.Management.Automation.Language.Parser]::ParseFile($TemplatePath, [ref]$tokens, [ref]$errors) | Out-Null\n"
+                "if ($errors -and $errors.Count -gt 0) {\n"
+                "  $errors | ForEach-Object { Write-Error $_ }\n"
+                "  exit 1\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
 
         if not args.skip_shellcheck:
             _run(["shellcheck", "--severity=error", str(bash_file)], repo)
 
         if not args.skip_powershell_parse:
-            ps_file_path = str(ps_file).replace("'", "''")
-            ps_parse_cmd = (
-                "$tokens = $null; "
-                "$errors = $null; "
-                f"[System.Management.Automation.Language.Parser]::ParseFile('{ps_file_path}', [ref]$tokens, [ref]$errors) | Out-Null; "
-                "if ($errors -and $errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }"
-            )
             _run(
                 [
                     "pwsh",
                     "-NoProfile",
                     "-NonInteractive",
-                    "-Command",
-                    ps_parse_cmd,
+                    "-File",
+                    str(ps_parse_file),
+                    "-TemplatePath",
+                    str(ps_file),
                 ],
                 repo,
             )
+    _lint_batch_template(batch_template)
 
     print("uploader template lint: ok")
     return 0

@@ -15,34 +15,28 @@ def _bzl_string_literal(value):
 
 def _render_stub_build(settings, manifest, known_tests, test_management, context, service_keys = None):
     """Render BUILD content for stub repo targets."""
-    lines = []
-    lines.append(
-        "filegroup(\n" +
-        '    name = "test_optimization_files",\n' +
-        ("    srcs = %s,\n" % repr([settings, manifest, known_tests, test_management])) +
-        '    visibility = ["//visibility:public"],\n' +
-        ")\n\n"
-    )
-    lines.append(
-        "filegroup(\n" +
-        '    name = "test_optimization_context",\n' +
-        ("    srcs = %s,\n" % repr([context])) +
-        '    visibility = ["//visibility:public"],\n' +
-        ")\n\n"
-    )
-    for key in list(service_keys or []):
+
+    def _append_filegroups(name_suffix, srcs):
         lines.append(
             "filegroup(\n" +
-            ('    name = "test_optimization_files_%s",\n' % key) +
-            ("    srcs = %s,\n" % repr([settings, manifest, known_tests, test_management])) +
+            ('    name = "test_optimization_files%s",\n' % name_suffix) +
+            ("    srcs = %s,\n" % repr(srcs)) +
             '    visibility = ["//visibility:public"],\n' +
-            ")\n\n" +
+            ")\n\n",
+        )
+        lines.append(
             "filegroup(\n" +
-            ('    name = "test_optimization_context_%s",\n' % key) +
+            ('    name = "test_optimization_context%s",\n' % name_suffix) +
             ("    srcs = %s,\n" % repr([context])) +
             '    visibility = ["//visibility:public"],\n' +
-            ")\n\n"
+            ")\n\n",
         )
+
+    files_srcs = [settings, manifest, known_tests, test_management]
+    lines = []
+    _append_filegroups("", files_srcs)
+    for key in list(service_keys or []):
+        _append_filegroups("_%s" % key, files_srcs)
     lines.append('exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest))
     return "".join(lines)
 
@@ -51,6 +45,7 @@ render_stub_build_for_tests = _render_stub_build
 bzl_string_literal_for_tests = _bzl_string_literal
 
 def _example_stub_repo_impl(ctx):
+    """Implement example stub repo impl behavior."""
     manifest = ".testoptimization/manifest.txt"
     settings = ".testoptimization/cache/http/settings.json"
     known_tests = ".testoptimization/cache/http/known_tests.json"
@@ -81,8 +76,8 @@ def _example_stub_repo_impl(ctx):
         '            "module_path": "example.com/stub",\n' +
         '            "sanitized_module_path": "example_com_stub",\n' +
         '            "module_included": False,\n' +
-        '        },\n' +
-        '    },\n' +
+        "        },\n" +
+        "    },\n" +
         "}\n\n" +
         "topt_data_by_service = {\n" +
         "".join(mapping_lines) +
@@ -109,6 +104,7 @@ example_stub_repo = repository_rule(
 )
 
 def _example_stub_repo_extension_impl(module_ctx):
+    """Implement example stub repo extension impl behavior."""
     for mod in module_ctx.modules:
         for call in mod.tags.example_stub_repo:
             example_stub_repo(

@@ -182,9 +182,20 @@ full bundle.
 
 2. **Check paths use forward slashes** in Starlark/Bazel contexts (backslashes
    are auto-converted).
-3. **Git Bash path conversion**: when running the integration harness from
-   PowerShell, ensure `cygpath` is available (Git for Windows). The harness
-   falls back to raw paths, but mixed-path conversion improves consistency.
+3. **Use native PowerShell harness on Windows**:
+   - `.\tools\tests\integration\run_mock_server_tests.ps1`
+   - Git Bash is not required for Windows integration runs.
+
+## Safe command patterns
+
+- Prefer explicit env assignment over shell interpolation in troubleshooting
+  commands:
+  - Unix: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads`
+  - PowerShell: set `$env:DD_API_KEY` and `$env:DD_SITE` first, then run `bazel run //:dd_upload_payloads`
+- Quote paths containing spaces and avoid `eval`-style wrappers.
+- For refetch debugging, use:
+  - `bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
+  - if required by workspace mode: `bazel sync --enable_workspace --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
 
 ## Getting help
 

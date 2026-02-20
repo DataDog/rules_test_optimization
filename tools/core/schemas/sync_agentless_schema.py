@@ -18,6 +18,7 @@ from typing import Any
 
 
 def _repo_root() -> Path:
+    """Internal helper for repo root behavior."""
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
         if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
@@ -26,14 +27,17 @@ def _repo_root() -> Path:
 
 
 def _default_yaml_path() -> Path:
+    """Internal helper for default yaml path behavior."""
     return _repo_root() / "tools" / "core" / "schemas" / "agentless-schema.yaml"
 
 
 def _default_json_path() -> Path:
+    """Internal helper for default json path behavior."""
     return _repo_root() / "tools" / "core" / "schemas" / "agentless-schema.json"
 
 
 def _load_yaml_with_pyyaml(path: Path) -> Any:
+    """Internal helper for load yaml with pyyaml behavior."""
     try:
         import yaml  # type: ignore
     except ImportError as exc:
@@ -43,6 +47,7 @@ def _load_yaml_with_pyyaml(path: Path) -> Any:
 
 
 def _load_yaml_with_ruby(path: Path) -> Any:
+    """Internal helper for load yaml with ruby behavior."""
     ruby = shutil.which("ruby")
     if not ruby:
         raise RuntimeError("Ruby is not available")
@@ -69,6 +74,7 @@ def _load_yaml_with_ruby(path: Path) -> Any:
 
 
 def load_yaml(path: Path) -> Any:
+    """Implement load yaml behavior."""
     pyyaml_error: Exception | None = None
     try:
         return _load_yaml_with_pyyaml(path)
@@ -87,15 +93,18 @@ def load_yaml(path: Path) -> Any:
 
 
 def load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
+    """Implement load json behavior."""
+    with path.open("r", encoding="utf-8-sig") as handle:
         return json.load(handle)
 
 
 def render_json(data: Any) -> str:
+    """Implement render json behavior."""
     return json.dumps(data, indent=2) + "\n"
 
 
 def parse_args() -> argparse.Namespace:
+    """Implement parse args behavior."""
     parser = argparse.ArgumentParser(
         description="Sync tools/core/schemas/agentless-schema.json from YAML source."
     )
@@ -122,6 +131,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     args = parse_args()
     yaml_path = args.yaml_path.resolve()
     json_path = args.json_path.resolve()

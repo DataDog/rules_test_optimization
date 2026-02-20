@@ -118,10 +118,13 @@ Notes:
 - The sequence above intentionally preserves the test exit code.
 - Uploader failures are still reported in uploader logs/output; monitor those in CI.
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
+- Windows-friendly wrappers are provided as `examples/*/runtests.ps1` and use
+  native PowerShell + Bazel (no Git Bash dependency).
 
 Dry-run mode for CI/debugging:
 - Set `RUNTESTS_DRY_RUN=1` when invoking `examples/*/runtests.sh` to print
   the commands that would run without executing Bazel test/upload operations.
+- PowerShell wrappers honor the same `RUNTESTS_DRY_RUN=1` environment variable.
 
 ## Multi-service (aggregator)
 

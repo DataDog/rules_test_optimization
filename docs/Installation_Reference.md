@@ -31,6 +31,9 @@ bazel_dep(name = "rules_go", version = "0.59.0")
 ```
 
 Use the same full commit SHA (40 chars) for core and companion modules.
+For mirrored/archive installs, also pin and verify archive `sha256` values (see
+"Archive mirror installation" below) so the fetched source is integrity-checked
+in CI and local builds.
 
 ### Option B: local development overrides
 

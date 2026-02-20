@@ -16,7 +16,7 @@ The steps are:
    - `@<repo>//:module_<sanitized>` (per‑module bundle: `cache/http/settings.json` + that module’s known/test‑management files)
    The sync also emits an `export.bzl` helper describing available module labels, the resolved `manifest_path`, and detected runtime/module hints for consumers. Per‑module targets expose canonical runfile names rooted at the manifest directory (`<out_dir>/...`, default `.testoptimization/...`) regardless of where split files are stored physically.  
    Notes:
-   - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; it is normalized to `https://api.<site>`.
+   - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; ASCII whitespace is trimmed and value is normalized to `https://api.<site>`.
    - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
    Reference implementation: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
 

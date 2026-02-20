@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import types
 from typing import Optional
@@ -16,6 +18,7 @@ from unittest import mock
 
 
 def _runfile(rel_path: str) -> Path:
+    """Internal helper for runfile behavior."""
     test_srcdir = os.environ.get("TEST_SRCDIR", "")
     test_workspace = os.environ.get("TEST_WORKSPACE", "")
     workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
@@ -62,6 +65,7 @@ def _runfile(rel_path: str) -> Path:
 
 
 def _load_module(name: str, rel_path: str) -> types.ModuleType:
+    """Internal helper for load module behavior."""
     path = _runfile(rel_path)
     spec = importlib.util.spec_from_file_location(name, str(path))
     if spec is None or spec.loader is None:
@@ -72,8 +76,10 @@ def _load_module(name: str, rel_path: str) -> types.ModuleType:
 
 
 class ValidatePayloadSchemaTests(unittest.TestCase):
+    """Test case group covering ValidatePayloadSchemaTests behaviors."""
     @classmethod
     def setUpClass(cls) -> None:
+        """Execute setUpClass lifecycle behavior."""
         cls.mod = _load_module(
             "validate_payload_schema_mod",
             "tools/core/validate_payload_schema.py",
@@ -85,6 +91,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         payload_path: str,
         extra_args: Optional[list[str]] = None,
     ) -> int:
+        """Internal helper for run main behavior."""
         old_argv = list(self.mod.sys.argv)
         self.mod.sys.argv = [
             "validate_payload_schema.py",
@@ -98,6 +105,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.mod.sys.argv = old_argv
 
     def test_valid_and_invalid_payload(self) -> None:
+        """Validate valid and invalid payload behavior."""
         schema = {
             "type": "object",
             "required": ["ok"],
@@ -118,6 +126,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.assertEqual(1, rc_invalid)
 
     def test_safe_size_handles_missing(self) -> None:
+        """Validate safe size handles missing behavior."""
         missing_path = os.path.join(
             tempfile.gettempdir(),
             "does-not-exist-validate-payload-schema",
@@ -126,6 +135,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertIsNone(value)
 
     def test_max_errors_flag_is_supported(self) -> None:
+        """Validate max errors flag is supported behavior."""
         schema = {"type": "object"}
         with tempfile.TemporaryDirectory() as tmp:
             schema_path = Path(tmp) / "schema.json"
@@ -140,6 +150,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.assertEqual(0, rc)
 
     def test_invalid_max_errors_env_returns_usage_error(self) -> None:
+        """Validate invalid max errors env returns usage error behavior."""
         schema = {"type": "object"}
         with tempfile.TemporaryDirectory() as tmp:
             schema_path = Path(tmp) / "schema.json"
@@ -154,6 +165,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.assertEqual(2, rc)
 
     def test_missing_input_paths_return_usage_error(self) -> None:
+        """Validate missing input paths return usage error behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             missing_schema = str(Path(tmp) / "missing-schema.json")
             missing_payload = str(Path(tmp) / "missing-payload.json")
@@ -161,6 +173,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.assertEqual(2, rc)
 
     def test_unsupported_keywords_default_to_error(self) -> None:
+        """Validate unsupported keywords default to error behavior."""
         schema = {"oneOf": [{"const": "ok"}]}
         errors: list[str] = []
         self.mod._validate("ok", schema, schema, "$", errors, 10)
@@ -168,6 +181,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertIn("unsupported JSON Schema keyword 'oneOf'", errors[0])
 
     def test_unsupported_keywords_warn_mode(self) -> None:
+        """Validate unsupported keywords warn mode behavior."""
         schema = {"oneOf": [{"const": "ok"}]}
         errors: list[str] = []
         stderr = io.StringIO()
@@ -185,6 +199,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertIn("unsupported JSON Schema keyword 'oneOf'", stderr.getvalue())
 
     def test_internal_predicates_and_helpers(self) -> None:
+        """Validate internal predicates and helpers behavior."""
         self.assertTrue(self.mod._is_number(3))
         self.assertTrue(self.mod._is_number(3.14))
         self.assertFalse(self.mod._is_number(True))
@@ -203,6 +218,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertEqual("a, b", self.mod._sample_keys({"a": 1, "b": 2}))
 
     def test_resolve_ref_supports_list_indices(self) -> None:
+        """Validate resolve ref supports list indices behavior."""
         root = {
             "$defs": {
                 "variants": [
@@ -216,6 +232,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.mod._resolve_ref(root, "#/$defs/variants/2")
 
     def test_validate_direct_number_bounds(self) -> None:
+        """Validate validate direct number bounds behavior."""
         schema = {"type": "number", "minimum": 10, "maximum": 20}
         errors: list[str] = []
         self.mod._validate(7, schema, schema, "$", errors, 10)
@@ -227,12 +244,14 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
 
     def test_validate_number_bounds_stops_at_max_errors(self) -> None:
         # Deliberately inconsistent schema to force both bounds to fail.
+        """Validate validate number bounds stops at max errors behavior."""
         schema = {"type": "number", "minimum": 10, "maximum": 5}
         errors: list[str] = []
         self.mod._validate(7, schema, schema, "$", errors, 1)
         self.assertEqual(1, len(errors))
 
     def test_validate_invalid_pattern_properties_regex(self) -> None:
+        """Validate validate invalid pattern properties regex behavior."""
         schema = {
             "type": "object",
             "patternProperties": {
@@ -245,6 +264,7 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertIn("invalid patternProperties regex", errors[0])
 
     def test_main_resets_stats_between_runs(self) -> None:
+        """Validate main resets stats between runs behavior."""
         schema = {
             "type": "object",
             "properties": {"ok": {"type": "boolean"}},
@@ -269,27 +289,90 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             self.assertEqual(nodes_first, nodes_second)
 
     def test_parse_args_supports_max_errors(self) -> None:
+        """Validate parse args supports max errors behavior."""
         parsed = self.mod._parse_args(["schema.json", "payload.json", "--max-errors", "5"])
         self.assertEqual("schema.json", parsed.schema_path)
         self.assertEqual("payload.json", parsed.payload_path)
         self.assertEqual(5, parsed.max_errors)
 
+    def test_help_exit_returns_zero(self) -> None:
+        """Validate help exit returns zero behavior."""
+        with mock.patch.object(self.mod, "_parse_args", side_effect=SystemExit(0)):
+            rc = self.mod.main()
+        self.assertEqual(0, rc)
 
-class SyncAgentlessSchemaTests(unittest.TestCase):
+
+class CheckSchemaParserParityTests(unittest.TestCase):
+    """Test case group covering CheckSchemaParserParityTests behaviors."""
     @classmethod
     def setUpClass(cls) -> None:
+        """Execute setUpClass lifecycle behavior."""
+        cls.mod = _load_module(
+            "check_schema_parser_parity_mod",
+            "tools/core/schemas/check_schema_parser_parity.py",
+        )
+
+    def test_main_success_when_parsers_match(self) -> None:
+        """Validate main success when parsers match behavior."""
+        yaml_path = Path("/tmp/fake-agentless-schema.yaml")
+        with mock.patch.object(self.mod, "_default_yaml_path", return_value=yaml_path), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_pyyaml",
+            return_value={"ok": True},
+        ), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_ruby",
+            return_value={"ok": True},
+        ):
+            rc = self.mod.main()
+        self.assertEqual(0, rc)
+
+    def test_main_returns_mismatch_error(self) -> None:
+        """Validate main returns mismatch error behavior."""
+        yaml_path = Path("/tmp/fake-agentless-schema.yaml")
+        with mock.patch.object(self.mod, "_default_yaml_path", return_value=yaml_path), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_pyyaml",
+            return_value={"ok": True},
+        ), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_ruby",
+            return_value={"ok": False},
+        ):
+            rc = self.mod.main()
+        self.assertEqual(1, rc)
+
+    def test_main_returns_runtime_error_when_pyyaml_fails(self) -> None:
+        """Validate main returns runtime error when pyyaml fails behavior."""
+        yaml_path = Path("/tmp/fake-agentless-schema.yaml")
+        with mock.patch.object(self.mod, "_default_yaml_path", return_value=yaml_path), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_pyyaml",
+            side_effect=RuntimeError("missing pyyaml"),
+        ):
+            rc = self.mod.main()
+        self.assertEqual(2, rc)
+
+
+class SyncAgentlessSchemaTests(unittest.TestCase):
+    """Test case group covering SyncAgentlessSchemaTests behaviors."""
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Execute setUpClass lifecycle behavior."""
         cls.mod = _load_module(
             "sync_agentless_schema_mod",
             "tools/core/schemas/sync_agentless_schema.py",
         )
 
     def test_render_json_trailing_newline(self) -> None:
+        """Validate render json trailing newline behavior."""
         out = self.mod.render_json({"a": 1})
         self.assertTrue(out.endswith("\n"))
         self.assertIn('"a": 1', out)
         self.assertEqual({"a": 1}, json.loads(out))
 
     def test_load_yaml_prefers_pyyaml_and_falls_back_to_ruby(self) -> None:
+        """Validate load yaml prefers pyyaml and falls back to ruby behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             yaml_path = Path(tmp) / "schema.yaml"
             yaml_path.write_text("a: 1\n", encoding="utf-8")
@@ -308,6 +391,7 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
                 ruby_loader.assert_called_once_with(yaml_path)
 
     def test_load_yaml_raises_when_both_backends_fail(self) -> None:
+        """Validate load yaml raises when both backends fail behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             yaml_path = Path(tmp) / "schema.yaml"
             yaml_path.write_text("a: 1\n", encoding="utf-8")
@@ -325,6 +409,7 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
                     self.mod.load_yaml(yaml_path)
 
     def test_load_yaml_falls_back_when_pyyaml_raises_non_runtime_error(self) -> None:
+        """Validate load yaml falls back when pyyaml raises non runtime error behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             yaml_path = Path(tmp) / "schema.yaml"
             yaml_path.write_text("a: 1\n", encoding="utf-8")
@@ -343,6 +428,7 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
                 ruby_loader.assert_called_once_with(yaml_path)
 
     def test_main_check_and_update_paths(self) -> None:
+        """Validate main check and update paths behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             yaml_path = Path(tmp) / "agentless-schema.yaml"
             json_path = Path(tmp) / "agentless-schema.json"
@@ -378,16 +464,28 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
                     rc_check_bad = self.mod.main()
                 self.assertEqual(1, rc_check_bad)
 
+    def test_load_json_accepts_utf8_bom(self) -> None:
+        """Validate load json accepts utf8 bom behavior."""
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = Path(tmp) / "schema.json"
+            # UTF-8 BOM + valid JSON payload.
+            json_path.write_bytes(b"\xef\xbb\xbf{\"ok\": true}")
+            loaded = self.mod.load_json(json_path)
+            self.assertEqual({"ok": True}, loaded)
+
 
 class CheckModuleVersionsTests(unittest.TestCase):
+    """Test case group covering CheckModuleVersionsTests behaviors."""
     @classmethod
     def setUpClass(cls) -> None:
+        """Execute setUpClass lifecycle behavior."""
         cls.mod = _load_module(
             "check_module_versions_mod",
             "tools/dev/check_module_versions.py",
         )
 
     def test_extract_module_version(self) -> None:
+        """Validate extract module version behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text(
@@ -397,6 +495,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
             self.assertEqual("1.2.3", self.mod._extract_module_version(module_file))
 
     def test_extract_module_version_inline(self) -> None:
+        """Validate extract module version inline behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text(
@@ -406,6 +505,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
             self.assertEqual("2.0.1", self.mod._extract_module_version(module_file))
 
     def test_extract_module_version_with_comments_and_nested_parentheses(self) -> None:
+        """Validate extract module version with comments and nested parentheses behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text(
@@ -423,6 +523,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
             self.assertEqual("3.4.5", self.mod._extract_module_version(module_file))
 
     def test_extract_bazel_dep_version(self) -> None:
+        """Validate extract bazel dep version behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text(
@@ -443,6 +544,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
             )
 
     def test_extract_bazel_dep_version_multiline_with_comments(self) -> None:
+        """Validate extract bazel dep version multiline with comments behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text(
@@ -467,6 +569,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
             )
 
     def test_extract_starlark_string_constant(self) -> None:
+        """Validate extract starlark string constant behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             bzl_file = Path(tmp) / "common_utils.bzl"
             bzl_file.write_text(
@@ -483,6 +586,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
             )
 
     def test_extract_starlark_string_constant_missing_raises(self) -> None:
+        """Validate extract starlark string constant missing raises behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             bzl_file = Path(tmp) / "common_utils.bzl"
             bzl_file.write_text("RULES_VERSION = 123\n", encoding="utf-8")
@@ -490,6 +594,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
                 self.mod._extract_starlark_string_constant(bzl_file, "RULES_VERSION")
 
     def test_extract_module_version_missing_raises(self) -> None:
+        """Validate extract module version missing raises behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text('module(name = "demo")\n', encoding="utf-8")
@@ -497,6 +602,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
                 self.mod._extract_module_version(module_file)
 
     def test_extract_core_dep_missing_raises(self) -> None:
+        """Validate extract core dep missing raises behavior."""
         with tempfile.TemporaryDirectory() as tmp:
             module_file = Path(tmp) / "MODULE.bazel"
             module_file.write_text(
@@ -510,6 +616,7 @@ class CheckModuleVersionsTests(unittest.TestCase):
                 )
 
     def test_main_reports_version_mismatch(self) -> None:
+        """Validate main reports version mismatch behavior."""
         with mock.patch.object(self.mod, "_extract_module_version", side_effect=["1.2.3", "1.2.4"]), mock.patch.object(
             self.mod,
             "_extract_bazel_dep_version",
@@ -518,12 +625,206 @@ class CheckModuleVersionsTests(unittest.TestCase):
             self.assertEqual(1, self.mod.main())
 
     def test_main_reports_parse_errors(self) -> None:
+        """Validate main reports parse errors behavior."""
         with mock.patch.object(
             self.mod,
             "_extract_module_version",
             side_effect=ValueError("bad module"),
         ):
             self.assertEqual(2, self.mod.main())
+
+    def test_extract_call_args_blocks_handles_triple_quoted_strings(self) -> None:
+        """Validate extract call args blocks handles triple quoted strings behavior."""
+        text = "\n".join(
+            [
+                "module(",
+                '    name = "demo",',
+                '    doc = """',
+                "line with ) and # should be ignored",
+                '""",',
+                '    version = "1.2.3",',
+                ")",
+            ]
+        )
+        blocks = self.mod._extract_call_args_blocks(text, "module")
+        self.assertEqual(1, len(blocks))
+        self.assertIn('version = "1.2.3"', blocks[0])
+
+    def test_main_reports_semver_errors(self) -> None:
+        """Validate main reports semver errors behavior."""
+        with mock.patch.object(self.mod, "_extract_module_version", side_effect=["1.2", "1.2.3"]), mock.patch.object(
+            self.mod,
+            "_extract_bazel_dep_version",
+            side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
+        ), mock.patch.object(
+            self.mod,
+            "_extract_starlark_string_constant",
+            side_effect=["1.2.3", "2.0"],
+        ):
+            self.assertEqual(1, self.mod.main())
+
+
+class LintUploaderTemplatesTests(unittest.TestCase):
+    """Test case group covering LintUploaderTemplatesTests behaviors."""
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Execute setUpClass lifecycle behavior."""
+        cls.mod = _load_module(
+            "lint_uploader_templates_mod",
+            "tools/dev/lint_uploader_templates.py",
+        )
+
+    def test_normalize_bash_replaces_tokens(self) -> None:
+        """Validate normalize bash replaces tokens behavior."""
+        normalized = self.mod._normalize_bash_template_for_lint(
+            "A=__DDTPL_ALPHA__\nB=__DDTPL_BETA__\n"
+        )
+        self.assertNotIn("__DDTPL_ALPHA__", normalized)
+        self.assertNotIn("__DDTPL_BETA__", normalized)
+        self.assertIn("A=0", normalized)
+
+    def test_lint_batch_template_checks_required_marker(self) -> None:
+        """Validate lint batch template checks required marker behavior."""
+        with self.assertRaises(RuntimeError):
+            self.mod._lint_batch_template("@echo off\n")
+
+    def test_lint_batch_template_accepts_expected_shape(self) -> None:
+        """Validate lint batch template accepts expected shape behavior."""
+        self.mod._lint_batch_template(
+            "@echo off\n"
+            "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\"\n"
+            "exit /b %ERRORLEVEL%\n"
+        )
+
+
+class RuntimeTemplateParityTests(unittest.TestCase):
+    """Test case group covering RuntimeTemplateParityTests behaviors."""
+    @staticmethod
+    def _extract_starlark_fingerprint_alphabet(sync_text: str) -> str:
+        """Internal helper for extract starlark fingerprint alphabet behavior."""
+        match = re.search(
+            r'_FINGERPRINT_ALPHABET\s*=\s*("(?:[^"\\]|\\.)*")',
+            sync_text,
+        )
+        if match is None:
+            raise AssertionError("unable to locate _FINGERPRINT_ALPHABET in sync file")
+        return ast.literal_eval(match.group(1))
+
+    @staticmethod
+    def _extract_bash_fingerprint_alphabet(bash_text: str) -> str:
+        """Internal helper for extract bash fingerprint alphabet behavior."""
+        marker = "local alphabet=$'"
+        start = bash_text.find(marker)
+        if start < 0:
+            raise AssertionError("unable to locate bash fingerprint alphabet")
+
+        i = start + len(marker)
+        encoded_chars: list[str] = []
+        while i < len(bash_text):
+            ch = bash_text[i]
+            if ch == "\\" and i + 1 < len(bash_text):
+                encoded_chars.append(ch)
+                encoded_chars.append(bash_text[i + 1])
+                i += 2
+                continue
+            if ch == "'":
+                encoded = "".join(encoded_chars)
+                return bytes(encoded, "utf-8").decode("unicode_escape")
+            encoded_chars.append(ch)
+            i += 1
+        raise AssertionError("unterminated bash fingerprint alphabet")
+
+    @staticmethod
+    def _extract_powershell_fingerprint_alphabet(powershell_text: str) -> str:
+        """Internal helper for extract powershell fingerprint alphabet behavior."""
+        match = re.search(r"\$alphabet\s*=\s*'([^\n]*)'", powershell_text)
+        if match is None:
+            raise AssertionError("unable to locate PowerShell fingerprint alphabet")
+        return match.group(1).replace("''", "'")
+
+    def test_runtime_fingerprint_alphabet_matches_sync(self) -> None:
+        """Validate runtime fingerprint alphabet matches sync behavior."""
+        sync_text = _runfile("tools/core/test_optimization_sync.bzl").read_text(encoding="utf-8")
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        expected = self._extract_starlark_fingerprint_alphabet(sync_text)
+        self.assertEqual(expected, self._extract_bash_fingerprint_alphabet(bash_text))
+        self.assertEqual(expected, self._extract_powershell_fingerprint_alphabet(powershell_text))
+
+    def test_runtime_unknown_char_bucketing_matches_sync(self) -> None:
+        """Validate runtime unknown char bucketing matches sync behavior."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("idx=$((alpha_len + (i % 7)))", bash_text)
+        self.assertIn("$idx = $alphabet.Length + ($i % 7)", powershell_text)
+
+    def test_sync_windows_mkdir_command_uses_path(self) -> None:
+        """Validate sync windows mkdir command uses path behavior."""
+        sync_text = _runfile("tools/core/test_optimization_sync.bzl").read_text(encoding="utf-8")
+        self.assertIn("New-Item -ItemType Directory -Force -Path", sync_text)
+        self.assertNotIn("New-Item -ItemType Directory -Force -LiteralPath", sync_text)
+
+    def test_bash_runtime_has_no_windows_delegation(self) -> None:
+        """Validate bash runtime has no windows delegation behavior."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8").lower()
+        self.assertNotIn("mingw", bash_text)
+        self.assertNotIn("msys", bash_text)
+        self.assertNotIn("cygwin", bash_text)
+        self.assertNotIn("exec powershell.exe", bash_text)
+
+
+class MockDdServerTests(unittest.TestCase):
+    """Test case group covering MockDdServerTests behaviors."""
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Execute setUpClass lifecycle behavior."""
+        cls.mod = _load_module(
+            "mock_dd_server_mod",
+            "tools/tests/integration/mock_dd_server.py",
+        )
+
+    def test_require_single_header_rejects_duplicates(self) -> None:
+        """Validate require single header rejects duplicates behavior."""
+        from email.message import Message
+
+        headers = Message()
+        headers.add_header("DD-API-KEY", "a")
+        headers.add_header("DD-API-KEY", "b")
+        value, err = self.mod._require_single_header(headers, "DD-API-KEY")
+        self.assertIsNone(value)
+        self.assertEqual("duplicate DD-API-KEY headers", err)
+
+    def test_normalize_headers_redacts_api_key(self) -> None:
+        """Validate normalize headers redacts api key behavior."""
+        out = self.mod._normalize_headers({"DD-API-KEY": "secret", "Content-Type": "application/json"})
+        self.assertEqual("<redacted>", out["DD-API-KEY"])
+        self.assertEqual("application/json", out["Content-Type"])
+
+    def test_decode_uploader_coverage_payload_reads_coveragex_part(self) -> None:
+        """Validate decode uploader coverage payload reads coveragex part behavior."""
+        boundary = "abc123"
+        body = (
+            f"--{boundary}\r\n"
+            "Content-Disposition: form-data; name=\"coveragex\"; filename=\"coverage.json\"\r\n"
+            "Content-Type: application/json\r\n\r\n"
+            "{\"mock_mode\":\"ok\"}\r\n"
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+        fake_handler = types.SimpleNamespace(headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        decoded = self.mod._Handler._decode_uploader_coverage_payload(fake_handler, body)
+        self.assertEqual({"mock_mode": "ok"}, decoded)
+
+    def test_payload_contains_resource(self) -> None:
+        """Validate payload contains resource behavior."""
+        payload = {"events": [{"content": {"resource": "target"}}]}
+        fake_handler = types.SimpleNamespace()
+        self.assertTrue(self.mod._Handler._payload_contains_resource(fake_handler, payload, "target"))
+        self.assertFalse(self.mod._Handler._payload_contains_resource(fake_handler, payload, "missing"))
 
 
 if __name__ == "__main__":

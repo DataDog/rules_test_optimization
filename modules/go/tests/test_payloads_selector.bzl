@@ -28,6 +28,7 @@ _payload_marker = rule(
 )
 
 def _embed_source_impl(_ctx):
+    """Implement embed source impl behavior."""
     return []
 
 _embed_source = rule(
@@ -144,6 +145,19 @@ def selector_no_match_fallback_target(name, tags = None):
         tags = tags,
     )
 
+def selector_empty_importpath_fallback_target(name, tags = None):
+    """Selector falls back to full_files when all importpath sources are empty."""
+    topt_go_payloads_selector(
+        name = name,
+        embeds = [],
+        explicit_importpath = "",
+        fallback_importpath = "",
+        full_files = ":full_payload",
+        module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
 def selector_include_disabled_target(name, tags = None):
     """Selector keeps full_files when include_per_module is disabled."""
     topt_go_payloads_selector(
@@ -172,12 +186,14 @@ def selector_override_target(name, tags = None):
     )
 
 def _has_fragment(items, fragment):
+    """Implement has fragment behavior."""
     for item in items:
         if fragment in item:
             return True
     return False
 
 def _assert_selected(env, target, expected_fragment):
+    """Implement assert selected behavior."""
     files = [f.basename for f in target[DefaultInfo].files.to_list()]
     asserts.equals(env, 1, len(files))
     asserts.true(
@@ -187,42 +203,56 @@ def _assert_selected(env, target, expected_fragment):
     )
 
 def _selector_explicit_precedence_test_impl(ctx):
+    """Implement selector explicit precedence test impl behavior."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "module_example_com_explicit_pkg")
     return analysistest.end(env)
 
 def _selector_embed_precedence_test_impl(ctx):
+    """Implement selector embed precedence test impl behavior."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "module_example_com_embed_pkg")
     return analysistest.end(env)
 
 def _selector_deps_precedence_test_impl(ctx):
+    """Implement selector deps precedence test impl behavior."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "module_example_com_deps_pkg")
     return analysistest.end(env)
 
 def _selector_fallback_test_impl(ctx):
+    """Implement selector fallback test impl behavior."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "module_example_com_fallback_pkg")
     return analysistest.end(env)
 
 def _selector_no_match_fallback_test_impl(ctx):
+    """Implement selector no match fallback test impl behavior."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    _assert_selected(env, target, "full_payload")
+    return analysistest.end(env)
+
+def _selector_empty_importpath_fallback_test_impl(ctx):
+    """Implement selector empty importpath fallback test impl behavior."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "full_payload")
     return analysistest.end(env)
 
 def _selector_include_disabled_test_impl(ctx):
+    """Implement selector include disabled test impl behavior."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "full_payload")
     return analysistest.end(env)
 
 def _selector_override_test_impl(ctx):
+    """Implement selector override test impl behavior."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "module_custom_override")
@@ -242,6 +272,9 @@ selector_fallback_test = analysistest.make(
 )
 selector_no_match_fallback_test = analysistest.make(
     _selector_no_match_fallback_test_impl,
+)
+selector_empty_importpath_fallback_test = analysistest.make(
+    _selector_empty_importpath_fallback_test_impl,
 )
 selector_include_disabled_test = analysistest.make(
     _selector_include_disabled_test_impl,

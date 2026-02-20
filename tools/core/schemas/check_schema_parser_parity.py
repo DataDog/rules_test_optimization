@@ -4,6 +4,11 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
 
 from sync_agentless_schema import (  # type: ignore
     _default_yaml_path,
@@ -13,6 +18,7 @@ from sync_agentless_schema import (  # type: ignore
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     yaml_path = _default_yaml_path().resolve()
     try:
         pyyaml_data = _load_yaml_with_pyyaml(yaml_path)
@@ -47,4 +53,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

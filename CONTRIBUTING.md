@@ -30,7 +30,7 @@
 - Python tooling tests:
   - `./bazelw test //tools/tests/python:python_tools_test`
 - Optional Python tooling dependencies (for local script execution):
-  - `python3 -m pip install -r tools/requirements.txt`
+  - `python3 -m pip install --require-hashes -r tools/requirements.txt`
 - Local lint prerequisites (match CI tooling):
   - `shellcheck` (shell lint lane)
   - `buildifier` (Starlark formatting lane)
@@ -40,7 +40,7 @@
 - Optional Python syntax smoke check when editing tooling:
   - `python3 -m py_compile tools/core/validate_payload_schema.py tools/core/schemas/sync_agentless_schema.py tools/tests/integration/mock_dd_server.py`
 - Integration harness:
-  - Prerequisites: `jq` (Linux/macOS) and Git Bash available in PATH on Windows.
+  - Prerequisites: `jq` (Linux/macOS). Windows harness is PowerShell-only.
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
   - Windows primary entrypoint: `tools/tests/integration/run_mock_server_tests.ps1`
   - Windows convenience wrapper: `tools/tests/integration/run_mock_server_tests.cmd`
@@ -71,6 +71,7 @@
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
+  - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
   - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.

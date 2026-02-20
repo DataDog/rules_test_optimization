@@ -63,6 +63,7 @@ COVERAGE_ALWAYS_FAIL_MARKER = "always_fail"
 class _ServerState:
     """Shared server state: fixtures and a thread-safe request log."""
     def __init__(self, fixtures: Dict[str, Any], log_path: str, max_body_size: int) -> None:
+        """Internal helper for init behavior."""
         self.fixtures = fixtures
         self.log_path = log_path
         self.max_body_size = max_body_size
@@ -72,6 +73,7 @@ class _ServerState:
 
     def log_request(self, path: str, method: str, headers: Dict[str, str], body: bytes) -> None:
         # Persist request bodies in base64 so multipart uploads can be snapshotted.
+        """Execute log request lifecycle behavior."""
         record = {
             "path": path,
             "method": method,
@@ -122,6 +124,29 @@ def _require_header(headers: Mapping[str, str], name: str) -> Optional[str]:
     return None
 
 
+def _header_values(headers: Mapping[str, str], name: str) -> List[str]:
+    """Return all case-insensitive values for a header name."""
+    if hasattr(headers, "get_all"):
+        values = headers.get_all(name)  # type: ignore[attr-defined]
+        if values:
+            return [str(v) for v in values]
+    out: List[str] = []
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            out.append(value)
+    return out
+
+
+def _require_single_header(headers: Mapping[str, str], name: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (header_value, error) and reject duplicate header values."""
+    values = _header_values(headers, name)
+    if not values:
+        return None, None
+    if len(values) > 1:
+        return None, f"duplicate {name} headers"
+    return values[0], None
+
+
 def _require_type(data: Any, expected: str) -> Optional[str]:
     """Validate top-level Datadog request envelope type."""
     if not isinstance(data, dict):
@@ -147,6 +172,7 @@ def _require_attrs(data: Any, keys: List[str]) -> Optional[str]:
 
 
 class _Handler(BaseHTTPRequestHandler):
+    """Container type for _Handler behavior."""
     server_version = "MockDD/1.0"
 
     def _send_json(self, code: int, payload: Any, extra_headers: Optional[Dict[str, str]] = None) -> None:
@@ -196,7 +222,7 @@ class _Handler(BaseHTTPRequestHandler):
             return b"", "Content-Length exceeds mock server body limit (%d bytes)" % self.server.state.max_body_size
         return self.rfile.read(length), None
 
-    def _log_and_validate(self, path, body):
+    def _record_request(self, path, body):
         """Persist request details to shared JSONL log."""
         # Capture requests for snapshot tests and assertions.
         headers = _normalize_headers(self.headers)
@@ -204,7 +230,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _maybe_apply_response_overrides(self):
         """Apply optional mock behavior overrides from request headers."""
-        delay_ms_raw = _require_header(self.headers, "X-Mock-Delay-Ms")
+        delay_ms_raw, delay_hdr_err = _require_single_header(self.headers, "X-Mock-Delay-Ms")
+        if delay_hdr_err:
+            self._send_json(400, _json_error(delay_hdr_err))
+            return True
         if delay_ms_raw:
             try:
                 delay_ms = int(delay_ms_raw)
@@ -217,7 +246,11 @@ class _Handler(BaseHTTPRequestHandler):
             if delay_ms > 0:
                 time.sleep(delay_ms / 1000.0)
 
-        if _require_header(self.headers, "X-Mock-Rate-Limit") == "1":
+        rate_limit_hdr, rate_limit_err = _require_single_header(self.headers, "X-Mock-Rate-Limit")
+        if rate_limit_err:
+            self._send_json(400, _json_error(rate_limit_err))
+            return True
+        if rate_limit_hdr == "1":
             self._send_json(
                 429,
                 {"errors": [{"status": "429", "title": "mock rate limit"}]},
@@ -225,7 +258,10 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return True
 
-        status_override = _require_header(self.headers, "X-Mock-Status-Code")
+        status_override, status_hdr_err = _require_single_header(self.headers, "X-Mock-Status-Code")
+        if status_hdr_err:
+            self._send_json(400, _json_error(status_hdr_err))
+            return True
         if status_override:
             try:
                 status_code = int(status_override)
@@ -243,7 +279,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _validate_settings(self, body):
         """Validate sync settings request payload and required headers."""
         # Validate the sync "settings" request payload and required headers.
-        if not _require_header(self.headers, "DD-API-KEY"):
+        api_key, api_key_err = _require_single_header(self.headers, "DD-API-KEY")
+        if api_key_err:
+            return api_key_err
+        if not api_key:
             return "missing DD-API-KEY"
         try:
             data = json.loads(body.decode("utf-8"))
@@ -260,7 +299,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _validate_known_tests(self, body):
         """Validate known-tests request payload and required headers."""
         # Validate the "known tests" request payload and required headers.
-        if not _require_header(self.headers, "DD-API-KEY"):
+        api_key, api_key_err = _require_single_header(self.headers, "DD-API-KEY")
+        if api_key_err:
+            return api_key_err
+        if not api_key:
             return "missing DD-API-KEY"
         try:
             data = json.loads(body.decode("utf-8"))
@@ -298,7 +340,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _validate_test_management(self, body):
         """Validate test-management request payload and required headers."""
         # Validate the test management request payload and required headers.
-        if not _require_header(self.headers, "DD-API-KEY"):
+        api_key, api_key_err = _require_single_header(self.headers, "DD-API-KEY")
+        if api_key_err:
+            return api_key_err
+        if not api_key:
             return "missing DD-API-KEY"
         try:
             data = json.loads(body.decode("utf-8"))
@@ -314,23 +359,39 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _validate_uploader_test(self, body, evp_subdomain = None):
         """Validate uploader test payload request (agentless or EVP mode)."""
-        lang_hdr = _require_header(self.headers, "Datadog-Meta-Lang")
-        tracer_hdr = _require_header(self.headers, "Datadog-Meta-Tracer-Version")
+        lang_hdr, lang_hdr_err = _require_single_header(self.headers, "Datadog-Meta-Lang")
+        if lang_hdr_err:
+            return lang_hdr_err
+        tracer_hdr, tracer_hdr_err = _require_single_header(self.headers, "Datadog-Meta-Tracer-Version")
+        if tracer_hdr_err:
+            return tracer_hdr_err
         if evp_subdomain:
-            got_subdomain = _require_header(self.headers, "X-Datadog-EVP-Subdomain")
+            got_subdomain, subdomain_err = _require_single_header(self.headers, "X-Datadog-EVP-Subdomain")
+            if subdomain_err:
+                return subdomain_err
             if got_subdomain != evp_subdomain:
                 return "missing or invalid X-Datadog-EVP-Subdomain"
-        elif not _require_header(self.headers, "DD-API-KEY"):
-            return "missing DD-API-KEY"
+        else:
+            api_key, api_key_err = _require_single_header(self.headers, "DD-API-KEY")
+            if api_key_err:
+                return api_key_err
+            if not api_key:
+                return "missing DD-API-KEY"
         if not lang_hdr:
             return "missing Datadog-Meta-Lang"
         if not tracer_hdr:
             return "missing Datadog-Meta-Tracer-Version"
-        content_type = _require_header(self.headers, "Content-Type") or ""
+        content_type, content_type_err = _require_single_header(self.headers, "Content-Type")
+        if content_type_err:
+            return content_type_err
+        content_type = content_type or ""
         if "application/json" not in content_type:
             return "expected Content-Type application/json"
         body_for_json = body
-        content_encoding = (_require_header(self.headers, "Content-Encoding") or "").lower()
+        content_encoding, content_encoding_err = _require_single_header(self.headers, "Content-Encoding")
+        if content_encoding_err:
+            return content_encoding_err
+        content_encoding = (content_encoding or "").lower()
         if "gzip" in content_encoding:
             try:
                 body_for_json = gzip.decompress(body)
@@ -354,7 +415,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _decode_uploader_test_payload(self, body):
         """Decode uploader test payload JSON, handling optional gzip."""
         body_for_json = body
-        content_encoding = (_require_header(self.headers, "Content-Encoding") or "").lower()
+        content_encoding, _ = _require_single_header(self.headers, "Content-Encoding")
+        content_encoding = (content_encoding or "").lower()
         if "gzip" in content_encoding:
             try:
                 body_for_json = gzip.decompress(body)
@@ -368,7 +430,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _decode_uploader_coverage_payload(self, body):
         """Decode coveragex multipart JSON payload when present."""
-        content_type = _require_header(self.headers, "Content-Type") or ""
+        content_type, _ = _require_single_header(self.headers, "Content-Type")
+        content_type = content_type or ""
         if "boundary=" not in content_type:
             return None
         try:
@@ -404,16 +467,31 @@ class _Handler(BaseHTTPRequestHandler):
     def _validate_uploader_cov(self, evp_subdomain = None):
         """Validate uploader coverage payload request (agentless or EVP mode)."""
         if evp_subdomain:
-            got_subdomain = _require_header(self.headers, "X-Datadog-EVP-Subdomain")
+            got_subdomain, subdomain_err = _require_single_header(self.headers, "X-Datadog-EVP-Subdomain")
+            if subdomain_err:
+                return subdomain_err
             if got_subdomain != evp_subdomain:
                 return "missing or invalid X-Datadog-EVP-Subdomain"
-        elif not _require_header(self.headers, "DD-API-KEY"):
-            return "missing DD-API-KEY"
-        if not _require_header(self.headers, "Datadog-Meta-Lang"):
+        else:
+            api_key, api_key_err = _require_single_header(self.headers, "DD-API-KEY")
+            if api_key_err:
+                return api_key_err
+            if not api_key:
+                return "missing DD-API-KEY"
+        lang, lang_err = _require_single_header(self.headers, "Datadog-Meta-Lang")
+        if lang_err:
+            return lang_err
+        if not lang:
             return "missing Datadog-Meta-Lang"
-        if not _require_header(self.headers, "Datadog-Meta-Tracer-Version"):
+        tracer, tracer_err = _require_single_header(self.headers, "Datadog-Meta-Tracer-Version")
+        if tracer_err:
+            return tracer_err
+        if not tracer:
             return "missing Datadog-Meta-Tracer-Version"
-        content_type = _require_header(self.headers, "Content-Type") or ""
+        content_type, content_type_err = _require_single_header(self.headers, "Content-Type")
+        if content_type_err:
+            return content_type_err
+        content_type = content_type or ""
         if not content_type.startswith("multipart/form-data"):
             return "expected multipart/form-data content type"
         return None
@@ -425,7 +503,7 @@ class _Handler(BaseHTTPRequestHandler):
         if body_err:
             self._send_json(400, _json_error(body_err))
             return
-        self._log_and_validate(path, body)
+        self._record_request(path, body)
         if path == "/__mock/reset_retries":
             self.server.state.reset_retry_counters()
             self._send_json(200, {"ok": True})
@@ -576,6 +654,7 @@ class _ReusableHTTPServer(HTTPServer):
 
 
 def _load_fixture_or_exit(fixtures_dir: str, filename: str) -> Any:
+    """Internal helper for load fixture or exit behavior."""
     path = os.path.join(fixtures_dir, filename)
     if not os.path.exists(path):
         print("error: fixture not found: %s" % path, file = sys.stderr)
