@@ -33,6 +33,7 @@ _UNSUPPORTED_POLICY_ENV = "DD_TEST_OPTIMIZATION_SCHEMA_UNSUPPORTED_KEYWORDS"
 
 
 def _new_stats() -> Dict[str, int]:
+    """Internal helper for new stats behavior."""
     return {
         "nodes": 0,
         "refs": 0,
@@ -50,11 +51,13 @@ _STATS = _new_stats()
 
 
 def _reset_stats() -> None:
+    """Internal helper for reset stats behavior."""
     global _STATS
     _STATS = _new_stats()
 
 
 def _debug_enabled() -> bool:
+    """Internal helper for debug enabled behavior."""
     val = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_DEBUG")
     if val is None:
         val = os.getenv("DD_TEST_OPTIMIZATION_DEBUG")
@@ -64,15 +67,18 @@ def _debug_enabled() -> bool:
 
 
 def _debug(msg: str, debug: bool = False) -> None:
+    """Internal helper for debug behavior."""
     if debug or _debug_enabled():
         print(f"[schema-validator][dbg] {msg}", file=sys.stderr)
 
 
 def _stat_inc(stats: Dict[str, int], key: str, n: int = 1) -> None:
+    """Internal helper for stat inc behavior."""
     stats[key] = stats.get(key, 0) + n
 
 
 def _safe_size(path: str) -> Optional[int]:
+    """Internal helper for safe size behavior."""
     try:
         return os.path.getsize(path)
     except OSError:
@@ -80,12 +86,14 @@ def _safe_size(path: str) -> Optional[int]:
 
 
 def _format_size(size: Optional[int]) -> str:
+    """Internal helper for format size behavior."""
     if size is None:
         return "unknown"
     return str(size)
 
 
 def _ensure_readable_file(path: str, label: str) -> Optional[str]:
+    """Internal helper for ensure readable file behavior."""
     if not os.path.exists(path):
         return f"{label} file does not exist: {path}"
     if not os.path.isfile(path):
@@ -94,6 +102,7 @@ def _ensure_readable_file(path: str, label: str) -> Optional[str]:
 
 
 def _max_errors_from_env() -> int:
+    """Internal helper for max errors from env behavior."""
     raw = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_MAX_ERRORS")
     if raw is None or raw.strip() == "":
         return DEFAULT_MAX_ERRORS
@@ -107,6 +116,7 @@ def _max_errors_from_env() -> int:
 
 
 def _unsupported_policy_from_env() -> str:
+    """Internal helper for unsupported policy from env behavior."""
     raw = os.getenv(_UNSUPPORTED_POLICY_ENV, "error")
     mode = str(raw).strip().lower()
     if not mode:
@@ -119,6 +129,7 @@ def _unsupported_policy_from_env() -> str:
 
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
+    """Internal helper for parse args behavior."""
     parser = argparse.ArgumentParser(
         prog = "validate_payload_schema.py",
         description = "Validate payload JSON against a schema JSON file.",
@@ -135,6 +146,7 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
 
 
 def _sample_keys(value: Any, limit: int = 12) -> str:
+    """Internal helper for sample keys behavior."""
     if not isinstance(value, dict):
         return ""
     keys = list(value.keys())
@@ -144,10 +156,12 @@ def _sample_keys(value: Any, limit: int = 12) -> str:
 
 
 def _is_number(value: Any) -> bool:
+    """Internal helper for is number behavior."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _is_type(value: Any, type_name: str) -> bool:
+    """Internal helper for is type behavior."""
     if type_name == "object":
         return isinstance(value, dict)
     if type_name == "array":
@@ -166,6 +180,7 @@ def _is_type(value: Any, type_name: str) -> bool:
 
 
 def _resolve_ref(root: Dict[str, Any], ref: str, stats: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """Internal helper for resolve ref behavior."""
     if stats is not None:
         _stat_inc(stats, "refs")
     if not ref.startswith("#/"):
@@ -194,6 +209,7 @@ def _resolve_ref(root: Dict[str, Any], ref: str, stats: Optional[Dict[str, int]]
 
 
 def _path_key(path: str, key: str) -> str:
+    """Internal helper for path key behavior."""
     safe = key.replace("'", "\\'")
     return f"{path}['{safe}']"
 
@@ -209,6 +225,7 @@ def _validate(
     warned_unsupported: Optional[Set[str]] = None,
     unsupported_policy: str = "error",
 ) -> None:
+    """Internal helper for validate behavior."""
     if stats is None:
         stats = _new_stats()
     if warned_unsupported is None:
@@ -359,6 +376,7 @@ def _validate(
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     global _STATS
     debug = _debug_enabled()
     _reset_stats()

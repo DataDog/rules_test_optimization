@@ -7,6 +7,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Handle Get-RepoRoot behavior.
 function Get-RepoRoot {
   param([string]$StartPath)
   $candidate = (Resolve-Path $StartPath).Path
@@ -22,6 +23,7 @@ function Get-RepoRoot {
   }
 }
 
+# Handle Get-PythonCommand behavior.
 function Get-PythonCommand {
   if ($env:PYTHON) {
     $cmd = Get-Command $env:PYTHON -ErrorAction SilentlyContinue
@@ -34,6 +36,7 @@ function Get-PythonCommand {
   throw "python interpreter not found (tried PYTHON, python3, python)"
 }
 
+# Handle Get-FreePort behavior.
 function Get-FreePort {
   $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
   $listener.Start()
@@ -44,6 +47,7 @@ function Get-FreePort {
   }
 }
 
+# Handle Wait-ForPort behavior.
 function Wait-ForPort {
   param(
     [int]$Port,
@@ -69,6 +73,7 @@ function Wait-ForPort {
   return $false
 }
 
+# Handle Render-UploaderTemplate behavior.
 function Render-UploaderTemplate {
   param(
     [string]$TemplatePath,
@@ -99,6 +104,7 @@ function Render-UploaderTemplate {
   [System.IO.File]::WriteAllText($OutputPath, $content, $utf8NoBom)
 }
 
+# Handle Read-JsonLog behavior.
 function Read-JsonLog {
   param([string]$Path)
   $entries = @()

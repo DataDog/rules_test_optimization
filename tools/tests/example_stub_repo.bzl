@@ -45,6 +45,7 @@ render_stub_build_for_tests = _render_stub_build
 bzl_string_literal_for_tests = _bzl_string_literal
 
 def _example_stub_repo_impl(ctx):
+    """Implement example stub repo impl behavior."""
     manifest = ".testoptimization/manifest.txt"
     settings = ".testoptimization/cache/http/settings.json"
     known_tests = ".testoptimization/cache/http/known_tests.json"
@@ -103,6 +104,7 @@ example_stub_repo = repository_rule(
 )
 
 def _example_stub_repo_extension_impl(module_ctx):
+    """Implement example stub repo extension impl behavior."""
     for mod in module_ctx.modules:
         for call in mod.tags.example_stub_repo:
             example_stub_repo(

@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 def _repo_root() -> Path:
+    """Internal helper for repo root behavior."""
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
         if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
@@ -15,6 +16,7 @@ def _repo_root() -> Path:
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     repo = _repo_root()
     root_file = repo / ".bazelversion"
     go_file = repo / "modules/go/.bazelversion"

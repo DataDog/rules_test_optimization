@@ -14,6 +14,7 @@ from typing import List
 
 
 def _repo_root() -> Path:
+    """Internal helper for repo root behavior."""
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
         if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
@@ -22,6 +23,7 @@ def _repo_root() -> Path:
 
 
 def _read_text(path: Path) -> str:
+    """Internal helper for read text behavior."""
     try:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -108,6 +110,7 @@ def _extract_call_args_blocks(text: str, fn_name: str) -> List[str]:
 
 
 def _extract_module_version(path: Path) -> str:
+    """Internal helper for extract module version behavior."""
     text = _read_text(path)
     module_blocks = _extract_call_args_blocks(text, "module")
     if not module_blocks:
@@ -121,6 +124,7 @@ def _extract_module_version(path: Path) -> str:
 
 
 def _extract_bazel_dep_version(path: Path, dep_name: str) -> str:
+    """Internal helper for extract bazel dep version behavior."""
     text = _read_text(path)
     for block in _extract_call_args_blocks(text, "bazel_dep"):
         if re.search(r'name\s*=\s*"%s"' % re.escape(dep_name), block):
@@ -136,6 +140,7 @@ def _extract_bazel_dep_version(path: Path, dep_name: str) -> str:
     )
 
 def _extract_starlark_string_constant(path: Path, constant_name: str) -> str:
+    """Internal helper for extract starlark string constant behavior."""
     text = _read_text(path)
     m = re.search(
         r"^\s*%s\s*=\s*\"([^\"]+)\"\s*$" % re.escape(constant_name),
@@ -147,14 +152,17 @@ def _extract_starlark_string_constant(path: Path, constant_name: str) -> str:
     return m.group(1)
 
 def _is_semver_like(version: str) -> bool:
+    """Internal helper for is semver like behavior."""
     return bool(re.match(r"^\d+\.\d+\.\d+$", version or ""))
 
 def _check_semver(label: str, version: str, errors: List[str]) -> None:
+    """Internal helper for check semver behavior."""
     if not _is_semver_like(version):
         errors.append(f'{label} "{version}" must be semantic version format X.Y.Z')
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     try:
         repo_root = _repo_root()
         core_module = repo_root / "MODULE.bazel"

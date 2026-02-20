@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Handle Invoke-RunCmd behavior.
 function Invoke-RunCmd {
   param(
     [Parameter(Mandatory = $true)]
@@ -18,6 +19,7 @@ function Invoke-RunCmd {
   return $LASTEXITCODE
 }
 
+# Handle Get-BazelCommand behavior.
 function Get-BazelCommand {
   $bazel = Get-Command bazel -ErrorAction SilentlyContinue
   if (-not $bazel) {
@@ -26,6 +28,7 @@ function Get-BazelCommand {
   return $bazel.Source
 }
 
+# Handle Invoke-ExampleRunTests behavior.
 function Invoke-ExampleRunTests {
   param(
     [Parameter(Mandatory = $true)]

@@ -15,6 +15,7 @@ _ALLOWED_STATUS = {"pending", "done"}
 
 
 def _repo_root() -> Path:
+    """Internal helper for repo root behavior."""
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
         if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
@@ -23,6 +24,7 @@ def _repo_root() -> Path:
 
 
 def _extract_ids(path: Path) -> set[str]:
+    """Internal helper for extract ids behavior."""
     text = path.read_text(encoding="utf-8")
     ids = set(_ID_RE.findall(text))
     if ids:
@@ -31,6 +33,7 @@ def _extract_ids(path: Path) -> set[str]:
 
 
 def _parse_ledger_rows(path: Path) -> dict[str, dict[str, str]]:
+    """Internal helper for parse ledger rows behavior."""
     rows: dict[str, dict[str, str]] = {}
     for raw in path.read_text(encoding="utf-8").splitlines():
         if not _TABLE_ROW_RE.match(raw):
@@ -49,6 +52,7 @@ def _parse_ledger_rows(path: Path) -> dict[str, dict[str, str]]:
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     parser = argparse.ArgumentParser(
         description="Check that audit findings are tracked in findings_validation_2026_02.md",
     )

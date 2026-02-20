@@ -63,6 +63,7 @@ COVERAGE_ALWAYS_FAIL_MARKER = "always_fail"
 class _ServerState:
     """Shared server state: fixtures and a thread-safe request log."""
     def __init__(self, fixtures: Dict[str, Any], log_path: str, max_body_size: int) -> None:
+        """Internal helper for init behavior."""
         self.fixtures = fixtures
         self.log_path = log_path
         self.max_body_size = max_body_size
@@ -72,6 +73,7 @@ class _ServerState:
 
     def log_request(self, path: str, method: str, headers: Dict[str, str], body: bytes) -> None:
         # Persist request bodies in base64 so multipart uploads can be snapshotted.
+        """Execute log request lifecycle behavior."""
         record = {
             "path": path,
             "method": method,
@@ -170,6 +172,7 @@ def _require_attrs(data: Any, keys: List[str]) -> Optional[str]:
 
 
 class _Handler(BaseHTTPRequestHandler):
+    """Container type for _Handler behavior."""
     server_version = "MockDD/1.0"
 
     def _send_json(self, code: int, payload: Any, extra_headers: Optional[Dict[str, str]] = None) -> None:
@@ -651,6 +654,7 @@ class _ReusableHTTPServer(HTTPServer):
 
 
 def _load_fixture_or_exit(fixtures_dir: str, filename: str) -> Any:
+    """Internal helper for load fixture or exit behavior."""
     path = os.path.join(fixtures_dir, filename)
     if not os.path.exists(path):
         print("error: fixture not found: %s" % path, file = sys.stderr)

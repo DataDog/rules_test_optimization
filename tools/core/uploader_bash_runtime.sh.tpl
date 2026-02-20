@@ -9,6 +9,7 @@ set -euo pipefail
 # DEBUG is set later, so we use a function that checks the variable at runtime
 log() { echo "[dd-uploader] $1"; }
 DEBUG_BOOTSTRAP=$(echo "${DD_TEST_OPTIMIZATION_DEBUG:-0}" | tr '[:upper:]' '[:lower:]')
+# Handle dbg behavior.
 dbg() {
     local dbg_val="${DEBUG:-$DEBUG_BOOTSTRAP}"
     dbg_val=$(echo "$dbg_val" | tr '[:upper:]' '[:lower:]')
@@ -18,6 +19,7 @@ dbg() {
 }
 dbg "startup runfiles env: RUNFILES_DIR='${RUNFILES_DIR:-<unset>}' RUNFILES_MANIFEST_FILE='${RUNFILES_MANIFEST_FILE:-<unset>}' script='$0'"
 
+# Handle trim ascii whitespace behavior.
 trim_ascii_whitespace() {
     local value="$1"
     value="${value#"${value%%[!$' 	
@@ -28,6 +30,7 @@ trim_ascii_whitespace() {
 ' "$value"
 }
 
+# Handle normalize dd site or fail behavior.
 normalize_dd_site_or_fail() {
     local raw="$1"
     local site
@@ -422,6 +425,7 @@ WORKSPACE_HASH=$(compute_workspace_hash)
 LOCK_DIR="${TMPDIR:-/tmp}/dd_upload_payloads_$WORKSPACE_HASH.lock"
 LOCK_ACQUIRED=0
 
+# Handle lock dir age seconds behavior.
 lock_dir_age_seconds() {
     local dir="$1"
     local now mtime
@@ -444,6 +448,7 @@ lock_dir_age_seconds() {
     fi
 }
 
+# Handle acquire lock behavior.
 acquire_lock() {
     local max_attempts=3
     local attempt=0
@@ -584,6 +589,7 @@ fi
 # Find all test.outputs directories
 # Supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth for large testlogs trees
 MAX_DEPTH=${DD_TEST_OPTIMIZATION_MAX_DEPTH:-0}
+# Handle find test outputs behavior.
 find_test_outputs() {
     local depth_args=()
     if (( MAX_DEPTH > 0 )); then
@@ -674,6 +680,7 @@ dbg "Waiting for test outputs to quiesce..."
 
 # Cache the list of test.outputs directories for efficiency (avoid rescanning on each loop iteration)
 TEST_OUTPUTS_CACHE=""
+# Handle cache test outputs behavior.
 cache_test_outputs() {
     TEST_OUTPUTS_CACHE=$(find_test_outputs)
 }
@@ -806,6 +813,7 @@ redact_header() {
   fi
 }
 
+# Handle dbg headers behavior.
 dbg_headers() {
   local label="$1"; shift
   local arr=("$@")
@@ -848,6 +856,7 @@ CO_EVENTS_SKIPPED_MISSING_SOURCE=0
 CO_EVENTS_SKIPPED_UNMATCHED=0
 CO_EVENTS_SKIPPED_ERRORS=0
 
+# Handle decode percent path behavior.
 decode_percent_path() {
   local value="$1"
   if [[ "$value" != *"%"* ]]; then
@@ -876,6 +885,7 @@ decode_percent_path() {
   fi
 }
 
+# Handle normalize path like behavior.
 normalize_path_like() {
   local raw="$1"
   if [[ "$raw" == file://* ]]; then
@@ -947,6 +957,7 @@ normalize_path_like() {
   return 0
 }
 
+# Handle add path candidate behavior.
 add_path_candidate() {
   local candidate="$1"
   local normalized
@@ -968,6 +979,7 @@ add_path_candidate() {
   CODEOWNERS_SOURCE_CANDIDATES+=("$normalized")
 }
 
+# Handle add derived source candidate behavior.
 add_derived_source_candidate() {
   local candidate="$1"
   if [[ "$candidate" == external/* || "$candidate" == _main/external/* ]]; then
@@ -979,6 +991,7 @@ add_derived_source_candidate() {
   add_path_candidate "$candidate"
 }
 
+# Handle strip workspace prefix behavior.
 strip_workspace_prefix() {
   local path_value="$1"
   local root_value="$2"
@@ -996,6 +1009,7 @@ strip_workspace_prefix() {
   fi
 }
 
+# Handle build source candidates behavior.
 build_source_candidates() {
   local source_path="$1"
   CODEOWNERS_SOURCE_CANDIDATES=()
@@ -1029,6 +1043,7 @@ build_source_candidates() {
   fi
 }
 
+# Handle glob to regex behavior.
 glob_to_regex() {
   local pattern="$1"
   local out=""
@@ -1143,6 +1158,7 @@ glob_to_regex() {
   echo "$out"
 }
 
+# Handle compile codeowners regex behavior.
 compile_codeowners_regex() {
   local pattern="$1"
   local anchored=0
@@ -1180,6 +1196,7 @@ compile_codeowners_regex() {
   return 0
 }
 
+# Handle parse codeowners file behavior.
 parse_codeowners_file() {
   local file_path="$1"
   local line pattern rest regex
@@ -1242,6 +1259,7 @@ parse_codeowners_file() {
   done < "$file_path"
 }
 
+# Handle is gitlab section header pattern behavior.
 is_gitlab_section_header_pattern() {
   local pattern="$1"
   [[ "$pattern" =~ ^\[[^][]+\]$ ]] || return 1
@@ -1270,6 +1288,7 @@ is_gitlab_section_header_pattern() {
   return 0
 }
 
+# Handle is gitlab section header line behavior.
 is_gitlab_section_header_line() {
   local line="$1"
   if [[ "$line" =~ ^(\[[^][]+\])([[:space:]]+.*)?$ ]]; then
@@ -1279,6 +1298,7 @@ is_gitlab_section_header_line() {
   return 1
 }
 
+# Handle codeowners regex is valid behavior.
 codeowners_regex_is_valid() {
   local regex="$1"
   local status=0
@@ -1298,6 +1318,7 @@ codeowners_regex_is_valid() {
   return 1
 }
 
+# Handle split codeowners pattern and owners behavior.
 split_codeowners_pattern_and_owners() {
   local line="$1"
   local pattern=""
@@ -1333,6 +1354,7 @@ split_codeowners_pattern_and_owners() {
   return 0
 }
 
+# Handle init codeowners behavior.
 init_codeowners() {
   (( CODEOWNERS_INITIALIZED == 1 )) && return
   CODEOWNERS_INITIALIZED=1
@@ -1415,6 +1437,7 @@ init_codeowners() {
   fi
 }
 
+# Handle dedupe owners behavior.
 dedupe_owners() {
   local owners_line="$1"
   local -a in_tokens=()
@@ -1440,6 +1463,7 @@ dedupe_owners() {
   fi
 }
 
+# Handle owners line to json behavior.
 owners_line_to_json() {
   local owners_line="$1"
   local deduped
@@ -1451,6 +1475,7 @@ owners_line_to_json() {
   fi
 }
 
+# Handle match codeowners owners line behavior.
 match_codeowners_owners_line() {
   local candidate="$1"
   local idx regex owners_line rule_has_owners matched="$CODEOWNERS_MATCH_NONE"
@@ -1470,6 +1495,7 @@ match_codeowners_owners_line() {
   echo "$matched"
 }
 
+# Handle resolve codeowners json for source behavior.
 resolve_codeowners_json_for_source() {
   local source_path="$1"
   build_source_candidates "$source_path"
@@ -1508,6 +1534,7 @@ resolve_codeowners_json_for_source() {
   echo ""
 }
 
+# Handle inject codeowners tags behavior.
 inject_codeowners_tags() {
   local payload_file="$1"
   init_codeowners
@@ -1641,6 +1668,7 @@ elif [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" && "$JQ_AVAILABLE" != "1" ]]; t
   dbg "api key fingerprint check skipped: jq not available"
 fi
 
+# Handle enrich with context behavior.
 enrich_with_context() {
   local infile="$1"; local tmpfile="$2"
   dbg "enrich_with_context: infile='$infile' outfile='$tmpfile' ctx='${CONTEXT_JSON:-<none>}' jq=$JQ_AVAILABLE"
@@ -1765,6 +1793,7 @@ cleanup_file() {
     fi
 }
 
+# Handle validate payload behavior.
 validate_payload() {
     local file="$1"
     if [[ -z "$SCHEMA_JSON" || ! -f "$SCHEMA_JSON" ]]; then
@@ -1791,6 +1820,7 @@ validate_payload() {
 # Track upload failures globally
 UPLOAD_FAILURES=0
 
+# Handle upload single test behavior.
 upload_single_test() {
     local file="$1"
     local body resp payload_file gz http rc
@@ -1874,6 +1904,7 @@ upload_single_test() {
     return 0
 }
 
+# Handle upload single coverage behavior.
 upload_single_coverage() {
     local file="$1"
     # Create event.json for multipart
@@ -1927,6 +1958,7 @@ upload_single_coverage() {
     return 0
 }
 
+# Handle upload all tests behavior.
 upload_all_tests() {
     local total=0
     local failed=0
@@ -1967,6 +1999,7 @@ upload_all_tests() {
     fi
 }
 
+# Handle upload all coverage behavior.
 upload_all_coverage() {
     local total=0
     local failed=0

@@ -14,6 +14,7 @@ _TOKEN_RE = re.compile(r"__DDTPL_[A-Z0-9_]+__")
 
 
 def _repo_root() -> Path:
+    """Internal helper for repo root behavior."""
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
         if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
@@ -24,6 +25,7 @@ def _repo_root() -> Path:
 def _normalize_bash_template_for_lint(template: str) -> str:
     # Runtime templates carry __DDTPL_*__ tokens; replace them with deterministic
     # literals so shellcheck parses render-equivalent syntax.
+    """Internal helper for normalize bash template for lint behavior."""
     normalized = _TOKEN_RE.sub("0", template)
     return normalized
 
@@ -31,10 +33,12 @@ def _normalize_bash_template_for_lint(template: str) -> str:
 def _normalize_powershell_template_for_lint(template: str) -> str:
     # Keep parser checks deterministic by replacing token placeholders with
     # scalar literals.
+    """Internal helper for normalize powershell template for lint behavior."""
     return _TOKEN_RE.sub("0", template)
 
 
 def _lint_batch_template(template: str) -> None:
+    """Internal helper for lint batch template behavior."""
     if "__DDTPL_PS_NAME__" not in template:
         raise RuntimeError("batch template missing __DDTPL_PS_NAME__ placeholder")
     normalized = _TOKEN_RE.sub("dd_upload_payloads.ps1", template).lower()
@@ -45,6 +49,7 @@ def _lint_batch_template(template: str) -> None:
 
 
 def _run(cmd: list[str], cwd: Path) -> None:
+    """Internal helper for run behavior."""
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
     except FileNotFoundError as exc:
@@ -57,6 +62,7 @@ def _run(cmd: list[str], cwd: Path) -> None:
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     parser = argparse.ArgumentParser(description="Lint uploader runtime template files")
     parser.add_argument(
         "--skip-shellcheck",

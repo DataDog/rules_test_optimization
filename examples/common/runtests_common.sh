@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Handle run example runtests behavior.
 run_example_runtests() {
   local script_dir="$1"
   local bazelw
@@ -9,6 +10,7 @@ run_example_runtests() {
 
   cd "$script_dir"
 
+  # Handle run cmd behavior.
   run_cmd() {
     if [[ "${RUNTESTS_DRY_RUN:-0}" == "1" ]]; then
       echo "[dry-run] $*"

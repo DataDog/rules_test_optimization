@@ -18,6 +18,7 @@ from sync_agentless_schema import (  # type: ignore
 
 
 def main() -> int:
+    """Run CLI entrypoint logic and return process exit code."""
     yaml_path = _default_yaml_path().resolve()
     try:
         pyyaml_data = _load_yaml_with_pyyaml(yaml_path)
