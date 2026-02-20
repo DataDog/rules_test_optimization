@@ -99,7 +99,7 @@ changes can invalidate fetch cache entries as expected.
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `DD_API_KEY` | Yes | Datadog API key for metadata fetches |
-| `DD_SITE` | No | Site domain (`datadoghq.com`, `datadoghq.eu`, etc.). Values like `app.<site>` normalize to `api.<site>` |
+| `DD_SITE` | No | Site domain (`datadoghq.com`, `datadoghq.eu`, etc.). Leading/trailing ASCII whitespace is trimmed; values like `app.<site>` normalize to `api.<site>` |
 | `DD_TEST_OPTIMIZATION_API_BASE` | No | Override sync API base URL (test/dev and mock-server scenarios) |
 | `FETCH_SALT` | No | Manual refetch trigger (example: `--repo_env=FETCH_SALT=<timestamp>`) |
 | `GO_MODULE_PATH` | No | Explicit Go module path override used when emitting `export.bzl` |
@@ -148,6 +148,11 @@ Auto-detection currently maps CI metadata from:
 Provider-name note: AWS CodeBuild is emitted as `awscodebuild` in sync
 metadata (`ci.provider.name`).
 
+Provider precedence note:
+- explicit `DD_GIT_*` overrides win first;
+- CI-provider environment detection is second;
+- git CLI fallback (`git rev-parse`, `git log`, etc.) is last.
+
 Additional mapped metadata inputs include:
 
 - `APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH`
@@ -176,11 +181,15 @@ The uploader rule reads these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | Explicit CODEOWNERS path for enrichment |
 | `TESTLOGS_DIR` | Explicit `bazel-testlogs` path for non-standard layouts |
 
+Numeric precision caveat:
+- Keep high-cardinality IDs (for example CI job IDs) as strings when possible.
+  Some JSON tooling and runtimes may lose precision for integers above `2^53 - 1`.
+
 ## Integration harness environment variables (maintainer workflows)
 
 These variables are used by repository integration harness scripts (not by the
 sync repository rule or uploader runtime paths above):
 
-| Variable | Purpose |
-|----------|---------|
-| `DD_TEST_OPTIMIZATION_GIT_BASH` | Optional absolute path override for Git Bash in `tools/tests/integration/run_mock_server_tests.ps1` when auto-discovery is not suitable |
+- Linux/macOS harness supports existing shell env overrides documented in
+  `tools/tests/integration/run_mock_server_tests.sh`.
+- Windows harness is PowerShell-only; no Git Bash path override variable is used.

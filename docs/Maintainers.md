@@ -143,8 +143,8 @@ tools\tests\integration\run_mock_server_tests.cmd
 
 Notes:
 
-- The PowerShell entrypoint reuses the Bash harness for parity and prefers Git
-  for Windows `bash.exe` (or `DD_TEST_OPTIMIZATION_GIT_BASH` when set).
+- The PowerShell entrypoint is native and self-contained (no Git Bash
+  dependency). Linux/macOS keep the Bash harness.
 - Test-only endpoint overrides:
   - `DD_TEST_OPTIMIZATION_API_BASE` (sync)
   - `DD_TEST_OPTIMIZATION_INTAKE_BASE` (uploader, agentless path)

@@ -365,6 +365,8 @@ def main() -> int:
     try:
         args = _parse_args(sys.argv[1:])
     except SystemExit as exc:
+        if exc.code is None:
+            return 0
         return int(exc.code) if isinstance(exc.code, int) else 2
 
     schema_path = args.schema_path

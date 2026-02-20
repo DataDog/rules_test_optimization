@@ -284,12 +284,17 @@ def dedup_keys(keys):
         c = base_counts.get(k, 0) + 1
         base_counts[k] = c
         candidate = k if c == 1 else ("%s_%d" % (k, c))
-        for _ in range(len(keys) + len(taken) + 2):
+        resolved = False
+        max_attempts = (len(keys) * 2) + len(taken) + 10
+        for _ in range(max_attempts):
             if not taken.get(candidate):
+                resolved = True
                 break
             c += 1
             base_counts[k] = c
             candidate = "%s_%d" % (k, c)
+        if not resolved:
+            fail("dedup_keys: failed to allocate unique key for '%s' after %d attempts" % (k, max_attempts))
         taken[candidate] = True
         out.append(candidate)
     return out

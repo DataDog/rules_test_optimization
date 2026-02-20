@@ -8,5 +8,8 @@ exports_files([
     "test_optimization_uploader.bzl",
     "topt_macro_utils.bzl",
     "topt_selection_utils.bzl",
+    "uploader_bash_runtime.sh.tpl",
+    "uploader_powershell_runtime.ps1.tpl",
+    "uploader_batch_runtime.bat.tpl",
     "validate_payload_schema.py",
 ], visibility = ["//visibility:public"])

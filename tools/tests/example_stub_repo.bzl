@@ -15,34 +15,27 @@ def _bzl_string_literal(value):
 
 def _render_stub_build(settings, manifest, known_tests, test_management, context, service_keys = None):
     """Render BUILD content for stub repo targets."""
-    lines = []
-    lines.append(
-        "filegroup(\n" +
-        '    name = "test_optimization_files",\n' +
-        ("    srcs = %s,\n" % repr([settings, manifest, known_tests, test_management])) +
-        '    visibility = ["//visibility:public"],\n' +
-        ")\n\n"
-    )
-    lines.append(
-        "filegroup(\n" +
-        '    name = "test_optimization_context",\n' +
-        ("    srcs = %s,\n" % repr([context])) +
-        '    visibility = ["//visibility:public"],\n' +
-        ")\n\n"
-    )
-    for key in list(service_keys or []):
+    def _append_filegroups(name_suffix, srcs):
         lines.append(
             "filegroup(\n" +
-            ('    name = "test_optimization_files_%s",\n' % key) +
-            ("    srcs = %s,\n" % repr([settings, manifest, known_tests, test_management])) +
+            ('    name = "test_optimization_files%s",\n' % name_suffix) +
+            ("    srcs = %s,\n" % repr(srcs)) +
             '    visibility = ["//visibility:public"],\n' +
-            ")\n\n" +
+            ")\n\n"
+        )
+        lines.append(
             "filegroup(\n" +
-            ('    name = "test_optimization_context_%s",\n' % key) +
+            ('    name = "test_optimization_context%s",\n' % name_suffix) +
             ("    srcs = %s,\n" % repr([context])) +
             '    visibility = ["//visibility:public"],\n' +
             ")\n\n"
         )
+
+    files_srcs = [settings, manifest, known_tests, test_management]
+    lines = []
+    _append_filegroups("", files_srcs)
+    for key in list(service_keys or []):
+        _append_filegroups("_%s" % key, files_srcs)
     lines.append('exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest))
     return "".join(lines)
 

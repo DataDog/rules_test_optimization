@@ -16,10 +16,7 @@ from typing import List
 def _repo_root() -> Path:
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
-        if (
-            (candidate / "MODULE.bazel").exists() and
-            (candidate / "modules" / "go" / "MODULE.bazel").exists()
-        ):
+        if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
             return candidate
     raise ValueError("unable to locate repository root from script path")
 
@@ -57,6 +54,13 @@ def _extract_call_args_blocks(text: str, fn_name: str) -> List[str]:
         while i < n:
             ch = text[i]
             if in_string:
+                if len(in_string) == 3:
+                    if text.startswith(in_string, i):
+                        in_string = ""
+                        i += 3
+                        continue
+                    i += 1
+                    continue
                 if escape:
                     escape = False
                 elif ch == "\\":
@@ -66,15 +70,21 @@ def _extract_call_args_blocks(text: str, fn_name: str) -> List[str]:
                 i += 1
                 continue
 
-            if ch == "#" :
+            if ch == "#":
                 newline = text.find("\n", i)
                 if newline < 0:
                     i = n
                 else:
                     i = newline + 1
                 continue
+            if text.startswith('"""', i) or text.startswith("'''", i):
+                in_string = text[i:i + 3]
+                escape = False
+                i += 3
+                continue
             if ch == '"' or ch == "'":
                 in_string = ch
+                escape = False
                 i += 1
                 continue
             if ch == "(":
@@ -139,6 +149,10 @@ def _extract_starlark_string_constant(path: Path, constant_name: str) -> str:
 def _is_semver_like(version: str) -> bool:
     return bool(re.match(r"^\d+\.\d+\.\d+$", version or ""))
 
+def _check_semver(label: str, version: str, errors: List[str]) -> None:
+    if not _is_semver_like(version):
+        errors.append(f'{label} "{version}" must be semantic version format X.Y.Z')
+
 
 def main() -> int:
     try:
@@ -148,17 +162,18 @@ def main() -> int:
         common_utils = repo_root / "tools" / "core" / "common_utils.bzl"
         if not core_module.exists():
             raise ValueError(f"core module file not found: {core_module}")
-        if not go_module.exists():
-            raise ValueError(f"go companion module file not found: {go_module}")
         if not common_utils.exists():
             raise ValueError(f"common utils file not found: {common_utils}")
 
         core_module_version = _extract_module_version(core_module)
-        go_module_version = _extract_module_version(go_module)
-        go_core_dep_version = _extract_bazel_dep_version(
-            go_module,
-            "datadog-rules-test-optimization",
-        )
+        go_module_exists = go_module.exists()
+        go_module_version = _extract_module_version(go_module) if go_module_exists else ""
+        go_core_dep_version = ""
+        if go_module_exists:
+            go_core_dep_version = _extract_bazel_dep_version(
+                go_module,
+                "datadog-rules-test-optimization",
+            )
         rules_version = _extract_starlark_string_constant(common_utils, "RULES_VERSION")
         uploader_version = _extract_starlark_string_constant(common_utils, "UPLOADER_VERSION")
     except ValueError as exc:
@@ -171,13 +186,13 @@ def main() -> int:
     ]
 
     errors = []
-    if core_module_version != go_module_version:
+    if go_module_exists and core_module_version != go_module_version:
         errors.append(
             "module version mismatch: "
             f'root MODULE.bazel is "{core_module_version}" but '
             f'modules/go/MODULE.bazel is "{go_module_version}"'
         )
-    if go_core_dep_version != core_module_version:
+    if go_module_exists and go_core_dep_version != core_module_version:
         errors.append(
             "dependency version mismatch: "
             f'modules/go depends on core version "{go_core_dep_version}" but '
@@ -189,12 +204,12 @@ def main() -> int:
             f'tools/core/common_utils.bzl RULES_VERSION is "{rules_version}" but '
             f'root MODULE.bazel declares "{core_module_version}"'
         )
-    if not _is_semver_like(uploader_version):
-        errors.append(
-            "uploader version format mismatch: "
-            f'tools/core/common_utils.bzl UPLOADER_VERSION "{uploader_version}" '
-            "must be semantic version format X.Y.Z"
-        )
+    _check_semver("root MODULE.bazel version", core_module_version, errors)
+    if go_module_exists:
+        _check_semver("modules/go MODULE.bazel version", go_module_version, errors)
+        _check_semver("modules/go -> core dependency version", go_core_dep_version, errors)
+    _check_semver("tools/core/common_utils.bzl RULES_VERSION", rules_version, errors)
+    _check_semver("tools/core/common_utils.bzl UPLOADER_VERSION", uploader_version, errors)
     for example_module in example_modules:
         try:
             ex_core_dep = _extract_bazel_dep_version(
@@ -214,11 +229,13 @@ def main() -> int:
                 f'example dependency mismatch ({example_module}): core dep is "{ex_core_dep}" '
                 f'but root module declares "{core_module_version}"'
             )
-        if ex_go_dep != go_module_version:
+        if go_module_exists and ex_go_dep != go_module_version:
             errors.append(
                 f'example dependency mismatch ({example_module}): go dep is "{ex_go_dep}" '
                 f'but modules/go declares "{go_module_version}"'
             )
+        _check_semver(f"{example_module} core dependency version", ex_core_dep, errors)
+        _check_semver(f"{example_module} go dependency version", ex_go_dep, errors)
 
     if errors:
         print("ERROR: module version alignment check failed:", file=sys.stderr)
@@ -226,10 +243,12 @@ def main() -> int:
             print(f"- {err}", file=sys.stderr)
         return 1
 
+    go_display = go_module_version if go_module_exists else "<missing>"
+    go_dep_display = go_core_dep_version if go_module_exists else "<skipped>"
     print(
         "Module versions are aligned: "
-        f'core="{core_module_version}", go="{go_module_version}", '
-        f'go->core dep="{go_core_dep_version}", '
+        f'core="{core_module_version}", go="{go_display}", '
+        f'go->core dep="{go_dep_display}", '
         f'rules="{rules_version}", uploader="{uploader_version}"'
     )
     return 0

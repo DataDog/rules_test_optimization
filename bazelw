@@ -7,6 +7,16 @@ set -euo pipefail
 
 now_ts="$(date +%s)"
 ttl_seconds="${FETCH_SALT_TTL:-0}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bazelversion_file="${script_dir}/.bazelversion"
+wanted_version=""
+if [[ -f "${bazelversion_file}" ]]; then
+  wanted_version="$(tr -d '[:space:]' < "${bazelversion_file}")"
+fi
+if [[ -z "${wanted_version}" ]]; then
+  echo "error: unable to read expected Bazel version from ${bazelversion_file}" >&2
+  exit 127
+fi
 
 if [[ "${ttl_seconds}" =~ ^[0-9]+$ ]] && [[ "${ttl_seconds}" -gt 0 ]]; then
   salt=$(( now_ts / ttl_seconds ))
@@ -16,8 +26,21 @@ fi
 
 if command -v bazelisk >/dev/null 2>&1; then
   bazel_cmd="bazelisk"
+elif command -v bazel >/dev/null 2>&1; then
+  system_bazel_version="$(bazel --version 2>/dev/null | awk '{print $NF}')"
+  if [[ "${BAZELW_ALLOW_SYSTEM_BAZEL:-0}" == "1" ]]; then
+    echo "warning: bazelisk not found; using system bazel due to BAZELW_ALLOW_SYSTEM_BAZEL=1" >&2
+    bazel_cmd="bazel"
+  elif [[ "$system_bazel_version" == "$wanted_version" ]]; then
+    echo "warning: bazelisk not found; using system bazel version $system_bazel_version (matches .bazelversion)" >&2
+    bazel_cmd="bazel"
+  else
+    echo "error: bazelisk is required to enforce .bazelversion (wanted $wanted_version, found system bazel $system_bazel_version)." >&2
+    exit 127
+  fi
 else
-  bazel_cmd="bazel"
+  echo "error: bazelisk is required to enforce .bazelversion (set BAZELW_ALLOW_SYSTEM_BAZEL=1 to override)." >&2
+  exit 127
 fi
 
 sanitize_repository_url() {

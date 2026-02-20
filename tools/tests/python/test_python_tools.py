@@ -274,6 +274,58 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertEqual("payload.json", parsed.payload_path)
         self.assertEqual(5, parsed.max_errors)
 
+    def test_help_exit_returns_zero(self) -> None:
+        with mock.patch.object(self.mod, "_parse_args", side_effect=SystemExit(0)):
+            rc = self.mod.main()
+        self.assertEqual(0, rc)
+
+
+class CheckSchemaParserParityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = _load_module(
+            "check_schema_parser_parity_mod",
+            "tools/core/schemas/check_schema_parser_parity.py",
+        )
+
+    def test_main_success_when_parsers_match(self) -> None:
+        yaml_path = Path("/tmp/fake-agentless-schema.yaml")
+        with mock.patch.object(self.mod, "_default_yaml_path", return_value=yaml_path), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_pyyaml",
+            return_value={"ok": True},
+        ), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_ruby",
+            return_value={"ok": True},
+        ):
+            rc = self.mod.main()
+        self.assertEqual(0, rc)
+
+    def test_main_returns_mismatch_error(self) -> None:
+        yaml_path = Path("/tmp/fake-agentless-schema.yaml")
+        with mock.patch.object(self.mod, "_default_yaml_path", return_value=yaml_path), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_pyyaml",
+            return_value={"ok": True},
+        ), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_ruby",
+            return_value={"ok": False},
+        ):
+            rc = self.mod.main()
+        self.assertEqual(1, rc)
+
+    def test_main_returns_runtime_error_when_pyyaml_fails(self) -> None:
+        yaml_path = Path("/tmp/fake-agentless-schema.yaml")
+        with mock.patch.object(self.mod, "_default_yaml_path", return_value=yaml_path), mock.patch.object(
+            self.mod,
+            "_load_yaml_with_pyyaml",
+            side_effect=RuntimeError("missing pyyaml"),
+        ):
+            rc = self.mod.main()
+        self.assertEqual(2, rc)
+
 
 class SyncAgentlessSchemaTests(unittest.TestCase):
     @classmethod
@@ -377,6 +429,14 @@ class SyncAgentlessSchemaTests(unittest.TestCase):
                 with mock.patch.object(self.mod, "parse_args", return_value=args_check_bad):
                     rc_check_bad = self.mod.main()
                 self.assertEqual(1, rc_check_bad)
+
+    def test_load_json_accepts_utf8_bom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = Path(tmp) / "schema.json"
+            # UTF-8 BOM + valid JSON payload.
+            json_path.write_bytes(b"\xef\xbb\xbf{\"ok\": true}")
+            loaded = self.mod.load_json(json_path)
+            self.assertEqual({"ok": True}, loaded)
 
 
 class CheckModuleVersionsTests(unittest.TestCase):
@@ -524,6 +584,105 @@ class CheckModuleVersionsTests(unittest.TestCase):
             side_effect=ValueError("bad module"),
         ):
             self.assertEqual(2, self.mod.main())
+
+    def test_extract_call_args_blocks_handles_triple_quoted_strings(self) -> None:
+        text = "\n".join(
+            [
+                "module(",
+                '    name = "demo",',
+                '    doc = """',
+                "line with ) and # should be ignored",
+                '""",',
+                '    version = "1.2.3",',
+                ")",
+            ]
+        )
+        blocks = self.mod._extract_call_args_blocks(text, "module")
+        self.assertEqual(1, len(blocks))
+        self.assertIn('version = "1.2.3"', blocks[0])
+
+    def test_main_reports_semver_errors(self) -> None:
+        with mock.patch.object(self.mod, "_extract_module_version", side_effect=["1.2", "1.2.3"]), mock.patch.object(
+            self.mod,
+            "_extract_bazel_dep_version",
+            side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
+        ), mock.patch.object(
+            self.mod,
+            "_extract_starlark_string_constant",
+            side_effect=["1.2.3", "2.0"],
+        ):
+            self.assertEqual(1, self.mod.main())
+
+
+class LintUploaderTemplatesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = _load_module(
+            "lint_uploader_templates_mod",
+            "tools/dev/lint_uploader_templates.py",
+        )
+
+    def test_normalize_bash_replaces_tokens(self) -> None:
+        normalized = self.mod._normalize_bash_template_for_lint(
+            "A=__DDTPL_ALPHA__\nB=__DDTPL_BETA__\n"
+        )
+        self.assertNotIn("__DDTPL_ALPHA__", normalized)
+        self.assertNotIn("__DDTPL_BETA__", normalized)
+        self.assertIn("A=0", normalized)
+
+    def test_lint_batch_template_checks_required_marker(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self.mod._lint_batch_template("@echo off\n")
+
+    def test_lint_batch_template_accepts_expected_shape(self) -> None:
+        self.mod._lint_batch_template(
+            "@echo off\n"
+            "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\"\n"
+            "exit /b %ERRORLEVEL%\n"
+        )
+
+
+class MockDdServerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = _load_module(
+            "mock_dd_server_mod",
+            "tools/tests/integration/mock_dd_server.py",
+        )
+
+    def test_require_single_header_rejects_duplicates(self) -> None:
+        from email.message import Message
+
+        headers = Message()
+        headers.add_header("DD-API-KEY", "a")
+        headers.add_header("DD-API-KEY", "b")
+        value, err = self.mod._require_single_header(headers, "DD-API-KEY")
+        self.assertIsNone(value)
+        self.assertEqual("duplicate DD-API-KEY headers", err)
+
+    def test_normalize_headers_redacts_api_key(self) -> None:
+        out = self.mod._normalize_headers({"DD-API-KEY": "secret", "Content-Type": "application/json"})
+        self.assertEqual("<redacted>", out["DD-API-KEY"])
+        self.assertEqual("application/json", out["Content-Type"])
+
+    def test_decode_uploader_coverage_payload_reads_coveragex_part(self) -> None:
+        boundary = "abc123"
+        body = (
+            f"--{boundary}\r\n"
+            "Content-Disposition: form-data; name=\"coveragex\"; filename=\"coverage.json\"\r\n"
+            "Content-Type: application/json\r\n\r\n"
+            "{\"mock_mode\":\"ok\"}\r\n"
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+        fake_handler = types.SimpleNamespace(headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        decoded = self.mod._Handler._decode_uploader_coverage_payload(fake_handler, body)
+        self.assertEqual({"mock_mode": "ok"}, decoded)
+
+    def test_payload_contains_resource(self) -> None:
+        payload = {"events": [{"content": {"resource": "target"}}]}
+        fake_handler = types.SimpleNamespace()
+        self.assertTrue(self.mod._Handler._payload_contains_resource(fake_handler, payload, "target"))
+        self.assertFalse(self.mod._Handler._payload_contains_resource(fake_handler, payload, "missing"))
 
 
 if __name__ == "__main__":

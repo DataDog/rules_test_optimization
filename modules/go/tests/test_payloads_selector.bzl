@@ -144,6 +144,19 @@ def selector_no_match_fallback_target(name, tags = None):
         tags = tags,
     )
 
+def selector_empty_importpath_fallback_target(name, tags = None):
+    """Selector falls back to full_files when all importpath sources are empty."""
+    topt_go_payloads_selector(
+        name = name,
+        embeds = [],
+        explicit_importpath = "",
+        fallback_importpath = "",
+        full_files = ":full_payload",
+        module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
 def selector_include_disabled_target(name, tags = None):
     """Selector keeps full_files when include_per_module is disabled."""
     topt_go_payloads_selector(
@@ -216,6 +229,12 @@ def _selector_no_match_fallback_test_impl(ctx):
     _assert_selected(env, target, "full_payload")
     return analysistest.end(env)
 
+def _selector_empty_importpath_fallback_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    _assert_selected(env, target, "full_payload")
+    return analysistest.end(env)
+
 def _selector_include_disabled_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -242,6 +261,9 @@ selector_fallback_test = analysistest.make(
 )
 selector_no_match_fallback_test = analysistest.make(
     _selector_no_match_fallback_test_impl,
+)
+selector_empty_importpath_fallback_test = analysistest.make(
+    _selector_empty_importpath_fallback_test_impl,
 )
 selector_include_disabled_test = analysistest.make(
     _selector_include_disabled_test_impl,

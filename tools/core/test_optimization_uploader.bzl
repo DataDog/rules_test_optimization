@@ -48,9 +48,6 @@ load(
 # NOTE: `UPLOADER_VERSION` and `RULES_VERSION` are intentionally independent.
 # Uploader runtime behavior can evolve without forcing a rules contract bump,
 # while payload metadata still carries both for observability.
-load("//tools/core:uploader_bash_template.bzl", "UPLOADER_BASH_TEMPLATE")
-load("//tools/core:uploader_batch_template.bzl", "UPLOADER_BATCH_TEMPLATE")
-load("//tools/core:uploader_powershell_template.bzl", "UPLOADER_POWERSHELL_TEMPLATE")
 
 def _render_template(template, substitutions):
     """Render script template placeholders with literal-brace support."""
@@ -132,6 +129,21 @@ def _base_template_substitutions(
         "schema_validator_path": schema_validator_path,
         "rules_version": RULES_VERSION,
     }
+
+def _tokenize_template_substitutions(substitutions):
+    """Convert logical substitution keys to template token placeholders."""
+    tokenized = {}
+    for key, value in substitutions.items():
+        value_str = str(value)
+        for forbidden in ["\n", "\r", "\t"]:
+            if forbidden in value_str:
+                fail("dd_payload_uploader: template substitution '%s' contains control characters" % key)
+        # Guard against shell/script-breaking interpolation primitives.
+        for forbidden in ["\"", "$", "`"]:
+            if forbidden in value_str:
+                fail("dd_payload_uploader: template substitution '%s' contains unsupported character '%s'" % (key, forbidden))
+        tokenized["__DDTPL_%s__" % key.upper()] = value_str
+    return tokenized
 
 def _bash_curl_retry_flags_for_tests():
     """Expose uploader curl retry defaults for unit tests."""
@@ -616,11 +628,8 @@ def _uploader_impl(ctx):
             log_debug(debug, "inputs", "  data file: %s (%s)" % (f.basename, f.short_path))
 
     # ------------------------------------------------------------------
-    # Phase 2: Render Bash runtime implementation.
+    # Phase 2: Materialize Bash runtime implementation from template file.
     # ------------------------------------------------------------------
-    # Bash implementation (Unix)
-    bash_template = UPLOADER_BASH_TEMPLATE
-
     bash_substitutions = _base_template_substitutions(
         quiescent_sec,
         max_wait_sec,
@@ -637,18 +646,24 @@ def _uploader_impl(ctx):
         schema_validator_path,
     )
     bash_substitutions["curl_retry_flags"] = " ".join(_bash_curl_retry_flags_for_tests())
-    bash_script = _render_template(bash_template, bash_substitutions)
-    log_debug(debug, "render", "Bash script rendered (bytes=%d)" % len(bash_script))
-
-    # PowerShell implementation (Windows)
-    ps_template = UPLOADER_POWERSHELL_TEMPLATE
+    bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.expand_template(
+        template = ctx.file._bash_runtime_template,
+        output = bash_file,
+        substitutions = _tokenize_template_substitutions(bash_substitutions),
+        is_executable = True,
+    )
+    log_debug(debug, "render", "Bash script rendered from template: %s" % ctx.file._bash_runtime_template.short_path)
 
     # ------------------------------------------------------------------
-    # Phase 3: Render PowerShell runtime implementation.
+    # Phase 3: Materialize PowerShell runtime implementation from template file.
     # ------------------------------------------------------------------
-    ps_script = _render_template(
-        ps_template,
-        _base_template_substitutions(
+    ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
+    ctx.actions.expand_template(
+        template = ctx.file._powershell_runtime_template,
+        output = ps_file,
+        substitutions = _tokenize_template_substitutions(
+            _base_template_substitutions(
             quiescent_sec,
             max_wait_sec,
             fail_on_error,
@@ -662,24 +677,23 @@ def _uploader_impl(ctx):
             schema_json_path,
             schema_validator_rloc,
             schema_validator_path,
+            ),
         ),
+        is_executable = False,
     )
-    log_debug(debug, "render", "PowerShell script rendered (bytes=%d)" % len(ps_script))
+    log_debug(debug, "render", "PowerShell script rendered from template: %s" % ctx.file._powershell_runtime_template.short_path)
 
     # ------------------------------------------------------------------
     # Phase 4: Materialize executable/script artifacts.
     # ------------------------------------------------------------------
-    # Emit scripts
-    bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
-    ctx.actions.write(output = bash_file, content = bash_script, is_executable = True)
-    ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
-    ctx.actions.write(output = ps_file, content = ps_script, is_executable = False)
-
     # Create a batch file wrapper for native Windows (calls PowerShell)
-    bat_template = UPLOADER_BATCH_TEMPLATE
-    bat_script = bat_template.replace("{ps_name}", ps_file.basename)
     bat_file = ctx.actions.declare_file(ctx.label.name + ".bat")
-    ctx.actions.write(output = bat_file, content = bat_script, is_executable = True)
+    ctx.actions.expand_template(
+        template = ctx.file._batch_runtime_template,
+        output = bat_file,
+        substitutions = _tokenize_template_substitutions({"ps_name": ps_file.basename}),
+        is_executable = True,
+    )
     log_debug(debug, "outputs", "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
 
     # ------------------------------------------------------------------
@@ -717,6 +731,10 @@ _dd_payload_uploader_rule = rule(
         # Schema + validator bundled for best-effort payload validation
         "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
         "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),
+        # Runtime templates (kept as standalone files, not inline Starlark strings)
+        "_bash_runtime_template": attr.label(default = "//tools/core:uploader_bash_runtime.sh.tpl", allow_single_file = True),
+        "_powershell_runtime_template": attr.label(default = "//tools/core:uploader_powershell_runtime.ps1.tpl", allow_single_file = True),
+        "_batch_runtime_template": attr.label(default = "//tools/core:uploader_batch_runtime.bat.tpl", allow_single_file = True),
         # Private attribute to detect Windows platform
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },

@@ -31,11 +31,19 @@ jobs:
 
       - name: Install Python tooling dependencies
         shell: bash
-        run: python3 -m pip install -r tools/requirements.txt
+        run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Verify core/go module versions are aligned
         shell: bash
         run: python3 tools/dev/check_module_versions.py
+
+      - name: Verify .bazelversion parity
+        shell: bash
+        run: python3 tools/dev/check_bazelversion_sync.py
+
+      - name: Verify findings ledger coverage
+        shell: bash
+        run: python3 tools/dev/check_findings_ledger.py
 
       - name: Verify schema files are in sync
         shell: bash
@@ -68,3 +76,197 @@ jobs:
         run: |
           echo "Release validation completed."
           echo "Before publishing, follow CONTRIBUTING.md release runbook steps."
+
+  release-hermetic:
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Bazel tests (hermetic lane)
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          ./bazelw test //tools/... \
+          --spawn_strategy=sandboxed \
+          --strategy=TestRunner=sandboxed \
+          --incompatible_strict_action_env \
+          --sandbox_default_allow_network=false \
+          --modify_execution_info=TestRunner=+block-network \
+          --test_env=TZ=UTC \
+          --test_env=LANG=C \
+          --test_env=LC_ALL=C \
+          --enable_runfiles
+
+      - name: Run Bazel tests (go companion hermetic lane)
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          cd modules/go &&
+          ../../bazelw test //... \
+          --override_module=datadog-rules-test-optimization=../.. \
+          --spawn_strategy=sandboxed \
+          --strategy=TestRunner=sandboxed \
+          --incompatible_strict_action_env \
+          --sandbox_default_allow_network=false \
+          --modify_execution_info=TestRunner=+block-network \
+          --test_env=TZ=UTC \
+          --test_env=LANG=C \
+          --test_env=LC_ALL=C \
+          --enable_runfiles
+
+  release-shell-lint:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install shellcheck
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Lint repository shell scripts
+        shell: bash
+        run: |
+          shellcheck --severity=error \
+            bazelw \
+            examples/single_service/runtests.sh \
+            examples/multi_service/runtests.sh \
+            tools/tests/integration/*.sh \
+            tools/tests/python/run_python_tools_test.sh \
+            tools/tests/python/run_bazelw_wrapper_test.sh
+
+      - name: Lint uploader templates (bash parser)
+        shell: bash
+        run: python3 tools/dev/lint_uploader_templates.py --skip-powershell-parse
+
+  release-powershell-lint:
+    timeout-minutes: 20
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {
+              Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+            }
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
+          }
+
+      - name: Lint integration PowerShell scripts
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path "tools/tests/integration/*.ps1" -Severity Error
+          if ($results) {
+            $results | Format-Table -AutoSize
+            throw "PSScriptAnalyzer found lint errors."
+          }
+
+      - name: Lint uploader templates (PowerShell parser)
+        shell: pwsh
+        run: python tools/dev/lint_uploader_templates.py --skip-shellcheck
+
+  release-gofmt-check:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Verify Go files are gofmt formatted
+        shell: bash
+        run: |
+          mapfile -t go_files < <(git ls-files '*.go')
+          if (( ${#go_files[@]} == 0 )); then
+            exit 0
+          fi
+          unformatted="$(gofmt -l "${go_files[@]}")"
+          if [[ -n "${unformatted}" ]]; then
+            echo "error: gofmt found unformatted files:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+  release-docs-links:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check markdown links
+        uses: lycheeverse/lychee-action@82202e5e9c2f4ef1a55a3d02563e1cb6041e5332 # v2.4.1
+        with:
+          args: >-
+            --glob
+            --no-progress
+            --verbose
+            --exclude-mail
+            --accept 429
+            --max-retries 2
+            --retry-wait-time 2
+            README.md
+            CONTRIBUTING.md
+            AGENTS.md
+            CHANGELOG.md
+            SECURITY.md
+            docs/**/*.md
+            examples/**/*.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-platform-smoke:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Ensure jq is available (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Get-Command jq -ErrorAction SilentlyContinue) {
+            jq --version
+            exit 0
+          }
+          choco install jq --no-progress -y
+          jq --version
+
+      - name: Run mock server integration tests (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./tools/tests/integration/run_mock_server_tests.sh
+
+      - name: Run mock server integration tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/tests/integration/run_mock_server_tests.ps1

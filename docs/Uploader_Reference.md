@@ -176,8 +176,9 @@ payload discovery/quiescence before proceeding.
   - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
   - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
   - Requires `DD_API_KEY`
-  - `DD_SITE` is validated as a hostname (with compatibility normalization for
-    `app.`/`api.` prefixes and URL-shaped inputs); credentials/ports are rejected
+  - `DD_SITE` is validated as a hostname (ASCII-whitespace is trimmed first),
+    with compatibility normalization for `app.`/`api.` prefixes and URL-shaped
+    inputs; credentials/ports are rejected
   - Test/dev override: set `DD_TEST_OPTIMIZATION_INTAKE_BASE` to use a custom
     base URL (agentless only)
 - EVP proxy (when `DD_TRACE_AGENT_URL` set):
@@ -194,7 +195,7 @@ payload discovery/quiescence before proceeding.
 - Both transient errors (connection issues) and HTTP errors (4xx/5xx) trigger
   retries
 - Behavior is consistent across Linux/macOS (bash/curl) and Windows
-  (PowerShell)
+  (PowerShell-only runtime path; no Git Bash requirement)
 
 ## Metadata enrichment (`context.json`)
 

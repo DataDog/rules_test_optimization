@@ -7,109 +7,197 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-<#
-.SYNOPSIS
-  Windows entrypoint for uploader integration tests.
+function Get-RepoRoot {
+  param([string]$StartPath)
+  $candidate = (Resolve-Path $StartPath).Path
+  while ($true) {
+    if ((Test-Path (Join-Path $candidate "MODULE.bazel") -PathType Leaf) -or (Test-Path (Join-Path $candidate ".git"))) {
+      return $candidate
+    }
+    $parent = Split-Path $candidate -Parent
+    if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $candidate) {
+      throw "unable to locate repository root from script path: $StartPath"
+    }
+    $candidate = $parent
+  }
+}
 
-.DESCRIPTION
-  Reuses the canonical integration scenario implemented in
-  tools/tests/integration/run_mock_server_tests.sh so Linux/macOS/Windows
-  execute the same assertions. On Windows, Bazel resolves dd_upload_payloads
-  to the .bat launcher, which exercises the PowerShell uploader implementation.
+function Get-PythonCommand {
+  if ($env:PYTHON) {
+    $cmd = Get-Command $env:PYTHON -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+  }
+  foreach ($name in @("python3", "python")) {
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+  }
+  throw "python interpreter not found (tried PYTHON, python3, python)"
+}
 
-.NOTES
-  Maintainers: keep this wrapper intentionally thin. The canonical scenario
-  logic must stay in the Bash harness to avoid cross-platform drift and
-  duplicated assertions. The Bash harness also owns dual-module Go wiring
-  (core + go companion + rules_go + local overrides).
-#>
+function Get-FreePort {
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  try {
+    return $listener.LocalEndpoint.Port
+  } finally {
+    $listener.Stop()
+  }
+}
+
+function Wait-ForPort {
+  param(
+    [int]$Port,
+    [int]$TimeoutSeconds
+  )
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    $client = $null
+    try {
+      $client = [System.Net.Sockets.TcpClient]::new()
+      $ar = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+      if ($ar.AsyncWaitHandle.WaitOne(200)) {
+        $client.EndConnect($ar)
+        return $true
+      }
+    } catch {
+      # keep polling
+    } finally {
+      if ($client) { $client.Close() }
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  return $false
+}
+
+function Render-UploaderTemplate {
+  param(
+    [string]$TemplatePath,
+    [string]$OutputPath
+  )
+  $content = Get-Content -LiteralPath $TemplatePath -Raw -Encoding UTF8
+  $replacements = @{
+    "__DDTPL_QUIESCENT_SEC__" = "1"
+    "__DDTPL_MAX_WAIT_SEC__" = "10"
+    "__DDTPL_FAIL_ON_ERROR__" = "False"
+    "__DDTPL_DEBUG__" = "False"
+    "__DDTPL_KEEP_PAYLOADS__" = "True"
+    "__DDTPL_FILTER_PREFIX__" = "False"
+    "__DDTPL_GZIP_PAYLOADS__" = "False"
+    "__DDTPL_UPLOADER_VERSION__" = "integration-test"
+    "__DDTPL_CONTEXT_JSON_RLOC__" = ""
+    "__DDTPL_CONTEXT_JSON_PATH__" = ""
+    "__DDTPL_SCHEMA_JSON_RLOC__" = ""
+    "__DDTPL_SCHEMA_JSON_PATH__" = ""
+    "__DDTPL_SCHEMA_VALIDATOR_RLOC__" = ""
+    "__DDTPL_SCHEMA_VALIDATOR_PATH__" = ""
+    "__DDTPL_RULES_VERSION__" = "integration-test"
+  }
+  foreach ($entry in $replacements.GetEnumerator()) {
+    $content = $content.Replace($entry.Key, $entry.Value)
+  }
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($OutputPath, $content, $utf8NoBom)
+}
+
+function Read-JsonLog {
+  param([string]$Path)
+  $entries = @()
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $entries }
+  foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $entries += ($line | ConvertFrom-Json)
+  }
+  return $entries
+}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$candidate = (Resolve-Path $scriptDir).Path
-$repoRoot = $null
-while ($true) {
-  if ((Test-Path (Join-Path $candidate "MODULE.bazel") -PathType Leaf) -or (Test-Path (Join-Path $candidate ".git"))) {
-    $repoRoot = $candidate
-    break
-  }
-  $parent = Split-Path $candidate -Parent
-  if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $candidate) {
-    throw "unable to locate repository root from script path: $scriptDir"
-  }
-  $candidate = $parent
-}
-$integrationSh = "tools/tests/integration/run_mock_server_tests.sh"
+$repoRoot = Get-RepoRoot -StartPath $scriptDir
+$python = Get-PythonCommand
+$tempRoot = Join-Path $env:TEMP ("dd_topt_windows_integration_" + [guid]::NewGuid().ToString("N"))
+$fixturesDir = Join-Path $repoRoot "tools/tests/integration/fixtures"
+$snapshotFile = Join-Path $repoRoot "tools/tests/integration/snapshots/citestcycle.json"
+$psTemplate = Join-Path $repoRoot "tools/core/uploader_powershell_runtime.ps1.tpl"
+$renderedUploader = Join-Path $tempRoot "dd_upload_payloads.ps1"
+$mockLog = Join-Path $tempRoot "mock.log"
+$mockOut = Join-Path $tempRoot "mock.out"
+$port = Get-FreePort
+$serverProc = $null
 
 Push-Location $repoRoot
 try {
-  # Prefer known Git for Windows bash locations to avoid accidentally resolving
-  # WSL's System32 bash.exe when both are installed.
-  $bashPath = $null
-  $probeNotes = New-Object System.Collections.Generic.List[string]
-  $gitBashCandidates = @(
-    $env:DD_TEST_OPTIMIZATION_GIT_BASH,
-    "C:\Program Files\Git\bin\bash.exe",
-    "C:\Program Files\Git\usr\bin\bash.exe",
-    "C:\Program Files (x86)\Git\bin\bash.exe",
-    "C:\Program Files (x86)\Git\usr\bin\bash.exe"
-  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-  foreach ($candidate in $gitBashCandidates) {
-    # Prefer an explicit Git Bash binary so CI does not accidentally invoke
-    # a WSL/System32 shim with incompatible path semantics.
-    $probeNotes.Add("candidate: $candidate")
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-      $bashPath = $candidate
-      $probeNotes.Add("selected candidate: $candidate")
-      break
-    }
+  New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+  if (-not (Test-Path -LiteralPath $fixturesDir -PathType Container)) {
+    throw "fixtures directory not found: $fixturesDir"
+  }
+  if (-not (Test-Path -LiteralPath $snapshotFile -PathType Leaf)) {
+    throw "snapshot fixture not found: $snapshotFile"
+  }
+  if (-not (Test-Path -LiteralPath $psTemplate -PathType Leaf)) {
+    throw "uploader template not found: $psTemplate"
   }
 
-  if ($null -eq $bashPath) {
-    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
-    if ($null -ne $gitCmd) {
-      $gitDir = Split-Path -Parent $gitCmd.Source
-      $derived = Join-Path $gitDir "bash.exe"
-      $probeNotes.Add("derived from git command: $derived")
-      if (Test-Path -LiteralPath $derived -PathType Leaf) {
-        $bashPath = $derived
-        $probeNotes.Add("selected derived git sibling: $derived")
-      }
-    }
+  $serverArgs = @(
+    "-u",
+    (Join-Path $repoRoot "tools/tests/integration/mock_dd_server.py"),
+    "--fixtures", $fixturesDir,
+    "--log", $mockLog,
+    "--port", "$port"
+  )
+  $serverProc = Start-Process -FilePath $python -ArgumentList $serverArgs -PassThru -NoNewWindow -RedirectStandardOutput $mockOut -RedirectStandardError $mockOut
+  if (-not (Wait-ForPort -Port $port -TimeoutSeconds 30)) {
+    if ($serverProc -and -not $serverProc.HasExited) { Stop-Process -Id $serverProc.Id -Force }
+    throw "mock server did not start on port $port"
   }
 
-  if ($null -eq $bashPath) {
-    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
-    if ($null -ne $bashCmd) {
-      $bashPath = $bashCmd.Source
-      $probeNotes.Add("selected from PATH: $bashPath")
-    }
-  }
+  $testOutputsRoot = Join-Path $tempRoot "bazel-testlogs/pkg/target/test.outputs"
+  $testsDir = Join-Path $testOutputsRoot "payloads/tests"
+  $coverageDir = Join-Path $testOutputsRoot "payloads/coverage"
+  New-Item -ItemType Directory -Force -Path $testsDir, $coverageDir | Out-Null
+  Copy-Item -LiteralPath $snapshotFile -Destination (Join-Path $testsDir "span_events_windows.json") -Force
+  '{"mock_mode":"ok"}' | Set-Content -LiteralPath (Join-Path $coverageDir "coverage_windows.json") -Encoding UTF8
 
-  if ($null -eq $bashPath) {
-    $details = ($probeNotes -join "; ")
-    throw "bash not found. Set DD_TEST_OPTIMIZATION_GIT_BASH or install Git for Windows. Probe details: $details"
-  }
+  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader
 
-  if ($bashPath -match "System32\\bash\.exe$") {
-    Write-Warning "Resolved bash to System32 shim ($bashPath). Set DD_TEST_OPTIMIZATION_GIT_BASH to a Git Bash binary for predictable path behavior."
-  }
+  $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
+  $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS = "1"
 
-  if (-not (Test-Path -LiteralPath $integrationSh -PathType Leaf)) {
-    throw "integration harness not found: $integrationSh"
-  }
-
-  $bashArgs = @($integrationSh)
-  if ($null -ne $ForwardArgs -and $ForwardArgs.Count -gt 0) {
-    # Forward extra args so local debugging mirrors direct Bash invocation.
-    $bashArgs += $ForwardArgs
-  }
-
-  Write-Host "Running integration harness via: $bashPath $($bashArgs -join ' ')"
-  & $bashPath @bashArgs
+  # Agentless flow
+  $env:DD_API_KEY = "00000000000000000000000000000000"
+  $env:DD_SITE = "datadoghq.com"
+  $env:DD_TEST_OPTIMIZATION_INTAKE_BASE = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TRACE_AGENT_URL -ErrorAction SilentlyContinue
+  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $renderedUploader @ForwardArgs
   if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+    throw "agentless uploader execution failed with exit code $LASTEXITCODE"
   }
+
+  # EVP flow
+  Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
+  Remove-Item Env:DD_TEST_OPTIMIZATION_INTAKE_BASE -ErrorAction SilentlyContinue
+  $env:DD_TRACE_AGENT_URL = "http://127.0.0.1:$port"
+  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $renderedUploader @ForwardArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "evp uploader execution failed with exit code $LASTEXITCODE"
+  }
+
+  $entries = Read-JsonLog -Path $mockLog
+  $paths = @($entries | ForEach-Object { $_.path })
+  $requiredPaths = @(
+    "/api/v2/citestcycle",
+    "/api/v2/citestcov",
+    "/evp_proxy/v2/api/v2/citestcycle",
+    "/evp_proxy/v2/api/v2/citestcov"
+  )
+  foreach ($requiredPath in $requiredPaths) {
+    if (-not ($paths -contains $requiredPath)) {
+      throw "missing expected uploader request path in mock log: $requiredPath"
+    }
+  }
+
+  Write-Host "Windows integration harness passed (PowerShell-only uploader path)."
 } finally {
+  if ($serverProc -and -not $serverProc.HasExited) {
+    Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
+  }
   Pop-Location
 }

@@ -211,11 +211,11 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 - **Bazel 5.0+ minimum capability** - Earliest Bazel line with required `TEST_UNDECLARED_OUTPUTS_DIR` payload support
 - **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
 - **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
-- **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; normalized to `https://api.<site>`
+- **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; leading/trailing ASCII whitespace is trimmed, then normalized to `https://api.<site>`
 - **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
   - **Linux**: `bash`, `curl`, `find`, `stat` (GNU), `awk`, and one of `md5sum` or `shasum`
   - **macOS**: `bash` (3.2+), `curl`, `find`, `stat` (BSD), `awk`, and one of `md5` or `shasum`
-  - **Windows**: `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+); the uploader uses .NET `HttpClient`
+  - **Windows**: `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+); the uploader uses .NET `HttpClient` and is intentionally PowerShell-only (no Git Bash dependency)
 
 Optional tooling:
 - **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
@@ -535,6 +535,7 @@ Fast checks before diving deep:
 - Full troubleshooting playbook: [`docs/Troubleshooting.md`](docs/Troubleshooting.md)
 - Configuration and fetch behavior reference: [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md)
 - Uploader runtime reference: [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md)
+- External-link provenance note: repository behavior is source-of-truth in this repo's code/tests; external docs are informative and may lag temporarily.
 
 ## Tips
 
