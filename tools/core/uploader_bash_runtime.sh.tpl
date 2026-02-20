@@ -341,7 +341,7 @@ fnv1a_32() {
         echo ""
         return
     fi
-    local alphabet='0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+'
+    local alphabet=$'0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+@=#%~!$^*()[]{}<>?,;|\\\"\'` '
     local hash=2166136261
     local input_len="${#input}"
     local alpha_len="${#alphabet}"
@@ -359,7 +359,8 @@ fnv1a_32() {
             fi
         done
         if (( found == 0 )); then
-            idx=0
+            # Keep unknown-character bucketing aligned with sync-side Starlark logic.
+            idx=$((alpha_len + (i % 7)))
         fi
         hash=$((hash ^ idx))
         hash=$(( (hash * 16777619) & 0xffffffff ))
@@ -399,13 +400,6 @@ if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
     CURL_RETRY_FLAGS+=(--retry-all-errors)
 fi
 dbg "curl retry flags: ${CURL_RETRY_FLAGS[*]}"
-
-# Windows detection - delegate to PowerShell if needed
-if [[ "$(uname -s | tr 'A-Z' 'a-z')" == *mingw* || "$(uname -s | tr 'A-Z' 'a-z')" == *msys* || "$(uname -s | tr 'A-Z' 'a-z')" == *cygwin* ]]; then
-  ps_path="$(dirname "$0")/$(basename "$0" .sh).ps1"
-  dbg "Windows-like environment detected; delegating to PowerShell: $ps_path"
-  exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps_path"
-fi
 
 # Acquire exclusive lock to prevent concurrent uploaders
 # Uses mkdir for portability (works on macOS which lacks flock)

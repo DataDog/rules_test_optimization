@@ -394,11 +394,12 @@ function Validate-Numeric([string]$name, [string]$val) {
 # Compute FNV-1a 32-bit hex fingerprint (non-cryptographic, for parity checks only)
 function Get-Fnv1a32Hex([string]$value) {
     if ([string]::IsNullOrEmpty($value)) { return "" }
-    $alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
+    $alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+@=#%~!$^*()[]{}<>?,;|\"''` '
     [uint32]$hash = 2166136261
-    foreach ($ch in $value.ToCharArray()) {
+    for ($i = 0; $i -lt $value.Length; $i++) {
+        $ch = $value.Substring($i, 1)
         $idx = $alphabet.IndexOf([string]$ch)
-        if ($idx -lt 0) { $idx = 0 }
+        if ($idx -lt 0) { $idx = $alphabet.Length + ($i % 7) }
         $hash = $hash -bxor ([uint32]$idx)
         # Keep arithmetic in uint64 and wrap to 32 bits explicitly.
         # This avoids signed-mask behavior differences on PowerShell.

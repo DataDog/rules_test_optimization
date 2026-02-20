@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import types
 from typing import Optional
@@ -640,6 +642,58 @@ class LintUploaderTemplatesTests(unittest.TestCase):
             "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\"\n"
             "exit /b %ERRORLEVEL%\n"
         )
+
+
+class RuntimeTemplateParityTests(unittest.TestCase):
+    @staticmethod
+    def _extract_starlark_fingerprint_alphabet(sync_text: str) -> str:
+        match = re.search(
+            r'_FINGERPRINT_ALPHABET\s*=\s*("(?:[^"\\]|\\.)*")',
+            sync_text,
+        )
+        if match is None:
+            raise AssertionError("unable to locate _FINGERPRINT_ALPHABET in sync file")
+        return ast.literal_eval(match.group(1))
+
+    @staticmethod
+    def _extract_bash_fingerprint_alphabet(bash_text: str) -> str:
+        match = re.search(r"local alphabet=\$'((?:\\.|[^'])*)'", bash_text)
+        if match is None:
+            raise AssertionError("unable to locate bash fingerprint alphabet")
+        return bytes(match.group(1), "utf-8").decode("unicode_escape")
+
+    @staticmethod
+    def _extract_powershell_fingerprint_alphabet(powershell_text: str) -> str:
+        match = re.search(r"\$alphabet\s*=\s*'([^\n]*)'", powershell_text)
+        if match is None:
+            raise AssertionError("unable to locate PowerShell fingerprint alphabet")
+        return match.group(1).replace("''", "'")
+
+    def test_runtime_fingerprint_alphabet_matches_sync(self) -> None:
+        sync_text = _runfile("tools/core/test_optimization_sync.bzl").read_text(encoding="utf-8")
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        expected = self._extract_starlark_fingerprint_alphabet(sync_text)
+        self.assertEqual(expected, self._extract_bash_fingerprint_alphabet(bash_text))
+        self.assertEqual(expected, self._extract_powershell_fingerprint_alphabet(powershell_text))
+
+    def test_runtime_unknown_char_bucketing_matches_sync(self) -> None:
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("idx=$((alpha_len + (i % 7)))", bash_text)
+        self.assertIn("$idx = $alphabet.Length + ($i % 7)", powershell_text)
+
+    def test_bash_runtime_has_no_windows_delegation(self) -> None:
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8").lower()
+        self.assertNotIn("mingw", bash_text)
+        self.assertNotIn("msys", bash_text)
+        self.assertNotIn("cygwin", bash_text)
+        self.assertNotIn("exec powershell.exe", bash_text)
 
 
 class MockDdServerTests(unittest.TestCase):
