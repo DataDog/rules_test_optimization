@@ -704,6 +704,11 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("idx=$((alpha_len + (i % 7)))", bash_text)
         self.assertIn("$idx = $alphabet.Length + ($i % 7)", powershell_text)
 
+    def test_sync_windows_mkdir_command_uses_path(self) -> None:
+        sync_text = _runfile("tools/core/test_optimization_sync.bzl").read_text(encoding="utf-8")
+        self.assertIn("New-Item -ItemType Directory -Force -Path", sync_text)
+        self.assertNotIn("New-Item -ItemType Directory -Force -LiteralPath", sync_text)
+
     def test_bash_runtime_has_no_windows_delegation(self) -> None:
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8").lower()
         self.assertNotIn("mingw", bash_text)

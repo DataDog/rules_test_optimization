@@ -299,7 +299,7 @@ def _ensure_parent_directory(ctx, path, debug):
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "New-Item -ItemType Directory -Force -LiteralPath '%s' | Out-Null" % _powershell_single_quote_literal(win_dir),
+            "New-Item -ItemType Directory -Force -Path '%s' | Out-Null" % _powershell_single_quote_literal(win_dir),
         ]
         res = ctx.execute(ps_cmd)
     else:
