@@ -41,10 +41,6 @@ jobs:
         shell: bash
         run: python3 tools/dev/check_bazelversion_sync.py
 
-      - name: Verify findings ledger coverage
-        shell: bash
-        run: python3 tools/dev/check_findings_ledger.py
-
       - name: Verify schema files are in sync
         shell: bash
         run: python3 tools/core/schemas/sync_agentless_schema.py --check

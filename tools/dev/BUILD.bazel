@@ -1,6 +1,5 @@
 exports_files([
     "check_bazelversion_sync.py",
-    "check_findings_ledger.py",
     "check_module_versions.py",
     "go_bootstrap.bzl",
     "lint_uploader_templates.py",

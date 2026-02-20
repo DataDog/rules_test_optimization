@@ -72,7 +72,6 @@
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
-  - findings-ledger coverage check (`tools/dev/check_findings_ledger.py`)
   - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.
