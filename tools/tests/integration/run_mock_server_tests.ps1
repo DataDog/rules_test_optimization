@@ -120,6 +120,7 @@ $psTemplate = Join-Path $repoRoot "tools/core/uploader_powershell_runtime.ps1.tp
 $renderedUploader = Join-Path $tempRoot "dd_upload_payloads.ps1"
 $mockLog = Join-Path $tempRoot "mock.log"
 $mockOut = Join-Path $tempRoot "mock.out"
+$mockErr = Join-Path $tempRoot "mock.err"
 $port = Get-FreePort
 $serverProc = $null
 
@@ -143,7 +144,7 @@ try {
     "--log", $mockLog,
     "--port", "$port"
   )
-  $serverProc = Start-Process -FilePath $python -ArgumentList $serverArgs -PassThru -NoNewWindow -RedirectStandardOutput $mockOut -RedirectStandardError $mockOut
+  $serverProc = Start-Process -FilePath $python -ArgumentList $serverArgs -PassThru -NoNewWindow -RedirectStandardOutput $mockOut -RedirectStandardError $mockErr
   if (-not (Wait-ForPort -Port $port -TimeoutSeconds 30)) {
     if ($serverProc -and -not $serverProc.HasExited) { Stop-Process -Id $serverProc.Id -Force }
     throw "mock server did not start on port $port"
