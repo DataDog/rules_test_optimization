@@ -20,9 +20,12 @@ dbg "startup runfiles env: RUNFILES_DIR='${RUNFILES_DIR:-<unset>}' RUNFILES_MANI
 
 trim_ascii_whitespace() {
     local value="$1"
-    value="${value#"${value%%[!$' \t\r\n']*}"}"
-    value="${value%"${value##*[!$' \t\r\n']}"}"
-    printf '%s\n' "$value"
+    value="${value#"${value%%[!$' 	
+']*}"}"
+    value="${value%"${value##*[!$' 	
+']}"}"
+    printf '%s
+' "$value"
 }
 
 normalize_dd_site_or_fail() {
@@ -39,7 +42,7 @@ normalize_dd_site_or_fail() {
         site="${site#*://}"
     fi
     site="${site%%/*}"
-    site="${site%%\\?*}"
+    site="${site%%\?*}"
     site="${site%%#*}"
     if [[ "$site" == app.* ]]; then site="${site#app.}"; fi
     if [[ "$site" == api.* ]]; then site="${site#api.}"; fi
@@ -166,7 +169,7 @@ resolve_runfile() {
                 dbg "resolve_runfile: manifest exact key '$cand' -> '$path' (not a file)"
             fi
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
-            # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
+            # Match entries whose key ends with "/<candidate>" or "\<candidate>".
             # Pass 2: suffix match for repo-prefixed key variants.
             path=$(awk -v key="$cand" '
                 BEGIN { bom = sprintf("%c%c%c", 239, 187, 191) }
@@ -177,7 +180,7 @@ resolve_runfile() {
                     }
                     if (length(k) > length(key) && substr(k, length(k) - length(key) + 1) == key) {
                         sep = substr(k, length(k) - length(key), 1)
-                        if (sep == "/" || sep == "\\\\") {
+                        if (sep == "/" || sep == "\\") {
                             print substr($0, length($1) + 2)
                             exit
                         }
@@ -323,7 +326,8 @@ PY
     fi
     if [[ -r /dev/urandom ]]; then
         local hex
-        hex=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+        hex=$(od -An -N16 -tx1 /dev/urandom | tr -d ' 
+')
         echo "${hex:0:8}-${hex:8:4}-${hex:12:4}-${hex:16:4}-${hex:20:12}"
         return
     fi
@@ -337,7 +341,7 @@ fnv1a_32() {
         echo ""
         return
     fi
-    local alphabet=$'0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+@=#%~!$^*()[]{}<>?,;|\\\"\'` '
+    local alphabet='0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+'
     local hash=2166136261
     local input_len="${#input}"
     local alpha_len="${#alphabet}"
@@ -355,8 +359,7 @@ fnv1a_32() {
             fi
         done
         if (( found == 0 )); then
-            # Keep unknown-character bucketing aligned with Starlark sync logic.
-            idx=$((alpha_len + (i % 7)))
+            idx=0
         fi
         hash=$((hash ^ idx))
         hash=$(( (hash * 16777619) & 0xffffffff ))
@@ -396,6 +399,13 @@ if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
     CURL_RETRY_FLAGS+=(--retry-all-errors)
 fi
 dbg "curl retry flags: ${CURL_RETRY_FLAGS[*]}"
+
+# Windows detection - delegate to PowerShell if needed
+if [[ "$(uname -s | tr 'A-Z' 'a-z')" == *mingw* || "$(uname -s | tr 'A-Z' 'a-z')" == *msys* || "$(uname -s | tr 'A-Z' 'a-z')" == *cygwin* ]]; then
+  ps_path="$(dirname "$0")/$(basename "$0" .sh).ps1"
+  dbg "Windows-like environment detected; delegating to PowerShell: $ps_path"
+  exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps_path"
+fi
 
 # Acquire exclusive lock to prevent concurrent uploaders
 # Uses mkdir for portability (works on macOS which lacks flock)
@@ -659,7 +669,7 @@ dbg "Uploader start time: $start_ts"
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 tests_executed() {
     local found
-    found=$(find "$TESTLOGS_DIR" \\( -name "test.log" -o -name "test.xml" \\) -type f -print -quit 2>/dev/null)
+    found=$(find "$TESTLOGS_DIR" \( -name "test.log" -o -name "test.xml" \) -type f -print -quit 2>/dev/null)
     [[ -n "$found" ]]
 }
 
@@ -791,7 +801,7 @@ redact_header() {
   local name="${h%%:*}"
   if [[ "$name" == "DD-API-KEY" ]]; then
     local val="${h#*:}"
-    val="${val# }"; val="${val% }"; val="${val%%$'\\r'}"
+    val="${val# }"; val="${val% }"; val="${val%%$'\r'}"
     if (( ${#val} > 4 )); then
       echo "DD-API-KEY: ****${val: -4}"
     else
@@ -864,7 +874,7 @@ decode_percent_path() {
     return
   fi
   local decoded
-  decoded=$(printf '%b' "${value//%/\\\\x}" 2>/dev/null || true)
+  decoded=$(printf '%b' "${value//%/\\x}" 2>/dev/null || true)
   if [[ -n "$decoded" ]]; then
     echo "$decoded"
   else
@@ -880,7 +890,7 @@ normalize_path_like() {
   raw=$(decode_percent_path "$raw")
   # Decode can re-introduce backslashes (for example %5C on Windows paths).
   # Normalize after decoding so slash-based matching stays consistent.
-  raw="${raw//\\\\//}"
+  raw="${raw//\\//}"
   # Collapse duplicated separators to improve matching stability.
   while [[ "$raw" == *"//"* ]]; do
     raw=$(echo "$raw" | sed -E 's#/{2,}#/#g')
@@ -1010,10 +1020,10 @@ build_source_candidates() {
   if [[ "$normalized_source" =~ /execroot/[^/]+/(.+)$ ]]; then
     add_derived_source_candidate "${BASH_REMATCH[1]}"
   fi
-  if [[ "$normalized_source" =~ \\.runfiles/_main/(.+)$ ]]; then
+  if [[ "$normalized_source" =~ \.runfiles/_main/(.+)$ ]]; then
     add_derived_source_candidate "${BASH_REMATCH[1]}"
   fi
-  if [[ "$normalized_source" =~ \\.runfiles/[^/]+/(.+)$ ]]; then
+  if [[ "$normalized_source" =~ \.runfiles/[^/]+/(.+)$ ]]; then
     add_derived_source_candidate "${BASH_REMATCH[1]}"
   fi
   # Keep only repository-relative fallback candidates. Absolute paths that are
@@ -1034,15 +1044,15 @@ glob_to_regex() {
   while (( i < plen )); do
     ch="${pattern:i:1}"
     # Backslash escapes the next glob metacharacter literally.
-    if [[ "$ch" == "\\\\" ]]; then
+    if [[ "$ch" == "\\" ]]; then
       if (( i + 1 < plen )); then
         nxt="${pattern:i+1:1}"
         case "$nxt" in
-          "."|"+"|"("|")"|"{"|"}"|"^"|"$"|"|"|"["|"]"|"*"|"?"|"\\\\")
-            if [[ "$nxt" == "\\\\" ]]; then
-              out="$out\\\\\\\\"
+          "."|"+"|"("|")"|"{"|"}"|"^"|"$"|"|"|"["|"]"|"*"|"?"|"\\")
+            if [[ "$nxt" == "\\" ]]; then
+              out="$out\\\\"
             else
-              out="$out\\\\$nxt"
+              out="$out\\$nxt"
             fi
             ;;
           *)
@@ -1051,7 +1061,7 @@ glob_to_regex() {
         esac
         i=$((i + 2))
       else
-        out="$out\\\\\\\\"
+        out="$out\\\\"
         i=$((i + 1))
       fi
       continue
@@ -1079,11 +1089,11 @@ glob_to_regex() {
         class_body="^"
         j=$((j + 1))
       elif (( j < plen )) && [[ "${pattern:j:1}" == "^" ]]; then
-        class_body="\\\\^"
+        class_body="\\^"
         j=$((j + 1))
       fi
       if (( j < plen )) && [[ "${pattern:j:1}" == "]" ]]; then
-        class_body="$class_body\\\\]"
+        class_body="$class_body\\]"
         j=$((j + 1))
       fi
       while (( j < plen )); do
@@ -1093,14 +1103,14 @@ glob_to_regex() {
           break
         fi
         case "$class_ch" in
-          "\\\\")
-            class_body="$class_body\\\\\\\\"
+          "\\")
+            class_body="$class_body\\\\"
             ;;
           "^")
-            class_body="$class_body\\\\^"
+            class_body="$class_body\\^"
             ;;
           "[")
-            class_body="$class_body\\\\["
+            class_body="$class_body\\["
             ;;
           *)
             class_body="$class_body$class_ch"
@@ -1113,7 +1123,7 @@ glob_to_regex() {
         i=$((j + 1))
         continue
       fi
-      out="${out}\\\\["
+      out="${out}\\["
       i=$((i + 1))
       continue
     fi
@@ -1124,11 +1134,11 @@ glob_to_regex() {
       "?")
         out="${out}[^/]"
         ;;
-      "."|"+"|"("|")"|"{"|"}"|"^"|"$"|"|"|"\\\\")
-        out="${out}\\\\$ch"
+      "."|"+"|"("|")"|"{"|"}"|"^"|"$"|"|"|"\\")
+        out="${out}\\$ch"
         ;;
       "]")
-        out="${out}\\\\]"
+        out="${out}\\]"
         ;;
       *)
         out="${out}$ch"
@@ -1181,7 +1191,7 @@ parse_codeowners_file() {
   local line pattern rest regex
   local -a owner_tokens=()
   while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%$'\\r'}"
+    line="${line%$'\r'}"
     line="${line#"${line%%[![:space:]]*}"}"
     [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
     # Section headers may include spaces (for example "[Core Team] @org/team").
@@ -1202,7 +1212,8 @@ parse_codeowners_file() {
     if [[ "$rest" == "#"* ]]; then
       rest=""
     elif [[ "$rest" == *[[:space:]]#* ]]; then
-      rest=$(printf '%s\n' "$rest" | sed -E 's/[[:space:]]#.*$//')
+      rest=$(printf '%s
+' "$rest" | sed -E 's/[[:space:]]#.*$//')
     fi
     rest="${rest%"${rest##*[![:space:]]}"}"
     [[ -z "$pattern" ]] && continue
@@ -1239,7 +1250,7 @@ parse_codeowners_file() {
 
 is_gitlab_section_header_pattern() {
   local pattern="$1"
-  [[ "$pattern" =~ ^\\[[^][]+\\]$ ]] || return 1
+  [[ "$pattern" =~ ^\[[^][]+\]$ ]] || return 1
   local inner="${pattern:1:${#pattern}-2}"
   # GitLab section headers can include whitespace (for example [Core Team]).
   if [[ "$inner" == *[[:space:]]* ]]; then
@@ -1247,7 +1258,7 @@ is_gitlab_section_header_pattern() {
   fi
   # Heuristic to avoid class-only glob false positives:
   # keep range-like and short bracket classes (for example [xy], [A-Z]).
-  if [[ "$inner" == *"-"* || "$inner" == *"!"* || "$inner" == *"^"* || "$inner" == *"\\\\"* ]]; then
+  if [[ "$inner" == *"-"* || "$inner" == *"!"* || "$inner" == *"^"* || "$inner" == *"\\"* ]]; then
     return 1
   fi
   # Preserve all-uppercase/digit class sets such as [ABCD] and [A1B2C3].
@@ -1267,7 +1278,7 @@ is_gitlab_section_header_pattern() {
 
 is_gitlab_section_header_line() {
   local line="$1"
-  if [[ "$line" =~ ^(\\[[^][]+\\])([[:space:]]+.*)?$ ]]; then
+  if [[ "$line" =~ ^(\[[^][]+\])([[:space:]]+.*)?$ ]]; then
     is_gitlab_section_header_pattern "${BASH_REMATCH[1]}"
     return $?
   fi
@@ -1306,7 +1317,7 @@ split_codeowners_pattern_and_owners() {
       escaped=0
       continue
     fi
-    if [[ "$ch" == "\\\\" ]]; then
+    if [[ "$ch" == "\\" ]]; then
       pattern="$pattern$ch"
       escaped=1
       continue
@@ -1430,7 +1441,8 @@ dedupe_owners() {
     (( seen == 0 )) && out_tokens+=("$token")
   done
   if (( ${#out_tokens[@]} > 0 )); then
-    printf '%s\n' "${out_tokens[@]}"
+    printf '%s
+' "${out_tokens[@]}"
   fi
 }
 
@@ -1586,7 +1598,7 @@ build_common_headers() {
       ] | @tsv
     ' "$payload_file" 2>/dev/null || true)
     if [[ -n "$meta_values" ]]; then
-      IFS=$'\t' read -r meta_lang meta_tracer meta_lang_version meta_lang_interpreter <<< "$meta_values"
+      IFS=$'	' read -r meta_lang meta_tracer meta_lang_version meta_lang_interpreter <<< "$meta_values"
       [[ -n "$meta_lang" ]] && lang="$meta_lang"
       [[ -n "$meta_tracer" ]] && tracer_version="$meta_tracer"
       [[ -n "$meta_lang_version" ]] && lang_version="$meta_lang_version"
@@ -1609,7 +1621,8 @@ curl_agentless() {
   if [[ -z "${DD_API_KEY:-}" ]]; then
     return 2
   fi
-  printf 'DD-API-KEY: %s\n' "$DD_API_KEY" | curl "$@" -H @-
+  printf 'DD-API-KEY: %s
+' "$DD_API_KEY" | curl "$@" -H @-
 }
 
 # Optional check: verify fetch-time API key fingerprint matches uploader API key.
@@ -1655,10 +1668,7 @@ enrich_with_context() {
     echo '{}' > "$ctx_file"
     cleanup_ctx=1
   fi
-  jq --slurpfile ctx "$ctx_file" \
-    --arg runtime_id "$RUNTIME_ID" \
-    --arg rules_version "$RULES_VERSION" \
-    --arg language_fallback "bazel" '
+  jq --slurpfile ctx "$ctx_file"     --arg runtime_id "$RUNTIME_ID"     --arg rules_version "$RULES_VERSION"     --arg language_fallback "bazel" '
     def ctx_val($k): $ctx[0][$k];
     def ctx_str($k): (ctx_val($k) | if type=="string" and length>0 then . else null end);
     def ctx_runtime_id: (ctx_str("runtime-id") // ctx_str("runtime.id") // ctx_str("runtime_id"));
@@ -1848,10 +1858,10 @@ upload_single_test() {
         fi
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \\
+      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}")
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${TEST_EVP[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}")
     fi
     rc=$?
@@ -1898,14 +1908,14 @@ upload_single_coverage() {
         dbg "headers: multipart/form-data (event + coveragex)"
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \\
-        -X POST "${COV_URL}" "${COMMON_HDRS[@]}" \\
-        -F "event=@${eventjson};type=application/json;filename=fileevent.json" \\
+      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${COV_URL}" "${COMMON_HDRS[@]}" \
+        -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
         -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}")
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \\
-        -X POST "${COV_URL}" "${COMMON_HDRS[@]}" "${COV_EVP[@]}" \\
-        -F "event=@${eventjson};type=application/json;filename=fileevent.json" \\
+      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${COV_URL}" "${COMMON_HDRS[@]}" "${COV_EVP[@]}" \
+        -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
         -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}")
     fi
     rc=$?

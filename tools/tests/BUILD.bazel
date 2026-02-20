@@ -9,6 +9,7 @@
 #   CI runs this harness explicitly in .github/workflows/ci.yml.
 exports_files([
     "example_stub_repo.bzl",
+    "integration/mock_dd_server.py",
 ], visibility = ["//visibility:public"])
 
 test_suite(

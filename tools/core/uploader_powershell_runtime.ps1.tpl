@@ -101,7 +101,7 @@ function Resolve-Runfile {
                 }
             }
             # Fallback: some manifests prefix keys with repo names (for example "<repo>/path/to/file").
-            # Match entries whose key ends with "/<candidate>" or "\\<candidate>".
+            # Match entries whose key ends with "/<candidate>" or "\<candidate>".
             # Pass 2: suffix-key matches for bzlmod/workspace key variants.
             foreach ($line in $manifest) {
                 $lineNorm = $line
@@ -121,7 +121,7 @@ function Resolve-Runfile {
                 if ($i -le 0) { continue }
                 $key = $lineNorm.Substring(0, $i)
                 if ($key.Length -le $cand.Length) { continue }
-                if ($key.EndsWith("/$cand", [System.StringComparison]::Ordinal) -or $key.EndsWith("\\$cand", [System.StringComparison]::Ordinal)) {
+                if ($key.EndsWith("/$cand", [System.StringComparison]::Ordinal) -or $key.EndsWith("\$cand", [System.StringComparison]::Ordinal)) {
                     $path = $lineNorm.Substring($i + 1).TrimStart().TrimEnd()
                     if (Test-Path -LiteralPath $path -PathType Leaf) {
                         Dbg "Resolve-Runfile hit manifest suffix key '$cand' -> '$path'"
@@ -150,7 +150,7 @@ function Resolve-ArtifactPath {
 
     $execRoot = $null
     try {
-        $execRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\\..\\.."))
+        $execRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))
     } catch {
         $execRoot = $null
     }
@@ -385,7 +385,7 @@ function Normalize-Bool([string]$val) {
 
 # Validate numeric value; exit 2 if invalid
 function Validate-Numeric([string]$name, [string]$val) {
-    if ($val -notmatch '^\\d+$') {
+    if ($val -notmatch '^\d+$') {
         Log "error: $name must be a non-negative integer, got: '$val'"
         exit 2  # Configuration error
     }
@@ -394,15 +394,11 @@ function Validate-Numeric([string]$name, [string]$val) {
 # Compute FNV-1a 32-bit hex fingerprint (non-cryptographic, for parity checks only)
 function Get-Fnv1a32Hex([string]$value) {
     if ([string]::IsNullOrEmpty($value)) { return "" }
-    $alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+@=#%~!$^*()[]{}<>?,;|\"''` '
+    $alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:/.+"
     [uint32]$hash = 2166136261
-    for ($i = 0; $i -lt $value.Length; $i++) {
-        $ch = $value.Substring($i, 1)
+    foreach ($ch in $value.ToCharArray()) {
         $idx = $alphabet.IndexOf([string]$ch)
-        if ($idx -lt 0) {
-            # Keep unknown-character bucketing aligned with Starlark sync logic.
-            $idx = $alphabet.Length + ($i % 7)
-        }
+        if ($idx -lt 0) { $idx = 0 }
         $hash = $hash -bxor ([uint32]$idx)
         # Keep arithmetic in uint64 and wrap to 32 bits explicitly.
         # This avoids signed-mask behavior differences on PowerShell.
@@ -956,7 +952,7 @@ function Get-PathCandidates([string]$SourcePath) {
   $workspaceRoot = $null
   if ($env:BUILD_WORKSPACE_DIRECTORY) {
     $workspaceRoot = $env:BUILD_WORKSPACE_DIRECTORY
-  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\\]bazel-testlogs(?:[/\\].*)?$')) {
+  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\]bazel-testlogs(?:[/\].*)?$')) {
     $workspaceRoot = $Matches[1]
   } else {
     $workspaceRoot = (Get-Location).Path
@@ -979,10 +975,10 @@ function Get-PathCandidates([string]$SourcePath) {
   if ($normalized -match '/execroot/[^/]+/(.+)$') {
     Add-DerivedPathCandidate $candidates $Matches[1]
   }
-  if ($normalized -match '\\.runfiles/_main/(.+)$') {
+  if ($normalized -match '\.runfiles/_main/(.+)$') {
     Add-DerivedPathCandidate $candidates $Matches[1]
   }
-  if ($normalized -match '\\.runfiles/[^/]+/(.+)$') {
+  if ($normalized -match '\.runfiles/[^/]+/(.+)$') {
     Add-DerivedPathCandidate $candidates $Matches[1]
   }
   # Keep only repository-relative fallback candidates. Absolute paths that are
@@ -1007,7 +1003,7 @@ function Convert-CodeOwnersGlobToRegex([string]$Pattern) {
         [void]$sb.Append([Regex]::Escape($escapedCh))
         $i += 2
       } else {
-        [void]$sb.Append("\\\\")
+        [void]$sb.Append("\\")
         $i++
       }
       continue
@@ -1042,11 +1038,11 @@ function Convert-CodeOwnersGlobToRegex([string]$Pattern) {
         [void]$classSb.Append("^")
         $j++
       } elseif ($j -lt $Pattern.Length -and $Pattern.Substring($j, 1) -eq '^') {
-        [void]$classSb.Append("\\^")
+        [void]$classSb.Append("\^")
         $j++
       }
       if ($j -lt $Pattern.Length -and $Pattern.Substring($j, 1) -eq ']') {
-        [void]$classSb.Append("\\]")
+        [void]$classSb.Append("\]")
         $j++
       }
       while ($j -lt $Pattern.Length) {
@@ -1056,11 +1052,11 @@ function Convert-CodeOwnersGlobToRegex([string]$Pattern) {
           break
         }
         if ([int][char]$classCh -eq 92) {
-          [void]$classSb.Append("\\\\")
+          [void]$classSb.Append("\\")
         } elseif ($classCh -eq '^') {
-          [void]$classSb.Append("\\^")
+          [void]$classSb.Append("\^")
         } elseif ($classCh -eq '[') {
-          [void]$classSb.Append("\\[")
+          [void]$classSb.Append("\[")
         } elseif ($classCh -eq '-') {
           [void]$classSb.Append("-")
         } else {
@@ -1073,32 +1069,32 @@ function Convert-CodeOwnersGlobToRegex([string]$Pattern) {
         $i = $j + 1
         continue
       }
-      [void]$sb.Append("\\[")
+      [void]$sb.Append("\[")
       $i++
       continue
     }
     if ($ch -eq '.') {
-      [void]$sb.Append("\\.")
+      [void]$sb.Append("\.")
     } elseif ($ch -eq '+') {
-      [void]$sb.Append("\\+")
+      [void]$sb.Append("\+")
     } elseif ($ch -eq '(') {
-      [void]$sb.Append("\\(")
+      [void]$sb.Append("\(")
     } elseif ($ch -eq ')') {
-      [void]$sb.Append("\\)")
+      [void]$sb.Append("\)")
     } elseif ($ch -eq '{') {
-      [void]$sb.Append("\\{")
+      [void]$sb.Append("\{")
     } elseif ($ch -eq '}') {
-      [void]$sb.Append("\\}")
+      [void]$sb.Append("\}")
     } elseif ($ch -eq '^') {
-      [void]$sb.Append("\\^")
+      [void]$sb.Append("\^")
     } elseif ($ch -eq '$') {
-      [void]$sb.Append("\\$")
+      [void]$sb.Append("\$")
     } elseif ($ch -eq '|') {
-      [void]$sb.Append("\\|")
+      [void]$sb.Append("\|")
     } elseif ([int][char]$ch -eq 92) {
-      [void]$sb.Append("\\\\")
+      [void]$sb.Append("\\")
     } elseif ($ch -eq ']') {
-      [void]$sb.Append("\\]")
+      [void]$sb.Append("\]")
     } else {
       [void]$sb.Append($ch)
     }
@@ -1161,7 +1157,7 @@ function Split-CodeOwnersLine([string]$Line) {
 
 function Test-IsGitLabSectionHeaderPattern([string]$Pattern) {
   if ([string]::IsNullOrEmpty($Pattern)) { return $false }
-  if ($Pattern -notmatch '^\\[[^\\[\\]]+\\]$') { return $false }
+  if ($Pattern -notmatch '^\[[^\[\]]+\]$') { return $false }
   $inner = $Pattern.Substring(1, $Pattern.Length - 2)
   # GitLab section headers can include whitespace (for example [Core Team]).
   if ($inner.Contains(" ") -or $inner.Contains("`t")) {
@@ -1183,7 +1179,7 @@ function Test-IsGitLabSectionHeaderPattern([string]$Pattern) {
 
 function Test-IsGitLabSectionHeaderLine([string]$Line) {
   if ([string]::IsNullOrEmpty($Line)) { return $false }
-  if ($Line -notmatch '^(\\[[^\\[\\]]+\\])(?:\\s+.*)?$') { return $false }
+  if ($Line -notmatch '^(\[[^\[\]]+\])(?:\s+.*)?$') { return $false }
   return (Test-IsGitLabSectionHeaderPattern $Matches[1])
 }
 
@@ -1194,7 +1190,7 @@ function Initialize-CodeOwnersRules {
   $workspace = $null
   if ($env:BUILD_WORKSPACE_DIRECTORY) {
     $workspace = $env:BUILD_WORKSPACE_DIRECTORY
-  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\\]bazel-testlogs(?:[/\\].*)?$')) {
+  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\]bazel-testlogs(?:[/\].*)?$')) {
     $workspace = $Matches[1]
   } else {
     $workspace = (Get-Location).Path
@@ -1271,12 +1267,12 @@ function Initialize-CodeOwnersRules {
     # Strip inline comments only when '#' begins a comment segment.
     if ($ownersRaw.StartsWith("#")) {
       $ownersRaw = ""
-    } elseif ($ownersRaw -match '\\s#') {
-      $ownersRaw = ($ownersRaw -replace '\\s#.*$', '').TrimEnd()
+    } elseif ($ownersRaw -match '\s#') {
+      $ownersRaw = ($ownersRaw -replace '\s#.*$', '').TrimEnd()
     }
     $ownerTokens = @()
     if (-not [string]::IsNullOrWhiteSpace($ownersRaw)) {
-      $ownerTokens = @($ownersRaw -split '\\s+' | Where-Object { -not [string]::IsNullOrEmpty($_) })
+      $ownerTokens = @($ownersRaw -split '\s+' | Where-Object { -not [string]::IsNullOrEmpty($_) })
     }
     $regex = Convert-CodeOwnersPatternToRegex $pattern
     if ([string]::IsNullOrEmpty($regex)) { continue }

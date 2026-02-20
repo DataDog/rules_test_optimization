@@ -18,6 +18,27 @@ if [[ -z "${wanted_version}" ]]; then
   exit 127
 fi
 
+extract_semver() {
+  local raw="${1:-}"
+  if [[ "${raw}" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+detect_system_bazel_version() {
+  local raw=""
+  local parsed=""
+  raw="$(bazel --version 2>/dev/null || true)"
+  parsed="$(extract_semver "${raw}" || true)"
+  if [[ -z "${parsed}" ]]; then
+    raw="$(bazel version 2>/dev/null | awk -F': ' '/Build label:/ { print $2; exit }')"
+    parsed="$(extract_semver "${raw}" || true)"
+  fi
+  printf '%s' "${parsed}"
+}
+
 if [[ "${ttl_seconds}" =~ ^[0-9]+$ ]] && [[ "${ttl_seconds}" -gt 0 ]]; then
   salt=$(( now_ts / ttl_seconds ))
 else
@@ -27,10 +48,13 @@ fi
 if command -v bazelisk >/dev/null 2>&1; then
   bazel_cmd="bazelisk"
 elif command -v bazel >/dev/null 2>&1; then
-  system_bazel_version="$(bazel --version 2>/dev/null | awk '{print $NF}')"
+  system_bazel_version="$(detect_system_bazel_version)"
   if [[ "${BAZELW_ALLOW_SYSTEM_BAZEL:-0}" == "1" ]]; then
     echo "warning: bazelisk not found; using system bazel due to BAZELW_ALLOW_SYSTEM_BAZEL=1" >&2
     bazel_cmd="bazel"
+  elif [[ -z "${system_bazel_version}" ]]; then
+    echo "error: bazelisk is required to enforce .bazelversion (unable to detect system bazel version)." >&2
+    exit 127
   elif [[ "$system_bazel_version" == "$wanted_version" ]]; then
     echo "warning: bazelisk not found; using system bazel version $system_bazel_version (matches .bazelversion)" >&2
     bazel_cmd="bazel"
