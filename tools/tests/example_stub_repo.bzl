@@ -77,6 +77,16 @@ def _example_stub_repo_impl(ctx):
         '            "sanitized_module_path": "example_com_stub",\n' +
         '            "module_included": False,\n' +
         "        },\n" +
+        '        "python": {\n' +
+        '            "module_path": "example.python.stub",\n' +
+        '            "sanitized_module_path": "example_python_stub",\n' +
+        '            "module_included": False,\n' +
+        "        },\n" +
+        '        "java": {\n' +
+        '            "module_path": "com.example.stub",\n' +
+        '            "sanitized_module_path": "com_example_stub",\n' +
+        '            "module_included": False,\n' +
+        "        },\n" +
         "    },\n" +
         "}\n\n" +
         "topt_data_by_service = {\n" +

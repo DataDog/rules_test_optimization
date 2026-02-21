@@ -1,0 +1,17 @@
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+py_library(
+    name = "hello_lib",
+    srcs = ["main.py"],
+)
+
+dd_topt_py_test(
+    name = "hello_test",
+    py_test_rule = py_test,
+    topt_data = topt_data,
+    srcs = ["main_test.py"],
+    main = "main_test.py",
+    deps = [":hello_lib"],
+    imports = ["example/python/project"],
+)

@@ -83,6 +83,7 @@ load(
     "read_abs_file_command_control_chars_target_rule",
     "read_abs_file_command_escaping_test",
     "parse_go_module_path_test",
+    "runtime_module_path_from_environ_test",
     "partition_unix_headers_test",
     "partition_unix_headers_without_api_key_test",
     "sanitize_repository_url_test",
@@ -231,6 +232,12 @@ read_abs_file_command_control_chars_failure_test(
 
 parse_go_module_path_test(
     name = "parse_go_module_path_test",
+    size = "small",
+    timeout = "short",
+)
+
+runtime_module_path_from_environ_test(
+    name = "runtime_module_path_from_environ_test",
     size = "small",
     timeout = "short",
 )
@@ -722,6 +729,7 @@ test_suite(
         ":read_abs_file_command_escaping_test",
         ":read_abs_file_command_control_chars_failure_test",
         ":parse_go_module_path_test",
+        ":runtime_module_path_from_environ_test",
         ":dirname_test",
         ":normalize_out_dir_or_fail_test",
         ":export_bzl_manifest_path_test",

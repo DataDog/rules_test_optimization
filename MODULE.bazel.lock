@@ -181,9 +181,57 @@
         ]
       }
     },
+    "//tools/dev:java_bootstrap.bzl%java_bootstrap_extension": {
+      "general": {
+        "bzlTransitiveDigest": "kirU/QQikoUYgwvCWiLk8+/rT1zH8xy4LkQwlLSkRD8=",
+        "usagesDigest": "YTAY9SvZJOqL7lipKcOnc1epOB4gxpuAVQxKZyP29X0=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "datadog-rules-test-optimization-java": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:local.bzl%local_repository",
+            "attributes": {
+              "path": "modules/java"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
+    "//tools/dev:python_bootstrap.bzl%python_bootstrap_extension": {
+      "general": {
+        "bzlTransitiveDigest": "XnQca7NkR0JO0TpYVkYaNyRZ/qlK8dXTVNWJbYQCOWE=",
+        "usagesDigest": "QQYQfNORW/ZYBR1sLD/rleldX8GsEGHSzeU4OgJ6u14=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "datadog-rules-test-optimization-python": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:local.bzl%local_repository",
+            "attributes": {
+              "path": "modules/python"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "CupZAjLL9G93Tem/3CDHO/m75vLv420DmywdYOhZAHY=",
+        "bzlTransitiveDigest": "d2H+83f/LXtQNUs5kPm+DxOjd9B2CgYM4bIH/Zlbm3w=",
         "usagesDigest": "XsrGIwV6f2LnU06owJNbMouQ+/gMiw6hxMQqdC32pHE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

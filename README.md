@@ -10,9 +10,11 @@ Pick the path that matches your repository:
 
 - **Bzlmod + core only (any language):** sync + uploader integration without language-specific macros
 - **Bzlmod + Go companion:** `dd_topt_go_test` macro with importpath inference
+- **Bzlmod + Python companion:** `dd_topt_py_test` macro with analysis-time selection
+- **Bzlmod + Java companion:** `dd_topt_java_test` macro with analysis-time selection
 - **Bzlmod + multi-service monorepo:** one sync extension, per-service labels/exports
 - **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled
-- **Other languages:** use core sync/uploader now; add a companion orchestration module when needed (see [Other languages (without companion macro)](#other-languages-without-companion-macro))
+- **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
 
 ## First-run checklist (all scenarios)
 
@@ -29,6 +31,9 @@ Use this checklist before your first CI rollout:
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS`
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS`
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS`
+     - `common --repo_env=GO_MODULE_PATH` (optional Go module-path hint)
+     - `common --repo_env=PYTHON_MODULE_PATH` (optional Python module-path hint)
+     - `common --repo_env=JAVA_MODULE_PATH` (optional Java module-path hint)
    - Keep `DD_API_KEY` and `DD_SITE` out of test runtime by default.
      In Bazel file-mode, tests do not need uploader credentials.
    - Optional test runtime forwarding only when your tracer/test harness needs it:
@@ -123,6 +128,58 @@ dd_topt_go_test(
 )
 ```
 
+### Bzlmod + Python companion (`dd_topt_py_test`)
+
+```bzl
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-python",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/python",
+)
+```
+
+```bzl
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_py_test(
+    name = "pkg_py_test",
+    srcs = ["test_*.py"],
+    deps = [":pkg_lib"],
+    imports = ["example/python/pkg"],
+    topt_data = topt_data,
+    py_test_rule = py_test,
+)
+```
+
+### Bzlmod + Java companion (`dd_topt_java_test`)
+
+```bzl
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-java",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/java",
+)
+```
+
+```bzl
+load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_java_test(
+    name = "pkg_java_test",
+    srcs = ["*Test.java"],
+    deps = [":pkg_lib"],
+    test_class = "com.example.pkg.SampleTest",
+    topt_data = topt_data,
+    java_test_rule = java_test,
+)
+```
+
 ### Bzlmod + multi-service monorepo
 
 ```bzl
@@ -176,7 +233,8 @@ setup, uploader wiring, and full WORKSPACE details.
 
 ### Other languages
 
-Use the core-only path above, then wire your language test rule/macro so it:
+Use the core-only path above, or mirror the Python/Java companion pattern, then
+wire your language test rule/macro so it:
 
 1. Includes `@test_optimization_data//:test_optimization_files` in `data`
 2. Sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to the manifest runfile path

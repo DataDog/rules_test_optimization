@@ -1,0 +1,4 @@
+exports_files([
+    "topt_py_test.bzl",
+    "topt_py_infer.bzl",
+], visibility = ["//visibility:public"])

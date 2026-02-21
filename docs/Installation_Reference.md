@@ -28,6 +28,24 @@ git_override(
 
 # Only needed when using dd_topt_go_test
 bazel_dep(name = "rules_go", version = "0.59.0")
+
+# Optional companion module (only needed if you use dd_topt_py_test)
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-python",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/python",
+)
+
+# Optional companion module (only needed if you use dd_topt_java_test)
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-java",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/java",
+)
 ```
 
 Use the same full commit SHA (40 chars) for core and companion modules.
@@ -45,6 +63,14 @@ local_path_override(
 local_path_override(
     module_name = "datadog-rules-test-optimization-go",
     path = "/absolute/path/to/datadog-rules-test-optimization/modules/go",
+)
+local_path_override(
+    module_name = "datadog-rules-test-optimization-python",
+    path = "/absolute/path/to/datadog-rules-test-optimization/modules/python",
+)
+local_path_override(
+    module_name = "datadog-rules-test-optimization-java",
+    path = "/absolute/path/to/datadog-rules-test-optimization/modules/java",
 )
 ```
 
@@ -66,9 +92,11 @@ use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
 Core module note: `datadog-rules-test-optimization` is runtime-agnostic and
-does not declare `rules_go`. Go-specific orchestration lives in the companion
-module `datadog-rules-test-optimization-go`, which depends on `rules_go` for
-provider types only (toolchains are still configured by consumers).
+does not declare language-rule dependencies. Language-specific orchestration
+lives in companion modules:
+- `datadog-rules-test-optimization-go` (depends on `rules_go` providers),
+- `datadog-rules-test-optimization-python`,
+- `datadog-rules-test-optimization-java`.
 
 ### Go companion module
 
@@ -76,6 +104,18 @@ If you use the Go convenience macro, load it from the companion module:
 
 ```bzl
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+```
+
+### Python companion module
+
+```bzl
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+```
+
+### Java companion module
+
+```bzl
+load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
 ```
 
 ### Core-only consumer (no Go companion)
@@ -145,6 +185,10 @@ use_repo(
 #    the available list (for example "go_service_2").
 ```
 
+Mixed-runtime note: keep runtime-specific sync repositories separate (for
+example one sync for Go services and another sync for Python services). A single
+`test_optimization_multi_sync` call currently models one runtime per invocation.
+
 Additional helper file exported by the generated repository:
 
 - `export.bzl` with a single dictionary `topt_data` containing:
@@ -153,11 +197,9 @@ Additional helper file exported by the generated repository:
   - `manifest_path`: path to `manifest.txt` inside the generated repo
   - `labels`: list of available per-module sanitized labels
   - `set`: dict-as-set keyed by sanitized labels for fast membership checks
-  - `runtimes["go"]`: nested object with:
-    - `module_path`: detected Go module path (may be empty)
-    - `sanitized_module_path`: sanitized label fragment for `module_path`
-    - `module_included`: boolean; true when the detected Go module has a
-      matching per-module filegroup
+  - `runtimes["go"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
+  - `runtimes["python"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
+  - `runtimes["java"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
 
 Then in any BUILD file:
 
@@ -299,6 +341,10 @@ common --repo_env=DD_GIT_COMMIT_MESSAGE
 common --repo_env=DD_GIT_HEAD_MESSAGE
 # Optional: override detected Go module path for export.bzl
 common --repo_env=GO_MODULE_PATH
+# Optional: provide Python module path hint for export.bzl
+common --repo_env=PYTHON_MODULE_PATH
+# Optional: provide Java module path hint for export.bzl
+common --repo_env=JAVA_MODULE_PATH
 # Optional: force refetch once (example)
 # common --repo_env=FETCH_SALT=<timestamp>
 

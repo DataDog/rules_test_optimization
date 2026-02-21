@@ -617,7 +617,11 @@ class CheckModuleVersionsTests(unittest.TestCase):
 
     def test_main_reports_version_mismatch(self) -> None:
         """Validate main reports version mismatch behavior."""
-        with mock.patch.object(self.mod, "_extract_module_version", side_effect=["1.2.3", "1.2.4"]), mock.patch.object(
+        with mock.patch.object(
+            self.mod,
+            "_extract_module_version",
+            side_effect=["1.2.3", "1.2.4", "1.2.3", "1.2.3"],
+        ), mock.patch.object(
             self.mod,
             "_extract_bazel_dep_version",
             side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
@@ -652,7 +656,11 @@ class CheckModuleVersionsTests(unittest.TestCase):
 
     def test_main_reports_semver_errors(self) -> None:
         """Validate main reports semver errors behavior."""
-        with mock.patch.object(self.mod, "_extract_module_version", side_effect=["1.2", "1.2.3"]), mock.patch.object(
+        with mock.patch.object(
+            self.mod,
+            "_extract_module_version",
+            side_effect=["1.2", "1.2.3", "1.2.3", "1.2.3"],
+        ), mock.patch.object(
             self.mod,
             "_extract_bazel_dep_version",
             side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],

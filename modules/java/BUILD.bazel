@@ -1,0 +1,4 @@
+exports_files([
+    "topt_java_test.bzl",
+    "topt_java_infer.bzl",
+], visibility = ["//visibility:public"])

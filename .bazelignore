@@ -7,3 +7,11 @@ modules/go/bazel-bin
 modules/go/bazel-out
 modules/go/bazel-testlogs
 modules/go/bazel-go
+modules/python/bazel-bin
+modules/python/bazel-out
+modules/python/bazel-testlogs
+modules/python/bazel-python
+modules/java/bazel-bin
+modules/java/bazel-out
+modules/java/bazel-testlogs
+modules/java/bazel-java

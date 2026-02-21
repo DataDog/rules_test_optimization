@@ -24,6 +24,7 @@ load(
     "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
+    "runtime_module_path_from_environ_for_tests",
     "partition_unix_headers_for_tests",
     "record_sync_extension_repo_owner_or_fail_for_tests",
     "render_export_bzl_for_tests",
@@ -512,6 +513,31 @@ def _parse_go_module_path_test(ctx):
     asserts.equals(env, "", parse_go_module_path_for_tests(""))
     return unittest.end(env)
 
+def _runtime_module_path_from_environ_test(ctx):
+    """Validate runtime module path env helper normalization for set/unset values."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "",
+        runtime_module_path_from_environ_for_tests({}, "PYTHON_MODULE_PATH"),
+    )
+    asserts.equals(
+        env,
+        "pkg.subpkg",
+        runtime_module_path_from_environ_for_tests({"PYTHON_MODULE_PATH": "  pkg.subpkg  "}, "PYTHON_MODULE_PATH"),
+    )
+    asserts.equals(
+        env,
+        "",
+        runtime_module_path_from_environ_for_tests({"JAVA_MODULE_PATH": "   "}, "JAVA_MODULE_PATH"),
+    )
+    asserts.equals(
+        env,
+        "com.example.app",
+        runtime_module_path_from_environ_for_tests({"JAVA_MODULE_PATH": "com.example.app"}, "JAVA_MODULE_PATH"),
+    )
+    return unittest.end(env)
+
 def _dirname_test(ctx):
     """Validate dirname helper behavior across path forms."""
     env = unittest.begin(ctx)
@@ -544,10 +570,20 @@ def _export_bzl_manifest_path_test(ctx):
         "example_com_mod",
         True,
         ".testoptimization/manifest.txt",
+        python_module_path = "example.python.mod",
+        sanitized_python_module_path = "example_python_mod",
+        python_module_included = False,
+        java_module_path = "com.example.mod",
+        sanitized_java_module_path = "com_example_mod",
+        java_module_included = True,
     )
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
     asserts.true(env, "\"runtimes\": {" in content)
     asserts.true(env, "\"go\": {" in content)
+    asserts.true(env, "\"python\": {" in content)
+    asserts.true(env, "\"java\": {" in content)
+    asserts.true(env, "\"module_path\": \"example.python.mod\"" in content)
+    asserts.true(env, "\"module_path\": \"com.example.mod\"" in content)
     asserts.false(env, "\n    \"go\": {\n" in content)
     return unittest.end(env)
 
@@ -562,11 +598,21 @@ def _export_bzl_escaping_test(ctx):
         "sanitized\\path",
         True,
         "path\\to\\manifest.txt",
+        python_module_path = "py\"mod",
+        sanitized_python_module_path = "py\\sanitized",
+        python_module_included = False,
+        java_module_path = "java\"mod",
+        sanitized_java_module_path = "java\\sanitized",
+        java_module_included = True,
     )
     asserts.true(env, "\"repo_name\": \"repo\\\"name\"" in content)
     asserts.true(env, "\"manifest_path\": \"path\\\\to\\\\manifest.txt\"" in content)
     asserts.true(env, "\"module_path\": \"go\\\"mod\"" in content)
     asserts.true(env, "\"sanitized_module_path\": \"sanitized\\\\path\"" in content)
+    asserts.true(env, "\"module_path\": \"py\\\"mod\"" in content)
+    asserts.true(env, "\"sanitized_module_path\": \"py\\\\sanitized\"" in content)
+    asserts.true(env, "\"module_path\": \"java\\\"mod\"" in content)
+    asserts.true(env, "\"sanitized_module_path\": \"java\\\\sanitized\"" in content)
     return unittest.end(env)
 
 def _fnv1a_symbol_distinguishes_common_symbols_test(ctx):
@@ -984,6 +1030,7 @@ collect_env_from_environ_empty_test = unittest.make(_collect_env_from_environ_em
 collect_env_ctx_wrapper_test = unittest.make(_collect_env_ctx_wrapper_test)
 read_abs_file_command_escaping_test = unittest.make(_read_abs_file_command_escaping_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
+runtime_module_path_from_environ_test = unittest.make(_runtime_module_path_from_environ_test)
 dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)

@@ -36,6 +36,49 @@ function Get-PythonCommand {
   throw "python interpreter not found (tried PYTHON, python3, python)"
 }
 
+# Handle Get-TempDirectory behavior.
+function Get-TempDirectory {
+  foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+      return $value
+    }
+  }
+  $fallback = [System.IO.Path]::GetTempPath()
+  if (-not [string]::IsNullOrWhiteSpace($fallback)) {
+    return $fallback
+  }
+  throw "unable to resolve temporary directory (checked TEMP, TMP, TMPDIR, and Path.GetTempPath())"
+}
+
+# Handle Get-PowerShellCommand behavior.
+function Get-PowerShellCommand {
+  foreach ($name in @("powershell.exe", "pwsh", "powershell")) {
+    $cmd = Get-Command $name -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+  }
+  throw "PowerShell host not found (tried powershell.exe, pwsh, powershell)"
+}
+
+# Handle Invoke-UploaderScript behavior.
+function Invoke-UploaderScript {
+  param(
+    [string]$PowerShellPath,
+    [string]$ScriptPath,
+    [string[]]$ForwardedArgs
+  )
+  $hostName = (Split-Path -Leaf $PowerShellPath).ToLowerInvariant()
+  $invokeArgs = @("-NoProfile", "-NonInteractive")
+  if ($hostName -eq "powershell.exe") {
+    $invokeArgs += @("-ExecutionPolicy", "Bypass")
+  }
+  $invokeArgs += @("-File", $ScriptPath)
+  if ($ForwardedArgs) {
+    $invokeArgs += $ForwardedArgs
+  }
+  & $PowerShellPath @invokeArgs
+}
+
 # Handle Get-FreePort behavior.
 function Get-FreePort {
   $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -119,7 +162,9 @@ function Read-JsonLog {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Get-RepoRoot -StartPath $scriptDir
 $python = Get-PythonCommand
-$tempRoot = Join-Path $env:TEMP ("dd_topt_windows_integration_" + [guid]::NewGuid().ToString("N"))
+$powerShellHost = Get-PowerShellCommand
+$tempDir = Get-TempDirectory
+$tempRoot = Join-Path $tempDir ("dd_topt_windows_integration_" + [guid]::NewGuid().ToString("N"))
 $fixturesDir = Join-Path $repoRoot "tools/tests/integration/fixtures"
 $snapshotFile = Join-Path $repoRoot "tools/tests/integration/snapshots/citestcycle.json"
 $psTemplate = Join-Path $repoRoot "tools/core/uploader_powershell_runtime.ps1.tpl"
@@ -167,6 +212,8 @@ try {
 
   $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
   $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS = "1"
+  if ([string]::IsNullOrWhiteSpace($env:TEMP)) { $env:TEMP = $tempDir }
+  if ([string]::IsNullOrWhiteSpace($env:TMP)) { $env:TMP = $tempDir }
 
   # Agentless flow
   # Build a deterministic mock key at runtime to avoid committing a secret-like literal.
@@ -174,7 +221,7 @@ try {
   $env:DD_SITE = "datadoghq.com"
   $env:DD_TEST_OPTIMIZATION_INTAKE_BASE = "http://127.0.0.1:$port"
   Remove-Item Env:DD_TRACE_AGENT_URL -ErrorAction SilentlyContinue
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $renderedUploader @ForwardArgs
+  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
   if ($LASTEXITCODE -ne 0) {
     throw "agentless uploader execution failed with exit code $LASTEXITCODE"
   }
@@ -183,7 +230,7 @@ try {
   Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:DD_TEST_OPTIMIZATION_INTAKE_BASE -ErrorAction SilentlyContinue
   $env:DD_TRACE_AGENT_URL = "http://127.0.0.1:$port"
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $renderedUploader @ForwardArgs
+  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
   if ($LASTEXITCODE -ne 0) {
     throw "evp uploader execution failed with exit code $LASTEXITCODE"
   }
