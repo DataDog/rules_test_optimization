@@ -865,7 +865,7 @@ def _render_export_bzl(
             "            \"module_path\": %s,\n" % json.encode(module_path or "") +
             "            \"sanitized_module_path\": %s,\n" % json.encode(sanitized_module_path or "") +
             "            \"module_included\": %s,\n" % ("True" if module_included else "False") +
-            "        },\n"
+            "        },\n",
         )
 
     return (

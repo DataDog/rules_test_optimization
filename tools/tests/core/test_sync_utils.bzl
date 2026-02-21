@@ -24,12 +24,12 @@ load(
     "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
-    "runtime_module_path_from_environ_for_tests",
     "partition_unix_headers_for_tests",
     "record_sync_extension_repo_owner_or_fail_for_tests",
     "render_export_bzl_for_tests",
     "render_module_runfiles_bzl_for_tests",
     "resolve_dd_api_base_for_tests",
+    "runtime_module_path_from_environ_for_tests",
     "sanitize_repository_url_for_tests",
     "set_context_tag_from_env_for_tests",
 )

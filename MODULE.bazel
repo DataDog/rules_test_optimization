@@ -62,6 +62,9 @@ example_stub_repo = use_extension(
 )
 example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
-    service_keys = ["go_service", "ruby_service"],
+    service_keys = [
+        "go_service",
+        "ruby_service",
+    ],
 )
 use_repo(example_stub_repo, "test_optimization_data")
