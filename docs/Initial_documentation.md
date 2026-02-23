@@ -28,9 +28,9 @@ The steps are:
    Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 4. **Language macros (optional)**:
-   Thin wrappers (e.g., for Go) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
+   Thin wrappers (for Go/Python/Java) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
    - Core module (`datadog-rules-test-optimization`) stays runtime-agnostic.
-   - Go orchestration lives in companion module (`datadog-rules-test-optimization-go`).
+   - Language orchestration lives in companion modules (`datadog-rules-test-optimization-go`, `datadog-rules-test-optimization-python`, `datadog-rules-test-optimization-java`).
 
 ### Go macro and import path inference
 
@@ -49,6 +49,24 @@ Note: The core module no longer declares `rules_go`. The companion module
 `datadog-rules-test-optimization-go` declares `rules_go` for provider
 definitions only. Consumers still configure Go toolchains/SDK in their own
 `MODULE.bazel`.
+
+### Python macro and module identifier inference
+
+`dd_topt_py_test` applies analysis-time selection with this precedence:
+
+1) explicit `module_identifier`,
+2) inferred candidates (`imports`, dependency-propagated identifiers, explicit attrs),
+3) fallback from `<python module path>/<bazel package>` when available,
+4) full-bundle fallback.
+
+### Java macro and package identifier inference
+
+`dd_topt_java_test` applies analysis-time selection with this precedence:
+
+1) explicit `module_identifier`,
+2) `test_class` package plus dependency/attribute-derived candidates,
+3) fallback from `<java module path>/<bazel package>` when available,
+4) full-bundle fallback.
 
 ## Why a repository extension?
 

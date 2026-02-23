@@ -16,6 +16,9 @@ bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
 # Consumer-facing core usage remains rules_go-free.
 bazel_dep(name = "rules_go", version = "0.59.0", dev_dependency = True)
 
+# Dev-only dependency for in-repo Python companion/example builds.
+bazel_dep(name = "rules_python", version = "0.40.0", dev_dependency = True)
+
 # Dev-only local wiring for companion module loads from this repository root.
 go_bootstrap = use_extension(
     "//tools/dev:go_bootstrap.bzl",
@@ -28,6 +31,28 @@ go_bootstrap.local_go_companion(
 )
 use_repo(go_bootstrap, "datadog-rules-test-optimization-go")
 
+python_bootstrap = use_extension(
+    "//tools/dev:python_bootstrap.bzl",
+    "python_bootstrap_extension",
+    dev_dependency = True,
+)
+python_bootstrap.local_python_companion(
+    name = "datadog-rules-test-optimization-python",
+    path = "modules/python",
+)
+use_repo(python_bootstrap, "datadog-rules-test-optimization-python")
+
+java_bootstrap = use_extension(
+    "//tools/dev:java_bootstrap.bzl",
+    "java_bootstrap_extension",
+    dev_dependency = True,
+)
+java_bootstrap.local_java_companion(
+    name = "datadog-rules-test-optimization-java",
+    path = "modules/java",
+)
+use_repo(java_bootstrap, "datadog-rules-test-optimization-java")
+
 # Dev-only stub repository so //examples/... can be analyzed from this root
 # workspace without fetching real Datadog data.
 example_stub_repo = use_extension(
@@ -37,6 +62,9 @@ example_stub_repo = use_extension(
 )
 example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
-    service_keys = ["go_service", "ruby_service"],
+    service_keys = [
+        "go_service",
+        "ruby_service",
+    ],
 )
 use_repo(example_stub_repo, "test_optimization_data")

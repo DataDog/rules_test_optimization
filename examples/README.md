@@ -12,7 +12,9 @@ repository, use `./bazelw` for local development convenience.
   omit override blocks.
 - Add module dependencies before `use_extension(...)`:
   - `bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")`
-- `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")` for Go macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")` for Go macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.0.0")` for Python macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.0.0")` for Java macro usage
   - `bazel_dep(name = "rules_go", ...)` for Go examples shown below
 - Configure Go toolchains/SDK in your repo if you build Go targets.
 - Provide sync credentials via environment and forward them to repository rules:
@@ -67,6 +69,38 @@ dd_topt_go_test(
     embed = [":pkg_lib"],      # importpath inferred via rules_go provider
     topt_data = topt_data,     # single-service dict
     go_test_rule = go_test,
+)
+```
+
+BUILD.bazel (Python companion):
+
+```bzl
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_py_test(
+    name = "pkg_py_test",
+    srcs = ["test_*.py"],
+    deps = [":pkg_lib"],
+    imports = ["example/python/pkg"],
+    topt_data = topt_data,
+    py_test_rule = py_test,
+)
+```
+
+BUILD.bazel (Java companion):
+
+```bzl
+load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_java_test(
+    name = "pkg_java_test",
+    srcs = ["*Test.java"],
+    deps = [":pkg_lib"],
+    test_class = "com.example.pkg.SampleTest",
+    topt_data = topt_data,
+    java_test_rule = java_test,
 )
 ```
 
@@ -193,6 +227,69 @@ dd_topt_go_test(
     topt_data = topt_data_by_service["go_service"],  # sanitized key
     go_test_rule = go_test,
 )
+```
+
+BUILD.bazel — Python (mapping + key):
+
+```bzl
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+
+dd_topt_py_test(
+    name = "pkg_py_test",
+    srcs = ["test_*.py"],
+    deps = [":pkg_lib"],
+    topt_data = topt_data_by_service,
+    topt_service = "py_service",                # or raw "py-service"
+    py_test_rule = py_test,
+)
+```
+
+BUILD.bazel — Java (mapping + key):
+
+```bzl
+load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+
+dd_topt_java_test(
+    name = "pkg_java_test",
+    srcs = ["*Test.java"],
+    deps = [":pkg_lib"],
+    test_class = "com.example.pkg.SampleTest",
+    topt_data = topt_data_by_service,
+    topt_service = "java_service",              # or raw "java-service"
+    java_test_rule = java_test,
+)
+```
+
+Mixed-runtime monorepo pattern:
+
+```bzl
+# Keep runtime-specific sync repos separate.
+topt_go = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+topt_go.test_optimization_sync(
+    name = "test_optimization_data_go",
+    service = "go-service",
+    runtime_name = "go",
+    runtime_version = "1.24.0",
+)
+
+topt_py = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+topt_py.test_optimization_sync(
+    name = "test_optimization_data_py",
+    service = "py-service",
+    runtime_name = "python",
+    runtime_version = "3.12",
+)
+
+use_repo(topt_go, "test_optimization_data_go")
+use_repo(topt_py, "test_optimization_data_py")
 ```
 
 BUILD.bazel — Option B (mapping + key, inference via embed):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify module version alignment for core + Go companion.
+"""Verify module version alignment for core + companion modules.
 
 This guard is intentionally lightweight so it can run in CI and local pre-release
 checks without extra dependencies.
@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import sys
-from typing import List
+from typing import Dict, List, Optional
 
 
 def _repo_root() -> Path:
@@ -139,6 +139,19 @@ def _extract_bazel_dep_version(path: Path, dep_name: str) -> str:
         f'{path} is missing bazel_dep(name = "{dep_name}", ...)'
     )
 
+def _extract_optional_bazel_dep_version(path: Path, dep_name: str) -> Optional[str]:
+    """Return dep version when declared, otherwise None."""
+    text = _read_text(path)
+    for block in _extract_call_args_blocks(text, "bazel_dep"):
+        if re.search(r'name\s*=\s*"%s"' % re.escape(dep_name), block):
+            version_match = re.search(r'version\s*=\s*"([^"]+)"', block)
+            if version_match is None:
+                raise ValueError(
+                    f'{path} declares bazel_dep(name = "{dep_name}") without version'
+                )
+            return version_match.group(1)
+    return None
+
 def _extract_starlark_string_constant(path: Path, constant_name: str) -> str:
     """Internal helper for extract starlark string constant behavior."""
     text = _read_text(path)
@@ -166,7 +179,16 @@ def main() -> int:
     try:
         repo_root = _repo_root()
         core_module = repo_root / "MODULE.bazel"
-        go_module = repo_root / "modules" / "go" / "MODULE.bazel"
+        companion_module_paths = {
+            "go": repo_root / "modules" / "go" / "MODULE.bazel",
+            "python": repo_root / "modules" / "python" / "MODULE.bazel",
+            "java": repo_root / "modules" / "java" / "MODULE.bazel",
+        }
+        companion_dep_names = {
+            "go": "datadog-rules-test-optimization-go",
+            "python": "datadog-rules-test-optimization-python",
+            "java": "datadog-rules-test-optimization-java",
+        }
         common_utils = repo_root / "tools" / "core" / "common_utils.bzl"
         if not core_module.exists():
             raise ValueError(f"core module file not found: {core_module}")
@@ -174,12 +196,17 @@ def main() -> int:
             raise ValueError(f"common utils file not found: {common_utils}")
 
         core_module_version = _extract_module_version(core_module)
-        go_module_exists = go_module.exists()
-        go_module_version = _extract_module_version(go_module) if go_module_exists else ""
-        go_core_dep_version = ""
-        if go_module_exists:
-            go_core_dep_version = _extract_bazel_dep_version(
-                go_module,
+        companion_versions: Dict[str, str] = {}
+        companion_core_dep_versions: Dict[str, str] = {}
+        companion_exists: Dict[str, bool] = {}
+        for language, module_path in companion_module_paths.items():
+            exists = module_path.exists()
+            companion_exists[language] = exists
+            if not exists:
+                continue
+            companion_versions[language] = _extract_module_version(module_path)
+            companion_core_dep_versions[language] = _extract_bazel_dep_version(
+                module_path,
                 "datadog-rules-test-optimization",
             )
         rules_version = _extract_starlark_string_constant(common_utils, "RULES_VERSION")
@@ -194,18 +221,24 @@ def main() -> int:
     ]
 
     errors = []
-    if go_module_exists and core_module_version != go_module_version:
-        errors.append(
-            "module version mismatch: "
-            f'root MODULE.bazel is "{core_module_version}" but '
-            f'modules/go/MODULE.bazel is "{go_module_version}"'
-        )
-    if go_module_exists and go_core_dep_version != core_module_version:
-        errors.append(
-            "dependency version mismatch: "
-            f'modules/go depends on core version "{go_core_dep_version}" but '
-            f'root MODULE.bazel declares "{core_module_version}"'
-        )
+    for language, exists in companion_exists.items():
+        if not exists:
+            continue
+        module_version = companion_versions[language]
+        core_dep_version = companion_core_dep_versions[language]
+        module_rel = f"modules/{language}/MODULE.bazel"
+        if core_module_version != module_version:
+            errors.append(
+                "module version mismatch: "
+                f'root MODULE.bazel is "{core_module_version}" but '
+                f'{module_rel} is "{module_version}"'
+            )
+        if core_dep_version != core_module_version:
+            errors.append(
+                "dependency version mismatch: "
+                f'{module_rel} depends on core version "{core_dep_version}" but '
+                f'root MODULE.bazel declares "{core_module_version}"'
+            )
     if rules_version != core_module_version:
         errors.append(
             "rules version mismatch: "
@@ -213,9 +246,15 @@ def main() -> int:
             f'root MODULE.bazel declares "{core_module_version}"'
         )
     _check_semver("root MODULE.bazel version", core_module_version, errors)
-    if go_module_exists:
-        _check_semver("modules/go MODULE.bazel version", go_module_version, errors)
-        _check_semver("modules/go -> core dependency version", go_core_dep_version, errors)
+    for language, exists in companion_exists.items():
+        if not exists:
+            continue
+        _check_semver(f"modules/{language} MODULE.bazel version", companion_versions[language], errors)
+        _check_semver(
+            f"modules/{language} -> core dependency version",
+            companion_core_dep_versions[language],
+            errors,
+        )
     _check_semver("tools/core/common_utils.bzl RULES_VERSION", rules_version, errors)
     _check_semver("tools/core/common_utils.bzl UPLOADER_VERSION", uploader_version, errors)
     for example_module in example_modules:
@@ -223,10 +262,6 @@ def main() -> int:
             ex_core_dep = _extract_bazel_dep_version(
                 example_module,
                 "datadog-rules-test-optimization",
-            )
-            ex_go_dep = _extract_bazel_dep_version(
-                example_module,
-                "datadog-rules-test-optimization-go",
             )
         except ValueError as exc:
             errors.append(str(exc))
@@ -237,13 +272,25 @@ def main() -> int:
                 f'example dependency mismatch ({example_module}): core dep is "{ex_core_dep}" '
                 f'but root module declares "{core_module_version}"'
             )
-        if go_module_exists and ex_go_dep != go_module_version:
-            errors.append(
-                f'example dependency mismatch ({example_module}): go dep is "{ex_go_dep}" '
-                f'but modules/go declares "{go_module_version}"'
-            )
         _check_semver(f"{example_module} core dependency version", ex_core_dep, errors)
-        _check_semver(f"{example_module} go dependency version", ex_go_dep, errors)
+        for language, exists in companion_exists.items():
+            if not exists:
+                continue
+            dep_name = companion_dep_names[language]
+            try:
+                ex_dep = _extract_optional_bazel_dep_version(example_module, dep_name)
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            if ex_dep == None:
+                continue
+            module_version = companion_versions[language]
+            if ex_dep != module_version:
+                errors.append(
+                    f'example dependency mismatch ({example_module}): {language} dep is "{ex_dep}" '
+                    f'but modules/{language} declares "{module_version}"'
+                )
+            _check_semver(f"{example_module} {language} dependency version", ex_dep, errors)
 
     if errors:
         print("ERROR: module version alignment check failed:", file=sys.stderr)
@@ -251,12 +298,15 @@ def main() -> int:
             print(f"- {err}", file=sys.stderr)
         return 1
 
-    go_display = go_module_version if go_module_exists else "<missing>"
-    go_dep_display = go_core_dep_version if go_module_exists else "<skipped>"
+    companion_display = []
+    for language in ["go", "python", "java"]:
+        if not companion_exists.get(language):
+            companion_display.append(f'{language}="<missing>"')
+            continue
+        companion_display.append(f'{language}="{companion_versions[language]}"')
     print(
         "Module versions are aligned: "
-        f'core="{core_module_version}", go="{go_display}", '
-        f'go->core dep="{go_dep_display}", '
+        f'core="{core_module_version}", {", ".join(companion_display)}, '
         f'rules="{rules_version}", uploader="{uploader_version}"'
     )
     return 0
