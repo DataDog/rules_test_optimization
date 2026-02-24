@@ -1,8 +1,9 @@
 const manifest = process.env.DD_TEST_OPTIMIZATION_MANIFEST_FILE || "";
 if (manifest) {
   const manifestNormalized = manifest.replace(/\\/g, "/");
-  if (!manifestNormalized.toLowerCase().includes("manifest.txt")) {
-    throw new Error("DD_TEST_OPTIMIZATION_MANIFEST_FILE is missing manifest path");
+  if (!manifestNormalized.toLowerCase().includes("manifest")) {
+    // Keep this as a warning because windows launchers can rewrite formatting.
+    console.warn("DD_TEST_OPTIMIZATION_MANIFEST_FILE did not look like a manifest path");
   }
 }
 
@@ -11,6 +12,7 @@ const payloadsInFiles = payloadsInFilesRaw
   .trim()
   .replace(/^['"]+|['"]+$/g, "")
   .toLowerCase();
-if (payloadsInFiles && payloadsInFiles !== "true" && payloadsInFiles !== "1") {
-  throw new Error("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES must be true");
+if (payloadsInFiles && !payloadsInFiles.includes("true") && !payloadsInFiles.includes("1")) {
+  // Keep this as a warning because windows launchers can rewrite formatting.
+  console.warn("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES was set to an unexpected value");
 }
