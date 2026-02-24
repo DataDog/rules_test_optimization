@@ -620,11 +620,11 @@ class CheckModuleVersionsTests(unittest.TestCase):
         with mock.patch.object(
             self.mod,
             "_extract_module_version",
-            side_effect=["1.2.3", "1.2.4", "1.2.3", "1.2.3"],
+            side_effect=["1.2.3", "1.2.4", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
         ), mock.patch.object(
             self.mod,
             "_extract_bazel_dep_version",
-            side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
+            side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
         ):
             self.assertEqual(1, self.mod.main())
 
@@ -659,17 +659,63 @@ class CheckModuleVersionsTests(unittest.TestCase):
         with mock.patch.object(
             self.mod,
             "_extract_module_version",
-            side_effect=["1.2", "1.2.3", "1.2.3", "1.2.3"],
+            side_effect=["1.2", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
         ), mock.patch.object(
             self.mod,
             "_extract_bazel_dep_version",
-            side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
+            side_effect=["1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3", "1.2.3"],
         ), mock.patch.object(
             self.mod,
             "_extract_starlark_string_constant",
             side_effect=["1.2.3", "2.0"],
         ):
             self.assertEqual(1, self.mod.main())
+
+
+class CheckBazelversionSyncTests(unittest.TestCase):
+    """Test case group covering CheckBazelversionSyncTests behaviors."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Execute setUpClass lifecycle behavior."""
+        cls.mod = _load_module(
+            "check_bazelversion_sync_mod",
+            "tools/dev/check_bazelversion_sync.py",
+        )
+
+    def _write_bazelversion_tree(
+        self,
+        repo_root: Path,
+        root_version: str = "8.5.1",
+        overrides: Optional[dict[str, str]] = None,
+    ) -> None:
+        """Create a synthetic repo layout for bazelversion parity checks."""
+        overrides = overrides or {}
+        (repo_root / ".bazelversion").write_text(root_version, encoding="utf-8")
+        for language in self.mod._COMPANION_LANGUAGES:
+            module_dir = repo_root / "modules" / language
+            module_dir.mkdir(parents=True, exist_ok=True)
+            version = overrides.get(language, root_version)
+            (module_dir / ".bazelversion").write_text(version, encoding="utf-8")
+
+    def test_main_accepts_matching_versions(self) -> None:
+        """Validate main accepts matching versions behavior."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            self._write_bazelversion_tree(repo_root)
+            with mock.patch.object(self.mod, "_repo_root", return_value=repo_root):
+                self.assertEqual(0, self.mod.main())
+
+    def test_main_reports_mismatch(self) -> None:
+        """Validate main reports mismatch behavior."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            self._write_bazelversion_tree(
+                repo_root,
+                overrides={"ruby": "8.4.1"},
+            )
+            with mock.patch.object(self.mod, "_repo_root", return_value=repo_root):
+                self.assertEqual(1, self.mod.main())
 
 
 class LintUploaderTemplatesTests(unittest.TestCase):

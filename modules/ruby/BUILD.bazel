@@ -1,0 +1,4 @@
+exports_files([
+    "topt_ruby_test.bzl",
+    "topt_ruby_infer.bzl",
+], visibility = ["//visibility:public"])

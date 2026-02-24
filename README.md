@@ -12,6 +12,9 @@ Pick the path that matches your repository:
 - **Bzlmod + Go companion:** `dd_topt_go_test` macro with importpath inference
 - **Bzlmod + Python companion:** `dd_topt_py_test` macro with analysis-time selection
 - **Bzlmod + Java companion:** `dd_topt_java_test` macro with analysis-time selection
+- **Bzlmod + NodeJS companion:** `dd_topt_nodejs_test` macro with analysis-time selection
+- **Bzlmod + .NET companion:** `dd_topt_dotnet_test` macro with analysis-time selection
+- **Bzlmod + Ruby companion:** `dd_topt_ruby_test` macro with analysis-time selection
 - **Bzlmod + multi-service monorepo:** one sync extension, per-service labels/exports
 - **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled
 - **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
@@ -34,6 +37,9 @@ Use this checklist before your first CI rollout:
      - `common --repo_env=GO_MODULE_PATH` (optional Go module-path hint)
      - `common --repo_env=PYTHON_MODULE_PATH` (optional Python module-path hint)
      - `common --repo_env=JAVA_MODULE_PATH` (optional Java module-path hint)
+     - `common --repo_env=NODEJS_MODULE_PATH` (optional NodeJS module-path hint)
+     - `common --repo_env=DOTNET_MODULE_PATH` (optional .NET module-path hint)
+     - `common --repo_env=RUBY_MODULE_PATH` (optional Ruby module-path hint)
    - Keep `DD_API_KEY` and `DD_SITE` out of test runtime by default.
      In Bazel file-mode, tests do not need uploader credentials.
    - Optional test runtime forwarding only when your tracer/test harness needs it:
@@ -180,6 +186,131 @@ dd_topt_java_test(
 )
 ```
 
+### Bzlmod + NodeJS companion (`dd_topt_nodejs_test`)
+
+```bzl
+bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-nodejs",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/nodejs",
+)
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "22.22.0")
+use_repo(node, "nodejs", "nodejs_host", "nodejs_toolchains")
+register_toolchains("@nodejs_toolchains//:all")
+```
+
+```bzl
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_nodejs_test(
+    name = "pkg_nodejs_test",
+    entry_point = "smoke_test.js",
+    copy_data_to_bin = False,  # Datadog payload data comes from external repos.
+    module_identifier = "apps/nodejs/pkg",
+    topt_data = topt_data,
+    nodejs_test_rule = js_test,
+)
+```
+
+### Bzlmod + .NET companion (`dd_topt_dotnet_test`)
+
+```bzl
+bazel_dep(name = "rules_dotnet", version = "0.21.5")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-dotnet",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/dotnet",
+)
+
+dotnet = use_extension("@rules_dotnet//dotnet:extensions.bzl", "dotnet")
+dotnet.toolchain(
+    name = "dotnet",
+    dotnet_version = "8.0.100",
+)
+use_repo(dotnet, "dotnet_toolchains")
+register_toolchains("@dotnet_toolchains//:all")
+```
+
+```bzl
+load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+load(":dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
+
+dd_topt_dotnet_test(
+    name = "pkg_dotnet_test",
+    srcs = ["smoke_test.cs"],
+    target_frameworks = ["net8.0"],
+    module_identifier = "Company.Product.Package",
+    topt_data = topt_data,
+    dotnet_test_rule = dotnet_csharp_test_adapter,
+)
+```
+
+`dotnet_test_adapter.bzl` wraps `@rules_dotnet//dotnet:defs.bzl` `csharp_test` and maps the Datadog macro's `env` to `csharp_test(envs = ...)`.
+
+```bzl
+# dotnet_test_adapter.bzl
+load("@rules_dotnet//dotnet:defs.bzl", "csharp_test")
+
+def dotnet_csharp_test_adapter(name, data = None, env = None, **kwargs):
+    envs = dict(kwargs.pop("envs", {}))
+    if env:
+        envs.update(env)
+
+    csharp_test(
+        name = name,
+        data = [] if data == None else data,
+        envs = envs,
+        **kwargs
+    )
+```
+
+### Bzlmod + Ruby companion (`dd_topt_ruby_test`)
+
+```bzl
+bazel_dep(name = "rules_ruby", version = "0.21.1")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-ruby",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/ruby",
+)
+
+ruby = use_extension("@rules_ruby//ruby:extensions.bzl", "ruby")
+ruby.toolchain(
+    name = "ruby",
+    version = "3.3.9",
+)
+use_repo(ruby, "ruby", "ruby_toolchains")
+register_toolchains("@ruby_toolchains//:all")
+```
+
+```bzl
+load("@rules_ruby//ruby:defs.bzl", "rb_test")
+load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_ruby_test(
+    name = "pkg_ruby_test",
+    srcs = ["smoke_test.rb"],
+    main = "smoke_test.rb",
+    module_identifier = "apps/ruby/pkg",
+    topt_data = topt_data,
+    ruby_test_rule = rb_test,
+)
+```
+
 ### Bzlmod + multi-service monorepo
 
 ```bzl
@@ -233,8 +364,8 @@ setup, uploader wiring, and full WORKSPACE details.
 
 ### Other languages
 
-Use the core-only path above, or mirror the Python/Java companion pattern, then
-wire your language test rule/macro so it:
+Use the core-only path above, or mirror the companion pattern used by
+Go/Python/Java/NodeJS/.NET/Ruby, then wire your language test rule/macro so it:
 
 1. Includes `@test_optimization_data//:test_optimization_files` in `data`
 2. Sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to the manifest runfile path
@@ -528,7 +659,9 @@ dd_topt_go_test(
 ## Other languages (without companion macro)
 
 Core sync + uploader support is runtime-agnostic and works for any language
-runtime that honors the file-mode contract.
+runtime that honors the file-mode contract. This section is primarily for
+languages beyond the first-class companions (`go`, `python`, `java`, `nodejs`,
+`dotnet`, `ruby`).
 
 Repository layout note: keep `tools/` runtime-agnostic (`tools/core`,
 `tools/tests`, `tools/dev`). Add first-class language orchestration under

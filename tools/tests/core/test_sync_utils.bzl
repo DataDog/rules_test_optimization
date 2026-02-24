@@ -536,6 +536,21 @@ def _runtime_module_path_from_environ_test(ctx):
         "com.example.app",
         runtime_module_path_from_environ_for_tests({"JAVA_MODULE_PATH": "com.example.app"}, "JAVA_MODULE_PATH"),
     )
+    asserts.equals(
+        env,
+        "packages/api",
+        runtime_module_path_from_environ_for_tests({"NODEJS_MODULE_PATH": " packages/api "}, "NODEJS_MODULE_PATH"),
+    )
+    asserts.equals(
+        env,
+        "My.Product.Service",
+        runtime_module_path_from_environ_for_tests({"DOTNET_MODULE_PATH": "My.Product.Service"}, "DOTNET_MODULE_PATH"),
+    )
+    asserts.equals(
+        env,
+        "apps/web",
+        runtime_module_path_from_environ_for_tests({"RUBY_MODULE_PATH": "apps/web"}, "RUBY_MODULE_PATH"),
+    )
     return unittest.end(env)
 
 def _dirname_test(ctx):
@@ -576,14 +591,29 @@ def _export_bzl_manifest_path_test(ctx):
         java_module_path = "com.example.mod",
         sanitized_java_module_path = "com_example_mod",
         java_module_included = True,
+        nodejs_module_path = "packages/service",
+        sanitized_nodejs_module_path = "packages_service",
+        nodejs_module_included = False,
+        dotnet_module_path = "Company.Product.Service",
+        sanitized_dotnet_module_path = "company_product_service",
+        dotnet_module_included = True,
+        ruby_module_path = "apps/ruby_service",
+        sanitized_ruby_module_path = "apps_ruby_service",
+        ruby_module_included = False,
     )
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
     asserts.true(env, "\"runtimes\": {" in content)
     asserts.true(env, "\"go\": {" in content)
     asserts.true(env, "\"python\": {" in content)
     asserts.true(env, "\"java\": {" in content)
+    asserts.true(env, "\"nodejs\": {" in content)
+    asserts.true(env, "\"dotnet\": {" in content)
+    asserts.true(env, "\"ruby\": {" in content)
     asserts.true(env, "\"module_path\": \"example.python.mod\"" in content)
     asserts.true(env, "\"module_path\": \"com.example.mod\"" in content)
+    asserts.true(env, "\"module_path\": \"packages/service\"" in content)
+    asserts.true(env, "\"module_path\": \"Company.Product.Service\"" in content)
+    asserts.true(env, "\"module_path\": \"apps/ruby_service\"" in content)
     asserts.false(env, "\n    \"go\": {\n" in content)
     return unittest.end(env)
 
@@ -604,6 +634,15 @@ def _export_bzl_escaping_test(ctx):
         java_module_path = "java\"mod",
         sanitized_java_module_path = "java\\sanitized",
         java_module_included = True,
+        nodejs_module_path = "node\"mod",
+        sanitized_nodejs_module_path = "node\\sanitized",
+        nodejs_module_included = False,
+        dotnet_module_path = "dotnet\"mod",
+        sanitized_dotnet_module_path = "dotnet\\sanitized",
+        dotnet_module_included = True,
+        ruby_module_path = "ruby\"mod",
+        sanitized_ruby_module_path = "ruby\\sanitized",
+        ruby_module_included = False,
     )
     asserts.true(env, "\"repo_name\": \"repo\\\"name\"" in content)
     asserts.true(env, "\"manifest_path\": \"path\\\\to\\\\manifest.txt\"" in content)
@@ -613,6 +652,12 @@ def _export_bzl_escaping_test(ctx):
     asserts.true(env, "\"sanitized_module_path\": \"py\\\\sanitized\"" in content)
     asserts.true(env, "\"module_path\": \"java\\\"mod\"" in content)
     asserts.true(env, "\"sanitized_module_path\": \"java\\\\sanitized\"" in content)
+    asserts.true(env, "\"module_path\": \"node\\\"mod\"" in content)
+    asserts.true(env, "\"sanitized_module_path\": \"node\\\\sanitized\"" in content)
+    asserts.true(env, "\"module_path\": \"dotnet\\\"mod\"" in content)
+    asserts.true(env, "\"sanitized_module_path\": \"dotnet\\\\sanitized\"" in content)
+    asserts.true(env, "\"module_path\": \"ruby\\\"mod\"" in content)
+    asserts.true(env, "\"sanitized_module_path\": \"ruby\\\\sanitized\"" in content)
     return unittest.end(env)
 
 def _fnv1a_symbol_distinguishes_common_symbols_test(ctx):

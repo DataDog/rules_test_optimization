@@ -1,0 +1,20 @@
+module(
+    name = "datadog-rules-test-optimization-nodejs",
+    version = "1.0.0",
+)
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+# Dev-only stub repository so companion-module tests can resolve
+# @test_optimization_data labels without network access.
+example_stub_repo = use_extension(
+    "//tests:example_stub_repo.bzl",
+    "example_stub_repo_extension",
+    dev_dependency = True,
+)
+example_stub_repo.example_stub_repo(
+    name = "test_optimization_data",
+    service_keys = ["nodejs_service", "ruby_service"],
+)
+use_repo(example_stub_repo, "test_optimization_data")

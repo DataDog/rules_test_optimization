@@ -28,9 +28,9 @@ The steps are:
    Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 4. **Language macros (optional)**:
-   Thin wrappers (for Go/Python/Java) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
+   Thin wrappers (for Go/Python/Java/NodeJS/.NET/Ruby) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
    - Core module (`datadog-rules-test-optimization`) stays runtime-agnostic.
-   - Language orchestration lives in companion modules (`datadog-rules-test-optimization-go`, `datadog-rules-test-optimization-python`, `datadog-rules-test-optimization-java`).
+   - Language orchestration lives in companion modules (`datadog-rules-test-optimization-go`, `datadog-rules-test-optimization-python`, `datadog-rules-test-optimization-java`, `datadog-rules-test-optimization-nodejs`, `datadog-rules-test-optimization-dotnet`, `datadog-rules-test-optimization-ruby`).
 
 ### Go macro and import path inference
 
@@ -66,6 +66,33 @@ definitions only. Consumers still configure Go toolchains/SDK in their own
 1) explicit `module_identifier`,
 2) `test_class` package plus dependency/attribute-derived candidates,
 3) fallback from `<java module path>/<bazel package>` when available,
+4) full-bundle fallback.
+
+### NodeJS macro and module identifier inference
+
+`dd_topt_nodejs_test` applies analysis-time selection with this precedence:
+
+1) explicit `module_identifier`,
+2) inferred candidates (`package_name`, `module_name`, `npm_package`, `entry_point`, and dependency-propagated identifiers),
+3) fallback from `<nodejs module path>/<bazel package>` when available,
+4) full-bundle fallback.
+
+### .NET macro and namespace identifier inference
+
+`dd_topt_dotnet_test` applies analysis-time selection with this precedence:
+
+1) explicit `module_identifier`,
+2) inferred candidates (`root_namespace`, `assembly_name`, `project_name`, `test_class`, and dependency-propagated identifiers),
+3) fallback from `<dotnet module path>.<bazel package>` when available,
+4) full-bundle fallback.
+
+### Ruby macro and module identifier inference
+
+`dd_topt_ruby_test` applies analysis-time selection with this precedence:
+
+1) explicit `module_identifier`,
+2) inferred candidates (`require_path`, `gem_name`, `library_name`, `main`, and dependency-propagated identifiers),
+3) fallback from `<ruby module path>/<bazel package>` when available,
 4) full-bundle fallback.
 
 ## Why a repository extension?

@@ -1,0 +1,4 @@
+exports_files([
+    "topt_nodejs_test.bzl",
+    "topt_nodejs_infer.bzl",
+], visibility = ["//visibility:public"])

@@ -46,6 +46,33 @@ git_override(
     commit = "<commit-sha>",
     strip_prefix = "modules/java",
 )
+
+# Optional companion module (only needed if you use dd_topt_nodejs_test)
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-nodejs",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/nodejs",
+)
+
+# Optional companion module (only needed if you use dd_topt_dotnet_test)
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-dotnet",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/dotnet",
+)
+
+# Optional companion module (only needed if you use dd_topt_ruby_test)
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-ruby",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/ruby",
+)
 ```
 
 Use the same full commit SHA (40 chars) for core and companion modules.
@@ -72,6 +99,18 @@ local_path_override(
     module_name = "datadog-rules-test-optimization-java",
     path = "/absolute/path/to/datadog-rules-test-optimization/modules/java",
 )
+local_path_override(
+    module_name = "datadog-rules-test-optimization-nodejs",
+    path = "/absolute/path/to/datadog-rules-test-optimization/modules/nodejs",
+)
+local_path_override(
+    module_name = "datadog-rules-test-optimization-dotnet",
+    path = "/absolute/path/to/datadog-rules-test-optimization/modules/dotnet",
+)
+local_path_override(
+    module_name = "datadog-rules-test-optimization-ruby",
+    path = "/absolute/path/to/datadog-rules-test-optimization/modules/ruby",
+)
 ```
 
 ### Configure sync extension (single service)
@@ -96,7 +135,10 @@ does not declare language-rule dependencies. Language-specific orchestration
 lives in companion modules:
 - `datadog-rules-test-optimization-go` (depends on `rules_go` providers),
 - `datadog-rules-test-optimization-python`,
-- `datadog-rules-test-optimization-java`.
+- `datadog-rules-test-optimization-java`,
+- `datadog-rules-test-optimization-nodejs`,
+- `datadog-rules-test-optimization-dotnet`,
+- `datadog-rules-test-optimization-ruby`.
 
 ### Go companion module
 
@@ -118,7 +160,25 @@ load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_t
 load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
 ```
 
-### Core-only consumer (no Go companion)
+### NodeJS companion module
+
+```bzl
+load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
+```
+
+### .NET companion module
+
+```bzl
+load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
+```
+
+### Ruby companion module
+
+```bzl
+load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
+```
+
+### Core-only consumer (no companion module)
 
 If your repository needs sync + uploader only (including non-Go languages),
 depend on core only:
@@ -200,6 +260,9 @@ Additional helper file exported by the generated repository:
   - `runtimes["go"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
   - `runtimes["python"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
   - `runtimes["java"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
+  - `runtimes["nodejs"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
+  - `runtimes["dotnet"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
+  - `runtimes["ruby"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
 
 Then in any BUILD file:
 
@@ -345,6 +408,12 @@ common --repo_env=GO_MODULE_PATH
 common --repo_env=PYTHON_MODULE_PATH
 # Optional: provide Java module path hint for export.bzl
 common --repo_env=JAVA_MODULE_PATH
+# Optional: provide NodeJS module path hint for export.bzl
+common --repo_env=NODEJS_MODULE_PATH
+# Optional: provide .NET module path hint for export.bzl
+common --repo_env=DOTNET_MODULE_PATH
+# Optional: provide Ruby module path hint for export.bzl
+common --repo_env=RUBY_MODULE_PATH
 # Optional: force refetch once (example)
 # common --repo_env=FETCH_SALT=<timestamp>
 

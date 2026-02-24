@@ -1,0 +1,16 @@
+load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
+load("@rules_ruby//ruby:defs.bzl", "rb_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_ruby_test(
+    name = "hello_test",
+    srcs = ["smoke_test.rb"],
+    main = "smoke_test.rb",
+    module_identifier = "apps/ruby/example",
+    ruby_test_rule = rb_test,
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    topt_data = topt_data,
+)

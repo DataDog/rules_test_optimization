@@ -87,6 +87,21 @@ def _example_stub_repo_impl(ctx):
         '            "sanitized_module_path": "com_example_stub",\n' +
         '            "module_included": False,\n' +
         "        },\n" +
+        '        "nodejs": {\n' +
+        '            "module_path": "packages/stub",\n' +
+        '            "sanitized_module_path": "packages_stub",\n' +
+        '            "module_included": False,\n' +
+        "        },\n" +
+        '        "dotnet": {\n' +
+        '            "module_path": "Company.Product.Stub",\n' +
+        '            "sanitized_module_path": "company_product_stub",\n' +
+        '            "module_included": False,\n' +
+        "        },\n" +
+        '        "ruby": {\n' +
+        '            "module_path": "apps/stub",\n' +
+        '            "sanitized_module_path": "apps_stub",\n' +
+        '            "module_included": False,\n' +
+        "        },\n" +
         "    },\n" +
         "}\n\n" +
         "topt_data_by_service = {\n" +

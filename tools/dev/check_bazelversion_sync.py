@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Ensure root and modules/go .bazelversion files stay aligned."""
+"""Ensure root and companion-module .bazelversion files stay aligned."""
 
 from __future__ import annotations
 
 from pathlib import Path
+
+_COMPANION_LANGUAGES = (
+    "go",
+    "python",
+    "java",
+    "nodejs",
+    "dotnet",
+    "ruby",
+)
 
 
 def _repo_root() -> Path:
@@ -19,27 +28,41 @@ def main() -> int:
     """Run CLI entrypoint logic and return process exit code."""
     repo = _repo_root()
     root_file = repo / ".bazelversion"
-    go_file = repo / "modules/go/.bazelversion"
+    companion_files = [
+        repo / "modules" / language / ".bazelversion"
+        for language in _COMPANION_LANGUAGES
+    ]
+    expected_files = [root_file] + companion_files
 
-    for path in (root_file, go_file):
+    for path in expected_files:
         if not path.exists():
             print(f"error: required file missing: {path}")
             return 1
 
     root_version = root_file.read_text(encoding="utf-8").strip()
-    go_version = go_file.read_text(encoding="utf-8").strip()
+    companion_versions = {
+        str(path.relative_to(repo)): path.read_text(encoding="utf-8").strip()
+        for path in companion_files
+    }
 
-    if not root_version or not go_version:
+    if not root_version or any(not version for version in companion_versions.values()):
         print("error: .bazelversion files must not be empty")
         return 1
-    if root_version != go_version:
-        print(
-            "error: .bazelversion mismatch: "
-            f"root={root_version!r} modules/go={go_version!r}",
-        )
+
+    mismatches = [
+        f"{rel_path}={version!r}"
+        for rel_path, version in companion_versions.items()
+        if version != root_version
+    ]
+    if mismatches:
+        print("error: .bazelversion mismatch:")
+        print(f"  root={root_version!r}")
+        for mismatch in mismatches:
+            print(f"  {mismatch}")
         return 1
 
-    print(f".bazelversion parity: ok ({root_version})")
+    languages = ", ".join(_COMPANION_LANGUAGES)
+    print(f".bazelversion parity: ok ({root_version}) across root + {languages}")
     return 0
 
 

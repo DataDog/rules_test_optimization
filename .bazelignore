@@ -15,3 +15,15 @@ modules/java/bazel-bin
 modules/java/bazel-out
 modules/java/bazel-testlogs
 modules/java/bazel-java
+modules/nodejs/bazel-bin
+modules/nodejs/bazel-out
+modules/nodejs/bazel-testlogs
+modules/nodejs/bazel-nodejs
+modules/dotnet/bazel-bin
+modules/dotnet/bazel-out
+modules/dotnet/bazel-testlogs
+modules/dotnet/bazel-dotnet
+modules/ruby/bazel-bin
+modules/ruby/bazel-out
+modules/ruby/bazel-testlogs
+modules/ruby/bazel-ruby
