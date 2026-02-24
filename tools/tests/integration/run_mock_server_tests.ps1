@@ -317,7 +317,19 @@ filegroup(
   if ($syncCqueryExitCode -ne 0) {
     throw "sync runtime preflight cquery failed with exit code $syncCqueryExitCode"
   }
-  $executionRoot = (& $bazel @bazelFlags info "execution_root" @repoEnvs | Select-Object -First 1).Trim()
+  $executionRootOutput = & $bazel @bazelFlags info "execution_root" @repoEnvs
+  $executionRootExitCode = Get-NativeExitCode
+  if ($executionRootExitCode -ne 0) {
+    throw "sync runtime preflight info execution_root failed with exit code $executionRootExitCode"
+  }
+  $executionRootLines = @($executionRootOutput)
+  if ($executionRootLines.Count -eq 0) {
+    throw "sync runtime preflight info execution_root returned no output"
+  }
+  $executionRoot = ([string]$executionRootLines[0]).Trim()
+  if ([string]::IsNullOrWhiteSpace($executionRoot)) {
+    throw "sync runtime preflight info execution_root returned an empty path"
+  }
   $settingsPath = $null
   $candidateBases = @(
     $preflightOutBase,
