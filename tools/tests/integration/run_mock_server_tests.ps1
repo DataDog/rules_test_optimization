@@ -60,6 +60,15 @@ function Get-PowerShellCommand {
   throw "PowerShell host not found (tried powershell.exe, pwsh, powershell)"
 }
 
+# Read LASTEXITCODE safely under strict mode.
+function Get-NativeExitCode {
+  $lastExitVar = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+  if ($null -eq $lastExitVar -or $null -eq $lastExitVar.Value) {
+    return 0
+  }
+  return [int]$lastExitVar.Value
+}
+
 # Handle Invoke-UploaderScript behavior.
 function Invoke-UploaderScript {
   param(
@@ -77,11 +86,7 @@ function Invoke-UploaderScript {
     $invokeArgs += $ForwardedArgs
   }
   & $PowerShellPath @invokeArgs
-  $lastExitVar = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
-  if ($null -eq $lastExitVar -or $null -eq $lastExitVar.Value) {
-    return 0
-  }
-  return [int]$lastExitVar.Value
+  return Get-NativeExitCode
 }
 
 # Handle Get-FreePort behavior.
@@ -294,20 +299,23 @@ filegroup(
   Push-Location $syncWorkspace
   try {
     & $bazel @bazelFlags fetch "//:all_sync_payloads" @repoEnvs
-    if ($LASTEXITCODE -ne 0) {
-      throw "sync runtime preflight fetch failed with exit code $LASTEXITCODE"
+    $syncFetchExitCode = Get-NativeExitCode
+    if ($syncFetchExitCode -ne 0) {
+      throw "sync runtime preflight fetch failed with exit code $syncFetchExitCode"
     }
     & $bazel @bazelFlags build "//:all_sync_payloads" @repoEnvs
-    if ($LASTEXITCODE -ne 0) {
-      throw "sync runtime preflight build failed with exit code $LASTEXITCODE"
+    $syncBuildExitCode = Get-NativeExitCode
+    if ($syncBuildExitCode -ne 0) {
+      throw "sync runtime preflight build failed with exit code $syncBuildExitCode"
     }
   } finally {
     Pop-Location
   }
 
   $cqueryOutput = & $bazel @bazelFlags cquery "@test_optimization_data//:test_optimization_files" "--output=files" @repoEnvs
-  if ($LASTEXITCODE -ne 0) {
-    throw "sync runtime preflight cquery failed with exit code $LASTEXITCODE"
+  $syncCqueryExitCode = Get-NativeExitCode
+  if ($syncCqueryExitCode -ne 0) {
+    throw "sync runtime preflight cquery failed with exit code $syncCqueryExitCode"
   }
   $executionRoot = (& $bazel @bazelFlags info "execution_root" @repoEnvs | Select-Object -First 1).Trim()
   $settingsPath = $null
