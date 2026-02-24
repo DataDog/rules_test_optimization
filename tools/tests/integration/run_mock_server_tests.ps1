@@ -317,18 +317,17 @@ filegroup(
   if ($syncCqueryExitCode -ne 0) {
     throw "sync runtime preflight cquery failed with exit code $syncCqueryExitCode"
   }
+  $executionRoot = ""
   $executionRootOutput = & $bazel @bazelFlags info "execution_root" @repoEnvs
   $executionRootExitCode = Get-NativeExitCode
-  if ($executionRootExitCode -ne 0) {
-    throw "sync runtime preflight info execution_root failed with exit code $executionRootExitCode"
+  if ($executionRootExitCode -eq 0) {
+    $executionRootLines = @($executionRootOutput)
+    if ($executionRootLines.Count -gt 0) {
+      $executionRoot = ([string]$executionRootLines[0]).Trim()
+    }
   }
-  $executionRootLines = @($executionRootOutput)
-  if ($executionRootLines.Count -eq 0) {
-    throw "sync runtime preflight info execution_root returned no output"
-  }
-  $executionRoot = ([string]$executionRootLines[0]).Trim()
   if ([string]::IsNullOrWhiteSpace($executionRoot)) {
-    throw "sync runtime preflight info execution_root returned an empty path"
+    Write-Host "warning: unable to resolve execution_root from bazel info (exit=$executionRootExitCode); continuing with output_base-derived roots"
   }
   $settingsPath = $null
   $candidateBases = @(
