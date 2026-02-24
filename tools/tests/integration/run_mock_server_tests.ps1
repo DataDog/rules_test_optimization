@@ -360,31 +360,47 @@ filegroup(
     if ($settingsPath) { break }
   }
   if (-not $settingsPath) {
-    $externalDir = Join-Path $preflightOutBase "external"
-    if (Test-Path -LiteralPath $externalDir -PathType Container) {
-      $repoDirCandidates = Get-ChildItem -LiteralPath $externalDir -Directory -ErrorAction SilentlyContinue |
-        Where-Object {
-          $_.Name -match "test_optimization_data" -and
-          $_.Name -notmatch "test_optimization_data_(nodejs|dotnet|ruby)$"
-        } |
-        Sort-Object {
-          if ($_.Name -eq "test_optimization_data") { 0 }
-          elseif ($_.Name -match "(^|[+~])test_optimization_data$") { 1 }
-          else { 2 }
-        }, Name
+    $externalRoots = @(
+      (Join-Path $preflightOutBase "external"),
+      (Join-Path $preflightOutBase "execroot/_main/external")
+    )
+    if (-not [string]::IsNullOrWhiteSpace($executionRoot)) {
+      $externalRoots += (Join-Path $executionRoot "external")
+    }
+    $externalRoots = @($externalRoots | Select-Object -Unique)
 
-      foreach ($repoDir in $repoDirCandidates) {
-        $candidate = Join-Path $repoDir.FullName ".testoptimization/cache/http/settings.json"
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-          $settingsPath = (Resolve-Path -LiteralPath $candidate).Path
-          Write-Host "resolved settings.json from external repo fallback: $settingsPath"
-          break
+    $settingsCandidates = @()
+    foreach ($externalRoot in $externalRoots) {
+      if (-not (Test-Path -LiteralPath $externalRoot -PathType Container)) { continue }
+      $rootCandidates = Get-ChildItem -LiteralPath $externalRoot -Recurse -File -Filter "settings.json" -ErrorAction SilentlyContinue |
+        Where-Object {
+          ($_.FullName.Replace("\", "/")) -match "/\\.testoptimization/cache/http/settings\\.json$"
         }
+      if ($rootCandidates) {
+        $settingsCandidates += $rootCandidates
       }
+    }
+
+    if ($settingsCandidates.Count -gt 0) {
+      $preferredSettings = $settingsCandidates |
+        Sort-Object @{
+          Expression = {
+            $normalizedPath = $_.FullName.Replace("\", "/").ToLowerInvariant()
+            if ($normalizedPath -match "/test_optimization_data/\\.testoptimization/cache/http/settings\\.json$") { 0 }
+            elseif ($normalizedPath -match "/test_optimization_data_(nodejs|dotnet|ruby)/\\.testoptimization/cache/http/settings\\.json$") { 2 }
+            elseif ($normalizedPath -match "test_optimization_data") { 1 }
+            else { 3 }
+          }
+        }, @{
+          Expression = { $_.FullName }
+        }
+      $settingsPath = (Resolve-Path -LiteralPath $preferredSettings[0].FullName).Path
+      Write-Host "resolved settings.json from recursive external fallback: $settingsPath"
     }
   }
   if (-not $settingsPath) {
-    throw "failed to resolve settings.json path from sync runtime preflight cquery output"
+    $cquerySample = (@($cqueryOutput) | Select-Object -First 10) -join " | "
+    throw "failed to resolve settings.json path from sync runtime preflight cquery output (output_base=$preflightOutBase, execution_root=$executionRoot, cquery_sample=$cquerySample)"
   }
   $toptHttpDir = Split-Path -Parent $settingsPath
   $toptCacheDir = Split-Path -Parent $toptHttpDir
