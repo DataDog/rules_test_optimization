@@ -317,6 +317,19 @@ filegroup(
   if ($syncCqueryExitCode -ne 0) {
     throw "sync runtime preflight cquery failed with exit code $syncCqueryExitCode"
   }
+  $actualOutputBase = ""
+  $outputBaseOutput = & $bazel @bazelFlags info "output_base" @repoEnvs
+  $outputBaseExitCode = Get-NativeExitCode
+  if ($outputBaseExitCode -eq 0) {
+    $outputBaseLines = @($outputBaseOutput)
+    if ($outputBaseLines.Count -gt 0) {
+      $actualOutputBase = ([string]$outputBaseLines[0]).Trim()
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($actualOutputBase)) {
+    Write-Host "warning: unable to resolve output_base from bazel info (exit=$outputBaseExitCode); using requested output_base path"
+  }
+
   $executionRoot = ""
   $executionRootOutput = & $bazel @bazelFlags info "execution_root" @repoEnvs
   $executionRootExitCode = Get-NativeExitCode
@@ -329,13 +342,30 @@ filegroup(
   if ([string]::IsNullOrWhiteSpace($executionRoot)) {
     Write-Host "warning: unable to resolve execution_root from bazel info (exit=$executionRootExitCode); continuing with output_base-derived roots"
   }
-  $settingsPath = $null
-  $candidateBases = @(
+
+  $outputBaseRoots = @(
     $preflightOutBase,
-    (Join-Path $preflightOutBase "execroot/_main"),
-    $executionRoot,
-    $syncWorkspace
+    $actualOutputBase
   )
+  $outputBaseRoots = @(
+    $outputBaseRoots |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+  )
+
+  $settingsPath = $null
+  $candidateBases = @()
+  foreach ($outputBaseRoot in $outputBaseRoots) {
+    $candidateBases += $outputBaseRoot
+    $candidateBases += (Join-Path $outputBaseRoot "execroot/_main")
+  }
+  $candidateBases += @($executionRoot, $syncWorkspace)
+  $candidateBases = @(
+    $candidateBases |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+  )
+
   foreach ($line in @($cqueryOutput)) {
     $candidate = [string]$line
     if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
@@ -361,10 +391,10 @@ filegroup(
   }
   $externalRoots = @()
   if (-not $settingsPath) {
-    $externalRoots = @(
-      (Join-Path $preflightOutBase "external"),
-      (Join-Path $preflightOutBase "execroot/_main/external")
-    )
+    foreach ($outputBaseRoot in $outputBaseRoots) {
+      $externalRoots += (Join-Path $outputBaseRoot "external")
+      $externalRoots += (Join-Path $outputBaseRoot "execroot/_main/external")
+    }
     if (-not [string]::IsNullOrWhiteSpace($executionRoot)) {
       $externalRoots += (Join-Path $executionRoot "external")
     }
@@ -407,6 +437,33 @@ filegroup(
       }
     }
 
+    if ($settingsCandidates.Count -eq 0) {
+      foreach ($externalRoot in $externalRoots) {
+        if (-not (Test-Path -LiteralPath $externalRoot -PathType Container)) { continue }
+        $exportFiles = Get-ChildItem -LiteralPath $externalRoot -Recurse -File -Filter "export.bzl" -ErrorAction SilentlyContinue
+        foreach ($exportFile in $exportFiles) {
+          $exportText = Get-Content -LiteralPath $exportFile.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+          if ([string]::IsNullOrWhiteSpace($exportText)) { continue }
+          if ($exportText -notmatch 'repo_name"\s*:\s*"test_optimization_data') { continue }
+
+          $settingsCandidate = Join-Path (Split-Path -Parent $exportFile.FullName) ".testoptimization/cache/http/settings.json"
+          if (-not (Test-Path -LiteralPath $settingsCandidate -PathType Leaf)) { continue }
+
+          $score = 15
+          if ($exportText -match 'repo_name"\s*:\s*"test_optimization_data"') {
+            $score = 0
+          } elseif ($exportText -match 'repo_name"\s*:\s*"test_optimization_data_(nodejs|dotnet|ruby)"') {
+            $score = 35
+          }
+          $settingsCandidates += [pscustomobject]@{
+            Score = $score
+            Path = (Resolve-Path -LiteralPath $settingsCandidate).Path
+            RepoDir = (Split-Path -Parent $exportFile.FullName)
+          }
+        }
+      }
+    }
+
     if ($settingsCandidates.Count -gt 0) {
       $preferredSettings = $settingsCandidates | Sort-Object Score, Path | Select-Object -First 1
       $settingsPath = $preferredSettings.Path
@@ -415,8 +472,9 @@ filegroup(
   }
   if (-not $settingsPath) {
     $cquerySample = (@($cqueryOutput) | Select-Object -First 10) -join " | "
-    $externalRootsSample = ($externalRoots | Select-Object -First 5) -join ","
-    throw "failed to resolve settings.json path from sync runtime preflight cquery output (output_base=$preflightOutBase, execution_root=$executionRoot, external_roots=$externalRootsSample, cquery_sample=$cquerySample)"
+    $externalRootsSample = ($externalRoots | Select-Object -First 8) -join ","
+    $existingExternalRoots = ($externalRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -First 8) -join ","
+    throw "failed to resolve settings.json path from sync runtime preflight cquery output (requested_output_base=$preflightOutBase, actual_output_base=$actualOutputBase, execution_root=$executionRoot, external_roots=$externalRootsSample, existing_external_roots=$existingExternalRoots, cquery_sample=$cquerySample)"
   }
   $toptHttpDir = Split-Path -Parent $settingsPath
   $toptCacheDir = Split-Path -Parent $toptHttpDir
