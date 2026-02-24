@@ -360,6 +360,30 @@ filegroup(
     if ($settingsPath) { break }
   }
   if (-not $settingsPath) {
+    $externalDir = Join-Path $preflightOutBase "external"
+    if (Test-Path -LiteralPath $externalDir -PathType Container) {
+      $repoDirCandidates = Get-ChildItem -LiteralPath $externalDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object {
+          $_.Name -match "test_optimization_data" -and
+          $_.Name -notmatch "test_optimization_data_(nodejs|dotnet|ruby)$"
+        } |
+        Sort-Object {
+          if ($_.Name -eq "test_optimization_data") { 0 }
+          elseif ($_.Name -match "(^|[+~])test_optimization_data$") { 1 }
+          else { 2 }
+        }, Name
+
+      foreach ($repoDir in $repoDirCandidates) {
+        $candidate = Join-Path $repoDir.FullName ".testoptimization/cache/http/settings.json"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+          $settingsPath = (Resolve-Path -LiteralPath $candidate).Path
+          Write-Host "resolved settings.json from external repo fallback: $settingsPath"
+          break
+        }
+      }
+    }
+  }
+  if (-not $settingsPath) {
     throw "failed to resolve settings.json path from sync runtime preflight cquery output"
   }
   $toptHttpDir = Split-Path -Parent $settingsPath
