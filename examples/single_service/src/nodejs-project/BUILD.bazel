@@ -4,9 +4,13 @@ load("@test_optimization_data//:export.bzl", "topt_data")
 
 dd_topt_nodejs_test(
     name = "hello_test",
-    nodejs_test_rule = js_test,
-    topt_data = topt_data,
-    module_identifier = "example/nodejs/project",
-    entry_point = "smoke_test.js",
     copy_data_to_bin = False,
+    entry_point = "smoke_test.js",
+    module_identifier = "example/nodejs/project",
+    nodejs_test_rule = js_test,
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    topt_data = topt_data,
 )
