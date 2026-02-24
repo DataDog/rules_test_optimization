@@ -3,7 +3,7 @@
 ## Development Workflow
 
 - Create a feature branch for each change.
-- Keep pull requests focused (core-only, go-companion-only, or docs-only when possible).
+- Keep pull requests focused (core-only, single-companion-module-only, or docs-only when possible).
 - Keep repository-level Bazel config explicit in scripts/workflows: this repo
   intentionally has no root `.bazelrc` (example workspaces own local `.bazelrc`).
 - For new core-rule `fail(...)` diagnostics, prefer consistent prefixed wording
@@ -23,9 +23,19 @@
   - `./bazelw test //tools/...`
 - Go companion tests:
   - `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- Python companion tests:
+  - `cd modules/python && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- Java companion tests:
+  - `cd modules/java && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- NodeJS companion tests:
+  - `cd modules/nodejs && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- .NET companion tests:
+  - `cd modules/dotnet && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- Ruby companion tests:
+  - `cd modules/ruby && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
 - Build examples from root:
   - `./bazelw build //examples/...`
-- Verify core/go module version alignment:
+- Verify core/companion module version alignment:
   - `python3 tools/dev/check_module_versions.py`
 - Python tooling tests:
   - `./bazelw test //tools/tests/python:python_tools_test`
@@ -93,9 +103,11 @@
 - Root module (`MODULE.bazel`) must stay runtime-agnostic and avoid non-dev
   language-rule dependencies. (`rules_go` is allowed only as `dev_dependency`
   for in-repo example builds.)
-- Root module must not declare `bazel_dep(name = "datadog-rules-test-optimization-go", ...)`.
-- Go-specific orchestration stays isolated in `modules/go`.
-- Dev bootstrap wiring in `tools/dev/go_bootstrap.bzl` is dev-only and cycle-safe.
+- Root module must not declare direct `bazel_dep(...)` edges to companion
+  modules (`datadog-rules-test-optimization-go`, `...-python`, `...-java`,
+  `...-nodejs`, `...-dotnet`, `...-ruby`).
+- Language-specific orchestration stays isolated in `modules/<language>`.
+- Dev bootstrap wiring in `tools/dev/*_bootstrap.bzl` is dev-only and cycle-safe.
 
 ## PR Checklist
 
@@ -109,15 +121,15 @@
 - [ ] Reviewed timeout metadata when adding new slow tests (`--test_verbose_timeout_warnings`).
 - [ ] Included rationale and risk notes in PR description.
 
-## Release Runbook (Core + Go Companion)
+## Release Runbook (Core + Companion Modules)
 
 - CI release gate:
   - Trigger `.github/workflows/release.yml` via `workflow_dispatch` (or push a version tag) before publication.
   - The workflow now always executes the full validation suite for release safety.
 
 - Version alignment:
-  - Keep root `MODULE.bazel` and `modules/go/MODULE.bazel` versions aligned.
-  - Keep the Go companion dependency on core aligned with the same version.
+  - Keep root `MODULE.bazel` and all companion `modules/*/MODULE.bazel` versions aligned.
+  - Keep each companion dependency on core aligned with the same version.
   - Keep `tools/core/common_utils.bzl` `RULES_VERSION` aligned with root
     `MODULE.bazel` version.
   - Keep `UPLOADER_VERSION` in semantic-version format (`X.Y.Z`) and update it
@@ -125,15 +137,15 @@
   - Run `python3 tools/dev/check_module_versions.py` before every release cut.
 - Publication order:
   1. Publish core module metadata/artifacts.
-  2. Publish go companion metadata/artifacts (depends on core).
+  2. Publish companion metadata/artifacts (depends on core).
 - Companion source mapping:
-  - Ensure release metadata maps companion sources to `modules/go` (strip-prefix/subdirectory strategy).
+  - Ensure release metadata maps each companion source to `modules/<language>` (strip-prefix/subdirectory strategy).
 - BCR metadata checklist (performed in the Bazel Central Registry repo):
   - Core module entry includes `MODULE.bazel`, `metadata.json`, and `source.json`.
-  - Go companion entry includes `MODULE.bazel`, `metadata.json`, and `source.json`.
-  - Companion `source.json` uses a `strip_prefix` that resolves to `modules/go` at archive root.
+  - Companion entries include `MODULE.bazel`, `metadata.json`, and `source.json`.
+  - Each companion `source.json` uses a `strip_prefix` that resolves to `modules/<language>` at archive root.
   - Generate scaffolding with BCR helper tooling (for example `bazel run //tools:add_module`) and then verify each generated file.
 - Pre-announce validation:
-  - core tests, go companion tests, examples build, integration harness, hermetic lane all green.
+  - core tests, companion tests, examples build, integration harness, hermetic lane all green.
 - Rollback notes:
   - If companion release fails, avoid publishing docs that require new load paths until both artifacts are available.

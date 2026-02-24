@@ -183,7 +183,34 @@ test_optimization_sync.test_optimization_sync(
     runtime_version = "1.2.3",
 )
 
-use_repo(test_optimization_sync, "test_optimization_data")
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data_nodejs",
+    service = "mock-service-nodejs",
+    runtime_name = "nodejs",
+    runtime_version = "1.2.3",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data_dotnet",
+    service = "mock-service-dotnet",
+    runtime_name = "dotnet",
+    runtime_version = "1.2.3",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data_ruby",
+    service = "mock-service-ruby",
+    runtime_name = "ruby",
+    runtime_version = "1.2.3",
+)
+
+use_repo(
+    test_optimization_sync,
+    "test_optimization_data",
+    "test_optimization_data_nodejs",
+    "test_optimization_data_dotnet",
+    "test_optimization_data_ruby",
+)
 MODULE_EOF
 
 cat > BUILD.bazel <<BUILD_EOF
@@ -366,11 +393,24 @@ SYNC_SALT_VALUE="integration-sync-${RANDOM}-$(date +%s)"
 "$BAZEL" "${BAZEL_FLAGS[@]}" fetch @test_optimization_data//:test_optimization_files \
   --repo_env=FETCH_SALT="$SYNC_SALT_VALUE" \
   "${REPO_ENVS[@]}"
+
+# Canonical runtime-name preflight for newly supported runtimes.
+for runtime in nodejs dotnet ruby; do
+  "$BAZEL" "${BAZEL_FLAGS[@]}" fetch "@test_optimization_data_${runtime}//:test_optimization_files" \
+    --repo_env=FETCH_SALT="$SYNC_SALT_VALUE" \
+    "${REPO_ENVS[@]}"
+done
+
 "$BAZEL" "${BAZEL_FLAGS[@]}" query @test_optimization_data//:test_optimization_context \
   "${REPO_ENVS[@]}" >/dev/null
 
 "$BAZEL" "${BAZEL_FLAGS[@]}" build @test_optimization_data//:test_optimization_files \
   "${REPO_ENVS[@]}"
+
+for runtime in nodejs dotnet ruby; do
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build "@test_optimization_data_${runtime}//:test_optimization_files" \
+    "${REPO_ENVS[@]}"
+done
 
 CQUERY_OUT=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_files --output=files \
   "${REPO_ENVS[@]}")
@@ -445,6 +485,13 @@ if [[ ! -f "$EXPORT_PATH" ]]; then
   echo "error: missing export.bzl at $EXPORT_PATH"
   exit 1
 fi
+
+for runtime in go python java nodejs dotnet ruby; do
+  if ! grep -q "\"$runtime\": {" "$EXPORT_PATH"; then
+    echo "error: export.bzl missing runtime key '$runtime'"
+    exit 1
+  fi
+done
 
 unset DD_TRACE_AGENT_URL
 

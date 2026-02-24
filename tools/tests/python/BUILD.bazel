@@ -12,6 +12,7 @@ sh_test(
         "//tools/core:uploader_bash_runtime.sh.tpl",
         "//tools/core:uploader_batch_runtime.bat.tpl",
         "//tools/core:uploader_powershell_runtime.ps1.tpl",
+        "//tools/dev:check_bazelversion_sync.py",
         "//tools/dev:check_module_versions.py",
         "//tools/dev:lint_uploader_templates.py",
         "//tools/tests:integration/mock_dd_server.py",

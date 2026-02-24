@@ -183,11 +183,17 @@ def main() -> int:
             "go": repo_root / "modules" / "go" / "MODULE.bazel",
             "python": repo_root / "modules" / "python" / "MODULE.bazel",
             "java": repo_root / "modules" / "java" / "MODULE.bazel",
+            "nodejs": repo_root / "modules" / "nodejs" / "MODULE.bazel",
+            "dotnet": repo_root / "modules" / "dotnet" / "MODULE.bazel",
+            "ruby": repo_root / "modules" / "ruby" / "MODULE.bazel",
         }
         companion_dep_names = {
             "go": "datadog-rules-test-optimization-go",
             "python": "datadog-rules-test-optimization-python",
             "java": "datadog-rules-test-optimization-java",
+            "nodejs": "datadog-rules-test-optimization-nodejs",
+            "dotnet": "datadog-rules-test-optimization-dotnet",
+            "ruby": "datadog-rules-test-optimization-ruby",
         }
         common_utils = repo_root / "tools" / "core" / "common_utils.bzl"
         if not core_module.exists():
@@ -282,7 +288,7 @@ def main() -> int:
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-            if ex_dep == None:
+            if ex_dep is None:
                 continue
             module_version = companion_versions[language]
             if ex_dep != module_version:
@@ -299,7 +305,7 @@ def main() -> int:
         return 1
 
     companion_display = []
-    for language in ["go", "python", "java"]:
+    for language in ["go", "python", "java", "nodejs", "dotnet", "ruby"]:
         if not companion_exists.get(language):
             companion_display.append(f'{language}="<missing>"')
             continue

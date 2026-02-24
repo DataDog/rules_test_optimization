@@ -11,7 +11,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
 | `name` | string | required | External repository name to create (examples use `test_optimization_data`) |
 | `out_dir` | string | `.testoptimization` | Base output directory. Must be a non-empty relative path; absolute paths and `..` traversal are rejected |
 | `service` | string | `"unnamed-service"` or `DD_SERVICE` | Service name precedence: `service` attr > `DD_SERVICE` env > fallback |
-| `runtime_name` | string | empty | Optional runtime name (example: `go`) |
+| `runtime_name` | string | empty | Optional runtime name (examples: `go`, `python`, `java`, `nodejs`, `dotnet`, `ruby`) |
 | `runtime_version` | string | empty | Optional runtime version (example: `1.24.0`) |
 | `runtime_arch` | string | auto-detected | Optional runtime arch; defaults to detected `os.architecture` |
 | `http_connect_timeout_seconds` | int | `10` | Optional connect-timeout override for sync HTTP requests (`-1` keeps default/env behavior) |
@@ -103,6 +103,11 @@ changes can invalidate fetch cache entries as expected.
 | `DD_TEST_OPTIMIZATION_API_BASE` | No | Override sync API base URL (test/dev and mock-server scenarios) |
 | `FETCH_SALT` | No | Manual refetch trigger (example: `--repo_env=FETCH_SALT=<timestamp>`) |
 | `GO_MODULE_PATH` | No | Explicit Go module path override used when emitting `export.bzl` |
+| `PYTHON_MODULE_PATH` | No | Explicit Python module path override used when emitting `export.bzl` |
+| `JAVA_MODULE_PATH` | No | Explicit Java module path override used when emitting `export.bzl` |
+| `NODEJS_MODULE_PATH` | No | Explicit NodeJS module path override used when emitting `export.bzl` |
+| `DOTNET_MODULE_PATH` | No | Explicit .NET module path override used when emitting `export.bzl` |
+| `RUBY_MODULE_PATH` | No | Explicit Ruby module path override used when emitting `export.bzl` |
 | `DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS` | No | Sync connect-timeout override |
 | `DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS` | No | Sync per-request max-time override |
 | `DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS` | No | Sync retry-attempt override |

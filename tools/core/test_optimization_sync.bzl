@@ -849,7 +849,16 @@ def _render_export_bzl(
         python_module_included = False,
         java_module_path = "",
         sanitized_java_module_path = "",
-        java_module_included = False):
+        java_module_included = False,
+        nodejs_module_path = "",
+        sanitized_nodejs_module_path = "",
+        nodejs_module_included = False,
+        dotnet_module_path = "",
+        sanitized_dotnet_module_path = "",
+        dotnet_module_included = False,
+        ruby_module_path = "",
+        sanitized_ruby_module_path = "",
+        ruby_module_included = False):
     """Render export.bzl content consumed by macros and BUILD files."""
     repo_name_lit = json.encode(repo_name or "")
     manifest_file_lit = json.encode(manifest_file or "")
@@ -859,6 +868,9 @@ def _render_export_bzl(
         ("go", go_module_path, sanitized_go_module_path, go_module_included),
         ("python", python_module_path, sanitized_python_module_path, python_module_included),
         ("java", java_module_path, sanitized_java_module_path, java_module_included),
+        ("nodejs", nodejs_module_path, sanitized_nodejs_module_path, nodejs_module_included),
+        ("dotnet", dotnet_module_path, sanitized_dotnet_module_path, dotnet_module_included),
+        ("ruby", ruby_module_path, sanitized_ruby_module_path, ruby_module_included),
     ]:
         runtime_entries.append(
             "        \"%s\": {\n" % runtime_name +
@@ -1816,6 +1828,12 @@ def _impl(ctx):
     sanitized_python_module_path = sanitize_label_fragment(python_module_path) if python_module_path else ""
     java_module_path = _detect_runtime_module_path_from_env(ctx, debug, "java", "JAVA_MODULE_PATH")
     sanitized_java_module_path = sanitize_label_fragment(java_module_path) if java_module_path else ""
+    nodejs_module_path = _detect_runtime_module_path_from_env(ctx, debug, "nodejs", "NODEJS_MODULE_PATH")
+    sanitized_nodejs_module_path = sanitize_label_fragment(nodejs_module_path) if nodejs_module_path else ""
+    dotnet_module_path = _detect_runtime_module_path_from_env(ctx, debug, "dotnet", "DOTNET_MODULE_PATH")
+    sanitized_dotnet_module_path = sanitize_label_fragment(dotnet_module_path) if dotnet_module_path else ""
+    ruby_module_path = _detect_runtime_module_path_from_env(ctx, debug, "ruby", "RUBY_MODULE_PATH")
+    sanitized_ruby_module_path = sanitize_label_fragment(ruby_module_path) if ruby_module_path else ""
 
     # Build a modules index for per-module filegroups (labels are sanitized suffixes)
     labels = sorted([v for v in label_map.values()]) if label_map else []
@@ -1843,6 +1861,18 @@ def _impl(ctx):
     if sanitized_java_module_path:
         if label_seen.get(sanitized_java_module_path):
             java_module_included = True
+    nodejs_module_included = False
+    if sanitized_nodejs_module_path:
+        if label_seen.get(sanitized_nodejs_module_path):
+            nodejs_module_included = True
+    dotnet_module_included = False
+    if sanitized_dotnet_module_path:
+        if label_seen.get(sanitized_dotnet_module_path):
+            dotnet_module_included = True
+    ruby_module_included = False
+    if sanitized_ruby_module_path:
+        if label_seen.get(sanitized_ruby_module_path):
+            ruby_module_included = True
 
     # Unified export file for simpler loading from user repos
     # Prefer the apparent repo name passed by the extension/WORKSPACE helper; fallback to ctx.name
@@ -1861,6 +1891,15 @@ def _impl(ctx):
         java_module_path = java_module_path,
         sanitized_java_module_path = sanitized_java_module_path,
         java_module_included = java_module_included,
+        nodejs_module_path = nodejs_module_path,
+        sanitized_nodejs_module_path = sanitized_nodejs_module_path,
+        nodejs_module_included = nodejs_module_included,
+        dotnet_module_path = dotnet_module_path,
+        sanitized_dotnet_module_path = sanitized_dotnet_module_path,
+        dotnet_module_included = dotnet_module_included,
+        ruby_module_path = ruby_module_path,
+        sanitized_ruby_module_path = sanitized_ruby_module_path,
+        ruby_module_included = ruby_module_included,
     )
     ctx.file("export.bzl", export_bzl)
 
@@ -2012,6 +2051,9 @@ test_optimization_sync = repository_rule(
         "GO_MODULE_PATH",  # Optional: explicit Go module path override for export.bzl
         "PYTHON_MODULE_PATH",  # Optional: explicit Python module path override for export.bzl
         "JAVA_MODULE_PATH",  # Optional: explicit Java module path override for export.bzl
+        "NODEJS_MODULE_PATH",  # Optional: explicit NodeJS module path override for export.bzl
+        "DOTNET_MODULE_PATH",  # Optional: explicit Dotnet module path override for export.bzl
+        "RUBY_MODULE_PATH",  # Optional: explicit Ruby module path override for export.bzl
         # Host OS hints used for cross-platform behavior and request configuration
         "OS",  # Windows OS marker (used in _is_windows and _detect_os_info)
         "ComSpec",  # Windows command processor path

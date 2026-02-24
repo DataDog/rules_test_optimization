@@ -1,0 +1,334 @@
+load(
+    ":test_macro.bzl",
+    "nodejs_macro_env_none_target",
+    "nodejs_macro_env_none_wiring_test",
+    "nodejs_macro_multi_service_target",
+    "nodejs_macro_multi_service_wiring_test",
+    "nodejs_macro_single_service_target",
+    "nodejs_macro_single_service_wiring_test",
+    "resolve_topt_service_key_missing_failure_test",
+    "resolve_topt_service_key_missing_target_rule",
+    "resolve_topt_service_key_unknown_failure_test",
+    "resolve_topt_service_key_unknown_target_rule",
+    "select_service_entry_empty_mapping_failure_test",
+    "select_service_entry_empty_mapping_target_rule",
+    "select_service_entry_malformed_topt_data_failure_test",
+    "select_service_entry_malformed_topt_data_target_rule",
+    "validate_nodejs_test_rule_missing_failure_test",
+    "validate_nodejs_test_rule_missing_target_rule",
+)
+load(
+    ":test_selection_utils.bzl",
+    "build_module_labels_empty_entry_failure_test",
+    "build_module_labels_empty_entry_target_rule",
+    "build_module_labels_invalid_entry_failure_test",
+    "build_module_labels_invalid_entry_target_rule",
+    "build_module_labels_invalid_shape_failure_test",
+    "build_module_labels_invalid_shape_target_rule",
+    "build_module_labels_unsanitized_entry_failure_test",
+    "build_module_labels_unsanitized_entry_target_rule",
+    "build_module_labels_valid_test",
+    "nodejs_stub_includes_manifest_in_files_test",
+    "normalize_nodejs_identifier_edge_cases_test",
+    "normalize_user_data_handles_none_test",
+    "normalize_user_data_invalid_type_failure_test",
+    "normalize_user_data_invalid_type_target_rule",
+    "resolve_topt_service_key_prefers_exact_then_sanitized_test",
+    "select_module_group_name_test",
+    "service_mapping_entries_filters_non_service_test",
+)
+load(
+    ":test_payloads_selector.bzl",
+    "selector_attr_precedence_target",
+    "selector_attr_precedence_test",
+    "selector_deps_precedence_target",
+    "selector_deps_precedence_test",
+    "selector_explicit_precedence_target",
+    "selector_explicit_precedence_test",
+    "selector_fallback_target",
+    "selector_fallback_test",
+    "selector_include_disabled_target",
+    "selector_include_disabled_test",
+    "selector_no_match_fallback_target",
+    "selector_no_match_fallback_test",
+    "selector_override_target",
+    "selector_override_test",
+    "selector_payload_fixture_targets",
+)
+
+service_mapping_entries_filters_non_service_test(
+    name = "service_mapping_entries_filters_non_service_test",
+    size = "small",
+    timeout = "short",
+)
+
+resolve_topt_service_key_prefers_exact_then_sanitized_test(
+    name = "resolve_topt_service_key_prefers_exact_then_sanitized_test",
+    size = "small",
+    timeout = "short",
+)
+
+select_module_group_name_test(
+    name = "select_module_group_name_test",
+    size = "small",
+    timeout = "short",
+)
+
+normalize_nodejs_identifier_edge_cases_test(
+    name = "normalize_nodejs_identifier_edge_cases_test",
+    size = "small",
+    timeout = "short",
+)
+
+normalize_user_data_handles_none_test(
+    name = "normalize_user_data_handles_none_test",
+    size = "small",
+    timeout = "short",
+)
+
+normalize_user_data_invalid_type_target_rule(
+    name = "normalize_user_data_invalid_type_target",
+    tags = ["manual"],
+)
+
+normalize_user_data_invalid_type_failure_test(
+    name = "normalize_user_data_invalid_type_failure_test",
+    target_under_test = ":normalize_user_data_invalid_type_target",
+)
+
+build_module_labels_valid_test(
+    name = "build_module_labels_valid_test",
+    size = "small",
+    timeout = "short",
+)
+
+nodejs_stub_includes_manifest_in_files_test(
+    name = "nodejs_stub_includes_manifest_in_files_test",
+    size = "small",
+    timeout = "short",
+)
+
+selector_payload_fixture_targets()
+
+selector_explicit_precedence_target(
+    name = "selector_explicit_precedence_target",
+    tags = ["manual"],
+)
+
+selector_explicit_precedence_test(
+    name = "selector_explicit_precedence_test",
+    target_under_test = ":selector_explicit_precedence_target",
+)
+
+selector_attr_precedence_target(
+    name = "selector_attr_precedence_target",
+    tags = ["manual"],
+)
+
+selector_attr_precedence_test(
+    name = "selector_attr_precedence_test",
+    target_under_test = ":selector_attr_precedence_target",
+)
+
+selector_deps_precedence_target(
+    name = "selector_deps_precedence_target",
+    tags = ["manual"],
+)
+
+selector_deps_precedence_test(
+    name = "selector_deps_precedence_test",
+    target_under_test = ":selector_deps_precedence_target",
+)
+
+selector_fallback_target(
+    name = "selector_fallback_target",
+    tags = ["manual"],
+)
+
+selector_fallback_test(
+    name = "selector_fallback_test",
+    target_under_test = ":selector_fallback_target",
+)
+
+selector_no_match_fallback_target(
+    name = "selector_no_match_fallback_target",
+    tags = ["manual"],
+)
+
+selector_no_match_fallback_test(
+    name = "selector_no_match_fallback_test",
+    target_under_test = ":selector_no_match_fallback_target",
+)
+
+selector_include_disabled_target(
+    name = "selector_include_disabled_target",
+    tags = ["manual"],
+)
+
+selector_include_disabled_test(
+    name = "selector_include_disabled_test",
+    target_under_test = ":selector_include_disabled_target",
+)
+
+selector_override_target(
+    name = "selector_override_target",
+    tags = ["manual"],
+)
+
+selector_override_test(
+    name = "selector_override_test",
+    target_under_test = ":selector_override_target",
+)
+
+nodejs_macro_single_service_target(
+    name = "nodejs_macro_single_service_target",
+    tags = ["manual"],
+)
+
+nodejs_macro_single_service_wiring_test(
+    name = "nodejs_macro_single_service_wiring_test",
+    target_under_test = ":nodejs_macro_single_service_target",
+)
+
+nodejs_macro_multi_service_target(
+    name = "nodejs_macro_multi_service_target",
+    tags = ["manual"],
+)
+
+nodejs_macro_multi_service_wiring_test(
+    name = "nodejs_macro_multi_service_wiring_test",
+    target_under_test = ":nodejs_macro_multi_service_target",
+)
+
+nodejs_macro_env_none_target(
+    name = "nodejs_macro_env_none_target",
+    tags = ["manual"],
+)
+
+nodejs_macro_env_none_wiring_test(
+    name = "nodejs_macro_env_none_wiring_test",
+    target_under_test = ":nodejs_macro_env_none_target",
+)
+
+build_module_labels_invalid_shape_target_rule(
+    name = "build_module_labels_invalid_shape_target",
+    tags = ["manual"],
+)
+
+build_module_labels_invalid_shape_failure_test(
+    name = "build_module_labels_invalid_shape_failure_test",
+    target_under_test = ":build_module_labels_invalid_shape_target",
+)
+
+build_module_labels_invalid_entry_target_rule(
+    name = "build_module_labels_invalid_entry_target",
+    tags = ["manual"],
+)
+
+build_module_labels_invalid_entry_failure_test(
+    name = "build_module_labels_invalid_entry_failure_test",
+    target_under_test = ":build_module_labels_invalid_entry_target",
+)
+
+build_module_labels_empty_entry_target_rule(
+    name = "build_module_labels_empty_entry_target",
+    tags = ["manual"],
+)
+
+build_module_labels_empty_entry_failure_test(
+    name = "build_module_labels_empty_entry_failure_test",
+    target_under_test = ":build_module_labels_empty_entry_target",
+)
+
+build_module_labels_unsanitized_entry_target_rule(
+    name = "build_module_labels_unsanitized_entry_target",
+    tags = ["manual"],
+)
+
+build_module_labels_unsanitized_entry_failure_test(
+    name = "build_module_labels_unsanitized_entry_failure_test",
+    target_under_test = ":build_module_labels_unsanitized_entry_target",
+)
+
+resolve_topt_service_key_missing_target_rule(
+    name = "resolve_topt_service_key_missing_target",
+    tags = ["manual"],
+)
+
+resolve_topt_service_key_missing_failure_test(
+    name = "resolve_topt_service_key_missing_failure_test",
+    target_under_test = ":resolve_topt_service_key_missing_target",
+)
+
+resolve_topt_service_key_unknown_target_rule(
+    name = "resolve_topt_service_key_unknown_target",
+    tags = ["manual"],
+)
+
+resolve_topt_service_key_unknown_failure_test(
+    name = "resolve_topt_service_key_unknown_failure_test",
+    target_under_test = ":resolve_topt_service_key_unknown_target",
+)
+
+validate_nodejs_test_rule_missing_target_rule(
+    name = "validate_nodejs_test_rule_missing_target",
+    tags = ["manual"],
+)
+
+validate_nodejs_test_rule_missing_failure_test(
+    name = "validate_nodejs_test_rule_missing_failure_test",
+    target_under_test = ":validate_nodejs_test_rule_missing_target",
+)
+
+select_service_entry_malformed_topt_data_target_rule(
+    name = "select_service_entry_malformed_topt_data_target",
+    tags = ["manual"],
+)
+
+select_service_entry_malformed_topt_data_failure_test(
+    name = "select_service_entry_malformed_topt_data_failure_test",
+    target_under_test = ":select_service_entry_malformed_topt_data_target",
+)
+
+select_service_entry_empty_mapping_target_rule(
+    name = "select_service_entry_empty_mapping_target",
+    tags = ["manual"],
+)
+
+select_service_entry_empty_mapping_failure_test(
+    name = "select_service_entry_empty_mapping_failure_test",
+    target_under_test = ":select_service_entry_empty_mapping_target",
+)
+
+test_suite(
+    name = "tests",
+    tests = [
+        ":service_mapping_entries_filters_non_service_test",
+        ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
+        ":select_module_group_name_test",
+        ":normalize_nodejs_identifier_edge_cases_test",
+        ":normalize_user_data_handles_none_test",
+        ":normalize_user_data_invalid_type_failure_test",
+        ":build_module_labels_valid_test",
+        ":nodejs_stub_includes_manifest_in_files_test",
+        ":nodejs_macro_single_service_wiring_test",
+        ":nodejs_macro_multi_service_wiring_test",
+        ":nodejs_macro_env_none_wiring_test",
+        ":build_module_labels_invalid_shape_failure_test",
+        ":build_module_labels_invalid_entry_failure_test",
+        ":build_module_labels_empty_entry_failure_test",
+        ":build_module_labels_unsanitized_entry_failure_test",
+        ":resolve_topt_service_key_missing_failure_test",
+        ":resolve_topt_service_key_unknown_failure_test",
+        ":validate_nodejs_test_rule_missing_failure_test",
+        ":select_service_entry_malformed_topt_data_failure_test",
+        ":select_service_entry_empty_mapping_failure_test",
+        ":selector_explicit_precedence_test",
+        ":selector_attr_precedence_test",
+        ":selector_deps_precedence_test",
+        ":selector_fallback_test",
+        ":selector_no_match_fallback_test",
+        ":selector_include_disabled_test",
+        ":selector_override_test",
+    ],
+)

@@ -201,6 +201,157 @@ try {
     throw "mock server did not start on port $port"
   }
 
+  # Canonical runtime-name preflight for sync extension coverage.
+  $syncWorkspace = Join-Path $tempRoot "sync_preflight_ws"
+  New-Item -ItemType Directory -Force -Path $syncWorkspace | Out-Null
+  $repoRootForModule = $repoRoot.Replace("\", "/")
+  $moduleContent = @"
+module(name = "topt-windows-integration", version = "0.0.0")
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = "$repoRootForModule",
+)
+
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data",
+    service = "mock-service",
+    runtime_name = "go",
+    runtime_version = "1.2.3",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data_nodejs",
+    service = "mock-service-nodejs",
+    runtime_name = "nodejs",
+    runtime_version = "1.2.3",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data_dotnet",
+    service = "mock-service-dotnet",
+    runtime_name = "dotnet",
+    runtime_version = "1.2.3",
+)
+
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data_ruby",
+    service = "mock-service-ruby",
+    runtime_name = "ruby",
+    runtime_version = "1.2.3",
+)
+
+use_repo(
+    test_optimization_sync,
+    "test_optimization_data",
+    "test_optimization_data_nodejs",
+    "test_optimization_data_dotnet",
+    "test_optimization_data_ruby",
+)
+"@
+  $buildContent = @"
+filegroup(
+    name = "all_sync_payloads",
+    srcs = [
+        "@test_optimization_data//:test_optimization_files",
+        "@test_optimization_data_nodejs//:test_optimization_files",
+        "@test_optimization_data_dotnet//:test_optimization_files",
+        "@test_optimization_data_ruby//:test_optimization_files",
+    ],
+)
+"@
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText((Join-Path $syncWorkspace "MODULE.bazel"), $moduleContent, $utf8NoBom)
+  [System.IO.File]::WriteAllText((Join-Path $syncWorkspace "BUILD.bazel"), $buildContent, $utf8NoBom)
+
+  $bazel = Join-Path $repoRoot "bazelw"
+  $preflightOutBase = Join-Path $tempRoot "sync_preflight_out"
+  $bazelFlags = @("--output_base=$preflightOutBase")
+  $repoEnvs = @(
+    "--repo_env=DD_API_KEY=mock",
+    "--repo_env=DD_TEST_OPTIMIZATION_API_BASE=http://127.0.0.1:$port",
+    "--repo_env=DD_ENV=ci",
+    "--repo_env=DD_GIT_REPOSITORY_URL=https://example.com/repo.git",
+    "--repo_env=DD_GIT_BRANCH=main",
+    "--repo_env=DD_GIT_COMMIT_SHA=1111111",
+    "--repo_env=DD_GIT_HEAD_COMMIT=1111111",
+    "--repo_env=DD_GIT_COMMIT_MESSAGE=Test_commit",
+    "--repo_env=DD_GIT_HEAD_MESSAGE=Test_head",
+    "--repo_env=DD_GIT_TAG=v1.0.0"
+  )
+  Push-Location $syncWorkspace
+  try {
+    & $bazel @bazelFlags fetch "//:all_sync_payloads" @repoEnvs
+    if ($LASTEXITCODE -ne 0) {
+      throw "sync runtime preflight fetch failed with exit code $LASTEXITCODE"
+    }
+    & $bazel @bazelFlags build "//:all_sync_payloads" @repoEnvs
+    if ($LASTEXITCODE -ne 0) {
+      throw "sync runtime preflight build failed with exit code $LASTEXITCODE"
+    }
+  } finally {
+    Pop-Location
+  }
+
+  $cqueryOutput = & $bazel @bazelFlags cquery "@test_optimization_data//:test_optimization_files" "--output=files" @repoEnvs
+  if ($LASTEXITCODE -ne 0) {
+    throw "sync runtime preflight cquery failed with exit code $LASTEXITCODE"
+  }
+  $executionRoot = (& $bazel @bazelFlags info "execution_root" @repoEnvs | Select-Object -First 1).Trim()
+  $settingsPath = $null
+  $candidateBases = @(
+    $preflightOutBase,
+    (Join-Path $preflightOutBase "execroot/_main"),
+    $executionRoot,
+    $syncWorkspace
+  )
+  foreach ($line in @($cqueryOutput)) {
+    $candidate = [string]$line
+    if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    $candidate = $candidate.Trim()
+    $normalized = $candidate.Replace("\", "/")
+    if (-not $normalized.EndsWith("/.testoptimization/cache/http/settings.json")) { continue }
+    if ([System.IO.Path]::IsPathRooted($candidate)) {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $settingsPath = (Resolve-Path -LiteralPath $candidate).Path
+        break
+      }
+      continue
+    }
+    foreach ($base in $candidateBases) {
+      if ([string]::IsNullOrWhiteSpace($base)) { continue }
+      $joined = Join-Path $base $candidate
+      if (Test-Path -LiteralPath $joined -PathType Leaf) {
+        $settingsPath = (Resolve-Path -LiteralPath $joined).Path
+        break
+      }
+    }
+    if ($settingsPath) { break }
+  }
+  if (-not $settingsPath) {
+    throw "failed to resolve settings.json path from sync runtime preflight cquery output"
+  }
+  $toptHttpDir = Split-Path -Parent $settingsPath
+  $toptCacheDir = Split-Path -Parent $toptHttpDir
+  $toptDir = Split-Path -Parent $toptCacheDir
+  $exportPath = Join-Path (Split-Path -Parent $toptDir) "export.bzl"
+  if (-not (Test-Path -LiteralPath $exportPath -PathType Leaf)) {
+    throw "missing export.bzl after sync preflight at $exportPath"
+  }
+  $exportContent = Get-Content -LiteralPath $exportPath -Raw -Encoding UTF8
+  foreach ($runtime in @("go", "python", "java", "nodejs", "dotnet", "ruby")) {
+    if (-not $exportContent.Contains("`"$runtime`": {")) {
+      throw "export.bzl missing runtime key '$runtime'"
+    }
+  }
+
   $testOutputsRoot = Join-Path $tempRoot "bazel-testlogs/pkg/target/test.outputs"
   $testsDir = Join-Path $testOutputsRoot "payloads/tests"
   $coverageDir = Join-Path $testOutputsRoot "payloads/coverage"

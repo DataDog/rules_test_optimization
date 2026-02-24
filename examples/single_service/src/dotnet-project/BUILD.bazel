@@ -1,0 +1,12 @@
+load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+load(":dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
+
+dd_topt_dotnet_test(
+    name = "hello_test",
+    dotnet_test_rule = dotnet_csharp_test_adapter,
+    topt_data = topt_data,
+    module_identifier = "Company.Product.Example",
+    srcs = ["smoke_test.cs"],
+    target_frameworks = ["net8.0"],
+)

@@ -1,0 +1,4 @@
+exports_files([
+    "topt_dotnet_test.bzl",
+    "topt_dotnet_infer.bzl",
+], visibility = ["//visibility:public"])

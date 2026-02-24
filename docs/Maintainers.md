@@ -13,6 +13,12 @@ This document is for contributors and maintainers of
   - `cd modules/python && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
 - Java companion tests from module root:
   - `cd modules/java && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- NodeJS companion tests from module root:
+  - `cd modules/nodejs && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- .NET companion tests from module root:
+  - `cd modules/dotnet && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+- Ruby companion tests from module root:
+  - `cd modules/ruby && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
 - Integration harness:
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
   - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
@@ -28,12 +34,16 @@ This document is for contributors and maintainers of
 - Root workspace resolves `@datadog-rules-test-optimization-python` and
   `@datadog-rules-test-optimization-java` through corresponding dev-only
   bootstrap extensions under `tools/dev/`.
+- Root workspace resolves `@datadog-rules-test-optimization-nodejs`,
+  `@datadog-rules-test-optimization-dotnet`, and
+  `@datadog-rules-test-optimization-ruby` through corresponding dev-only
+  bootstrap extensions under `tools/dev/`.
 - `go_bootstrap.local_go_companion(path = "...")` must stay repository-relative
   (no absolute paths, drive prefixes, or `..` traversal) and must point to a
   real module root containing `MODULE.bazel`.
 - Do not add a root `bazel_dep` edge from core to the Go companion; that creates
   a dependency cycle (`core -> companion -> core`). The same constraint applies
-  to Python and Java companions.
+  to Python, Java, NodeJS, .NET, and Ruby companions.
 - Schema ownership remains in core:
   - `tools/core/schemas/*`
   - `tools/core/validate_payload_schema.py`
@@ -196,8 +206,9 @@ Notes:
 - Repository tracks both `.bazelversion` and `MODULE.bazel.lock` in git to
   reduce local/CI drift.
 - `.bazelversion` is intentionally duplicated at repository root and companion
-  module roots (`modules/go/`, `modules/python/`, `modules/java/`) so either
-  workspace entrypoint resolves the same Bazel line.
+  module roots (`modules/go/`, `modules/python/`, `modules/java/`,
+  `modules/nodejs/`, `modules/dotnet/`, `modules/ruby/`) so either workspace
+  entrypoint resolves the same Bazel line.
 - CI also keeps a dedicated WORKSPACE-compat probe on Bazel `8.4.1` (separate
   from the `8.5.1` baseline lanes) so legacy `--enable_workspace` behavior is
   continuously exercised during Bazel 9 migration.
@@ -208,6 +219,9 @@ Notes:
 cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
 cd modules/python && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
 cd modules/java && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
+cd modules/nodejs && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
+cd modules/dotnet && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
+cd modules/ruby && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..
 ```
 
 ```powershell
@@ -219,6 +233,15 @@ Push-Location modules\python
 ..\..\bazelw test //... --override_module=datadog-rules-test-optimization=../..
 Pop-Location
 Push-Location modules\java
+..\..\bazelw test //... --override_module=datadog-rules-test-optimization=../..
+Pop-Location
+Push-Location modules\nodejs
+..\..\bazelw test //... --override_module=datadog-rules-test-optimization=../..
+Pop-Location
+Push-Location modules\dotnet
+..\..\bazelw test //... --override_module=datadog-rules-test-optimization=../..
+Pop-Location
+Push-Location modules\ruby
 ..\..\bazelw test //... --override_module=datadog-rules-test-optimization=../..
 Pop-Location
 ```
@@ -274,9 +297,13 @@ This repository currently uses pre-publication install paths in README
   - `datadog-rules-test-optimization-go`
   - `datadog-rules-test-optimization-python`
   - `datadog-rules-test-optimization-java`
+  - `datadog-rules-test-optimization-nodejs`
+  - `datadog-rules-test-optimization-dotnet`
+  - `datadog-rules-test-optimization-ruby`
 - Per-module BCR files:
   - `MODULE.bazel`
   - `metadata.json`
   - `source.json`
 - Companion module `source.json` maps archive root to `modules/go` via
-  `strip_prefix` (and similarly for `modules/python` and `modules/java`).
+  `strip_prefix` (and similarly for `modules/python`, `modules/java`,
+  `modules/nodejs`, `modules/dotnet`, and `modules/ruby`).

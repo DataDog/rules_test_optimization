@@ -378,7 +378,7 @@ jobs:
         shell: bash
         run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
-      - name: Verify core/go module versions are aligned
+      - name: Verify core/companion module versions are aligned
         shell: bash
         run: python3 tools/dev/check_module_versions.py
 

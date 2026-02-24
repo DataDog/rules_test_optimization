@@ -15,7 +15,18 @@ repository, use `./bazelw` for local development convenience.
   - `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")` for Go macro usage
   - `bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.0.0")` for Python macro usage
   - `bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.0.0")` for Java macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.0.0")` for NodeJS macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.0.0")` for .NET macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.0.0")` for Ruby macro usage
   - `bazel_dep(name = "rules_go", ...)` for Go examples shown below
+- For NodeJS/.NET/Ruby examples shown below, also pin reference rulesets and register toolchains:
+  - `bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")`
+  - `bazel_dep(name = "rules_nodejs", version = "6.7.3")`
+  - `bazel_dep(name = "rules_dotnet", version = "0.21.5")`
+  - `bazel_dep(name = "rules_ruby", version = "0.21.1")`
+  - `node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node"); node.toolchain(node_version = "22.22.0"); use_repo(node, "nodejs", "nodejs_host", "nodejs_toolchains"); register_toolchains("@nodejs_toolchains//:all")`
+  - `dotnet = use_extension("@rules_dotnet//dotnet:extensions.bzl", "dotnet"); dotnet.toolchain(name = "dotnet", dotnet_version = "8.0.100"); use_repo(dotnet, "dotnet_toolchains"); register_toolchains("@dotnet_toolchains//:all")`
+  - `ruby = use_extension("@rules_ruby//ruby:extensions.bzl", "ruby"); ruby.toolchain(name = "ruby", version = "3.3.9"); use_repo(ruby, "ruby", "ruby_toolchains"); register_toolchains("@ruby_toolchains//:all")`
 - Configure Go toolchains/SDK in your repo if you build Go targets.
 - Provide sync credentials via environment and forward them to repository rules:
   - shell/CI secret: `DD_API_KEY`
@@ -28,7 +39,15 @@ MODULE.bazel:
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.0.0")
+
 bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
+bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
+bazel_dep(name = "rules_dotnet", version = "0.21.5")
+bazel_dep(name = "rules_ruby", version = "0.21.1")
 
 git_override(
     module_name = "datadog-rules-test-optimization",
@@ -41,6 +60,27 @@ git_override(
     commit = "<commit-sha>",
     strip_prefix = "modules/go",
 )
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "22.22.0")
+use_repo(node, "nodejs", "nodejs_host", "nodejs_toolchains")
+register_toolchains("@nodejs_toolchains//:all")
+
+dotnet = use_extension("@rules_dotnet//dotnet:extensions.bzl", "dotnet")
+dotnet.toolchain(
+    name = "dotnet",
+    dotnet_version = "8.0.100",
+)
+use_repo(dotnet, "dotnet_toolchains")
+register_toolchains("@dotnet_toolchains//:all")
+
+ruby = use_extension("@rules_ruby//ruby:extensions.bzl", "ruby")
+ruby.toolchain(
+    name = "ruby",
+    version = "3.3.9",
+)
+use_repo(ruby, "ruby", "ruby_toolchains")
+register_toolchains("@ruby_toolchains//:all")
 
 test_optimization_sync = use_extension(
     "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
@@ -101,6 +141,59 @@ dd_topt_java_test(
     test_class = "com.example.pkg.SampleTest",
     topt_data = topt_data,
     java_test_rule = java_test,
+)
+```
+
+BUILD.bazel (NodeJS companion):
+
+```bzl
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_nodejs_test(
+    name = "pkg_nodejs_test",
+    entry_point = "smoke_test.js",
+    copy_data_to_bin = False,  # Datadog payload data comes from external repos.
+    module_identifier = "apps/nodejs/pkg",
+    topt_data = topt_data,
+    nodejs_test_rule = js_test,
+)
+```
+
+BUILD.bazel (.NET companion):
+
+```bzl
+load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+load(":dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
+
+dd_topt_dotnet_test(
+    name = "pkg_dotnet_test",
+    srcs = ["smoke_test.cs"],
+    target_frameworks = ["net8.0"],
+    module_identifier = "Company.Product.Package",
+    topt_data = topt_data,
+    dotnet_test_rule = dotnet_csharp_test_adapter,
+)
+```
+
+`dotnet_test_adapter.bzl` wraps `@rules_dotnet//dotnet:defs.bzl` `csharp_test` and maps the Datadog macro's `env` to `csharp_test(envs = ...)`.
+
+BUILD.bazel (Ruby companion):
+
+```bzl
+load("@rules_ruby//ruby:defs.bzl", "rb_test")
+load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_ruby_test(
+    name = "pkg_ruby_test",
+    srcs = ["smoke_test.rb"],
+    main = "smoke_test.rb",
+    module_identifier = "apps/ruby/pkg",
+    topt_data = topt_data,
+    ruby_test_rule = rb_test,
 )
 ```
 
@@ -259,6 +352,62 @@ dd_topt_java_test(
     topt_data = topt_data_by_service,
     topt_service = "java_service",              # or raw "java-service"
     java_test_rule = java_test,
+)
+```
+
+BUILD.bazel — NodeJS (mapping + key):
+
+```bzl
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+
+dd_topt_nodejs_test(
+    name = "pkg_nodejs_test",
+    entry_point = "smoke_test.js",
+    copy_data_to_bin = False,  # Datadog payload data comes from external repos.
+    module_identifier = "apps/nodejs/pkg",
+    topt_data = topt_data_by_service,
+    topt_service = "nodejs_service",            # or raw "nodejs-service"
+    nodejs_test_rule = js_test,
+)
+```
+
+BUILD.bazel — .NET (mapping + key):
+
+```bzl
+load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+load(":dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
+
+dd_topt_dotnet_test(
+    name = "pkg_dotnet_test",
+    srcs = ["smoke_test.cs"],
+    target_frameworks = ["net8.0"],
+    module_identifier = "Company.Product.Package",
+    topt_data = topt_data_by_service,
+    topt_service = "dotnet_service",            # or raw "dotnet-service"
+    dotnet_test_rule = dotnet_csharp_test_adapter,
+)
+```
+
+`dotnet_test_adapter.bzl` wraps `@rules_dotnet//dotnet:defs.bzl` `csharp_test` and maps the Datadog macro's `env` to `csharp_test(envs = ...)`.
+
+BUILD.bazel — Ruby (mapping + key):
+
+```bzl
+load("@rules_ruby//ruby:defs.bzl", "rb_test")
+load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
+
+dd_topt_ruby_test(
+    name = "pkg_ruby_test",
+    srcs = ["smoke_test.rb"],
+    main = "smoke_test.rb",
+    module_identifier = "apps/ruby/pkg",
+    topt_data = topt_data_by_service,
+    topt_service = "ruby_service",              # or raw "ruby-service"
+    ruby_test_rule = rb_test,
 )
 ```
 
