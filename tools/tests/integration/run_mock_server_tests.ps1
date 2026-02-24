@@ -77,6 +77,11 @@ function Invoke-UploaderScript {
     $invokeArgs += $ForwardedArgs
   }
   & $PowerShellPath @invokeArgs
+  $lastExitVar = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+  if ($null -eq $lastExitVar -or $null -eq $lastExitVar.Value) {
+    return 0
+  }
+  return [int]$lastExitVar.Value
 }
 
 # Handle Get-FreePort behavior.
@@ -372,18 +377,18 @@ filegroup(
   $env:DD_SITE = "datadoghq.com"
   $env:DD_TEST_OPTIMIZATION_INTAKE_BASE = "http://127.0.0.1:$port"
   Remove-Item Env:DD_TRACE_AGENT_URL -ErrorAction SilentlyContinue
-  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
-  if ($LASTEXITCODE -ne 0) {
-    throw "agentless uploader execution failed with exit code $LASTEXITCODE"
+  $agentlessExitCode = Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
+  if ($agentlessExitCode -ne 0) {
+    throw "agentless uploader execution failed with exit code $agentlessExitCode"
   }
 
   # EVP flow
   Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:DD_TEST_OPTIMIZATION_INTAKE_BASE -ErrorAction SilentlyContinue
   $env:DD_TRACE_AGENT_URL = "http://127.0.0.1:$port"
-  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
-  if ($LASTEXITCODE -ne 0) {
-    throw "evp uploader execution failed with exit code $LASTEXITCODE"
+  $evpExitCode = Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
+  if ($evpExitCode -ne 0) {
+    throw "evp uploader execution failed with exit code $evpExitCode"
   }
 
   $entries = Read-JsonLog -Path $mockLog
