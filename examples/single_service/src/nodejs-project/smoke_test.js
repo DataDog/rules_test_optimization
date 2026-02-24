@@ -1,5 +1,6 @@
 const manifest = process.env.DD_TEST_OPTIMIZATION_MANIFEST_FILE || "";
-if (!manifest.includes(".testoptimization/manifest.txt")) {
+const manifestNormalized = manifest.replace(/\\/g, "/");
+if (!manifestNormalized.includes(".testoptimization/manifest.txt")) {
   throw new Error("DD_TEST_OPTIMIZATION_MANIFEST_FILE is missing manifest path");
 }
 

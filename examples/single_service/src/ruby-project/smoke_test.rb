@@ -1,5 +1,6 @@
 manifest = ENV.fetch("DD_TEST_OPTIMIZATION_MANIFEST_FILE", "")
-unless manifest.include?(".testoptimization/manifest.txt")
+manifest_normalized = manifest.tr("\\", "/")
+unless manifest_normalized.include?(".testoptimization/manifest.txt")
   raise "DD_TEST_OPTIMIZATION_MANIFEST_FILE is missing manifest path"
 end
 
