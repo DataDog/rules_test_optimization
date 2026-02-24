@@ -134,7 +134,6 @@ function Invoke-UploaderScript {
     $invokeArgs += $ForwardedArgs
   }
   & $PowerShellPath @invokeArgs
-  return Get-NativeExitCode
 }
 
 # Handle Get-FreePort behavior.
@@ -558,7 +557,8 @@ filegroup(
   $env:DD_SITE = "datadoghq.com"
   $env:DD_TEST_OPTIMIZATION_INTAKE_BASE = "http://127.0.0.1:$port"
   Remove-Item Env:DD_TRACE_AGENT_URL -ErrorAction SilentlyContinue
-  $agentlessExitCode = Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
+  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
+  $agentlessExitCode = Get-NativeExitCode
   if ($agentlessExitCode -ne 0) {
     throw "agentless uploader execution failed with exit code $agentlessExitCode"
   }
@@ -567,7 +567,8 @@ filegroup(
   Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:DD_TEST_OPTIMIZATION_INTAKE_BASE -ErrorAction SilentlyContinue
   $env:DD_TRACE_AGENT_URL = "http://127.0.0.1:$port"
-  $evpExitCode = Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
+  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
+  $evpExitCode = Get-NativeExitCode
   if ($evpExitCode -ne 0) {
     throw "evp uploader execution failed with exit code $evpExitCode"
   }
