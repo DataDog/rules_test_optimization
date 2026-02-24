@@ -60,13 +60,36 @@ function Get-PowerShellCommand {
   throw "PowerShell host not found (tried powershell.exe, pwsh, powershell)"
 }
 
-# Handle Get-BashCommand behavior.
-function Get-BashCommand {
-  foreach ($name in @("bash", "bash.exe")) {
+# Resolve Bazel invocation mode without requiring bash.
+function Resolve-BazelInvoker {
+  param([string]$RepoRoot)
+
+  foreach ($name in @("bazelisk", "bazel")) {
     $cmd = Get-Command $name -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    if ($cmd) {
+      return @{
+        mode = "native"
+        command = $cmd.Source
+      }
+    }
   }
-  throw "bash not found (tried bash, bash.exe)"
+
+  $wrapper = Join-Path $RepoRoot "bazelw"
+  if (Test-Path -LiteralPath $wrapper -PathType Leaf) {
+    foreach ($name in @("bash", "bash.exe")) {
+      $bashCmd = Get-Command $name -ErrorAction SilentlyContinue
+      if ($bashCmd) {
+        Write-Host "warning: bazel/bazelisk not found in PATH; falling back to bazelw via bash"
+        return @{
+          mode = "wrapper"
+          command = $wrapper
+          bash = $bashCmd.Source
+        }
+      }
+    }
+  }
+
+  throw "unable to locate Bazel command (tried bazelisk, bazel, and bazelw+bash)"
 }
 
 # Read LASTEXITCODE safely under strict mode.
@@ -78,18 +101,20 @@ function Get-NativeExitCode {
   return [int]$lastExitVar.Value
 }
 
-# Invoke bazelw through bash so stdout and exit code are consistent on Windows.
+# Invoke Bazel command (native if possible, wrapper fallback otherwise).
 function Invoke-BazelCommand {
   param(
-    [string]$BashPath,
-    [string]$BazelWrapperPath,
+    [hashtable]$BazelInvoker,
     [string[]]$BazelArgs
   )
-  $invokeArgs = @("-lc", 'exec "$@"', "--", $BazelWrapperPath)
-  if ($BazelArgs) {
-    $invokeArgs += $BazelArgs
+  if ($BazelInvoker["mode"] -eq "native") {
+    & $BazelInvoker["command"] @BazelArgs
+    return
   }
-  & $BashPath @invokeArgs
+
+  $invokeArgs = @("-lc", 'exec "$@"', "--", $BazelInvoker["command"])
+  if ($BazelArgs) { $invokeArgs += $BazelArgs }
+  & $BazelInvoker["bash"] @invokeArgs
 }
 
 # Handle Invoke-UploaderScript behavior.
@@ -196,7 +221,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Get-RepoRoot -StartPath $scriptDir
 $python = Get-PythonCommand
 $powerShellHost = Get-PowerShellCommand
-$bashPath = Get-BashCommand
+$bazelInvoker = Resolve-BazelInvoker -RepoRoot $repoRoot
 $tempDir = Get-TempDirectory
 $tempRoot = Join-Path $tempDir ("dd_topt_windows_integration_" + [guid]::NewGuid().ToString("N"))
 $fixturesDir = Join-Path $repoRoot "tools/tests/integration/fixtures"
@@ -305,10 +330,6 @@ filegroup(
   [System.IO.File]::WriteAllText((Join-Path $syncWorkspace "MODULE.bazel"), $moduleContent, $utf8NoBom)
   [System.IO.File]::WriteAllText((Join-Path $syncWorkspace "BUILD.bazel"), $buildContent, $utf8NoBom)
 
-  $bazelWrapper = Join-Path $repoRoot "bazelw"
-  if (-not (Test-Path -LiteralPath $bazelWrapper -PathType Leaf)) {
-    throw "bazel wrapper not found: $bazelWrapper"
-  }
   $preflightOutBase = Join-Path $tempRoot "sync_preflight_out"
   $bazelFlags = @("--output_base=$preflightOutBase")
   $repoEnvs = @(
@@ -325,12 +346,12 @@ filegroup(
   )
   Push-Location $syncWorkspace
   try {
-    Invoke-BazelCommand -BashPath $bashPath -BazelWrapperPath $bazelWrapper -BazelArgs (@($bazelFlags + @("fetch", "//:all_sync_payloads") + $repoEnvs))
+    Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("fetch", "//:all_sync_payloads") + $repoEnvs))
     $syncFetchExitCode = Get-NativeExitCode
     if ($syncFetchExitCode -ne 0) {
       throw "sync runtime preflight fetch failed with exit code $syncFetchExitCode"
     }
-    Invoke-BazelCommand -BashPath $bashPath -BazelWrapperPath $bazelWrapper -BazelArgs (@($bazelFlags + @("build", "//:all_sync_payloads") + $repoEnvs))
+    Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("build", "//:all_sync_payloads") + $repoEnvs))
     $syncBuildExitCode = Get-NativeExitCode
     if ($syncBuildExitCode -ne 0) {
       throw "sync runtime preflight build failed with exit code $syncBuildExitCode"
@@ -339,13 +360,13 @@ filegroup(
     Pop-Location
   }
 
-  $cqueryOutput = Invoke-BazelCommand -BashPath $bashPath -BazelWrapperPath $bazelWrapper -BazelArgs (@($bazelFlags + @("cquery", "@test_optimization_data//:test_optimization_files", "--output=files") + $repoEnvs))
+  $cqueryOutput = Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("cquery", "@test_optimization_data//:test_optimization_files", "--output=files") + $repoEnvs))
   $syncCqueryExitCode = Get-NativeExitCode
   if ($syncCqueryExitCode -ne 0) {
     throw "sync runtime preflight cquery failed with exit code $syncCqueryExitCode"
   }
   $actualOutputBase = ""
-  $outputBaseOutput = Invoke-BazelCommand -BashPath $bashPath -BazelWrapperPath $bazelWrapper -BazelArgs (@($bazelFlags + @("info", "output_base") + $repoEnvs))
+  $outputBaseOutput = Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("info", "output_base") + $repoEnvs))
   $outputBaseExitCode = Get-NativeExitCode
   if ($outputBaseExitCode -eq 0) {
     $outputBaseLines = @($outputBaseOutput)
@@ -358,7 +379,7 @@ filegroup(
   }
 
   $executionRoot = ""
-  $executionRootOutput = Invoke-BazelCommand -BashPath $bashPath -BazelWrapperPath $bazelWrapper -BazelArgs (@($bazelFlags + @("info", "execution_root") + $repoEnvs))
+  $executionRootOutput = Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("info", "execution_root") + $repoEnvs))
   $executionRootExitCode = Get-NativeExitCode
   if ($executionRootExitCode -eq 0) {
     $executionRootLines = @($executionRootOutput)
