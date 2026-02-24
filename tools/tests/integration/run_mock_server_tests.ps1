@@ -359,6 +359,7 @@ filegroup(
     }
     if ($settingsPath) { break }
   }
+  $externalRoots = @()
   if (-not $settingsPath) {
     $externalRoots = @(
       (Join-Path $preflightOutBase "external"),
@@ -367,40 +368,55 @@ filegroup(
     if (-not [string]::IsNullOrWhiteSpace($executionRoot)) {
       $externalRoots += (Join-Path $executionRoot "external")
     }
-    $externalRoots = @($externalRoots | Select-Object -Unique)
+    $externalRoots = @(
+      $externalRoots |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      Select-Object -Unique
+    )
 
     $settingsCandidates = @()
     foreach ($externalRoot in $externalRoots) {
       if (-not (Test-Path -LiteralPath $externalRoot -PathType Container)) { continue }
-      $rootCandidates = Get-ChildItem -LiteralPath $externalRoot -Recurse -File -Filter "settings.json" -ErrorAction SilentlyContinue |
-        Where-Object {
-          ($_.FullName.Replace("\", "/")) -match "/\\.testoptimization/cache/http/settings\\.json$"
+      $repoDirs = Get-ChildItem -LiteralPath $externalRoot -Directory -Force -ErrorAction SilentlyContinue
+      foreach ($repoDir in $repoDirs) {
+        $settingsCandidate = Join-Path $repoDir.FullName ".testoptimization/cache/http/settings.json"
+        if (-not (Test-Path -LiteralPath $settingsCandidate -PathType Leaf)) { continue }
+
+        $score = 50
+        $repoDirNorm = $repoDir.FullName.Replace("\", "/").ToLowerInvariant()
+        if ($repoDirNorm -match "test_optimization_data") { $score = 20 }
+        if ($repoDirNorm -match "test_optimization_data_(nodejs|dotnet|ruby)") { $score = 40 }
+
+        $exportCandidate = Join-Path $repoDir.FullName "export.bzl"
+        if (Test-Path -LiteralPath $exportCandidate -PathType Leaf) {
+          $exportText = Get-Content -LiteralPath $exportCandidate -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+          if ($exportText -match 'repo_name"\s*:\s*"test_optimization_data"') {
+            $score = 0
+          } elseif ($exportText -match 'repo_name"\s*:\s*"test_optimization_data_(nodejs|dotnet|ruby)"') {
+            $score = [Math]::Min($score, 30)
+          } elseif ($exportText -match 'repo_name"\s*:\s*"test_optimization_data') {
+            $score = [Math]::Min($score, 10)
+          }
         }
-      if ($rootCandidates) {
-        $settingsCandidates += $rootCandidates
+
+        $settingsCandidates += [pscustomobject]@{
+          Score = $score
+          Path = (Resolve-Path -LiteralPath $settingsCandidate).Path
+          RepoDir = $repoDir.FullName
+        }
       }
     }
 
     if ($settingsCandidates.Count -gt 0) {
-      $preferredSettings = $settingsCandidates |
-        Sort-Object @{
-          Expression = {
-            $normalizedPath = $_.FullName.Replace("\", "/").ToLowerInvariant()
-            if ($normalizedPath -match "/test_optimization_data/\\.testoptimization/cache/http/settings\\.json$") { 0 }
-            elseif ($normalizedPath -match "/test_optimization_data_(nodejs|dotnet|ruby)/\\.testoptimization/cache/http/settings\\.json$") { 2 }
-            elseif ($normalizedPath -match "test_optimization_data") { 1 }
-            else { 3 }
-          }
-        }, @{
-          Expression = { $_.FullName }
-        }
-      $settingsPath = (Resolve-Path -LiteralPath $preferredSettings[0].FullName).Path
-      Write-Host "resolved settings.json from recursive external fallback: $settingsPath"
+      $preferredSettings = $settingsCandidates | Sort-Object Score, Path | Select-Object -First 1
+      $settingsPath = $preferredSettings.Path
+      Write-Host "resolved settings.json from external directory fallback: $settingsPath"
     }
   }
   if (-not $settingsPath) {
     $cquerySample = (@($cqueryOutput) | Select-Object -First 10) -join " | "
-    throw "failed to resolve settings.json path from sync runtime preflight cquery output (output_base=$preflightOutBase, execution_root=$executionRoot, cquery_sample=$cquerySample)"
+    $externalRootsSample = ($externalRoots | Select-Object -First 5) -join ","
+    throw "failed to resolve settings.json path from sync runtime preflight cquery output (output_base=$preflightOutBase, execution_root=$executionRoot, external_roots=$externalRootsSample, cquery_sample=$cquerySample)"
   }
   $toptHttpDir = Split-Path -Parent $settingsPath
   $toptCacheDir = Split-Path -Parent $toptHttpDir
