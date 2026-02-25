@@ -3,11 +3,15 @@ load(
     "dedup_keys_test",
     "sanitize_label_fragment_test",
     "log_helpers_and_is_dict_test",
+    "validate_api_key_carriage_return_failure_test",
+    "validate_api_key_carriage_return_target_rule",
     "validate_api_key_missing_failure_test",
     "validate_api_key_normalization_test",
     "validate_api_key_control_chars_failure_test",
     "validate_api_key_control_chars_target_rule",
     "validate_api_key_missing_target_rule",
+    "validate_api_key_tab_failure_test",
+    "validate_api_key_tab_target_rule",
     "validate_api_key_whitespace_failure_test",
     "validate_api_key_whitespace_target_rule",
     "validate_runtime_name_test",
@@ -374,6 +378,26 @@ validate_api_key_control_chars_target_rule(
 validate_api_key_control_chars_failure_test(
     name = "validate_api_key_control_chars_failure_test",
     target_under_test = ":validate_api_key_control_chars_target",
+)
+
+validate_api_key_carriage_return_target_rule(
+    name = "validate_api_key_carriage_return_target",
+    tags = ["manual"],
+)
+
+validate_api_key_carriage_return_failure_test(
+    name = "validate_api_key_carriage_return_failure_test",
+    target_under_test = ":validate_api_key_carriage_return_target",
+)
+
+validate_api_key_tab_target_rule(
+    name = "validate_api_key_tab_target",
+    tags = ["manual"],
+)
+
+validate_api_key_tab_failure_test(
+    name = "validate_api_key_tab_failure_test",
+    target_under_test = ":validate_api_key_tab_target",
 )
 
 validate_service_name_missing_target_rule(
@@ -760,6 +784,8 @@ test_suite(
         ":validate_api_key_missing_failure_test",
         ":validate_api_key_whitespace_failure_test",
         ":validate_api_key_control_chars_failure_test",
+        ":validate_api_key_carriage_return_failure_test",
+        ":validate_api_key_tab_failure_test",
         ":validate_runtime_name_test",
         ":validate_runtime_version_test",
         ":validate_service_name_missing_failure_test",

@@ -37,11 +37,7 @@ RUNTIME_VALUE_WARN_LEN = 100
 RULES_VERSION = "1.0.0"
 UPLOADER_VERSION = "2.0.0"
 LABEL_FRAGMENT_ALLOWED_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
-API_KEY_CONTROL_CHARS = (
-    "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f" +
-    "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f" +
-    "\x7f"
-)
+API_KEY_CONTROL_CHARS = "\n\r\t"
 
 def log_info(message):
     """Print user-facing progress messages."""
@@ -224,7 +220,8 @@ Please provide a non-empty API key via:
 """)
 
     for i in range(len(trimmed)):
-        if API_KEY_CONTROL_CHARS.find(trimmed[i]) != -1:
+        ch = trimmed[i]
+        if ch in API_KEY_CONTROL_CHARS or ch < " " or ch > "~":
             fail("""
 test_optimization: DD_API_KEY must not contain control characters.
 

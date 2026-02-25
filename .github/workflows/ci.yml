@@ -47,18 +47,71 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/...
 
-      - name: Run Bazel tests (companion modules)
+      - name: Run Bazel tests (go companion module)
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 25
+        timeout-minutes: 10
         shell: bash
         run: |
-          for module in go python java nodejs dotnet ruby; do
-            (
-              cd "modules/${module}" &&
-              ../../bazelw test //... \
+          (
+            cd modules/go &&
+            ../../bazelw test //... \
               --override_module=datadog-rules-test-optimization=../..
-            )
-          done
+          )
+
+      - name: Run Bazel tests (python companion module)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/python &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (java companion module)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/java &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (nodejs companion module)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/nodejs &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (dotnet companion module)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/dotnet &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (ruby companion module)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/ruby &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
 
       - name: Build examples
         timeout-minutes: 10
@@ -262,115 +315,17 @@ jobs:
               sys.exit(1)
           PY
 
-  shell-lint:
+  shared-validation:
     uses: ./.github/workflows/shared-validation.yml
     with:
       python_version: "3.11"
       run_buildifier: true
       verify_bazelrc_sync: true
-
-  gofmt-check:
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Verify Go files are gofmt formatted
-        shell: bash
-        run: |
-          mapfile -t go_files < <(git ls-files '*.go')
-          if (( ${#go_files[@]} == 0 )); then
-            exit 0
-          fi
-          unformatted="$(gofmt -l "${go_files[@]}")"
-          if [[ -n "${unformatted}" ]]; then
-            echo "error: gofmt found unformatted files:"
-            echo "${unformatted}"
-            exit 1
-          fi
-
-  schema-sync-check:
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install Python tooling dependencies
-        shell: bash
-        run: python3 -m pip install --require-hashes -r tools/requirements.txt
-
-      - name: Verify core/companion module versions are aligned
-        shell: bash
-        run: python3 tools/dev/check_module_versions.py
-
-      - name: Verify .bazelversion parity
-        shell: bash
-        run: python3 tools/dev/check_bazelversion_sync.py
-
-      - name: Validate integration fixture and snapshot JSON
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          files = sorted(Path("tools/tests/integration/fixtures").glob("*.json"))
-          files += sorted(Path("tools/tests/integration/snapshots").glob("*.json"))
-          for path in files:
-            with path.open("r", encoding="utf-8") as handle:
-              json.load(handle)
-            print(f"valid json: {path}")
-          PY
-
-      - name: Verify schema files are in sync
-        shell: bash
-        run: python3 tools/core/schemas/sync_agentless_schema.py --check
-
-      - name: Verify schema parser parity (PyYAML vs Ruby)
-        shell: bash
-        run: python3 tools/core/schemas/check_schema_parser_parity.py
-
-  powershell-lint:
-    timeout-minutes: 15
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install PSScriptAnalyzer
-        shell: pwsh
-        run: |
-          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
-            if (-not (Get-PackageProvider -ListAvailable -Name NuGet -ErrorAction SilentlyContinue)) {
-              Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
-            }
-            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-            Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber
-          }
-
-      - name: Lint integration PowerShell scripts
-        shell: pwsh
-        run: |
-          $results = Invoke-ScriptAnalyzer -Path "tools/tests/integration/*.ps1" -Severity Error
-          if ($results) {
-            $results | Format-Table -AutoSize
-            throw "PSScriptAnalyzer found lint errors."
-          }
-
-      - name: Lint embedded uploader templates (PowerShell lane)
-        shell: pwsh
-        run: python tools/dev/lint_uploader_templates.py --skip-shellcheck
+      run_gofmt: true
+      run_powershell_lint: true
+      run_schema_validation: true
+      run_fixture_json_validation: true
+      run_schema_parser_parity: true
 
   # Policy: keep the hermetic lane Linux-only for now.
   # Rationale: sandbox/network-blocking semantics are most reliable on Linux;
@@ -397,14 +352,13 @@ jobs:
           --test_env=LC_ALL=C \
           --enable_runfiles
 
-      - name: Run Bazel tests (companion hermetic lane)
-        timeout-minutes: 25
+      - name: Run Bazel tests (go companion hermetic lane)
+        timeout-minutes: 10
         shell: bash
         run: |
-          for module in go python java nodejs dotnet ruby; do
-            (
-              cd "modules/${module}" &&
-              ../../bazelw test //... \
+          (
+            cd modules/go &&
+            ../../bazelw test //... \
               --override_module=datadog-rules-test-optimization=../.. \
               --spawn_strategy=sandboxed \
               --strategy=TestRunner=sandboxed \
@@ -415,5 +369,99 @@ jobs:
               --test_env=LANG=C \
               --test_env=LC_ALL=C \
               --enable_runfiles
-            )
-          done
+          )
+
+      - name: Run Bazel tests (python companion hermetic lane)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/python &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../.. \
+              --spawn_strategy=sandboxed \
+              --strategy=TestRunner=sandboxed \
+              --incompatible_strict_action_env \
+              --sandbox_default_allow_network=false \
+              --modify_execution_info=TestRunner=+block-network \
+              --test_env=TZ=UTC \
+              --test_env=LANG=C \
+              --test_env=LC_ALL=C \
+              --enable_runfiles
+          )
+
+      - name: Run Bazel tests (java companion hermetic lane)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/java &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../.. \
+              --spawn_strategy=sandboxed \
+              --strategy=TestRunner=sandboxed \
+              --incompatible_strict_action_env \
+              --sandbox_default_allow_network=false \
+              --modify_execution_info=TestRunner=+block-network \
+              --test_env=TZ=UTC \
+              --test_env=LANG=C \
+              --test_env=LC_ALL=C \
+              --enable_runfiles
+          )
+
+      - name: Run Bazel tests (nodejs companion hermetic lane)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/nodejs &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../.. \
+              --spawn_strategy=sandboxed \
+              --strategy=TestRunner=sandboxed \
+              --incompatible_strict_action_env \
+              --sandbox_default_allow_network=false \
+              --modify_execution_info=TestRunner=+block-network \
+              --test_env=TZ=UTC \
+              --test_env=LANG=C \
+              --test_env=LC_ALL=C \
+              --enable_runfiles
+          )
+
+      - name: Run Bazel tests (dotnet companion hermetic lane)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/dotnet &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../.. \
+              --spawn_strategy=sandboxed \
+              --strategy=TestRunner=sandboxed \
+              --incompatible_strict_action_env \
+              --sandbox_default_allow_network=false \
+              --modify_execution_info=TestRunner=+block-network \
+              --test_env=TZ=UTC \
+              --test_env=LANG=C \
+              --test_env=LC_ALL=C \
+              --enable_runfiles
+          )
+
+      - name: Run Bazel tests (ruby companion hermetic lane)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          (
+            cd modules/ruby &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../.. \
+              --spawn_strategy=sandboxed \
+              --strategy=TestRunner=sandboxed \
+              --incompatible_strict_action_env \
+              --sandbox_default_allow_network=false \
+              --modify_execution_info=TestRunner=+block-network \
+              --test_env=TZ=UTC \
+              --test_env=LANG=C \
+              --test_env=LC_ALL=C \
+              --enable_runfiles
+          )
