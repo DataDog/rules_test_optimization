@@ -1,0 +1,88 @@
+name: Shared Validation
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        required: false
+        type: string
+        default: "3.11"
+      run_buildifier:
+        required: false
+        type: boolean
+        default: false
+      verify_bazelrc_sync:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  BUILDIFIER_VERSION: "8.2.1"
+  BUILDIFIER_SHA256_LINUX_AMD64: "6ceb7b0ab7cf66fceccc56a027d21d9cc557a7f34af37d2101edb56b92fcfa1a"
+
+jobs:
+  shell-lint:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Lint repository shell scripts
+        shell: bash
+        run: |
+          shellcheck --severity=error \
+            bazelw \
+            examples/common/runtests_common.sh \
+            examples/single_service/runtests.sh \
+            examples/multi_service/runtests.sh \
+            tools/tests/integration/*.sh \
+            tools/tests/python/run_python_tools_test.sh \
+            tools/tests/python/run_bazelw_wrapper_test.sh
+
+      - name: Install Buildifier
+        if: ${{ inputs.run_buildifier }}
+        shell: bash
+        run: |
+          curl -sSL -o /tmp/buildifier "https://github.com/bazelbuild/buildtools/releases/download/v${BUILDIFIER_VERSION}/buildifier-linux-amd64"
+          echo "${BUILDIFIER_SHA256_LINUX_AMD64}  /tmp/buildifier" | sha256sum -c -
+          chmod +x /tmp/buildifier
+          sudo mv /tmp/buildifier /usr/local/bin/buildifier
+
+      - name: Check Starlark formatting with Buildifier
+        if: ${{ inputs.run_buildifier }}
+        shell: bash
+        run: |
+          mapfile -t starlark_files < <(
+            git ls-files -- \
+              '*.bzl' 'BUILD' 'BUILD.bazel' 'WORKSPACE' 'MODULE.bazel'
+          )
+          if (( ${#starlark_files[@]} == 0 )); then
+            echo "No Starlark files found."
+            exit 0
+          fi
+          buildifier -mode=check "${starlark_files[@]}"
+
+      - name: Lint embedded uploader templates (bash)
+        shell: bash
+        run: python3 tools/dev/lint_uploader_templates.py --skip-powershell-parse
+
+      - name: Verify example .bazelrc files stay in sync
+        if: ${{ inputs.verify_bazelrc_sync }}
+        shell: bash
+        run: |
+          cmp --silent examples/single_service/.bazelrc examples/multi_service/.bazelrc

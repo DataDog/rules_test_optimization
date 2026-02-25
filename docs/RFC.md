@@ -3,6 +3,7 @@
 Author: Tony Redondo
 Date: Feb 18, 2026  
 Status: Implemented (v1)
+> Last reviewed: 2026-02-25
 
 This document outlines a proposed method for integrating Datadog Test Optimization with Bazel. The approach involves using a module extension and repository rule to gather metadata during module/repository resolution, and a runtime uploader to transmit test and coverage data back to the backend. The document details the rationale behind this design, current behaviors, limitations, and a strategy for widespread adoption across various services and programming languages.
 

@@ -52,6 +52,7 @@ load(
     "//tools/core:common_utils.bzl",
     "RULES_VERSION",
     "dedup_keys",
+    "fail_with_prefix",
     "log_debug",
     "log_info",
     "sanitize_label_fragment",
@@ -106,14 +107,14 @@ def _parse_int_from_env_or_fail(env_key, raw_value):
     """Parse a base-10 integer from an environment variable value."""
     s = (raw_value or "").strip()
     if not s:
-        fail("test_optimization_sync: %s must be a non-empty integer when set" % env_key)
+        fail_with_prefix("test_optimization_sync", "%s must be a non-empty integer when set" % env_key)
     start = 1 if s.startswith("-") else 0
     if start == len(s):
-        fail("test_optimization_sync: %s must be a valid integer, got %s" % (env_key, repr(raw_value)))
+        fail_with_prefix("test_optimization_sync", "%s must be a valid integer, got %s" % (env_key, repr(raw_value)))
     for i in range(start, len(s)):
         ch = s[i]
         if ch < "0" or ch > "9":
-            fail("test_optimization_sync: %s must be a valid integer, got %s" % (env_key, repr(raw_value)))
+            fail_with_prefix("test_optimization_sync", "%s must be a valid integer, got %s" % (env_key, repr(raw_value)))
     return int(s)
 
 def _resolve_http_int_setting(ctx, attr_name, env_key, default_value, allow_zero = False):
@@ -132,9 +133,9 @@ def _resolve_http_int_setting(ctx, attr_name, env_key, default_value, allow_zero
             source = "default"
     if allow_zero:
         if value < 0:
-            fail("test_optimization_sync: %s must be >= 0 (from %s), got %d" % (attr_name, source, value))
+            fail_with_prefix("test_optimization_sync", "%s must be >= 0 (from %s), got %d" % (attr_name, source, value))
     elif value <= 0:
-        fail("test_optimization_sync: %s must be > 0 (from %s), got %d" % (attr_name, source, value))
+        fail_with_prefix("test_optimization_sync", "%s must be > 0 (from %s), got %d" % (attr_name, source, value))
     return value
 
 def _resolve_http_policy(ctx):
@@ -214,7 +215,10 @@ def _curl_base_args(policy):
 def _is_windows(ctx):
     """Best-effort repository-host Windows detection."""
 
-    # _is_windows: best-effort host OS detection using environment variables available in repository_ctx.
+    # _is_windows: prefer repository_ctx.os.name, then fall back to env heuristics.
+    os_name = (getattr(ctx.os, "name", "") or "").lower()
+    if "windows" in os_name:
+        return True
     os_env = (ctx.os.environ.get("OS") or "").lower()
     comspec = (ctx.os.environ.get("ComSpec") or ctx.os.environ.get("COMSPEC") or "").lower()
     return ("windows" in os_env) or comspec.endswith("cmd.exe")
@@ -306,7 +310,7 @@ def _ensure_parent_directory(ctx, path, debug):
         res = ctx.execute(["mkdir", "-p", dirp])
     log_debug(debug, "filesystem", "Ensured directory '%s' for output '%s' (rc=%d)" % (dirp, path, res.return_code))
     if res.return_code != 0:
-        fail("Failed creating directory %s for output %s: %s" % (dirp, path, (res.stderr or "").strip()))
+        fail_with_prefix("test_optimization_sync", "Failed creating directory %s for output %s: %s" % (dirp, path, (res.stderr or "").strip()))
 
 def _dirname(path):
     """Return parent directory using simple Starlark path operations."""
@@ -325,24 +329,24 @@ def _normalize_out_dir_or_fail(out_dir):
     # Keep output paths predictable and avoid traversal/absolute path inputs.
     raw = (out_dir or "").strip()
     if not raw:
-        fail("test_optimization_sync: out_dir must be a non-empty relative path")
+        fail_with_prefix("test_optimization_sync", "out_dir must be a non-empty relative path")
 
     normalized = raw.replace("\\", "/")
     if normalized.startswith("/"):
-        fail("test_optimization_sync: out_dir must be relative (absolute paths are not allowed): %s" % repr(out_dir))
+        fail_with_prefix("test_optimization_sync", "out_dir must be relative (absolute paths are not allowed): %s" % repr(out_dir))
     if len(normalized) >= 2 and normalized[1] == ":":
-        fail("test_optimization_sync: out_dir must not include a Windows drive prefix: %s" % repr(out_dir))
+        fail_with_prefix("test_optimization_sync", "out_dir must not include a Windows drive prefix: %s" % repr(out_dir))
 
     segments = []
     for seg in normalized.split("/"):
         if seg == "" or seg == ".":
             continue
         if seg == "..":
-            fail("test_optimization_sync: out_dir must not contain '..' path traversal segments: %s" % repr(out_dir))
+            fail_with_prefix("test_optimization_sync", "out_dir must not contain '..' path traversal segments: %s" % repr(out_dir))
         segments.append(seg)
 
     if not segments:
-        fail("test_optimization_sync: out_dir must resolve to a non-empty relative path: %s" % repr(out_dir))
+        fail_with_prefix("test_optimization_sync", "out_dir must resolve to a non-empty relative path: %s" % repr(out_dir))
     return "/".join(segments)
 
 def _validate_abs_path_command_input_or_fail(abs_path):
@@ -350,7 +354,7 @@ def _validate_abs_path_command_input_or_fail(abs_path):
     if not abs_path:
         return
     if ("\n" in abs_path) or ("\r" in abs_path) or ("\t" in abs_path):
-        fail("test_optimization_sync: absolute path contains unsupported control characters: %s" % repr(abs_path))
+        fail_with_prefix("test_optimization_sync", "absolute path contains unsupported control characters: %s" % repr(abs_path))
 
 def _try_read_abs_file(ctx, abs_path):
     """Best-effort absolute file read with explicit miss/read-error signaling."""
@@ -452,7 +456,7 @@ def _parse_go_module_path(go_mod_content):
             rest = s[len("module"):].strip()
 
             # Trim optional quotes
-            if len(rest) >= 2 and ((rest[0] == '"' and rest[-1] == '"') or (rest[0] == "'" and rest[-1] == "'")):
+            if len(rest) >= 2 and rest[0] == '"' and rest[-1] == '"':
                 rest = rest[1:-1]
             return rest
     return ""
@@ -691,26 +695,26 @@ def _normalize_dd_site_or_fail(site_env):
 
     site = site.lower()
     if not site:
-        fail("test_optimization_sync: DD_SITE resolved to an empty hostname: %s" % repr(site_env))
+        fail_with_prefix("test_optimization_sync", "DD_SITE resolved to an empty hostname: %s" % repr(site_env))
     if "@" in site:
-        fail("test_optimization_sync: DD_SITE must not include credentials/userinfo: %s" % repr(site_env))
+        fail_with_prefix("test_optimization_sync", "DD_SITE must not include credentials/userinfo: %s" % repr(site_env))
     if ":" in site:
-        fail("test_optimization_sync: DD_SITE must be a hostname without an explicit port: %s" % repr(site_env))
+        fail_with_prefix("test_optimization_sync", "DD_SITE must be a hostname without an explicit port: %s" % repr(site_env))
     if site.startswith(".") or site.endswith(".") or ".." in site:
-        fail("test_optimization_sync: DD_SITE must be a valid hostname: %s" % repr(site_env))
+        fail_with_prefix("test_optimization_sync", "DD_SITE must be a valid hostname: %s" % repr(site_env))
 
     labels = site.split(".")
     for label in labels:
         if not label:
-            fail("test_optimization_sync: DD_SITE must be a valid hostname: %s" % repr(site_env))
+            fail_with_prefix("test_optimization_sync", "DD_SITE must be a valid hostname: %s" % repr(site_env))
         if label.startswith("-") or label.endswith("-"):
-            fail("test_optimization_sync: DD_SITE labels must not start/end with '-': %s" % repr(site_env))
+            fail_with_prefix("test_optimization_sync", "DD_SITE labels must not start/end with '-': %s" % repr(site_env))
         for i in range(len(label)):
             ch = label[i]
             is_alpha = (ch >= "a" and ch <= "z")
             is_num = (ch >= "0" and ch <= "9")
             if not (is_alpha or is_num or ch == "-"):
-                fail("test_optimization_sync: DD_SITE contains unsupported hostname character %s in %s" % (repr(ch), repr(site_env)))
+                fail_with_prefix("test_optimization_sync", "DD_SITE contains unsupported hostname character %s in %s" % (repr(ch), repr(site_env)))
     return site
 
 def _compute_dd_api_base(site_env):
@@ -754,22 +758,22 @@ def _decode_json_object_or_fail(content, context):
     # Parse API/file JSON with actionable guardrails for malformed responses.
     trimmed = (content or "").strip()
     if not trimmed:
-        fail("test_optimization_sync: %s response is empty; expected JSON object" % context)
+        fail_with_prefix("test_optimization_sync", "%s response is empty; expected JSON object" % context)
 
     # Catch common non-JSON responses (HTML/text proxy errors) early.
     if not (trimmed.startswith("{") or trimmed.startswith("[")):
         sample = trimmed[:120].replace("\n", " ").replace("\r", " ")
-        fail(
+        fail_with_prefix(
+            "test_optimization_sync",
             (
-                "test_optimization_sync: %s response is not JSON (starts with: %s). " +
+                "%s response is not JSON (starts with: %s). " +
                 "Check DD_SITE/DD_TEST_OPTIMIZATION_API_BASE, credentials, and endpoint routing."
-            ) %
-            (context, repr(sample)),
+            ) % (context, repr(sample)),
         )
 
     obj = json.decode(trimmed)
     if not _is_dict(obj):
-        fail("test_optimization_sync: %s response must be a JSON object, got %s" % (context, type(obj)))
+        fail_with_prefix("test_optimization_sync", "%s response must be a JSON object, got %s" % (context, type(obj)))
     return obj
 
 def _collect_known_tests_modules(ctx, known_tests_file):
@@ -950,8 +954,9 @@ def _record_sync_extension_repo_owner_or_fail(seen_repo_owners, repo_name, owner
     """Record extension repo owner and fail on duplicate repository names."""
     prev_owner = seen_repo_owners.get(repo_name)
     if prev_owner != None:
-        fail(
-            "test_optimization_sync_extension: duplicate repository name '%s' declared by modules '%s' and '%s'. Use unique names for each test_optimization_sync tag." %
+        fail_with_prefix(
+            "test_optimization_sync_extension",
+            "duplicate repository name '%s' declared by modules '%s' and '%s'. Use unique names for each test_optimization_sync tag." %
             (repo_name, prev_owner, owner),
         )
     seen_repo_owners[repo_name] = owner
@@ -1039,7 +1044,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned for ' + $Url) -f $code; exit 1 }")
         lines.append("    Write-Output $code")
         lines.append("    exit 0")
-        lines.append("  } catch { if ($attempt -lt ($max - 1)) { Start-Sleep -Seconds %d; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }" % policy["retry_delay_seconds"])
+        lines.append("  } catch { if ($attempt -lt $max) { Start-Sleep -Seconds %d; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }" % policy["retry_delay_seconds"])
         lines.append("}")
         script_content = "\n".join(lines) + "\n"
         ctx.file(script_name, script_content)
@@ -1089,10 +1094,13 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     # Branch: network error or tool failure
     if result.return_code != 0:
         request_body = request_debug_payload if request_debug_payload else "<none>"
+        if (not debug) and request_body != "<none>" and len(request_body) > 500:
+            request_body = request_body[:500] + "...(truncated; enable debug for full body)"
 
         # Include response file path in failures so developers can inspect
         # partial payloads produced by proxies/gateways.
-        fail(
+        fail_with_prefix(
+            "test_optimization_sync",
             "HTTP request failed (status=%s, method=%s, url=%s, code=%d). stderr=%s\nresponse_file=%s\nrequest_body=%s" %
             (
                 http_status,

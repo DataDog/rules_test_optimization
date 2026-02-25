@@ -6,16 +6,16 @@ payload selection.
 
 load(
     "@datadog-rules-test-optimization//tools/core:common_utils.bzl",
-    _LABEL_FRAGMENT_ALLOWED_CHARS = "LABEL_FRAGMENT_ALLOWED_CHARS",
+    "fail_with_prefix",
 )
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
+    "build_module_labels",
     "normalize_user_data",
     "resolve_topt_service_key",
+    "select_service_entry_or_fail",
     "service_mapping_entries",
     _is_dict = "is_dict",
-    _is_list = "is_list",
-    _is_string = "is_string",
 )
 load("//:topt_java_infer.bzl", "topt_java_payloads_selector")
 
@@ -27,20 +27,10 @@ def _resolve_topt_service_key(service_entries, topt_service):
 
 def _validate_java_test_rule_or_fail(java_test_rule):
     if java_test_rule == None:
-        fail("dd_topt_java_test: you must pass java_test_rule = java_test from native rules")
+        fail_with_prefix("dd_topt_java_test", "you must pass java_test_rule = java_test from native rules")
 
 def _select_service_entry_or_fail(topt_data, topt_service):
-    if topt_data == None or not _is_dict(topt_data):
-        fail("dd_topt_java_test: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
-
-    if topt_data.get("repo_name"):
-        return topt_data
-
-    service_entries = _service_mapping_entries(topt_data)
-    if not service_entries:
-        fail("dd_topt_java_test: topt_data mapping did not contain any service entries")
-    selected_key = _resolve_topt_service_key(service_entries, topt_service)
-    return service_entries[selected_key]
+    return select_service_entry_or_fail(topt_data, topt_service, macro_name = "dd_topt_java_test")
 
 # Public aliases for unit tests.
 service_mapping_entries_for_tests = _service_mapping_entries
@@ -50,23 +40,7 @@ validate_java_test_rule_for_tests = _validate_java_test_rule_or_fail
 select_service_entry_for_tests = _select_service_entry_or_fail
 
 def _build_module_labels(sync_repo_name, labels):
-    if labels == None:
-        return []
-    if not _is_list(labels):
-        fail("dd_topt_java_test: selected service topt_data['labels'] must be a list or tuple")
-
-    module_labels = []
-    for lab in labels:
-        if not _is_string(lab):
-            fail("dd_topt_java_test: selected service topt_data['labels'] entries must be strings")
-        if not lab:
-            fail("dd_topt_java_test: selected service topt_data['labels'] entries must be non-empty")
-        for i in range(len(lab)):
-            ch = lab[i]
-            if ch not in _LABEL_FRAGMENT_ALLOWED_CHARS:
-                fail("dd_topt_java_test: selected service topt_data['labels'] entries must be sanitized ([a-z0-9_]): '%s'" % lab)
-        module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
-    return module_labels
+    return build_module_labels(sync_repo_name, labels, macro_name = "dd_topt_java_test")
 
 build_module_labels_for_tests = _build_module_labels
 
@@ -94,7 +68,7 @@ def dd_topt_java_test(
 
     sync_repo_name = _svc.get("repo_name")
     if not sync_repo_name:
-        fail("dd_topt_java_test: selected topt_data entry is missing required 'repo_name'")
+        fail_with_prefix("dd_topt_java_test", "selected topt_data entry is missing required 'repo_name'")
 
     _runtimes = _svc.get("runtimes") or {}
     _java = _runtimes.get("java") if _is_dict(_runtimes) else {}

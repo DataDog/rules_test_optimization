@@ -37,6 +37,11 @@ RUNTIME_VALUE_WARN_LEN = 100
 RULES_VERSION = "1.0.0"
 UPLOADER_VERSION = "2.0.0"
 LABEL_FRAGMENT_ALLOWED_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+API_KEY_CONTROL_CHARS = (
+    "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f" +
+    "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f" +
+    "\x7f"
+)
 
 def log_info(message):
     """Print user-facing progress messages."""
@@ -134,7 +139,7 @@ def sanitize_label_fragment(name):
                 idx = LABEL_FRAGMENT_ALLOWED_CHARS.find(ch)
                 if idx < 0:
                     idx = 37
-                seed = ((seed * 33) + idx + i) % 10000
+                seed = ((seed * 33) + idx + i) % 1000000
             result = "module_%d" % seed
     return result
 
@@ -218,6 +223,18 @@ Please provide a non-empty API key via:
   common --repo_env=DD_API_KEY
 """)
 
+    for i in range(len(trimmed)):
+        if API_KEY_CONTROL_CHARS.find(trimmed[i]) != -1:
+            fail("""
+test_optimization: DD_API_KEY must not contain control characters.
+
+Found an invalid character in DD_API_KEY (for example, newline, carriage return,
+tab, or another non-printable byte).
+
+Please provide a single-line key with printable characters only via:
+  common --repo_env=DD_API_KEY
+""")
+
     return trimmed
 
 def validate_runtime_name(name, debug = False):
@@ -276,6 +293,10 @@ def dedup_keys(keys):
 
     Returns:
       List of unique strings with numeric suffixes (_2, _3, etc.) for duplicates
+
+    Notes:
+      Worst-case runtime is quadratic when many colliding names require repeated
+      probing for an available suffix.
     """
     base_counts = {}
     taken = {}

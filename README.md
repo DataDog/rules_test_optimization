@@ -147,6 +147,7 @@ git_override(
 ```
 
 ```bzl
+load("@rules_python//python:defs.bzl", "py_test")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 

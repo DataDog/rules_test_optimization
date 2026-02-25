@@ -30,6 +30,16 @@ versioning.
     `test_optimization_context`, `module_<sanitized>`).
 - Go companion module with `dd_topt_go_test` macro and importpath-aware payload
   selection.
+- Python companion module with `dd_topt_py_test` analysis-time payload
+  selection.
+- Java companion module with `dd_topt_java_test` analysis-time payload
+  selection.
+- NodeJS companion module with `dd_topt_nodejs_test` analysis-time payload
+  selection.
+- .NET companion module with `dd_topt_dotnet_test` analysis-time payload
+  selection.
+- Ruby companion module with `dd_topt_ruby_test` analysis-time payload
+  selection.
 - Example workspaces for single-service and multi-service usage patterns.
 
 ### Changed

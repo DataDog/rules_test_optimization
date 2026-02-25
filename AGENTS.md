@@ -27,6 +27,11 @@ Agents: start with `README.md` for current operational behavior, then use the ov
   - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
   - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
   - `tests/` — Go-specific Starlark tests and local stub extension for `@test_optimization_data`.
+- `modules/python/` — Python companion module sources (`topt_py_test.bzl`, `topt_py_infer.bzl`, companion tests).
+- `modules/java/` — Java companion module sources (`topt_java_test.bzl`, `topt_java_infer.bzl`, companion tests).
+- `modules/nodejs/` — NodeJS companion module sources (`topt_nodejs_test.bzl`, `topt_nodejs_infer.bzl`, companion tests).
+- `modules/dotnet/` — .NET companion module sources (`topt_dotnet_test.bzl`, `topt_dotnet_infer.bzl`, companion tests).
+- `modules/ruby/` — Ruby companion module sources (`topt_ruby_test.bzl`, `topt_ruby_infer.bzl`, companion tests).
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
@@ -94,7 +99,7 @@ The sync rule creates `@test_optimization_data//` containing:
 - For Go, use `dd_topt_go_test` to set up the test with correct environment variables.
 - Create ONE uploader target per workspace at the root BUILD.bazel.
 
-## Consumer Tips (bzlmod + Go)
+## Consumer Tips (bzlmod)
 - In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)` and `bazel_dep("datadog-rules-test-optimization-go", ...)`, then `use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
 - In root `BUILD.bazel`: create the workspace-level uploader:
   ```bzl
@@ -109,13 +114,19 @@ The sync rule creates `@test_optimization_data//` containing:
 - Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["runtimes"]["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
 - Tests can read `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the manifest directory (via `filepath.Dir()`) and access synced payloads.
+- For Python/Java/NodeJS/.NET/Ruby companions, follow the corresponding quickstart sections in `README.md` (`Bzlmod + Python companion`, `Bzlmod + Java companion`, `Bzlmod + NodeJS companion`, `Bzlmod + .NET companion`, `Bzlmod + Ruby companion`).
 
 Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go companion module declares the `rules_go` dependency to load provider definitions; consumers still configure Go SDK/toolchains in their own `MODULE.bazel`.
 
 ## Maintainer Architecture Map
 - Core ownership (`tools/core/*`): runtime-agnostic sync + uploader + shared helpers; keep it free from non-dev language-rule dependencies.
 - Go ownership (`modules/go/*`): Go macro/aspect/selector and Go-specific tests.
-- Bootstrap ownership (`tools/dev/go_bootstrap.bzl`): dev-only local repo wiring for root workspace testing; do not convert it into a module dependency edge.
+- Python ownership (`modules/python/*`): Python macro/inference rule and companion tests.
+- Java ownership (`modules/java/*`): Java macro/inference rule and companion tests.
+- NodeJS ownership (`modules/nodejs/*`): NodeJS macro/inference rule and companion tests.
+- .NET ownership (`modules/dotnet/*`): .NET macro/inference rule and companion tests.
+- Ruby ownership (`modules/ruby/*`): Ruby macro/inference rule and companion tests.
+- Bootstrap ownership (`tools/dev/*_bootstrap.bzl`): dev-only local companion wiring for root workspace testing; do not convert bootstrap wiring into module dependency edges.
 - Invariants:
   - root module must not `bazel_dep` the Go companion module (avoid `core -> go -> core` cycle),
   - root module keeps `rules_go` as dev-only for in-repo examples (not consumer-facing core behavior),

@@ -3,6 +3,8 @@
 This document explains the current implementation architecture in this
 repository. For installation and day-to-day usage, start with `README.md`.
 
+> Last reviewed: 2026-02-25
+
 ## Approach Overview
 
 The integration uses a Bazel module extension and repository rule to fetch Datadog Test Optimization metadata during module/repo resolution, and a workspace-level uploader (via `bazel run`) to ship payloads from hermetic test runs.

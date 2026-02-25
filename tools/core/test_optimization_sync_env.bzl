@@ -169,7 +169,7 @@ def collect_env_from_environ(environ, attr_service = None):
         if gh_repo:
             env_data["repository_url"] = "%s/%s.git" % (gh_server, gh_repo)
         env_data["sha"] = environ.get("GITHUB_SHA") or ""
-        env_data["branch"] = normalize_ref(environ.get("GITHUB_REF") or "")
+        env_data["branch"] = environ.get("GITHUB_HEAD_REF") or normalize_ref(environ.get("GITHUB_REF") or "")
     elif environ.get("GITLAB_CI"):
         provider = "gitlab"
         env_data["repository_url"] = environ.get("CI_REPOSITORY_URL") or ""

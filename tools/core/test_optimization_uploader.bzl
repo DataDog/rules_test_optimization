@@ -41,6 +41,7 @@ load(
     "//tools/core:common_utils.bzl",
     "RULES_VERSION",
     "UPLOADER_VERSION",
+    "fail_with_prefix",
     "log_debug",
     "log_info",
 )
@@ -95,8 +96,8 @@ def _render_template(template, substitutions):
 
 # Helper to keep template booleans consistent across bash/PowerShell.
 def _bool_to_str(value):
-    """Return Starlark bool as title-cased string for template injection."""
-    return "True" if value else "False"
+    """Return Starlark bool as lowercase string for template injection."""
+    return "true" if value else "false"
 
 def _base_template_substitutions(
         quiescent_sec,
@@ -138,12 +139,12 @@ def _tokenize_template_substitutions(substitutions):
         value_str = str(value)
         for forbidden in ["\n", "\r", "\t"]:
             if forbidden in value_str:
-                fail("dd_payload_uploader: template substitution '%s' contains control characters" % key)
+                fail_with_prefix("test_optimization_uploader", "template substitution '%s' contains control characters" % key)
 
         # Guard against shell/script-breaking interpolation primitives.
         for forbidden in ["\"", "$", "`"]:
             if forbidden in value_str:
-                fail("dd_payload_uploader: template substitution '%s' contains unsupported character '%s'" % (key, forbidden))
+                fail_with_prefix("test_optimization_uploader", "template substitution '%s' contains unsupported character '%s'" % (key, forbidden))
         tokenized["__DDTPL_%s__" % key.upper()] = value_str
     return tokenized
 
