@@ -1,4 +1,5 @@
 """Unit tests for Go-specific selection and macro helper functions."""
+
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_infer.bzl",
@@ -36,8 +37,10 @@ def _resolve_topt_service_key_prefers_exact_then_sanitized_test(ctx):
         "go_service": {"repo_name": "repo_go"},
         "go_service_2": {"repo_name": "repo_go_2"},
     }
+
     # Exact keys are stable and should win when provided explicitly.
     asserts.equals(env, "go_service_2", resolve_topt_service_key_for_tests(entries, "go_service_2"))
+
     # Raw service names can still resolve through sanitization.
     asserts.equals(env, "go_service", resolve_topt_service_key_for_tests(entries, "go-service"))
     return unittest.end(env)

@@ -27,13 +27,13 @@ Maintenance notes:
   downstream BUILD files.
 """
 
-load("//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 load(
     "//tools/core:common_utils.bzl",
     "dedup_keys",
     "fail_with_prefix",
     "sanitize_label_fragment",
 )
+load("//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 
 def _compute_service_keys(services):
     """Return deterministic, Bazel-safe, deduplicated keys for services.
@@ -92,6 +92,7 @@ def _render_aggregate_bzl(service_keys, repo_names):
         key = entry["key"]
         repo = entry["repo"]
         sym = "svc_%s" % key
+
         # Load aliases are deterministic and collision-safe because `key` is
         # already sanitized/deduped by `_compute_service_keys`.
         lines.append('load("@%s//:export.bzl", %s = "topt_data")' % (repo, sym))
@@ -102,6 +103,7 @@ def _render_aggregate_bzl(service_keys, repo_names):
     for entry in entries:
         key = entry["key"]
         sym = "svc_%s" % key
+
         # Mapping key is the public service selector expected by consumers.
         lines.append("  \"%s\": %s," % (key, sym))
     lines.append("}")
@@ -113,6 +115,7 @@ def _render_aggregate_bzl(service_keys, repo_names):
     for entry in entries:
         key = entry["key"]
         repo = entry["repo"]
+
         # These names are public API for multi-service repo outputs.
         lines.append("  native.filegroup(")
         lines.append("      name = \"test_optimization_files_%s\"," % key)
@@ -130,6 +133,7 @@ def _render_aggregate_bzl(service_keys, repo_names):
         key = entry["key"]
         repo = entry["repo"]
         sym = "svc_%s" % key
+
         # Iterate each service's exported module labels to emit stable aliases.
         lines.append("  for _lab in %s[\"labels\"]:" % sym)
         lines.append("    native.filegroup(")
@@ -151,6 +155,7 @@ record_multi_repo_owner_or_fail_for_tests = _record_multi_repo_owner_or_fail
 
 def _multi_aggregate_impl(ctx):
     """Repository rule implementation for the aggregate multi-service repo."""
+
     # Build an in-repo Starlark shim (`aggregate.bzl`) rather than writing a
     # giant BUILD directly so generated logic remains easy to inspect/debug.
     keys = list(ctx.attr.service_keys)
@@ -189,6 +194,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
     - fan out `test_optimization_sync` once per service
     - create a single aggregate repo exporting service-qualified aliases
     """
+
     # Iterate tags and instantiate per-service repos + aggregator
     # This mirrors the single-service extension behavior while faning out
     # service-specific repositories in one declarative call.
@@ -206,6 +212,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
             # Phase 1: derive deterministic service identity for labels/repos.
             # Determinism here is critical because downstream labels are public.
             keys = _compute_service_keys(services)
+
             # Repo names are positional with keys/services; keep list order intact.
             per_repo_names = _compute_repo_names(name, keys)
             service_repo_entries = []
@@ -223,6 +230,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
             for entry in service_repo_entries:
                 svc = entry["service"]
                 repo = entry["repo"]
+
                 # Preserve original service string for API requests; only keys
                 # used for labels/repo names are sanitized/deduped.
                 test_optimization_sync(
