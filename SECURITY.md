@@ -25,4 +25,9 @@ Include:
 This policy covers the code and documentation in this repository, including:
 - Bazel module extension/repository rules under `tools/core`
 - Go companion module under `modules/go`
+- Python companion module under `modules/python`
+- Java companion module under `modules/java`
+- NodeJS companion module under `modules/nodejs`
+- .NET companion module under `modules/dotnet`
+- Ruby companion module under `modules/ruby`
 - Integration harnesses under `tools/tests`

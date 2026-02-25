@@ -149,6 +149,8 @@ example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
     service_keys = [
         "go_service",
+        "python_service",
+        "java_service",
         "nodejs_service",
         "dotnet_service",
         "ruby_service",

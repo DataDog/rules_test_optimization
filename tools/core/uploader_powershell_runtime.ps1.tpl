@@ -206,7 +206,7 @@ function Redact-HeaderValue([string]$name, [string]$value) {
     if ($value.Length -gt 4) {
         return ("****" + $value.Substring($value.Length - 4))
     }
-    return $value
+    return "****"
 }
 
 function Dbg-Headers([string]$label, $headers) {

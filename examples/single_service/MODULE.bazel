@@ -86,6 +86,8 @@ test_optimization_sync = use_extension(
 
 test_optimization_sync.test_optimization_sync(
   name = "test_optimization_data",
+  # Logical service identifier for Datadog metadata (not language-bound).
+  # A single service can include tests from multiple runtimes.
   service = "go-service",
   runtime_name = "go",
   runtime_version = "1.24.0",

@@ -39,16 +39,15 @@ Maintenance notes:
 
 load(
     "@datadog-rules-test-optimization//tools/core:common_utils.bzl",
-    _LABEL_FRAGMENT_ALLOWED_CHARS = "LABEL_FRAGMENT_ALLOWED_CHARS",
+    "fail_with_prefix",
 )
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
+    "build_module_labels",
     "normalize_user_data",
     "resolve_topt_service_key",
     "service_mapping_entries",
     _is_dict = "is_dict",
-    _is_list = "is_list",
-    _is_string = "is_string",
 )
 load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 
@@ -66,23 +65,7 @@ normalize_user_data_for_tests = _normalize_user_data
 
 def _build_module_labels(sync_repo_name, labels):
     """Implement build module labels behavior."""
-    if labels == None:
-        return []
-    if not _is_list(labels):
-        fail("dd_topt_go_test: selected service topt_data['labels'] must be a list or tuple")
-
-    module_labels = []
-    for lab in labels:
-        if not _is_string(lab):
-            fail("dd_topt_go_test: selected service topt_data['labels'] entries must be strings")
-        if not lab:
-            fail("dd_topt_go_test: selected service topt_data['labels'] entries must be non-empty")
-        for i in range(len(lab)):
-            ch = lab[i]
-            if ch not in _LABEL_FRAGMENT_ALLOWED_CHARS:
-                fail("dd_topt_go_test: selected service topt_data['labels'] entries must be sanitized ([a-z0-9_]): '%s'" % lab)
-        module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
-    return module_labels
+    return build_module_labels(sync_repo_name, labels, macro_name = "dd_topt_go_test")
 
 build_module_labels_for_tests = _build_module_labels
 
@@ -128,7 +111,7 @@ def dd_topt_go_test(
     # ------------------------------------------------------------------
     # Validate required topt_data early so failures surface at loading time.
     if topt_data == None or not _is_dict(topt_data):
-        fail("dd_topt_go_test: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
+        fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
 
     # Support both shapes:
     # 1) Single-service dict with keys: repo_name, labels, set, runtimes
@@ -141,7 +124,7 @@ def dd_topt_go_test(
         # Aggregator mapping: select service from service-shaped entries only.
         service_entries = _service_mapping_entries(topt_data)
         if not service_entries:
-            fail("dd_topt_go_test: topt_data mapping did not contain any service entries")
+            fail_with_prefix("dd_topt_go_test", "topt_data mapping did not contain any service entries")
 
         # Explicit `topt_service` is resolved via exact-then-sanitized matching
         # to preserve collision-safe keys while still accepting ergonomic input.
@@ -170,7 +153,7 @@ def dd_topt_go_test(
     # Resolve sync repo name from selected service
     sync_repo_name = _svc.get("repo_name")
     if not sync_repo_name:
-        fail("dd_topt_go_test: selected topt_data entry is missing required 'repo_name'")
+        fail_with_prefix("dd_topt_go_test", "selected topt_data entry is missing required 'repo_name'")
 
     # Decide whether to include per-module files:
     # - When inferring (explicit importpath or embed provided), always attempt per-module selection
@@ -273,7 +256,7 @@ def dd_topt_go_test(
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
     # Keeping this explicit avoids hidden repository dependencies in the macro.
     if go_test_rule == None:
-        fail("dd_topt_go_test: you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
+        fail_with_prefix("dd_topt_go_test", "you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
 
     # Use the package directory as the default runtime working directory when
     # callers do not specify one. This keeps relative fixture paths stable.

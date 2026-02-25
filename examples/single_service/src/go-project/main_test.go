@@ -67,15 +67,16 @@ func resolveRlocation(p string) (string, bool) {
 	}
 	if mf := os.Getenv("RUNFILES_MANIFEST_FILE"); mf != "" {
 		if f, err := os.Open(mf); err == nil {
-			defer f.Close()
 			sc := bufio.NewScanner(f)
 			for sc.Scan() {
 				line := sc.Text()
 				i := strings.IndexByte(line, ' ')
 				if i > 0 && line[:i] == p {
+					_ = f.Close()
 					return line[i+1:], true
 				}
 			}
+			_ = f.Close()
 		}
 	}
 	if s := os.Getenv("TEST_SRCDIR"); s != "" {

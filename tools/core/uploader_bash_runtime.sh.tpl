@@ -806,7 +806,7 @@ redact_header() {
     if (( ${#val} > 4 )); then
       echo "DD-API-KEY: ****${val: -4}"
     else
-      echo "DD-API-KEY: $val"
+      echo "DD-API-KEY: ****"
     fi
   else
     echo "$h"

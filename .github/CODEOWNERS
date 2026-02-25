@@ -4,6 +4,13 @@
 # Go companion module and tests.
 /modules/go/ @DataDog/ci-app-libraries
 
+# Other companion modules and tests.
+/modules/python/ @DataDog/ci-app-libraries
+/modules/java/ @DataDog/ci-app-libraries
+/modules/nodejs/ @DataDog/ci-app-libraries
+/modules/dotnet/ @DataDog/ci-app-libraries
+/modules/ruby/ @DataDog/ci-app-libraries
+
 # Contributor/maintainer documentation.
 /docs/ @DataDog/ci-app-libraries
 /*.md @DataDog/ci-app-libraries

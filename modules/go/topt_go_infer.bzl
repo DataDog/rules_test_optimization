@@ -27,13 +27,14 @@ Maintenance notes:
   full payload bundle.
 """
 
-# In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
-# GoArchive still exists separately.
-load("@rules_go//go:def.bzl", "GoArchive", "GoInfo")
 load(
     "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
     "select_module_group_name",
 )
+
+# In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
+# GoArchive still exists separately.
+load("@rules_go//go:def.bzl", "GoArchive", "GoInfo")
 
 _select_module_group_name = select_module_group_name
 
@@ -105,6 +106,7 @@ def _topt_go_payloads_selector_impl(ctx):
     This keeps selection logic in analysis phase while presenting a simple
     `DefaultInfo` data target for consuming macros (`dd_topt_go_test`).
     """
+
     # Decide which payload files to expose as runfiles based on the inferred importpath.
     # This rule deliberately returns a plain DefaultInfo so downstream macros
     # can treat it like a normal data dependency.
@@ -121,6 +123,7 @@ def _topt_go_payloads_selector_impl(ctx):
         ip = ctx.attr.fallback_importpath or ""
 
     module_group_names = [m.label.name for m in ctx.attr.module_groups]
+
     # Compute target name first, then resolve to actual label object below.
     selected_name = _select_module_group_name(
         ip,

@@ -258,6 +258,29 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
     asserts.equals(env, "abc123", github.get("sha"))
     asserts.equals(env, "unnamed-service", github.get("service"))
 
+    github_pr = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITHUB_SHA": "def456",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_SERVER_URL": "https://github.example",
+        "GITHUB_REF": "refs/pull/42/merge",
+        "GITHUB_HEAD_REF": "feature/pr-branch",
+    }, None)
+    asserts.equals(env, "github_actions", github_pr.get("ci_provider_name"))
+    asserts.equals(env, "feature/pr-branch", github_pr.get("branch"))
+    asserts.equals(env, "def456", github_pr.get("sha"))
+
+    github_tag = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITHUB_SHA": "ffeeddcc",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_SERVER_URL": "https://github.example",
+        "GITHUB_REF": "refs/tags/v1.2.3",
+    }, None)
+    asserts.equals(env, "github_actions", github_tag.get("ci_provider_name"))
+    asserts.equals(env, "v1.2.3", github_tag.get("branch"))
+    asserts.equals(env, "ffeeddcc", github_tag.get("sha"))
+
     overridden = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
         "DD_SERVICE": "service-from-env",
@@ -504,7 +527,7 @@ def _parse_go_module_path_test(ctx):
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("module github.com/foo/bar"))
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("module\tgithub.com/foo/bar"))
     asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("module \"github.com/foo/bar\""))
-    asserts.equals(env, "github.com/foo/bar", parse_go_module_path_for_tests("// comment\nmodule 'github.com/foo/bar'\n"))
+    asserts.equals(env, "'github.com/foo/bar'", parse_go_module_path_for_tests("// comment\nmodule 'github.com/foo/bar'\n"))
     asserts.equals(env, "github.com/foo/v2", parse_go_module_path_for_tests("module github.com/foo/v2"))
     asserts.equals(env, "github.com/first/mod", parse_go_module_path_for_tests("module github.com/first/mod\nmodule github.com/second/mod"))
     asserts.equals(env, "", parse_go_module_path_for_tests("module"))

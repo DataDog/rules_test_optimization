@@ -59,7 +59,7 @@ def _validate_api_key_normalization_test(ctx):
     env = unittest.begin(ctx)
     asserts.equals(env, "abcd1234", validate_api_key(" abcd1234 "))
     asserts.equals(env, "abc%def", validate_api_key(" abc%def "))
-    asserts.equals(env, "line1\nline2", validate_api_key("\nline1\nline2\n"))
+    asserts.equals(env, "abc_def-123", validate_api_key(" abc_def-123 "))
     return unittest.end(env)
 
 def _log_helpers_and_is_dict_test(ctx):
@@ -90,6 +90,21 @@ def _validate_api_key_whitespace_target_impl(_ctx):
     validate_api_key("   ")
     return []
 
+def _validate_api_key_control_chars_target_impl(_ctx):
+    """Analysis target expected to fail for control characters in API key."""
+    validate_api_key("line1\nline2")
+    return []
+
+def _validate_api_key_carriage_return_target_impl(_ctx):
+    """Analysis target expected to fail for carriage returns in API key."""
+    validate_api_key("line1\rline2")
+    return []
+
+def _validate_api_key_tab_target_impl(_ctx):
+    """Analysis target expected to fail for tabs in API key."""
+    validate_api_key("line1\tline2")
+    return []
+
 def _validate_service_name_missing_target_impl(_ctx):
     """Analysis target expected to fail when service name is missing."""
     validate_service_name(None)
@@ -111,6 +126,15 @@ validate_api_key_missing_target_rule = rule(
 validate_api_key_whitespace_target_rule = rule(
     implementation = _validate_api_key_whitespace_target_impl,
 )
+validate_api_key_control_chars_target_rule = rule(
+    implementation = _validate_api_key_control_chars_target_impl,
+)
+validate_api_key_carriage_return_target_rule = rule(
+    implementation = _validate_api_key_carriage_return_target_impl,
+)
+validate_api_key_tab_target_rule = rule(
+    implementation = _validate_api_key_tab_target_impl,
+)
 validate_service_name_missing_target_rule = rule(
     implementation = _validate_service_name_missing_target_impl,
 )
@@ -131,6 +155,24 @@ def _validate_api_key_whitespace_failure_test_impl(ctx):
     """Assert whitespace-API-key failure message remains stable."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "DD_API_KEY cannot be empty or whitespace-only")
+    return analysistest.end(env)
+
+def _validate_api_key_control_chars_failure_test_impl(ctx):
+    """Assert control-character API-key failure message remains stable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "DD_API_KEY must not contain control characters")
+    return analysistest.end(env)
+
+def _validate_api_key_carriage_return_failure_test_impl(ctx):
+    """Assert carriage-return API-key failure message remains stable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "DD_API_KEY must not contain control characters")
+    return analysistest.end(env)
+
+def _validate_api_key_tab_failure_test_impl(ctx):
+    """Assert tab API-key failure message remains stable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "DD_API_KEY must not contain control characters")
     return analysistest.end(env)
 
 def _validate_service_name_missing_failure_test_impl(ctx):
@@ -164,6 +206,18 @@ validate_api_key_missing_failure_test = analysistest.make(
 )
 validate_api_key_whitespace_failure_test = analysistest.make(
     _validate_api_key_whitespace_failure_test_impl,
+    expect_failure = True,
+)
+validate_api_key_control_chars_failure_test = analysistest.make(
+    _validate_api_key_control_chars_failure_test_impl,
+    expect_failure = True,
+)
+validate_api_key_carriage_return_failure_test = analysistest.make(
+    _validate_api_key_carriage_return_failure_test_impl,
+    expect_failure = True,
+)
+validate_api_key_tab_failure_test = analysistest.make(
+    _validate_api_key_tab_failure_test_impl,
     expect_failure = True,
 )
 validate_service_name_missing_failure_test = analysistest.make(

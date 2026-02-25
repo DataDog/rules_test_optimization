@@ -306,6 +306,8 @@ Pin an immutable commit SHA (or internal mirrored archive) for reproducibility.
 For WORKSPACE Go macro usage, ensure the selected commit includes
 `modules/go/topt_go_test.bzl`.
 
+### Archive mirror installation
+
 If your environment requires `http_archive`, use an internal mirror and pin all
 three values (`urls`, `strip_prefix`, and `sha256`):
 

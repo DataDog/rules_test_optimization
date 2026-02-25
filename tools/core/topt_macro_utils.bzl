@@ -8,6 +8,8 @@ Maintainers:
 
 load(
     "//tools/core:common_utils.bzl",
+    "LABEL_FRAGMENT_ALLOWED_CHARS",
+    "fail_with_prefix",
     "sanitize_label_fragment",
     _is_dict = "is_dict",
     _is_list = "is_list",
@@ -53,7 +55,60 @@ def normalize_user_data(user_data):
         return [user_data]
     if is_list(user_data):
         return list(user_data)
-    fail("normalize_user_data: expected None, string, list, or tuple; got %s" % type(user_data))
+    fail_with_prefix("topt_macro_utils", "normalize_user_data: expected None, string, list, or tuple; got %s" % type(user_data))
+    return []
+
+def build_module_labels(sync_repo_name, labels, macro_name = "dd_topt_macro"):
+    """Build per-module filegroup labels from sanitized module fragments.
+
+    Args:
+      sync_repo_name: Name of the generated sync repository.
+      labels: List/tuple of sanitized module label fragments.
+      macro_name: Macro name included in validation error text.
+
+    Returns:
+      List of `@repo//:module_<label>` filegroup labels.
+    """
+    if labels == None:
+        return []
+    if not is_list(labels):
+        fail_with_prefix("topt_macro_utils", "%s: selected service topt_data['labels'] must be a list or tuple" % macro_name)
+
+    module_labels = []
+    for lab in labels:
+        if not is_string(lab):
+            fail_with_prefix("topt_macro_utils", "%s: selected service topt_data['labels'] entries must be strings" % macro_name)
+        if not lab:
+            fail_with_prefix("topt_macro_utils", "%s: selected service topt_data['labels'] entries must be non-empty" % macro_name)
+        for i in range(len(lab)):
+            ch = lab[i]
+            if ch not in LABEL_FRAGMENT_ALLOWED_CHARS:
+                fail_with_prefix("topt_macro_utils", "%s: selected service topt_data['labels'] entries must be sanitized ([a-z0-9_]): '%s'" % (macro_name, lab))
+        module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
+    return module_labels
+
+def select_service_entry_or_fail(topt_data, topt_service, macro_name = "dd_topt_macro"):
+    """Select single-service payload data from single or aggregated exports.
+
+    Args:
+      topt_data: Exported single-service dict or multi-service mapping.
+      topt_service: Optional selected service key for aggregator mappings.
+      macro_name: Macro name included in validation error text.
+
+    Returns:
+      The selected single-service `topt_data` entry.
+    """
+    if topt_data == None or not is_dict(topt_data):
+        fail_with_prefix("topt_macro_utils", "%s: topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping" % macro_name)
+
+    if topt_data.get("repo_name"):
+        return topt_data
+
+    service_entries = service_mapping_entries(topt_data)
+    if not service_entries:
+        fail_with_prefix("topt_macro_utils", "%s: topt_data mapping did not contain any service entries" % macro_name)
+    selected_key = resolve_topt_service_key(service_entries, topt_service, macro_name = macro_name)
+    return service_entries[selected_key]
 
 def resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_macro"):
     """Resolve a requested service key within a multi-service mapping.
@@ -70,7 +125,7 @@ def resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_top
     if topt_service == None:
         if len(keys) == 1:
             return keys[0]
-        fail("%s: topt_data looks like a multi-service mapping; please pass topt_service (one of: %s)" % (macro_name, ", ".join(keys)))
+        fail_with_prefix("topt_macro_utils", "%s: topt_data looks like a multi-service mapping; please pass topt_service (one of: %s)" % (macro_name, ", ".join(keys)))
 
     if service_entries.get(topt_service) != None:
         return topt_service
@@ -79,4 +134,5 @@ def resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_top
     if service_entries.get(sanitized) != None:
         return sanitized
 
-    fail("%s: topt_service '%s' not found. Available: %s" % (macro_name, topt_service, ", ".join(keys)))
+    fail_with_prefix("topt_macro_utils", "%s: topt_service '%s' not found. Available: %s" % (macro_name, topt_service, ", ".join(keys)))
+    return ""

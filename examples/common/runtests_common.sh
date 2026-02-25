@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This helper currently exercises Go example targets only.
+# Use `bazel test //examples/...` to run the full multi-language examples matrix.
+
 # Handle run example runtests behavior.
 run_example_runtests() {
   local script_dir="$1"
