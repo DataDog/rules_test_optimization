@@ -832,8 +832,8 @@ def _http_execute_timeout_seconds_test(ctx):
     # Keep execute timeout derived from retry policy + explicit buffer instead
     # of a magic number to avoid accidentally clipping retries in CI.
     expected = (
-        (http_retry_attempts_for_tests * http_max_time_seconds_for_tests) +
-        ((http_retry_attempts_for_tests - 1) * http_retry_delay_seconds_for_tests) +
+        ((http_retry_attempts_for_tests + 1) * http_max_time_seconds_for_tests) +
+        (http_retry_attempts_for_tests * http_retry_delay_seconds_for_tests) +
         http_execute_timeout_buffer_seconds_for_tests
     )
     asserts.equals(env, expected, http_execute_timeout_seconds_for_tests)

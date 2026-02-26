@@ -953,7 +953,7 @@ function Get-PathCandidates([string]$SourcePath) {
   $workspaceRoot = $null
   if ($env:BUILD_WORKSPACE_DIRECTORY) {
     $workspaceRoot = $env:BUILD_WORKSPACE_DIRECTORY
-  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\]bazel-testlogs(?:[/\].*)?$')) {
+  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\\]bazel-testlogs(?:[/\\].*)?$')) {
     $workspaceRoot = $Matches[1]
   } else {
     $workspaceRoot = (Get-Location).Path
@@ -1191,7 +1191,7 @@ function Initialize-CodeOwnersRules {
   $workspace = $null
   if ($env:BUILD_WORKSPACE_DIRECTORY) {
     $workspace = $env:BUILD_WORKSPACE_DIRECTORY
-  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\]bazel-testlogs(?:[/\].*)?$')) {
+  } elseif ($TestlogsDir -and ($TestlogsDir -match '^(.*?)[/\\]bazel-testlogs(?:[/\\].*)?$')) {
     $workspace = $Matches[1]
   } else {
     $workspace = (Get-Location).Path
@@ -1536,7 +1536,18 @@ function Remove-PayloadFile([string]$FilePath) {
     if (-not $KeepPayloads) {
         # Best-effort cleanup: payload persistence is controlled by KeepPayloads,
         # not by upload success/failure of individual files.
-        Remove-Item -LiteralPath $FilePath -Force
+        try {
+            Remove-Item -LiteralPath $FilePath -Force -ErrorAction Stop
+        } catch {
+            # Preserve best-effort semantics even when files are read-only or already gone.
+            try {
+                $item = Get-Item -LiteralPath $FilePath -ErrorAction Stop
+                if ($item -and $item.PSObject.Properties['IsReadOnly']) {
+                    $item.IsReadOnly = $false
+                }
+            } catch {}
+            Remove-Item -LiteralPath $FilePath -Force -ErrorAction SilentlyContinue
+        }
     } else {
         Dbg "keeping payload (KEEP_PAYLOADS=1): $FilePath"
     }
