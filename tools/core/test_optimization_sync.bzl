@@ -91,8 +91,9 @@ HTTP_RETRY_DELAY_SECONDS = 2
 # transport retries short on slower hosts/CI workers.
 HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS = 60
 HTTP_EXECUTE_TIMEOUT_SECONDS = (
-    (HTTP_RETRY_ATTEMPTS * HTTP_MAX_TIME_SECONDS) +
-    ((HTTP_RETRY_ATTEMPTS - 1) * HTTP_RETRY_DELAY_SECONDS) +
+    # Curl/PowerShell both do one initial attempt plus `retry_attempts` retries.
+    ((HTTP_RETRY_ATTEMPTS + 1) * HTTP_MAX_TIME_SECONDS) +
+    (HTTP_RETRY_ATTEMPTS * HTTP_RETRY_DELAY_SECONDS) +
     HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS
 )
 
@@ -173,8 +174,9 @@ def _resolve_http_policy(ctx):
         allow_zero = True,
     )
     execute_timeout_seconds = (
-        (retry_attempts * max_time_seconds) +
-        ((retry_attempts - 1) * retry_delay_seconds) +
+        # Retry budget = initial attempt + N retries.
+        ((retry_attempts + 1) * max_time_seconds) +
+        (retry_attempts * retry_delay_seconds) +
         execute_timeout_buffer_seconds
     )
     return {
