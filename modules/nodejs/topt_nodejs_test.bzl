@@ -10,7 +10,9 @@ load(
 )
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
+    "append_data_dependencies",
     "build_module_labels",
+    "merge_user_env",
     "normalize_user_data",
     "resolve_topt_service_key",
     "select_service_entry_or_fail",
@@ -21,6 +23,8 @@ load("//:topt_nodejs_infer.bzl", "topt_nodejs_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
+_append_data_dependencies = append_data_dependencies
+_merge_user_env = merge_user_env
 
 def _resolve_topt_service_key(service_entries, topt_service):
     return resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_nodejs_test")
@@ -51,6 +55,15 @@ def _build_nodejs_fallback_identifier(package_path, runtime_info):
         return module_path.rstrip("/") + "/" + pkg.lstrip("/")
     return module_path or pkg
 
+def _has_non_empty_value(value):
+    if value == None:
+        return False
+    if type(value) == type(""):
+        return value.strip() != ""
+    if type(value) == type([]) or type(value) == type(()):
+        return len(value) > 0
+    return True
+
 def dd_topt_nodejs_test(
         name,
         topt_data,
@@ -64,7 +77,7 @@ def dd_topt_nodejs_test(
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
     user_data = kwargs.pop("data", None)
-    data = _normalize_user_data(user_data)
+    data = _append_data_dependencies(user_data, [])
 
     sync_repo_name = _svc.get("repo_name")
     if not sync_repo_name:
@@ -75,13 +88,24 @@ def dd_topt_nodejs_test(
     if not _is_dict(_nodejs):
         _nodejs = {}
 
-    deps_labels = kwargs.get("deps", []) or []
+    deps_labels = kwargs.get("deps")
+    if deps_labels == None:
+        deps_labels = []
     attribute_candidates = []
+    selector_attrs = {}
     for attr_name in ["package_name", "module_name", "npm_package", "entry_point"]:
-        if kwargs.get(attr_name) != None:
-            attribute_candidates.append(kwargs.get(attr_name))
+        value = kwargs.get(attr_name) if attr_name in kwargs else None
+        if value != None:
+            selector_attrs[attr_name] = value
+        if type(value) == type("") and value:
+            attribute_candidates.append(value)
 
-    uses_inference = bool(module_identifier) or bool(deps_labels) or bool(attribute_candidates)
+    uses_inference = _has_non_empty_value(module_identifier) or _has_non_empty_value(deps_labels)
+    if not uses_inference:
+        for attr_name in ["package_name", "module_name", "npm_package", "entry_point"]:
+            if _has_non_empty_value(kwargs.get(attr_name) if attr_name in kwargs else None):
+                uses_inference = True
+                break
     if uses_inference:
         include_per_module_files = True
     else:
@@ -106,18 +130,24 @@ def dd_topt_nodejs_test(
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override,
+        **selector_attrs
     )
 
-    user_env = kwargs.pop("env", None) or {}
-    env = dict(user_env)
+    user_env = kwargs.pop("env", None)
 
-    data.append(":" + selector_name)
+    data = _append_data_dependencies(data, [":" + selector_name])
 
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
-    data.append(manifest_label)
-    env["DD_TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
-    env["DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
+    data = _append_data_dependencies(data, [manifest_label])
+    env = _merge_user_env(
+        user_env,
+        {
+            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
+            "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+        },
+        macro_name = "dd_topt_nodejs_test",
+    )
 
     nodejs_test_rule(
         name = name,

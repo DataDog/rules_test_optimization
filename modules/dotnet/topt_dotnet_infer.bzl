@@ -58,15 +58,18 @@ _dotnet_module_aspect = aspect(
     attr_aspects = ["deps"],
 )
 
-def _select_from_candidates(candidates, module_group_names, include_per_module, module_label_override):
+def _select_from_candidates(candidates, module_group_names, include_per_module, module_label_override, strict = False):
     if not candidates:
         candidates = [""]
-    for candidate in candidates:
+    for idx in range(len(candidates)):
+        candidate = candidates[idx]
         selected_name = _select_module_group_name(
             candidate,
             module_group_names,
             include_per_module,
             module_label_override,
+            fail_on_miss = strict and idx == 0,
+            failure_context = "topt_dotnet_payloads_selector",
         )
         if selected_name:
             return selected_name
@@ -77,17 +80,23 @@ def _topt_dotnet_payloads_selector_impl(ctx):
 
     explicit_identifier = _normalize_dotnet_identifier(ctx.attr.explicit_identifier)
     selected_name = ""
+    strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
+        bool(explicit_identifier) or bool(ctx.attr.module_label_override)
+    )
     if explicit_identifier:
         selected_name = _select_from_candidates(
             [explicit_identifier],
             module_group_names,
             ctx.attr.include_per_module,
             ctx.attr.module_label_override,
+            strict = strict_selection,
         )
     else:
         inferred_candidates = []
         seen = {}
 
+        for candidate in [ctx.attr.root_namespace, ctx.attr.assembly_name, ctx.attr.project_name, ctx.attr.test_class]:
+            _append_normalized_candidate(inferred_candidates, seen, candidate)
         for candidate in ctx.attr.attribute_candidates:
             _append_normalized_candidate(inferred_candidates, seen, candidate)
         for dep in ctx.attr.deps:
@@ -100,6 +109,7 @@ def _topt_dotnet_payloads_selector_impl(ctx):
             module_group_names,
             ctx.attr.include_per_module,
             ctx.attr.module_label_override,
+            strict = strict_selection,
         )
 
         if not selected_name:
@@ -127,6 +137,10 @@ topt_dotnet_payloads_selector = rule(
     attrs = {
         "deps": attr.label_list(aspects = [_dotnet_module_aspect]),
         "attribute_candidates": attr.string_list(),
+        "root_namespace": attr.string(),
+        "assembly_name": attr.string(),
+        "project_name": attr.string(),
+        "test_class": attr.string(),
         "explicit_identifier": attr.string(),
         "fallback_identifier": attr.string(),
         "full_files": attr.label(),

@@ -133,6 +133,24 @@ def go_macro_env_none_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_select_inputs_target(name, tags = None):
+    """Target under test for configurable data/env handling."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        data = select({
+            "//conditions:default": [":test_macro.bzl"],
+        }),
+        env = select({
+            "//conditions:default": {
+                "CUSTOM_ENV": "from_select",
+                "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
+            },
+        }),
+        tags = tags,
+    )
+
 def _go_macro_single_service_wiring_test_impl(ctx):
     """Assert env/data/rundir contract for single-service macro usage."""
     env = analysistest.begin(ctx)
@@ -181,6 +199,20 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _go_macro_select_inputs_wiring_test_impl(ctx):
+    """Assert configurable data/env still get Datadog-required wiring."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_select_inputs_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -242,6 +274,9 @@ go_macro_rundir_mismatch_wiring_test = analysistest.make(
 )
 go_macro_env_none_wiring_test = analysistest.make(
     _go_macro_env_none_wiring_test_impl,
+)
+go_macro_select_inputs_wiring_test = analysistest.make(
+    _go_macro_select_inputs_wiring_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

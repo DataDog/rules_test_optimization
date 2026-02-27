@@ -10,6 +10,8 @@ load(
     "clone_payload_with_detached_attributes_for_tests",
     "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
+    "collect_known_tests_modules_for_tests",
+    "collect_test_management_modules_for_tests",
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
@@ -44,6 +46,20 @@ def _contains_stripped_line(lines, expected):
         if line.strip() == expected:
             return True
     return False
+
+def _fake_read_ctx(file_map):
+    """Build a minimal fake ctx that supports path/read for parser helpers."""
+
+    def _path(path):
+        return path
+
+    def _read(path):
+        return file_map.get(path, "")
+
+    return struct(
+        path = _path,
+        read = _read,
+    )
 
 def _dd_site_normalization_test(ctx):
     """Validate DD_SITE normalization into canonical API base URL."""
@@ -597,6 +613,86 @@ def _normalize_out_dir_or_fail_test(ctx):
     asserts.equals(env, "foo/bar", normalize_out_dir_or_fail_for_tests("foo\\bar"))
     return unittest.end(env)
 
+def _collect_known_tests_modules_defensive_shape_test(ctx):
+    """Validate known-tests module collection tolerates malformed nested shapes."""
+    env = unittest.begin(ctx)
+    fake_ctx = _fake_read_ctx({
+        "known_tests.json": json.encode({
+            "data": {
+                "attributes": {
+                    "tests": {
+                        "module_a": {"suite": ["test"]},
+                        "module_b": "not-a-map",
+                    },
+                },
+            },
+        }),
+        "known_tests_bad_data.json": json.encode({
+            "data": [],
+        }),
+        "known_tests_bad_attrs.json": json.encode({
+            "data": {
+                "attributes": "not-a-map",
+            },
+        }),
+    })
+    asserts.equals(
+        env,
+        ["module_a"],
+        collect_known_tests_modules_for_tests(fake_ctx, "known_tests.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_known_tests_modules_for_tests(fake_ctx, "known_tests_bad_data.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_known_tests_modules_for_tests(fake_ctx, "known_tests_bad_attrs.json"),
+    )
+    return unittest.end(env)
+
+def _collect_test_management_modules_defensive_shape_test(ctx):
+    """Validate test-management module collection tolerates malformed shapes."""
+    env = unittest.begin(ctx)
+    fake_ctx = _fake_read_ctx({
+        "test_management.json": json.encode({
+            "data": {
+                "attributes": {
+                    "modules": {
+                        "module_a": {"suite": {"test": {}}},
+                        "module_b": [],
+                    },
+                },
+            },
+        }),
+        "test_management_bad_data.json": json.encode({
+            "data": "not-a-map",
+        }),
+        "test_management_bad_attrs.json": json.encode({
+            "data": {
+                "attributes": [],
+            },
+        }),
+    })
+    asserts.equals(
+        env,
+        ["module_a"],
+        collect_test_management_modules_for_tests(fake_ctx, "test_management.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_test_management_modules_for_tests(fake_ctx, "test_management_bad_data.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_test_management_modules_for_tests(fake_ctx, "test_management_bad_attrs.json"),
+    )
+    return unittest.end(env)
+
 def _export_bzl_manifest_path_test(ctx):
     """Validate manifest_path emission in generated export.bzl."""
     env = unittest.begin(ctx)
@@ -856,6 +952,15 @@ def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
     asserts.true(env, 'syms["custom_topt/cache/http/test_management.json"] = tm' in custom_content)
     return unittest.end(env)
 
+def _render_module_runfiles_bzl_escaping_test(ctx):
+    """Validate generated runfiles helper escapes special characters safely."""
+    env = unittest.begin(ctx)
+    escaped_content = render_module_runfiles_bzl_for_tests('custom"root\\path')
+    asserts.true(env, 'syms["custom\\"root\\\\path/cache/http/settings.json"] = ctx.file.settings' in escaped_content)
+    asserts.true(env, 'syms["custom\\"root\\\\path/manifest.txt"] = ctx.file.manifest' in escaped_content)
+    asserts.false(env, 'syms["custom"root\\path/cache/http/settings.json"] = ctx.file.settings' in escaped_content)
+    return unittest.end(env)
+
 def _partition_unix_headers_test(ctx):
     """Validate Unix header partitioning keeps DD-API-KEY out of public headers."""
     env = unittest.begin(ctx)
@@ -943,6 +1048,11 @@ def _normalize_out_dir_windows_drive_target_impl(_ctx):
     normalize_out_dir_or_fail_for_tests("C:/tmp/out")
     return []
 
+def _normalize_out_dir_control_chars_target_impl(_ctx):
+    """Target expected to fail when out_dir includes control characters."""
+    normalize_out_dir_or_fail_for_tests("foo\nbar")
+    return []
+
 def _decode_json_object_non_json_target_impl(_ctx):
     """Target expected to fail on non-JSON payload."""
     decode_json_object_or_fail_for_tests("NOT_JSON", "settings.json")
@@ -990,6 +1100,9 @@ normalize_out_dir_traversal_target_rule = rule(
 )
 normalize_out_dir_windows_drive_target_rule = rule(
     implementation = _normalize_out_dir_windows_drive_target_impl,
+)
+normalize_out_dir_control_chars_target_rule = rule(
+    implementation = _normalize_out_dir_control_chars_target_impl,
 )
 decode_json_object_non_json_target_rule = rule(
     implementation = _decode_json_object_non_json_target_impl,
@@ -1050,6 +1163,12 @@ def _normalize_out_dir_windows_drive_failure_test_impl(ctx):
     asserts.expect_failure(env, "must not include a Windows drive prefix")
     return analysistest.end(env)
 
+def _normalize_out_dir_control_chars_failure_test_impl(ctx):
+    """Assert control-char out_dir failure stays actionable."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "must not contain control characters")
+    return analysistest.end(env)
+
 def _decode_json_object_non_json_failure_test_impl(ctx):
     """Assert non-JSON failure message remains actionable."""
     env = analysistest.begin(ctx)
@@ -1101,6 +1220,8 @@ parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 runtime_module_path_from_environ_test = unittest.make(_runtime_module_path_from_environ_test)
 dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
+collect_known_tests_modules_defensive_shape_test = unittest.make(_collect_known_tests_modules_defensive_shape_test)
+collect_test_management_modules_defensive_shape_test = unittest.make(_collect_test_management_modules_defensive_shape_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 export_bzl_escaping_test = unittest.make(_export_bzl_escaping_test)
 fnv1a_symbol_distinguishes_common_symbols_test = unittest.make(_fnv1a_symbol_distinguishes_common_symbols_test)
@@ -1111,6 +1232,7 @@ example_stub_service_keys_targets_test = unittest.make(_example_stub_service_key
 example_stub_export_string_escaping_test = unittest.make(_example_stub_export_string_escaping_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
+render_module_runfiles_bzl_escaping_test = unittest.make(_render_module_runfiles_bzl_escaping_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)
 partition_unix_headers_without_api_key_test = unittest.make(_partition_unix_headers_without_api_key_test)
 record_sync_extension_repo_owner_success_test = unittest.make(_record_sync_extension_repo_owner_success_test)
@@ -1141,6 +1263,10 @@ normalize_out_dir_traversal_failure_test = analysistest.make(
 )
 normalize_out_dir_windows_drive_failure_test = analysistest.make(
     _normalize_out_dir_windows_drive_failure_test_impl,
+    expect_failure = True,
+)
+normalize_out_dir_control_chars_failure_test = analysistest.make(
+    _normalize_out_dir_control_chars_failure_test_impl,
     expect_failure = True,
 )
 decode_json_object_non_json_failure_test = analysistest.make(

@@ -1690,7 +1690,7 @@ enrich_with_context() {
     echo '{}' > "$ctx_file"
     cleanup_ctx=1
   fi
-  jq --slurpfile ctx "$ctx_file"     --arg runtime_id "$RUNTIME_ID"     --arg rules_version "$RULES_VERSION"     --arg language_fallback "bazel" '
+  if ! jq --slurpfile ctx "$ctx_file"     --arg runtime_id "$RUNTIME_ID"     --arg rules_version "$RULES_VERSION"     --arg language_fallback "bazel" '
     def ctx_val($k): $ctx[0][$k];
     def ctx_str($k): (ctx_val($k) | if type=="string" and length>0 then . else null end);
     def ctx_runtime_id: (ctx_str("runtime-id") // ctx_str("runtime.id") // ctx_str("runtime_id"));
@@ -1736,7 +1736,11 @@ enrich_with_context() {
         )
       else .
       end)
-  ' "$infile" > "$tmpfile"
+  ' "$infile" > "$tmpfile"; then
+    # Keep uploads resilient when enrichment input is malformed or jq fails.
+    log "warning: context enrichment failed for payload: $infile"
+    cp "$infile" "$tmpfile"
+  fi
   # CODEOWNERS enrichment is applied after metadata/context merge so source-path
   # detection can leverage normalized event structure.
   inject_codeowners_tags "$tmpfile"
@@ -1882,13 +1886,20 @@ upload_single_test() {
         fi
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
-        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}")
+      if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
-        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${TEST_EVP[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}")
+      if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${TEST_EVP[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
     fi
-    rc=$?
     http="${http:-000}"
     if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
         dbg "upload_single_test: HTTP $http (rc=$rc)"
@@ -1933,17 +1944,24 @@ upload_single_coverage() {
         dbg "headers: multipart/form-data (event + coveragex)"
     fi
     if (( AGENTLESS == 1 )); then
-      http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+      if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}")
+        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
     else
-      http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+      if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" "${COV_EVP[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}")
+        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
     fi
-    rc=$?
     http="${http:-000}"
     if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
         dbg "upload_single_coverage: HTTP $http (rc=$rc)"

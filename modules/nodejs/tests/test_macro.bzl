@@ -137,6 +137,26 @@ def nodejs_macro_env_none_target(name, tags = None):
         tags = tags,
     )
 
+def nodejs_macro_select_inputs_target(name, tags = None):
+    dd_topt_nodejs_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        nodejs_test_rule = _nodejs_test_capture_rule,
+        data = select({
+            "//conditions:default": [":test_macro.bzl"],
+        }),
+        env = select({
+            "//conditions:default": {
+                "CUSTOM_ENV": "from_select",
+                "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
+            },
+        }),
+        package_name = select({
+            "//conditions:default": "packages/nodejs/select/pkg",
+        }),
+        tags = tags,
+    )
+
 def _nodejs_macro_single_service_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -176,6 +196,20 @@ def _nodejs_macro_env_none_wiring_test_impl(ctx):
     captured = target[ToptNodejsMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _nodejs_macro_select_inputs_wiring_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptNodejsMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":nodejs_macro_select_inputs_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "packages/nodejs/select/pkg", captured.package_name)
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -268,6 +302,9 @@ nodejs_macro_multi_service_wiring_test = analysistest.make(
 )
 nodejs_macro_env_none_wiring_test = analysistest.make(
     _nodejs_macro_env_none_wiring_test_impl,
+)
+nodejs_macro_select_inputs_wiring_test = analysistest.make(
+    _nodejs_macro_select_inputs_wiring_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

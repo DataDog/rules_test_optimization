@@ -15,6 +15,7 @@ ToptPyMacroCaptureInfo = provider(
         "data_labels": "Forwarded data dependency labels.",
         "env": "Forwarded environment map.",
         "imports": "Forwarded imports attribute.",
+        "importpath": "Forwarded importpath attribute.",
     },
 )
 
@@ -23,6 +24,7 @@ def _py_test_capture_impl(ctx):
         data_labels = [str(dep.label) for dep in ctx.attr.data],
         env = dict(ctx.attr.env),
         imports = list(ctx.attr.imports),
+        importpath = ctx.attr.importpath,
     )]
 
 _py_test_capture_rule = rule(
@@ -32,6 +34,8 @@ _py_test_capture_rule = rule(
         "deps": attr.label_list(),
         "env": attr.string_dict(),
         "imports": attr.string_list(),
+        "importpath": attr.string(),
+        "module_path": attr.string(),
     },
 )
 
@@ -115,6 +119,26 @@ def py_macro_env_none_target(name, tags = None):
         tags = tags,
     )
 
+def py_macro_select_inputs_target(name, tags = None):
+    dd_topt_py_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        py_test_rule = _py_test_capture_rule,
+        data = select({
+            "//conditions:default": [":test_macro.bzl"],
+        }),
+        env = select({
+            "//conditions:default": {
+                "CUSTOM_ENV": "from_select",
+                "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
+            },
+        }),
+        importpath = select({
+            "//conditions:default": "example/python/select/pkg",
+        }),
+        tags = tags,
+    )
+
 def _py_macro_single_service_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -152,6 +176,20 @@ def _py_macro_env_none_wiring_test_impl(ctx):
     captured = target[ToptPyMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _py_macro_select_inputs_wiring_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptPyMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_select_inputs_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "example/python/select/pkg", captured.importpath)
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -244,6 +282,9 @@ py_macro_multi_service_wiring_test = analysistest.make(
 )
 py_macro_env_none_wiring_test = analysistest.make(
     _py_macro_env_none_wiring_test_impl,
+)
+py_macro_select_inputs_wiring_test = analysistest.make(
+    _py_macro_select_inputs_wiring_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

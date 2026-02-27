@@ -831,6 +831,38 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertNotIn("cygwin", bash_text)
         self.assertNotIn("exec powershell.exe", bash_text)
 
+    def test_bash_runtime_guards_context_enrichment_failures(self) -> None:
+        """Validate bash runtime falls back when jq context enrichment fails."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        self.assertIn("if ! jq --slurpfile ctx", bash_text)
+        self.assertIn('log "warning: context enrichment failed for payload:', bash_text)
+        self.assertIn('cp "$infile" "$tmpfile"', bash_text)
+
+    def test_bash_runtime_guards_curl_command_substitutions(self) -> None:
+        """Validate bash runtime captures curl failures without set -e aborts."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        self.assertIn("if http=$(curl_agentless -f -sS", bash_text)
+        self.assertIn("if http=$(curl -f -sS", bash_text)
+        self.assertIn("rc=$?", bash_text)
+        self.assertIn('http="${http:-000}"', bash_text)
+
+    def test_powershell_runtime_temp_and_testlogs_guards(self) -> None:
+        """Validate PowerShell runtime temp fallback and TESTLOGS_DIR checks."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[System.IO.Path]::GetTempPath()", powershell_text)
+        self.assertIn("unable to determine a temporary directory (TEMP/GetTempPath)", powershell_text)
+        self.assertIn("Test-Path -LiteralPath $env:TESTLOGS_DIR -PathType Container", powershell_text)
+        self.assertIn("TESTLOGS_DIR is set but is not a directory", powershell_text)
+
+    def test_powershell_runtime_max_depth_warning(self) -> None:
+        """Validate PowerShell runtime emits visible max-depth compatibility warning."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("warning: DD_TEST_OPTIMIZATION_MAX_DEPTH ignored", powershell_text)
+
 
 class MockDdServerTests(unittest.TestCase):
     """Test case group covering MockDdServerTests behaviors."""

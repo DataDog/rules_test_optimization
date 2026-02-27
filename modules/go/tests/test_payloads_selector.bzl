@@ -185,6 +185,32 @@ def selector_override_target(name, tags = None):
         tags = tags,
     )
 
+def selector_explicit_miss_failure_target(name, tags = None):
+    """Explicit importpath mismatch should fail with actionable diagnostics."""
+    topt_go_payloads_selector(
+        name = name,
+        explicit_importpath = "example.com/explicit/missing",
+        embeds = [],
+        fallback_importpath = "example.com/fallback/pkg",
+        full_files = ":full_payload",
+        module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_override_miss_failure_target(name, tags = None):
+    """Override mismatch should fail with actionable diagnostics."""
+    topt_go_payloads_selector(
+        name = name,
+        embeds = [],
+        fallback_importpath = "example.com/fallback/pkg",
+        full_files = ":full_payload",
+        module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        module_label_override = "missing_override",
+        tags = tags,
+    )
+
 def _has_fragment(items, fragment):
     """Implement has fragment behavior."""
     for item in items:
@@ -258,6 +284,20 @@ def _selector_override_test_impl(ctx):
     _assert_selected(env, target, "module_custom_override")
     return analysistest.end(env)
 
+def _selector_explicit_miss_failure_test_impl(ctx):
+    """Implement selector explicit mismatch failure test behavior."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "explicit module identifier")
+    asserts.expect_failure(env, "Available module groups")
+    return analysistest.end(env)
+
+def _selector_override_miss_failure_test_impl(ctx):
+    """Implement selector override mismatch failure test behavior."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "module_label_override")
+    asserts.expect_failure(env, "Available module groups")
+    return analysistest.end(env)
+
 selector_explicit_precedence_test = analysistest.make(
     _selector_explicit_precedence_test_impl,
 )
@@ -281,4 +321,12 @@ selector_include_disabled_test = analysistest.make(
 )
 selector_override_test = analysistest.make(
     _selector_override_test_impl,
+)
+selector_explicit_miss_failure_test = analysistest.make(
+    _selector_explicit_miss_failure_test_impl,
+    expect_failure = True,
+)
+selector_override_miss_failure_test = analysistest.make(
+    _selector_override_miss_failure_test_impl,
+    expect_failure = True,
 )

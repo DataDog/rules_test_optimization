@@ -437,7 +437,15 @@ Dbg "gzip enabled: $GzipPayloads"
 # Lock is scoped to workspace to allow parallel uploads in different workspaces
 $WorkspacePath = if ($env:BUILD_WORKSPACE_DIRECTORY) { $env:BUILD_WORKSPACE_DIRECTORY } else { (Get-Location).Path }
 $WorkspaceHash = [System.BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($WorkspacePath))).Replace("-","").Substring(0,8)
-$LockFile = Join-Path $env:TEMP "dd_upload_payloads_$WorkspaceHash.lock"
+$TempRoot = $env:TEMP
+if ([string]::IsNullOrWhiteSpace($TempRoot)) {
+    $TempRoot = [System.IO.Path]::GetTempPath()
+}
+if ([string]::IsNullOrWhiteSpace($TempRoot)) {
+    Log "error: unable to determine a temporary directory (TEMP/GetTempPath)"
+    exit 2
+}
+$LockFile = Join-Path $TempRoot "dd_upload_payloads_$WorkspaceHash.lock"
 
 function Acquire-Lock {
     $maxAttempts = 3
@@ -466,7 +474,7 @@ if (-not (Acquire-Lock)) {
 }
 
 # Temp directory for enriched payloads / event files
-$script:TmpPayloadDir = Join-Path $env:TEMP ("dd_topt_payloads_" + [System.Guid]::NewGuid().ToString("N"))
+$script:TmpPayloadDir = Join-Path $TempRoot ("dd_topt_payloads_" + [System.Guid]::NewGuid().ToString("N"))
 try {
     New-Item -ItemType Directory -Path $script:TmpPayloadDir -Force | Out-Null
 } catch {
@@ -503,10 +511,14 @@ $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Rele
 
 # Check explicit TESTLOGS_DIR override first (fail fast if set but invalid)
 if ($env:TESTLOGS_DIR) {
-    if (Test-Path -LiteralPath $env:TESTLOGS_DIR) {
+    if (Test-Path -LiteralPath $env:TESTLOGS_DIR -PathType Container) {
         # Explicit override bypasses auto-discovery heuristics.
         $TestlogsDir = $env:TESTLOGS_DIR
         Dbg "using explicit TESTLOGS_DIR=$TestlogsDir"
+    } elseif (Test-Path -LiteralPath $env:TESTLOGS_DIR) {
+        Log "error: TESTLOGS_DIR is set but is not a directory: $($env:TESTLOGS_DIR)"
+        Release-Lock
+        exit 2  # Configuration error (see exit codes in docs)
     } else {
         Log "error: TESTLOGS_DIR is set but path does not exist: $($env:TESTLOGS_DIR)"
         Log "hint: ensure you used the same Bazel wrapper for 'bazel info' as for 'bazel test'"
@@ -562,7 +574,7 @@ function Find-TestOutputs {
             $params['Depth'] = $MaxDepth
             Dbg "limiting search depth to $MaxDepth"
         } else {
-            Dbg "warning: DD_TEST_OPTIMIZATION_MAX_DEPTH ignored (requires PowerShell 7+, have $($PSVersionTable.PSVersion))"
+            Log "warning: DD_TEST_OPTIMIZATION_MAX_DEPTH ignored (requires PowerShell 7+, have $($PSVersionTable.PSVersion))"
         }
     }
     Get-ChildItem @params

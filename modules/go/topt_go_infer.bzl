@@ -23,8 +23,9 @@ Maintenance notes:
   should read rules_go providers for orchestration selection.
 - Keep provider access defensive (`getattr` / `hasattr`) because rules_go
   provider internals can vary across versions.
-- Never make selection failure fatal; always preserve the safe fallback to the
-  full payload bundle.
+- Explicit selector inputs should fail fast when they cannot map to any
+  exported `module_<sanitized>` filegroup; inferred/fallback paths still use
+  the safe full-bundle fallback.
 """
 
 load(
@@ -125,11 +126,16 @@ def _topt_go_payloads_selector_impl(ctx):
     module_group_names = [m.label.name for m in ctx.attr.module_groups]
 
     # Compute target name first, then resolve to actual label object below.
+    strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
+        bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
+    )
     selected_name = _select_module_group_name(
         ip,
         module_group_names,
         ctx.attr.include_per_module,
         ctx.attr.module_label_override,
+        fail_on_miss = strict_selection,
+        failure_context = "topt_go_payloads_selector",
     )
     chosen = None
     if selected_name:

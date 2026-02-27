@@ -312,6 +312,121 @@ dd_topt_ruby_test(
 )
 ```
 
+### Optional: workspace-local wrappers (less boilerplate)
+
+If your workspace always uses the same synced repo (`@test_optimization_data`)
+and the same underlying test rule symbols, create thin local wrappers so
+package BUILD files do not repeat `topt_data` and `*_test_rule`.
+
+Single-service wrapper pattern (Go example):
+
+```bzl
+# tools/build/dd_go_test.bzl
+load("@rules_go//go:def.bzl", "go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+def dd_go_test(name, **kwargs):
+    dd_topt_go_test(
+        name = name,
+        topt_data = topt_data,
+        go_test_rule = go_test,
+        **kwargs
+    )
+```
+
+```bzl
+# package BUILD.bazel
+load("//tools/build:dd_go_test.bzl", "dd_go_test")
+
+dd_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+)
+```
+
+You can apply the same pattern to all companion macros:
+
+```bzl
+# tools/build/dd_py_test.bzl
+load("@rules_python//python:defs.bzl", "py_test")
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+def dd_py_test(name, **kwargs):
+    dd_topt_py_test(
+        name = name,
+        topt_data = topt_data,
+        py_test_rule = py_test,
+        **kwargs
+    )
+```
+
+```bzl
+# tools/build/dd_java_test.bzl
+load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+def dd_java_test(name, **kwargs):
+    dd_topt_java_test(
+        name = name,
+        topt_data = topt_data,
+        java_test_rule = native.java_test,
+        **kwargs
+    )
+```
+
+```bzl
+# tools/build/dd_nodejs_test.bzl
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+def dd_nodejs_test(name, **kwargs):
+    dd_topt_nodejs_test(
+        name = name,
+        topt_data = topt_data,
+        nodejs_test_rule = js_test,
+        **kwargs
+    )
+```
+
+```bzl
+# tools/build/dd_dotnet_test.bzl
+load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+load("//:dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
+
+def dd_dotnet_test(name, **kwargs):
+    dd_topt_dotnet_test(
+        name = name,
+        topt_data = topt_data,
+        dotnet_test_rule = dotnet_csharp_test_adapter,
+        **kwargs
+    )
+```
+
+```bzl
+# tools/build/dd_ruby_test.bzl
+load("@rules_ruby//ruby:defs.bzl", "rb_test")
+load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+def dd_ruby_test(name, **kwargs):
+    dd_topt_ruby_test(
+        name = name,
+        topt_data = topt_data,
+        ruby_test_rule = rb_test,
+        **kwargs
+    )
+```
+
+For multi-service repos, either:
+
+1. Keep `topt_service` as a wrapper argument and pass `topt_data_by_service`
+2. Create one wrapper per service with `topt_service` pre-set
+
 ### Bzlmod + multi-service monorepo
 
 ```bzl
