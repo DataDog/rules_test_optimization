@@ -8,10 +8,10 @@ load(
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
     "clone_payload_with_detached_attributes_for_tests",
-    "collect_known_tests_modules_for_tests",
-    "collect_test_management_modules_for_tests",
     "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
+    "collect_known_tests_modules_for_tests",
+    "collect_test_management_modules_for_tests",
     "compute_dd_api_base_for_tests",
     "decode_json_object_or_fail_for_tests",
     "dirname_for_tests",
@@ -49,6 +49,7 @@ def _contains_stripped_line(lines, expected):
 
 def _fake_read_ctx(file_map):
     """Build a minimal fake ctx that supports path/read for parser helpers."""
+
     def _path(path):
         return path
 

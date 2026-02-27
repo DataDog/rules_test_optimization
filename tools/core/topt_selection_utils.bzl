@@ -5,8 +5,7 @@ Maintainers:
 - Keep this file dependency-light and free of language-specific provider loads.
 """
 
-load("//tools/core:common_utils.bzl", "sanitize_label_fragment")
-load("//tools/core:common_utils.bzl", "fail_with_prefix")
+load("//tools/core:common_utils.bzl", "fail_with_prefix", "sanitize_label_fragment")
 
 def _fail_missing_module_group(expected_name, module_group_names, importpath, module_label_override, failure_context):
     """Fail with actionable diagnostics for explicit module-selection mismatches."""
