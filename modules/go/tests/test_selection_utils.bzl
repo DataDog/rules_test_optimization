@@ -209,7 +209,7 @@ def _build_module_labels_unsanitized_entry_failure_test_impl(ctx):
 def _normalize_user_data_invalid_type_failure_test_impl(ctx):
     """Assert unsupported `data` containers fail with direct guidance."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "normalize_user_data: expected None, string, list, or tuple")
+    asserts.expect_failure(env, "normalize_user_data: expected None, string, list, tuple, or select")
     return analysistest.end(env)
 
 service_mapping_entries_filters_non_service_test = unittest.make(_service_mapping_entries_filters_non_service_test)

@@ -15,6 +15,7 @@ ToptJavaMacroCaptureInfo = provider(
         "data_labels": "Forwarded data dependency labels.",
         "env": "Forwarded environment map.",
         "test_class": "Forwarded test_class attribute.",
+        "java_package": "Forwarded java_package attribute.",
     },
 )
 
@@ -23,6 +24,7 @@ def _java_test_capture_impl(ctx):
         data_labels = [str(dep.label) for dep in ctx.attr.data],
         env = dict(ctx.attr.env),
         test_class = ctx.attr.test_class,
+        java_package = ctx.attr.java_package,
     )]
 
 _java_test_capture_rule = rule(
@@ -32,6 +34,8 @@ _java_test_capture_rule = rule(
         "deps": attr.label_list(),
         "env": attr.string_dict(),
         "test_class": attr.string(),
+        "java_package": attr.string(),
+        "package": attr.string(),
     },
 )
 
@@ -115,6 +119,26 @@ def java_macro_env_none_target(name, tags = None):
         tags = tags,
     )
 
+def java_macro_select_inputs_target(name, tags = None):
+    dd_topt_java_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        java_test_rule = _java_test_capture_rule,
+        data = select({
+            "//conditions:default": [":test_macro.bzl"],
+        }),
+        env = select({
+            "//conditions:default": {
+                "CUSTOM_ENV": "from_select",
+                "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
+            },
+        }),
+        java_package = select({
+            "//conditions:default": "com.example.select.pkg",
+        }),
+        tags = tags,
+    )
+
 def _java_macro_single_service_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -152,6 +176,20 @@ def _java_macro_env_none_wiring_test_impl(ctx):
     captured = target[ToptJavaMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _java_macro_select_inputs_wiring_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptJavaMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":java_macro_select_inputs_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "com.example.select.pkg", captured.java_package)
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -244,6 +282,9 @@ java_macro_multi_service_wiring_test = analysistest.make(
 )
 java_macro_env_none_wiring_test = analysistest.make(
     _java_macro_env_none_wiring_test_impl,
+)
+java_macro_select_inputs_wiring_test = analysistest.make(
+    _java_macro_select_inputs_wiring_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

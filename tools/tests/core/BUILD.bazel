@@ -56,6 +56,8 @@ load(
     "decode_json_object_non_json_failure_test",
     "decode_json_object_non_json_target_rule",
     "decode_json_object_valid_test",
+    "collect_known_tests_modules_defensive_shape_test",
+    "collect_test_management_modules_defensive_shape_test",
     "clone_payload_with_detached_attributes_test",
     "clone_payload_with_nested_structure_test",
     "collect_env_ctx_wrapper_test",
@@ -76,6 +78,8 @@ load(
     "normalize_out_dir_absolute_target_rule",
     "normalize_out_dir_traversal_failure_test",
     "normalize_out_dir_traversal_target_rule",
+    "normalize_out_dir_control_chars_failure_test",
+    "normalize_out_dir_control_chars_target_rule",
     "normalize_out_dir_windows_drive_failure_test",
     "normalize_out_dir_windows_drive_target_rule",
     "export_bzl_manifest_path_test",
@@ -97,6 +101,7 @@ load(
     "record_sync_extension_repo_owner_duplicate_target_rule",
     "record_sync_extension_repo_owner_success_test",
     "render_module_runfiles_bzl_respects_manifest_root_test",
+    "render_module_runfiles_bzl_escaping_test",
     "resolve_dd_api_base_test",
     "set_context_tag_from_env_test",
 )
@@ -256,6 +261,18 @@ dirname_test(
 
 normalize_out_dir_or_fail_test(
     name = "normalize_out_dir_or_fail_test",
+    size = "small",
+    timeout = "short",
+)
+
+collect_known_tests_modules_defensive_shape_test(
+    name = "collect_known_tests_modules_defensive_shape_test",
+    size = "small",
+    timeout = "short",
+)
+
+collect_test_management_modules_defensive_shape_test(
+    name = "collect_test_management_modules_defensive_shape_test",
     size = "small",
     timeout = "short",
 )
@@ -498,6 +515,12 @@ render_module_runfiles_bzl_respects_manifest_root_test(
     timeout = "short",
 )
 
+render_module_runfiles_bzl_escaping_test(
+    name = "render_module_runfiles_bzl_escaping_test",
+    size = "small",
+    timeout = "short",
+)
+
 partition_unix_headers_test(
     name = "partition_unix_headers_test",
     size = "small",
@@ -560,6 +583,16 @@ normalize_out_dir_traversal_target_rule(
 normalize_out_dir_traversal_failure_test(
     name = "normalize_out_dir_traversal_failure_test",
     target_under_test = ":normalize_out_dir_traversal_target",
+)
+
+normalize_out_dir_control_chars_target_rule(
+    name = "normalize_out_dir_control_chars_target",
+    tags = ["manual"],
+)
+
+normalize_out_dir_control_chars_failure_test(
+    name = "normalize_out_dir_control_chars_failure_test",
+    target_under_test = ":normalize_out_dir_control_chars_target",
 )
 
 normalize_out_dir_windows_drive_target_rule(
@@ -768,6 +801,8 @@ test_suite(
         ":runtime_module_path_from_environ_test",
         ":dirname_test",
         ":normalize_out_dir_or_fail_test",
+        ":collect_known_tests_modules_defensive_shape_test",
+        ":collect_test_management_modules_defensive_shape_test",
         ":export_bzl_manifest_path_test",
         ":export_bzl_escaping_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",
@@ -801,6 +836,7 @@ test_suite(
         ":record_multi_repo_owner_duplicate_failure_test",
         ":http_execute_timeout_seconds_test",
         ":render_module_runfiles_bzl_respects_manifest_root_test",
+        ":render_module_runfiles_bzl_escaping_test",
         ":partition_unix_headers_test",
         ":partition_unix_headers_without_api_key_test",
         ":record_sync_extension_repo_owner_success_test",
@@ -809,6 +845,7 @@ test_suite(
         ":normalize_out_dir_empty_failure_test",
         ":normalize_out_dir_absolute_failure_test",
         ":normalize_out_dir_traversal_failure_test",
+        ":normalize_out_dir_control_chars_failure_test",
         ":normalize_out_dir_windows_drive_failure_test",
         ":decode_json_object_non_json_failure_test",
         ":decode_json_object_array_failure_test",

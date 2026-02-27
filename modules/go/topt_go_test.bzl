@@ -43,7 +43,9 @@ load(
 )
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
+    "append_data_dependencies",
     "build_module_labels",
+    "merge_user_env",
     "normalize_user_data",
     "resolve_topt_service_key",
     "service_mapping_entries",
@@ -53,6 +55,8 @@ load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
+_append_data_dependencies = append_data_dependencies
+_merge_user_env = merge_user_env
 
 def _resolve_topt_service_key(service_entries, topt_service):
     """Implement resolve topt service key behavior."""
@@ -138,7 +142,7 @@ def dd_topt_go_test(
     # Use `pop` so caller kwargs forwarded to go_test do not contain stale
     # `data` after we normalize/augment it below.
     user_data = kwargs.pop("data", None)
-    data = _normalize_user_data(user_data)
+    data = _append_data_dependencies(user_data, [])
 
     # Extract hints for importpath detection
     explicit_importpath = kwargs.get("importpath") if "importpath" in kwargs else None
@@ -188,8 +192,7 @@ def dd_topt_go_test(
     # ------------------------------------------------------------------
     # Prepare env map using a selector rule that infers importpath via aspect
     # Same `pop` pattern keeps final go_test kwargs clean and explicit.
-    user_env = kwargs.pop("env", None) or {}
-    env = dict(user_env)
+    user_env = kwargs.pop("env", None)
 
     # Build the list of per-module groups once (if any were exported)
     # Use exported sanitized labels directly to avoid re-deriving naming policy
@@ -234,7 +237,7 @@ def dd_topt_go_test(
     # ------------------------------------------------------------------
     # Data/env for the go test: depend only on the selector and use its runfiles.
     # This keeps go_test callsites simple while centralizing selection logic.
-    data.append(":" + selector_name)
+    data = _append_data_dependencies(data, [":" + selector_name])
 
     # Add manifest file reference for deriving the working directory.
     # Keep this dynamic via export metadata so custom out_dir values continue
@@ -246,12 +249,17 @@ def dd_topt_go_test(
     # @repo//:<path> (for example @test_optimization_data//:.testoptimization/manifest.txt).
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
-    data.append(manifest_label)
-    env["DD_TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
-
-    # Signal to the library that payloads should be written to files (TEST_UNDECLARED_OUTPUTS_DIR)
-    # Always set - the library will write to TEST_UNDECLARED_OUTPUTS_DIR when this is true
-    env["DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
+    data = _append_data_dependencies(data, [manifest_label])
+    env = _merge_user_env(
+        user_env,
+        {
+            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
+            # Signal to the library that payloads should be written to files
+            # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
+            "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+        },
+        macro_name = "dd_topt_go_test",
+    )
 
     # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
     # Keeping this explicit avoids hidden repository dependencies in the macro.

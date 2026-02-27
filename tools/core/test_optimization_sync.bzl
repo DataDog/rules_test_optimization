@@ -332,6 +332,9 @@ def _normalize_out_dir_or_fail(out_dir):
     raw = (out_dir or "").strip()
     if not raw:
         fail_with_prefix("test_optimization_sync", "out_dir must be a non-empty relative path")
+    for ch in ["\n", "\r", "\t"]:
+        if ch in raw:
+            fail_with_prefix("test_optimization_sync", "out_dir must not contain control characters: %s" % repr(out_dir))
 
     normalized = raw.replace("\\", "/")
     if normalized.startswith("/"):
@@ -350,6 +353,10 @@ def _normalize_out_dir_or_fail(out_dir):
     if not segments:
         fail_with_prefix("test_optimization_sync", "out_dir must resolve to a non-empty relative path: %s" % repr(out_dir))
     return "/".join(segments)
+
+def _bzl_string_literal(value):
+    """Return a safely escaped double-quoted Starlark string literal."""
+    return json.encode(str(value or ""))
 
 def _validate_abs_path_command_input_or_fail(abs_path):
     """Fail fast when absolute path contains control characters."""
@@ -548,9 +555,15 @@ def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_fi
 
     # Decode and navigate to data.attributes.<module_key> (map: module -> content map)
     obj = _decode_json_object_or_fail(content, source_file)
-    data_obj = obj.get("data") or {}
-    attrs_obj = data_obj.get("attributes") or {}
-    modules_obj = attrs_obj.get(module_key) or {}
+    data_obj = obj.get("data")
+    if not _is_dict(data_obj):
+        data_obj = {}
+    attrs_obj = data_obj.get("attributes")
+    if not _is_dict(attrs_obj):
+        attrs_obj = {}
+    modules_obj = attrs_obj.get(module_key)
+    if not _is_dict(modules_obj):
+        modules_obj = {}
     if not _is_dict(modules_obj):
         return specs
 
@@ -787,9 +800,15 @@ def _collect_known_tests_modules(ctx, known_tests_file):
     if not content or not content.strip():
         return []
     obj = _decode_json_object_or_fail(content, known_tests_file)
-    data_obj = obj.get("data") or {}
-    attrs_obj = data_obj.get("attributes") or {}
-    tests_obj = attrs_obj.get("tests") or {}
+    data_obj = obj.get("data")
+    if not _is_dict(data_obj):
+        data_obj = {}
+    attrs_obj = data_obj.get("attributes")
+    if not _is_dict(attrs_obj):
+        attrs_obj = {}
+    tests_obj = attrs_obj.get("tests")
+    if not _is_dict(tests_obj):
+        tests_obj = {}
     if not _is_dict(tests_obj):
         return []
     modules = []
@@ -807,9 +826,15 @@ def _collect_test_management_modules(ctx, test_management_file):
     if not content or not content.strip():
         return []
     obj = _decode_json_object_or_fail(content, test_management_file)
-    data_obj = obj.get("data") or {}
-    attrs_obj = data_obj.get("attributes") or {}
-    modules_obj = attrs_obj.get("modules") or {}
+    data_obj = obj.get("data")
+    if not _is_dict(data_obj):
+        data_obj = {}
+    attrs_obj = data_obj.get("attributes")
+    if not _is_dict(attrs_obj):
+        attrs_obj = {}
+    modules_obj = attrs_obj.get("modules")
+    if not _is_dict(modules_obj):
+        modules_obj = {}
     if not _is_dict(modules_obj):
         return []
     modules = []
@@ -909,17 +934,21 @@ def _render_module_runfiles_bzl(manifest_root):
     manifest_rloc = "%s/manifest.txt" % manifest_root
     known_tests_rloc = "%s/cache/http/known_tests.json" % manifest_root
     test_management_rloc = "%s/cache/http/test_management.json" % manifest_root
+    settings_rloc_lit = _bzl_string_literal(settings_rloc)
+    manifest_rloc_lit = _bzl_string_literal(manifest_rloc)
+    known_tests_rloc_lit = _bzl_string_literal(known_tests_rloc)
+    test_management_rloc_lit = _bzl_string_literal(test_management_rloc)
     return (
         "def _topt_module_files_impl(ctx):\n" +
         "    syms = {}\n" +
-        ('    syms["%s"] = ctx.file.settings\n' % settings_rloc) +
-        ('    syms["%s"] = ctx.file.manifest\n' % manifest_rloc) +
+        ("    syms[%s] = ctx.file.settings\n" % settings_rloc_lit) +
+        ("    syms[%s] = ctx.file.manifest\n" % manifest_rloc_lit) +
         "    kt = getattr(ctx.file, \"known_tests\", None)\n" +
         "    if kt:\n" +
-        ('        syms["%s"] = kt\n' % known_tests_rloc) +
+        ("        syms[%s] = kt\n" % known_tests_rloc_lit) +
         "    tm = getattr(ctx.file, \"test_management\", None)\n" +
         "    if tm:\n" +
-        ('        syms["%s"] = tm\n' % test_management_rloc) +
+        ("        syms[%s] = tm\n" % test_management_rloc_lit) +
         "    return DefaultInfo(runfiles = ctx.runfiles(symlinks = syms))\n" +
         "\n" +
         "topt_module_files = rule(\n" +
@@ -1201,6 +1230,8 @@ http_retry_delay_seconds_for_tests = HTTP_RETRY_DELAY_SECONDS
 http_execute_timeout_buffer_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS
 http_execute_timeout_seconds_for_tests = HTTP_EXECUTE_TIMEOUT_SECONDS
 decode_json_object_or_fail_for_tests = _decode_json_object_or_fail
+collect_known_tests_modules_for_tests = _collect_known_tests_modules
+collect_test_management_modules_for_tests = _collect_test_management_modules
 partition_unix_headers_for_tests = _partition_unix_headers
 record_sync_extension_repo_owner_or_fail_for_tests = _record_sync_extension_repo_owner_or_fail
 render_module_runfiles_bzl_for_tests = _render_module_runfiles_bzl
@@ -1699,12 +1730,18 @@ def _impl(ctx):
     settings_path = ctx.path(settings_file)
     settings_content = ctx.read(settings_path)
     settings_obj = _decode_json_object_or_fail(settings_content, settings_file)
-    data_obj = settings_obj.get("data") or {}
-    attrs_obj = data_obj.get("attributes") or {}
+    data_obj = settings_obj.get("data")
+    if not _is_dict(data_obj):
+        data_obj = {}
+    attrs_obj = data_obj.get("attributes")
+    if not _is_dict(attrs_obj):
+        attrs_obj = {}
     enabled_val = attrs_obj.get("known_tests_enabled")
     known_tests_enabled = (enabled_val == True)
 
-    tm_obj = attrs_obj.get("test_management") or {}
+    tm_obj = attrs_obj.get("test_management")
+    if not _is_dict(tm_obj):
+        tm_obj = {}
     test_management_enabled = (tm_obj.get("enabled") == True)
     log_debug(debug, "settings", "known_tests_enabled parsed as: %s" % known_tests_enabled)
 
@@ -1726,11 +1763,11 @@ def _impl(ctx):
         known_tests_enabled = False
 
         # Ensure attributes dict exists and update the flag
-        if not _is_dict(data_obj):
+        if not _is_dict(settings_obj.get("data")):
             settings_obj["data"] = {"attributes": {}}
             data_obj = settings_obj["data"]
             attrs_obj = data_obj["attributes"]
-        elif ("attributes" not in data_obj) or (not _is_dict(data_obj.get("attributes"))):
+        elif ("attributes" not in settings_obj["data"]) or (not _is_dict(settings_obj["data"].get("attributes"))):
             data_obj["attributes"] = {}
             attrs_obj = data_obj["attributes"]
 
@@ -1740,11 +1777,11 @@ def _impl(ctx):
 
     if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
         test_management_enabled = False
-        if not _is_dict(data_obj):
+        if not _is_dict(settings_obj.get("data")):
             settings_obj["data"] = {"attributes": {}}
             data_obj = settings_obj["data"]
             attrs_obj = data_obj["attributes"]
-        elif ("attributes" not in data_obj) or (not _is_dict(data_obj.get("attributes"))):
+        elif ("attributes" not in settings_obj["data"]) or (not _is_dict(settings_obj["data"].get("attributes"))):
             data_obj["attributes"] = {}
             attrs_obj = data_obj["attributes"]
 
@@ -1993,10 +2030,10 @@ def _impl(ctx):
             test_management_file = tm_by_label.get(lab)
             build_content += ("\ntopt_module_files(\n" +
                               ('    name = "module_%s",\n' % lab) +
-                              ('    settings = "%s",\n' % settings_file) +
-                              ('    manifest = "%s",\n' % manifest_file) +
-                              (('    known_tests = "%s",\n' % known_tests_file) if known_tests_file else "") +
-                              (('    test_management = "%s",\n' % test_management_file) if test_management_file else "") +
+                              ("    settings = %s,\n" % _bzl_string_literal(settings_file)) +
+                              ("    manifest = %s,\n" % _bzl_string_literal(manifest_file)) +
+                              (("    known_tests = %s,\n" % _bzl_string_literal(known_tests_file)) if known_tests_file else "") +
+                              (("    test_management = %s,\n" % _bzl_string_literal(test_management_file)) if test_management_file else "") +
                               '    visibility = ["//visibility:public"],\n' +
                               ")\n")
     log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)

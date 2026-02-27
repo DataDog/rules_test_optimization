@@ -165,6 +165,32 @@ def selector_override_target(name, tags = None):
         tags = tags,
     )
 
+def selector_explicit_miss_failure_target(name, tags = None):
+    topt_nodejs_payloads_selector(
+        name = name,
+        explicit_identifier = "packages/nodejs/missing/pkg",
+        attribute_candidates = [],
+        deps = [],
+        fallback_identifier = "packages/nodejs/fallback/pkg",
+        full_files = ":full_payload",
+        module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_override_miss_failure_target(name, tags = None):
+    topt_nodejs_payloads_selector(
+        name = name,
+        attribute_candidates = [],
+        deps = [],
+        fallback_identifier = "packages/nodejs/fallback/pkg",
+        full_files = ":full_payload",
+        module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        module_label_override = "missing_override",
+        tags = tags,
+    )
+
 def _has_fragment(items, fragment):
     for item in items:
         if fragment in item:
@@ -222,6 +248,18 @@ def _selector_override_test_impl(ctx):
     _assert_selected(env, target, "module_custom_override")
     return analysistest.end(env)
 
+def _selector_explicit_miss_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "explicit module identifier")
+    asserts.expect_failure(env, "Available module groups")
+    return analysistest.end(env)
+
+def _selector_override_miss_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "module_label_override")
+    asserts.expect_failure(env, "Available module groups")
+    return analysistest.end(env)
+
 selector_explicit_precedence_test = analysistest.make(
     _selector_explicit_precedence_test_impl,
 )
@@ -242,4 +280,12 @@ selector_include_disabled_test = analysistest.make(
 )
 selector_override_test = analysistest.make(
     _selector_override_test_impl,
+)
+selector_explicit_miss_failure_test = analysistest.make(
+    _selector_explicit_miss_failure_test_impl,
+    expect_failure = True,
+)
+selector_override_miss_failure_test = analysistest.make(
+    _selector_override_miss_failure_test_impl,
+    expect_failure = True,
 )

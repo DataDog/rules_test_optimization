@@ -10,7 +10,9 @@ load(
 )
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
+    "append_data_dependencies",
     "build_module_labels",
+    "merge_user_env",
     "normalize_user_data",
     "resolve_topt_service_key",
     "select_service_entry_or_fail",
@@ -21,6 +23,8 @@ load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
+_append_data_dependencies = append_data_dependencies
+_merge_user_env = merge_user_env
 
 def _resolve_topt_service_key(service_entries, topt_service):
     return resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_py_test")
@@ -51,6 +55,15 @@ def _build_python_fallback_identifier(package_path, runtime_info):
         return (module_path + "." + pkg_dotted) if pkg_dotted else module_path
     return pkg_dotted
 
+def _has_non_empty_value(value):
+    if value == None:
+        return False
+    if type(value) == type(""):
+        return value.strip() != ""
+    if type(value) == type([]) or type(value) == type(()):
+        return len(value) > 0
+    return True
+
 def dd_topt_py_test(
         name,
         topt_data,
@@ -64,7 +77,7 @@ def dd_topt_py_test(
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
     user_data = kwargs.pop("data", None)
-    data = _normalize_user_data(user_data)
+    data = _append_data_dependencies(user_data, [])
 
     sync_repo_name = _svc.get("repo_name")
     if not sync_repo_name:
@@ -75,15 +88,27 @@ def dd_topt_py_test(
     if not _is_dict(_python):
         _python = {}
 
-    deps_labels = kwargs.get("deps", []) or []
-    imports_candidates = kwargs.get("imports", []) or []
+    deps_labels = kwargs.get("deps")
+    if deps_labels == None:
+        deps_labels = []
+    imports_candidates = kwargs.get("imports")
+    if imports_candidates == None:
+        imports_candidates = []
+    importpath_candidate = kwargs.get("importpath") if "importpath" in kwargs else None
+    module_path_candidate = kwargs.get("module_path") if "module_path" in kwargs else None
     attribute_candidates = []
-    if kwargs.get("importpath") != None:
-        attribute_candidates.append(kwargs.get("importpath"))
-    if kwargs.get("module_path") != None:
-        attribute_candidates.append(kwargs.get("module_path"))
+    if type(importpath_candidate) == type("") and importpath_candidate:
+        attribute_candidates.append(importpath_candidate)
+    if type(module_path_candidate) == type("") and module_path_candidate:
+        attribute_candidates.append(module_path_candidate)
 
-    uses_inference = bool(module_identifier) or bool(imports_candidates) or bool(deps_labels) or bool(attribute_candidates)
+    uses_inference = (
+        _has_non_empty_value(module_identifier) or
+        _has_non_empty_value(imports_candidates) or
+        _has_non_empty_value(deps_labels) or
+        _has_non_empty_value(importpath_candidate) or
+        _has_non_empty_value(module_path_candidate)
+    )
     if uses_inference:
         include_per_module_files = True
     else:
@@ -109,18 +134,25 @@ def dd_topt_py_test(
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override,
+        importpath = importpath_candidate if importpath_candidate != None else "",
+        module_path = module_path_candidate if module_path_candidate != None else "",
     )
 
-    user_env = kwargs.pop("env", None) or {}
-    env = dict(user_env)
+    user_env = kwargs.pop("env", None)
 
-    data.append(":" + selector_name)
+    data = _append_data_dependencies(data, [":" + selector_name])
 
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
-    data.append(manifest_label)
-    env["DD_TEST_OPTIMIZATION_MANIFEST_FILE"] = "$(rlocationpath %s)" % manifest_label
-    env["DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"] = "true"
+    data = _append_data_dependencies(data, [manifest_label])
+    env = _merge_user_env(
+        user_env,
+        {
+            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
+            "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+        },
+        macro_name = "dd_topt_py_test",
+    )
 
     py_test_rule(
         name = name,

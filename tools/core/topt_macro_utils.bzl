@@ -20,6 +20,10 @@ is_dict = _is_dict
 is_list = _is_list
 is_string = _is_string
 
+def is_select(value):
+    """Return True when value is a configurable `select(...)` expression."""
+    return type(value) == "select"
+
 def service_mapping_entries(topt_data):
     """Extract service-shaped entries from an aggregator mapping.
 
@@ -50,13 +54,43 @@ def normalize_user_data(user_data):
     if user_data == None:
         return []
 
+    if is_select(user_data):
+        return user_data
+
     # A single label can be passed as a string; keep it atomic.
     if is_string(user_data):
         return [user_data]
     if is_list(user_data):
         return list(user_data)
-    fail_with_prefix("topt_macro_utils", "normalize_user_data: expected None, string, list, or tuple; got %s" % type(user_data))
+    fail_with_prefix("topt_macro_utils", "normalize_user_data: expected None, string, list, tuple, or select; got %s" % type(user_data))
     return []
+
+def append_data_dependencies(user_data, extra_labels):
+    """Append generated data labels while preserving `select(...)` configurability."""
+
+    labels = list(extra_labels or [])
+    normalized = normalize_user_data(user_data)
+    if is_select(normalized):
+        return normalized + labels
+    out = list(normalized)
+    out.extend(labels)
+    return out
+
+def merge_user_env(user_env, required_env, macro_name = "dd_topt_macro"):
+    """Merge caller env with required env keys, supporting `select(...)` values."""
+
+    if required_env == None or not is_dict(required_env):
+        fail_with_prefix("topt_macro_utils", "%s: required_env must be a dict" % macro_name)
+
+    if user_env == None:
+        base = {}
+    elif is_dict(user_env) or is_select(user_env):
+        base = user_env
+    else:
+        fail_with_prefix("topt_macro_utils", "%s: env must be None, dict, or select; got %s" % (macro_name, type(user_env)))
+
+    # Required keys intentionally win over caller-provided values.
+    return base | required_env
 
 def build_module_labels(sync_repo_name, labels, macro_name = "dd_topt_macro"):
     """Build per-module filegroup labels from sanitized module fragments.
