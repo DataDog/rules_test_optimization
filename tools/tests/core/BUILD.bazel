@@ -103,6 +103,7 @@ load(
     "render_module_runfiles_bzl_respects_manifest_root_test",
     "render_module_runfiles_bzl_escaping_test",
     "resolve_dd_api_base_test",
+    "redact_url_userinfo_test",
     "set_context_tag_from_env_test",
 )
 load(
@@ -149,6 +150,12 @@ dd_site_invalid_failure_test(
 # Validate DD_TEST_OPTIMIZATION_API_BASE override behavior.
 resolve_dd_api_base_test(
     name = "resolve_dd_api_base_test",
+    size = "small",
+    timeout = "short",
+)
+
+redact_url_userinfo_test(
+    name = "redact_url_userinfo_test",
     size = "small",
     timeout = "short",
 )

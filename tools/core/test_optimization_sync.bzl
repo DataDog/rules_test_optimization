@@ -753,7 +753,7 @@ def _resolve_dd_api_base(env_data, debug):
     if override:
         # Allow tests/dev to point sync requests at a mock server without changing DD_SITE.
         base = override.rstrip("/")
-        log_debug(debug, "http", "DD_TEST_OPTIMIZATION_API_BASE override set: %s" % base)
+        log_debug(debug, "http", "DD_TEST_OPTIMIZATION_API_BASE override set: %s" % _redact_url_userinfo(base))
         return base
     return _compute_dd_api_base(env_data.get("dd_site"))
 
@@ -766,6 +766,29 @@ def _resolve_dd_api_base_for_tests(dd_site, dd_api_base):
         "dd_api_base": dd_api_base or "",
     }
     return _resolve_dd_api_base(env_data, False)
+
+def _redact_url_userinfo(url):
+    """Remove URL userinfo to keep logs/errors free from credential leaks."""
+    s = (url or "").strip()
+    if not s:
+        return ""
+    scheme_idx = s.find("://")
+    if scheme_idx < 0:
+        return s
+    auth_start = scheme_idx + 3
+    end = len(s)
+    for sep in ["/", "?", "#"]:
+        idx = s.find(sep, auth_start)
+        if idx >= 0 and idx < end:
+            end = idx
+    authority = s[auth_start:end]
+    at_idx = -1
+    for i in range(len(authority)):
+        if authority[i] == "@":
+            at_idx = i
+    if at_idx < 0:
+        return s
+    return s[:auth_start] + authority[at_idx + 1:] + s[end:]
 
 def _decode_json_object_or_fail(content, context):
     """Decode JSON and enforce top-level object with actionable failures."""
@@ -1026,9 +1049,10 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     is_win = _is_windows(ctx)
     http_method = method or "GET"
     policy = http_policy if http_policy != None else _resolve_http_policy(ctx)
+    redacted_url = _redact_url_userinfo(url)
 
     # Avoid logging secrets; only log method and URL
-    log_info("http %s %s" % (http_method, url))
+    log_info("http %s %s" % (http_method, redacted_url))
 
     if is_win:
         # Build a small PowerShell script to perform the request with basic retries.
@@ -1072,7 +1096,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
 
         # Emulate curl -f: treat HTTP >= 400 as failure
         lines.append("    $code = if ($resp.StatusCode) { [int]$resp.StatusCode } else { 200 }")
-        lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned for ' + $Url) -f $code; exit 1 }")
+        lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned') -f $code; exit 1 }")
         lines.append("    Write-Output $code")
         lines.append("    exit 0")
         lines.append("  } catch { if ($attempt -lt $max) { Start-Sleep -Seconds %d; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }" % policy["retry_delay_seconds"])
@@ -1127,6 +1151,9 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         request_body = request_debug_payload if request_debug_payload else "<none>"
         if (not debug) and request_body != "<none>" and len(request_body) > 500:
             request_body = request_body[:500] + "...(truncated; enable debug for full body)"
+        stderr_text = (result.stderr or "").strip()
+        if stderr_text and url and (redacted_url != url):
+            stderr_text = stderr_text.replace(url, redacted_url)
 
         # Include response file path in failures so developers can inspect
         # partial payloads produced by proxies/gateways.
@@ -1136,9 +1163,9 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             (
                 http_status,
                 http_method,
-                url,
+                redacted_url,
                 result.return_code,
-                (result.stderr or "").strip(),
+                stderr_text,
                 out_file,
                 request_body,
             ),
@@ -1156,17 +1183,17 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             size_result = ctx.execute(size_cmd)
             if size_result.return_code == 0 and size_result.stdout:
                 bytes_str = size_result.stdout.strip()
-                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, url))
+                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, redacted_url))
             else:
-                log_info("Downloaded %s from %s" % (out_file, url))
+                log_info("Downloaded %s from %s" % (out_file, redacted_url))
         else:
             size_result = ctx.execute(["wc", "-c", out_file])
             if size_result.return_code == 0 and size_result.stdout:
                 parts = [p for p in size_result.stdout.strip().split(" ") if p]
                 bytes_str = parts[0] if parts else "unknown"
-                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, url))
+                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, redacted_url))
             else:
-                log_info("Downloaded %s from %s" % (out_file, url))
+                log_info("Downloaded %s from %s" % (out_file, redacted_url))
 
         # Emit full response body when debug is enabled, similar to request logging
         if debug:
@@ -1175,7 +1202,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
                 log_debug(
                     debug,
                     "http",
-                    "HTTP response body (%s %s): %s" % (http_method, url, try_body),
+                    "HTTP response body (%s %s): %s" % (http_method, redacted_url, try_body),
                 )
 
     return result.return_code
@@ -1209,6 +1236,7 @@ def _http_post_json(ctx, url, headers, json_body_str, tmp_body_file, out_file, d
 # Public aliases for tests (avoid importing private symbols)
 compute_dd_api_base_for_tests = _compute_dd_api_base
 resolve_dd_api_base_for_tests = _resolve_dd_api_base_for_tests
+redact_url_userinfo_for_tests = _redact_url_userinfo
 build_module_label_map_for_tests = _build_module_label_map
 normalize_ref_for_tests = _normalize_ref
 first_env_for_tests = _first_env
