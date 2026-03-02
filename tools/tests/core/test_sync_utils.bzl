@@ -28,6 +28,7 @@ load(
     "parse_go_module_path_for_tests",
     "partition_unix_headers_for_tests",
     "record_sync_extension_repo_owner_or_fail_for_tests",
+    "redact_url_userinfo_for_tests",
     "render_export_bzl_for_tests",
     "render_module_runfiles_bzl_for_tests",
     "resolve_dd_api_base_for_tests",
@@ -112,6 +113,32 @@ def _resolve_dd_api_base_test(ctx):
         "https://api.datadoghq.com",
         resolve_dd_api_base_for_tests(None, ""),
     )
+    return unittest.end(env)
+
+def _redact_url_userinfo_test(ctx):
+    """Validate URL userinfo redaction used by sync logging/error paths."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "https://api.datadoghq.com/v1/test",
+        redact_url_userinfo_for_tests("https://user:pass@api.datadoghq.com/v1/test"),
+    )
+    asserts.equals(
+        env,
+        "https://api.datadoghq.com?x=1",
+        redact_url_userinfo_for_tests("https://token@api.datadoghq.com?x=1"),
+    )
+    asserts.equals(
+        env,
+        "https://api.datadoghq.com",
+        redact_url_userinfo_for_tests("https://api.datadoghq.com"),
+    )
+    asserts.equals(
+        env,
+        "not-a-url",
+        redact_url_userinfo_for_tests("not-a-url"),
+    )
+    asserts.equals(env, "", redact_url_userinfo_for_tests(""))
     return unittest.end(env)
 
 def _module_label_map_collision_test(ctx):
@@ -1203,6 +1230,7 @@ def _record_sync_extension_repo_owner_duplicate_failure_test_impl(ctx):
 
 dd_site_normalization_test = unittest.make(_dd_site_normalization_test)
 resolve_dd_api_base_test = unittest.make(_resolve_dd_api_base_test)
+redact_url_userinfo_test = unittest.make(_redact_url_userinfo_test)
 module_label_map_collision_test = unittest.make(_module_label_map_collision_test)
 module_label_map_empty_inputs_test = unittest.make(_module_label_map_empty_inputs_test)
 normalize_ref_test = unittest.make(_normalize_ref_test)
