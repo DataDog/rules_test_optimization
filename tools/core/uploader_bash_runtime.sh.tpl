@@ -753,8 +753,8 @@ done
 if ! DD_SITE="$(normalize_dd_site_or_fail "${DD_SITE:-datadoghq.com}")"; then
   exit 2
 fi
-INTAKE_BASE="${DD_TEST_OPTIMIZATION_INTAKE_BASE:-}"
-if [[ -z "${DD_TRACE_AGENT_URL:-}" ]]; then
+INTAKE_BASE="${DD_TEST_OPTIMIZATION_AGENTLESS_URL:-}"
+if [[ -z "${DD_TEST_OPTIMIZATION_AGENT_URL:-}" ]]; then
   # Agentless mode: direct public intake URLs (or explicit override base).
   AGENTLESS=1
   if [[ -n "$INTAKE_BASE" ]]; then
@@ -762,7 +762,7 @@ if [[ -z "${DD_TRACE_AGENT_URL:-}" ]]; then
     BASE="${INTAKE_BASE%/}"
     TEST_URL="${BASE}/api/v2/citestcycle"
     COV_URL="${BASE}/api/v2/citestcov"
-    dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE override active: $BASE"
+    dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL override active: $BASE"
   else
     TEST_URL="https://citestcycle-intake.${DD_SITE}/api/v2/citestcycle"
     COV_URL="https://citestcov-intake.${DD_SITE}/api/v2/citestcov"
@@ -770,10 +770,10 @@ if [[ -z "${DD_TRACE_AGENT_URL:-}" ]]; then
 else
   # EVP mode: route through agent endpoint with required subdomain headers.
   AGENTLESS=0
-  TEST_URL="${DD_TRACE_AGENT_URL}/evp_proxy/v2/api/v2/citestcycle"
-  COV_URL="${DD_TRACE_AGENT_URL}/evp_proxy/v2/api/v2/citestcov"
+  TEST_URL="${DD_TEST_OPTIMIZATION_AGENT_URL}/evp_proxy/v2/api/v2/citestcycle"
+  COV_URL="${DD_TEST_OPTIMIZATION_AGENT_URL}/evp_proxy/v2/api/v2/citestcov"
   if [[ -n "$INTAKE_BASE" ]]; then
-    dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE ignored in EVP mode"
+    dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL ignored in EVP mode"
   fi
 fi
 dbg "mode: AGENTLESS=$AGENTLESS DD_SITE=$DD_SITE"

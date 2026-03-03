@@ -77,7 +77,7 @@ def _dd_site_normalization_test(ctx):
     return unittest.end(env)
 
 def _resolve_dd_api_base_test(ctx):
-    """Validate DD_TEST_OPTIMIZATION_API_BASE override precedence."""
+    """Validate DD_TEST_OPTIMIZATION_AGENTLESS_URL override precedence."""
     env = unittest.begin(ctx)
 
     # Ensure overrides take precedence over DD_SITE-derived defaults.

@@ -164,8 +164,8 @@ Notes:
 - The PowerShell entrypoint is native and self-contained (no Git Bash
   dependency). Linux/macOS keep the Bash harness.
 - Test-only endpoint overrides:
-  - `DD_TEST_OPTIMIZATION_API_BASE` (sync)
-  - `DD_TEST_OPTIMIZATION_INTAKE_BASE` (uploader, agentless path)
+  - `DD_TEST_OPTIMIZATION_AGENTLESS_URL` (shared direct URL override for sync + uploader agentless path)
+  - `DD_TEST_OPTIMIZATION_AGENT_URL` (uploader, EVP proxy path)
 - The harness asserts CODEOWNERS enrichment/preservation and runfile manifest
   fallback behavior, and prints focused diagnostics on assertion failures.
 - The harness requires `jq` for snapshot/enrichment assertions.

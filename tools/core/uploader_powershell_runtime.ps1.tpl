@@ -698,7 +698,7 @@ while ($true) {
 }
 
 # Build endpoints
-$Agentless = [string]::IsNullOrEmpty($env:DD_TRACE_AGENT_URL)
+$Agentless = [string]::IsNullOrEmpty($env:DD_TEST_OPTIMIZATION_AGENT_URL)
 try {
   $DD_Site = Normalize-DdSiteOrFail $env:DD_SITE
 } catch {
@@ -707,23 +707,23 @@ try {
   exit 2
 }
 # Allow tests/dev to override intake base without changing DD_SITE.
-$IntakeBase = $env:DD_TEST_OPTIMIZATION_INTAKE_BASE
+$IntakeBase = $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL
 if ($Agentless) {
   # Agentless mode posts directly to Datadog intake hosts.
   if (-not [string]::IsNullOrEmpty($IntakeBase)) {
     $Base = $IntakeBase.TrimEnd('/')
     $TestUrl = "$Base/api/v2/citestcycle"
     $CovUrl = "$Base/api/v2/citestcov"
-    Dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE override active: $Base"
+    Dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL override active: $Base"
   } else {
     $TestUrl = "https://citestcycle-intake.$DD_Site/api/v2/citestcycle"
     $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
   }
 } else {
   # EVP mode tunnels through agent endpoint and requires EVP subdomain headers.
-  $TestUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcycle"
-  $CovUrl = "$($env:DD_TRACE_AGENT_URL)/evp_proxy/v2/api/v2/citestcov"
-  if (-not [string]::IsNullOrEmpty($IntakeBase)) { Dbg "DD_TEST_OPTIMIZATION_INTAKE_BASE ignored in EVP mode" }
+  $TestUrl = "$($env:DD_TEST_OPTIMIZATION_AGENT_URL)/evp_proxy/v2/api/v2/citestcycle"
+  $CovUrl = "$($env:DD_TEST_OPTIMIZATION_AGENT_URL)/evp_proxy/v2/api/v2/citestcov"
+  if (-not [string]::IsNullOrEmpty($IntakeBase)) { Dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL ignored in EVP mode" }
 }
 Dbg "mode: Agentless=$Agentless Site=$DD_Site"
 Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl"

@@ -766,8 +766,8 @@ Behavior model:
          max_wait_sec budget is exhausted.
        - If max_wait_sec=0 and no payloads are present, decide immediately.
     3) Upload mode selection:
-       - Agentless mode when DD_TRACE_AGENT_URL is unset (requires DD_API_KEY).
-       - EVP mode when DD_TRACE_AGENT_URL is set (uses EVP subdomain headers).
+       - Agentless mode when DD_TEST_OPTIMIZATION_AGENT_URL is unset (requires DD_API_KEY).
+       - EVP mode when DD_TEST_OPTIMIZATION_AGENT_URL is set (uses EVP subdomain headers).
     4) Per-file best-effort semantics:
        - Continue uploading remaining files after individual failures.
        - Aggregate failures into final process exit code.
@@ -799,11 +799,11 @@ Required environment variables for upload:
     DD_API_KEY - Datadog API key (agentless mode)
     DD_SITE - Datadog site (agentless mode, default: datadoghq.com)
     OR
-    DD_TRACE_AGENT_URL - Agent/EVP endpoint URL (agent mode)
+    DD_TEST_OPTIMIZATION_AGENT_URL - Agent/EVP endpoint URL (agent mode)
 
 Optional environment variables:
     TESTLOGS_DIR - Override testlogs directory (for non-standard setups)
-    DD_TEST_OPTIMIZATION_INTAKE_BASE - Override intake base URL (agentless only, test/dev)
+    DD_TEST_OPTIMIZATION_AGENTLESS_URL - Override intake base URL (agentless only, test/dev)
     DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 - Retain payloads after upload
     DD_TEST_OPTIMIZATION_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json
     DD_TEST_OPTIMIZATION_MAX_WAIT_SEC - Override max wait time (0 skips waiting when no payloads are present)

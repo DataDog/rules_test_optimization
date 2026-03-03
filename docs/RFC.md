@@ -130,7 +130,7 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 - Phase 3 — [Upload outside user tests](https://github.com/DataDog/rules_test_optimization/blob/main/tools/core/test_optimization_uploader.bzl):
 
   - A single workspace-level uploader target (normal rule, not test) runs via `bazel run` after tests complete.
-  - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TRACE_AGENT_URL`), and deletes successfully uploaded files.
+  - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`), and deletes successfully uploaded files.
   - Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 
@@ -223,7 +223,7 @@ Runtime Uploader
 
 - `dd_payload_uploader` is a normal Bazel rule (not a test) that runs via `bazel run` after tests complete. It discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for quiescence, then uploads and deletes payloads. It supports:
   - Agentless mode (`DD_API_KEY`, `DD_SITE`) posting to `https://citestcycle-intake.<site>/api/v2/citestcycle` and `https://citestcov-intake.<site>/api/v2/citestcov`.
-  - EVP proxy mode (`DD_TRACE_AGENT_URL`) posting to `/evp_proxy/v2/...` with subdomain routing headers.
+  - EVP proxy mode (`DD_TEST_OPTIMIZATION_AGENT_URL`) posting to `/evp_proxy/v2/...` with subdomain routing headers.
 - A single uploader target per workspace is required (enforced via a runtime
   uploader lock file to prevent concurrent uploads; unrelated to
   `MODULE.bazel.lock`).
@@ -252,7 +252,7 @@ Language Macros
 
 Security Considerations
 
-- Secrets are passed via `--repo_env`/`--test_env` and not written to disk. The repo rule’s HTTP calls rely on `DD_API_KEY` at fetch time; the uploader uses either `DD_API_KEY` or `DD_TRACE_AGENT_URL` at upload time (`bazel run` step).  
+- Secrets are passed via `--repo_env`/`--test_env` and not written to disk. The repo rule’s HTTP calls rely on `DD_API_KEY` at fetch time; the uploader uses either `DD_API_KEY` or `DD_TEST_OPTIMIZATION_AGENT_URL` at upload time (`bazel run` step).  
 - `context.json` contains only non‑secret metadata and is safe to include as runfiles.  
 - Consumers should configure sandboxing and network blocking for tests (`--config=hermetic`, `--sandbox_default_allow_network=false`) and make only the payload directory writable.
 

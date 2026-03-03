@@ -161,5 +161,5 @@ Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go c
 - Never write secrets to disk. Pass `DD_API_KEY`, `DD_SITE` via environment when running the uploader.
 - `context.json` is non‑secret; include it via `@<repo>//:test_optimization_context` in the uploader's data.
 - If CODEOWNERS auto-discovery is not reliable in your environment, set `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` explicitly to a checked-in CODEOWNERS path.
-- Agentless uploads require `DD_API_KEY` and `DD_SITE`; EVP proxy requires `DD_TRACE_AGENT_URL` (EVP headers handled by the rule).
+- Agentless uploads require `DD_API_KEY` and `DD_SITE`; EVP proxy requires `DD_TEST_OPTIMIZATION_AGENT_URL` (EVP headers handled by the rule).
 - Uploader credentials are passed at runtime: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //:dd_upload_payloads`
