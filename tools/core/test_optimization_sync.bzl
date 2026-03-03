@@ -753,7 +753,7 @@ def _resolve_dd_api_base(env_data, debug):
     if override:
         # Allow tests/dev to point sync requests at a mock server without changing DD_SITE.
         base = override.rstrip("/")
-        log_debug(debug, "http", "DD_TEST_OPTIMIZATION_API_BASE override set: %s" % _redact_url_userinfo(base))
+        log_debug(debug, "http", "DD_TEST_OPTIMIZATION_AGENTLESS_URL override set: %s" % _redact_url_userinfo(base))
         return base
     return _compute_dd_api_base(env_data.get("dd_site"))
 
@@ -805,7 +805,7 @@ def _decode_json_object_or_fail(content, context):
             "test_optimization_sync",
             (
                 "%s response is not JSON (starts with: %s). " +
-                "Check DD_SITE/DD_TEST_OPTIMIZATION_API_BASE, credentials, and endpoint routing."
+                "Check DD_SITE/DD_TEST_OPTIMIZATION_AGENTLESS_URL, credentials, and endpoint routing."
             ) % (context, repr(sample)),
         )
 
@@ -2115,7 +2115,7 @@ test_optimization_sync = repository_rule(
         # Environment variables treated as rule inputs
         "DD_API_KEY",  # Required: Datadog API key for authentication
         "DD_SITE",  # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
-        "DD_TEST_OPTIMIZATION_API_BASE",  # Optional: override Datadog API base URL (test/dev)
+        "DD_TEST_OPTIMIZATION_AGENTLESS_URL",  # Optional: override Datadog API base URL (test/dev)
         "DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS",  # Optional: override connect timeout
         "DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS",  # Optional: override request max time
         "DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS",  # Optional: override retry attempts

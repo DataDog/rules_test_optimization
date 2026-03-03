@@ -147,7 +147,7 @@ dd_site_invalid_failure_test(
     target_under_test = ":dd_site_invalid_target",
 )
 
-# Validate DD_TEST_OPTIMIZATION_API_BASE override behavior.
+# Validate DD_TEST_OPTIMIZATION_AGENTLESS_URL override behavior.
 resolve_dd_api_base_test(
     name = "resolve_dd_api_base_test",
     size = "small",

@@ -53,7 +53,7 @@ when tests failed.
 
 Credential handling:
 
-- Pass `DD_API_KEY`, `DD_SITE`, and `DD_TRACE_AGENT_URL` at runtime via
+- Pass `DD_API_KEY`, `DD_SITE`, and `DD_TEST_OPTIMIZATION_AGENT_URL` at runtime via
   environment variables only.
 - Do not hardcode secrets in `BUILD.bazel`, scripts committed to git, or CI
   logs.
@@ -95,7 +95,7 @@ dd_payload_uploader(
 
 - **Agentless mode (default):** Requires `DD_API_KEY` and `DD_SITE`; uploads
   directly to Datadog intake
-- **EVP proxy mode:** Requires `DD_TRACE_AGENT_URL`; uploads via local agent or
+- **EVP proxy mode:** Requires `DD_TEST_OPTIMIZATION_AGENT_URL`; uploads via local agent or
   EVP proxy
 
 ## Passing credentials
@@ -105,7 +105,7 @@ dd_payload_uploader(
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 
 # Option 2: EVP proxy mode
-DD_TRACE_AGENT_URL="http://localhost:8126" bazel run //:dd_upload_payloads
+DD_TEST_OPTIMIZATION_AGENT_URL="http://localhost:8126" bazel run //:dd_upload_payloads
 
 # Option 3: Export before run
 export DD_API_KEY="your-api-key"
@@ -120,7 +120,7 @@ $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 
 # Option 2: EVP proxy mode
-$env:DD_TRACE_AGENT_URL = "http://localhost:8126"
+$env:DD_TEST_OPTIMIZATION_AGENT_URL = "http://localhost:8126"
 bazel run //:dd_upload_payloads
 
 # Option 3: Set variables before run
@@ -172,17 +172,17 @@ payload discovery/quiescence before proceeding.
 
 ## Endpoints and headers
 
-- Agentless (when `DD_TRACE_AGENT_URL` unset):
+- Agentless (when `DD_TEST_OPTIMIZATION_AGENT_URL` unset):
   - Tests: `https://citestcycle-intake.<DD_SITE>/api/v2/citestcycle`
   - Coverage: `https://citestcov-intake.<DD_SITE>/api/v2/citestcov`
   - Requires `DD_API_KEY`
   - `DD_SITE` is validated as a hostname (ASCII-whitespace is trimmed first),
     with compatibility normalization for `app.`/`api.` prefixes and URL-shaped
     inputs; credentials/ports are rejected
-  - Test/dev override: set `DD_TEST_OPTIMIZATION_INTAKE_BASE` to use a custom
+  - Test/dev override: set `DD_TEST_OPTIMIZATION_AGENTLESS_URL` to use a custom
     base URL (agentless only)
-- EVP proxy (when `DD_TRACE_AGENT_URL` set):
-  - Base: `${DD_TRACE_AGENT_URL}/evp_proxy/v2/...`
+- EVP proxy (when `DD_TEST_OPTIMIZATION_AGENT_URL` set):
+  - Base: `${DD_TEST_OPTIMIZATION_AGENT_URL}/evp_proxy/v2/...`
   - Adds `X-Datadog-EVP-Subdomain` per endpoint
 - Test payloads are JSON (msgpack is not available in Starlark). Coverage is
   multipart with `event` and `coveragex` parts.

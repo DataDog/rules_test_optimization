@@ -26,7 +26,7 @@ The steps are:
    Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (for example through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
 
 3. **Payload reporting**:
-   A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TRACE_AGENT_URL`).
+   A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`).
    Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 4. **Language macros (optional)**:
@@ -155,7 +155,7 @@ Tests remain hermetic with network blocked. They write payloads to Bazel's built
 - Discovers all `test.outputs/` directories in `bazel-testlogs/`,
 - Waits for filesystem quiescence,
 - Enriches test payloads with `context.json` when present,
-- Uploads to Datadog using either `DD_API_KEY`/`DD_SITE` (agentless) or `DD_TRACE_AGENT_URL` (EVP proxy),
+- Uploads to Datadog using either `DD_API_KEY`/`DD_SITE` (agentless) or `DD_TEST_OPTIMIZATION_AGENT_URL` (EVP proxy),
 - Deletes successfully uploaded payloads.
 
 No secrets are written to disk; all credentials are passed via environment variables.
@@ -206,7 +206,7 @@ flowchart TD
     U1 -->|upload tests| G1{Agentless?\n DD_API_KEY}
     U1 -->|upload coverage| G1
     G1 -- Yes --> I1[(citestcycle/citestcov\n intake on <DD_SITE>)]
-    G1 -- No  --> I2[(EVP proxy\n ${DD_TRACE_AGENT_URL})]
+    G1 -- No  --> I2[(EVP proxy\n ${DD_TEST_OPTIMIZATION_AGENT_URL})]
   end
 
   %% Optional multi-service aggregator (not connected to flow)
@@ -244,7 +244,7 @@ Test Execution (Hermetic)
 Upload (via bazel run)
   [uploader rule] --enrich--> context.json
        |-- agentless (DD_API_KEY, DD_SITE) --> citestcycle/citestcov intake
-       |-- EVP proxy (DD_TRACE_AGENT_URL) -> /evp_proxy/... endpoints
+       |-- EVP proxy (DD_TEST_OPTIMIZATION_AGENT_URL) -> /evp_proxy/... endpoints
 
 Optional: Multi-service aggregator
   @test_optimization_data//:test_optimization_files_<service>

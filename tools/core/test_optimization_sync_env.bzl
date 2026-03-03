@@ -102,7 +102,7 @@ def collect_env_from_environ(environ, attr_service = None):
     """Collect CI/git/service context from a plain env mapping."""
     env_data = {
         "dd_site": environ.get("DD_SITE") or "",
-        "dd_api_base": environ.get("DD_TEST_OPTIMIZATION_API_BASE") or "",
+        "dd_api_base": environ.get("DD_TEST_OPTIMIZATION_AGENTLESS_URL") or "",
         "service": (attr_service or environ.get("DD_SERVICE") or "unnamed-service"),
         "environment": environ.get("DD_ENV") or "CI",
         "repository_url": "",

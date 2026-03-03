@@ -100,7 +100,7 @@ changes can invalidate fetch cache entries as expected.
 |----------|----------|---------|
 | `DD_API_KEY` | Yes | Datadog API key for metadata fetches |
 | `DD_SITE` | No | Site domain (`datadoghq.com`, `datadoghq.eu`, etc.). Leading/trailing ASCII whitespace is trimmed; values like `app.<site>` normalize to `api.<site>` |
-| `DD_TEST_OPTIMIZATION_API_BASE` | No | Override sync API base URL (test/dev and mock-server scenarios) |
+| `DD_TEST_OPTIMIZATION_AGENTLESS_URL` | No | Override sync API base URL (test/dev and mock-server scenarios) |
 | `FETCH_SALT` | No | Manual refetch trigger (example: `--repo_env=FETCH_SALT=<timestamp>`) |
 | `GO_MODULE_PATH` | No | Explicit Go module path override used when emitting `export.bzl` |
 | `PYTHON_MODULE_PATH` | No | Explicit Python module path override used when emitting `export.bzl` |
@@ -113,6 +113,10 @@ changes can invalidate fetch cache entries as expected.
 | `DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS` | No | Sync retry-attempt override |
 | `DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS` | No | Sync retry-delay override |
 | `DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS` | No | Sync outer execute-timeout buffer override |
+
+`DD_TEST_OPTIMIZATION_AGENTLESS_URL` is the shared direct URL override used by:
+- Sync metadata requests (repository rule phase), and
+- Agentless uploader intake requests (`bazel run //:dd_upload_payloads`).
 
 Note: `FETCH_SALT_TTL` is a convenience variable for this repository's `./bazelw`
 wrapper (not a repository-rule input itself). It periodically derives
@@ -174,8 +178,8 @@ The uploader rule reads these variables at `bazel run` time:
 |----------|---------|
 | `DD_API_KEY` | Required for agentless uploads |
 | `DD_SITE` | Required for agentless uploads (intake host derivation) |
-| `DD_TRACE_AGENT_URL` | Enables EVP proxy mode |
-| `DD_TEST_OPTIMIZATION_INTAKE_BASE` | Optional agentless intake base override for test/dev setups |
+| `DD_TEST_OPTIMIZATION_AGENT_URL` | Enables EVP proxy mode |
+| `DD_TEST_OPTIMIZATION_AGENTLESS_URL` | Optional agentless intake base override for test/dev setups |
 | `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | Keep payload files after successful upload |
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` uploads all payloads; `1` restricts to `span_events_*.json` / `coverage_*.json` |
 | `DD_TEST_OPTIMIZATION_DEBUG` | Enable verbose uploader logs |

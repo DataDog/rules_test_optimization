@@ -333,7 +333,7 @@ filegroup(
   $bazelFlags = @("--output_base=$preflightOutBase")
   $repoEnvs = @(
     "--repo_env=DD_API_KEY=mock",
-    "--repo_env=DD_TEST_OPTIMIZATION_API_BASE=http://127.0.0.1:$port",
+    "--repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL=http://127.0.0.1:$port",
     "--repo_env=DD_ENV=ci",
     "--repo_env=DD_GIT_REPOSITORY_URL=https://example.com/repo.git",
     "--repo_env=DD_GIT_BRANCH=main",
@@ -555,8 +555,8 @@ filegroup(
   # Build a deterministic mock key at runtime to avoid committing a secret-like literal.
   $env:DD_API_KEY = [string]::new("0", 32)
   $env:DD_SITE = "datadoghq.com"
-  $env:DD_TEST_OPTIMIZATION_INTAKE_BASE = "http://127.0.0.1:$port"
-  Remove-Item Env:DD_TRACE_AGENT_URL -ErrorAction SilentlyContinue
+  $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TEST_OPTIMIZATION_AGENT_URL -ErrorAction SilentlyContinue
   Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
   $agentlessExitCode = Get-NativeExitCode
   if ($agentlessExitCode -ne 0) {
@@ -565,8 +565,8 @@ filegroup(
 
   # EVP flow
   Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
-  Remove-Item Env:DD_TEST_OPTIMIZATION_INTAKE_BASE -ErrorAction SilentlyContinue
-  $env:DD_TRACE_AGENT_URL = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TEST_OPTIMIZATION_AGENTLESS_URL -ErrorAction SilentlyContinue
+  $env:DD_TEST_OPTIMIZATION_AGENT_URL = "http://127.0.0.1:$port"
   Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
   $evpExitCode = Get-NativeExitCode
   if ($evpExitCode -ne 0) {

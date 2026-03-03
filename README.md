@@ -28,7 +28,7 @@ Use this checklist before your first CI rollout:
    - `common --repo_env=DD_API_KEY`
    - `common --repo_env=DD_SITE`
    - Optional sync overrides when needed:
-     - `common --repo_env=DD_TEST_OPTIMIZATION_API_BASE`
+     - `common --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL` (shared direct URL override for sync + uploader agentless path)
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS`
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS`
      - `common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS`
@@ -43,8 +43,8 @@ Use this checklist before your first CI rollout:
    - Keep `DD_API_KEY` and `DD_SITE` out of test runtime by default.
      In Bazel file-mode, tests do not need uploader credentials.
    - Optional test runtime forwarding only when your tracer/test harness needs it:
-     - `test --test_env=DD_TRACE_AGENT_URL`
-     - `test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE`
+     - `test --test_env=DD_TEST_OPTIMIZATION_AGENT_URL`
+     - `test --test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`
 3. Create exactly one uploader target at workspace root:
    - `//:dd_upload_payloads` via `dd_payload_uploader(...)`
 4. Run tests, then uploader, while preserving test exit code.

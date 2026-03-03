@@ -390,7 +390,7 @@ dd_payload_uploader(
 # Repository rule (module/repo phase) — affects refetch
 common --repo_env=DD_API_KEY
 common --repo_env=DD_SITE
-common --repo_env=DD_TEST_OPTIMIZATION_API_BASE  # Optional override for Datadog API base URL (test/dev)
+common --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional shared direct URL override for sync + uploader agentless path (test/dev)
 common --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS  # Optional sync HTTP connect-timeout override
 common --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS         # Optional sync HTTP max-time override
 common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS           # Optional sync HTTP retry-attempt override
@@ -430,8 +430,8 @@ common --repo_env=RUBY_MODULE_PATH
 
 # Tests (runtime)
 # Keep uploader credentials out of test runtime by default.
-test --test_env=DD_TRACE_AGENT_URL
-test --test_env=DD_TEST_OPTIMIZATION_INTAKE_BASE  # Optional override for intake base URL (agentless only, test/dev)
+test --test_env=DD_TEST_OPTIMIZATION_AGENT_URL
+test --test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional override for intake base URL (agentless only, test/dev)
 ```
 
 Security note: keep secret values out of `.bazelrc`. Forward variable names
