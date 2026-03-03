@@ -346,7 +346,7 @@
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "vvVSU4sSbDMKSTpGswqN5Lzt0/GkcR3+FMVsQWKWSYo=",
-        "usagesDigest": "ruwsgi1+vTYAtEwICP4pQ4R8aVncgkWUPq278aNMOKo=",
+        "usagesDigest": "71WEtJM30nBub+1514C0Kt3e+47gEP+FsiOkn7xW43M=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -357,6 +357,8 @@
               "repo_alias": "test_optimization_data",
               "service_keys": [
                 "go_service",
+                "python_service",
+                "java_service",
                 "nodejs_service",
                 "dotnet_service",
                 "ruby_service"
