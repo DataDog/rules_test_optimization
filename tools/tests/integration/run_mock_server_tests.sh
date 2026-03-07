@@ -1313,24 +1313,24 @@ local_path_override(
     path = ${ESCAPED_MODULES_GO},
 )
 
-topt_multi = use_extension(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
-    "test_optimization_multi_sync_extension",
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
 )
 
-topt_multi.test_optimization_multi_sync(
+go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service", "go_service"],
     out_dir = "custom_topt",
-    runtime_name = "go",
     runtime_version = "1.2.3",
 )
 
 use_repo(
-    topt_multi,
+    go_topt,
     "test_optimization_data",
     "test_optimization_data_go_service",
     "test_optimization_data_go_service_2",
+    "rules_go_orchestrion_tool",
 )
 MODULE_MULTI_EOF
 
@@ -1455,6 +1455,102 @@ fi
 if ! grep -q "go_service_2" "$MULTI_INVALID_LOG"; then
   echo "error: invalid-service scenario missing go_service_2 key in message"
   cat "$MULTI_INVALID_LOG" || true
+  exit 1
+fi
+
+# Scenario: bootstrap helper patches MODULE.bazel and runs an idempotent
+# Orchestrion pin flow without requiring a second extension in consumer setup.
+BOOT_WS="$TMP_WS/ws_bootstrap"
+mkdir -p "$BOOT_WS/bin"
+cat > "$BOOT_WS/MODULE.bazel" <<MODULE_BOOT_EOF
+module(name = "topt-bootstrap-integration", version = "0.0.0")
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = ${ESCAPED_REPO_ROOT},
+)
+local_path_override(
+    module_name = "datadog-rules-test-optimization-go",
+    path = ${ESCAPED_MODULES_GO},
+)
+
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
+)
+
+go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.2.3",
+)
+
+use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+MODULE_BOOT_EOF
+
+cat > "$BOOT_WS/go.mod" <<'GOMOD_BOOT_EOF'
+module example.com/bootstrap-go
+
+go 1.24.0
+GOMOD_BOOT_EOF
+
+cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "run" ] && [ "${2:-}" = "github.com/DataDog/orchestrion@v1.5.0" ] && [ "${3:-}" = "pin" ]; then
+  cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
+package tools
+
+import _ "github.com/DataDog/orchestrion"
+PIN_TOOL_EOF
+  : > go.sum
+  exit 0
+fi
+
+echo "unexpected go invocation: $*" >&2
+exit 1
+FAKE_GO_EOF
+chmod +x "$BOOT_WS/bin/go"
+
+(
+  cd "$BOOT_WS"
+  PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+    --workspace "$BOOT_WS"
+)
+
+if ! grep -q 'git_override(' "$BOOT_WS/MODULE.bazel"; then
+  echo "error: bootstrap helper did not add rules_go git_override"
+  cat "$BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
+if grep -q '@rules_go//go:extensions.bzl", "orchestrion"' "$BOOT_WS/MODULE.bazel"; then
+  echo "error: bootstrap helper unexpectedly added a separate rules_go orchestrion extension"
+  cat "$BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
+if [ ! -f "$BOOT_WS/orchestrion.tool.go" ]; then
+  echo "error: bootstrap helper did not create orchestrion.tool.go"
+  exit 1
+fi
+if [ ! -f "$BOOT_WS/orchestrion.yml" ]; then
+  echo "error: bootstrap helper did not create orchestrion.yml"
+  exit 1
+fi
+
+printf 'custom: true\n' > "$BOOT_WS/orchestrion.yml"
+(
+  cd "$BOOT_WS"
+  PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+    --workspace "$BOOT_WS"
+)
+
+if ! grep -q 'custom: true' "$BOOT_WS/orchestrion.yml"; then
+  echo "error: bootstrap helper overwrote an existing orchestrion.yml without --force"
+  cat "$BOOT_WS/orchestrion.yml" || true
   exit 1
 fi
 

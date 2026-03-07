@@ -82,13 +82,23 @@ ruby.toolchain(
 use_repo(ruby, "ruby", "ruby_toolchains")
 register_toolchains("@ruby_toolchains//:all")
 
-test_optimization_sync = use_extension(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
-    "test_optimization_sync_extension",
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
 )
 
-test_optimization_sync.test_optimization_sync(name = "test_optimization_data")
-use_repo(test_optimization_sync, "test_optimization_data")
+go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.24.0",
+)
+use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+```
+
+Bootstrap once after adding the Go module files:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
 ```
 
 BUILD.bazel (inference via embed):
@@ -274,24 +284,30 @@ git_override(
     strip_prefix = "modules/go",
 )
 
-topt_multi = use_extension(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
-    "test_optimization_multi_sync_extension",
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
 )
 
-topt_multi.test_optimization_multi_sync(
+go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service", "ruby-service"],
-    runtime_name = "go",
     runtime_version = "1.24.0",
 )
 
 use_repo(
-    topt_multi,
+    go_topt,
     "test_optimization_data",                 # aggregator repo
     "test_optimization_data_go_service",      # per-service repos
     "test_optimization_data_ruby_service",
+    "rules_go_orchestrion_tool",
 )
+```
+
+Bootstrap once after adding the Go module files:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-module-dir src/go-project
 ```
 
 Repository roles in multi-service mode:

@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "bootstrap_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/DataDog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bootstrap_test",
+    srcs = ["main_test.go"],
+    embed = [":bootstrap_lib"],
+)

@@ -1,8 +1,7 @@
 """Macro: dd_topt_go_test.
 
-Wraps a rules_go `go_test` with Datadog Test Optimization support. The macro
-creates a single go_test target with the necessary environment variables and
-data dependencies for test optimization.
+Wraps a rules_go `go_test` with Datadog Test Optimization support and
+Orchestrion-backed compile-time instrumentation.
 
 Notes:
 - You must set up the sync repo once (via MODULE.bazel or WORKSPACE) so that
@@ -17,8 +16,9 @@ Notes:
   test_optimization_uploader.bzl) and run it via `bazel run` after tests.
 
 Macro design constraints:
-- This macro only wraps `go_test`; it does not create upload targets and does
-  not alter workspace-level upload behavior.
+- This macro creates a hidden raw `go_test` plus a public wrapper target.
+- It does not create upload targets and does not alter workspace-level upload
+  behavior.
 - Runtime behavior must remain hermetic: tests write payloads to
   `TEST_UNDECLARED_OUTPUTS_DIR`; uploads happen in a separate `bazel run` step.
 - Data selection should be predictable:
@@ -52,6 +52,7 @@ load(
     _is_dict = "is_dict",
 )
 load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
+load("//:topt_go_orchestrion.bzl", "orch_go_test")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -73,6 +74,41 @@ def _build_module_labels(sync_repo_name, labels):
 
 build_module_labels_for_tests = _build_module_labels
 
+_WRAPPER_ONLY_ATTRS = [
+    "flaky",
+    "local",
+    "shard_count",
+    "size",
+    "tags",
+    "timeout",
+    "visibility",
+]
+
+_SHARED_TEST_ATTRS = [
+    "compatible_with",
+    "exec_compatible_with",
+    "restricted_to",
+    "target_compatible_with",
+    "testonly",
+]
+
+def _extract_wrapper_kwargs(kwargs):
+    """Split macro kwargs between raw go_test and public wrapper."""
+    wrapper_kwargs = {}
+    raw_passthrough = {}
+
+    for key in _WRAPPER_ONLY_ATTRS:
+        if key in kwargs:
+            wrapper_kwargs[key] = kwargs.pop(key)
+
+    for key in _SHARED_TEST_ATTRS:
+        if key in kwargs:
+            value = kwargs.pop(key)
+            wrapper_kwargs[key] = value
+            raw_passthrough[key] = value
+
+    return wrapper_kwargs, raw_passthrough
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
@@ -87,8 +123,8 @@ def dd_topt_go_test(
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
-    This macro creates a single go_test target with the necessary environment
-    variables for test optimization. Payloads are written to Bazel's
+    This macro creates a hidden raw go_test target plus a public
+    Orchestrion-enabled wrapper target. Payloads are written to Bazel's
     TEST_UNDECLARED_OUTPUTS_DIR and collected in bazel-testlogs/<target>/test.outputs/.
 
     After running tests, use a single workspace-level uploader target to upload
@@ -134,6 +170,8 @@ def dd_topt_go_test(
         # to preserve collision-safe keys while still accepting ergonomic input.
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
         _svc = service_entries[selected_key]
+
+    wrapper_kwargs, raw_passthrough = _extract_wrapper_kwargs(kwargs)
 
     # ------------------------------------------------------------------
     # Phase 2: Collect caller-provided inputs that we augment downstream.
@@ -271,11 +309,24 @@ def dd_topt_go_test(
     if "rundir" not in kwargs:
         kwargs["rundir"] = native.package_name()
 
-    # Create ONLY the go_test - NO uploader, NO test_suite.
-    # Users must create ONE uploader target per workspace and run it via `bazel run`.
+    raw_name = name + "__raw_go_test"
+    user_tags = wrapper_kwargs.get("tags")
+    kwargs["tags"] = (user_tags or []) + ["manual"]
+    kwargs["visibility"] = ["//visibility:private"]
+    for key, value in raw_passthrough.items():
+        kwargs[key] = value
+
+    # Create the hidden raw go_test first, then expose it through an
+    # Orchestrion-enabled public wrapper target.
     go_test_rule(
-        name = name,
+        name = raw_name,
         data = data,
         env = env,
         **kwargs
+    )
+
+    orch_go_test(
+        name = name,
+        actual = ":" + raw_name,
+        **wrapper_kwargs
     )

@@ -10,6 +10,7 @@ go_binary(
 go_library(
   name = "hello_lib",
   srcs = ["main.go"],
+  importpath = "example.com/single-service-go-project",
 )
 
 dd_topt_go_test(

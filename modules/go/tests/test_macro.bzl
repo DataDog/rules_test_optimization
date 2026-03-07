@@ -8,8 +8,8 @@ Maintainer goals covered here:
 
 Why this harness exists:
 `dd_topt_go_test` requires a `go_test_rule` symbol from callers. These tests
-inject a lightweight fake rule to capture what the macro forwards, so we can
-assert behavior at analysis time without compiling Go code.
+inject a lightweight fake executable rule to capture what the macro forwards,
+so we can assert behavior at analysis time without compiling Go code.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
@@ -31,12 +31,21 @@ ToptGoMacroCaptureInfo = provider(
 
 def _go_test_capture_impl(ctx):
     """Capture macro-forwarded attributes for analysistest assertions."""
-    return [ToptGoMacroCaptureInfo(
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
+    return [
+        DefaultInfo(
+            files = depset([out]),
+            runfiles = ctx.runfiles(files = [out]),
+            executable = out,
+        ),
+        ToptGoMacroCaptureInfo(
         data_labels = [str(dep.label) for dep in ctx.attr.data],
         env = dict(ctx.attr.env),
         importpath = ctx.attr.importpath,
         rundir = ctx.attr.rundir,
-    )]
+        ),
+    ]
 
 def _has_fragment(items, fragment):
     for item in items:
@@ -59,6 +68,7 @@ _go_test_capture_rule = rule(
         "importpath": attr.string(),
         "rundir": attr.string(),
     },
+    executable = True,
 )
 
 def _single_service_topt_data():
@@ -219,6 +229,15 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     asserts.true(env, "rlocationpath" in manifest_env)
     return analysistest.end(env)
 
+def _go_macro_public_wrapper_test_impl(ctx):
+    """Assert the public target is now the wrapper executable."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    asserts.equals(env, 1, len(files))
+    asserts.equals(env, "go_macro_single_service_target", files[0].basename)
+    return analysistest.end(env)
+
 def _resolve_topt_service_key_missing_target_impl(_ctx):
     """Analysis target expected to fail on missing service in multi-service map."""
     resolve_topt_service_key_for_tests(
@@ -277,6 +296,9 @@ go_macro_env_none_wiring_test = analysistest.make(
 )
 go_macro_select_inputs_wiring_test = analysistest.make(
     _go_macro_select_inputs_wiring_test_impl,
+)
+go_macro_public_wrapper_test = analysistest.make(
+    _go_macro_public_wrapper_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

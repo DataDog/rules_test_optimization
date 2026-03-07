@@ -105,8 +105,7 @@ exit $testStatus
 
 ### Bzlmod + Go companion (`dd_topt_go_test`)
 
-Start from the core-only quickstart above, then add these extra module
-dependencies:
+Start from the core-only quickstart above, then add the Go companion:
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
@@ -117,7 +116,39 @@ git_override(
     strip_prefix = "modules/go",
 )
 bazel_dep(name = "rules_go", version = "0.59.0")
+
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
+)
+
+go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.24.0",
+)
+
+use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
 ```
+
+Then run the Datadog bootstrap helper once from the workspace that owns your
+Go module:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
+```
+
+If the Go module lives below the workspace root:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-module-dir path/to/go-module
+```
+
+The bootstrap helper:
+- patches `MODULE.bazel` with the Datadog-managed `rules_go` override required for Orchestrion
+- runs `orchestrion pin`
+- writes `orchestrion.tool.go`
+- writes a starter `orchestrion.yml` when missing
 
 Then use `dd_topt_go_test` in your package:
 
@@ -430,23 +461,23 @@ For multi-service repos, either:
 ### Bzlmod + multi-service monorepo
 
 ```bzl
-topt_multi = use_extension(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
-    "test_optimization_multi_sync_extension",
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
 )
 
-topt_multi.test_optimization_multi_sync(
+go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service", "ruby-service"],
-    runtime_name = "go",
     runtime_version = "1.24.0",
 )
 
 use_repo(
-    topt_multi,
+    go_topt,
     "test_optimization_data",
     "test_optimization_data_go_service",
     "test_optimization_data_ruby_service",
+    "rules_go_orchestrion_tool",
 )
 ```
 
@@ -673,10 +704,38 @@ For complete uploader details, use [`docs/Uploader_Reference.md`](docs/Uploader_
 ## Convenience macro: dd_topt_go_test
 
 The `dd_topt_go_test` macro creates a `go_test` target with Datadog Test
-Optimization data/env wiring included.
+Optimization data/env wiring included, and always runs through an internal
+Orchestrion-enabled wrapper target.
 
 By default, it also sets `rundir` to the current Bazel package when not
 explicitly provided.
+
+Before using it, configure the Go companion extension in `MODULE.bazel`:
+
+```bzl
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.59.0")
+
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
+)
+
+go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.24.0",
+)
+
+use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+```
+
+Then run the Datadog bootstrap helper once so Orchestrion is pinned into the
+workspace Go module:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
+```
 
 ### Basic usage
 

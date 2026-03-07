@@ -7,6 +7,16 @@ bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/darccio/rules_go.git",
+    commit = "1a1b95dce9e67870fd8143d2f707028fa0acb222",
+)
+
+orchestrion_stub = use_extension("//tests:orchestrion_stub_repo.bzl", "orchestrion_stub_extension")
+orchestrion_stub.stub_orchestrion(name = "rules_go_orchestrion_tool")
+use_repo(orchestrion_stub, "rules_go_orchestrion_tool")
+
 # Dev-only stub repository so companion-module tests can resolve
 # @test_optimization_data labels without network access.
 example_stub_repo = use_extension(

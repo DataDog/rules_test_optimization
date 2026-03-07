@@ -6,6 +6,7 @@ exports_files([
     "java_bootstrap.bzl",
     "lint_uploader_templates.py",
     "nodejs_bootstrap.bzl",
+    "orchestrion_stub.bzl",
     "python_bootstrap.bzl",
     "ruby_bootstrap.bzl",
 ], visibility = ["//visibility:public"])
