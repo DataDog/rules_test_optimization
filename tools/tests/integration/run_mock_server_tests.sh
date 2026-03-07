@@ -1385,12 +1385,34 @@ dd_topt_go_test(
 BUILD_MULTI_EOF
 
 cat > "$MULTI_WS/macro_probe.bzl" <<'MACRO_PROBE_EOF'
+def _fake_go_test_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
+    return [DefaultInfo(
+        files = depset([out]),
+        runfiles = ctx.runfiles(files = [out]),
+        executable = out,
+    )]
+
+_fake_go_test = rule(
+    implementation = _fake_go_test_impl,
+    attrs = {
+        "data": attr.label_list(allow_files = True),
+        "embed": attr.label_list(),
+        "env": attr.string_dict(),
+        "importpath": attr.string(),
+        "rundir": attr.string(),
+    },
+    executable = True,
+    test = True,
+)
+
 def fake_go_test(name, data = [], env = {}, **kwargs):
-    _ = env
-    _ = kwargs
-    native.filegroup(
+    _fake_go_test(
         name = name,
-        srcs = data,
+        data = data,
+        env = env,
+        **kwargs
     )
 MACRO_PROBE_EOF
 
