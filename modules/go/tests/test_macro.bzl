@@ -40,10 +40,10 @@ def _go_test_capture_impl(ctx):
             executable = out,
         ),
         ToptGoMacroCaptureInfo(
-        data_labels = [str(dep.label) for dep in ctx.attr.data],
-        env = dict(ctx.attr.env),
-        importpath = ctx.attr.importpath,
-        rundir = ctx.attr.rundir,
+            data_labels = [str(dep.label) for dep in ctx.attr.data],
+            env = dict(ctx.attr.env),
+            importpath = ctx.attr.importpath,
+            rundir = ctx.attr.rundir,
         ),
     ]
 
