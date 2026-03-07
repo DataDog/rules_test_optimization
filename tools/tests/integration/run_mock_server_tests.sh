@@ -1443,10 +1443,11 @@ MULTI_LOG_START="$(log_line_count)"
 
 MULTI_MACRO_CQUERY=$(
   cd "$MULTI_WS" && \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe --output=build "${REPO_ENVS[@]}"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe__raw_go_test --output=build "${REPO_ENVS[@]}"
 )
-# The selected manifest label is the strongest end-to-end macro assertion:
-# it proves the chosen service mapping and out_dir propagation simultaneously.
+# The manifest/data wiring lives on the hidden raw go_test target. Querying the
+# wrapper target only verifies the public wrapper exists, not which payload set
+# the macro selected underneath it.
 if ! printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service_2//:custom_topt/manifest.txt"; then
   echo "error: dd_topt_go_test multi-service probe did not resolve to go_service_2 custom out_dir manifest"
   echo "$MULTI_MACRO_CQUERY"
