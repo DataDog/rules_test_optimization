@@ -14,6 +14,10 @@ so we can assert behavior at analysis time without compiling Go code.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load(
+    "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
+    "select_wrapper_output_name_for_tests",
+)
+load(
     "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "dd_topt_go_test",
     "resolve_topt_service_key_for_tests",
@@ -26,6 +30,13 @@ ToptGoMacroCaptureInfo = provider(
         "env": "Forwarded environment map.",
         "importpath": "Forwarded importpath attribute.",
         "rundir": "Forwarded runtime working directory.",
+    },
+)
+
+WrapperOutputNameInfo = provider(
+    doc = "Computed wrapper output file name for Orchestrion wrapper tests.",
+    fields = {
+        "output_name": "The output file name selected by the wrapper helper.",
     },
 )
 
@@ -69,6 +80,24 @@ _go_test_capture_rule = rule(
         "rundir": attr.string(),
     },
     executable = True,
+)
+
+def _wrapper_output_name_target_impl(ctx):
+    return [WrapperOutputNameInfo(
+        output_name = select_wrapper_output_name_for_tests(
+            ctx.attr.label_name,
+            ctx.attr.executable_basename,
+            ctx.attr.is_windows,
+        ),
+    )]
+
+wrapper_output_name_target_rule = rule(
+    implementation = _wrapper_output_name_target_impl,
+    attrs = {
+        "label_name": attr.string(mandatory = True),
+        "executable_basename": attr.string(mandatory = True),
+        "is_windows": attr.bool(mandatory = True),
+    },
 )
 
 def _single_service_topt_data():
@@ -282,6 +311,20 @@ def _resolve_topt_service_key_unknown_failure_test_impl(ctx):
     asserts.expect_failure(env, "go_service, ruby_service")
     return analysistest.end(env)
 
+def _wrapper_output_name_non_windows_test_impl(ctx):
+    """Assert non-Windows wrapper names remain extensionless."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.equals(env, "hello_test", target[WrapperOutputNameInfo].output_name)
+    return analysistest.end(env)
+
+def _wrapper_output_name_windows_test_impl(ctx):
+    """Assert Windows wrapper names preserve the .exe suffix."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.equals(env, "hello_test.exe", target[WrapperOutputNameInfo].output_name)
+    return analysistest.end(env)
+
 go_macro_single_service_wiring_test = analysistest.make(
     _go_macro_single_service_wiring_test_impl,
 )
@@ -307,4 +350,10 @@ resolve_topt_service_key_missing_failure_test = analysistest.make(
 resolve_topt_service_key_unknown_failure_test = analysistest.make(
     _resolve_topt_service_key_unknown_failure_test_impl,
     expect_failure = True,
+)
+wrapper_output_name_non_windows_test = analysistest.make(
+    _wrapper_output_name_non_windows_test_impl,
+)
+wrapper_output_name_windows_test = analysistest.make(
+    _wrapper_output_name_windows_test_impl,
 )

@@ -25,9 +25,15 @@ def _dep_exec_and_runfiles(dep):
     default_info = target[DefaultInfo]
     return default_info.files_to_run.executable, default_info.default_runfiles.merge(default_info.data_runfiles)
 
+def _select_wrapper_output_name(label_name, executable_basename, is_windows):
+    if is_windows and executable_basename.endswith(".exe"):
+        return label_name + ".exe"
+    return label_name
+
 def _orch_go_test_impl(ctx):
     dep_exe, dep_runfiles = _dep_exec_and_runfiles(ctx.attr.actual)
-    out = ctx.actions.declare_file(ctx.label.name)
+    is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
+    out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
     ctx.actions.symlink(output = out, target_file = dep_exe)
 
     return [DefaultInfo(
@@ -48,6 +54,9 @@ orch_go_test = rule(
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),
+        "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
     test = True,
 )
+
+select_wrapper_output_name_for_tests = _select_wrapper_output_name

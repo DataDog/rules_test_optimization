@@ -157,6 +157,10 @@ print(json.dumps(path.replace("\\\\", "/")))
 PY
 )
 
+# Keep these aligned with modules/go/tools/dd_topt_go_bootstrap/main.go.
+RULES_GO_ORCHESTRION_REMOTE="https://github.com/darccio/rules_go.git"
+RULES_GO_ORCHESTRION_COMMIT="1a1b95dce9e67870fd8143d2f707028fa0acb222"
+
 # Build a throwaway Bazel workspace in a temp dir so we exercise the rules
 # like a real consumer (bzlmod deps + BUILD targets), without adding files
 # to this repo.
@@ -1303,6 +1307,12 @@ module(name = "topt-multi-integration", version = "0.0.0")
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0")
+
+git_override(
+    module_name = "rules_go",
+    remote = "${RULES_GO_ORCHESTRION_REMOTE}",
+    commit = "${RULES_GO_ORCHESTRION_COMMIT}",
+)
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",
