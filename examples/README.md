@@ -95,6 +95,10 @@ go_topt.test_optimization_go(
 use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
 ```
 
+Recommended when this workspace is configuring Go services only. For
+mixed-language repos, keep the core `test_optimization_sync_extension` path for
+non-Go runtimes and use separate exported repos per runtime.
+
 Bootstrap once after adding the Go module files:
 
 ```bash
@@ -291,15 +295,15 @@ go_topt = use_extension(
 
 go_topt.test_optimization_go(
     name = "test_optimization_data",
-    services = ["go-service", "ruby-service"],
+    services = ["go-service-a", "go-service-b"],
     runtime_version = "1.24.0",
 )
 
 use_repo(
     go_topt,
     "test_optimization_data",                 # aggregator repo
-    "test_optimization_data_go_service",      # per-service repos
-    "test_optimization_data_ruby_service",
+    "test_optimization_data_go_service_a",    # per-service repos
+    "test_optimization_data_go_service_b",
     "rules_go_orchestrion_tool",
 )
 ```
@@ -316,6 +320,8 @@ Repository roles in multi-service mode:
   `:module_<service>_<module_label>`.
 - `@test_optimization_data_<service>//...` (per-service repos) are useful when
   loading a service-specific export dictionary directly.
+- This Go extension form is for multi-service Go only. Every configured service
+  is materialized as `runtime_name = "go"`.
 
 BUILD.bazel — Option A (explicit selection, inference via embed):
 
@@ -430,7 +436,8 @@ dd_topt_ruby_test(
 Mixed-runtime monorepo pattern:
 
 ```bzl
-# Keep runtime-specific sync repos separate.
+# Keep runtime-specific sync repos separate. This remains the recommended path
+# when not every service is Go and not every service needs Orchestrion.
 topt_go = use_extension(
     "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",

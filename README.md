@@ -107,6 +107,12 @@ exit $testStatus
 
 Start from the core-only quickstart above, then add the Go companion:
 
+Recommended usage:
+- Use `test_optimization_sync_extension` directly for non-Go runtimes and for mixed-language repos where each runtime should keep its own sync repo.
+- Use `test_optimization_go_extension` with `service = ...` for a single Go service.
+- Use `test_optimization_go_extension` with `services = [...]` only when every configured service is a Go service.
+- For mixed-language monorepos, keep using the core sync extension separately per runtime, then point each language companion at its own exported `topt_data`.
+
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 git_override(
@@ -460,6 +466,10 @@ For multi-service repos, either:
 
 ### Bzlmod + multi-service monorepo
 
+Use the Go extension multi-service form only for multi-service Go setups. It is
+not a generic mixed-runtime extension; every service configured through it is
+materialized as `runtime_name = "go"`.
+
 ```bzl
 go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
@@ -468,21 +478,57 @@ go_topt = use_extension(
 
 go_topt.test_optimization_go(
     name = "test_optimization_data",
-    services = ["go-service", "ruby-service"],
+    services = ["go-service-a", "go-service-b"],
     runtime_version = "1.24.0",
 )
 
 use_repo(
     go_topt,
     "test_optimization_data",
-    "test_optimization_data_go_service",
-    "test_optimization_data_ruby_service",
+    "test_optimization_data_go_service_a",
+    "test_optimization_data_go_service_b",
     "rules_go_orchestrion_tool",
 )
 ```
 
 For macro consumers, load `topt_data_by_service` from
 `@test_optimization_data//:export.bzl` and select by `topt_service`.
+
+### Bzlmod + mixed-language monorepo
+
+For mixed-runtime repos, keep the sync repos separate and use the runtime
+appropriate companion on top of each exported dataset.
+
+```bzl
+topt_go = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+topt_go.test_optimization_sync(
+    name = "test_optimization_data_go",
+    service = "go-service",
+    runtime_name = "go",
+    runtime_version = "1.24.0",
+)
+
+topt_ruby = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+topt_ruby.test_optimization_sync(
+    name = "test_optimization_data_ruby",
+    service = "ruby-service",
+    runtime_name = "ruby",
+    runtime_version = "3.3.9",
+)
+
+use_repo(topt_go, "test_optimization_data_go")
+use_repo(topt_ruby, "test_optimization_data_ruby")
+```
+
+Then load the matching export in each runtime-specific wrapper or BUILD file:
+- Go targets use `@test_optimization_data_go//:export.bzl`
+- Ruby targets use `@test_optimization_data_ruby//:export.bzl`
 
 ### WORKSPACE mode
 
