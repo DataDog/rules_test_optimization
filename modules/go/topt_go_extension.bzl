@@ -97,6 +97,7 @@ orchestrion_repo = repository_rule(
 def _materialize_single_service_repo(call):
     test_optimization_sync(
         name = call.name,
+        repo_name = call.name,
         out_dir = call.out_dir,
         service = call.service,
         runtime_name = "go",
