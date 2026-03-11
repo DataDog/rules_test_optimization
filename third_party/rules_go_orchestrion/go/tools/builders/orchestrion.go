@@ -558,9 +558,6 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
 		// Prevent go from trying to download different toolchains
 		cmd.Env = setEnv(cmd.Env, "GOTOOLCHAIN", "local")
-		if getEnv(cmd.Env, orchestrionLogLevelEnvVar) == "" && getEnv(cmd.Env, "ORCHESTRION_DEBUG_TRACE") != "" {
-			cmd.Env = setEnv(cmd.Env, orchestrionLogLevelEnvVar, "TRACE")
-		}
 		// Also ensure GOROOT is set correctly in cmd.Env
 		if goSdkPath != "" {
 			cmd.Env = setEnv(cmd.Env, "GOROOT", goSdkPath)
