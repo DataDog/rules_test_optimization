@@ -255,7 +255,7 @@ func runOrchestrionPin(cfg config) error {
 func warmOrchestrionModuleCache(cfg config) error {
 	commands := [][]string{
 		{"mod", "download", "github.com/DataDog/dd-trace-go/v2"},
-		{"list", "github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"},
+		{"list", "github.com/DataDog/dd-trace-go/v2/..."},
 	}
 
 	for _, args := range commands {
