@@ -285,22 +285,6 @@
         ]
       }
     },
-    "//tools/dev:orchestrion_stub.bzl%orchestrion_stub_extension": {
-      "general": {
-        "bzlTransitiveDigest": "laeYxoiVDasP7dwMgm3EuwtLtY4c/9QpjFz24CbIxhk=",
-        "usagesDigest": "3V0qUFqCcuUMocsYGFxkdaLDylE19d6GA3bA1H6adVc=",
-        "recordedFileInputs": {},
-        "recordedDirentsInputs": {},
-        "envVariables": {},
-        "generatedRepoSpecs": {
-          "dd_rules_go_orchestrion_tool_stub": {
-            "repoRuleId": "@@//tools/dev:orchestrion_stub.bzl%orchestrion_stub_repo",
-            "attributes": {}
-          }
-        },
-        "recordedRepoMappingEntries": []
-      }
-    },
     "//tools/dev:python_bootstrap.bzl%python_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "XnQca7NkR0JO0TpYVkYaNyRZ/qlK8dXTVNWJbYQCOWE=",
@@ -517,7 +501,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "AARGF9jcnFwzntl1SDBjI8gnTqv3zHeX6LdTuQJHwtk=",
+        "bzlTransitiveDigest": "XLlOnBqw/E4BxCcKXZrtn+MsWwn1JtdxKJZ67gztGlc=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

@@ -151,7 +151,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-mod
 ```
 
 The bootstrap helper:
-- patches `MODULE.bazel` with the Datadog-managed `rules_go` override and `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
+- patches `MODULE.bazel` with a Datadog-managed `rules_go` override back to this repository's vendored `third_party/rules_go_orchestrion` module and the `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
 - runs `orchestrion pin`
 - writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing

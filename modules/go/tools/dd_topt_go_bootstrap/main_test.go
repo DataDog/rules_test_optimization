@@ -32,12 +32,15 @@ func TestReplaceManagedBlockAppendsWhenMissing(t *testing.T) {
 func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	cfg := config{
 		orchestrionVersion: "v1.5.0",
-		rulesGoRemote:      "https://github.com/example/rules_go.git",
+		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
 	}
 	got := managedModuleBlock(cfg)
 	if !strings.Contains(got, `git_override(`) {
 		t.Fatalf("expected rules_go override in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion"`) {
+		t.Fatalf("expected vendored rules_go strip_prefix in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `use_extension("@rules_go//go:extensions.bzl", "orchestrion")`) {
 		t.Fatalf("expected rules_go orchestrion extension in managed block:\n%s", got)
@@ -60,6 +63,24 @@ git_override(
 `
 	if _, err := replaceManagedBlock(input, managedBlockStart+"\nfoo\n"+managedBlockEnd+"\n"); err == nil {
 		t.Fatal("expected conflicting rules_go override to fail")
+	}
+}
+
+func TestInferDatadogRepoOverride(t *testing.T) {
+	input := `module(name = "example")
+git_override(
+    module_name = "datadog-rules-test-optimization-go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "cafebabe",
+    strip_prefix = "modules/go",
+)
+`
+	remote, commit := inferDatadogRepoOverride(input)
+	if remote != "https://github.com/DataDog/rules_test_optimization.git" {
+		t.Fatalf("unexpected remote: %q", remote)
+	}
+	if commit != "cafebabe" {
+		t.Fatalf("unexpected commit: %q", commit)
 	}
 }
 

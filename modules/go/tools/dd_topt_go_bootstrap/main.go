@@ -14,8 +14,9 @@ import (
 
 const (
 	defaultRulesGoVersion        = "0.59.0"
-	defaultRulesGoRemote         = "https://github.com/darccio/rules_go.git"
-	defaultRulesGoCommit         = "1a1b95dce9e67870fd8143d2f707028fa0acb222"
+	defaultRulesGoRemote         = "https://github.com/DataDog/rules_test_optimization.git"
+	defaultRulesGoCommit         = "16712cc851915317659b932471dcb68af48dd5bb"
+	defaultRulesGoStripPrefix    = "third_party/rules_go_orchestrion"
 	defaultOrchestrionVersion    = "v1.5.0"
 	managedBlockStart            = "# BEGIN Datadog Go Orchestrion bootstrap"
 	managedBlockEnd              = "# END Datadog Go Orchestrion bootstrap"
@@ -131,6 +132,13 @@ func patchModuleFile(cfg config) error {
 		}
 	}
 
+	if cfg.rulesGoRemote == defaultRulesGoRemote && cfg.rulesGoCommit == defaultRulesGoCommit {
+		if remote, commit := inferDatadogRepoOverride(text); remote != "" && commit != "" {
+			cfg.rulesGoRemote = remote
+			cfg.rulesGoCommit = commit
+		}
+	}
+
 	managedBlock := managedModuleBlock(cfg)
 
 	text, err = replaceManagedBlock(text, managedBlock)
@@ -150,13 +158,14 @@ git_override(
     module_name = "rules_go",
     remote = "%s",
     commit = "%s",
+    strip_prefix = "%s",
 )
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(version = "%s")
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, cfg.orchestrionVersion, managedBlockEnd)
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, defaultRulesGoStripPrefix, cfg.orchestrionVersion, managedBlockEnd)
 }
 
 func insertAfterModuleDecl(content, snippet string) (string, error) {
@@ -204,6 +213,27 @@ func replaceManagedBlock(content, block string) (string, error) {
 	buf.WriteString("\n")
 	buf.WriteString(block)
 	return buf.String(), nil
+}
+
+func inferDatadogRepoOverride(content string) (string, string) {
+	overridePattern := regexp.MustCompile(`(?s)git_override\(\s*module_name\s*=\s*"([^"]+)"(.*?)\n\)`)
+	remotePattern := regexp.MustCompile(`remote\s*=\s*"([^"]+)"`)
+	commitPattern := regexp.MustCompile(`commit\s*=\s*"([^"]+)"`)
+
+	for _, match := range overridePattern.FindAllStringSubmatch(content, -1) {
+		moduleName := match[1]
+		if moduleName != "datadog-rules-test-optimization" && moduleName != "datadog-rules-test-optimization-go" {
+			continue
+		}
+		body := match[2]
+		remoteMatch := remotePattern.FindStringSubmatch(body)
+		commitMatch := commitPattern.FindStringSubmatch(body)
+		if len(remoteMatch) < 2 || len(commitMatch) < 2 {
+			continue
+		}
+		return remoteMatch[1], commitMatch[1]
+	}
+	return "", ""
 }
 
 func runOrchestrionPin(cfg config) error {
