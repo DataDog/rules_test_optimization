@@ -131,14 +131,7 @@ func patchModuleFile(cfg config) error {
 		}
 	}
 
-	managedBlock := fmt.Sprintf(`%s
-git_override(
-    module_name = "rules_go",
-    remote = "%s",
-    commit = "%s",
-)
-%s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, managedBlockEnd)
+	managedBlock := managedModuleBlock(cfg)
 
 	text, err = replaceManagedBlock(text, managedBlock)
 	if err != nil {
@@ -149,6 +142,21 @@ git_override(
 		return fmt.Errorf("write MODULE.bazel: %w", err)
 	}
 	return nil
+}
+
+func managedModuleBlock(cfg config) string {
+	return fmt.Sprintf(`%s
+git_override(
+    module_name = "rules_go",
+    remote = "%s",
+    commit = "%s",
+)
+
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(version = "%s")
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+%s
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, cfg.orchestrionVersion, managedBlockEnd)
 }
 
 func insertAfterModuleDecl(content, snippet string) (string, error) {

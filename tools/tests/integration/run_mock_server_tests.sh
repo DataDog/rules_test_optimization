@@ -1323,6 +1323,9 @@ local_path_override(
     path = ${ESCAPED_MODULES_GO},
 )
 
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(version = "v1.5.0")
+
 go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
     "test_optimization_go_extension",
@@ -1336,11 +1339,15 @@ go_topt.test_optimization_go(
 )
 
 use_repo(
+    orchestrion,
+    "rules_go_orchestrion_tool",
+)
+
+use_repo(
     go_topt,
     "test_optimization_data",
     "test_optimization_data_go_service",
     "test_optimization_data_go_service_2",
-    "rules_go_orchestrion_tool",
 )
 MODULE_MULTI_EOF
 
@@ -1521,7 +1528,7 @@ go_topt.test_optimization_go(
     runtime_version = "1.2.3",
 )
 
-use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+use_repo(go_topt, "test_optimization_data")
 MODULE_BOOT_EOF
 
 cat > "$BOOT_WS/go.mod" <<'GOMOD_BOOT_EOF'

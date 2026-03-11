@@ -92,7 +92,7 @@ go_topt.test_optimization_go(
     service = "go-service",
     runtime_version = "1.24.0",
 )
-use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+use_repo(go_topt, "test_optimization_data")
 ```
 
 Recommended when this workspace is configuring Go services only. For
@@ -304,7 +304,6 @@ use_repo(
     "test_optimization_data",                 # aggregator repo
     "test_optimization_data_go_service_a",    # per-service repos
     "test_optimization_data_go_service_b",
-    "rules_go_orchestrion_tool",
 )
 ```
 

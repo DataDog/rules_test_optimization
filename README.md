@@ -134,7 +134,7 @@ go_topt.test_optimization_go(
     runtime_version = "1.24.0",
 )
 
-use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+use_repo(go_topt, "test_optimization_data")
 ```
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
@@ -151,7 +151,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-mod
 ```
 
 The bootstrap helper:
-- patches `MODULE.bazel` with the Datadog-managed `rules_go` override required for Orchestrion
+- patches `MODULE.bazel` with the Datadog-managed `rules_go` override and `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
 - runs `orchestrion pin`
 - writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing
@@ -487,7 +487,6 @@ use_repo(
     "test_optimization_data",
     "test_optimization_data_go_service_a",
     "test_optimization_data_go_service_b",
-    "rules_go_orchestrion_tool",
 )
 ```
 
@@ -773,7 +772,7 @@ go_topt.test_optimization_go(
     runtime_version = "1.24.0",
 )
 
-use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+use_repo(go_topt, "test_optimization_data")
 ```
 
 Then run the Datadog bootstrap helper once so Orchestrion is pinned into the

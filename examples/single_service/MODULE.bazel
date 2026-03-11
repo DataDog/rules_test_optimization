@@ -98,4 +98,4 @@ go_topt.test_optimization_go(
   debug = True,
 )
 
-use_repo(go_topt, "test_optimization_data", "rules_go_orchestrion_tool")
+use_repo(go_topt, "test_optimization_data")

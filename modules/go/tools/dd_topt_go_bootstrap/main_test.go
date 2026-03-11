@@ -29,6 +29,27 @@ func TestReplaceManagedBlockAppendsWhenMissing(t *testing.T) {
 	}
 }
 
+func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.5.0",
+		rulesGoRemote:      "https://github.com/example/rules_go.git",
+		rulesGoCommit:      "deadbeef",
+	}
+	got := managedModuleBlock(cfg)
+	if !strings.Contains(got, `git_override(`) {
+		t.Fatalf("expected rules_go override in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `use_extension("@rules_go//go:extensions.bzl", "orchestrion")`) {
+		t.Fatalf("expected rules_go orchestrion extension in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `orchestrion.from_source(version = "v1.5.0")`) {
+		t.Fatalf("expected orchestrion version in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `use_repo(orchestrion, "rules_go_orchestrion_tool")`) {
+		t.Fatalf("expected rules_go orchestrion repo wiring in managed block:\n%s", got)
+	}
+}
+
 func TestReplaceManagedBlockRejectsConflictingOverride(t *testing.T) {
 	input := `module(name = "example")
 git_override(
