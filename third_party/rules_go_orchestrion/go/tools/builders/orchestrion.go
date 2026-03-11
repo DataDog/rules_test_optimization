@@ -396,6 +396,9 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath string, verbose bool) 
 			fmt.Fprintf(os.Stderr, "DEBUG: Starting orchestrion jobserver path=%s cwd=%s PATH including %s, GOROOT=%s\n", orchestrionPath, mustGetwd(), goBinPath, absGoSdkPath)
 		}
 	}
+	if err := ensureWovenPackagesAvailable(cmd.Env, verbose); err != nil {
+		return nil, fmt.Errorf("warm woven dependencies before jobserver: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start orchestrion jobserver: %w", err)
