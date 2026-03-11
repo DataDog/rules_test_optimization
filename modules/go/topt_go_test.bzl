@@ -92,6 +92,13 @@ _SHARED_TEST_ATTRS = [
     "testonly",
 ]
 
+_ORCHESTRION_PIN_FILES = [
+    "go.mod",
+    "go.sum",
+    "orchestrion.tool.go",
+    "orchestrion.yml",
+]
+
 def _extract_wrapper_kwargs(kwargs):
     """Split macro kwargs between raw go_test and public wrapper."""
     wrapper_kwargs = {}
@@ -276,6 +283,14 @@ def dd_topt_go_test(
     # Data/env for the go test: depend only on the selector and use its runfiles.
     # This keeps go_test callsites simple while centralizing selection logic.
     data = _append_data_dependencies(data, [":" + selector_name])
+
+    # Stage local Orchestrion pin files as hidden data inputs. They remain
+    # runtime-inert for the test itself, but the vendored rules_go builder uses
+    # them to materialize the temporary module that Orchestrion expects during
+    # compile-time instrumentation.
+    orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
+    if orchestrion_pin_files:
+        data = _append_data_dependencies(data, orchestrion_pin_files)
 
     # Add manifest file reference for deriving the working directory.
     # Keep this dynamic via export metadata so custom out_dir values continue

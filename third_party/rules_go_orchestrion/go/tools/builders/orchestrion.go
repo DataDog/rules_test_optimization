@@ -57,6 +57,7 @@ type orchestrionJobserver struct {
 // Returns a cleanup function that removes the temporary files we created.
 func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err error) {
 	const goModFile = "go.mod"
+	const goSumFile = "go.sum"
 	const orchestrionYML = "orchestrion.yml"
 	const orchestrionToolGo = "orchestrion.tool.go"
 
@@ -67,16 +68,52 @@ func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err erro
 		fmt.Fprintf(os.Stderr, "orchestrion: ensureGoModExists cwd=%s srcDirs=%v\n", cwd, srcDirs)
 	}
 
-	// Check if go.mod already exists
+	// Prefer copying pinned module metadata from the source directory. Orchestrion
+	// needs the real module requirements from `orchestrion pin`; a synthetic
+	// minimal go.mod is only a fallback when the package has no module files.
 	if _, err := os.Stat(goModFile); os.IsNotExist(err) {
-		// Create a minimal go.mod file
-		content := []byte("module bazel_orchestrion_temp\n\ngo 1.21\n")
-		if err := os.WriteFile(goModFile, content, 0644); err != nil {
-			return nil, fmt.Errorf("creating temporary go.mod: %w", err)
+		var copiedGoMod bool
+		for _, dir := range srcDirs {
+			goModSrc := filepath.Join(dir, goModFile)
+			if _, err := os.Stat(goModSrc); err == nil {
+				if verbose {
+					fmt.Fprintf(os.Stderr, "orchestrion: Found %s\n", goModSrc)
+				}
+				if err := copyOrchFile(goModSrc, goModFile); err != nil {
+					return nil, fmt.Errorf("copying go.mod: %w", err)
+				}
+				filesToCleanup = append(filesToCleanup, goModFile)
+				copiedGoMod = true
+				if verbose {
+					fmt.Fprintf(os.Stderr, "orchestrion: Copied go.mod to cwd\n")
+				}
+
+				goSumSrc := filepath.Join(dir, goSumFile)
+				if _, err := os.Stat(goSumSrc); err == nil {
+					if verbose {
+						fmt.Fprintf(os.Stderr, "orchestrion: Found %s\n", goSumSrc)
+					}
+					if err := copyOrchFile(goSumSrc, goSumFile); err != nil {
+						return nil, fmt.Errorf("copying go.sum: %w", err)
+					}
+					filesToCleanup = append(filesToCleanup, goSumFile)
+					if verbose {
+						fmt.Fprintf(os.Stderr, "orchestrion: Copied go.sum to cwd\n")
+					}
+				}
+				break
+			}
 		}
-		filesToCleanup = append(filesToCleanup, goModFile)
-		if verbose {
-			fmt.Fprintf(os.Stderr, "orchestrion: Created temporary go.mod\n")
+
+		if !copiedGoMod {
+			content := []byte("module bazel_orchestrion_temp\n\ngo 1.21\n")
+			if err := os.WriteFile(goModFile, content, 0644); err != nil {
+				return nil, fmt.Errorf("creating temporary go.mod: %w", err)
+			}
+			filesToCleanup = append(filesToCleanup, goModFile)
+			if verbose {
+				fmt.Fprintf(os.Stderr, "orchestrion: Created temporary go.mod\n")
+			}
 		}
 	}
 

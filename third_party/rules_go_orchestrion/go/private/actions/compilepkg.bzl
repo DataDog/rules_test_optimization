@@ -204,6 +204,11 @@ def emit_compilepkg(
         inputs_direct.append(go.orchestrion)
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(sdk.go)
+        # Stage rule data files for the builder so it can copy module pin files
+        # (for example go.mod, go.sum, orchestrion.tool.go, orchestrion.yml)
+        # into the temporary module it creates for Orchestrion instrumentation.
+        if hasattr(go._ctx.files, "data"):
+            inputs_direct.extend(go._ctx.files.data)
 
     go.actions.run(
         inputs = depset(inputs_direct, transitive = inputs_transitive),
