@@ -605,6 +605,11 @@ func compileGo(goenv *env, srcs []string, orchImportPath, packagePath, importcfg
 				srcDirs = append(srcDirs, dir)
 			}
 		}
+		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+		if err != nil {
+			return fmt.Errorf("compilepkg: %w", err)
+		}
+		defer restoreOrchWorkDir()
 		cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.verbose)
 		if err != nil {
 			return fmt.Errorf("compilepkg: %w", err)
