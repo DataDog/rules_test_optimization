@@ -95,6 +95,9 @@ func run(cfg config) error {
 	if err := runOrchestrionPin(cfg); err != nil {
 		return err
 	}
+	if err := warmOrchestrionModuleCache(cfg); err != nil {
+		return err
+	}
 	if err := writeStarterOrchestrionYML(cfg); err != nil {
 		return err
 	}
@@ -245,6 +248,26 @@ func runOrchestrionPin(cfg config) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("run orchestrion pin in %s: %w", cfg.goModuleDir, err)
 	}
+	return nil
+}
+
+func warmOrchestrionModuleCache(cfg config) error {
+	commands := [][]string{
+		{"mod", "download", "github.com/DataDog/dd-trace-go/v2"},
+		{"list", "github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"},
+	}
+
+	for _, args := range commands {
+		cmd := exec.Command("go", args...)
+		cmd.Dir = cfg.goModuleDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Env = append(os.Environ(), "GO111MODULE=on")
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("run `go %s` in %s: %w", strings.Join(args, " "), cfg.goModuleDir, err)
+		}
+	}
+
 	return nil
 }
 
