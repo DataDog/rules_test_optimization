@@ -48,9 +48,29 @@ const (
 // GOMODCACHE, but orchestrion shells out to `go list` while loading injector
 // configuration from orchestrion.tool.go.
 func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
-	cacheRoot := filepath.Join(os.TempDir(), fmt.Sprintf("orchestrion-go-cache-%d", os.Getpid()))
-	goModCache := filepath.Join(cacheRoot, "pkg", "mod")
-	goBuildCache := filepath.Join(cacheRoot, "cache")
+	cacheRoot := getEnv(env, "GOPATH")
+	if cacheRoot == "" {
+		if home := getEnv(env, "HOME"); home != "" {
+			cacheRoot = filepath.Join(home, "go")
+		}
+	}
+	if cacheRoot == "" {
+		cacheRoot = filepath.Join(os.TempDir(), fmt.Sprintf("orchestrion-go-cache-%d", os.Getpid()))
+	}
+
+	goModCache := getEnv(env, "GOMODCACHE")
+	if goModCache == "" {
+		goModCache = filepath.Join(cacheRoot, "pkg", "mod")
+	}
+
+	goBuildCache := getEnv(env, "GOCACHE")
+	if goBuildCache == "" {
+		if userCacheDir, err := os.UserCacheDir(); err == nil && userCacheDir != "" {
+			goBuildCache = filepath.Join(userCacheDir, "go-build")
+		} else {
+			goBuildCache = filepath.Join(cacheRoot, "cache")
+		}
+	}
 
 	for _, dir := range []string{goModCache, goBuildCache} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -372,6 +392,21 @@ func setEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(env, prefix+value)
+}
+
+// getEnv returns the value of an environment variable from env, or an empty
+// string if the key is not present.
+func getEnv(env []string, key string) string {
+	if env == nil {
+		return ""
+	}
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return ""
 }
 
 // prependToPath prepends a directory to the PATH environment variable.
