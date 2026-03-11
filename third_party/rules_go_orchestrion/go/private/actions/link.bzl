@@ -180,6 +180,14 @@ def emit_link(
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
 
+    inputs_transitive = [
+        archive.libs,
+        archive.cgo_deps,
+        go.cc_toolchain_files,
+        go.sdk.tools,
+        go.stdlib.libs,
+    ]
+
     # Add orchestrion for toolexec instrumentation if enabled
     if go.orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
@@ -189,14 +197,6 @@ def emit_link(
         # The toolexec path may resolve woven dependencies during linking too,
         # so keep the SDK source tree available in sandboxed executions.
         inputs_transitive.append(go.sdk.srcs)
-
-    inputs_transitive = [
-        archive.libs,
-        archive.cgo_deps,
-        go.cc_toolchain_files,
-        go.sdk.tools,
-        go.stdlib.libs,
-    ]
     inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
 
     go.actions.run(
