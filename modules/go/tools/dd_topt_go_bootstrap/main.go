@@ -28,6 +28,7 @@ meta:
 
 aspects: []
 `
+	sharedOrchestrionCacheDirName = "datadog-orchestrion-go-cache"
 )
 
 type config struct {
@@ -244,7 +245,7 @@ func runOrchestrionPin(cfg config) error {
 	cmd.Dir = cfg.goModuleDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	cmd.Env = orchestrionBootstrapEnv()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("run orchestrion pin in %s: %w", cfg.goModuleDir, err)
 	}
@@ -262,13 +263,30 @@ func warmOrchestrionModuleCache(cfg config) error {
 		cmd.Dir = cfg.goModuleDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.Env = append(os.Environ(), "GO111MODULE=on")
+		cmd.Env = orchestrionBootstrapEnv()
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("run `go %s` in %s: %w", strings.Join(args, " "), cfg.goModuleDir, err)
 		}
 	}
 
 	return nil
+}
+
+func orchestrionBootstrapEnv() []string {
+	env := append([]string{}, os.Environ()...)
+	cacheRoot := filepath.Join(os.TempDir(), sharedOrchestrionCacheDirName)
+	goModCache := filepath.Join(cacheRoot, "pkg", "mod")
+	goBuildCache := filepath.Join(cacheRoot, "cache")
+
+	env = append(env,
+		"GO111MODULE=on",
+		"GOPATH="+cacheRoot,
+		"GOMODCACHE="+goModCache,
+		"GOCACHE="+goBuildCache,
+		"GOPROXY=https://proxy.golang.org,direct",
+		"GOSUMDB=sum.golang.org",
+	)
+	return env
 }
 
 func writeStarterOrchestrionYML(cfg config) error {

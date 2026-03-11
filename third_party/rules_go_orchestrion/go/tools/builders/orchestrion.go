@@ -41,6 +41,11 @@ const (
 
 	// jobserverPollInterval is the interval to poll for the URL file.
 	jobserverPollInterval = 50 * time.Millisecond
+
+	// orchestrionSharedCacheDirName is a stable cache root shared by bootstrap
+	// and sandboxed Orchestrion subprocesses, so woven dependency resolution can
+	// reuse downloaded modules across steps.
+	orchestrionSharedCacheDirName = "datadog-orchestrion-go-cache"
 )
 
 // ensureGoModuleCacheEnv provisions a writable Go cache/module cache for
@@ -60,7 +65,7 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 		}
 	}
 	if cacheRoot == "" {
-		cacheRoot = filepath.Join(os.TempDir(), fmt.Sprintf("orchestrion-go-cache-%d", os.Getpid()))
+		cacheRoot = filepath.Join(os.TempDir(), orchestrionSharedCacheDirName)
 	}
 
 	goModCache := getEnv(env, "GOMODCACHE")
@@ -416,6 +421,12 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 			getEnv(cmd.Env, "GOPACKAGESDRIVER"),
 			getEnv(cmd.Env, orchestrionSkipPinEnvVar),
 		)
+		stdlibDir := filepath.Join(getEnv(cmd.Env, "GOROOT"), "src", "log")
+		if info, err := os.Stat(stdlibDir); err == nil {
+			fmt.Fprintf(os.Stderr, "orchestrion: stdlib path %s present dir=%t\n", stdlibDir, info.IsDir())
+		} else {
+			fmt.Fprintf(os.Stderr, "orchestrion: stdlib path %s stat error: %v\n", stdlibDir, err)
+		}
 	}
 
 	return runAndLogCommand(cmd, verbose)
