@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -329,6 +330,70 @@ func enterOrchestrionWorkDir(srcDirs []string, verbose bool) (func(), error) {
 		}
 	}
 	return func() {}, nil
+}
+
+func resolveOrchestrionImportPath(fallback string, verbose bool) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fallback
+	}
+
+	moduleDir := cwd
+	for {
+		if _, err := os.Stat(filepath.Join(moduleDir, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(moduleDir)
+		if parent == moduleDir {
+			return fallback
+		}
+		moduleDir = parent
+	}
+
+	modulePath, err := readGoModulePath(filepath.Join(moduleDir, "go.mod"))
+	if err != nil || modulePath == "" {
+		return fallback
+	}
+
+	rel, err := filepath.Rel(moduleDir, cwd)
+	if err != nil {
+		return fallback
+	}
+
+	importPath := modulePath
+	if rel != "." {
+		importPath = modulePath + "/" + filepath.ToSlash(rel)
+	}
+
+	if verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: resolved import path %s -> %s (moduleDir=%s cwd=%s)\n", fallback, importPath, moduleDir, cwd)
+	}
+
+	return importPath
+}
+
+func readGoModulePath(goModPath string) (string, error) {
+	f, err := os.Open(goModPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
 }
 
 // copyOrchFile copies a file from src to dst. This is a simple wrapper
