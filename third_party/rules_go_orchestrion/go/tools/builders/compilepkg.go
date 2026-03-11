@@ -537,6 +537,9 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 }
 
 func compileGo(goenv *env, srcs []string, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {
+	if orchestrion != "" {
+		orchestrion = abs(orchestrion)
+	}
 	args := goenv.goToolWithOrchestion(orchestrion, "compile")
 	args = append(args, "-p", packagePath, "-importcfg", importcfgPath, "-pack")
 	// Add a buildid when using orchestrion - it needs this for its NBT caching
