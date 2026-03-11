@@ -186,6 +186,9 @@ def emit_link(
         inputs_direct.append(go.orchestrion)
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(go.sdk.go)
+        # The toolexec path may resolve woven dependencies during linking too,
+        # so keep the SDK source tree available in sandboxed executions.
+        inputs_transitive.append(go.sdk.srcs)
 
     inputs_transitive = [
         archive.libs,

@@ -55,6 +55,11 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 		}
 	}
 	if cacheRoot == "" {
+		if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
+			cacheRoot = filepath.Join(homeDir, "go")
+		}
+	}
+	if cacheRoot == "" {
 		cacheRoot = filepath.Join(os.TempDir(), fmt.Sprintf("orchestrion-go-cache-%d", os.Getpid()))
 	}
 
@@ -81,9 +86,11 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 	env = setEnv(env, "GOPATH", cacheRoot)
 	env = setEnv(env, "GOMODCACHE", goModCache)
 	env = setEnv(env, "GOCACHE", goBuildCache)
+	env = setEnv(env, "GOPROXY", "https://proxy.golang.org,direct")
+	env = setEnv(env, "GOSUMDB", "sum.golang.org")
 
 	if verbose {
-		fmt.Fprintf(os.Stderr, "orchestrion: using GOPATH=%s GOMODCACHE=%s GOCACHE=%s\n", cacheRoot, goModCache, goBuildCache)
+		fmt.Fprintf(os.Stderr, "orchestrion: using GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOPROXY=%s\n", cacheRoot, goModCache, goBuildCache, getEnv(env, "GOPROXY"))
 	}
 
 	return env, nil
