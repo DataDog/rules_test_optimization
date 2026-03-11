@@ -43,6 +43,32 @@ const (
 	jobserverPollInterval = 50 * time.Millisecond
 )
 
+// ensureGoModuleCacheEnv provisions a writable Go cache/module cache for
+// orchestrion subprocesses. Some Bazel sandboxes do not provide GOPATH or
+// GOMODCACHE, but orchestrion shells out to `go list` while loading injector
+// configuration from orchestrion.tool.go.
+func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
+	cacheRoot := filepath.Join(os.TempDir(), fmt.Sprintf("orchestrion-go-cache-%d", os.Getpid()))
+	goModCache := filepath.Join(cacheRoot, "pkg", "mod")
+	goBuildCache := filepath.Join(cacheRoot, "cache")
+
+	for _, dir := range []string{goModCache, goBuildCache} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating orchestrion go cache dir %s: %w", dir, err)
+		}
+	}
+
+	env = setEnv(env, "GOPATH", cacheRoot)
+	env = setEnv(env, "GOMODCACHE", goModCache)
+	env = setEnv(env, "GOCACHE", goBuildCache)
+
+	if verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: using GOPATH=%s GOMODCACHE=%s GOCACHE=%s\n", cacheRoot, goModCache, goBuildCache)
+	}
+
+	return env, nil
+}
+
 // orchestrionJobserver manages the lifecycle of an orchestrion jobserver process.
 type orchestrionJobserver struct {
 	url     string
@@ -203,6 +229,11 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath string, verbose bool) 
 	// Set up environment with proper PATH and GOROOT for the server process
 	// The server needs access to the go binary to load its configuration
 	cmd.Env = os.Environ()
+	var err error
+	cmd.Env, err = ensureGoModuleCacheEnv(cmd.Env, verbose)
+	if err != nil {
+		return nil, err
+	}
 	if goSdkPath != "" {
 		absGoSdkPath := goSdkPath
 		if !filepath.IsAbs(goSdkPath) {
@@ -300,11 +331,16 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 
 	// Let cmd inherit the modified environment from the current process
 	// Don't set cmd.Env explicitly so it uses the process environment
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	var err error
+	cmd.Env, err = ensureGoModuleCacheEnv(cmd.Env, verbose)
+	if err != nil {
+		return err
+	}
 
 	if jobserver != nil && jobserver.URL() != "" {
-		if cmd.Env == nil {
-			cmd.Env = os.Environ()
-		}
 		cmd.Env = appendEnvIfNotExists(cmd.Env, orchestrionJobserverURLEnvVar, jobserver.URL())
 		cmd.Env = appendEnvIfNotExists(cmd.Env, orchestrionSkipPinEnvVar, "true")
 		// Disable external package driver to ensure go command is used directly
@@ -317,9 +353,6 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		}
 	}
 	if importPath != "" {
-		if cmd.Env == nil {
-			cmd.Env = os.Environ()
-		}
 		cmd.Env = appendEnvIfNotExists(cmd.Env, toolexecImportPathEnvVar, importPath)
 	}
 
