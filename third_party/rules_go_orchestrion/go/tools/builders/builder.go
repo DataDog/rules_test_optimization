@@ -22,11 +22,16 @@ package main
 import (
 	"log"
 	"os"
+	"path/filepath"
 )
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("builder: ")
+
+	if absArg0, err := filepath.Abs(os.Args[0]); err == nil {
+		os.Args[0] = absArg0
+	}
 
 	args, _, err := expandParamsFiles(os.Args[1:])
 	if err != nil {
