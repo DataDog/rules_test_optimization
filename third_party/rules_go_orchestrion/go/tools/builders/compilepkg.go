@@ -160,7 +160,7 @@ func compilePkg(args []string) error {
 func compileArchive(
 	goenv *env,
 	pack string,
-	importPath string,
+	orchImportPath string,
 	packagePath string,
 	srcs archiveSrcs,
 	deps []archive,
@@ -621,7 +621,7 @@ func compileGo(goenv *env, srcs []string, packagePath, importcfgPath, embedcfgPa
 
 	// TOOLEXEC_IMPORTPATH should match the compiler import path, not Bazel's
 	// internal importmap/package path.
-	return goenv.runCommandWithJobserver(args, jobserver, importPath)
+	return goenv.runCommandWithJobserver(args, jobserver, orchImportPath)
 }
 
 func appendToArchive(goenv *env, pack, outPath string, objFiles []string) error {
