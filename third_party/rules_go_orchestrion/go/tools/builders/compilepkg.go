@@ -537,8 +537,10 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 }
 
 func compileGo(goenv *env, srcs []string, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {
+	sdkPath := abs(goenv.sdk)
 	if orchestrion != "" {
 		orchestrion = abs(orchestrion)
+		goenv.sdk = sdkPath
 	}
 	args := goenv.goToolWithOrchestion(orchestrion, "compile")
 	args = append(args, "-p", packagePath, "-importcfg", importcfgPath, "-pack")
@@ -603,7 +605,7 @@ func compileGo(goenv *env, srcs []string, packagePath, importcfgPath, embedcfgPa
 	}
 
 	// Start orchestrion jobserver if needed
-	jobserver, err := startOrchestrionJobserver(orchestrion, goenv.sdk, goenv.verbose)
+	jobserver, err := startOrchestrionJobserver(orchestrion, sdkPath, goenv.verbose)
 	if err != nil {
 		return fmt.Errorf("compilepkg: failed to start orchestrion jobserver: %w", err)
 	}
