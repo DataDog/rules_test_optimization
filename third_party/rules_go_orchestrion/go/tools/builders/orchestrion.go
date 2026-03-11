@@ -317,14 +317,44 @@ func enterOrchestrionWorkDir(srcDirs []string, verbose bool) (func(), error) {
 				if cwd == dir {
 					return func() {}, nil
 				}
+				var cleanupPaths []string
+				for _, name := range []string{"bazel-out", "external"} {
+					srcPath := filepath.Join(cwd, name)
+					if _, err := os.Stat(srcPath); err != nil {
+						continue
+					}
+					dstPath := filepath.Join(dir, name)
+					if _, err := os.Lstat(dstPath); err == nil {
+						continue
+					} else if !os.IsNotExist(err) {
+						return nil, fmt.Errorf("stat orchestrion compatibility path %s: %w", dstPath, err)
+					}
+					relTarget, err := filepath.Rel(dir, srcPath)
+					if err != nil {
+						return nil, fmt.Errorf("compute orchestrion compatibility path for %s: %w", name, err)
+					}
+					if err := os.Symlink(relTarget, dstPath); err != nil {
+						return nil, fmt.Errorf("create orchestrion compatibility symlink %s -> %s: %w", dstPath, relTarget, err)
+					}
+					cleanupPaths = append(cleanupPaths, dstPath)
+					if verbose {
+						fmt.Fprintf(os.Stderr, "orchestrion: created compatibility symlink %s -> %s\n", dstPath, relTarget)
+					}
+				}
 				if verbose {
 					fmt.Fprintf(os.Stderr, "orchestrion: chdir %s -> %s\n", cwd, dir)
 				}
 				if err := os.Chdir(dir); err != nil {
+					for _, cleanupPath := range cleanupPaths {
+						_ = os.Remove(cleanupPath)
+					}
 					return nil, fmt.Errorf("chdir to orchestrion work dir %s: %w", dir, err)
 				}
 				return func() {
 					_ = os.Chdir(cwd)
+					for _, cleanupPath := range cleanupPaths {
+						_ = os.Remove(cleanupPath)
+					}
 				}, nil
 			}
 		}
