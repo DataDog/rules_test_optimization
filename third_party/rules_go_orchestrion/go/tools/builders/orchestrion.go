@@ -243,6 +243,36 @@ func logOrchestrionTempModuleState() {
 	}
 }
 
+// enterOrchestrionWorkDir switches the current process directory to the first
+// source directory that already contains Orchestrion pin/module metadata. This
+// keeps `go list` / `go env GOMOD` aligned with the real Go module root instead
+// of Bazel's execroot when Orchestrion shells out during toolexec compilation.
+func enterOrchestrionWorkDir(srcDirs []string, verbose bool) (func(), error) {
+	for _, dir := range srcDirs {
+		for _, marker := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return nil, fmt.Errorf("determine cwd before orchestrion chdir: %w", err)
+				}
+				if cwd == dir {
+					return func() {}, nil
+				}
+				if verbose {
+					fmt.Fprintf(os.Stderr, "orchestrion: chdir %s -> %s\n", cwd, dir)
+				}
+				if err := os.Chdir(dir); err != nil {
+					return nil, fmt.Errorf("chdir to orchestrion work dir %s: %w", dir, err)
+				}
+				return func() {
+					_ = os.Chdir(cwd)
+				}, nil
+			}
+		}
+	}
+	return func() {}, nil
+}
+
 // copyOrchFile copies a file from src to dst. This is a simple wrapper
 // that reads the entire file and writes it to the destination.
 // Note: There's also a copyFile in cgo2.go with different implementation.

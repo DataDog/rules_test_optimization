@@ -587,6 +587,11 @@ func compileGo(goenv *env, srcs []string, packagePath, importcfgPath, embedcfgPa
 				srcDirs = append(srcDirs, dir)
 			}
 		}
+		restoreWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+		if err != nil {
+			return fmt.Errorf("compilepkg: %w", err)
+		}
+		defer restoreWorkDir()
 		cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.verbose)
 		if err != nil {
 			return fmt.Errorf("compilepkg: %w", err)
