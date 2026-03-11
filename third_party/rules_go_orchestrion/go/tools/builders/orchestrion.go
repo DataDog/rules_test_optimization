@@ -205,17 +205,29 @@ func ensureGoRootCompatibility(goRootPath, goSdkPath string, verbose bool) error
 		return fmt.Errorf("stat SDK src %s: %w", sdkSrcPath, err)
 	}
 
-	relTarget, err := filepath.Rel(goRootPath, sdkSrcPath)
+	linkTarget, err := computeCompatibilitySymlinkTarget(goRootPath, sdkSrcPath)
 	if err != nil {
 		return fmt.Errorf("compute GOROOT src symlink from %s to %s: %w", goRootPath, sdkSrcPath, err)
 	}
-	if err := os.Symlink(relTarget, srcPath); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("create GOROOT src symlink %s -> %s: %w", srcPath, relTarget, err)
+	if err := os.Symlink(linkTarget, srcPath); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("create GOROOT src symlink %s -> %s: %w", srcPath, linkTarget, err)
 	}
 	if verbose {
-		fmt.Fprintf(os.Stderr, "orchestrion: created GOROOT src compatibility symlink %s -> %s\n", srcPath, relTarget)
+		fmt.Fprintf(os.Stderr, "orchestrion: created GOROOT src compatibility symlink %s -> %s\n", srcPath, linkTarget)
 	}
 	return nil
+}
+
+func computeCompatibilitySymlinkTarget(baseDir, dstPath string) (string, error) {
+	relTarget, err := filepath.Rel(baseDir, dstPath)
+	if err == nil {
+		return relTarget, nil
+	}
+	absTarget, absErr := filepath.Abs(dstPath)
+	if absErr != nil {
+		return "", fmt.Errorf("absolutize compatibility target %s after relative failure: %w", dstPath, absErr)
+	}
+	return absTarget, nil
 }
 
 // orchestrionJobserver manages the lifecycle of an orchestrion jobserver process.
@@ -387,16 +399,16 @@ func enterOrchestrionWorkDir(srcDirs []string, verbose bool) (func(), error) {
 					} else if !os.IsNotExist(err) {
 						return nil, fmt.Errorf("stat orchestrion compatibility path %s: %w", dstPath, err)
 					}
-					relTarget, err := filepath.Rel(dir, srcPath)
+					linkTarget, err := computeCompatibilitySymlinkTarget(dir, srcPath)
 					if err != nil {
 						return nil, fmt.Errorf("compute orchestrion compatibility path for %s: %w", name, err)
 					}
-					if err := os.Symlink(relTarget, dstPath); err != nil {
-						return nil, fmt.Errorf("create orchestrion compatibility symlink %s -> %s: %w", dstPath, relTarget, err)
+					if err := os.Symlink(linkTarget, dstPath); err != nil {
+						return nil, fmt.Errorf("create orchestrion compatibility symlink %s -> %s: %w", dstPath, linkTarget, err)
 					}
 					cleanupPaths = append(cleanupPaths, dstPath)
 					if verbose {
-						fmt.Fprintf(os.Stderr, "orchestrion: created compatibility symlink %s -> %s\n", dstPath, relTarget)
+						fmt.Fprintf(os.Stderr, "orchestrion: created compatibility symlink %s -> %s\n", dstPath, linkTarget)
 					}
 				}
 				if verbose {
