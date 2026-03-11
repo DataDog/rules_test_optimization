@@ -588,6 +588,18 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
 		// Prevent go from trying to download different toolchains
 		cmd.Env = setEnv(cmd.Env, "GOTOOLCHAIN", "local")
+		// Force module-aware resolution for Orchestrion's woven dependency lookups.
+		// Our explicit `go list -mod=mod` probes succeed in the same sandbox; this
+		// keeps the actual toolexec execution on the same resolution mode.
+		goFlags := strings.TrimSpace(getEnv(cmd.Env, "GOFLAGS"))
+		if !strings.Contains(goFlags, "-mod=") {
+			if goFlags == "" {
+				goFlags = "-mod=mod"
+			} else {
+				goFlags = "-mod=mod " + goFlags
+			}
+			cmd.Env = setEnv(cmd.Env, "GOFLAGS", goFlags)
+		}
 		// Also ensure GOROOT is set correctly in cmd.Env
 		if goSdkPath != "" {
 			cmd.Env = setEnv(cmd.Env, "GOROOT", goSdkPath)
@@ -600,7 +612,7 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		return fmt.Errorf("ensure woven dependencies available: %w", err)
 	}
 	if verbose {
-		fmt.Fprintf(os.Stderr, "orchestrion: command cwd=%s path=%s importpath=%s GOROOT=%s GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOTOOLCHAIN=%s GOPACKAGESDRIVER=%s DD_ORCHESTRION_IS_GOMOD_VERSION=%s\n",
+		fmt.Fprintf(os.Stderr, "orchestrion: command cwd=%s path=%s importpath=%s GOROOT=%s GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOFLAGS=%s GOTOOLCHAIN=%s GOPACKAGESDRIVER=%s DD_ORCHESTRION_IS_GOMOD_VERSION=%s\n",
 			mustGetwd(),
 			cmd.Path,
 			importPath,
@@ -608,6 +620,7 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 			getEnv(cmd.Env, "GOPATH"),
 			getEnv(cmd.Env, "GOMODCACHE"),
 			getEnv(cmd.Env, "GOCACHE"),
+			getEnv(cmd.Env, "GOFLAGS"),
 			getEnv(cmd.Env, "GOTOOLCHAIN"),
 			getEnv(cmd.Env, "GOPACKAGESDRIVER"),
 			getEnv(cmd.Env, orchestrionSkipPinEnvVar),
