@@ -78,6 +78,9 @@ func compilePkg(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if orchestrion != "" {
+		goenv.verbose = true
+	}
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
 	}

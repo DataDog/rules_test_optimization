@@ -208,11 +208,34 @@ func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err erro
 		}
 	}
 
+	if verbose {
+		logOrchestrionTempModuleState()
+	}
+
 	return func() {
 		for _, f := range filesToCleanup {
 			os.Remove(f)
 		}
 	}, nil
+}
+
+func logOrchestrionTempModuleState() {
+	cwd, _ := os.Getwd()
+	fmt.Fprintf(os.Stderr, "orchestrion: temp module cwd=%s\n", cwd)
+	for _, name := range []string{"go.mod", "go.sum", "orchestrion.tool.go", "orchestrion.yml"} {
+		if info, err := os.Stat(name); err == nil {
+			fmt.Fprintf(os.Stderr, "orchestrion: temp file %s size=%d\n", name, info.Size())
+		} else if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "orchestrion: temp file %s missing\n", name)
+		} else {
+			fmt.Fprintf(os.Stderr, "orchestrion: temp file %s stat error: %v\n", name, err)
+		}
+	}
+	if data, err := os.ReadFile("go.mod"); err == nil {
+		fmt.Fprintf(os.Stderr, "orchestrion: temp go.mod has dd-trace-go/v2=%t orchestrion/all/v2=%t\n",
+			strings.Contains(string(data), "github.com/DataDog/dd-trace-go/v2"),
+			strings.Contains(string(data), "github.com/DataDog/dd-trace-go/orchestrion/all/v2"))
+	}
 }
 
 // copyOrchFile copies a file from src to dst. This is a simple wrapper
@@ -381,6 +404,18 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	}
 	if importPath != "" {
 		cmd.Env = appendEnvIfNotExists(cmd.Env, toolexecImportPathEnvVar, importPath)
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: command env importpath=%s GOROOT=%s GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOTOOLCHAIN=%s GOPACKAGESDRIVER=%s DD_ORCHESTRION_IS_GOMOD_VERSION=%s\n",
+			importPath,
+			getEnv(cmd.Env, "GOROOT"),
+			getEnv(cmd.Env, "GOPATH"),
+			getEnv(cmd.Env, "GOMODCACHE"),
+			getEnv(cmd.Env, "GOCACHE"),
+			getEnv(cmd.Env, "GOTOOLCHAIN"),
+			getEnv(cmd.Env, "GOPACKAGESDRIVER"),
+			getEnv(cmd.Env, orchestrionSkipPinEnvVar),
+		)
 	}
 
 	return runAndLogCommand(cmd, verbose)
