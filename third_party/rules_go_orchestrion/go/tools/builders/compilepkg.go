@@ -295,8 +295,8 @@ func compileArchive(
 			switch coverFormat {
 			case "go_cover":
 				srcName = origSrc
-				if importPath != "" {
-					srcName = path.Join(importPath, filepath.Base(origSrc))
+				if orchImportPath != "" {
+					srcName = path.Join(orchImportPath, filepath.Base(origSrc))
 				}
 			case "lcov":
 				// Bazel merges lcov reports across languages and thus assumes
@@ -310,7 +310,7 @@ func compileArchive(
 				// to write the lcov file with the expected exec root relative source
 				// path.
 				srcName = relCoverPath[origSrc]
-				srcPathMapping[srcName] = path.Join(importPath, filepath.Base(srcName))
+				srcPathMapping[srcName] = path.Join(orchImportPath, filepath.Base(srcName))
 			default:
 				return fmt.Errorf("invalid value for -cover_format: %q", coverFormat)
 			}
@@ -334,11 +334,11 @@ func compileArchive(
 
 		// Modeled after go toolchain's coverage variables configuration.
 		// https://github.com/golang/go/blob/go1.24.5/src/cmd/go/internal/work/exec.go#L1932
-		sum := sha256.Sum256([]byte(importPath))
+		sum := sha256.Sum256([]byte(orchImportPath))
 		coverVar := fmt.Sprintf("goCover_%x_", sum[:6])
 		if len(coverOut) > 0 {
 			coverageCfg = workDir + "pkgcfg.txt"
-			coverOut, err := instrumentForCoverage(goenv, importPath, packageName, coverIn, coverVar, coverMode, coverOut, workDir, relCoverPath, srcPathMapping)
+			coverOut, err := instrumentForCoverage(goenv, orchImportPath, packageName, coverIn, coverVar, coverMode, coverOut, workDir, relCoverPath, srcPathMapping)
 			if err != nil {
 				return err
 			}
@@ -404,7 +404,7 @@ func compileArchive(
 		gcFlags = append(gcFlags, "-trimpath="+trimPath)
 	}
 
-	importcfgPath, err := checkImportsAndBuildCfg(goenv, importPath, srcs, deps, packageListPath, recompileInternalDeps, compilingWithCgo, coverMode, workDir)
+	importcfgPath, err := checkImportsAndBuildCfg(goenv, orchImportPath, srcs, deps, packageListPath, recompileInternalDeps, compilingWithCgo, coverMode, workDir)
 	if err != nil {
 		return err
 	}
@@ -462,7 +462,7 @@ func compileArchive(
 	}
 
 	// Compile the filtered .go files.
-	if err := compileGo(goenv, goSrcs, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, orchestrion); err != nil {
+	if err := compileGo(goenv, goSrcs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, orchestrion); err != nil {
 		return err
 	}
 
@@ -549,7 +549,7 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	return importcfgPath, nil
 }
 
-func compileGo(goenv *env, srcs []string, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {
+func compileGo(goenv *env, srcs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {
 	sdkPath := abs(goenv.sdk)
 	if orchestrion != "" {
 		orchestrion = abs(orchestrion)
