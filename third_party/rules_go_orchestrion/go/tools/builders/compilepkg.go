@@ -80,6 +80,15 @@ func compilePkg(args []string) error {
 	}
 	if orchestrion != "" {
 		goenv.verbose = true
+		if cwd, err := os.Getwd(); err == nil {
+			fmt.Fprintf(os.Stderr, "compilepkg: orchestrion enabled cwd=%s builder=%s sdk=%s importpath=%s packagepath=%s\n", cwd, os.Args[0], goenv.sdk, importPath, packagePath)
+		}
+		if info, err := os.Stat(orchestrion); err == nil {
+			fmt.Fprintf(os.Stderr, "compilepkg: orchestrion binary=%s size=%d mode=%s\n", orchestrion, info.Size(), info.Mode())
+		} else {
+			fmt.Fprintf(os.Stderr, "compilepkg: orchestrion binary=%s stat error=%v\n", orchestrion, err)
+		}
+		fmt.Fprintf(os.Stderr, "compilepkg: raw args=%q\n", args)
 	}
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
@@ -109,6 +118,10 @@ func compilePkg(args []string) error {
 	err = applyTestFilter(testFilter, &srcs)
 	if err != nil {
 		return err
+	}
+	if orchestrion != "" {
+		fmt.Fprintf(os.Stderr, "compilepkg: filtered go=%d cgo=%d c=%d cxx=%d objc=%d objcxx=%d asm=%d embeds=%d outLink=%s outIface=%s\n",
+			len(srcs.goSrcs), len(srcs.cSrcs), len(srcs.cSrcs), len(srcs.cxxSrcs), len(srcs.objcSrcs), len(srcs.objcxxSrcs), len(srcs.sSrcs), len(embedSrcs), outLinkobjPath, outInterfacePath)
 	}
 
 	return compileArchive(

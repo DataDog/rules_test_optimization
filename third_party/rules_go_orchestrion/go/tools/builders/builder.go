@@ -20,6 +20,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -31,6 +32,13 @@ func main() {
 
 	if absArg0, err := filepath.Abs(os.Args[0]); err == nil {
 		os.Args[0] = absArg0
+	}
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
+		if cwd, err := os.Getwd(); err == nil {
+			fmt.Fprintf(os.Stderr, "builder: startup cwd=%s argv0=%s args=%q\n", cwd, os.Args[0], os.Args[1:])
+		} else {
+			fmt.Fprintf(os.Stderr, "builder: startup cwd=<error:%v> argv0=%s args=%q\n", err, os.Args[0], os.Args[1:])
+		}
 	}
 
 	args, _, err := expandParamsFiles(os.Args[1:])

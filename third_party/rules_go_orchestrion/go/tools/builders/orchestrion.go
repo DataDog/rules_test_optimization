@@ -335,7 +335,7 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath string, verbose bool) 
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
 
 		if verbose {
-			fmt.Fprintf(os.Stderr, "DEBUG: Starting orchestrion jobserver with PATH including %s, GOROOT=%s\n", goBinPath, absGoSdkPath)
+			fmt.Fprintf(os.Stderr, "DEBUG: Starting orchestrion jobserver path=%s cwd=%s PATH including %s, GOROOT=%s\n", orchestrionPath, mustGetwd(), goBinPath, absGoSdkPath)
 		}
 	}
 
@@ -441,7 +441,9 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		cmd.Env = appendEnvIfNotExists(cmd.Env, toolexecImportPathEnvVar, importPath)
 	}
 	if verbose {
-		fmt.Fprintf(os.Stderr, "orchestrion: command env importpath=%s GOROOT=%s GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOTOOLCHAIN=%s GOPACKAGESDRIVER=%s DD_ORCHESTRION_IS_GOMOD_VERSION=%s\n",
+		fmt.Fprintf(os.Stderr, "orchestrion: command cwd=%s path=%s importpath=%s GOROOT=%s GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOTOOLCHAIN=%s GOPACKAGESDRIVER=%s DD_ORCHESTRION_IS_GOMOD_VERSION=%s\n",
+			mustGetwd(),
+			cmd.Path,
 			importPath,
 			getEnv(cmd.Env, "GOROOT"),
 			getEnv(cmd.Env, "GOPATH"),
@@ -457,9 +459,22 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		} else {
 			fmt.Fprintf(os.Stderr, "orchestrion: stdlib path %s stat error: %v\n", stdlibDir, err)
 		}
+		if info, err := os.Stat(cmd.Path); err == nil {
+			fmt.Fprintf(os.Stderr, "orchestrion: command path %s present mode=%s size=%d\n", cmd.Path, info.Mode(), info.Size())
+		} else {
+			fmt.Fprintf(os.Stderr, "orchestrion: command path %s stat error: %v\n", cmd.Path, err)
+		}
 	}
 
 	return runAndLogCommand(cmd, verbose)
+}
+
+func mustGetwd() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Sprintf("<cwd error: %v>", err)
+	}
+	return cwd
 }
 
 // setEnv sets an environment variable, replacing any existing value.
