@@ -30,6 +30,10 @@ import (
 	"strings"
 )
 
+var linkDebugPatterns = []string{
+	"github.com/DataDog/dd-trace-go/v2",
+}
+
 func link(args []string) error {
 	// Parse arguments.
 	args, _, err := expandParamsFiles(args)
@@ -45,8 +49,7 @@ func link(args []string) error {
 	main := flags.String("main", "", "Path to the main archive.")
 	packagePath := flags.String("p", "", "Package path of the main archive.")
 	outFile := flags.String("o", "", "Path to output file.")
-	orchestrion := flags.String("orchestrion", "", "Path to orchestrion binary (unused for link, but kept for API compatibility)")
-	_ = orchestrion // Orchestrion is not used for link step, see comment in link command generation
+	orchestrion := flags.String("orchestrion", "", "Path to orchestrion binary")
 	flags.Var(&archives, "arc", "Label, package path, and file name of a dependency, separated by '='")
 	packageList := flags.String("package_list", "", "The file containing the list of standard library packages")
 	buildmode := flags.String("buildmode", "", "Build mode used.")
@@ -100,15 +103,17 @@ func link(args []string) error {
 	if !goenv.shouldPreserveWorkDir {
 		defer os.Remove(importcfgName)
 	}
+	debugImportcfgState("before-link", importcfgName)
+
+	orchImportPath := *packagePath
+	sdkPath := abs(goenv.sdk)
+	if *orchestrion != "" {
+		*orchestrion = abs(*orchestrion)
+		goenv.sdk = sdkPath
+	}
 
 	// generate any additional link options we need
-	// Note: We do NOT use orchestrion for link because:
-	// 1. Orchestrion's instrumentation happens at compile time, not link time
-	// 2. Orchestrion's link processing tries to read link.deps from all packages
-	//    in importcfg, but rules_go doesn't build all Go toolchain packages
-	// 3. In Bazel, dependencies are explicitly managed, so we don't need
-	//    orchestrion's dependency resolution during linking
-	goargs := goenv.goTool("link")
+	goargs := goenv.goToolWithOrchestion(*orchestrion, "link")
 	goargs = append(goargs, "-importcfg", importcfgName)
 
 	parseXdef := func(xdef string) (pkg, name, value string, err error) {
@@ -179,10 +184,65 @@ func link(args []string) error {
 		defer os.Setenv("GOROOT", oldroot)
 	}
 
-	// Run the link command directly (orchestrion is not used for link step)
-	if err := goenv.runCommand(goargs); err != nil {
+	if *orchestrion != "" {
+		srcDirs := make([]string, 0, len(archives))
+		seen := make(map[string]bool)
+		addSrcDir := func(dir string) {
+			if dir == "" {
+				return
+			}
+			if absDir, err := filepath.Abs(dir); err == nil {
+				if realDir, err := filepath.EvalSymlinks(absDir); err == nil {
+					dir = realDir
+				} else {
+					dir = absDir
+				}
+			}
+			if !seen[dir] {
+				seen[dir] = true
+				srcDirs = append(srcDirs, dir)
+			}
+		}
+		for _, archive := range archives {
+			addSrcDir(filepath.Dir(archive.packagePath))
+		}
+		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+		if err != nil {
+			return fmt.Errorf("link: %w", err)
+		}
+		defer restoreOrchWorkDir()
+		cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.verbose)
+		if err != nil {
+			return fmt.Errorf("link: %w", err)
+		}
+		defer cleanupGoMod()
+		if orchImportPath == "main" || orchImportPath == "testmain" {
+			orchImportPath = ""
+		}
+		orchImportPath = resolveOrchestrionImportPath(orchImportPath, goenv.verbose)
+		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			cwd, _ := os.Getwd()
+			fmt.Fprintf(os.Stderr, "link: orchestrion cwd=%s packagePath=%s resolved_importpath=%s main=%s out=%s\n", cwd, *packagePath, orchImportPath, *main, *outFile)
+		}
+		goRootPath := goenv.goroot
+		if goRootPath == "" {
+			goRootPath = os.Getenv("GOROOT")
+		}
+		jobserver, err := startOrchestrionJobserver(*orchestrion, sdkPath, goRootPath, goenv.verbose)
+		if err != nil {
+			return fmt.Errorf("link: failed to start orchestrion jobserver: %w", err)
+		}
+		defer jobserver.cleanup()
+		if err := goenv.runCommandWithJobserver(goargs, jobserver, orchImportPath); err != nil {
+			debugImportcfgState("after-link-error", importcfgName)
+			return err
+		}
+		debugImportcfgState("after-link-success", importcfgName)
+	} else if err := goenv.runCommand(goargs); err != nil {
+		debugImportcfgState("after-link-error", importcfgName)
 		return err
 	}
+	debugImportcfgState("after-link-success", importcfgName)
 
 	if *buildmode == "c-archive" {
 		if err := stripArMetadata(*outFile); err != nil {
@@ -191,6 +251,48 @@ func link(args []string) error {
 	}
 
 	return nil
+}
+
+func debugImportcfgState(stage, path string) {
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "" {
+		return
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: %s importcfg=%s read error: %v\n", stage, path, err)
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	packagefileCount := 0
+	interesting := make([]string, 0, len(lines))
+	malformed := make([]string, 0, 8)
+	for _, line := range lines {
+		if strings.HasPrefix(line, "packagefile ") {
+			packagefileCount++
+			rest := strings.TrimPrefix(line, "packagefile ")
+			parts := strings.SplitN(rest, "=", 2)
+			if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+				malformed = append(malformed, line)
+			}
+		}
+		for _, pattern := range linkDebugPatterns {
+			if strings.Contains(line, pattern) {
+				interesting = append(interesting, line)
+				break
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "orchestrion link debug: %s importcfg=%s bytes=%d packagefiles=%d interesting=%d malformed=%d\n",
+		stage, path, len(data), packagefileCount, len(interesting), len(malformed))
+	for _, line := range interesting {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: %s %s\n", stage, line)
+	}
+	for _, line := range malformed {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: %s malformed %s\n", stage, line)
+	}
 }
 
 var versionExp = regexp.MustCompile(`.*go1\.(\d+).*$`)

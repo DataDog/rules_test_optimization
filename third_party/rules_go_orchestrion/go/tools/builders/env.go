@@ -87,7 +87,9 @@ func (e *env) checkFlagsAndSetGoroot() error {
 	if e.sdk == "" {
 		return errors.New("-sdk was not set")
 	}
+	e.sdk = abs(e.sdk)
 	if e.goroot != "" {
+		e.goroot = abs(e.goroot)
 		err := os.Setenv("GOROOT", e.goroot)
 		if err != nil {
 			return err
@@ -180,9 +182,11 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 	buf := &bytes.Buffer{}
 	cmd.Stdout = buf
 	cmd.Stderr = buf
-	// Make SDK path absolute so child processes can find `go`
-	sdkPath := abs(e.sdk)
-	err := executeCommandWithJobserver(cmd, jobserver, importPath, sdkPath, e.verbose)
+	goRootPath := e.goroot
+	if goRootPath == "" {
+		goRootPath = os.Getenv("GOROOT")
+	}
+	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose)
 	os.Stderr.Write(relativizePaths(buf.Bytes()))
 	return err
 }

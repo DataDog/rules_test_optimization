@@ -197,6 +197,11 @@ def emit_link(
         # The toolexec path may resolve woven dependencies during linking too,
         # so keep the SDK source tree available in sandboxed executions.
         inputs_transitive.append(go.sdk.srcs)
+        # Stage rule data files for the link builder too so it can reuse the
+        # same pinned module files seen during compile (for example go.mod,
+        # go.sum, orchestrion.tool.go, orchestrion.yml).
+        if hasattr(go._ctx.files, "data"):
+            inputs_direct.extend(go._ctx.files.data)
     inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
 
     go.actions.run(

@@ -111,10 +111,19 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 	return env, nil
 }
 
-func ensureWovenPackagesAvailable(env []string, verbose bool) error {
-	goExe := filepath.Join(getEnv(env, "GOROOT"), "bin", "go")
-	if runtime.GOOS == "windows" {
-		goExe += ".exe"
+func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) error {
+	goExe := ""
+	if goSdkPath != "" {
+		goExe = filepath.Join(goSdkPath, "bin", "go")
+		if runtime.GOOS == "windows" {
+			goExe += ".exe"
+		}
+	}
+	if goExe == "" {
+		goExe = filepath.Join(getEnv(env, "GOROOT"), "bin", "go")
+		if runtime.GOOS == "windows" {
+			goExe += ".exe"
+		}
 	}
 
 	if _, err := os.Stat(goExe); err != nil {
@@ -122,6 +131,16 @@ func ensureWovenPackagesAvailable(env []string, verbose bool) error {
 			fmt.Fprintf(os.Stderr, "orchestrion: skipping woven dependency warmup; go binary unavailable at %s: %v\n", goExe, err)
 		}
 		return nil
+	}
+
+	probeIncludesRequestedPackages := func(out []byte) bool {
+		text := string(out)
+		for _, pkg := range orchestrionWovenPackagePatterns {
+			if !strings.Contains(text, pkg) {
+				return false
+			}
+		}
+		return true
 	}
 
 	runProbe := func(label string, args ...string) error {
@@ -136,6 +155,12 @@ func ensureWovenPackagesAvailable(env []string, verbose bool) error {
 			}
 		}
 		if err != nil {
+			if probeIncludesRequestedPackages(out) {
+				if verbose {
+					fmt.Fprintf(os.Stderr, "orchestrion: %s returned non-zero but included all requested woven packages; continuing\n", label)
+				}
+				return nil
+			}
 			return fmt.Errorf("%s failed: %w", label, err)
 		}
 		return nil
@@ -156,6 +181,39 @@ func ensureWovenPackagesAvailable(env []string, verbose bool) error {
 
 	if err := runProbe("re-probe woven deps", append([]string{"list", "-mod=mod"}, orchestrionWovenPackagePatterns...)...); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ensureGoRootCompatibility(goRootPath, goSdkPath string, verbose bool) error {
+	if goRootPath == "" || goSdkPath == "" {
+		return nil
+	}
+
+	srcPath := filepath.Join(goRootPath, "src")
+	if _, err := os.Stat(srcPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat GOROOT src %s: %w", srcPath, err)
+	}
+
+	sdkSrcPath := filepath.Join(goSdkPath, "src")
+	if _, err := os.Stat(sdkSrcPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat SDK src %s: %w", sdkSrcPath, err)
+	}
+
+	relTarget, err := filepath.Rel(goRootPath, sdkSrcPath)
+	if err != nil {
+		return fmt.Errorf("compute GOROOT src symlink from %s to %s: %w", goRootPath, sdkSrcPath, err)
+	}
+	if err := os.Symlink(relTarget, srcPath); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("create GOROOT src symlink %s -> %s: %w", srcPath, relTarget, err)
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: created GOROOT src compatibility symlink %s -> %s\n", srcPath, relTarget)
 	}
 	return nil
 }
@@ -441,8 +499,11 @@ func copyOrchFile(src, dst string) error {
 // instance. The caller must call cleanup() when done to terminate the server.
 // If orchestrionPath is empty or ORCHESTRION_JOBSERVER_URL is already set,
 // this returns nil (no server needed).
-// goSdkPath is the path to the Go SDK, used to set PATH and GOROOT for the server.
-func startOrchestrionJobserver(orchestrionPath, goSdkPath string, verbose bool) (*orchestrionJobserver, error) {
+// goSdkPath is the path to the Go SDK, used to set PATH for the server.
+// goRootPath is the GOROOT tree that should be exposed to `go list` / asm
+// resolution inside the jobserver. Under Bazel this is often the cloned stdlib
+// tree, not the SDK root.
+func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, verbose bool) (*orchestrionJobserver, error) {
 	if orchestrionPath == "" {
 		return nil, nil
 	}
@@ -481,17 +542,29 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath string, verbose bool) 
 		}
 		goBinPath := filepath.Join(absGoSdkPath, "bin")
 		cmd.Env = prependToPath(cmd.Env, goBinPath)
-		cmd.Env = setEnv(cmd.Env, "GOROOT", absGoSdkPath)
+		if goRootPath != "" {
+			if !filepath.IsAbs(goRootPath) {
+				if abs, err := filepath.Abs(goRootPath); err == nil {
+					goRootPath = abs
+				}
+			}
+			cmd.Env = setEnv(cmd.Env, "GOROOT", goRootPath)
+		} else {
+			cmd.Env = setEnv(cmd.Env, "GOROOT", absGoSdkPath)
+		}
 		// Prevent go from trying to download different toolchains
 		cmd.Env = setEnv(cmd.Env, "GOTOOLCHAIN", "local")
 		// Disable external package driver
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
 
 		if verbose {
-			fmt.Fprintf(os.Stderr, "DEBUG: Starting orchestrion jobserver path=%s cwd=%s PATH including %s, GOROOT=%s\n", orchestrionPath, mustGetwd(), goBinPath, absGoSdkPath)
+			fmt.Fprintf(os.Stderr, "DEBUG: Starting orchestrion jobserver path=%s cwd=%s PATH including %s, GOROOT=%s\n", orchestrionPath, mustGetwd(), goBinPath, getEnv(cmd.Env, "GOROOT"))
 		}
 	}
-	if err := ensureWovenPackagesAvailable(cmd.Env, verbose); err != nil {
+	if err := ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose); err != nil {
+		return nil, err
+	}
+	if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose); err != nil {
 		return nil, fmt.Errorf("warm woven dependencies before jobserver: %w", err)
 	}
 
@@ -559,7 +632,8 @@ func waitForURLFile(path string, timeout time.Duration) (string, error) {
 // in the environment if a jobserver is provided. If importPath is non-empty,
 // TOOLEXEC_IMPORTPATH is also set (required by orchestrion toolexec).
 // If goSdkPath is non-empty, the Go SDK's bin directory is prepended to PATH.
-func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver, importPath, goSdkPath string, verbose bool) error {
+// If goRootPath is non-empty, it is used as GOROOT for the command.
+func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver, importPath, goSdkPath, goRootPath string, verbose bool) error {
 	if goSdkPath != "" {
 		// Set PATH in the current process so that child processes inherit it
 		// This is needed because exec.Command looks up the path using the current process's PATH
@@ -567,7 +641,11 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		currentPath := os.Getenv("PATH")
 		newPath := goBinPath + string(os.PathListSeparator) + currentPath
 		os.Setenv("PATH", newPath)
-		os.Setenv("GOROOT", goSdkPath)
+		if goRootPath != "" {
+			os.Setenv("GOROOT", goRootPath)
+		} else {
+			os.Setenv("GOROOT", goSdkPath)
+		}
 	}
 
 	// Let cmd inherit the modified environment from the current process
@@ -578,6 +656,9 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	var err error
 	cmd.Env, err = ensureGoModuleCacheEnv(cmd.Env, verbose)
 	if err != nil {
+		return err
+	}
+	if err := ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose); err != nil {
 		return err
 	}
 
@@ -601,14 +682,16 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 			cmd.Env = setEnv(cmd.Env, "GOFLAGS", goFlags)
 		}
 		// Also ensure GOROOT is set correctly in cmd.Env
-		if goSdkPath != "" {
+		if goRootPath != "" {
+			cmd.Env = setEnv(cmd.Env, "GOROOT", goRootPath)
+		} else if goSdkPath != "" {
 			cmd.Env = setEnv(cmd.Env, "GOROOT", goSdkPath)
 		}
 	}
 	if importPath != "" {
-		cmd.Env = appendEnvIfNotExists(cmd.Env, toolexecImportPathEnvVar, importPath)
+		cmd.Env = setEnv(cmd.Env, toolexecImportPathEnvVar, importPath)
 	}
-	if err := ensureWovenPackagesAvailable(cmd.Env, verbose); err != nil {
+	if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose); err != nil {
 		return fmt.Errorf("ensure woven dependencies available: %w", err)
 	}
 	if verbose {

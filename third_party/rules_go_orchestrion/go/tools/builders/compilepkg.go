@@ -229,6 +229,12 @@ func compileArchive(
 			goSrcs = append(goSrcs, src.filename)
 		}
 	}
+	if orchestrion != "" && packagePath == "main" && len(goSrcs) == 1 && filepath.Base(goSrcs[0]) == "testmain.go" {
+		if goenv.verbose {
+			fmt.Fprintf(os.Stderr, "compilepkg: disabling orchestrion for synthetic testmain package %s\n", goSrcs[0])
+		}
+		orchestrion = ""
+	}
 	cSrcs := make([]string, len(srcs.cSrcs))
 	for i, src := range srcs.cSrcs {
 		cSrcs[i] = src.filename
@@ -462,7 +468,7 @@ func compileArchive(
 	}
 
 	// Compile the filtered .go files.
-	if err := compileGo(goenv, goSrcs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, orchestrion); err != nil {
+	if err := compileGo(goenv, goSrcs, embedLookupDirs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, orchestrion); err != nil {
 		return err
 	}
 
@@ -549,7 +555,7 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	return importcfgPath, nil
 }
 
-func compileGo(goenv *env, srcs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {
+func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {
 	sdkPath := abs(goenv.sdk)
 	if orchestrion != "" {
 		orchestrion = abs(orchestrion)
@@ -589,8 +595,11 @@ func compileGo(goenv *env, srcs []string, orchImportPath, packagePath, importcfg
 	if orchestrion != "" {
 		srcDirs := make([]string, 0, len(srcs))
 		seen := make(map[string]bool)
-		for _, src := range srcs {
-			dir := filepath.Dir(src)
+
+		addSrcDir := func(dir string) {
+			if dir == "" {
+				return
+			}
 			// Get absolute path to handle symlinks properly
 			if absDir, err := filepath.Abs(dir); err == nil {
 				// Also resolve symlinks to find the real source directory
@@ -605,6 +614,12 @@ func compileGo(goenv *env, srcs []string, orchImportPath, packagePath, importcfg
 				srcDirs = append(srcDirs, dir)
 			}
 		}
+		for _, lookupDir := range embedLookupDirs {
+			addSrcDir(lookupDir)
+		}
+		for _, src := range srcs {
+			addSrcDir(filepath.Dir(src))
+		}
 		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
 		if err != nil {
 			return fmt.Errorf("compilepkg: %w", err)
@@ -618,8 +633,13 @@ func compileGo(goenv *env, srcs []string, orchImportPath, packagePath, importcfg
 		defer cleanupGoMod()
 	}
 
-	// Start orchestrion jobserver if needed
-	jobserver, err := startOrchestrionJobserver(orchestrion, sdkPath, goenv.verbose)
+	// Start orchestrion jobserver if needed. Use the normalized GOROOT captured
+	// during flag parsing; do not recompute it after any orchestrion chdir.
+	goRootPath := goenv.goroot
+	if goRootPath == "" {
+		goRootPath = os.Getenv("GOROOT")
+	}
+	jobserver, err := startOrchestrionJobserver(orchestrion, sdkPath, goRootPath, goenv.verbose)
 	if err != nil {
 		return fmt.Errorf("compilepkg: failed to start orchestrion jobserver: %w", err)
 	}
