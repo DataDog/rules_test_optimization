@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -46,7 +47,15 @@ const (
 	// and sandboxed Orchestrion subprocesses, so woven dependency resolution can
 	// reuse downloaded modules across steps.
 	orchestrionSharedCacheDirName = "datadog-orchestrion-go-cache"
+
+	orchestrionLogLevelEnvVar = "ORCHESTRION_LOG_LEVEL"
 )
+
+var orchestrionWovenPackagePatterns = []string{
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	"github.com/DataDog/dd-trace-go/v2/profiler",
+	"github.com/DataDog/dd-trace-go/v2/instrumentation/env",
+}
 
 // ensureGoModuleCacheEnv provisions a writable Go cache/module cache for
 // orchestrion subprocesses. Some Bazel sandboxes do not provide GOPATH or
@@ -99,6 +108,55 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 	}
 
 	return env, nil
+}
+
+func ensureWovenPackagesAvailable(env []string, verbose bool) error {
+	goExe := filepath.Join(getEnv(env, "GOROOT"), "bin", "go")
+	if runtime.GOOS == "windows" {
+		goExe += ".exe"
+	}
+
+	if _, err := os.Stat(goExe); err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "orchestrion: skipping woven dependency warmup; go binary unavailable at %s: %v\n", goExe, err)
+		}
+		return nil
+	}
+
+	runProbe := func(label string, args ...string) error {
+		cmd := exec.Command(goExe, args...)
+		cmd.Env = env
+		cmd.Dir = mustGetwd()
+		out, err := cmd.CombinedOutput()
+		if verbose {
+			fmt.Fprintf(os.Stderr, "orchestrion: %s command=%q\n", label, append([]string{goExe}, args...))
+			if len(out) > 0 {
+				fmt.Fprintf(os.Stderr, "orchestrion: %s output:\n%s\n", label, string(out))
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("%s failed: %w", label, err)
+		}
+		return nil
+	}
+
+	if err := runProbe("probe woven deps", append([]string{"list", "-mod=mod"}, orchestrionWovenPackagePatterns...)...); err == nil {
+		return nil
+	} else if verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: initial woven dependency probe failed: %v\n", err)
+	}
+
+	if err := runProbe("download dd-trace-go", "mod", "download", "github.com/DataDog/dd-trace-go/v2"); err != nil && verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: dd-trace-go module download failed: %v\n", err)
+	}
+	if err := runProbe("download orchestrion all", "mod", "download", "github.com/DataDog/dd-trace-go/orchestrion/all/v2"); err != nil && verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: orchestrion all module download failed: %v\n", err)
+	}
+
+	if err := runProbe("re-probe woven deps", append([]string{"list", "-mod=mod"}, orchestrionWovenPackagePatterns...)...); err != nil {
+		return err
+	}
+	return nil
 }
 
 // orchestrionJobserver manages the lifecycle of an orchestrion jobserver process.
@@ -432,6 +490,9 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
 		// Prevent go from trying to download different toolchains
 		cmd.Env = setEnv(cmd.Env, "GOTOOLCHAIN", "local")
+		if getEnv(cmd.Env, orchestrionLogLevelEnvVar) == "" && getEnv(cmd.Env, "ORCHESTRION_DEBUG_TRACE") != "" {
+			cmd.Env = setEnv(cmd.Env, orchestrionLogLevelEnvVar, "TRACE")
+		}
 		// Also ensure GOROOT is set correctly in cmd.Env
 		if goSdkPath != "" {
 			cmd.Env = setEnv(cmd.Env, "GOROOT", goSdkPath)
@@ -439,6 +500,9 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	}
 	if importPath != "" {
 		cmd.Env = appendEnvIfNotExists(cmd.Env, toolexecImportPathEnvVar, importPath)
+	}
+	if err := ensureWovenPackagesAvailable(cmd.Env, verbose); err != nil {
+		return fmt.Errorf("ensure woven dependencies available: %w", err)
 	}
 	if verbose {
 		fmt.Fprintf(os.Stderr, "orchestrion: command cwd=%s path=%s importpath=%s GOROOT=%s GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOTOOLCHAIN=%s GOPACKAGESDRIVER=%s DD_ORCHESTRION_IS_GOMOD_VERSION=%s\n",
