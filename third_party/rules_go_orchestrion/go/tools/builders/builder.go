@@ -68,6 +68,8 @@ func main() {
 		action = nogoValidation
 	case "filterbuildid":
 		action = filterBuildID
+	case "orchestrionfilterbuildid":
+		action = orchestrionFilterBuildID
 	case "gentestmain":
 		action = genTestMain
 	case "link":

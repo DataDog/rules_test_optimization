@@ -96,6 +96,9 @@ func run(cfg config) error {
 	if err := runOrchestrionPin(cfg); err != nil {
 		return err
 	}
+	if err := ensureCIVisibilityOrchestrionImport(cfg); err != nil {
+		return err
+	}
 	if err := warmOrchestrionModuleCache(cfg); err != nil {
 		return err
 	}
@@ -248,6 +251,30 @@ func runOrchestrionPin(cfg config) error {
 	cmd.Env = orchestrionBootstrapEnv()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("run orchestrion pin in %s: %w", cfg.goModuleDir, err)
+	}
+	return nil
+}
+
+func ensureCIVisibilityOrchestrionImport(cfg config) error {
+	path := filepath.Join(cfg.goModuleDir, "orchestrion.tool.go")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read orchestrion.tool.go: %w", err)
+	}
+
+	const ciVisibilityImport = `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`
+	if strings.Contains(string(content), ciVisibilityImport) {
+		return nil
+	}
+
+	const v2Import = `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`
+	updated := strings.Replace(string(content), v2Import, v2Import+"\n\n\t"+ciVisibilityImport, 1)
+	if updated == string(content) {
+		return fmt.Errorf("patch orchestrion.tool.go: could not locate %q import", v2Import)
+	}
+
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("write orchestrion.tool.go: %w", err)
 	}
 	return nil
 }

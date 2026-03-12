@@ -506,6 +506,7 @@ def go_context(
     go_context_info = None
     go_config_info = None
     stdlib = None
+    orchestrion = None
 
     if go_context_data == None:
         if hasattr(attr, "_go_context_data"):
@@ -521,6 +522,14 @@ def go_context(
         go_config_info = go_context_data[GoConfigInfo]
         stdlib = go_context_data[GoStdLib]
         go_context_info = go_context_data[GoContextInfo]
+
+    if go_context_info and go_context_info.orchestrion:
+        orchestrion = go_context_info.orchestrion
+    elif getattr(attr, "_orchestrion_enabled", None) and getattr(attr, "_orchestrion_tool_binary", None):
+        if attr._orchestrion_enabled[BuildSettingInfo].value:
+            orchestrion_files = attr._orchestrion_tool_binary.files.to_list()
+            if orchestrion_files:
+                orchestrion = orchestrion_files[0]
 
     if getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
         cgo_context_info = cgo_context_data_impl(ctx)
@@ -653,7 +662,7 @@ def go_context(
         cgo_tools = cgo_tools,
         nogo = go_context_info.nogo if go_context_info else None,
         coverdata = go_context_info.coverdata if go_context_info else None,
-        orchestrion = go_context_info.orchestrion if go_context_info else None,
+        orchestrion = orchestrion,
         coverage_enabled = ctx.configuration.coverage_enabled,
         coverage_instrumented = ctx.coverage_instrumented(),
         export_stdlib = go_config_info.export_stdlib,

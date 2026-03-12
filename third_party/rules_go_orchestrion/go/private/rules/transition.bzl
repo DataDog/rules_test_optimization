@@ -212,6 +212,7 @@ _reset_transition_dict = dict(_common_reset_transition_dict, **{
 })
 
 _reset_transition_keys = sorted(_reset_transition_dict.keys())
+_ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
 
 _stdlib_keep_keys = sorted([
     "//go/config:msan",
@@ -283,8 +284,8 @@ def _go_stdlib_transition_impl(settings, _attr):
 
 go_stdlib_transition = transition(
     implementation = _go_stdlib_transition_impl,
-    inputs = _reset_transition_keys,
-    outputs = _reset_transition_keys + ["//command_line_option:collect_code_coverage"],
+    inputs = _reset_transition_keys + [_ORCHESTRION_ENABLED_SETTING],
+    outputs = _reset_transition_keys + [_ORCHESTRION_ENABLED_SETTING, "//command_line_option:collect_code_coverage"],
 )
 
 def _go_reset_target_impl(ctx):

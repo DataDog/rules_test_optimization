@@ -229,12 +229,6 @@ func compileArchive(
 			goSrcs = append(goSrcs, src.filename)
 		}
 	}
-	if orchestrion != "" && packagePath == "main" && len(goSrcs) == 1 && filepath.Base(goSrcs[0]) == "testmain.go" {
-		if goenv.verbose {
-			fmt.Fprintf(os.Stderr, "compilepkg: disabling orchestrion for synthetic testmain package %s\n", goSrcs[0])
-		}
-		orchestrion = ""
-	}
 	cSrcs := make([]string, len(srcs.cSrcs))
 	for i, src := range srcs.cSrcs {
 		cSrcs[i] = src.filename
@@ -626,6 +620,12 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPa
 		}
 		defer restoreOrchWorkDir()
 		orchImportPath = resolveOrchestrionImportPath(orchImportPath, goenv.verbose)
+		if isSyntheticTestmainCompile(packagePath, srcs) && !strings.HasSuffix(orchImportPath, ".test") {
+			orchImportPath += ".test"
+			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "compilepkg: synthetic testmain import path adjusted to %s\n", orchImportPath)
+			}
+		}
 		cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.verbose)
 		if err != nil {
 			return fmt.Errorf("compilepkg: %w", err)
@@ -679,4 +679,11 @@ func sanitizePathForIdentifier(path string) string {
 		}
 		return '_'
 	}, path)
+}
+
+func isSyntheticTestmainCompile(packagePath string, srcs []string) bool {
+	if packagePath != "main" || len(srcs) != 1 {
+		return false
+	}
+	return filepath.Base(srcs[0]) == "testmain.go"
 }

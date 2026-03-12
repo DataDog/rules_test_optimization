@@ -75,6 +75,11 @@ def _orchestrion_build_impl(ctx):
     if compile_flag_old not in compile_proxy_src:
         fail("Could not patch Orchestrion compile flags in %s" % compile_proxy_path)
     compile_proxy_src = compile_proxy_src.replace(compile_flag_old, compile_flag_new)
+    compile_nbt_old = """\tjobs, err := client.FromEnvironment(ctx, cmd.WorkDir)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n\tres, err := client.Request(ctx, jobs, nbt.StartRequest{ImportPath: importPath, BuildID: cmd.Flags.BuildID})\n"""
+    compile_nbt_new = """\tif cmd.Flags.BuildID == \"\" {\n\t\tzerolog.Ctx(ctx).Trace().Str(\"import-path\", importPath).Msg(\"Skipping never-build-twice request because build ID is empty\")\n\t\treturn cmd, nil\n\t}\n\n\tjobs, err := client.FromEnvironment(ctx, cmd.WorkDir)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n\tres, err := client.Request(ctx, jobs, nbt.StartRequest{ImportPath: importPath, BuildID: cmd.Flags.BuildID})\n"""
+    if compile_nbt_old not in compile_proxy_src:
+        fail("Could not patch Orchestrion compile NBT guard in %s" % compile_proxy_path)
+    compile_proxy_src = compile_proxy_src.replace(compile_nbt_old, compile_nbt_new, 1)
     attach_old = """\tif _, err := os.Stat(cmd.Flags.Output); errors.Is(err, os.ErrNotExist) {\n\t\t// Already failing, not doing anything...\n\t\treturn nil\n\t} else if err != nil {\n\t\treturn err\n\t}\n\n\torchestrionDir := filepath.Join(cmd.Flags.Output, \"..\", \"orchestrion\")\n"""
     attach_new = """\ttargetArchive := cmd.Flags.LinkObj\n\tif targetArchive == \"\" {\n\t\ttargetArchive = cmd.Flags.Output\n\t}\n\n\tif _, err := os.Stat(targetArchive); errors.Is(err, os.ErrNotExist) {\n\t\t// Already failing, not doing anything...\n\t\treturn nil\n\t} else if err != nil {\n\t\treturn err\n\t}\n\n\torchestrionDir := filepath.Join(targetArchive, \"..\", \"orchestrion\")\n"""
     if attach_old not in compile_proxy_src:
@@ -131,6 +136,124 @@ def _orchestrion_build_impl(ctx):
     if oncompile_main_old not in oncompile_main_src:
         fail("Could not patch Orchestrion oncompile-main resolver context in %s" % oncompile_main_path)
     ctx.file(oncompile_main_path, oncompile_main_src.replace(oncompile_main_old, oncompile_main_new, 1))
+
+    toolexec_cmd_path = "internal/cmd/toolexec.go"
+    toolexec_cmd_src = ctx.read(toolexec_cmd_path)
+    toolexec_cmd_old = """\t\tproxyCmd, err := proxy.ParseCommand(ctx, importPath, clictx.Args().Slice())\n\t\tif err != nil || proxyCmd == nil {\n\t\t\t// An error occurred, or we have been instructed to skip this command.\n\t\t\treturn err\n\t\t}\n\t\tdefer func() { proxyCmd.Close(ctx, resErr) }()\n\n\t\tif proxyCmd.Type() == proxy.CommandTypeOther {\n"""
+    toolexec_cmd_new = """\t\tproxyCmd, err := proxy.ParseCommand(ctx, importPath, clictx.Args().Slice())\n\t\tif os.Getenv(\"ORCHESTRION_DEBUG_TRACE\") == \"1\" && strings.Contains(importPath, \"testing\") {\n\t\t\tif err != nil {\n\t\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: toolexec parse importpath=%s err=%v args=%v\\n\", importPath, err, clictx.Args().Slice())\n\t\t\t} else if proxyCmd == nil {\n\t\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: toolexec parse importpath=%s proxyCmd=<nil> args=%v\\n\", importPath, clictx.Args().Slice())\n\t\t\t} else {\n\t\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: toolexec parse importpath=%s type=%s args=%v\\n\", importPath, proxyCmd.Type(), proxyCmd.Args())\n\t\t\t}\n\t\t}\n\t\tif err != nil || proxyCmd == nil {\n\t\t\t// An error occurred, or we have been instructed to skip this command.\n\t\t\treturn err\n\t\t}\n\t\tdefer func() { proxyCmd.Close(ctx, resErr) }()\n\n\t\tif proxyCmd.Type() == proxy.CommandTypeOther {\n"""
+    if toolexec_cmd_old not in toolexec_cmd_src:
+        fail("Could not patch Orchestrion toolexec parse logging in %s" % toolexec_cmd_path)
+    ctx.file(toolexec_cmd_path, toolexec_cmd_src.replace(toolexec_cmd_old, toolexec_cmd_new, 1))
+
+    goflags_path = "internal/goflags/flags.go"
+    goflags_src = ctx.read(goflags_path)
+    goflags_old = """\t\tif err != nil {\n\t\t\treturn flags, fmt.Errorf(\"failed to resolve argv0 (%q) of %d: %w\", args[0], p.Pid, err)\n\t\t}\n"""
+    goflags_new = """\t\tif err != nil {\n\t\t\tlog.Trace().Err(err).Int32(\"process.pid\", p.Pid).Strs(\"args\", args).Msg(\"Skipping parent process with unresolvable argv0\")\n\t\t\tcontinue\n\t\t}\n"""
+    if goflags_old not in goflags_src:
+        fail("Could not patch Orchestrion parent argv0 resolution in %s" % goflags_path)
+    goflags_src = goflags_src.replace(goflags_old, goflags_new, 1)
+    goflags_cmdline_old = """\t\targs, err = p.CmdlineSliceWithContext(ctx)\n\t\tif err != nil {\n\t\t\treturn flags, fmt.Errorf(\"failed to get command line of %d: %w\", p.Pid, err)\n\t\t}\n"""
+    goflags_cmdline_new = """\t\targs, err = p.CmdlineSliceWithContext(ctx)\n\t\tif err != nil {\n\t\t\tlog.Trace().Err(err).Int32(\"process.pid\", p.Pid).Msg(\"Skipping parent process with unreadable command line\")\n\t\t\tif p.Pid == 1 {\n\t\t\t\treturn flags, nil\n\t\t\t}\n\t\t\tcontinue\n\t\t}\n"""
+    if goflags_cmdline_old not in goflags_src:
+        fail("Could not patch Orchestrion parent cmdline resolution in %s" % goflags_path)
+    goflags_src = goflags_src.replace(goflags_cmdline_old, goflags_cmdline_new, 1)
+    goflags_parent_old = """\t\tp, err = p.ParentWithContext(ctx)\n\t\tif err != nil {\n\t\t\treturn flags, fmt.Errorf(\"failed to find parent process of %d: %w\", p.Pid, err)\n\t\t}\n"""
+    goflags_parent_new = """\t\tp, err = p.ParentWithContext(ctx)\n\t\tif err != nil {\n\t\t\tlog.Trace().Err(err).Int32(\"process.pid\", p.Pid).Msg(\"Stopping parent process walk\")\n\t\t\treturn flags, nil\n\t\t}\n"""
+    if goflags_parent_old not in goflags_src:
+        fail("Could not patch Orchestrion parent walk termination in %s" % goflags_path)
+    ctx.file(goflags_path, goflags_src.replace(goflags_parent_old, goflags_parent_new, 1))
+
+    inject_path = "internal/injector/aspect/advice/inject.go"
+    inject_src = ctx.read(inject_path)
+    inject_old = """func (a injectDeclarations) AddedImports() []string {\n\treturn append(a.Template.AddedImports(), a.Links...)\n}\n"""
+    inject_new = """func (a injectDeclarations) AddedImports() []string {\n\t// Link-only dependencies are not source imports. Treating them as imports\n\t// makes the package-level prefilter drop aspects for stdlib packages whose\n\t// importcfg cannot list Datadog helper archives ahead of weaving.\n\treturn a.Template.AddedImports()\n}\n"""
+    if inject_old not in inject_src:
+        fail("Could not patch Orchestrion inject-declarations imports in %s" % inject_path)
+    ctx.file(inject_path, inject_src.replace(inject_old, inject_new, 1))
+
+    injector_path = "internal/injector/injector.go"
+    injector_src = ctx.read(injector_path)
+    injector_imports_old = """\t\"errors\"\n\t\"fmt\"\n\t\"go/importer\"\n"""
+    injector_imports_new = """\t\"errors\"\n\t\"fmt\"\n\t\"go/importer\"\n\t\"os\"\n"""
+    if injector_imports_old not in injector_src:
+        fail("Could not patch Orchestrion injector imports in %s" % injector_path)
+    injector_src = injector_src.replace(injector_imports_old, injector_imports_new, 1)
+    injector_filter_old = """\tlog := zerolog.Ctx(ctx)\n\taspects = i.packageFilterAspects(aspects)\n\n\tfset := token.NewFileSet()\n"""
+    injector_filter_new = """\tlog := zerolog.Ctx(ctx)\n\taspects = i.packageFilterAspects(aspects)\n\tif os.Getenv(\"ORCHESTRION_DEBUG_TRACE\") == \"1\" && i.ImportPath == \"testing\" {\n\t\tids := make([]string, 0, len(aspects))\n\t\tfor _, a := range aspects {\n\t\t\tids = append(ids, a.ID)\n\t\t}\n\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: testing packageFilterAspects count=%d ids=%v\\n\", len(aspects), ids)\n\t}\n\n\tfset := token.NewFileSet()\n"""
+    if injector_filter_old not in injector_src:
+        fail("Could not patch Orchestrion injector filter logging in %s" % injector_path)
+    injector_src = injector_src.replace(injector_filter_old, injector_filter_new, 1)
+    injector_file_old = """\t\t\tres, err := i.injectFile(ctx, decorator, dstFile, typeInfo, parsedFile.Aspects)\n"""
+    injector_file_new = """\t\t\tif os.Getenv(\"ORCHESTRION_DEBUG_TRACE\") == \"1\" && i.ImportPath == \"testing\" {\n\t\t\t\tids := make([]string, 0, len(parsedFile.Aspects))\n\t\t\t\tfor _, a := range parsedFile.Aspects {\n\t\t\t\t\tids = append(ids, a.ID)\n\t\t\t\t}\n\t\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: testing file=%s aspect_count=%d ids=%v\\n\", parsedFile.Name, len(parsedFile.Aspects), ids)\n\t\t\t}\n\t\t\tres, err := i.injectFile(ctx, decorator, dstFile, typeInfo, parsedFile.Aspects)\n"""
+    if injector_file_old not in injector_src:
+        fail("Could not patch Orchestrion injector file logging in %s" % injector_path)
+    injector_src = injector_src.replace(injector_file_old, injector_file_new, 1)
+    injector_typecheck_old = """\ttypeInfo, err := i.typeCheck(ctx, fset, parsedFiles)\n\tif errors.Is(err, typeCheckingError{}) {\n\t\t// We don't want to fail here on type-checking errors... Instead do nothing and let the standard\n"""
+    injector_typecheck_new = """\ttypeInfo, err := i.typeCheck(ctx, fset, parsedFiles)\n\tif errors.Is(err, typeCheckingError{}) {\n\t\tif os.Getenv(\"ORCHESTRION_DEBUG_TRACE\") == \"1\" && i.ImportPath == \"testing\" {\n\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: testing typecheck error=%v\\n\", err)\n\t\t}\n\t\t// We don't want to fail here on type-checking errors... Instead do nothing and let the standard\n"""
+    if injector_typecheck_old not in injector_src:
+        fail("Could not patch Orchestrion injector typecheck logging in %s" % injector_path)
+    injector_src = injector_src.replace(injector_typecheck_old, injector_typecheck_new, 1)
+    injector_node_old = """func injectNode(ctx context.AdviceContext, aspects []*aspect.Aspect) (mod bool, err error) {\n\tfor _, inj := range aspects {\n\t\tif !inj.JoinPoint.Matches(ctx) {\n\t\t\tcontinue\n\t\t}\n\n\t\tfor idx, act := range inj.Advice {\n"""
+    injector_node_new = """func injectNode(ctx context.AdviceContext, aspects []*aspect.Aspect) (mod bool, err error) {\n\tfor _, inj := range aspects {\n\t\tif os.Getenv(\"ORCHESTRION_DEBUG_TRACE\") == \"1\" && ctx.ImportPath() == \"testing\" && (inj.ID == \"M.Run\" || inj.ID == \"T.Run\") {\n\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: gotesting candidate aspect=%s node=%T importpath=%s\\n\", inj.ID, ctx.Node(), ctx.ImportPath())\n\t\t}\n\t\tif !inj.JoinPoint.Matches(ctx) {\n\t\t\tcontinue\n\t\t}\n\t\tif os.Getenv(\"ORCHESTRION_DEBUG_TRACE\") == \"1\" && ctx.ImportPath() == \"testing\" && (inj.ID == \"M.Run\" || inj.ID == \"T.Run\") {\n\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: gotesting matched aspect=%s node=%T importpath=%s\\n\", inj.ID, ctx.Node(), ctx.ImportPath())\n\t\t}\n\n\t\tfor idx, act := range inj.Advice {\n"""
+    if injector_node_old not in injector_src:
+        fail("Could not patch Orchestrion injector node logging in %s" % injector_path)
+    injector_src = injector_src.replace(injector_node_old, injector_node_new, 1)
+    ctx.file(injector_path, injector_src)
+
+    oncompile_diag_path = "internal/toolexec/aspect/oncompile.go"
+    oncompile_diag_src = ctx.read(oncompile_diag_path)
+    oncompile_imports_old = """\t\"context\"\n\t\"fmt\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"slices\"\n\t\"strings\"\n"""
+    oncompile_imports_new = """\t\"context\"\n\t\"fmt\"\n\t\"io\"\n\t\"os\"\n\t\"os/exec\"\n\t\"path/filepath\"\n\t\"slices\"\n\t\"strings\"\n"""
+    if oncompile_imports_old not in oncompile_diag_src:
+        fail("Could not patch Orchestrion oncompile imports in %s" % oncompile_diag_path)
+    oncompile_diag_src = oncompile_diag_src.replace(oncompile_imports_old, oncompile_imports_new, 1)
+    oncompile_diag_old = """\tlog := zerolog.Ctx(ctx).With().Str(\"phase\", \"compile\").Str(\"import-path\", w.ImportPath).Logger()\n\tctx = log.WithContext(ctx)\n\n\timports, err := importcfg.ParseFile(ctx, cmd.Flags.ImportCfg)\n"""
+    oncompile_diag_new = """\tlog := zerolog.Ctx(ctx).With().Str(\"phase\", \"compile\").Str(\"import-path\", w.ImportPath).Logger()\n\tctx = log.WithContext(ctx)\n\tdebugCompile := os.Getenv(\"ORCHESTRION_DEBUG_TRACE\") == \"1\" && (w.ImportPath == \"testing\" || cmd.Flags.Package == \"testing\" || cmd.Flags.Package == \"main\")\n\tif debugCompile {\n\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: oncompile importpath=%s package=%s testmain=%t importcfg=%s files=%v\\n\", w.ImportPath, cmd.Flags.Package, cmd.TestMain(), cmd.Flags.ImportCfg, cmd.GoFiles())\n\t}\n\n\timports, err := importcfg.ParseFile(ctx, cmd.Flags.ImportCfg)\n"""
+    if oncompile_diag_old not in oncompile_diag_src:
+        fail("Could not patch Orchestrion oncompile diagnostics in %s" % oncompile_diag_path)
+    oncompile_diag_src = oncompile_diag_src.replace(oncompile_diag_old, oncompile_diag_new, 1)
+    oncompile_aspects_old = """\taspects := cfg.Aspects()\n\tspecialBehavior, isSpecial := FindBehaviorOverride(w.ImportPath)\n"""
+    oncompile_aspects_new = """\taspects := cfg.Aspects()\n\tif debugCompile {\n\t\tids := make([]string, 0, len(aspects))\n\t\tfor _, a := range aspects {\n\t\t\tids = append(ids, a.ID)\n\t\t}\n\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: loaded aspects importpath=%s count=%d ids=%v\\n\", w.ImportPath, len(aspects), ids)\n\t}\n\tspecialBehavior, isSpecial := FindBehaviorOverride(w.ImportPath)\n"""
+    if oncompile_aspects_old not in oncompile_diag_src:
+        fail("Could not patch Orchestrion oncompile aspect logging in %s" % oncompile_diag_path)
+    oncompile_diag_src = oncompile_diag_src.replace(oncompile_aspects_old, oncompile_aspects_new, 1)
+    oncompile_lookup_old = """\t\tLookup:     imports.Lookup,\n"""
+    oncompile_lookup_new = """\t\tLookup:     fallbackLookup(imports.Lookup, debugCompile),\n"""
+    if oncompile_lookup_old not in oncompile_diag_src:
+        fail("Could not patch Orchestrion oncompile lookup in %s" % oncompile_diag_path)
+    oncompile_diag_src = oncompile_diag_src.replace(oncompile_lookup_old, oncompile_lookup_new, 1)
+    oncompile_helper = """
+func fallbackLookup(primary func(string) (io.ReadCloser, error), debug bool) func(string) (io.ReadCloser, error) {
+\treturn func(path string) (io.ReadCloser, error) {
+\t\tif rc, err := primary(path); err == nil {
+\t\t\treturn rc, nil
+\t\t} else if strings.Contains(path, \".\") {
+\t\t\treturn nil, err
+\t\t}
+\t\tcmd := exec.Command(\"go\", \"list\", \"-export\", \"-find\", \"-f\", \"{{.Export}}\", path)
+\t\tcmd.Env = os.Environ()
+\t\tcmd.Env = append(cmd.Env, \"GO111MODULE=off\")
+\t\tout, err := cmd.CombinedOutput()
+\t\tif err != nil {
+\t\t\tif debug {
+\t\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: fallback go list failed importpath=%s err=%v out=%s\\n\", path, err, string(out))
+\t\t\t}
+\t\t\treturn nil, err
+\t\t}
+\t\texportFile := strings.TrimSpace(string(out))
+\t\tif debug {
+\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: fallback go list resolved importpath=%s export=%s\\n\", path, exportFile)
+\t\t}
+\t\treturn os.Open(exportFile)
+\t}
+}
+
+"""
+    oncompile_insert_after = """var OrchestrionDirPathElement = filepath.Join(\"orchestrion\", \"src\")\n\n"""
+    if oncompile_insert_after not in oncompile_diag_src:
+        fail("Could not patch Orchestrion oncompile helper insertion point in %s" % oncompile_diag_path)
+    oncompile_diag_src = oncompile_diag_src.replace(oncompile_insert_after, oncompile_insert_after + oncompile_helper, 1)
+    ctx.file(oncompile_diag_path, oncompile_diag_src)
     
     # Try to find go binary
     go_path = ctx.which("go")

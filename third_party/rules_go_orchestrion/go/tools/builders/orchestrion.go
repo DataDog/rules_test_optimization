@@ -50,6 +50,18 @@ const (
 	orchestrionSharedCacheDirName = "datadog-orchestrion-go-cache"
 
 	orchestrionLogLevelEnvVar = "ORCHESTRION_LOG_LEVEL"
+
+	syntheticOrchestrionGoMod = `module bazel_orchestrion_temp
+
+go 1.21
+
+require (
+	github.com/DataDog/orchestrion v1.5.0
+	gopkg.in/DataDog/dd-trace-go.v1 v1.74.8
+	github.com/DataDog/dd-trace-go/v2 v2.6.0
+	github.com/DataDog/dd-trace-go/orchestrion/all/v2 v2.6.0
+)
+`
 )
 
 var orchestrionWovenPackagePatterns = []string{
@@ -293,7 +305,7 @@ func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err erro
 		}
 
 		if !copiedGoMod {
-			content := []byte("module bazel_orchestrion_temp\n\ngo 1.21\n")
+			content := []byte(syntheticOrchestrionGoMod)
 			if err := os.WriteFile(goModFile, content, 0644); err != nil {
 				return nil, fmt.Errorf("creating temporary go.mod: %w", err)
 			}
@@ -366,9 +378,16 @@ func logOrchestrionTempModuleState() {
 		}
 	}
 	if data, err := os.ReadFile("go.mod"); err == nil {
-		fmt.Fprintf(os.Stderr, "orchestrion: temp go.mod has dd-trace-go/v2=%t orchestrion/all/v2=%t\n",
+		fmt.Fprintf(os.Stderr, "orchestrion: temp go.mod has dd-trace-go/v2=%t dd-trace-go.v1=%t orchestrion/all/v2=%t\n",
 			strings.Contains(string(data), "github.com/DataDog/dd-trace-go/v2"),
+			strings.Contains(string(data), "gopkg.in/DataDog/dd-trace-go.v1"),
 			strings.Contains(string(data), "github.com/DataDog/dd-trace-go/orchestrion/all/v2"))
+	}
+	if data, err := os.ReadFile("orchestrion.tool.go"); err == nil {
+		fmt.Fprintf(os.Stderr, "orchestrion: temp orchestrion.tool.go contents begin\n%s\norchestrion: temp orchestrion.tool.go contents end\n", string(data))
+	}
+	if data, err := os.ReadFile("orchestrion.yml"); err == nil {
+		fmt.Fprintf(os.Stderr, "orchestrion: temp orchestrion.yml contents begin\n%s\norchestrion: temp orchestrion.yml contents end\n", string(data))
 	}
 }
 
@@ -702,6 +721,23 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	}
 	if importPath != "" {
 		cmd.Env = setEnv(cmd.Env, toolexecImportPathEnvVar, importPath)
+	}
+	logLevel := strings.TrimSpace(getEnv(cmd.Env, orchestrionLogLevelEnvVar))
+	if logLevel == "" && getEnv(cmd.Env, "ORCHESTRION_DEBUG_TRACE") == "1" {
+		logLevel = "TRACE"
+		cmd.Env = setEnv(cmd.Env, orchestrionLogLevelEnvVar, logLevel)
+	}
+	if logLevel != "" && filepath.Base(cmd.Path) == "orchestrion_bin" {
+		hasLogLevel := false
+		for _, arg := range cmd.Args[1:] {
+			if strings.HasPrefix(arg, "--log-level=") {
+				hasLogLevel = true
+				break
+			}
+		}
+		if !hasLogLevel {
+			cmd.Args = append([]string{cmd.Args[0], "--log-level=" + logLevel}, cmd.Args[1:]...)
+		}
 	}
 	if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose); err != nil {
 		return fmt.Errorf("ensure woven dependencies available: %w", err)

@@ -140,7 +140,11 @@ func (e *env) goToolWithOrchestion(orchestrionPath, tool string, args ...string)
 	if orchestrionPath != "" {
 		// Prepend orchestrion toolexec to wrap the Go tool
 		orchestrionArgs := []string{orchestrionPath}
-		if logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL"); logLevel != "" {
+		logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
+		if logLevel == "" && os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
+			logLevel = "TRACE"
+		}
+		if logLevel != "" {
 			orchestrionArgs = append(orchestrionArgs, "--log-level="+logLevel)
 		}
 		orchestrionArgs = append(orchestrionArgs, "toolexec")
@@ -317,6 +321,14 @@ func absCCCompiler(envNameList []string, argList []string) error {
 func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
 	if verbose {
 		fmt.Fprintln(os.Stderr, formatCommand(cmd))
+	}
+	if verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
+		if cmd.Stdout == nil {
+			cmd.Stdout = os.Stdout
+		}
+		if cmd.Stderr == nil {
+			cmd.Stderr = os.Stderr
+		}
 	}
 	cleanup := passLongArgsInResponseFiles(cmd)
 	defer cleanup()

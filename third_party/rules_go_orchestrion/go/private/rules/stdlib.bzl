@@ -13,6 +13,10 @@
 # limitations under the License.
 
 load(
+    "@bazel_skylib//rules:common_settings.bzl",
+    "BuildSettingInfo",
+)
+load(
     "//go/private:common.bzl",
     "GO_TOOLCHAIN",
 )
@@ -44,6 +48,15 @@ stdlib = rule(
         "_go_config": attr.label(
             default = "//:go_config",
             providers = [GoConfigInfo],
+        ),
+        "_orchestrion_enabled": attr.label(
+            default = "//go/private/orchestrion:enabled",
+            providers = [BuildSettingInfo],
+        ),
+        "_orchestrion_tool_binary": attr.label(
+            default = "//go/private/orchestrion:tool_binary",
+            allow_files = True,
+            cfg = "exec",
         ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",

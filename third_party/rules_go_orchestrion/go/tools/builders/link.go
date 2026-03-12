@@ -34,6 +34,22 @@ var linkDebugPatterns = []string{
 	"github.com/DataDog/dd-trace-go/v2",
 }
 
+func dumpLinkDebugFile(prefix, packagePath string, payload []byte) {
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "" {
+		return
+	}
+	sanitized := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "@", "_").Replace(packagePath)
+	if sanitized == "" {
+		sanitized = "unknown"
+	}
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s-%d.txt", prefix, sanitized, os.Getpid()))
+	if err := os.WriteFile(path, payload, 0o644); err == nil {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: wrote %s\n", path)
+	} else {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: failed to write %s: %v\n", path, err)
+	}
+}
+
 func link(args []string) error {
 	// Parse arguments.
 	args, _, err := expandParamsFiles(args)
@@ -60,6 +76,9 @@ func link(args []string) error {
 	}
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
+	}
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+		fmt.Fprintf(os.Stderr, "link: parsed packagePath=%q main=%q out=%q toolArgs=%q\n", *packagePath, *main, *outFile, toolArgs)
 	}
 
 	// On Windows, take the absolute path of the output file and main file.
@@ -95,16 +114,6 @@ func link(args []string) error {
 		}
 	}
 
-	// Build an importcfg file.
-	importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
-	if err != nil {
-		return err
-	}
-	if !goenv.shouldPreserveWorkDir {
-		defer os.Remove(importcfgName)
-	}
-	debugImportcfgState("before-link", importcfgName)
-
 	orchImportPath := *packagePath
 	sdkPath := abs(goenv.sdk)
 	if *orchestrion != "" {
@@ -114,7 +123,6 @@ func link(args []string) error {
 
 	// generate any additional link options we need
 	goargs := goenv.goToolWithOrchestion(*orchestrion, "link")
-	goargs = append(goargs, "-importcfg", importcfgName)
 
 	parseXdef := func(xdef string) (pkg, name, value string, err error) {
 		eq := strings.IndexByte(xdef, '=')
@@ -167,21 +175,14 @@ func link(args []string) error {
 		return err
 	}
 	defer linkerCleanup()
-	// add in the unprocess pass through options
+	// Add the unprocessed pass-through options first. Positional inputs like the
+	// main archive must come last so orchestrion's link proxy can still parse
+	// later flags such as -importcfg.
 	goargs = append(goargs, toolArgs...)
-	goargs = append(goargs, *main)
 
 	clearGoRoot, err := onVersion(23)
 	if err != nil {
 		return err
-	}
-	if clearGoRoot {
-		// Explicitly set GOROOT to a dummy value when running linker.
-		// This ensures that the GOROOT written into the binary
-		// is constant and thus builds are reproducible.
-		oldroot := os.Getenv("GOROOT")
-		os.Setenv("GOROOT", "GOROOT")
-		defer os.Setenv("GOROOT", oldroot)
 	}
 
 	if *orchestrion != "" {
@@ -216,14 +217,34 @@ func link(args []string) error {
 			return fmt.Errorf("link: %w", err)
 		}
 		defer cleanupGoMod()
-		if orchImportPath == "main" || orchImportPath == "testmain" {
+		if orchImportPath == "main" {
 			orchImportPath = ""
 		}
 		orchImportPath = resolveOrchestrionImportPath(orchImportPath, goenv.verbose)
+		if strings.HasSuffix(*main, "~testmain.a") && !strings.HasSuffix(orchImportPath, ".test") {
+			orchImportPath += ".test"
+			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "link: synthetic test binary import path adjusted to %s\n", orchImportPath)
+			}
+		}
 		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
 			cwd, _ := os.Getwd()
 			fmt.Fprintf(os.Stderr, "link: orchestrion cwd=%s packagePath=%s resolved_importpath=%s main=%s out=%s\n", cwd, *packagePath, orchImportPath, *main, *outFile)
 		}
+		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
+		if err != nil {
+			return err
+		}
+		if !goenv.shouldPreserveWorkDir {
+			defer os.Remove(importcfgName)
+		}
+		debugImportcfgState("before-link", importcfgName)
+		dumpLinkDebugFile("orchestrion-link-args", *packagePath, []byte(strings.Join(goargs, "\n")+"\n"))
+		if data, err := os.ReadFile(importcfgName); err == nil {
+			dumpLinkDebugFile("orchestrion-link-importcfg", *packagePath, data)
+		}
+		goargs = append(goargs, "-importcfg", importcfgName)
+		goargs = append(goargs, *main)
 		goRootPath := goenv.goroot
 		if goRootPath == "" {
 			goRootPath = os.Getenv("GOROOT")
@@ -238,11 +259,30 @@ func link(args []string) error {
 			return err
 		}
 		debugImportcfgState("after-link-success", importcfgName)
-	} else if err := goenv.runCommand(goargs); err != nil {
+	} else {
+		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
+		if err != nil {
+			return err
+		}
+		if !goenv.shouldPreserveWorkDir {
+			defer os.Remove(importcfgName)
+		}
+		debugImportcfgState("before-link", importcfgName)
+		goargs = append(goargs, "-importcfg", importcfgName)
+		goargs = append(goargs, *main)
+		if clearGoRoot {
+			// Explicitly set GOROOT to a dummy value only after generating the
+			// importcfg file so stdlib entries retain their real archive paths.
+			oldroot := os.Getenv("GOROOT")
+			os.Setenv("GOROOT", "GOROOT")
+			defer os.Setenv("GOROOT", oldroot)
+		}
+		if err := goenv.runCommand(goargs); err != nil {
 		debugImportcfgState("after-link-error", importcfgName)
 		return err
 	}
-	debugImportcfgState("after-link-success", importcfgName)
+		debugImportcfgState("after-link-success", importcfgName)
+	}
 
 	if *buildmode == "c-archive" {
 		if err := stripArMetadata(*outFile); err != nil {
@@ -292,6 +332,11 @@ func debugImportcfgState(stage, path string) {
 	}
 	for _, line := range malformed {
 		fmt.Fprintf(os.Stderr, "orchestrion link debug: %s malformed %s\n", stage, line)
+	}
+
+	if dumpPath := os.Getenv("ORCHESTRION_DEBUG_IMPORTCFG_COPY"); dumpPath != "" {
+		_ = os.WriteFile(dumpPath, data, 0o644)
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: copied importcfg to %s\n", dumpPath)
 	}
 }
 

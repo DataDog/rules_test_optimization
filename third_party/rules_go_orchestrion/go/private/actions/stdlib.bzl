@@ -50,6 +50,8 @@ def emit_stdlib(go):
     return [go_info, stdlib]
 
 def _should_use_sdk_stdlib(go):
+    if go.orchestrion:
+        return False
     version = parse_version(go.sdk.version)
     if version and version[0] <= 1 and version[1] <= 19 and go.sdk.experiments:
         # The precompiled stdlib shipped with 1.19 or below doesn't have experiments
@@ -163,6 +165,21 @@ def _build_stdlib(go):
     if go.mode.pgoprofile:
         args.add("-pgoprofile", go.mode.pgoprofile)
         inputs_direct.append(go.mode.pgoprofile)
+
+    if go.orchestrion:
+        args.add("-orchestrion", go.orchestrion)
+        inputs_direct.append(go.orchestrion)
+        inputs_direct.append(sdk.go)
+        inputs_transitive.append(sdk.srcs)
+        if hasattr(go._ctx.files, "data"):
+            args.add_all(
+                go._ctx.files.data,
+                map_each = _dirname,
+                before_each = "-orchsrc",
+                uniquify = True,
+                expand_directories = False,
+            )
+            inputs_direct.extend(go._ctx.files.data)
 
     outputs = [pkg]
     go.actions.run(
