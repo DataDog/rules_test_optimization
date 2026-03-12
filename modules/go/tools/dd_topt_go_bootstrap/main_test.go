@@ -107,7 +107,6 @@ func TestEnsureCIVisibilityOrchestrionImport(t *testing.T) {
 
 import (
 	_ "github.com/DataDog/orchestrion" // integration
-	_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
 	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration
 )
 `
@@ -125,11 +124,11 @@ import (
 		t.Fatalf("read orchestrion.tool.go: %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`) {
-		t.Fatalf("expected ci visibility import in orchestrion.tool.go:\n%s", text)
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) {
+		t.Fatalf("expected v2 orchestrion import in orchestrion.tool.go:\n%s", text)
 	}
-	if strings.Count(text, `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`) != 1 {
-		t.Fatalf("expected ci visibility import to be added once:\n%s", text)
+	if strings.Count(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) != 1 {
+		t.Fatalf("expected v2 orchestrion import to be added once:\n%s", text)
 	}
 }
 
@@ -141,7 +140,6 @@ func TestEnsureCIVisibilityOrchestrionImportNoopWhenPresent(t *testing.T) {
 import (
 	_ "github.com/DataDog/orchestrion" // integration
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
-	_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration
 	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration
 )
 `
@@ -159,8 +157,8 @@ import (
 		t.Fatalf("read orchestrion.tool.go: %v", err)
 	}
 	text := string(content)
-	if strings.Count(text, `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`) != 1 {
-		t.Fatalf("expected ci visibility import to remain single:\n%s", text)
+	if strings.Count(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) != 1 {
+		t.Fatalf("expected v2 orchestrion import to remain single:\n%s", text)
 	}
 }
 
@@ -191,7 +189,40 @@ import (
 		t.Fatalf("read orchestrion.tool.go: %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`) {
-		t.Fatalf("expected ci visibility import in orchestrion.tool.go:\n%s", text)
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) {
+		t.Fatalf("expected v2 orchestrion import in orchestrion.tool.go:\n%s", text)
+	}
+}
+
+func TestEnsureCIVisibilityOrchestrionImportRemovesLegacyV1Import(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "orchestrion.tool.go")
+	original := `package tools
+
+import (
+	_ "github.com/DataDog/orchestrion" // integration
+	_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration
+	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration
+)
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("write orchestrion.tool.go: %v", err)
+	}
+
+	cfg := config{goModuleDir: dir}
+	if err := ensureCIVisibilityOrchestrionImport(cfg); err != nil {
+		t.Fatalf("ensureCIVisibilityOrchestrionImport error: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read orchestrion.tool.go: %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`) {
+		t.Fatalf("expected legacy v1 import to be removed:\n%s", text)
+	}
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) {
+		t.Fatalf("expected v2 orchestrion import after legacy cleanup:\n%s", text)
 	}
 }

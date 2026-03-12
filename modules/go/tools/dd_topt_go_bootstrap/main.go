@@ -263,29 +263,38 @@ func ensureCIVisibilityOrchestrionImport(cfg config) error {
 	}
 	text := string(content)
 
-	const ciVisibilityImport = `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`
-	if strings.Contains(text, ciVisibilityImport) {
-		return nil
-	}
+	const (
+		legacyCIVisibilityImport = `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`
+		v2OrchestrionImport      = `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`
+	)
 
-	const v2ImportPattern = `(?m)^(\s*_\s*"github\.com/DataDog/dd-trace-go/v2/orchestrion"(?:\s*//.*)?\s*)$`
-	if re := regexp.MustCompile(v2ImportPattern); re.MatchString(text) {
-		updated := re.ReplaceAllString(text, `${1}`+"\n\t"+ciVisibilityImport)
+	updated := strings.ReplaceAll(text, legacyCIVisibilityImport+"\n", "")
+	updated = strings.ReplaceAll(updated, legacyCIVisibilityImport, "")
+	updated = strings.ReplaceAll(updated, "\n\n\n", "\n\n")
+
+	if strings.Contains(updated, v2OrchestrionImport) {
+		if updated == text {
+			return nil
+		}
 		if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 			return fmt.Errorf("write orchestrion.tool.go: %w", err)
 		}
 		return nil
 	}
 
-	if strings.Contains(text, ")\n") {
-		updated := strings.Replace(text, ")\n", "\t"+ciVisibilityImport+"\n)\n", 1)
-		if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-			return fmt.Errorf("write orchestrion.tool.go: %w", path, err)
-		}
-		return nil
+	baseOrchestrionPattern := `(?m)^(\s*_\s*"github\.com/DataDog/orchestrion"(?:\s*//.*)?\s*)$`
+	if re := regexp.MustCompile(baseOrchestrionPattern); re.MatchString(updated) {
+		updated = re.ReplaceAllString(updated, `${1}`+"\n\t"+v2OrchestrionImport)
+	} else if strings.Contains(updated, ")\n") {
+		updated = strings.Replace(updated, ")\n", "\t"+v2OrchestrionImport+"\n)\n", 1)
+	} else {
+		return fmt.Errorf("patch orchestrion.tool.go: could not locate import block")
 	}
 
-	return fmt.Errorf("patch orchestrion.tool.go: could not locate import block")
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("write orchestrion.tool.go: %w", err)
+	}
+	return nil
 }
 
 func warmOrchestrionModuleCache(cfg config) error {
