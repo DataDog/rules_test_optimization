@@ -22,10 +22,18 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+var orchestrionInstrumentedStdlibPackages = []string{
+	"log",
+	"log/slog",
+	"net/http",
+	"testing",
+}
 
 type archive struct {
 	label, importPath, packagePath, file string
@@ -211,6 +219,102 @@ package with this path is linked.`,
 		return "", err
 	}
 	return filename, nil
+}
+
+func rewriteImportcfgForOrchestrionStdlib(importcfgPath string, goenv *env) error {
+	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" {
+		return nil
+	}
+
+	exports, err := resolveInstrumentedStdlibExports(goenv, orchestrionInstrumentedStdlibPackages)
+	if err != nil {
+		return err
+	}
+	if len(exports) == 0 {
+		return nil
+	}
+
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	replaced := 0
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "packagefile ") {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "packagefile ")
+		parts := strings.SplitN(rest, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
+			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
+			replaced++
+		}
+	}
+
+	if replaced == 0 {
+		return nil
+	}
+
+	updated := strings.Join(lines, "\n")
+	if err := os.WriteFile(importcfgPath, []byte(updated), 0o644); err != nil {
+		return err
+	}
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries in %s\n", replaced, importcfgPath)
+	}
+	return nil
+}
+
+func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string]string, error) {
+	if len(packages) == 0 {
+		return nil, nil
+	}
+
+	args := append(
+		goenv.goCmd(
+			"list",
+			"-mod=mod",
+			"-tags=tools",
+			"-export",
+			"-f",
+			"{{if .Export}}{{.ImportPath}}={{.Export}}{{end}}",
+		),
+		packages...,
+	)
+
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = goenv.goroot
+	cmd.Env = append([]string{}, os.Environ()...)
+	cmd.Env = setEnv(cmd.Env, "GOROOT", goenv.goroot)
+	cmd.Env = setEnv(cmd.Env, "GO111MODULE", "on")
+	cmd.Env = setEnv(cmd.Env, "GOWORK", "off")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("go list stdlib exports: %w\n%s", err, string(output))
+	}
+
+	exports := make(map[string]string, len(packages))
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+			continue
+		}
+		exports[parts[0]] = parts[1]
+	}
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: resolved stdlib exports %v\n", exports)
+	}
+	return exports, nil
 }
 
 type depsError struct {

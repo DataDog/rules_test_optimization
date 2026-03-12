@@ -238,6 +238,9 @@ func link(args []string) error {
 		if !goenv.shouldPreserveWorkDir {
 			defer os.Remove(importcfgName)
 		}
+		if err := rewriteImportcfgForOrchestrionStdlib(importcfgName, goenv); err != nil {
+			return fmt.Errorf("link: rewrite stdlib importcfg for orchestrion: %w", err)
+		}
 		debugImportcfgState("before-link", importcfgName)
 		dumpLinkDebugFile("orchestrion-link-args", *packagePath, []byte(strings.Join(goargs, "\n")+"\n"))
 		if data, err := os.ReadFile(importcfgName); err == nil {
