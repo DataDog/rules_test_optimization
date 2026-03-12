@@ -318,6 +318,7 @@ func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err erro
 
 	// Look for orchestrion.yml in source directories and copy it to cwd
 	// Also look for orchestrion.tool.go which may contain additional config imports
+	var copiedToolGo bool
 	for _, dir := range srcDirs {
 		ymlSrc := filepath.Join(dir, orchestrionYML)
 		if _, err := os.Stat(ymlSrc); err == nil {
@@ -347,11 +348,28 @@ func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err erro
 					return nil, fmt.Errorf("copying orchestrion.tool.go: %w", err)
 				}
 				filesToCleanup = append(filesToCleanup, orchestrionToolGo)
+				copiedToolGo = true
 				if verbose {
 					fmt.Fprintf(os.Stderr, "orchestrion: Copied orchestrion.tool.go to cwd\n")
 				}
 			}
 		}
+	}
+
+	if _, err := os.Stat(orchestrionToolGo); os.IsNotExist(err) {
+		if err := os.WriteFile(orchestrionToolGo, []byte(syntheticOrchestrionToolGo), 0o644); err != nil {
+			return nil, fmt.Errorf("creating temporary orchestrion.tool.go: %w", err)
+		}
+		filesToCleanup = append(filesToCleanup, orchestrionToolGo)
+		if verbose {
+			if copiedToolGo {
+				fmt.Fprintf(os.Stderr, "orchestrion: Recreated missing orchestrion.tool.go with synthetic fallback\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "orchestrion: Created temporary orchestrion.tool.go\n")
+			}
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("stat orchestrion.tool.go: %w", err)
 	}
 
 	if verbose {

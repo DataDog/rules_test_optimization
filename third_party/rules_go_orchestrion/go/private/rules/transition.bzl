@@ -173,26 +173,30 @@ def _request_nogo_transition(settings, _attr):
     """
     settings = dict(settings)
     settings["//go/private:request_nogo"] = True
+    settings["//go/private/orchestrion:enabled"] = settings.get("//go/private/orchestrion:enabled", False)
     return settings
 
 request_nogo_transition = transition(
     implementation = _request_nogo_transition,
-    inputs = [],
-    outputs = ["//go/private:request_nogo"],
+    inputs = ["//go/private/orchestrion:enabled"],
+    outputs = ["//go/private:request_nogo", "//go/private/orchestrion:enabled"],
 )
 
-def _non_request_nogo_transition(_settings, _attr):
+def _non_request_nogo_transition(settings, _attr):
     # This transition is used to make sure we only end up with 1 copy of coverdata,
     # even if a test links against it and is run in coverage mode.
     #
     # It is also used to make sure that we do not end up with multiple configurations
     # for CC toolchain dependencies when doing CGO.
-    return {"//go/private:request_nogo": False}
+    return {
+        "//go/private:request_nogo": False,
+        "//go/private/orchestrion:enabled": settings.get("//go/private/orchestrion:enabled", False),
+    }
 
 non_request_nogo_transition = transition(
     implementation = _non_request_nogo_transition,
-    inputs = [],
-    outputs = ["//go/private:request_nogo"],
+    inputs = ["//go/private/orchestrion:enabled"],
+    outputs = ["//go/private:request_nogo", "//go/private/orchestrion:enabled"],
 )
 
 _common_reset_transition_dict = dict({

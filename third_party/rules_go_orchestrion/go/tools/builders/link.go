@@ -32,6 +32,10 @@ import (
 
 var linkDebugPatterns = []string{
 	"github.com/DataDog/dd-trace-go/v2",
+	"packagefile log=",
+	"packagefile log/slog=",
+	"packagefile net/http=",
+	"packagefile testing=",
 }
 
 func dumpLinkDebugFile(prefix, packagePath string, payload []byte) {
@@ -238,10 +242,10 @@ func link(args []string) error {
 		if !goenv.shouldPreserveWorkDir {
 			defer os.Remove(importcfgName)
 		}
-		if err := rewriteImportcfgForOrchestrionStdlib(importcfgName, goenv); err != nil {
-			return fmt.Errorf("link: rewrite stdlib importcfg for orchestrion: %w", err)
-		}
-		debugImportcfgState("before-link", importcfgName)
+        if err := rewriteImportcfgForOrchestrionStdlib(importcfgName, goenv); err != nil {
+            return fmt.Errorf("link: rewrite stdlib importcfg for orchestrion: %w", err)
+        }
+        debugImportcfgState("before-link", importcfgName)
 		dumpLinkDebugFile("orchestrion-link-args", *packagePath, []byte(strings.Join(goargs, "\n")+"\n"))
 		if data, err := os.ReadFile(importcfgName); err == nil {
 			dumpLinkDebugFile("orchestrion-link-importcfg", *packagePath, data)

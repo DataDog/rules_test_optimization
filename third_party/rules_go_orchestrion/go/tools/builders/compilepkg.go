@@ -404,7 +404,7 @@ func compileArchive(
 		gcFlags = append(gcFlags, "-trimpath="+trimPath)
 	}
 
-	importcfgPath, err := checkImportsAndBuildCfg(goenv, orchImportPath, srcs, deps, packageListPath, recompileInternalDeps, compilingWithCgo, coverMode, workDir)
+	importcfgPath, err := checkImportsAndBuildCfg(goenv, orchImportPath, srcs, deps, packageListPath, recompileInternalDeps, compilingWithCgo, coverMode, workDir, orchestrion)
 	if err != nil {
 		return err
 	}
@@ -509,7 +509,7 @@ func compileArchive(
 	return nil
 }
 
-func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string) (string, error) {
+func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string, _ string) (string, error) {
 	// Check that the filtered sources don't import anything outside of
 	// the standard library and the direct dependencies.
 	imports, err := checkImports(srcs.goSrcs, deps, packageListPath, importPath, recompileInternalDeps)
@@ -546,7 +546,40 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	if err != nil {
 		return "", err
 	}
+	if err := rewriteImportcfgForOrchestrionStdlib(importcfgPath, goenv); err != nil {
+		return "", fmt.Errorf("compilepkg: rewrite stdlib importcfg for orchestrion: %w", err)
+	}
+	debugCompileImportcfgState(importPath, importcfgPath, imports)
 	return importcfgPath, nil
+}
+
+func debugCompileImportcfgState(importPath, importcfgPath string, imports map[string]*archive) {
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "" {
+		return
+	}
+
+	if importPath != "github.com/bazelbuild/rules_go/go/tools/coverdata" &&
+		importPath != "github.com/bazelbuild/rules_go/go/tools/bzltestutil" {
+		if _, ok := imports["testing"]; !ok {
+			return
+		}
+	}
+
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "compilepkg debug: importcfg read failed for %s: %v\n", importPath, err)
+		return
+	}
+
+	var interesting []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "packagefile testing=") ||
+			strings.HasPrefix(line, "packagefile runtime=") ||
+			strings.HasPrefix(line, "packagefile log=") {
+			interesting = append(interesting, line)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "compilepkg debug: importPath=%s importcfg=%s interesting=%q\n", importPath, importcfgPath, interesting)
 }
 
 func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {

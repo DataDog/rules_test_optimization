@@ -29,9 +29,6 @@ import (
 )
 
 var orchestrionInstrumentedStdlibPackages = []string{
-	"log",
-	"log/slog",
-	"net/http",
 	"testing",
 }
 
@@ -274,12 +271,42 @@ func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string
 	if len(packages) == 0 {
 		return nil, nil
 	}
+	exports := make(map[string]string, len(packages))
+	remaining := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if pkg == "testing" {
+			if archivePath, err := findWovenTestingArchive(goenv.goroot); err != nil {
+				return nil, err
+			} else if archivePath != "" {
+				exports[pkg] = archivePath
+				continue
+			}
+		}
+		remaining = append(remaining, pkg)
+	}
+	if len(remaining) == 0 {
+		return exports, nil
+	}
+	if info, err := os.Stat(goenv.goroot); err != nil || !info.IsDir() {
+		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipping stdlib export resolution, goroot unavailable: %s err=%v\n", goenv.goroot, err)
+		}
+		return nil, nil
+	}
+	if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, os.Getenv("ORCHESTRION_DEBUG_TRACE") != ""); err != nil {
+		return nil, err
+	}
+	gorootSrc := filepath.Join(goenv.goroot, "src")
+	if info, err := os.Stat(gorootSrc); err != nil || !info.IsDir() {
+		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipping stdlib export resolution, goroot/src unavailable: %s err=%v\n", gorootSrc, err)
+		}
+		return nil, nil
+	}
 
 	args := append(
 		goenv.goCmd(
 			"list",
-			"-mod=mod",
-			"-tags=tools",
 			"-export",
 			"-f",
 			"{{if .Export}}{{.ImportPath}}={{.Export}}{{end}}",
@@ -288,18 +315,33 @@ func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string
 	)
 
 	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Dir = goenv.goroot
+	cmd.Dir = gorootSrc
 	cmd.Env = append([]string{}, os.Environ()...)
 	cmd.Env = setEnv(cmd.Env, "GOROOT", goenv.goroot)
-	cmd.Env = setEnv(cmd.Env, "GO111MODULE", "on")
+	cmd.Env = setEnv(cmd.Env, "GO111MODULE", "off")
 	cmd.Env = setEnv(cmd.Env, "GOWORK", "off")
+	cachePath := getEnv(cmd.Env, "GOCACHE")
+	if cachePath == "" {
+		cachePath = filepath.Join(goenv.goroot, ".gocache")
+	}
+	cachePath = abs(cachePath)
+	if err := os.MkdirAll(cachePath, 0o755); err != nil {
+		return nil, fmt.Errorf("prepare stdlib export cache: %w", err)
+	}
+	cmd.Env = setEnv(cmd.Env, "GOCACHE", cachePath)
+	if getEnv(cmd.Env, "HOME") == "" {
+		homePath := filepath.Join(goenv.goroot, ".home")
+		if err := os.MkdirAll(homePath, 0o755); err != nil {
+			return nil, fmt.Errorf("prepare stdlib export home: %w", err)
+		}
+		cmd.Env = setEnv(cmd.Env, "HOME", homePath)
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("go list stdlib exports: %w\n%s", err, string(output))
 	}
 
-	exports := make(map[string]string, len(packages))
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -315,6 +357,41 @@ func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string
 		fmt.Fprintf(os.Stderr, "orchestrion link debug: resolved stdlib exports %v\n", exports)
 	}
 	return exports, nil
+}
+
+func findWovenTestingArchive(goroot string) (string, error) {
+	cacheRoot := filepath.Join(goroot, ".gocache")
+	info, err := os.Stat(cacheRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", nil
+	}
+	var match string
+	err = filepath.Walk(cacheRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		if bytes.Contains(data, []byte("instrumentTestingM")) ||
+			bytes.Contains(data, []byte("instrumentTestingTFunc")) ||
+			bytes.Contains(data, []byte("github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting")) {
+			match = path
+			return io.EOF
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return match, nil
 }
 
 type depsError struct {

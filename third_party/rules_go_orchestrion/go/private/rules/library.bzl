@@ -238,6 +238,14 @@ go_tool_library = rule(
         "_go_config": attr.label(default = "//:go_config"),
         "_cgo_context_data": attr.label(default = "//:cgo_context_data_proxy"),
         "_stdlib": attr.label(default = "//:stdlib"),
+        "_orchestrion_enabled": attr.label(
+            default = "//go/private/orchestrion:enabled",
+        ),
+        "_orchestrion_tool_binary": attr.label(
+            default = "//go/private/orchestrion:tool_binary",
+            allow_files = True,
+            cfg = "exec",
+        ),
     } | CGO_ATTRS,
     fragments = CGO_FRAGMENTS,
     toolchains = [GO_TOOLCHAIN] + CGO_TOOLCHAINS,

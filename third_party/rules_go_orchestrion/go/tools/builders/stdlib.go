@@ -30,7 +30,6 @@ const syntheticOrchestrionToolGo = `package tools
 import (
 	_ "github.com/DataDog/orchestrion"
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"
-	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2"
 )
 `
 

@@ -265,11 +265,26 @@ func ensureCIVisibilityOrchestrionImport(cfg config) error {
 
 	const (
 		legacyCIVisibilityImport = `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`
+		legacyCIVisibilityImportBare = `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility"`
 		v2OrchestrionImport      = `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`
+		v2AllImport              = `_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration`
+		v2AllImportBare          = `_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2"`
+		v2GotestingImport        = `_ "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting" // integration`
+		v2GotestingImportBare    = `_ "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting"`
 	)
 
 	updated := strings.ReplaceAll(text, legacyCIVisibilityImport+"\n", "")
 	updated = strings.ReplaceAll(updated, legacyCIVisibilityImport, "")
+	updated = strings.ReplaceAll(updated, legacyCIVisibilityImportBare+"\n", "")
+	updated = strings.ReplaceAll(updated, legacyCIVisibilityImportBare, "")
+	updated = strings.ReplaceAll(updated, v2AllImport+"\n", "")
+	updated = strings.ReplaceAll(updated, v2AllImport, "")
+	updated = strings.ReplaceAll(updated, v2AllImportBare+"\n", "")
+	updated = strings.ReplaceAll(updated, v2AllImportBare, "")
+	updated = strings.ReplaceAll(updated, v2GotestingImport+"\n", "")
+	updated = strings.ReplaceAll(updated, v2GotestingImport, "")
+	updated = strings.ReplaceAll(updated, v2GotestingImportBare+"\n", "")
+	updated = strings.ReplaceAll(updated, v2GotestingImportBare, "")
 	updated = strings.ReplaceAll(updated, "\n\n\n", "\n\n")
 
 	if strings.Contains(updated, v2OrchestrionImport) {
