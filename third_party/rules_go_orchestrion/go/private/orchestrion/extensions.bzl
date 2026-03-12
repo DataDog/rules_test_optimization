@@ -281,6 +281,7 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error), debug bool) fun
         timeout = 600,
         environment = {
             "GO111MODULE": "on",
+            "GOTOOLCHAIN": "go1.25.0+auto",
             "GOPROXY": "https://proxy.golang.org,direct",
             "GOMODCACHE": str(ctx.path(".gomodcache")),
             "GOCACHE": str(ctx.path(".gocache")),
