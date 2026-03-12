@@ -163,3 +163,35 @@ import (
 		t.Fatalf("expected ci visibility import to remain single:\n%s", text)
 	}
 }
+
+func TestEnsureCIVisibilityOrchestrionImportHandlesBlankLinesAroundV2Import(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "orchestrion.tool.go")
+	original := `package tools
+
+import (
+	_ "github.com/DataDog/orchestrion" // integration
+
+	_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
+
+	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration
+)
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("write orchestrion.tool.go: %v", err)
+	}
+
+	cfg := config{goModuleDir: dir}
+	if err := ensureCIVisibilityOrchestrionImport(cfg); err != nil {
+		t.Fatalf("ensureCIVisibilityOrchestrionImport error: %v", err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read orchestrion.tool.go: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`) {
+		t.Fatalf("expected ci visibility import in orchestrion.tool.go:\n%s", text)
+	}
+}

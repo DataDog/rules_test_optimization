@@ -261,22 +261,31 @@ func ensureCIVisibilityOrchestrionImport(cfg config) error {
 	if err != nil {
 		return fmt.Errorf("read orchestrion.tool.go: %w", err)
 	}
+	text := string(content)
 
 	const ciVisibilityImport = `_ "gopkg.in/DataDog/dd-trace-go.v1/civisibility" // integration`
-	if strings.Contains(string(content), ciVisibilityImport) {
+	if strings.Contains(text, ciVisibilityImport) {
 		return nil
 	}
 
-	const v2Import = `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`
-	updated := strings.Replace(string(content), v2Import, v2Import+"\n\n\t"+ciVisibilityImport, 1)
-	if updated == string(content) {
-		return fmt.Errorf("patch orchestrion.tool.go: could not locate %q import", v2Import)
+	const v2ImportPattern = `(?m)^(\s*_\s*"github\.com/DataDog/dd-trace-go/v2/orchestrion"(?:\s*//.*)?\s*)$`
+	if re := regexp.MustCompile(v2ImportPattern); re.MatchString(text) {
+		updated := re.ReplaceAllString(text, `${1}`+"\n\t"+ciVisibilityImport)
+		if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+			return fmt.Errorf("write orchestrion.tool.go: %w", err)
+		}
+		return nil
 	}
 
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-		return fmt.Errorf("write orchestrion.tool.go: %w", err)
+	if strings.Contains(text, ")\n") {
+		updated := strings.Replace(text, ")\n", "\t"+ciVisibilityImport+"\n)\n", 1)
+		if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+			return fmt.Errorf("write orchestrion.tool.go: %w", path, err)
+		}
+		return nil
 	}
-	return nil
+
+	return fmt.Errorf("patch orchestrion.tool.go: could not locate import block")
 }
 
 func warmOrchestrionModuleCache(cfg config) error {
