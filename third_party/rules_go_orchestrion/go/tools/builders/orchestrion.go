@@ -16,6 +16,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -57,7 +59,6 @@ go 1.21
 
 require (
 	github.com/DataDog/orchestrion v1.5.0
-	gopkg.in/DataDog/dd-trace-go.v1 v1.74.8
 	github.com/DataDog/dd-trace-go/v2 v2.6.0
 	github.com/DataDog/dd-trace-go/orchestrion/all/v2 v2.6.0
 )
@@ -97,11 +98,11 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 
 	goBuildCache := getEnv(env, "GOCACHE")
 	if goBuildCache == "" {
-		if userCacheDir, err := os.UserCacheDir(); err == nil && userCacheDir != "" {
-			goBuildCache = filepath.Join(userCacheDir, "go-build")
-		} else {
-			goBuildCache = filepath.Join(cacheRoot, "cache")
-		}
+		goBuildCache = filepath.Join(cacheRoot, "cache")
+	}
+	if goroot := strings.TrimSpace(getEnv(env, "GOROOT")); goroot != "" {
+		sum := sha256.Sum256([]byte(abs(goroot)))
+		goBuildCache = filepath.Join(cacheRoot, "cache", hex.EncodeToString(sum[:8]))
 	}
 
 	for _, dir := range []string{goModCache, goBuildCache} {
@@ -254,7 +255,7 @@ type orchestrionJobserver struct {
 // If srcDirs contains directories with orchestrion.yml, it copies them to the
 // current directory so orchestrion can find its configuration.
 // Returns a cleanup function that removes the temporary files we created.
-func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err error) {
+func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanup func(), err error) {
 	const goModFile = "go.mod"
 	const goSumFile = "go.sum"
 	const orchestrionYML = "orchestrion.yml"
@@ -376,11 +377,125 @@ func ensureGoModExists(srcDirs []string, verbose bool) (cleanup func(), err erro
 		logOrchestrionTempModuleState()
 	}
 
+	shouldPrepareSynthetic := false
+	for _, path := range filesToCleanup {
+		base := filepath.Base(path)
+		if base == goModFile || base == goSumFile || base == orchestrionToolGo {
+			shouldPrepareSynthetic = true
+			break
+		}
+	}
+	if shouldPrepareSynthetic {
+		if err := prepareSyntheticOrchestrionModule(goSdkPath, verbose); err != nil {
+			return nil, err
+		}
+	}
+
 	return func() {
 		for _, f := range filesToCleanup {
 			os.Remove(f)
 		}
 	}, nil
+}
+
+func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
+	goExe := ""
+	if goSdkPath != "" {
+		goExe = filepath.Join(goSdkPath, "bin", "go")
+		if runtime.GOOS == "windows" {
+			goExe += ".exe"
+		}
+	}
+	if goExe == "" {
+		var err error
+		goExe, err = exec.LookPath("go")
+		if err != nil {
+			gorootGo := filepath.Join(getEnv(os.Environ(), "GOROOT"), "bin", "go")
+			if runtime.GOOS == "windows" {
+				gorootGo += ".exe"
+			}
+			if _, statErr := os.Stat(gorootGo); statErr == nil {
+				goExe = gorootGo
+			}
+		}
+	}
+	if goExe == "" {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "orchestrion: skipping synthetic module preparation; go binary unavailable\n")
+		}
+		return nil
+	}
+
+		run := func(label string, args ...string) error {
+			cmd := exec.Command(goExe, args...)
+			env := append([]string{}, os.Environ()...)
+			normalizedEnv, envErr := ensureGoModuleCacheEnv(env, verbose)
+			if envErr != nil {
+				return fmt.Errorf("prepare synthetic module cache env: %w", envErr)
+			}
+			env = normalizedEnv
+			var replaced bool
+		for i, entry := range env {
+			if strings.HasPrefix(entry, "GO111MODULE=") {
+				env[i] = "GO111MODULE=on"
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			env = append(env, "GO111MODULE=on")
+		}
+		var foundProxy bool
+		var foundSumDB bool
+		for i, entry := range env {
+			switch {
+			case strings.HasPrefix(entry, "GOPROXY="):
+				foundProxy = true
+				if strings.TrimPrefix(entry, "GOPROXY=") == "" {
+					env[i] = "GOPROXY=https://proxy.golang.org,direct"
+				}
+			case strings.HasPrefix(entry, "GOSUMDB="):
+				foundSumDB = true
+				if strings.TrimPrefix(entry, "GOSUMDB=") == "" {
+					env[i] = "GOSUMDB=sum.golang.org"
+				}
+			}
+		}
+		if !foundProxy {
+			env = append(env, "GOPROXY=https://proxy.golang.org,direct")
+		}
+		if !foundSumDB {
+			env = append(env, "GOSUMDB=sum.golang.org")
+		}
+		cmd.Env = env
+		cmd.Dir = mustGetwd()
+		out, err := cmd.CombinedOutput()
+		if verbose {
+			fmt.Fprintf(os.Stderr, "orchestrion: %s command=%q\n", label, append([]string{goExe}, args...))
+			if len(out) > 0 {
+				fmt.Fprintf(os.Stderr, "orchestrion: %s output:\n%s\n", label, string(out))
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("%s failed: %w", label, err)
+		}
+		return nil
+	}
+
+	if err := run("download synthetic deps", "mod", "download",
+		"github.com/DataDog/orchestrion",
+		"github.com/DataDog/dd-trace-go/v2",
+		"github.com/DataDog/dd-trace-go/orchestrion/all/v2",
+	); err != nil {
+		return err
+	}
+	if err := run("load orchestrion tool imports", "list", "-mod=mod", "-tags=tools", "github.com/DataDog/dd-trace-go/v2/orchestrion"); err != nil {
+		return err
+	}
+	if err := run("tidy synthetic module", "mod", "tidy"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func logOrchestrionTempModuleState() {

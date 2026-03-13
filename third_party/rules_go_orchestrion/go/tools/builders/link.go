@@ -32,10 +32,33 @@ import (
 
 var linkDebugPatterns = []string{
 	"github.com/DataDog/dd-trace-go/v2",
+	"packagefile flag=",
+	"packagefile fmt=",
 	"packagefile log=",
 	"packagefile log/slog=",
 	"packagefile net/http=",
+	"packagefile os=",
+	"packagefile os/exec=",
+	"packagefile runtime=",
+	"packagefile vendor/golang.org/x/net/http/httpguts=",
 	"packagefile testing=",
+}
+
+var orchestrionLinkClosurePackages = []string{
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	"github.com/DataDog/dd-trace-go/v2/profiler",
+	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+}
+
+var orchestrionLinkStdlibRoots = []string{
+	"flag",
+	"log",
+	"log/slog",
+	"net/http",
+	"os",
+	"os/exec",
 }
 
 func dumpLinkDebugFile(prefix, packagePath string, payload []byte) {
@@ -52,6 +75,61 @@ func dumpLinkDebugFile(prefix, packagePath string, payload []byte) {
 	} else {
 		fmt.Fprintf(os.Stderr, "orchestrion link debug: failed to write %s: %v\n", path, err)
 	}
+}
+
+func dumpInterestingImportcfgLines(importcfgName, packagePath string) {
+	data, err := os.ReadFile(importcfgName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "link debug: failed to read importcfg %s: %v\n", importcfgName, err)
+		return
+	}
+	var interesting []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "packagefile runtime=") ||
+			strings.HasPrefix(line, "packagefile testing=") ||
+			strings.HasPrefix(line, "packagefile log=") ||
+			strings.HasPrefix(line, "packagefile flag=") ||
+			strings.HasPrefix(line, "packagefile fmt=") ||
+			strings.HasPrefix(line, "packagefile log/slog=") ||
+			strings.HasPrefix(line, "packagefile net/http=") {
+			interesting = append(interesting, line)
+		}
+	}
+	if len(interesting) == 0 {
+		fmt.Fprintf(os.Stderr, "link debug: no interesting importcfg lines for %s\n", packagePath)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "link debug: importcfg packagePath=%s interesting=%q\n", packagePath, interesting)
+}
+
+func collectOrchestrionLinkClosurePackages(archives []archive) []string {
+	seen := map[string]bool{
+		"testing":                  true,
+		"testing/internal/testdeps": true,
+	}
+	packages := []string{"testing", "testing/internal/testdeps"}
+	add := func(pkg string) {
+		pkg = strings.TrimSpace(pkg)
+		pkg = strings.TrimPrefix(pkg, "+initfirst/")
+		if pkg == "" || seen[pkg] {
+			return
+		}
+		if strings.HasPrefix(pkg, "github.com/bazelbuild/rules_go/") {
+			return
+		}
+		if !strings.Contains(pkg, ".") {
+			return
+		}
+		seen[pkg] = true
+		packages = append(packages, pkg)
+	}
+	for _, archive := range archives {
+		add(archive.packagePath)
+	}
+	for _, pkg := range orchestrionLinkClosurePackages {
+		add(pkg)
+	}
+	return packages
 }
 
 func link(args []string) error {
@@ -216,7 +294,7 @@ func link(args []string) error {
 			return fmt.Errorf("link: %w", err)
 		}
 		defer restoreOrchWorkDir()
-		cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.verbose)
+		cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose)
 		if err != nil {
 			return fmt.Errorf("link: %w", err)
 		}
@@ -242,10 +320,12 @@ func link(args []string) error {
 		if !goenv.shouldPreserveWorkDir {
 			defer os.Remove(importcfgName)
 		}
-        if err := rewriteImportcfgForOrchestrionStdlib(importcfgName, goenv); err != nil {
-            return fmt.Errorf("link: rewrite stdlib importcfg for orchestrion: %w", err)
-        }
-        debugImportcfgState("before-link", importcfgName)
+		closurePackages := collectOrchestrionLinkClosurePackages(archives)
+		if err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages); err != nil {
+			return fmt.Errorf("link: rewrite importcfg from cache stdlib closures: %w", err)
+		}
+		dumpInterestingImportcfgLines(importcfgName, *packagePath)
+		debugImportcfgState("before-link", importcfgName)
 		dumpLinkDebugFile("orchestrion-link-args", *packagePath, []byte(strings.Join(goargs, "\n")+"\n"))
 		if data, err := os.ReadFile(importcfgName); err == nil {
 			dumpLinkDebugFile("orchestrion-link-importcfg", *packagePath, data)

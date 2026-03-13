@@ -107,11 +107,13 @@ def _orchestrion_build_impl(ctx):
 
     aspect_resolve_path = "internal/toolexec/aspect/resolve.go"
     aspect_resolve_src = ctx.read(aspect_resolve_path)
+    aspect_resolve_request_old = """\tarchives, err := client.Request(\n\t\tctx,\n\t\tconn,\n\t\treq,\n\t)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n\t// Check for missing archives...\n"""
     aspect_resolve_old = """\tif !found {\n\t\treturn nil, fmt.Errorf(\"resolution did not include requested package %q\", importPath)\n\t}\n"""
     aspect_resolve_new = """\tif !found {\n\t\tkeys := make([]string, 0, len(archives))\n\t\tfor ip := range archives {\n\t\t\tkeys = append(keys, ip)\n\t\t}\n\t\tfmt.Fprintf(os.Stderr, \"orchestrion: resolvePackageFiles missing=%s returned=%v\\n\", importPath, keys)\n\t\treturn nil, fmt.Errorf(\"resolution did not include requested package %q\", importPath)\n\t}\n"""
     if aspect_resolve_old not in aspect_resolve_src:
         fail("Could not patch Orchestrion aspect resolver in %s" % aspect_resolve_path)
-    ctx.file(aspect_resolve_path, aspect_resolve_src.replace(aspect_resolve_old, aspect_resolve_new, 1))
+    aspect_resolve_src = aspect_resolve_src.replace(aspect_resolve_old, aspect_resolve_new, 1)
+    ctx.file(aspect_resolve_path, aspect_resolve_src)
 
     oncompile_path = "internal/toolexec/aspect/oncompile.go"
     oncompile_src = ctx.read(oncompile_path)
@@ -224,28 +226,48 @@ def _orchestrion_build_impl(ctx):
     oncompile_diag_src = oncompile_diag_src.replace(oncompile_lookup_old, oncompile_lookup_new, 1)
     oncompile_helper = """
 func fallbackLookup(primary func(string) (io.ReadCloser, error), debug bool) func(string) (io.ReadCloser, error) {
-\treturn func(path string) (io.ReadCloser, error) {
-\t\tif rc, err := primary(path); err == nil {
-\t\t\treturn rc, nil
-\t\t} else if strings.Contains(path, \".\") {
-\t\t\treturn nil, err
-\t\t}
-\t\tcmd := exec.Command(\"go\", \"list\", \"-export\", \"-find\", \"-f\", \"{{.Export}}\", path)
-\t\tcmd.Env = os.Environ()
-\t\tcmd.Env = append(cmd.Env, \"GO111MODULE=off\")
-\t\tout, err := cmd.CombinedOutput()
-\t\tif err != nil {
-\t\t\tif debug {
-\t\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: fallback go list failed importpath=%s err=%v out=%s\\n\", path, err, string(out))
-\t\t\t}
-\t\t\treturn nil, err
-\t\t}
-\t\texportFile := strings.TrimSpace(string(out))
-\t\tif debug {
-\t\t\tfmt.Fprintf(os.Stderr, \"orchestrion debug: fallback go list resolved importpath=%s export=%s\\n\", path, exportFile)
-\t\t}
-\t\treturn os.Open(exportFile)
-\t}
+	return func(path string) (io.ReadCloser, error) {
+		if goroot := strings.TrimSpace(os.Getenv("GOROOT")); goroot != "" && !strings.Contains(path, ".") {
+			installSuffix := strings.TrimSpace(os.Getenv("GOOS")) + "_" + strings.TrimSpace(os.Getenv("GOARCH"))
+			if installSuffix != "_" {
+				pkgArchive := filepath.Join(goroot, "pkg", installSuffix, filepath.FromSlash(path)+".a")
+				if _, statErr := os.Stat(pkgArchive); statErr == nil {
+					if debug {
+						fmt.Fprintln(os.Stderr, fmt.Sprintf("orchestrion debug: stdlib pkg archive forced importpath=%s export=%s", path, pkgArchive))
+					}
+					return os.Open(pkgArchive)
+				}
+			}
+		}
+		if rc, err := primary(path); err == nil {
+			if debug {
+				fmt.Fprintln(os.Stderr, fmt.Sprintf("orchestrion debug: primary archive resolved importpath=%s", path))
+			}
+			return rc, nil
+		} else if strings.Contains(path, ".") {
+			if debug {
+				fmt.Fprintln(os.Stderr, fmt.Sprintf("orchestrion debug: primary archive failed importpath=%s err=%v", path, err))
+			}
+			return nil, err
+		} else if debug {
+			fmt.Fprintln(os.Stderr, fmt.Sprintf("orchestrion debug: primary archive failed importpath=%s err=%v", path, err))
+		}
+		cmd := exec.Command("go", "list", "-export", "-find", "-f", "{{.Export}}", path)
+		cmd.Env = os.Environ()
+		cmd.Env = append(cmd.Env, "GO111MODULE=off")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			if debug {
+				fmt.Fprintln(os.Stderr, fmt.Sprintf("orchestrion debug: fallback go list failed importpath=%s err=%v out=%s", path, err, string(out)))
+			}
+			return nil, err
+		}
+		exportFile := strings.TrimSpace(string(out))
+		if debug {
+			fmt.Fprintln(os.Stderr, fmt.Sprintf("orchestrion debug: fallback go list resolved importpath=%s export=%s", path, exportFile))
+		}
+		return os.Open(exportFile)
+	}
 }
 
 """

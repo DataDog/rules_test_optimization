@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"go/build"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,7 @@ const syntheticOrchestrionToolGo = `package tools
 
 import (
 	_ "github.com/DataDog/orchestrion"
+	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2"
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"
 )
 `
@@ -172,7 +174,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer restoreOrchWorkDir()
-		cleanupGoMod, err := ensureGoModExists(orchestrionSrcDirs, goenv.verbose)
+		cleanupGoMod, err := ensureGoModExists(orchestrionSrcDirs, goenv.sdk, goenv.verbose)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
@@ -329,12 +331,122 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		if err := goenv.runCommandWithJobserver(installArgs, jobserver, ""); err != nil {
 			return err
 		}
+		if err := persistOrchestrionStdlibExports(goenv, append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRoots...), goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != ""); err != nil {
+			return fmt.Errorf("stdlib: persist orchestrion stdlib exports: %w", err)
+		}
 		return nil
 	}
 	if err := goenv.runCommand(installArgs); err != nil {
 		return err
 	}
 	return nil
+}
+
+func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool) error {
+	root := orchestrionStdlibExportRoot(goenv)
+	if root == "" {
+		return nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	pkgRoot := filepath.Join(abs(goenv.goroot), "pkg", goenv.installSuffix)
+	exports := make(map[string]string)
+	if err := filepath.Walk(pkgRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if filepath.Clean(path) == filepath.Clean(root) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".a" {
+			return nil
+		}
+		rel, err := filepath.Rel(pkgRoot, path)
+		if err != nil {
+			return err
+		}
+		pkg := filepath.ToSlash(strings.TrimSuffix(rel, ".a"))
+		exports[pkg] = path
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(exports) == 0 {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "stdlib: no stdlib archives found under %s for persistence\n", pkgRoot)
+		}
+		return nil
+	}
+	keys := make([]string, 0, len(exports))
+	for pkg := range exports {
+		keys = append(keys, pkg)
+	}
+	sort.Strings(keys)
+	var manifest strings.Builder
+	for _, pkg := range keys {
+		src := exports[pkg]
+		relDst := filepath.FromSlash(pkg) + ".a"
+		dst := filepath.Join(root, relDst)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := copyArchiveFile(src, dst); err != nil {
+			return fmt.Errorf("copy %s -> %s: %w", src, dst, err)
+		}
+		manifest.WriteString(pkg)
+		manifest.WriteString("=")
+		manifest.WriteString(relDst)
+		manifest.WriteString("\n")
+		if verbose {
+			fmt.Fprintf(os.Stderr, "stdlib: persisted orchestrion export %s -> %s (manifest=%s)\n", pkg, dst, relDst)
+		}
+	}
+	manifestPath := orchestrionStdlibExportManifestPath(goenv)
+	if manifestPath == "" {
+		return nil
+	}
+	if err := os.WriteFile(manifestPath, []byte(manifest.String()), 0o644); err != nil {
+		return err
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "stdlib: wrote orchestrion export manifest %s\n", manifestPath)
+	}
+	for _, pkg := range keys {
+		relDst := filepath.FromSlash(pkg) + ".a"
+		src := filepath.Join(root, relDst)
+		dst := filepath.Join(pkgRoot, relDst)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := copyArchiveFile(src, dst); err != nil {
+			return fmt.Errorf("sync persisted stdlib archive %s -> %s: %w", src, dst, err)
+		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "stdlib: synced persisted orchestrion export %s -> %s\n", src, dst)
+		}
+	}
+	return nil
+}
+
+func copyArchiveFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func ensureSyntheticOrchestrionToolGo(verbose bool) (func(), error) {

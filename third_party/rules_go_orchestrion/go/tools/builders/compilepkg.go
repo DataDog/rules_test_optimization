@@ -509,6 +509,10 @@ func compileArchive(
 	return nil
 }
 
+func shouldSkipOrchestrionForImportPath(importPath string) bool {
+	return strings.HasPrefix(importPath, "github.com/bazelbuild/rules_go/go/tools/")
+}
+
 func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string, _ string) (string, error) {
 	// Check that the filtered sources don't import anything outside of
 	// the standard library and the direct dependencies.
@@ -546,20 +550,31 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	if err != nil {
 		return "", err
 	}
-	if err := rewriteImportcfgForOrchestrionStdlib(importcfgPath, goenv); err != nil {
-		return "", fmt.Errorf("compilepkg: rewrite stdlib importcfg for orchestrion: %w", err)
+		if shouldSkipOrchestrionForImportPath(importPath) {
+			if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv); err != nil {
+				return "", fmt.Errorf("compilepkg: rewrite importcfg from helper package stdlib entries: %w", err)
+			}
+		} else {
+		if err := rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath, goenv); err != nil {
+			return "", fmt.Errorf("compilepkg: rewrite importcfg from cache stdlib exports: %w", err)
+		}
 	}
 	debugCompileImportcfgState(importPath, importcfgPath, imports)
 	return importcfgPath, nil
 }
 
 func debugCompileImportcfgState(importPath, importcfgPath string, imports map[string]*archive) {
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "" {
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "" &&
+		importPath != "hello_test__raw_go_test" &&
+		importPath != "hello_test__raw_go_test_test" {
 		return
 	}
 
-	if importPath != "github.com/bazelbuild/rules_go/go/tools/coverdata" &&
-		importPath != "github.com/bazelbuild/rules_go/go/tools/bzltestutil" {
+	if importPath != "hello_test__raw_go_test" &&
+		importPath != "hello_test__raw_go_test_test" &&
+		importPath != "github.com/bazelbuild/rules_go/go/tools/coverdata" &&
+		importPath != "github.com/bazelbuild/rules_go/go/tools/bzltestutil" &&
+		importPath != "example.com/rto-tests-go-project" {
 		if _, ok := imports["testing"]; !ok {
 			return
 		}
@@ -575,7 +590,11 @@ func debugCompileImportcfgState(importPath, importcfgPath string, imports map[st
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "packagefile testing=") ||
 			strings.HasPrefix(line, "packagefile runtime=") ||
-			strings.HasPrefix(line, "packagefile log=") {
+			strings.HasPrefix(line, "packagefile os=") ||
+			strings.HasPrefix(line, "packagefile os/exec=") ||
+			strings.HasPrefix(line, "packagefile log=") ||
+			strings.HasPrefix(line, "packagefile flag=") ||
+			strings.HasPrefix(line, "packagefile fmt=") {
 			interesting = append(interesting, line)
 		}
 	}
@@ -584,6 +603,12 @@ func debugCompileImportcfgState(importPath, importcfgPath string, imports map[st
 
 func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) error {
 	sdkPath := abs(goenv.sdk)
+	if shouldSkipOrchestrionForImportPath(orchImportPath) {
+		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "compilepkg: disabling orchestrion for rules_go helper package %s\n", orchImportPath)
+		}
+		orchestrion = ""
+	}
 	if orchestrion != "" {
 		orchestrion = abs(orchestrion)
 		goenv.sdk = sdkPath
@@ -659,11 +684,16 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPa
 				fmt.Fprintf(os.Stderr, "compilepkg: synthetic testmain import path adjusted to %s\n", orchImportPath)
 			}
 		}
-		cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.verbose)
+		cleanupGoMod, err := ensureGoModExists(srcDirs, sdkPath, goenv.verbose)
 		if err != nil {
 			return fmt.Errorf("compilepkg: %w", err)
 		}
 		defer cleanupGoMod()
+		if isSyntheticTestmainCompile(packagePath, srcs) ||
+			strings.Contains(orchImportPath, "bzltestutil") ||
+			strings.Contains(orchImportPath, "go-project") {
+			debugCompileImportcfgState(orchImportPath, importcfgPath, nil)
+		}
 	}
 
 	// Start orchestrion jobserver if needed. Use the normalized GOROOT captured

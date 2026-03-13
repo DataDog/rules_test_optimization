@@ -277,15 +277,15 @@ func ensureCIVisibilityOrchestrionImport(cfg config) error {
 	updated = strings.ReplaceAll(updated, legacyCIVisibilityImport, "")
 	updated = strings.ReplaceAll(updated, legacyCIVisibilityImportBare+"\n", "")
 	updated = strings.ReplaceAll(updated, legacyCIVisibilityImportBare, "")
-	updated = strings.ReplaceAll(updated, v2AllImport+"\n", "")
-	updated = strings.ReplaceAll(updated, v2AllImport, "")
-	updated = strings.ReplaceAll(updated, v2AllImportBare+"\n", "")
-	updated = strings.ReplaceAll(updated, v2AllImportBare, "")
 	updated = strings.ReplaceAll(updated, v2GotestingImport+"\n", "")
 	updated = strings.ReplaceAll(updated, v2GotestingImport, "")
 	updated = strings.ReplaceAll(updated, v2GotestingImportBare+"\n", "")
 	updated = strings.ReplaceAll(updated, v2GotestingImportBare, "")
 	updated = strings.ReplaceAll(updated, "\n\n\n", "\n\n")
+
+	if !strings.Contains(updated, v2AllImport) && strings.Contains(updated, v2AllImportBare) {
+		updated = strings.ReplaceAll(updated, v2AllImportBare, v2AllImport)
+	}
 
 	if strings.Contains(updated, v2OrchestrionImport) {
 		if updated == text {

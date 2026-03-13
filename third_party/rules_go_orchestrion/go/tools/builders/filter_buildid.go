@@ -146,6 +146,23 @@ func orchestrionFilterBuildID(args []string) error {
 		line := "orchestrionfilterbuildid: testing-related compile TOOLEXEC_IMPORTPATH=" + os.Getenv("TOOLEXEC_IMPORTPATH") + " args=" + strings.Join(newArgs, " ")
 		_, _ = os.Stderr.WriteString(line + "\n")
 		appendOrchestrionFilterLog(line)
+		if importcfg := importcfgFromArgs(newArgs); importcfg != "" {
+			if data, err := os.ReadFile(importcfg); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					if strings.HasPrefix(line, "packagefile runtime=") ||
+						strings.HasPrefix(line, "packagefile testing=") ||
+						strings.HasPrefix(line, "packagefile os=") ||
+						strings.HasPrefix(line, "packagefile os/exec=") ||
+						strings.HasPrefix(line, "packagefile flag=") ||
+						strings.HasPrefix(line, "packagefile fmt=") {
+						_, _ = os.Stderr.WriteString("orchestrionfilterbuildid: testing importcfg " + line + "\n")
+						appendOrchestrionFilterLog("testing importcfg " + line)
+					}
+				}
+			} else {
+				_, _ = os.Stderr.WriteString("orchestrionfilterbuildid: failed to read testing importcfg " + importcfg + ": " + err.Error() + "\n")
+			}
+		}
 	}
 	orchestrionArgs := []string{orchestrion}
 	logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
@@ -167,6 +184,15 @@ func orchestrionFilterBuildID(args []string) error {
 func packageFromCompileArgs(args []string) string {
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-p" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+func importcfgFromArgs(args []string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-importcfg" && i+1 < len(args) {
 			return args[i+1]
 		}
 	}
