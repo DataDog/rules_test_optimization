@@ -69,7 +69,7 @@ def _build_stdlib_list_json(go):
     sdk = go.sdk
 
     out = go.declare_file(go, "stdlib.pkg.json")
-    cache_dir = go.declare_directory(go, "gocache")
+    cache_dir = go.declare_directory(go, "list_gocache")
     args = go.builder_args(go, "stdliblist")
     args.add("-out", out)
     args.add_all("-cache", [cache_dir], expand_directories = False)
@@ -133,11 +133,13 @@ def _dirname(file):
 
 def _build_stdlib(go):
     pkg = go.declare_directory(go, path = "pkg")
+    stdlib_cache_dir = go.declare_directory(go, path = "gocache")
     args = go.builder_args(go, "stdlib")
 
     # Use a file rather than pkg.dirname as the latter is just a string and thus
     # not subject to path mapping.
     args.add_all("-out", [pkg], map_each = _dirname, expand_directories = False)
+    args.add_all("-cacheout", [stdlib_cache_dir], expand_directories = False)
     if go.mode.race:
         args.add("-race")
     if go.mode.msan:
@@ -181,7 +183,7 @@ def _build_stdlib(go):
             )
             inputs_direct.extend(go._ctx.files.data)
 
-    outputs = [pkg]
+    outputs = [pkg, stdlib_cache_dir]
     go.actions.run(
         inputs = depset(direct = inputs_direct, transitive = inputs_transitive),
         outputs = outputs,
@@ -192,10 +194,13 @@ def _build_stdlib(go):
         toolchain = GO_TOOLCHAIN_LABEL,
         execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT,
     )
-    list_json, cache_dir = _build_stdlib_list_json(go)
+    list_json, list_cache_dir = _build_stdlib_list_json(go)
+    cache_dir = depset([list_cache_dir])
+    if go.orchestrion:
+        cache_dir = depset([stdlib_cache_dir])
     return GoStdLib(
         _list_json = list_json,
         libs = depset([pkg]),
-        cache_dir = depset([cache_dir]),
+        cache_dir = cache_dir,
         root_file = pkg,
     )

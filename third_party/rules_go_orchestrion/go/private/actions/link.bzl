@@ -167,6 +167,7 @@ def emit_link(
     builder_args.add("-o", executable)
     builder_args.add("-main", archive.data.file)
     builder_args.add("-p", archive.data.importmap)
+    builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     tool_args.add_all(gc_linkopts)
     tool_args.add_all(go.toolchain.flags.link)
 
@@ -186,6 +187,7 @@ def emit_link(
         go.cc_toolchain_files,
         go.sdk.tools,
         go.stdlib.libs,
+        go.stdlib.cache_dir,
     ]
 
     # Add orchestrion for toolexec instrumentation if enabled

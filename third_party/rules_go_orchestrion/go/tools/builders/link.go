@@ -19,6 +19,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -32,6 +33,8 @@ import (
 
 var linkDebugPatterns = []string{
 	"github.com/DataDog/dd-trace-go/v2",
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations=",
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting=",
 	"packagefile flag=",
 	"packagefile fmt=",
 	"packagefile log=",
@@ -85,7 +88,13 @@ func dumpInterestingImportcfgLines(importcfgName, packagePath string) {
 	}
 	var interesting []string
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "packagefile runtime=") ||
+		if strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting=") ||
+			strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations=") ||
+			strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/ddtrace/tracer=") ||
+			strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/profiler=") ||
+			strings.Contains(line, "github.com/DataDog/dd-trace-go/contrib/net/http/v2=") ||
+			strings.Contains(line, "github.com/DataDog/dd-trace-go/contrib/log/slog/v2=") ||
+			strings.HasPrefix(line, "packagefile runtime=") ||
 			strings.HasPrefix(line, "packagefile testing=") ||
 			strings.HasPrefix(line, "packagefile log=") ||
 			strings.HasPrefix(line, "packagefile flag=") ||
@@ -104,7 +113,7 @@ func dumpInterestingImportcfgLines(importcfgName, packagePath string) {
 
 func collectOrchestrionLinkClosurePackages(archives []archive) []string {
 	seen := map[string]bool{
-		"testing":                  true,
+		"testing":                   true,
 		"testing/internal/testdeps": true,
 	}
 	packages := []string{"testing", "testing/internal/testdeps"}
@@ -130,6 +139,42 @@ func collectOrchestrionLinkClosurePackages(archives []archive) []string {
 		add(pkg)
 	}
 	return packages
+}
+
+func isSyntheticTestBinaryLink(mainArchive, packagePath string) bool {
+	mainBase := filepath.Base(mainArchive)
+	return strings.HasSuffix(mainBase, "~testmain.a") && (packagePath == "testmain" || packagePath == "")
+}
+
+func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive string) (bool, error) {
+	data, err := readArchiveEntry(mainArchive, syntheticTestmainPackagefileManifestName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "orchestrion link debug: synthetic packagefile manifest missing from %s\n", mainArchive)
+			}
+			return false, nil
+		}
+		return false, fmt.Errorf("read synthetic packagefile manifest from %s: %w", mainArchive, err)
+	}
+	directives := strings.Split(strings.TrimSpace(string(data)), "\n")
+	filtered := make([]string, 0, len(directives))
+	for _, line := range directives {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "packagefile ") {
+			filtered = append(filtered, line)
+		}
+	}
+	if len(filtered) == 0 {
+		return false, nil
+	}
+	if err := appendOrReplaceImportcfgDirectives(importcfgPath, filtered, "synthetic-testmain-manifest"); err != nil {
+		return false, err
+	}
+	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+		fmt.Fprintf(os.Stderr, "orchestrion link debug: applied %d synthetic packagefile directives from %s\n", len(filtered), mainArchive)
+	}
+	return true, nil
 }
 
 func link(args []string) error {
@@ -160,7 +205,7 @@ func link(args []string) error {
 		return err
 	}
 	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "link: parsed packagePath=%q main=%q out=%q toolArgs=%q\n", *packagePath, *main, *outFile, toolArgs)
+		fmt.Fprintf(os.Stderr, "link: parsed packagePath=%q main=%q out=%q stdlib_cache=%q toolArgs=%q\n", *packagePath, *main, *outFile, goenv.stdlibCache, toolArgs)
 	}
 
 	// On Windows, take the absolute path of the output file and main file.
@@ -197,14 +242,25 @@ func link(args []string) error {
 	}
 
 	orchImportPath := *packagePath
+	syntheticTestBinaryLink := isSyntheticTestBinaryLink(*main, *packagePath)
 	sdkPath := abs(goenv.sdk)
+	linkOrchestrion := *orchestrion
+	if syntheticTestBinaryLink {
+		linkOrchestrion = ""
+	}
+	if *orchestrion != "" && !syntheticTestBinaryLink {
+		fmt.Fprintf(os.Stderr, "link: orchestrion precheck packagePath=%q main=%q mainBase=%q syntheticTestBinaryLink=%t orchestrion=%q\n", *packagePath, *main, filepath.Base(*main), syntheticTestBinaryLink, *orchestrion)
+	}
 	if *orchestrion != "" {
 		*orchestrion = abs(*orchestrion)
+		if linkOrchestrion != "" {
+			linkOrchestrion = abs(linkOrchestrion)
+		}
 		goenv.sdk = sdkPath
 	}
 
 	// generate any additional link options we need
-	goargs := goenv.goToolWithOrchestion(*orchestrion, "link")
+	goargs := goenv.goToolWithOrchestion(linkOrchestrion, "link")
 
 	parseXdef := func(xdef string) (pkg, name, value string, err error) {
 		eq := strings.IndexByte(xdef, '=')
@@ -267,7 +323,12 @@ func link(args []string) error {
 		return err
 	}
 
-	if *orchestrion != "" {
+	syntheticTestBinaryLink = isSyntheticTestBinaryLink(*main, *packagePath)
+	if linkOrchestrion != "" {
+		fmt.Fprintf(os.Stderr, "link: orchestrion recheck packagePath=%q main=%q mainBase=%q syntheticTestBinaryLink=%t orchestrion=%q\n", *packagePath, *main, filepath.Base(*main), syntheticTestBinaryLink, linkOrchestrion)
+	}
+
+	if linkOrchestrion != "" {
 		srcDirs := make([]string, 0, len(archives))
 		seen := make(map[string]bool)
 		addSrcDir := func(dir string) {
@@ -320,9 +381,33 @@ func link(args []string) error {
 		if !goenv.shouldPreserveWorkDir {
 			defer os.Remove(importcfgName)
 		}
-		closurePackages := collectOrchestrionLinkClosurePackages(archives)
-		if err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages); err != nil {
-			return fmt.Errorf("link: rewrite importcfg from cache stdlib closures: %w", err)
+		if syntheticTestBinaryLink {
+			appliedManifest, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
+			if err != nil {
+				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
+			}
+			if appliedManifest && (goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "") {
+				fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; appending Datadog closure packagefiles\n")
+			}
+			if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
+				return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
+			}
+			dumpInterestingImportcfgLines(importcfgName, *packagePath)
+			if data, err := os.ReadFile(importcfgName); err == nil {
+				dumpLinkDebugFile("orchestrion-link-importcfg-synthetic", *packagePath, data)
+				_ = os.WriteFile("/tmp/orchestrion-link-importcfg-synthetic-latest.txt", data, 0o644)
+				fmt.Fprintf(os.Stderr, "orchestrion link debug: copied synthetic importcfg to /tmp/orchestrion-link-importcfg-synthetic-latest.txt\n")
+			}
+		}
+		if goenv.stdlibCache != "" {
+			if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {
+				return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
+			}
+		} else {
+			closurePackages := collectOrchestrionLinkClosurePackages(archives)
+			if err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages); err != nil {
+				return fmt.Errorf("link: rewrite importcfg from cache stdlib closures: %w", err)
+			}
 		}
 		dumpInterestingImportcfgLines(importcfgName, *packagePath)
 		debugImportcfgState("before-link", importcfgName)
@@ -332,27 +417,90 @@ func link(args []string) error {
 		}
 		goargs = append(goargs, "-importcfg", importcfgName)
 		goargs = append(goargs, *main)
-		goRootPath := goenv.goroot
-		if goRootPath == "" {
-			goRootPath = os.Getenv("GOROOT")
+		var jobserver *orchestrionJobserver
+		if syntheticTestBinaryLink {
+			fmt.Fprintf(os.Stderr, "link: synthetic test binary link using orchestrion path with jobserver disabled\n")
+		} else {
+			goRootPath := goenv.goroot
+			if goRootPath == "" {
+				goRootPath = os.Getenv("GOROOT")
+			}
+			jobserver, err = startOrchestrionJobserver(linkOrchestrion, sdkPath, goRootPath, goenv.verbose)
+			if err != nil {
+				return fmt.Errorf("link: failed to start orchestrion jobserver: %w", err)
+			}
+			defer jobserver.cleanup()
 		}
-		jobserver, err := startOrchestrionJobserver(*orchestrion, sdkPath, goRootPath, goenv.verbose)
-		if err != nil {
-			return fmt.Errorf("link: failed to start orchestrion jobserver: %w", err)
-		}
-		defer jobserver.cleanup()
 		if err := goenv.runCommandWithJobserver(goargs, jobserver, orchImportPath); err != nil {
 			debugImportcfgState("after-link-error", importcfgName)
 			return err
 		}
 		debugImportcfgState("after-link-success", importcfgName)
 	} else {
+		var restoreOrchWorkDir func()
+		var cleanupGoMod func()
+		if syntheticTestBinaryLink {
+			srcDirs := make([]string, 0, len(archives))
+			seen := make(map[string]bool)
+			addSrcDir := func(dir string) {
+				if dir == "" {
+					return
+				}
+				if absDir, err := filepath.Abs(dir); err == nil {
+					if realDir, err := filepath.EvalSymlinks(absDir); err == nil {
+						dir = realDir
+					} else {
+						dir = absDir
+					}
+				}
+				if !seen[dir] {
+					seen[dir] = true
+					srcDirs = append(srcDirs, dir)
+				}
+			}
+			for _, archive := range archives {
+				addSrcDir(filepath.Dir(archive.packagePath))
+			}
+			restoreOrchWorkDir, err = enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+			if err != nil {
+				return fmt.Errorf("link: %w", err)
+			}
+			defer restoreOrchWorkDir()
+			cleanupGoMod, err = ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose)
+			if err != nil {
+				return fmt.Errorf("link: %w", err)
+			}
+			defer cleanupGoMod()
+		}
 		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
 		if err != nil {
 			return err
 		}
 		if !goenv.shouldPreserveWorkDir {
 			defer os.Remove(importcfgName)
+		}
+		if syntheticTestBinaryLink {
+			appliedManifest, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
+			if err != nil {
+				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
+			}
+			if appliedManifest && (goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "") {
+				fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; appending Datadog closure packagefiles\n")
+			}
+			if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
+				return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
+			}
+			if goenv.stdlibCache != "" {
+				if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {
+					return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
+				}
+			}
+			dumpInterestingImportcfgLines(importcfgName, *packagePath)
+			if data, err := os.ReadFile(importcfgName); err == nil {
+				dumpLinkDebugFile("orchestrion-link-importcfg-synthetic", *packagePath, data)
+				_ = os.WriteFile("/tmp/orchestrion-link-importcfg-synthetic-latest.txt", data, 0o644)
+				fmt.Fprintf(os.Stderr, "orchestrion link debug: copied synthetic importcfg to /tmp/orchestrion-link-importcfg-synthetic-latest.txt\n")
+			}
 		}
 		debugImportcfgState("before-link", importcfgName)
 		goargs = append(goargs, "-importcfg", importcfgName)
@@ -365,9 +513,9 @@ func link(args []string) error {
 			defer os.Setenv("GOROOT", oldroot)
 		}
 		if err := goenv.runCommand(goargs); err != nil {
-		debugImportcfgState("after-link-error", importcfgName)
-		return err
-	}
+			debugImportcfgState("after-link-error", importcfgName)
+			return err
+		}
 		debugImportcfgState("after-link-success", importcfgName)
 	}
 

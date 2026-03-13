@@ -96,7 +96,7 @@ def emit_compilepkg(
     sdk = go.sdk
     inputs_direct = (sources + embedsrcs + [sdk.package_list, go.toolchain._pack] +
                      [archive.data.export_file for archive in archives])
-    inputs_transitive = [sdk.headers, sdk.tools, go.stdlib.libs, headers]
+    inputs_transitive = [sdk.headers, sdk.tools, go.stdlib.libs, go.stdlib.cache_dir, headers]
     outputs = [out_lib, out_export]
 
     shared_args = go.builder_args(go)
@@ -140,6 +140,7 @@ def emit_compilepkg(
 
     compile_args.add("-lo", out_lib)
     compile_args.add("-o", out_export)
+    compile_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     if out_cgo_export_h:
         compile_args.add("-cgoexport", out_cgo_export_h)
         outputs.append(out_cgo_export_h)
@@ -255,7 +256,7 @@ def _run_nogo(
     inputs_direct = (sources + [sdk.package_list] +
                      [archive.data.facts_file for archive in archives if archive.data.facts_file] +
                      [archive.data.export_file for archive in archives])
-    inputs_transitive = [sdk.tools, sdk.headers, go.stdlib.libs]
+    inputs_transitive = [sdk.tools, sdk.headers, go.stdlib.libs, go.stdlib.cache_dir]
     outputs = [out_diagnostics, out_facts]
 
     nogo_args = go.tool_args(go)

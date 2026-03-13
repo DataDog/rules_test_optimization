@@ -114,3 +114,49 @@ func stripArMetadata(archivePath string) error {
 		}
 	}
 }
+
+func readArchiveEntry(archivePath, entryName string) ([]byte, error) {
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer archive.Close()
+
+	magic := make([]byte, len(arHeader))
+	if _, err := io.ReadFull(archive, magic); err != nil {
+		return nil, err
+	}
+	if string(magic) != arHeader {
+		return nil, fmt.Errorf("%s is not an archive", archivePath)
+	}
+
+	targets := map[string]bool{
+		entryName:                          true,
+		entryName + "/":                    true,
+		strings.TrimSuffix(entryName, "/"): true,
+	}
+	for {
+		hdr := &header{}
+		if err := binary.Read(archive, binary.BigEndian, hdr); err == io.EOF {
+			return nil, os.ErrNotExist
+		} else if err != nil {
+			return nil, err
+		}
+
+		size := hdr.size()
+		name := strings.TrimSpace(hdr.name())
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(archive, payload); err != nil {
+			return nil, err
+		}
+		if size%2 != 0 {
+			if _, err := archive.Seek(1, io.SeekCurrent); err != nil {
+				return nil, err
+			}
+		}
+
+		if targets[name] {
+			return payload, nil
+		}
+	}
+}

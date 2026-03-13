@@ -288,6 +288,43 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error), debug bool) fun
     
     if not go_path:
         fail("Could not find 'go' binary. Please ensure Go is installed.")
+
+    upgrade_result = ctx.execute(
+        [
+            str(go_path),
+            "mod",
+            "edit",
+            "-require=github.com/DataDog/dd-trace-go/v2@v2.6.0",
+        ],
+        timeout = 120,
+        environment = {
+            "GO111MODULE": "on",
+            "GOTOOLCHAIN": "go1.25.0+auto",
+            "GOPROXY": "https://proxy.golang.org,direct",
+            "GOMODCACHE": str(ctx.path(".gomodcache")),
+            "GOCACHE": str(ctx.path(".gocache")),
+        },
+    )
+    if upgrade_result.return_code != 0:
+        fail("Failed to upgrade dd-trace-go in orchestrion tool go.mod: %s\n%s" % (upgrade_result.stdout, upgrade_result.stderr))
+
+    tidy_result = ctx.execute(
+        [
+            str(go_path),
+            "mod",
+            "tidy",
+        ],
+        timeout = 600,
+        environment = {
+            "GO111MODULE": "on",
+            "GOTOOLCHAIN": "go1.25.0+auto",
+            "GOPROXY": "https://proxy.golang.org,direct",
+            "GOMODCACHE": str(ctx.path(".gomodcache")),
+            "GOCACHE": str(ctx.path(".gocache")),
+        },
+    )
+    if tidy_result.return_code != 0:
+        fail("Failed to tidy orchestrion tool go.mod after upgrading dd-trace-go: %s\n%s" % (tidy_result.stdout, tidy_result.stderr))
     
     result = ctx.execute(
         [

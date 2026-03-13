@@ -53,6 +53,8 @@ const (
 
 	orchestrionLogLevelEnvVar = "ORCHESTRION_LOG_LEVEL"
 
+	orchestrionStdlibCacheEnvVar = "RULES_GO_ORCHESTRION_STDLIB_CACHE"
+
 	syntheticOrchestrionGoMod = `module bazel_orchestrion_temp
 
 go 1.21
@@ -60,7 +62,6 @@ go 1.21
 require (
 	github.com/DataDog/orchestrion v1.5.0
 	github.com/DataDog/dd-trace-go/v2 v2.6.0
-	github.com/DataDog/dd-trace-go/orchestrion/all/v2 v2.6.0
 )
 `
 )
@@ -96,13 +97,20 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 		goModCache = filepath.Join(cacheRoot, "pkg", "mod")
 	}
 
-	goBuildCache := getEnv(env, "GOCACHE")
+	goBuildCache := strings.TrimSpace(getEnv(env, orchestrionStdlibCacheEnvVar))
+	explicitBuildCache := goBuildCache != ""
+	if goBuildCache == "" {
+		goBuildCache = getEnv(env, "GOCACHE")
+		explicitBuildCache = goBuildCache != ""
+	}
 	if goBuildCache == "" {
 		goBuildCache = filepath.Join(cacheRoot, "cache")
 	}
-	if goroot := strings.TrimSpace(getEnv(env, "GOROOT")); goroot != "" {
-		sum := sha256.Sum256([]byte(abs(goroot)))
-		goBuildCache = filepath.Join(cacheRoot, "cache", hex.EncodeToString(sum[:8]))
+	if !explicitBuildCache {
+		if goroot := strings.TrimSpace(getEnv(env, "GOROOT")); goroot != "" {
+			sum := sha256.Sum256([]byte(stableCacheKeyPath(goroot)))
+			goBuildCache = filepath.Join(cacheRoot, "cache", hex.EncodeToString(sum[:8]))
+		}
 	}
 
 	for _, dir := range []string{goModCache, goBuildCache} {
@@ -122,6 +130,22 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 	}
 
 	return env, nil
+}
+
+func stableCacheKeyPath(path string) string {
+	path = abs(path)
+	path = filepath.ToSlash(path)
+	for _, marker := range []string{
+		"/execroot/_main/",
+		"/execroot/__main__/",
+		"/bazel-out/",
+		"/external/",
+	} {
+		if idx := strings.Index(path, marker); idx >= 0 {
+			return path[idx+1:]
+		}
+	}
+	return path
 }
 
 func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) error {
@@ -188,10 +212,6 @@ func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) 
 	if err := runProbe("download dd-trace-go", "mod", "download", "github.com/DataDog/dd-trace-go/v2"); err != nil && verbose {
 		fmt.Fprintf(os.Stderr, "orchestrion: dd-trace-go module download failed: %v\n", err)
 	}
-	if err := runProbe("download orchestrion all", "mod", "download", "github.com/DataDog/dd-trace-go/orchestrion/all/v2"); err != nil && verbose {
-		fmt.Fprintf(os.Stderr, "orchestrion: orchestrion all module download failed: %v\n", err)
-	}
-
 	if err := runProbe("re-probe woven deps", append([]string{"list", "-mod=mod"}, orchestrionWovenPackagePatterns...)...); err != nil {
 		return err
 	}
@@ -485,7 +505,6 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 	if err := run("download synthetic deps", "mod", "download",
 		"github.com/DataDog/orchestrion",
 		"github.com/DataDog/dd-trace-go/v2",
-		"github.com/DataDog/dd-trace-go/orchestrion/all/v2",
 	); err != nil {
 		return err
 	}
@@ -684,7 +703,7 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 	// Start the orchestrion server process
 	cmd := exec.Command(orchestrionPath, "server",
 		"-url-file="+urlFile,
-		"-inactivity-timeout=5m",
+		"-inactivity-timeout=30m",
 	)
 	cmd.Stdout = os.Stderr // Redirect to stderr for debugging
 	cmd.Stderr = os.Stderr
@@ -805,10 +824,13 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		currentPath := os.Getenv("PATH")
 		newPath := goBinPath + string(os.PathListSeparator) + currentPath
 		os.Setenv("PATH", newPath)
+		cmd.Env = prependToPath(cmd.Env, goBinPath)
 		if goRootPath != "" {
 			os.Setenv("GOROOT", goRootPath)
+			cmd.Env = setEnv(cmd.Env, "GOROOT", goRootPath)
 		} else {
 			os.Setenv("GOROOT", goSdkPath)
+			cmd.Env = setEnv(cmd.Env, "GOROOT", goSdkPath)
 		}
 	}
 
@@ -850,6 +872,13 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 			cmd.Env = setEnv(cmd.Env, "GOROOT", goRootPath)
 		} else if goSdkPath != "" {
 			cmd.Env = setEnv(cmd.Env, "GOROOT", goSdkPath)
+		}
+	} else {
+		cmd.Env = unsetEnv(cmd.Env, orchestrionJobserverURLEnvVar)
+		cmd.Env = unsetEnv(cmd.Env, orchestrionSkipPinEnvVar)
+		if verbose || getEnv(cmd.Env, "ORCHESTRION_DEBUG_TRACE") == "1" {
+			fmt.Fprintf(os.Stderr, "orchestrion: jobserver disabled for importpath=%s; cleared %s and %s\n",
+				importPath, orchestrionJobserverURLEnvVar, orchestrionSkipPinEnvVar)
 		}
 	}
 	if importPath != "" {
@@ -941,6 +970,21 @@ func getEnv(env []string, key string) string {
 		}
 	}
 	return ""
+}
+
+func unsetEnv(env []string, key string) []string {
+	if env == nil {
+		return nil
+	}
+	prefix := key + "="
+	filtered := env[:0]
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
 }
 
 // prependToPath prepends a directory to the PATH environment variable.

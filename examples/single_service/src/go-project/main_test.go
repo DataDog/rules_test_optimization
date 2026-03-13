@@ -23,14 +23,14 @@ func TestMain(m *testing.M) {
 	manifestRloc := os.Getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
 	if manifestRloc == "" {
 		fmt.Println("DD_TEST_OPTIMIZATION_MANIFEST_FILE not set")
-		os.Exit(m.Run())
+		runTests(m)
 	}
 
 	// Resolve the manifest path and get the .testoptimization directory
 	manifestPath, ok := resolveRlocation(manifestRloc)
 	if !ok {
 		fmt.Println("unable to resolve DD_TEST_OPTIMIZATION_MANIFEST_FILE runfile path")
-		os.Exit(m.Run())
+		runTests(m)
 	}
 	toptDir := filepath.Dir(manifestPath)
 	fmt.Println("Test optimization directory:", toptDir)
@@ -50,7 +50,15 @@ func TestMain(m *testing.M) {
 		fmt.Println("--------------------------------")
 		fmt.Println()
 	}
-	os.Exit(m.Run())
+
+	runTests(m)
+}
+
+func runTests(m *testing.M) {
+	fmt.Println("Starting tests...")
+	exitCode := m.Run()
+	fmt.Printf("Tests finished with exit code %d\n", exitCode)
+	os.Exit(exitCode)
 }
 
 // resolveRlocation resolves a runfile rlocation path to an absolute path.

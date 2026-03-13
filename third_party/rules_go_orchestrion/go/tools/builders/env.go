@@ -59,6 +59,11 @@ type env struct {
 	// For example, linux_amd64_race.
 	installSuffix string
 
+	// stdlibCache is the Bazel-declared cache directory containing stdlib export
+	// files produced by the stdlib action. When set, downstream importcfg
+	// rewrites should prefer this over any implicit GOCACHE guesswork.
+	stdlibCache string
+
 	// verbose indicates whether subprocess command lines should be printed.
 	verbose bool
 
@@ -76,6 +81,7 @@ func envFlags(flags *flag.FlagSet) *env {
 	flags.StringVar(&env.goroot, "goroot", "", "The value to set for GOROOT.")
 	flags.Var(&tagFlag{}, "tags", "List of build tags considered true.")
 	flags.StringVar(&env.installSuffix, "installsuffix", "", "Standard library under GOROOT/pkg")
+	flags.StringVar(&env.stdlibCache, "stdlib_cache", "", "Path to the Bazel-declared stdlib cache directory")
 	flags.BoolVar(&env.verbose, "v", false, "Whether subprocess command lines should be printed")
 	flags.BoolVar(&env.shouldPreserveWorkDir, "work", false, "if true, the temporary work directory will be preserved")
 	return env
@@ -88,6 +94,9 @@ func (e *env) checkFlagsAndSetGoroot() error {
 		return errors.New("-sdk was not set")
 	}
 	e.sdk = abs(e.sdk)
+	if e.stdlibCache != "" {
+		e.stdlibCache = abs(e.stdlibCache)
+	}
 	if e.goroot != "" {
 		e.goroot = abs(e.goroot)
 		err := os.Setenv("GOROOT", e.goroot)
@@ -186,6 +195,18 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 	buf := &bytes.Buffer{}
 	cmd.Stdout = buf
 	cmd.Stderr = buf
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	if e.stdlibCache != "" {
+		if info, err := os.Stat(e.stdlibCache); err == nil && info.IsDir() {
+			cmd.Env = setEnv(cmd.Env, "GOCACHE", e.stdlibCache)
+			cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, e.stdlibCache)
+			if e.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
+				fmt.Fprintf(os.Stderr, "orchestrion: preseeded GOCACHE=%s from stdlib_cache for jobserver command\n", e.stdlibCache)
+			}
+		}
+	}
 	goRootPath := e.goroot
 	if goRootPath == "" {
 		goRootPath = os.Getenv("GOROOT")
