@@ -13,52 +13,62 @@ Success criteria:
 
 ## Current Status
 
-The issue is **not fixed yet**.
+The issue is **locally fixed** on the warmed `_tests` cycle.
 
-What is already true:
+What is now true locally:
 
 - Orchestrion is active in the Bazel path.
 - The woven stdlib `testing.a` contains:
   - `instrumentTestingM`
   - `instrumentTestingTFunc`
   - `__dd_civisibility`
-- Earlier stdlib cache-family, build-setting, and helper-root mismatch issues were fixed.
-- The remaining blocker is at **final synthetic Darwin external link** in the local `_tests` fast cycle.
+- The local `_tests` target `//src/go-project:hello_test` now:
+  - builds successfully
+  - links successfully
+  - runs successfully with `DD_TRACE_DEBUG=true` and `DD_CIVISIBILITY_ENABLED=true`
+  - emits Datadog tracer / CI Visibility runtime logs again
+  - emits `instrumentTestingTFunc`
+  - emits `instrumentTestingM: finished with exit code: 0`
 
-Current failure:
+The critical local runtime proof is now present.
 
-- final synthetic link now fails in Darwin external linking with:
-  - `ld64.lld: error: .../go-link-224168786/000000.o: unhandled file type`
-- root cause is now concrete:
-  - `000000.o` is the extracted archive member `orchestrion.pack` from `hello_test__raw_go_test~testmain.a`
-  - this is metadata, not an object file
-  - Darwin external link enumerates archive members and tries to feed it to `ld64.lld` as an object
-  - therefore the synthetic packagefile manifest must not live inside the `.a` archive
-- the final synthetic importcfg already contains:
-  - woven stdlib cache-family packagefiles for `runtime`, `testing`, `fmt`, `flag`, `log`, `log/slog`, `net/http`
-  - sanitized Datadog helper packagefiles (`.nolinkdeps`) for:
-    - `github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting`
-    - `github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations`
-    - `github.com/DataDog/dd-trace-go/v2/ddtrace/tracer`
-    - `github.com/DataDog/dd-trace-go/v2/profiler`
-    - contrib `log/slog` and `net/http` helpers
+## Root Cause We Ended Up Fixing
 
-This strongly suggests the blocker is no longer “wrong helper root”, but the exact object materialized by `go tool link` for Darwin external linking.
+This turned out to be a two-part synthetic-link problem:
 
-Current fix under test:
+1. The synthetic `testmain` compile was persisting Datadog helper packagefile metadata inside the archive as `orchestrion.pack`.
+   - Darwin external link treated that archive member as a real object and failed with:
+     - `ld64.lld: ... 000000.o: unhandled file type`
 
-- move the synthetic `orchestrion.pack` manifest from an archive member to a sidecar file next to `~testmain.a`
-- keep a temporary archive-member fallback in link for compatibility while validating the sidecar path
-- rerun the local `_tests` fast cycle and confirm the old Darwin `000000.o: unhandled file type` failure disappears
+2. After moving that metadata out of the archive, the final synthetic link still regenerated Datadog helper packagefiles from a different helper-export family than the one used during synthetic `testmain` compile.
+   - compile-time `gotesting` / `integrations` came from one `.nolinkdeps` helper root
+   - final link rebuilt `gotesting` / `integrations` / `tracer` / `profiler` from another root
+   - that drift prevented the final binary from using the same instrumented helper closure that `testmain` compile had already proven
 
-Latest result:
+In short:
 
-- the sidecar fix did remove the old Darwin `orchestrion.pack` object leak
-- the next blocker is a helper-export family drift:
-  - synthetic `testmain` compile resolves `gotesting` from one `module-exports/...` root
-  - final link resolves the same package from a different `module-exports/...` root
-- current hypothesis is that the extra `currentWovenStdlibCacheKey` layer in helper export cache paths is too unstable during one Bazel build
-- current fix under test is to key helper export roots only by module state (`moduleExportRequestKey`) so compile and final link reuse the same Datadog helper export family
+- synthetic `testmain` needed a sidecar manifest, not an archive member
+- final synthetic link needed that sidecar manifest as a declared Bazel input
+- final synthetic link also needed to complete the Datadog helper closure from the same compile-time helper-export root instead of regenerating a second family
+
+## Latest Proven Fix
+
+The local fix that got runtime instrumentation working was:
+
+- declare a sidecar manifest output for synthetic `~testmain.a`
+- thread that sidecar through `GoArchiveData`
+- add the sidecar as a declared input to the final `GoLink`
+- teach link to load helper packagefile directives from the sidecar
+- then append the broader Datadog helper closure from the same compile-time export root
+- normalize helper-export root parsing so synthetic compile and final link agree on the root shape
+
+After that:
+
+- the synthetic final importcfg preserves the compile-time `.nolinkdeps` helper family
+- final link succeeds
+- runtime tracer / CI Visibility logs return
+- the `testing.M.Run` hook is active enough to emit:
+  - `instrumentTestingM: finished with exit code: 0`
 
 ## Repositories Involved
 
@@ -252,12 +262,40 @@ Tried:
 
 Result:
 
-- patch applied locally
-- helper-export families in final synthetic link are now unified, but compile-time synthetic `testmain` was still using a different helper-export family
-- root cause narrowed further:
-  - synthetic `testmain` compile was deriving `moduleDir` from package paths
-  - final synthetic link was resolving helper exports from the real source module dir
-  - that made `main` compile against one `gotesting` archive while final link used another
+- this was the right direction, but not sufficient on its own
+- the decisive missing piece was that synthetic compile metadata was not actually a declared link input
+- once the helper-family narrowing work was combined with the sidecar-manifest wiring, the final synthetic link stopped drifting into a second Datadog helper family
+
+### 12. Synthetic testmain manifest sidecar
+
+Tried:
+
+- declare a dedicated synthetic manifest sidecar next to `~testmain.a`
+- stop relying on the archive-member `orchestrion.pack` for the Darwin synthetic link path
+- carry the sidecar through `GoArchiveData`
+- add it as an explicit `GoLink` input
+- make final link load helper packagefiles from that sidecar first, then append any missing Datadog closure packages from the same root
+
+Result:
+
+- removed the Darwin `000000.o: unhandled file type` failure
+- eliminated helper-root drift between synthetic `testmain` compile and final link
+- restored runtime tracer logs
+- restored runtime CI Visibility hooks in the final local `_tests` test execution
+
+## Current Next Steps
+
+The local issue is fixed enough to move back into the outer loop:
+
+1. commit the current branch changes once the worktree is cleaned up
+2. repin the `_tests` repo to this new main-repo commit
+3. rerun the full PR matrix
+4. check whether CI now shows:
+   - Datadog tracer runtime logs
+   - `instrumentTestingM` runtime signal on Linux/macOS
+   - no regression on Windows
+
+If CI differs from the warmed local cycle, the first thing to inspect should be whether the synthetic `~testmain.a.orchestrion.pack` sidecar is present and declared in the CI link sandbox the same way it is locally.
 
 Latest local patch:
 
@@ -432,3 +470,160 @@ Do not commit or push until:
 - The issue is now much narrower than at the start.
 - We are no longer debugging general bootstrap or wrapper wiring.
 - The main remaining problem is final synthetic link consistency for Datadog helper archives.
+
+## Latest Checkpoint
+
+Two separate states now exist and should not be conflated:
+
+1. The real `_tests` repo Go path is locally fixed.
+   - Local `_tests` runs now show:
+     - `Datadog Tracer ... DEBUG`
+     - `instrumentTestingTFunc`
+     - `instrumentTestingM: finished with exit code: 0`
+   - That proves the core CI Visibility / Orchestrion runtime path works locally.
+
+2. A separate repo-local regression remains in `//modules/go/tools/dd_topt_go_bootstrap:bootstrap_test`.
+   - This is a plain synthetic test binary path with `orchestrion_enabled=false`.
+   - The failure is not the original CI Visibility issue.
+   - It currently fails because synthetic helper module preparation still tries to execute the Go SDK from a relative sandbox path:
+     - `fork/exec .../external/rules_go++go_sdk+go_default_sdk/bin/go: no such file or directory`
+
+### Root Cause Of The Separate Bootstrap Regression
+
+The bad relative SDK path was not coming from `goCmd()`.
+
+It was coming from:
+
+- [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+
+Specifically:
+
+- `prepareSyntheticOrchestrionModule(goSdkPath, ...)`
+
+was constructing:
+
+- `filepath.Join(goSdkPath, "bin", "go")`
+
+instead of:
+
+- `filepath.Join(abs(goSdkPath), "bin", "go")`
+
+This matters for sandboxed plain synthetic link paths such as `bootstrap_test`, where the working directory differs from the execroot-relative SDK path.
+
+There turned out to be two separate offenders in `orchestrion.go`:
+
+- `prepareSyntheticOrchestrionModule(...)`
+- `ensureWovenPackagesAvailable(...)`
+
+Both were constructing `.../bin/go` from the raw relative SDK path instead of `abs(goSdkPath)`.
+
+### Latest Narrow Fix
+
+Applied locally:
+
+- `prepareSyntheticOrchestrionModule()` now absolutizes `goSdkPath` before constructing the `go` executable path.
+
+This fix is intentionally narrow:
+
+- it targets the separate `bootstrap_test` regression
+- it does not change the already-working `_tests` Orchestrion runtime path
+
+### Immediate Next Step
+
+Re-run only:
+
+```bash
+./bazelw test //modules/go/tools/dd_topt_go_bootstrap:bootstrap_test --test_output=errors
+```
+
+If that goes green, then:
+
+1. rerun the broader main-repo check
+2. ensure the `_tests` local runtime path still shows `instrumentTestingM`
+3. then commit/push this branch state
+
+## Latest Local Result
+
+Both local validations are green now:
+
+1. Repo-local bootstrap regression:
+
+```bash
+./bazelw test //modules/go/tools/dd_topt_go_bootstrap:bootstrap_test --test_output=errors
+```
+
+Status:
+- PASS
+
+2. Real `_tests` runtime path:
+
+```bash
+cd /Users/tony.redondo/repos/github/Datadog/rules_test_optimization_tests
+source ~/ddtrace.sh >/dev/null 2>&1 || true
+./bazelw --batch --output_user_root=/tmp/rto_recheck_real_after_plainlink test //src/go-project:hello_test \
+  --override_module=datadog-rules-test-optimization=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization \
+  --override_module=datadog-rules-test-optimization-go=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go \
+  --override_module=datadog-rules-test-optimization-python=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/python \
+  --override_module=datadog-rules-test-optimization-java=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/java \
+  --override_module=datadog-rules-test-optimization-nodejs=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/nodejs \
+  --override_module=datadog-rules-test-optimization-dotnet=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/dotnet \
+  --override_module=datadog-rules-test-optimization-ruby=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/ruby \
+  --override_module=rules_go=/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion \
+  --test_output=streamed \
+  --test_env=DD_TRACE_DEBUG=true \
+  --test_env=DD_CIVISIBILITY_ENABLED=true \
+  --action_env=ORCHESTRION_DEBUG_TRACE=1 \
+  --action_env=ORCHESTRION_LOG_LEVEL=TRACE \
+  --sandbox_debug --verbose_failures
+```
+
+Status:
+- PASS
+
+Runtime proof in `/tmp/rto_recheck_real_after_plainlink.log`:
+- `Datadog Tracer v2.6.0 DEBUG: ...`
+- `instrumentTestingTFunc: instrumenting test function`
+- `instrumentTestingM: finished with exit code: 0`
+
+## Final Fixes From This Round
+
+### 1. Plain synthetic final link now reuses the compile-time sidecar only
+
+In:
+
+- [third_party/rules_go_orchestrion/go/tools/builders/link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
+
+Change:
+- plain synthetic link (`linkOrchestrion == ""`) no longer calls `appendMissingModulePackagefiles(...)`
+- it now relies only on the compile-time sidecar manifest
+
+Why:
+- the sidecar already carries the rooted Datadog helper packagefiles for the synthetic testmain path
+- the extra helper download path was only causing a separate bootstrap regression
+
+### 2. Plain synthetic helper preparation no longer tries to resolve the Go SDK from the wrong place
+
+In:
+
+- [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+
+Changes:
+- `prepareSyntheticOrchestrionModule()` now absolutizes `goSdkPath`
+- `ensureWovenPackagesAvailable()` now absolutizes `goSdkPath`
+
+Why:
+- plain bootstrap/test paths were previously trying to execute `.../external/rules_go++go_sdk+go_default_sdk/bin/go` from the wrong synthetic working context
+
+## Current Conclusion
+
+At the local level, the issue is now fixed:
+
+- repo-local bootstrap regression is fixed
+- real `_tests` runtime path is fixed
+- runtime CI Visibility instrumentation is confirmed with `instrumentTestingM`
+
+## Next Outer-Loop Step
+
+1. commit this latest round
+2. repin the `_tests` repo if needed
+3. rerun CI and verify the same runtime signals there

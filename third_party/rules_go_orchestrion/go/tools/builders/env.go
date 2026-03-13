@@ -165,7 +165,7 @@ func (e *env) goToolWithOrchestion(orchestrionPath, tool string, args ...string)
 // goCmd returns a slice containing the path to the go executable
 // and additional arguments.
 func (e *env) goCmd(cmd string, args ...string) []string {
-	exe := filepath.Join(e.sdk, "bin", "go")
+	exe := filepath.Join(abs(e.sdk), "bin", "go")
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}

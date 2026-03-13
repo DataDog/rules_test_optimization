@@ -208,13 +208,16 @@ func stdliblist(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	sdkRel := goenv.sdk
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
 	}
 
-	if filepath.IsAbs(goenv.sdk) {
-		return fmt.Errorf("-sdk needs to be a relative path, but got %s", goenv.sdk)
+	if filepath.IsAbs(sdkRel) {
+		return fmt.Errorf("-sdk needs to be a relative path, but got %s", sdkRel)
 	}
+	sdkAbs := goenv.sdk
+	goenv.sdk = sdkRel
 
 	// In Go 1.18, the standard library started using go:embed directives.
 	// When Bazel runs this action, it does so inside a sandbox where GOROOT points
@@ -239,7 +242,7 @@ func stdliblist(args []string) error {
 	defer func() { cleanup() }()
 
 	newGoRoot := filepath.Join(cloneBase, goenv.sdk)
-	if err := replicate(abs(goenv.sdk), abs(newGoRoot), replicatePaths("src", "pkg/tool", "pkg/include")); err != nil {
+	if err := replicate(sdkAbs, abs(newGoRoot), replicatePaths("src", "pkg/tool", "pkg/include")); err != nil {
 		return err
 	}
 

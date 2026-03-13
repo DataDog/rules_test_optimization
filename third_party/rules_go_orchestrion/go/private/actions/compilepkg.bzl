@@ -69,6 +69,7 @@ def emit_compilepkg(
         clinkopts = [],
         out_lib = None,
         out_export = None,
+        out_orchestrion_manifest = None,
         out_facts = None,
         out_diagnostics = None,
         out_nogo_validation = None,
@@ -98,6 +99,8 @@ def emit_compilepkg(
                      [archive.data.export_file for archive in archives])
     inputs_transitive = [sdk.headers, sdk.tools, go.stdlib.libs, go.stdlib.cache_dir, headers]
     outputs = [out_lib, out_export]
+    if out_orchestrion_manifest != None:
+        outputs.append(out_orchestrion_manifest)
 
     shared_args = go.builder_args(go)
     shared_args.add_all(sources, before_each = "-src")

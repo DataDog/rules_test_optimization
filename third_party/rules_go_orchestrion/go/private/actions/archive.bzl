@@ -54,6 +54,9 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
     if _recompile_suffix:
         pre_ext += _recompile_suffix
     out_lib = go.declare_file(go, name = source.name, ext = pre_ext + ".a")
+    out_orchestrion_manifest = None
+    if source.name.endswith("~testmain"):
+        out_orchestrion_manifest = go.declare_file(go, name = source.name, ext = pre_ext + ".a.orchestrion.pack")
 
     # store export information for compiling dependent packages separately
     out_export = go.declare_file(go, name = source.name, ext = pre_ext + ".x")
@@ -125,6 +128,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
             headers = headers,
             out_lib = out_lib,
             out_export = out_export,
+            out_orchestrion_manifest = out_orchestrion_manifest,
             out_facts = out_facts,
             out_diagnostics = out_diagnostics,
             out_nogo_validation = out_nogo_validation,
@@ -156,6 +160,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
             headers = headers,
             out_lib = out_lib,
             out_export = out_export,
+            out_orchestrion_manifest = out_orchestrion_manifest,
             out_facts = out_facts,
             out_diagnostics = out_diagnostics,
             out_nogo_validation = out_nogo_validation,
@@ -200,6 +205,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
         # Information needed by dependents
         file = out_lib,
         export_file = out_export,
+        _orchestrion_manifest = out_orchestrion_manifest,
         facts_file = out_facts,
         runfiles = source.runfiles,
         _validation_output = out_nogo_validation,

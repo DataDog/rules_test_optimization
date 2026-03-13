@@ -504,17 +504,25 @@ func compileArchive(
 	if err := compileGo(goenv, goSrcs, embedLookupDirs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, orchestrion); err != nil {
 		return err
 	}
-	if syntheticTestmainPackagefiles != "" {
+	if syntheticTestmain {
 		sidecarPath := syntheticTestmainPackagefileManifestSidecarPath(outLinkObj)
-		data, err := os.ReadFile(syntheticTestmainPackagefiles)
-		if err != nil {
-			return fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", syntheticTestmainPackagefiles, err)
+		data := []byte{}
+		if syntheticTestmainPackagefiles != "" {
+			var err error
+			data, err = os.ReadFile(syntheticTestmainPackagefiles)
+			if err != nil {
+				return fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", syntheticTestmainPackagefiles, err)
+			}
 		}
 		if err := os.WriteFile(sidecarPath, data, 0o644); err != nil {
 			return fmt.Errorf("write synthetic testmain packagefile manifest sidecar %s: %w", sidecarPath, err)
 		}
-		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "compilepkg: wrote synthetic testmain packagefile manifest sidecar %s\n", sidecarPath)
+		if syntheticTestmainPackagefiles != "" {
+			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "compilepkg: wrote synthetic testmain packagefile manifest sidecar %s\n", sidecarPath)
+			}
+		} else if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "compilepkg: wrote empty synthetic testmain packagefile manifest sidecar %s\n", sidecarPath)
 		}
 	}
 

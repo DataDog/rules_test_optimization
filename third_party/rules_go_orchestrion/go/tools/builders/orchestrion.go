@@ -151,7 +151,7 @@ func stableCacheKeyPath(path string) string {
 func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) error {
 	goExe := ""
 	if goSdkPath != "" {
-		goExe = filepath.Join(goSdkPath, "bin", "go")
+		goExe = filepath.Join(abs(goSdkPath), "bin", "go")
 		if runtime.GOOS == "windows" {
 			goExe += ".exe"
 		}
@@ -421,7 +421,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 	goExe := ""
 	if goSdkPath != "" {
-		goExe = filepath.Join(goSdkPath, "bin", "go")
+		goExe = filepath.Join(abs(goSdkPath), "bin", "go")
 		if runtime.GOOS == "windows" {
 			goExe += ".exe"
 		}
