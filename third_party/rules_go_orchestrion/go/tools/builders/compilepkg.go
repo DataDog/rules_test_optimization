@@ -44,6 +44,10 @@ var syntheticTestmainRootPackages = []struct {
 
 const syntheticTestmainPackagefileManifestName = "orchestrion.pack"
 
+func syntheticTestmainPackagefileManifestSidecarPath(archivePath string) string {
+	return archivePath + "." + syntheticTestmainPackagefileManifestName
+}
+
 func compilePkg(args []string) error {
 	// Parse arguments.
 	args, _, err := expandParamsFiles(args)
@@ -368,7 +372,7 @@ func compileArchive(
 
 	syntheticTestmain := isSyntheticTestmainCompile(packagePath, goSrcs)
 	if syntheticTestmain && orchestrion != "" {
-		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, workDir, srcs, deps, orchestrion)
+		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, workDir, srcs, deps, embedLookupDirs, orchestrion)
 		if err != nil {
 			return err
 		}
@@ -501,8 +505,16 @@ func compileArchive(
 		return err
 	}
 	if syntheticTestmainPackagefiles != "" {
-		if err := appendToArchive(goenv, pack, outLinkObj, []string{syntheticTestmainPackagefiles}); err != nil {
-			return fmt.Errorf("append synthetic testmain packagefile manifest: %w", err)
+		sidecarPath := syntheticTestmainPackagefileManifestSidecarPath(outLinkObj)
+		data, err := os.ReadFile(syntheticTestmainPackagefiles)
+		if err != nil {
+			return fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", syntheticTestmainPackagefiles, err)
+		}
+		if err := os.WriteFile(sidecarPath, data, 0o644); err != nil {
+			return fmt.Errorf("write synthetic testmain packagefile manifest sidecar %s: %w", sidecarPath, err)
+		}
+		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "compilepkg: wrote synthetic testmain packagefile manifest sidecar %s\n", sidecarPath)
 		}
 	}
 
@@ -549,13 +561,37 @@ func compileArchive(
 	return nil
 }
 
-func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs, deps []archive, orchestrion string) (archiveSrcs, []archive, string, error) {
-	packages := make([]string, 0, len(syntheticTestmainRootPackages))
+func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs, deps []archive, embedLookupDirs []string, orchestrion string) (archiveSrcs, []archive, string, error) {
+	packages := make([]string, 0, len(syntheticTestmainRootPackages)+len(orchestrionLinkClosurePackages))
 	for _, root := range syntheticTestmainRootPackages {
 		packages = append(packages, root.packagePath)
 	}
+	for _, pkg := range orchestrionLinkClosurePackages {
+		if pkg == "" {
+			continue
+		}
+		packages = append(packages, pkg)
+	}
 	moduleDir := ""
+	for _, dir := range embedLookupDirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		dir = abs(dir)
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			moduleDir = dir
+			break
+		}
+		if _, err := os.Stat(filepath.Join(dir, "orchestrion.tool.go")); err == nil {
+			moduleDir = dir
+			break
+		}
+	}
 	for _, dep := range deps {
+		if moduleDir != "" {
+			break
+		}
 		dir := filepath.Dir(strings.TrimSpace(dep.packagePath))
 		if dir == "." || dir == "" || strings.Contains(dir, "github.com/") {
 			continue
@@ -569,7 +605,14 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 	}
 
 	var importLines []string
-	var packagefileManifest []string
+	manifestLines := make(map[string]struct{}, len(exports)*2)
+	addManifestLine := func(line string) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
+		}
+		manifestLines[line] = struct{}{}
+	}
 	for _, root := range syntheticTestmainRootPackages {
 		exportPath := strings.TrimSpace(exports[root.packagePath])
 		if exportPath == "" {
@@ -581,10 +624,19 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 			file:        exportPath,
 		})
 		importLines = append(importLines, fmt.Sprintf("\t_ %q", root.alias))
-		packagefileManifest = append(packagefileManifest,
-			fmt.Sprintf("importmap %s=%s", root.alias, root.packagePath),
-			fmt.Sprintf("packagefile %s=%s", root.packagePath, exportPath),
-		)
+		addManifestLine(fmt.Sprintf("importmap %s=%s", root.alias, root.packagePath))
+		addManifestLine(fmt.Sprintf("packagefile %s=%s", root.packagePath, exportPath))
+	}
+	for pkg, exportPath := range exports {
+		pkg = strings.TrimSpace(pkg)
+		exportPath = strings.TrimSpace(exportPath)
+		if pkg == "" || exportPath == "" {
+			continue
+		}
+		if !strings.Contains(pkg, ".") {
+			continue
+		}
+		addManifestLine(fmt.Sprintf("packagefile %s=%s", pkg, exportPath))
 	}
 
 	source := "package main\n\nimport (\n" + strings.Join(importLines, "\n") + "\n)\n"
@@ -596,8 +648,13 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 	if err != nil {
 		return srcs, deps, "", fmt.Errorf("parse synthetic testmain linkdeps source: %w", err)
 	}
+	manifestEntries := make([]string, 0, len(manifestLines))
+	for line := range manifestLines {
+		manifestEntries = append(manifestEntries, line)
+	}
+	sort.Strings(manifestEntries)
 	manifestPath := filepath.Join(workDir, syntheticTestmainPackagefileManifestName)
-	if err := os.WriteFile(manifestPath, []byte(strings.Join(packagefileManifest, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(manifestPath, []byte(strings.Join(manifestEntries, "\n")+"\n"), 0o644); err != nil {
 		return srcs, deps, "", fmt.Errorf("write synthetic testmain packagefile manifest: %w", err)
 	}
 	srcs.goSrcs = append(srcs.goSrcs, extraSrcs.goSrcs...)

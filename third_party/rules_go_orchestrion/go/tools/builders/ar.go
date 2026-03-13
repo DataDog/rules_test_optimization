@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -159,4 +160,86 @@ func readArchiveEntry(archivePath, entryName string) ([]byte, error) {
 			return payload, nil
 		}
 	}
+}
+
+func copyArchiveWithoutEntries(srcPath, dstPath string, skippedNames map[string]bool) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	if err := os.MkdirAll(filepathDir(dstPath), 0o755); err != nil {
+		return err
+	}
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = dst.Close()
+	}()
+
+	magic := make([]byte, len(arHeader))
+	if _, err := io.ReadFull(src, magic); err != nil {
+		return err
+	}
+	if string(magic) != arHeader {
+		return fmt.Errorf("%s is not an archive", srcPath)
+	}
+	if _, err := dst.Write(magic); err != nil {
+		return err
+	}
+
+	for {
+		hdr := &header{}
+		if err := binary.Read(src, binary.BigEndian, hdr); err == io.EOF {
+			return nil
+		} else if err != nil {
+			return err
+		}
+
+		size := hdr.size()
+		name := strings.TrimSpace(hdr.name())
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(src, payload); err != nil {
+			return err
+		}
+		if size%2 != 0 {
+			if _, err := src.Seek(1, io.SeekCurrent); err != nil {
+				return err
+			}
+		}
+
+		trimmed := strings.TrimSuffix(name, "/")
+		if skippedNames[name] || skippedNames[trimmed] {
+			continue
+		}
+
+		buf := &bytes.Buffer{}
+		if err := binary.Write(buf, binary.BigEndian, hdr); err != nil {
+			return err
+		}
+		if _, err := dst.Write(buf.Bytes()); err != nil {
+			return err
+		}
+		if _, err := dst.Write(payload); err != nil {
+			return err
+		}
+		if size%2 != 0 {
+			if _, err := dst.Write([]byte{'\n'}); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func filepathDir(path string) string {
+	if i := strings.LastIndex(path, string(os.PathSeparator)); i >= 0 {
+		if i == 0 {
+			return string(os.PathSeparator)
+		}
+		return path[:i]
+	}
+	return "."
 }

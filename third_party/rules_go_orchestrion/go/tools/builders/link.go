@@ -147,11 +147,21 @@ func isSyntheticTestBinaryLink(mainArchive, packagePath string) bool {
 }
 
 func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive string) (bool, error) {
-	data, err := readArchiveEntry(mainArchive, syntheticTestmainPackagefileManifestName)
+	sidecarPath := syntheticTestmainPackagefileManifestSidecarPath(mainArchive)
+	data, err := os.ReadFile(sidecarPath)
+	if err == nil {
+		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "orchestrion link debug: loaded synthetic packagefile manifest sidecar %s\n", sidecarPath)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read synthetic packagefile manifest sidecar %s: %w", sidecarPath, err)
+	} else {
+		data, err = readArchiveEntry(mainArchive, syntheticTestmainPackagefileManifestName)
+	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: synthetic packagefile manifest missing from %s\n", mainArchive)
+				fmt.Fprintf(os.Stderr, "orchestrion link debug: synthetic packagefile manifest missing from sidecar %s and archive %s\n", sidecarPath, mainArchive)
 			}
 			return false, nil
 		}
@@ -327,6 +337,32 @@ func link(args []string) error {
 	if linkOrchestrion != "" {
 		fmt.Fprintf(os.Stderr, "link: orchestrion recheck packagePath=%q main=%q mainBase=%q syntheticTestBinaryLink=%t orchestrion=%q\n", *packagePath, *main, filepath.Base(*main), syntheticTestBinaryLink, linkOrchestrion)
 	}
+	if syntheticTestBinaryLink {
+		fmt.Fprintf(os.Stderr, "link: synthetic test binary detected packagePath=%q main=%q orchestrion_enabled=%t debug=%t\n", *packagePath, *main, linkOrchestrion != "", os.Getenv("ORCHESTRION_DEBUG_TRACE") != "")
+	}
+	if syntheticTestBinaryLink {
+		debugTmpDir := filepath.Join(os.TempDir(), "orchestrion-link-debug-synthetic")
+		if err := os.MkdirAll(debugTmpDir, 0o755); err != nil {
+			return fmt.Errorf("create synthetic link debug tmpdir parent: %w", err)
+		}
+		entries, _ := os.ReadDir(debugTmpDir)
+		for _, entry := range entries {
+			_ = os.RemoveAll(filepath.Join(debugTmpDir, entry.Name()))
+		}
+		if err := os.MkdirAll(debugTmpDir, 0o755); err != nil {
+			return fmt.Errorf("recreate synthetic link debug tmpdir: %w", err)
+		}
+		if _, err := os.Stat(debugTmpDir); err != nil {
+			return fmt.Errorf("stat synthetic link debug tmpdir: %w", err)
+		}
+		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "orchestrion link debug: forcing synthetic link tmpdir %s\n", debugTmpDir)
+		}
+		if err := os.Chmod(debugTmpDir, 0o755); err != nil {
+			return fmt.Errorf("chmod synthetic link debug tmpdir: %w", err)
+		}
+		goargs = append(goargs, "-tmpdir", debugTmpDir, "-v")
+	}
 
 	if linkOrchestrion != "" {
 		srcDirs := make([]string, 0, len(archives))
@@ -386,11 +422,12 @@ func link(args []string) error {
 			if err != nil {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
-			if appliedManifest && (goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "") {
-				fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; appending Datadog closure packagefiles\n")
-			}
-			if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
-				return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
+			if !appliedManifest {
+				if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
+					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
+				}
+			} else if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; reusing compile-time Datadog helper packagefiles\n")
 			}
 			dumpInterestingImportcfgLines(importcfgName, *packagePath)
 			if data, err := os.ReadFile(importcfgName); err == nil {
@@ -484,11 +521,12 @@ func link(args []string) error {
 			if err != nil {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
-			if appliedManifest && (goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "") {
-				fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; appending Datadog closure packagefiles\n")
-			}
-			if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
-				return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
+			if !appliedManifest {
+				if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
+					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
+				}
+			} else if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; reusing compile-time Datadog helper packagefiles\n")
 			}
 			if goenv.stdlibCache != "" {
 				if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {

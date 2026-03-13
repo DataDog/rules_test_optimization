@@ -705,7 +705,8 @@ func appendMissingModulePackagefiles(importcfgPath string, goenv *env, packages 
 	if len(packages) == 0 || goenv == nil || goenv.sdk == "" {
 		return nil
 	}
-	exports, err := resolveModuleExportsForPackages(goenv, packages, orchestrionPath, moduleDir)
+	forcedExportRoot := detectExistingModuleExportRoot(importcfgPath)
+	exports, err := resolveModuleExportsForPackagesWithRoot(goenv, packages, orchestrionPath, moduleDir, forcedExportRoot)
 	if err != nil {
 		return err
 	}
@@ -721,9 +722,59 @@ func appendMissingModulePackagefiles(importcfgPath string, goenv *env, packages 
 				fmt.Fprintf(os.Stderr, "orchestrion link debug: module export %s=%s\n", pkg, exports[pkg])
 			}
 		}
+		if forcedExportRoot != "" {
+			fmt.Fprintf(os.Stderr, "orchestrion link debug: reusing existing module export root %s\n", forcedExportRoot)
+		}
 	}
-	return appendMissingPackagefiles(importcfgPath, exports, "module")
+	directives := make([]string, 0, len(exports))
+	for pkg, exportPath := range exports {
+		if strings.TrimSpace(exportPath) == "" {
+			continue
+		}
+		directives = append(directives, fmt.Sprintf("packagefile %s=%s", pkg, exportPath))
+	}
+	sort.Strings(directives)
+	if forcedExportRoot != "" {
+		return appendMissingPackagefiles(importcfgPath, exports, "module-forced-root")
+	}
+	return appendOrReplaceImportcfgDirectives(importcfgPath, directives, "module")
 }
+
+func detectExistingModuleExportRoot(importcfgPath string) string {
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "packagefile github.com/DataDog/dd-trace-go/") {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(line, "packagefile "), "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if root := moduleExportRootFromPath(strings.TrimSpace(parts[1])); root != "" {
+			return root
+		}
+	}
+	return ""
+}
+
+func moduleExportRootFromPath(path string) string {
+	path = abs(path)
+	marker := string(filepath.Separator) + "module-exports" + string(filepath.Separator)
+	idx := strings.Index(path, marker)
+	if idx < 0 {
+		return ""
+	}
+	base := path[idx+len(marker):]
+	parts := strings.Split(base, string(filepath.Separator))
+	if len(parts) < 2 {
+		return ""
+	}
+	return filepath.Join(path[:idx+len(marker)], parts[0], parts[1])
+}
+
 func resolveBazelStdlibPkgArchives(goenv *env, packages []string) (map[string]string, error) {
 	if goenv == nil || goenv.goroot == "" || goenv.installSuffix == "" || len(packages) == 0 {
 		return nil, nil
@@ -748,6 +799,10 @@ func resolveBazelStdlibPkgArchives(goenv *env, packages []string) (map[string]st
 }
 
 func resolveModuleExportsForPackages(goenv *env, packages []string, orchestrionPath, moduleDir string) (map[string]string, error) {
+	return resolveModuleExportsForPackagesWithRoot(goenv, packages, orchestrionPath, moduleDir, "")
+}
+
+func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orchestrionPath, moduleDir, forcedExportRoot string) (map[string]string, error) {
 	if len(packages) == 0 || goenv == nil || goenv.sdk == "" {
 		return nil, nil
 	}
@@ -803,15 +858,22 @@ func resolveModuleExportsForPackages(goenv *env, packages []string, orchestrionP
 		return nil, fmt.Errorf("prepare module gomodcache: %w", err)
 	}
 	cmd.Env = setEnv(cmd.Env, "GOMODCACHE", gomodcache)
-	gocacheSuffix, err := currentWovenStdlibCacheKey(goenv)
-	if err != nil {
-		return nil, fmt.Errorf("derive module export cache key: %w", err)
+	var gocache string
+	if forcedExportRoot != "" {
+		gocache = abs(forcedExportRoot)
+		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "orchestrion link debug: module exports request moduleDir=%s forcedRoot=%s packages=%v\n", cmd.Dir, gocache, packages)
+		}
+	} else {
+		requestKey, err := moduleExportRequestKey(cmd.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("derive module export request key: %w", err)
+		}
+		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			fmt.Fprintf(os.Stderr, "orchestrion link debug: module exports request moduleDir=%s requestKey=%s packages=%v\n", cmd.Dir, requestKey, packages)
+		}
+		gocache = filepath.Join(gopath, "cache", "module-exports", requestKey)
 	}
-	requestKey, err := moduleExportRequestKey(cmd.Dir)
-	if err != nil {
-		return nil, fmt.Errorf("derive module export request key: %w", err)
-	}
-	gocache := filepath.Join(gopath, "cache", "module-exports", gocacheSuffix, requestKey)
 	gocache = abs(gocache)
 	if err := os.MkdirAll(gocache, 0o755); err != nil {
 		return nil, fmt.Errorf("prepare module gocache: %w", err)
@@ -869,7 +931,39 @@ func resolveModuleExportsForPackages(goenv *env, packages []string, orchestrionP
 		}
 		exports[parts[0]] = parts[1]
 	}
+	if err := sanitizeModuleExportArchives(exports); err != nil {
+		return nil, err
+	}
 	return exports, nil
+}
+
+func sanitizeModuleExportArchives(exports map[string]string) error {
+	for pkg, archivePath := range exports {
+		archivePath = strings.TrimSpace(archivePath)
+		if archivePath == "" {
+			continue
+		}
+		if _, err := readArchiveEntry(archivePath, "link.deps"); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("inspect module export archive for %s: %w", pkg, err)
+		}
+		sanitizedPath := archivePath + ".nolinkdeps"
+		if _, err := os.Stat(sanitizedPath); err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("stat sanitized module export archive for %s: %w", pkg, err)
+			}
+			if err := copyArchiveWithoutEntries(archivePath, sanitizedPath, map[string]bool{"link.deps": true}); err != nil {
+				return fmt.Errorf("sanitize module export archive for %s: %w", pkg, err)
+			}
+			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				fmt.Fprintf(os.Stderr, "orchestrion link debug: stripped link.deps from module export archive %s -> %s\n", archivePath, sanitizedPath)
+			}
+		}
+		exports[pkg] = sanitizedPath
+	}
+	return nil
 }
 
 func moduleExportRequestKey(moduleDir string) (string, error) {
@@ -877,7 +971,7 @@ func moduleExportRequestKey(moduleDir string) (string, error) {
 	var b strings.Builder
 	b.WriteString(moduleDir)
 	b.WriteString("\n")
-	for _, name := range []string{"go.mod", "go.sum", "orchestrion.tool.go", "orchestrion.yml"} {
+	for _, name := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
 		path := filepath.Join(moduleDir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {

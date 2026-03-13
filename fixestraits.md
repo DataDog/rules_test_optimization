@@ -22,17 +22,43 @@ What is already true:
   - `instrumentTestingM`
   - `instrumentTestingTFunc`
   - `__dd_civisibility`
-- Earlier stdlib cache-family and build-setting issues were fixed.
-- The remaining blocker is at **final synthetic link** in the local `_tests` fast cycle.
+- Earlier stdlib cache-family, build-setting, and helper-root mismatch issues were fixed.
+- The remaining blocker is at **final synthetic Darwin external link** in the local `_tests` fast cycle.
 
 Current failure:
 
-- final synthetic link fails with a Datadog helper archive fingerprint mismatch
-- the mismatch is currently between helper archives from different export families, for example:
-  - `github.com/DataDog/dd-trace-go/v2/internal`
-  - imported from `github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting`
+- final synthetic link now fails in Darwin external linking with:
+  - `ld64.lld: error: .../go-link-224168786/000000.o: unhandled file type`
+- root cause is now concrete:
+  - `000000.o` is the extracted archive member `orchestrion.pack` from `hello_test__raw_go_test~testmain.a`
+  - this is metadata, not an object file
+  - Darwin external link enumerates archive members and tries to feed it to `ld64.lld` as an object
+  - therefore the synthetic packagefile manifest must not live inside the `.a` archive
+- the final synthetic importcfg already contains:
+  - woven stdlib cache-family packagefiles for `runtime`, `testing`, `fmt`, `flag`, `log`, `log/slog`, `net/http`
+  - sanitized Datadog helper packagefiles (`.nolinkdeps`) for:
+    - `github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting`
+    - `github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations`
+    - `github.com/DataDog/dd-trace-go/v2/ddtrace/tracer`
+    - `github.com/DataDog/dd-trace-go/v2/profiler`
+    - contrib `log/slog` and `net/http` helpers
 
-This strongly suggests we are still mixing two different helper-export roots in the final link importcfg.
+This strongly suggests the blocker is no longer “wrong helper root”, but the exact object materialized by `go tool link` for Darwin external linking.
+
+Current fix under test:
+
+- move the synthetic `orchestrion.pack` manifest from an archive member to a sidecar file next to `~testmain.a`
+- keep a temporary archive-member fallback in link for compatibility while validating the sidecar path
+- rerun the local `_tests` fast cycle and confirm the old Darwin `000000.o: unhandled file type` failure disappears
+
+Latest result:
+
+- the sidecar fix did remove the old Darwin `orchestrion.pack` object leak
+- the next blocker is a helper-export family drift:
+  - synthetic `testmain` compile resolves `gotesting` from one `module-exports/...` root
+  - final link resolves the same package from a different `module-exports/...` root
+- current hypothesis is that the extra `currentWovenStdlibCacheKey` layer in helper export cache paths is too unstable during one Bazel build
+- current fix under test is to key helper export roots only by module state (`moduleExportRequestKey`) so compile and final link reuse the same Datadog helper export family
 
 ## Repositories Involved
 
@@ -211,6 +237,103 @@ Result:
 - produced the current best signal:
   - the final synthetic link is still mixing helper archive families
 
+### 11. Helper export family narrowing
+
+Tried:
+
+- dumping the final synthetic link importcfg into `/tmp/orchestrion-link-importcfg-synthetic-latest.txt`
+- proving that `gotesting` / `integrations` and the broader Datadog closure still resolve from different helper-export roots
+- changing synthetic `testmain` compile to warm the full Datadog closure, not only `gotesting` / `integrations`
+- removing `go.sum` from the helper-export cache request key so module export families are not split by mutable sum-file churn during the same build
+- adding explicit debug logs for:
+  - helper-export request key
+  - module dir
+  - package set used by each helper-export resolve call
+
+Result:
+
+- patch applied locally
+- helper-export families in final synthetic link are now unified, but compile-time synthetic `testmain` was still using a different helper-export family
+- root cause narrowed further:
+  - synthetic `testmain` compile was deriving `moduleDir` from package paths
+  - final synthetic link was resolving helper exports from the real source module dir
+  - that made `main` compile against one `gotesting` archive while final link used another
+
+Latest local patch:
+
+- synthetic `testmain` compile now prefers the real source module dir from `embedLookupDirs`
+- only falls back to the older package-path guess if no source-module hint is available
+- final synthetic link now detects any existing Datadog helper export root from the synthetic manifest importcfg and reuses that root when resolving additional Datadog helper packagefiles
+
+Latest result:
+
+- the final synthetic importcfg now carries a single helper-export family for `gotesting`, `integrations`, `tracer`, `profiler`, and the contrib helpers
+- but the compile-time synthetic `main` archive is still being linked against a different `gotesting` archive than the one used at final link
+- the final-link recomputation was no longer choosing a different root, it was rebuilding and replacing `gotesting` within the same root
+- latest patch changes the final-link behavior again:
+  - preserve the compile-time `gotesting` / `integrations` packagefiles when a helper root is already present
+  - only append the missing Datadog helper packagefiles from that same root
+
+### 12. Full synthetic helper manifest
+
+Tried:
+
+- persisting the full Datadog helper export map discovered during synthetic `testmain` compile into `orchestrion.pack`, not just the root alias packagefiles
+- changing final synthetic link to skip `appendMissingModulePackagefiles(...)` when that manifest is present and instead trust the compile-time helper packagefiles entirely
+
+Current hypothesis:
+
+- the last remaining `gotesting -> internal` mismatch is caused by final-link helper recomputation mutating a reused helper-export root in place
+- if final link uses the exact compile-time helper packagefiles from the synthetic manifest, helper archives should remain internally consistent and the final synthetic link should stop drifting
+
+Validation target:
+
+- rerun the local `_tests` fast cycle
+- confirm final synthetic importcfg contains the compile-time helper packagefiles without any new helper resolution at link
+- check whether the `github.com/DataDog/dd-trace-go/v2/internal` fingerprint mismatch disappears
+
+### 13. Helper archive sanitization
+
+Tried:
+
+- comparing the synthetic helper-export archives against a plain `go list -export` tracer archive
+- discovering that our helper-export archives carry an extra `link.deps` member while the plain Go archive does not
+- adding a local sanitization step so module-export archives are copied to `.nolinkdeps` variants before they are injected into compile/link importcfgs
+
+Current hypothesis:
+
+- the latest Darwin linker failure (`ld64.lld: unhandled file type`) is caused by the extra `link.deps` member in the Datadog helper package archives
+- stripping that member should leave a normal package archive layout closer to the plain `go list -export` result and let the final synthetic link proceed
+
+Result:
+
+- the old `gotesting -> internal` fingerprint mismatch stopped appearing
+- final synthetic importcfg now shows one helper-export family plus sanitized Datadog helper archives
+- but Darwin final link still fails with:
+  - `ld64.lld: error: .../000000.o: unhandled file type`
+
+### 14. Deterministic synthetic link tmpdir preservation
+
+Tried:
+
+- making synthetic final link log its detection loudly
+- forcing a deterministic tmpdir under:
+  - `/tmp/orchestrion-link-debug-synthetic`
+- clearing and recreating that directory on each debug run
+- keeping `-v` enabled for the synthetic `go tool link` path
+
+Current result:
+
+- the synthetic link path is definitely active
+- the final log now proves `link.go` is executing, but the link action itself does **not** carry `ORCHESTRION_DEBUG_TRACE`
+- because of that, the earlier tempdir-preservation block never triggered even though the synthetic link path was active
+- because of that, the Darwin linker tempdir still disappears before we can inspect `000000.o`
+
+Latest local patch:
+
+- synthetic final-link tmpdir preservation is now unconditional for synthetic test binaries
+- it no longer depends on `ORCHESTRION_DEBUG_TRACE`
+
 ## What We Know Now
 
 ### Proven
@@ -228,48 +351,62 @@ Result:
 
 ## Current Hypothesis
 
-The remaining bug is in the synthetic final-link importcfg construction:
+The remaining bug is no longer package selection. It is the **shape of one object produced or selected during synthetic Darwin final link**.
 
-- compile-time helper resolution and final-link helper resolution are still using **different helper-export roots**
-- `gotesting` / `integrations` packagefiles come from one helper-export family
-- `tracer`, `profiler`, or related Datadog helper packagefiles come from another
-- the final linker then sees incompatible fingerprints for transitive shared packages like:
-  - `github.com/DataDog/dd-trace-go/v2/internal`
+Most likely candidates:
+
+- one object emitted into the `go-link-*` tempdir is not a valid Darwin object for `ld64.lld`
+- the bad object may be derived from one of the sanitized Datadog helper archives
+- or the synthetic testmain plain-link path is still not using the exact builder binary we think it is, which would explain why the forced tmpdir diagnostics are missing
 
 This is why:
 
 - stdlib `testing.a` can already be correctly woven
-- yet final synthetic link still fails
+- final synthetic importcfg already looks reasonable
+- yet Darwin external link still fails before the final test binary is produced
 
 ## Likely Files To Fix Next
 
-- [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
 - [third_party/rules_go_orchestrion/go/tools/builders/link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/stdlib.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/stdlib.go)
+- [third_party/rules_go_orchestrion/go/tools/builders/ar.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/ar.go)
+- [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
 
 ## Next Steps
 
-### 1. Unify helper export family end-to-end
-
-Make synthetic `testmain` compile and final link use the exact same helper export family.
+### 1. Capture the Darwin synthetic link tmpdir for real
 
 Concrete direction:
 
-- inspect every path that resolves Datadog helper packagefiles
-- ensure both compile-time and final-link helper injection call into one shared resolver path
-- remove any remaining package-set-based divergence in helper export cache selection
+- rerun the fast local `_tests` cycle after forcing a deterministic synthetic tmpdir
+- verify the new link builder binary actually logs:
+  - `link: synthetic test binary detected ...`
+  - `orchestrion link debug: forcing synthetic link tmpdir ...`
+- inspect `/tmp/orchestrion-link-debug-synthetic` immediately after failure
 
-### 2. Replace stale helper entries instead of only appending missing ones
-
-If final synthetic link carries helper packagefiles from compile-time manifests, then simply appending missing entries is not enough.
+### 2. Inspect the rejected `000000.o`
 
 Concrete direction:
 
-- in final synthetic link importcfg generation, actively replace conflicting Datadog helper packagefile entries with the canonical family chosen for final link
+- once the tempdir is preserved, inspect:
+  - `000000.o`
+  - `go.o`
+  - any neighboring numbered objects
+- use:
+  - `file`
+  - `xxd`
+  - `otool`
+  - compare against `_go_.o` extracted from sanitized helper archives
 
-### 3. Re-verify runtime once final link passes
+### 3. If `000000.o` comes from sanitized helper archives, narrow or revert that sanitization
+
+Concrete direction:
+
+- if the rejected object is traced back to `.nolinkdeps` helper archives, stop mutating all helper archives
+- instead, either:
+  - preserve original helper archives and solve `link.deps` another way
+  - or sanitize only the specific archives proven to be safe
+
+### 4. Re-verify runtime once final link passes
 
 Once the local `_tests` fast cycle passes:
 
