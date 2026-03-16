@@ -62,6 +62,30 @@ Post-cleanup validation still passes:
   - `instrumentTestingTFunc: instrumenting test function`
   - `instrumentTestingM: finished with exit code: 0`
 
+Second cleanup pass was done in the vendored Orchestrion source patch layer:
+
+- `third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl`
+
+Second-pass cleanup changes:
+
+- removed the temporary source injection that logged missing package resolution results in `internal/toolexec/aspect/resolve.go`
+- removed the temporary source injection that logged `toolexec` parse decisions in `internal/cmd/toolexec.go`
+- removed the temporary source injection that logged package/file/aspect matching details in `internal/injector/injector.go`
+- removed the extra stderr diagnostics around `oncompile` and `onlink` dependency resolution
+- simplified the injected `fallbackLookup` helper to keep the archive-selection behavior without the debug spew
+- kept the functional `extensions.bzl` patches that are still required for the integration to work
+
+Second-pass runtime validation also passes:
+
+- real `_tests` run forced without test cache:
+  - `./bazelw test //src/go-project:hello_test --nocache_test_results ... --test_output=streamed`
+- runtime output still emits:
+  - `Datadog Tracer v2.6.0 DEBUG: ...`
+  - `instrumentTestingTFunc: instrumenting test function`
+  - `instrumentTestingM: finished with exit code: 0`
+
+So the debug-only Orchestrion source injections are no longer needed.
+
 ## Root Cause We Ended Up Fixing
 
 This turned out to be a two-part synthetic-link problem:
