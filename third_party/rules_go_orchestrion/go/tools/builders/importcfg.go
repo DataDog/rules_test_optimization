@@ -538,17 +538,7 @@ func moduleExportRootFromPath(path string) string {
 	if len(parts) < 1 || strings.TrimSpace(parts[0]) == "" {
 		return ""
 	}
-	root := filepath.Join(path[:idx+len(marker)], parts[0])
-	// Older experiments used an additional family segment under the request key.
-	// If the second component does not look like a go cache prefix dir, keep it as
-	// part of the root so those paths still coalesce correctly.
-	if len(parts) >= 2 {
-		second := strings.TrimSpace(parts[1])
-		if second != "" && len(second) > 2 {
-			root = filepath.Join(root, second)
-		}
-	}
-	return root
+	return filepath.Join(path[:idx+len(marker)], parts[0])
 }
 
 func resolveBazelStdlibPkgArchives(goenv *env, packages []string) (map[string]string, error) {
