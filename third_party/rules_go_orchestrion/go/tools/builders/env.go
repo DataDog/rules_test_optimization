@@ -150,9 +150,6 @@ func (e *env) goToolWithOrchestion(orchestrionPath, tool string, args ...string)
 		// Prepend orchestrion toolexec to wrap the Go tool
 		orchestrionArgs := []string{orchestrionPath}
 		logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
-		if logLevel == "" && os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
-			logLevel = "TRACE"
-		}
 		if logLevel != "" {
 			orchestrionArgs = append(orchestrionArgs, "--log-level="+logLevel)
 		}

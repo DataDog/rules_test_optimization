@@ -740,9 +740,6 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 		// Disable external package driver
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
 
-		if verbose {
-			fmt.Fprintf(os.Stderr, "DEBUG: Starting orchestrion jobserver path=%s cwd=%s PATH including %s, GOROOT=%s\n", orchestrionPath, mustGetwd(), goBinPath, getEnv(cmd.Env, "GOROOT"))
-		}
 	}
 	if err := ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose); err != nil {
 		return nil, err
@@ -881,10 +878,6 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		cmd.Env = setEnv(cmd.Env, toolexecImportPathEnvVar, importPath)
 	}
 	logLevel := strings.TrimSpace(getEnv(cmd.Env, orchestrionLogLevelEnvVar))
-	if logLevel == "" && getEnv(cmd.Env, "ORCHESTRION_DEBUG_TRACE") == "1" {
-		logLevel = "TRACE"
-		cmd.Env = setEnv(cmd.Env, orchestrionLogLevelEnvVar, logLevel)
-	}
 	if logLevel != "" && filepath.Base(cmd.Path) == "orchestrion_bin" {
 		hasLogLevel := false
 		for _, arg := range cmd.Args[1:] {
@@ -906,7 +899,7 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 func mustGetwd() string {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Sprintf("<cwd error: %v>", err)
+		return "."
 	}
 	return cwd
 }

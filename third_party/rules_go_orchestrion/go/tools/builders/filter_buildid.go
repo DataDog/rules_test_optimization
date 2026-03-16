@@ -37,9 +37,6 @@ func filterBuildID(args []string) error {
 	if orchestrion := strings.TrimSpace(os.Getenv("RULES_GO_ORCHESTRION_FILTERBUILDID")); orchestrion != "" {
 		orchestrionArgs := []string{orchestrion}
 		logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
-		if logLevel == "" && os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
-			logLevel = "TRACE"
-		}
 		if logLevel != "" {
 			orchestrionArgs = append(orchestrionArgs, "--log-level="+logLevel)
 		}
@@ -97,9 +94,6 @@ func orchestrionFilterBuildID(args []string) error {
 	}
 	orchestrionArgs := []string{orchestrion}
 	logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
-	if logLevel == "" && os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
-		logLevel = "TRACE"
-	}
 	if logLevel != "" {
 		orchestrionArgs = append(orchestrionArgs, "--log-level="+logLevel)
 	}

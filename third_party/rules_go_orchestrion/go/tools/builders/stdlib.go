@@ -101,8 +101,6 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	os.Setenv("GOCACHE", cachePath)
 	if *orchestrion == "" {
 		defer os.RemoveAll(cachePath)
-	} else if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "stdlib: preserving GOCACHE at %s for orchestrion-enabled downstream stdlib consumers\n", cachePath)
 	}
 
 	// Disable modules for the plain stdlib build command. When Orchestrion is
@@ -172,7 +170,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			}
 			if len(discovered) > 0 {
 				orchestrionSrcDirs = multiFlag(discovered)
-				if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+				if goenv.verbose {
 					fmt.Fprintf(os.Stderr, "stdlib: discovered orchestrion source dirs=%v\n", discovered)
 				}
 			}
@@ -200,9 +198,6 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		if cwd, err := os.Getwd(); err == nil {
 			goModPath := filepath.Join(cwd, "go.mod")
 			_ = os.Setenv("GOMOD", goModPath)
-			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "stdlib: exporting GOMOD=%s\n", goModPath)
-			}
 		}
 		prevGo111Module, hadGo111Module := os.LookupEnv("GO111MODULE")
 		_ = os.Setenv("GO111MODULE", "on")
@@ -237,21 +232,11 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			if err := goenv.runCommand(goenv.goCmd(tidyArgs[0], tidyArgs[1:]...)); err != nil {
 				return fmt.Errorf("stdlib: synthetic orchestrion tidy failed: %w", err)
 			}
-			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: synthetic orchestrion tidy completed using dd-trace-go/v2/orchestrion tools-tagged integration imports\n")
 			}
-			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: skipping synthetic orchestrion pin; using synthesized module/tool files instead\n")
-			}
-		}
-		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			diagnosticArgs := [][]string{
-				{"list", "-mod=mod", "-tags=tools", "-f", "{{.ImportPath}} GoFiles={{.GoFiles}} IgnoredGoFiles={{.IgnoredGoFiles}}", "github.com/DataDog/dd-trace-go/v2/orchestrion"},
-			}
-			for _, diag := range diagnosticArgs {
-				if err := goenv.runCommand(goenv.goCmd(diag[0], diag[1:]...)); err != nil && goenv.verbose {
-					fmt.Fprintf(os.Stderr, "stdlib: diagnostic command failed %q: %v\n", strings.Join(diag, " "), err)
-				}
 			}
 		}
 		goFlags := strings.TrimSpace(os.Getenv("GOFLAGS"))
@@ -262,21 +247,14 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 				goFlags += " -tags=tools"
 			}
 			_ = os.Setenv("GOFLAGS", goFlags)
-			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
+			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: forcing GOFLAGS=%s\n", goFlags)
 			}
-		}
-		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			cwd, _ := os.Getwd()
-			fmt.Fprintf(os.Stderr, "stdlib: orchestrion enabled cwd=%s sdk=%s goroot=%s orchsrc=%v\n", cwd, goenv.sdk, output, []string(orchestrionSrcDirs))
 		}
 		stdlibWorkDir := ""
 		if cwd, err := os.Getwd(); err == nil {
 			stdlibWorkDir = cwd
 			_ = os.Setenv("RULES_GO_ORCHESTRION_WORKDIR", cwd)
-			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "stdlib: exporting RULES_GO_ORCHESTRION_WORKDIR=%s\n", cwd)
-			}
 		}
 		toolexec = quotePathIfNeeded(abs(os.Args[0])) + " orchestrionfilterbuildid " + quotePathIfNeeded(*orchestrion)
 		if stdlibWorkDir != "" {
@@ -339,7 +317,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		if err := goenv.runCommandWithJobserver(installArgs, jobserver, ""); err != nil {
 			return err
 		}
-		if err := persistOrchestrionStdlibExports(goenv, append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRoots...), goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != ""); err != nil {
+		if err := persistOrchestrionStdlibExports(goenv, append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRoots...), goenv.verbose); err != nil {
 			return fmt.Errorf("stdlib: persist orchestrion stdlib exports: %w", err)
 		}
 		return nil
