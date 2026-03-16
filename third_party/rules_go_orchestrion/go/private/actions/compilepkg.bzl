@@ -69,7 +69,7 @@ def emit_compilepkg(
         clinkopts = [],
         out_lib = None,
         out_export = None,
-        out_orchestrion_manifest = None,
+        out_synthetic_testmain_manifest = None,
         out_facts = None,
         out_diagnostics = None,
         out_nogo_validation = None,
@@ -99,8 +99,8 @@ def emit_compilepkg(
                      [archive.data.export_file for archive in archives])
     inputs_transitive = [sdk.headers, sdk.tools, go.stdlib.libs, go.stdlib.cache_dir, headers]
     outputs = [out_lib, out_export]
-    if out_orchestrion_manifest != None:
-        outputs.append(out_orchestrion_manifest)
+    if out_synthetic_testmain_manifest != None:
+        outputs.append(out_synthetic_testmain_manifest)
 
     shared_args = go.builder_args(go)
     shared_args.add_all(sources, before_each = "-src")
@@ -143,6 +143,8 @@ def emit_compilepkg(
 
     compile_args.add("-lo", out_lib)
     compile_args.add("-o", out_export)
+    if out_synthetic_testmain_manifest:
+        compile_args.add("-synthetic_testmain_manifest", out_synthetic_testmain_manifest)
     compile_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     if out_cgo_export_h:
         compile_args.add("-cgoexport", out_cgo_export_h)

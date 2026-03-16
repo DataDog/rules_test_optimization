@@ -78,25 +78,25 @@ func collectOrchestrionLinkClosurePackages(archives []archive) []string {
 	return packages
 }
 
-func isSyntheticTestBinaryLink(mainArchive, packagePath string) bool {
+func isSyntheticTestmainLink(mainArchive, packagePath string) bool {
 	mainBase := filepath.Base(mainArchive)
 	return strings.HasSuffix(mainBase, "~testmain.a") && (packagePath == "testmain" || packagePath == "")
 }
 
-func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive string) (bool, error) {
+func readSyntheticTestmainPackagefileManifest(mainArchive string) ([]string, error) {
 	sidecarPath := syntheticTestmainPackagefileManifestSidecarPath(mainArchive)
 	data, err := os.ReadFile(sidecarPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("read synthetic packagefile manifest sidecar %s: %w", sidecarPath, err)
+		return nil, fmt.Errorf("read synthetic packagefile manifest sidecar %s: %w", sidecarPath, err)
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		data, err = readArchiveEntry(mainArchive, syntheticTestmainPackagefileManifestName)
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+			return nil, nil
 		}
-		return false, fmt.Errorf("read synthetic packagefile manifest from %s: %w", mainArchive, err)
+		return nil, fmt.Errorf("read synthetic packagefile manifest from %s: %w", mainArchive, err)
 	}
 	directives := strings.Split(strings.TrimSpace(string(data)), "\n")
 	filtered := make([]string, 0, len(directives))
@@ -105,6 +105,14 @@ func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive strin
 		if strings.HasPrefix(line, "packagefile ") {
 			filtered = append(filtered, line)
 		}
+	}
+	return filtered, nil
+}
+
+func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive string) (bool, error) {
+	filtered, err := readSyntheticTestmainPackagefileManifest(mainArchive)
+	if err != nil {
+		return false, err
 	}
 	if len(filtered) == 0 {
 		return false, nil
@@ -176,7 +184,7 @@ func link(args []string) error {
 	}
 
 	orchImportPath := *packagePath
-	syntheticTestBinaryLink := isSyntheticTestBinaryLink(*main, *packagePath)
+	syntheticTestBinaryLink := isSyntheticTestmainLink(*main, *packagePath)
 	sdkPath := abs(goenv.sdk)
 	linkOrchestrion := *orchestrion
 	if syntheticTestBinaryLink {
@@ -254,7 +262,7 @@ func link(args []string) error {
 		return err
 	}
 
-	syntheticTestBinaryLink = isSyntheticTestBinaryLink(*main, *packagePath)
+	syntheticTestBinaryLink = isSyntheticTestmainLink(*main, *packagePath)
 
 	if linkOrchestrion != "" {
 		srcDirs := make([]string, 0, len(archives))

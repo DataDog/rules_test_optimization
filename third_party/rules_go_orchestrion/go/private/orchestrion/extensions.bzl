@@ -25,6 +25,8 @@ def _orchestrion_build_impl(ctx):
         stripPrefix = "orchestrion-%s" % version.lstrip("v"),
     )
 
+    # Resolver / tempdir compatibility patches for Bazel sandboxes and the
+    # synthetic temp-module layout used by the vendored builders.
     # The upstream package resolver recursively re-runs `go list` under
     # `-toolexec=orchestrion toolexec`, which causes woven dependency lookups to
     # fail under Bazel's sandbox even when plain `go list -mod=mod` succeeds in
@@ -55,6 +57,7 @@ def _orchestrion_build_impl(ctx):
     resolve_src = resolve_src.replace(resolve_merge_old, resolve_merge_new, 1)
     ctx.file(resolve_path, resolve_src)
 
+    # Compile-proxy / archive metadata patches for the synthetic testmain flow.
     linkdeps_path = "internal/toolexec/aspect/linkdeps/linkdeps.go"
     linkdeps_src = ctx.read(linkdeps_path)
     linkdeps_old = """\n\tdata, err = readArchiveData(archive, Filename)\n\tif err != nil {\n\t\treturn res, fmt.Errorf(\"reading %s from %q: %w\", Filename, archive, err)\n\t}\n"""
@@ -108,6 +111,8 @@ def _orchestrion_build_impl(ctx):
         fail("Could not patch Orchestrion oncompile resolver context in %s" % oncompile_path)
     ctx.file(oncompile_path, oncompile_src.replace(oncompile_old, oncompile_new, 1))
 
+    # Resolver-context patches for onlink / oncompile-main so dependency lookups
+    # run under Bazel's import-path context instead of synthetic package names.
     onlink_path = "internal/toolexec/aspect/onlink.go"
     onlink_src = ctx.read(onlink_path)
     onlink_old = """\t\t\tdeps, err := resolvePackageFiles(ctx, depPath, cmd.WorkDir)\n"""
@@ -124,6 +129,8 @@ def _orchestrion_build_impl(ctx):
         fail("Could not patch Orchestrion oncompile-main resolver context in %s" % oncompile_main_path)
     ctx.file(oncompile_main_path, oncompile_main_src.replace(oncompile_main_old, oncompile_main_new, 1))
 
+    # Process-tree and injector prefilter patches that keep Orchestrion stable
+    # under Bazel's parent process graph and stdlib weaving path.
     goflags_path = "internal/goflags/flags.go"
     goflags_src = ctx.read(goflags_path)
     goflags_old = """\t\tif err != nil {\n\t\t\treturn flags, fmt.Errorf(\"failed to resolve argv0 (%q) of %d: %w\", args[0], p.Pid, err)\n\t\t}\n"""
@@ -150,6 +157,8 @@ def _orchestrion_build_impl(ctx):
         fail("Could not patch Orchestrion inject-declarations imports in %s" % inject_path)
     ctx.file(inject_path, inject_src.replace(inject_old, inject_new, 1))
 
+    # Stdlib lookup patch so Bazel-built stdlib/testmain compiles can fall back
+    # to the correct archive family when importcfg alone is insufficient.
     oncompile_diag_path = "internal/toolexec/aspect/oncompile.go"
     oncompile_diag_src = ctx.read(oncompile_diag_path)
     oncompile_imports_old = """\t\"context\"\n\t\"fmt\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"slices\"\n\t\"strings\"\n"""
@@ -203,6 +212,8 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     oncompile_diag_src = oncompile_diag_src.replace(oncompile_insert_after, oncompile_insert_after + oncompile_helper, 1)
     ctx.file(oncompile_diag_path, oncompile_diag_src)
     
+    # Build the patched Orchestrion tool from source with the same Go version
+    # family the Bazel integration expects.
     # Try to find go binary
     go_path = ctx.which("go")
     if not go_path:

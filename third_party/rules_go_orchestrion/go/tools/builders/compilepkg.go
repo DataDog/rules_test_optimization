@@ -43,9 +43,28 @@ var syntheticTestmainRootPackages = []struct {
 }
 
 const syntheticTestmainPackagefileManifestName = "orchestrion.pack"
+const syntheticTestmainPackagefileManifestSidecarSuffix = "." + syntheticTestmainPackagefileManifestName
 
 func syntheticTestmainPackagefileManifestSidecarPath(archivePath string) string {
-	return archivePath + "." + syntheticTestmainPackagefileManifestName
+	return archivePath + syntheticTestmainPackagefileManifestSidecarSuffix
+}
+
+func writeSyntheticTestmainPackagefileManifest(outputPath, sourcePath string) error {
+	if strings.TrimSpace(outputPath) == "" {
+		return nil
+	}
+	data := []byte{}
+	if strings.TrimSpace(sourcePath) != "" {
+		var err error
+		data, err = os.ReadFile(sourcePath)
+		if err != nil {
+			return fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", sourcePath, err)
+		}
+	}
+	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+		return fmt.Errorf("write synthetic testmain packagefile manifest %s: %w", outputPath, err)
+	}
+	return nil
 }
 
 func compilePkg(args []string) error {
@@ -61,7 +80,7 @@ func compilePkg(args []string) error {
 	var unfilteredSrcs, coverSrcs, embedSrcs, embedLookupDirs, embedRoots, recompileInternalDeps multiFlag
 	var deps archiveMultiFlag
 	var importPath, packagePath, packageListPath, coverMode string
-	var outLinkobjPath, outInterfacePath, cgoExportHPath, cgoGoSrcsPath string
+	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, cgoExportHPath, cgoGoSrcsPath string
 	var testFilter string
 	var gcFlags, asmFlags, cppFlags, cFlags, cxxFlags, objcFlags, objcxxFlags, ldFlags quoteMultiFlag
 	var coverFormat string
@@ -89,6 +108,7 @@ func compilePkg(args []string) error {
 	fs.StringVar(&coverMode, "cover_mode", "", "The coverage mode to use. Empty if coverage instrumentation should not be added.")
 	fs.StringVar(&outLinkobjPath, "lo", "", "The full output archive file required by the linker")
 	fs.StringVar(&outInterfacePath, "o", "", "The export-only output archive required to compile dependent packages")
+	fs.StringVar(&outSyntheticTestmainManifestPath, "synthetic_testmain_manifest", "", "Sidecar manifest that records compile-time Datadog helper packagefiles for synthetic Bazel testmain archives")
 	fs.StringVar(&cgoExportHPath, "cgoexport", "", "The _cgo_exports.h file to write")
 	fs.StringVar(&cgoGoSrcsPath, "cgo_go_srcs", "", "The directory to emit cgo-generated Go sources for nogo consumption to")
 	fs.StringVar(&testFilter, "testfilter", "off", "Controls test package filtering")
@@ -153,6 +173,7 @@ func compilePkg(args []string) error {
 		packageListPath,
 		outLinkobjPath,
 		outInterfacePath,
+		outSyntheticTestmainManifestPath,
 		cgoExportHPath,
 		cgoGoSrcsPath,
 		coverFormat,
@@ -186,6 +207,7 @@ func compileArchive(
 	packageListPath string,
 	outLinkObj string,
 	outInterfacePath string,
+	outSyntheticTestmainManifestPath string,
 	cgoExportHPath string,
 	cgoGoSrcsForNogoPath string,
 	coverFormat string,
@@ -483,17 +505,13 @@ func compileArchive(
 		return err
 	}
 	if syntheticTestmain {
-		sidecarPath := syntheticTestmainPackagefileManifestSidecarPath(outLinkObj)
-		data := []byte{}
-		if syntheticTestmainPackagefiles != "" {
-			var err error
-			data, err = os.ReadFile(syntheticTestmainPackagefiles)
-			if err != nil {
-				return fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", syntheticTestmainPackagefiles, err)
-			}
+		if outSyntheticTestmainManifestPath == "" {
+			outSyntheticTestmainManifestPath = syntheticTestmainPackagefileManifestSidecarPath(outLinkObj)
 		}
-		if err := os.WriteFile(sidecarPath, data, 0o644); err != nil {
-			return fmt.Errorf("write synthetic testmain packagefile manifest sidecar %s: %w", sidecarPath, err)
+		if err := writeSyntheticTestmainPackagefileManifest(outSyntheticTestmainManifestPath, syntheticTestmainPackagefiles); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
 		}
 	}
 
