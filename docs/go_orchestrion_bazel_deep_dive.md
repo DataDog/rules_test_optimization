@@ -67,7 +67,6 @@ dd_topt_go_test(
     name = "pkg_test",
     srcs = ["*_test.go"],
     topt_data = topt_data,
-    go_test_rule = go_test,
 )
 ```
 

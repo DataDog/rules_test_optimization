@@ -28,7 +28,8 @@ Macro design constraints:
 Maintenance notes:
 - This file belongs to the Go companion module and should be the only macro
   surface depending on rules_go behavior.
-- Keep this macro repository-agnostic by requiring `go_test_rule` injection.
+- Default to rules_go's `go_test`; keep `go_test_rule` only as an optional
+  override for tests and advanced callers.
 - Avoid hardcoding labels outside values exported by `@<repo>//:export.bzl`.
 - Preserve compatibility with both single-service (`topt_data`) and
   multi-service (`topt_data_by_service`) exports.
@@ -36,6 +37,8 @@ Maintenance notes:
   env/data wiring, default/custom rundir behavior, and multi-service
   service-key resolution.
 """
+
+load("@rules_go//go:def.bzl", "go_test")
 
 load(
     "@datadog-rules-test-optimization//tools/core:common_utils.bzl",
@@ -120,8 +123,8 @@ def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
         topt_data,
-        # Required: pass the rules_go go_test rule symbol from your BUILD file (e.g., go_test_rule = go_test)
-        go_test_rule,
+        # Optional override for tests or advanced callers. Defaults to rules_go's go_test.
+        go_test_rule = go_test,
         # Optional: when using the multi-service aggregator, select the service
         # (raw or sanitized). Ignored when a single-service dict is passed.
         topt_service = None,
@@ -143,8 +146,8 @@ def dd_topt_go_test(
       topt_data: Either the single-service dict exported by @<repo>//:export.bzl, or the
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
         Used to derive the repo alias, go_module_path, and whether to include per-module files.
-      go_test_rule: The rules_go go_test rule symbol (e.g., go_test from @rules_go//go:def.bzl).
-        Required to avoid repo visibility issues.
+      go_test_rule: Optional override for the underlying rules_go go_test rule.
+        Defaults to `go_test` from `@rules_go//go:def.bzl`.
       topt_service: Optional when passing the aggregator mapping; selects which service to use.
         Accepts raw or sanitized service key (e.g., "go-service" or "go_service").
         If sanitization collisions exist, pass the deduped key (for example "go_service_2").
@@ -314,10 +317,8 @@ def dd_topt_go_test(
         macro_name = "dd_topt_go_test",
     )
 
-    # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
-    # Keeping this explicit avoids hidden repository dependencies in the macro.
     if go_test_rule == None:
-        fail_with_prefix("dd_topt_go_test", "you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
+        fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
     # Use the package directory as the default runtime working directory when
     # callers do not specify one. This keeps relative fixture paths stable.

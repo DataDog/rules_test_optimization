@@ -7,9 +7,9 @@ Maintainer goals covered here:
 - Keep service-resolution failure messages actionable for users.
 
 Why this harness exists:
-`dd_topt_go_test` requires a `go_test_rule` symbol from callers. These tests
-inject a lightweight fake executable rule to capture what the macro forwards,
-so we can assert behavior at analysis time without compiling Go code.
+`dd_topt_go_test` defaults to rules_go's `go_test`, but these tests override it
+with a lightweight fake executable rule so we can capture what the macro
+forwards at analysis time without compiling Go code.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
@@ -24,7 +24,7 @@ load(
 )
 
 ToptGoMacroCaptureInfo = provider(
-    doc = "Captured arguments forwarded by dd_topt_go_test to go_test_rule.",
+    doc = "Captured arguments forwarded by dd_topt_go_test to the underlying go_test rule.",
     fields = {
         "data_labels": "Forwarded data dependency labels.",
         "env": "Forwarded environment map.",

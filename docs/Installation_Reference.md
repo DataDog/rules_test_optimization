@@ -238,9 +238,9 @@ use_repo(
 # Macros that expect "topt_data" can use either:
 # 1) Select explicitly:
 #    load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-#    dd_topt_go_test(..., topt_data = topt_data_by_service["go_service"], go_test_rule = go_test)
+#    dd_topt_go_test(..., topt_data = topt_data_by_service["go_service"])
 # 2) Pass the mapping and choose via topt_service (keeps BUILD simpler):
-#    dd_topt_go_test(..., topt_data = topt_data_by_service, topt_service = "go_service", go_test_rule = go_test)
+#    dd_topt_go_test(..., topt_data = topt_data_by_service, topt_service = "go_service")
 #    When service names sanitize to the same key, pass the deduped key shown in
 #    the available list (for example "go_service_2").
 ```
@@ -494,7 +494,6 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],  # Enables provider-based importpath inference
     topt_data = topt_data,
-    go_test_rule = go_test,
 )
 ```
 

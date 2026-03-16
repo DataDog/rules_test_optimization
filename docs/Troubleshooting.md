@@ -163,7 +163,6 @@ full bundle.
    ```bzl
    dd_topt_go_test(
        name = "my_test",
-       go_test_rule = go_test,
        module_label_override = "my_expected_module",  # Matches :module_my_expected_module
        ...
    )

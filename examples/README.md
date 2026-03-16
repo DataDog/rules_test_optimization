@@ -108,7 +108,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
 BUILD.bazel (inference via embed):
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_library")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -122,7 +122,6 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],      # importpath inferred via rules_go provider
     topt_data = topt_data,     # single-service dict
-    go_test_rule = go_test,
 )
 ```
 
@@ -325,7 +324,7 @@ Repository roles in multi-service mode:
 BUILD.bazel — Option A (explicit selection, inference via embed):
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_library")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
@@ -339,7 +338,6 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
     topt_data = topt_data_by_service["go_service"],  # sanitized key
-    go_test_rule = go_test,
 )
 ```
 
@@ -466,7 +464,7 @@ use_repo(topt_py, "test_optimization_data_py")
 BUILD.bazel — Option B (mapping + key, inference via embed):
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_library")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
@@ -482,7 +480,6 @@ dd_topt_go_test(
     topt_data = topt_data_by_service,
     topt_service = "go_service",                 # or raw "go-service"
     # If two services sanitize to the same key, use the deduped key (e.g. go_service_2).
-    go_test_rule = go_test,
 )
 ```
 

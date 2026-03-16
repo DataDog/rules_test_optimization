@@ -159,7 +159,6 @@ The bootstrap helper:
 Then use `dd_topt_go_test` in your package:
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_test")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -167,7 +166,6 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     topt_data = topt_data,
-    go_test_rule = go_test,
 )
 ```
 
@@ -359,7 +357,6 @@ Single-service wrapper pattern (Go example):
 
 ```bzl
 # tools/build/dd_go_test.bzl
-load("@rules_go//go:def.bzl", "go_test")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -367,7 +364,6 @@ def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         topt_data = topt_data,
-        go_test_rule = go_test,
         **kwargs
     )
 ```
@@ -785,7 +781,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
 ### Basic usage
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_library")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -799,7 +795,6 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],  # enables provider-based importpath inference
     topt_data = topt_data,
-    go_test_rule = go_test,
 )
 ```
 
@@ -832,7 +827,6 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     data = glob(["testdata/**"]),
     topt_data = topt_data,
-    go_test_rule = go_test,
 )
 ```
 
@@ -856,14 +850,12 @@ dd_topt_go_test(
     embed = [":pkg_lib"],
     module_label_override = "github_com_example_custom_pkg",
     topt_data = topt_data,
-    go_test_rule = go_test,
 )
 ```
 
 ### Multi-service usage
 
 ```bzl
-load("@rules_go//go:def.bzl", "go_test")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
@@ -872,7 +864,6 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     topt_data = topt_data_by_service,   # pass mapping
     topt_service = "go_service",        # select service
-    go_test_rule = go_test,
 )
 ```
 
