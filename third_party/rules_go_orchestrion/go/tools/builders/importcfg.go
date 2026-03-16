@@ -238,6 +238,102 @@ package with this path is linked.`,
 	return filename, nil
 }
 
+func readImportcfgLines(importcfgPath string) ([]string, error) {
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(string(data), "\n"), nil
+}
+
+func writeImportcfgLines(importcfgPath string, lines []string) error {
+	return os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644)
+}
+
+func parsePackagefileDirective(line string) (pkg, archivePath string, ok bool) {
+	if !strings.HasPrefix(line, "packagefile ") {
+		return "", "", false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(line, "packagefile "), "=", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func parseImportmapDirective(line string) (pkg, mappedTo string, ok bool) {
+	if !strings.HasPrefix(line, "importmap ") {
+		return "", "", false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(line, "importmap "), "=", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func rewriteImportcfgPackagefiles(importcfgPath string, exports map[string]string, skip func(string) bool) error {
+	if len(exports) == 0 {
+		return nil
+	}
+	lines, err := readImportcfgLines(importcfgPath)
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for i, line := range lines {
+		pkg, _, ok := parsePackagefileDirective(line)
+		if !ok {
+			continue
+		}
+		if skip != nil && skip(pkg) {
+			continue
+		}
+		exportPath, ok := exports[pkg]
+		if !ok || strings.TrimSpace(exportPath) == "" {
+			continue
+		}
+		lines[i] = fmt.Sprintf("packagefile %s=%s", pkg, exportPath)
+		replaced = true
+	}
+	if !replaced {
+		return nil
+	}
+	return writeImportcfgLines(importcfgPath, lines)
+}
+
+func appendMissingImportcfgPackagefiles(importcfgPath string, exports map[string]string) error {
+	if len(exports) == 0 {
+		return nil
+	}
+	lines, err := readImportcfgLines(importcfgPath)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]bool, len(lines))
+	for _, line := range lines {
+		pkg, _, ok := parsePackagefileDirective(line)
+		if ok {
+			existing[pkg] = true
+		}
+	}
+	missing := make([]string, 0, len(exports))
+	for pkg, exportPath := range exports {
+		if strings.TrimSpace(exportPath) == "" || existing[pkg] {
+			continue
+		}
+		missing = append(missing, pkg)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	for _, pkg := range missing {
+		lines = append(lines, fmt.Sprintf("packagefile %s=%s", pkg, exports[pkg]))
+	}
+	return writeImportcfgLines(importcfgPath, lines)
+}
+
 func rewriteImportcfgForOrchestrionStdlib(importcfgPath string, goenv *env) error {
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" {
 		return nil
@@ -252,41 +348,9 @@ func rewriteImportcfgForOrchestrionStdlib(importcfgPath string, goenv *env) erro
 	if len(exports) == 0 {
 		return nil
 	}
-
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if parts[0] == "runtime" || parts[0] == "testing" {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-
-	if replaced == 0 {
-		return nil
-	}
-
-	updated := strings.Join(lines, "\n")
-	if err := os.WriteFile(importcfgPath, []byte(updated), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, func(pkg string) bool {
+		return pkg == "runtime" || pkg == "testing"
+	})
 }
 
 func rewriteImportcfgForPersistedStdlib(importcfgPath string, goenv *env) error {
@@ -300,35 +364,7 @@ func rewriteImportcfgForPersistedStdlib(importcfgPath string, goenv *env) error 
 	if len(exports) == 0 {
 		return nil
 	}
-
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func appendMissingPersistedStdlibPackagefiles(importcfgPath string, goenv *env) error {
@@ -342,43 +378,7 @@ func appendMissingPersistedStdlibPackagefiles(importcfgPath string, goenv *env) 
 	if len(exports) == 0 {
 		return nil
 	}
-
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	existing := make(map[string]bool, len(lines))
-	for _, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		existing[parts[0]] = true
-	}
-
-	missing := make([]string, 0, len(exports))
-	for pkg := range exports {
-		if !existing[pkg] {
-			missing = append(missing, pkg)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	sort.Strings(missing)
-	for _, pkg := range missing {
-		lines = append(lines, fmt.Sprintf("packagefile %s=%s", pkg, exports[pkg]))
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return appendMissingImportcfgPackagefiles(importcfgPath, exports)
 }
 
 func rewriteImportcfgForStdlibRoots(importcfgPath string, goenv *env, roots []string) error {
@@ -392,35 +392,7 @@ func rewriteImportcfgForStdlibRoots(importcfgPath string, goenv *env, roots []st
 	if len(exports) == 0 {
 		return nil
 	}
-
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func rewriteImportcfgForCacheStdlibPackages(importcfgPath string, goenv *env, packages []string) error {
@@ -434,35 +406,7 @@ func rewriteImportcfgForCacheStdlibPackages(importcfgPath string, goenv *env, pa
 	if len(exports) == 0 {
 		return nil
 	}
-
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func rewriteImportcfgForExactStdlibPackages(importcfgPath string, goenv *env, packages []string) error {
@@ -476,103 +420,29 @@ func rewriteImportcfgForExactStdlibPackages(importcfgPath string, goenv *env, pa
 	if len(exports) == 0 {
 		return nil
 	}
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func appendMissingPackagefiles(importcfgPath string, exports map[string]string, _ string) error {
-	if len(exports) == 0 {
-		return nil
-	}
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	existing := make(map[string]bool, len(lines))
-	for _, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		existing[parts[0]] = true
-	}
-	missing := make([]string, 0, len(exports))
-	for pkg, exportPath := range exports {
-		if strings.TrimSpace(exportPath) == "" {
-			continue
-		}
-		if existing[pkg] {
-			continue
-		}
-		missing = append(missing, pkg)
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	sort.Strings(missing)
-	for _, pkg := range missing {
-		lines = append(lines, fmt.Sprintf("packagefile %s=%s", pkg, exports[pkg]))
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return appendMissingImportcfgPackagefiles(importcfgPath, exports)
 }
 
 func appendOrReplaceImportcfgDirectives(importcfgPath string, directives []string, _ string) error {
 	if len(directives) == 0 {
 		return nil
 	}
-	data, err := os.ReadFile(importcfgPath)
+	lines, err := readImportcfgLines(importcfgPath)
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(string(data), "\n")
 	indexes := make(map[string]int, len(lines))
 	for i, line := range lines {
-		switch {
-		case strings.HasPrefix(line, "packagefile "):
-			rest := strings.TrimPrefix(line, "packagefile ")
-			parts := strings.SplitN(rest, "=", 2)
-			if len(parts) == 2 {
-				indexes["packagefile "+parts[0]] = i
-			}
-		case strings.HasPrefix(line, "importmap "):
-			rest := strings.TrimPrefix(line, "importmap ")
-			parts := strings.SplitN(rest, "=", 2)
-			if len(parts) == 2 {
-				indexes["importmap "+parts[0]] = i
-			}
+		if pkg, _, ok := parsePackagefileDirective(line); ok {
+			indexes["packagefile "+pkg] = i
+			continue
+		}
+		if pkg, _, ok := parseImportmapDirective(line); ok {
+			indexes["importmap "+pkg] = i
 		}
 	}
 
@@ -610,10 +480,7 @@ func appendOrReplaceImportcfgDirectives(importcfgPath string, directives []strin
 		lines = append(lines, line)
 	}
 
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return writeImportcfgLines(importcfgPath, lines)
 }
 
 func appendMissingModulePackagefiles(importcfgPath string, goenv *env, packages []string, orchestrionPath, moduleDir string) error {
@@ -1073,40 +940,9 @@ func rewriteImportcfgForStdlibClosure(importcfgPath string, goenv *env, pkg stri
 	if len(exports) == 0 {
 		return nil
 	}
-
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exclude[parts[0]] {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-
-	updated := strings.Join(lines, "\n")
-	if err := os.WriteFile(importcfgPath, []byte(updated), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, func(pkg string) bool {
+		return exclude[pkg]
+	})
 }
 
 func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string]string, error) {
@@ -1412,29 +1248,7 @@ func rewriteImportcfgForAllStdlibExports(importcfgPath string, goenv *env) error
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *env) error {
@@ -1448,33 +1262,7 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	if len(exports) == 0 {
 		return nil
 	}
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string) error {
@@ -1507,44 +1295,17 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	if len(exports) == 0 {
 		return nil
 	}
-	data, err := os.ReadFile(importcfgPath)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	replaced := 0
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "packagefile ") {
-			continue
-		}
-		rest := strings.TrimPrefix(line, "packagefile ")
-		parts := strings.SplitN(rest, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
-			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
-			replaced++
-		}
-	}
-	if replaced == 0 {
-		return nil
-	}
-	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
-		return err
-	}
-	return nil
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) error {
 	if goenv == nil {
 		return nil
 	}
-	data, err := os.ReadFile(importcfgPath)
+	lines, err := readImportcfgLines(importcfgPath)
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(string(data), "\n")
 	packages := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, line := range lines {
@@ -1586,22 +1347,7 @@ func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) 
 	if len(exports) == 0 {
 		return nil
 	}
-	updated := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "packagefile ") {
-			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "packagefile "))
-			parts := strings.SplitN(rest, "=", 2)
-			if len(parts) == 2 {
-				pkg := strings.TrimSpace(parts[0])
-				if exportPath, ok := exports[pkg]; ok && strings.TrimSpace(exportPath) != "" {
-					line = fmt.Sprintf("packagefile %s=%s", pkg, exportPath)
-				}
-			}
-		}
-		updated = append(updated, line)
-	}
-	return os.WriteFile(importcfgPath, []byte(strings.Join(updated, "\n")), 0o666)
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func resolveStdlibExportsForPackageSet(goenv *env, packages []string) (map[string]string, error) {
