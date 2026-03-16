@@ -2,85 +2,41 @@
 
 ## Purpose
 
-This document explains, in detail, how Go compile-time instrumentation works in this repository through:
+This document explains the Go instrumentation path as it exists today in this
+repository.
 
-- the Go companion module
-- the vendored `rules_go` fork under `third_party/rules_go_orchestrion`
-- Datadog Orchestrion
-- Bazel test execution
+It focuses on the current steady-state design:
 
-It also explains the multi-day debugging effort that led to the final working implementation, which changes were essential, and why the final fix was harder than it initially looked.
+- how `dd_topt_go_test` is exposed to users
+- how bootstrap wires a workspace for Orchestrion
+- how the vendored `rules_go` fork invokes Orchestrion under Bazel
+- how stdlib weaving, synthetic `testmain`, and final link stay consistent
+- which invariants matter if you need to maintain or extend this path
 
-This is the engineering record for the Orchestrion integration work.
+This is a maintainer document. It intentionally describes the current system,
+not the debugging history that produced it.
 
-## Executive Summary
+### Why This Section Exists
 
-We wanted `dd_topt_go_test` to behave like a normal `rules_go` test target while also enabling Datadog Orchestrion so that:
-
-- application code is instrumented
-- dependencies are instrumented
-- the Go standard library is instrumented
-- CI Visibility hooks around `testing` are active in the final Bazel-built test binary
-
-The hard part was not merely enabling Orchestrion at compile time. We succeeded at that relatively early. The hard part was preserving a coherent archive/packagefile universe all the way through:
-
-- stdlib compilation
-- user package compilation
-- synthetic Bazel `testmain` compilation
-- final link
-
-The final issue turned out to be a **synthetic link consistency problem**, not just “Orchestrion is disabled”.
-
-The changes that ultimately fixed the integration were:
-
-1. moving synthetic Datadog helper metadata out of the `~testmain.a` archive into a sidecar file
-2. threading that sidecar through Bazel as a declared input to final `GoLink`
-3. making final synthetic link reuse the **same helper-export family** created during synthetic `testmain` compile instead of regenerating a second one
-
-That is what restored:
-
-- runtime tracer logs
-- `instrumentTestingTFunc`
-- `instrumentTestingM`
-
-in the real `_tests` repository flow and in CI.
+The Go integration is split across bootstrap, Starlark, vendored `rules_go`,
+and patched Orchestrion source. This section states upfront that the document is
+meant to unify those pieces into one operational model.
 
 ## Scope
 
-This document focuses on the Go integration path implemented across:
+The Go integration spans four layers:
+
+1. User-facing macro and analysis-time selection
+2. Bootstrap and workspace wiring
+3. Vendored `rules_go` fork with Orchestrion support
+4. Datadog Orchestrion itself, built from patched source
+
+Primary implementation entry points:
 
 - [modules/go/topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
 - [modules/go/topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
 - [modules/go/tools/dd_topt_go_bootstrap/main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
-- [third_party/rules_go_orchestrion](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion)
-
-It does not try to explain the entire repository. It assumes familiarity with:
-
-- Bazel
-- `rules_go`
-- Starlark rules/macros
-- Datadog CI Visibility at a high level
-
-## Terminology
-
-- **Core module**: `datadog-rules-test-optimization`
-- **Go companion**: `datadog-rules-test-optimization-go`
-- **Sync repo**: the generated repository containing Datadog metadata and exported labels such as `@test_optimization_data//:export.bzl`
-- **Raw test target**: the hidden `go_test` emitted by `dd_topt_go_test`
-- **Wrapper target**: the public transitioned test target emitted by `dd_topt_go_test`
-- **Orchestrion**: Datadog compile-time instrumentation tool for Go
-- **Synthetic testmain**: the Bazel-generated `testmain.go` package compiled for `rules_go` tests
-
-## Repository Topology
-
-### User-facing entry points
-
-- [modules/go/topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
-- [modules/go/topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
-- [modules/go/tools/dd_topt_go_bootstrap/main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
-
-### Vendored toolchain implementation
-
+- [third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
 - [third_party/rules_go_orchestrion/go/private/actions/archive.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
 - [third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
 - [third_party/rules_go_orchestrion/go/private/actions/link.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/link.bzl)
@@ -88,480 +44,836 @@ It does not try to explain the entire repository. It assumes familiarity with:
 - [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
 - [third_party/rules_go_orchestrion/go/tools/builders/link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
 - [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/stdliblist.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/stdliblist.go)
+
+### Why This Section Exists
+
+The repository is broader than the Go integration path. This section narrows
+the document to the files that actually determine how Orchestrion-backed Go
+tests work.
+
+## Mental Model
+
+The system is easiest to understand as three concentric layers:
+
+- Bazel remains the outer build and test system.
+- `rules_go` remains the Go rule implementation, but we vendor a fork that knows
+  how to invoke Orchestrion coherently.
+- Orchestrion remains the inner compile-time instrumentation engine.
+
+The user still writes a Bazel-native target:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_test",
+    srcs = ["*_test.go"],
+    topt_data = topt_data,
+    go_test_rule = go_test,
+)
+```
+
+But the raw `go_test` is built under a transition that enables Orchestrion in
+the vendored toolchain.
+
+### Why This Section Exists
+
+The most common architectural mistake is to think of Orchestrion as an external
+post-processing step. This section sets the correct model: Bazel, vendored
+`rules_go`, and Orchestrion are one compile pipeline.
 
 ## High-Level Architecture
 
-### Design Intent
-
-The public Go API remains a Bazel-native macro:
-
-- the user writes `dd_topt_go_test(...)`
-- Bazel still owns test scheduling, hermetic execution, and test output collection
-- Datadog metadata still comes from the generated sync repo
-
-But the actual compile path is Orchestrion-enabled through a transitioned wrapper target and a vendored `rules_go` toolchain that knows how to invoke Orchestrion coherently.
-
-### Flow Diagram
-
 ```mermaid
 flowchart TD
-    A[MODULE.bazel] --> B[test_optimization_go_extension]
-    B --> C[@test_optimization_data_go]
-    A --> D[dd_topt_go_bootstrap]
-    D --> E[orchestrion pin artifacts]
-    D --> F[rules_go orchestrion extension wiring]
+    A[MODULE.bazel] --> B[Go companion extension]
+    A --> C[dd_topt_go_bootstrap]
+    C --> D[MODULE.bazel patching]
+    C --> E[orchestrion pin files]
+    D --> F[vendored rules_go fork]
+    F --> G[rules_go Orchestrion extension]
+    G --> H[patched Orchestrion binary]
 
-    G[BUILD: dd_topt_go_test] --> H[hidden raw go_test]
-    G --> I[public orch_go_test wrapper]
-    I --> J[function transition: orchestrion enabled]
-    J --> H
+    I[BUILD: dd_topt_go_test] --> J[hidden raw go_test]
+    I --> K[public orch_go_test wrapper]
+    K --> L[function transition]
+    L --> J
 
-    H --> K[rules_go compilepkg/link/stdlib actions]
-    K --> L[orchestrion toolexec]
-    L --> M[woven stdlib + user packages + synthetic testmain]
-    M --> N[final Bazel test binary]
-    N --> O[CI Visibility runtime logs and payloads]
+    J --> M[compilepkg / stdlib / link actions]
+    M --> N[Orchestrion toolexec path]
+    N --> O[woven stdlib + package compile + synthetic testmain]
+    O --> P[final Bazel test binary]
+    P --> Q[CI Visibility runtime + payloads]
 ```
 
-## User-Facing Flow
+### Why This Section Exists
+
+The rest of the document is easier to follow if the major boundaries are visible
+first. This diagram is the system map the later sections zoom into.
+
+## Current User-Facing Flow
+
+### Why This Section Exists
+
+The public API is intentionally simpler than the internal implementation. This
+section explains the supported user-facing contract before moving into toolchain
+mechanics.
 
 ### 1. Module setup
 
-The user enables the Go extension and creates a generated metadata repository through:
+The consumer adds:
 
-- [README.md](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/README.md)
-- [modules/go/MODULE.bazel](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/MODULE.bazel)
+- the core module
+- the Go companion module
+- `rules_go`
+- the sync extension repo
 
-The Go-specific extension configures:
+The Go companion extension is responsible for the Go-specific repository wiring.
+The metadata repo exported by the sync extension still provides the per-service
+and per-module payload labels.
 
-- sync repo generation
-- Orchestrion repository wiring
-- Go runtime metadata
+#### Why This Exists
+
+Analysis-time payload selection depends on repository-level metadata. Module
+setup creates the repos and exports the macro needs later.
 
 ### 2. Bootstrap
 
-The bootstrap helper:
+The bootstrap binary is the one-time workspace mutation step.
 
-- updates `MODULE.bazel`
-- points `rules_go` at the vendored module
-- enables `@rules_go//go:extensions.bzl` Orchestrion extension
-- runs `orchestrion pin`
-- writes or patches:
-  - `go.mod`
-  - `go.sum`
-  - `orchestrion.tool.go`
-  - `orchestrion.yml`
+Implementation:
+- [main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
 
-Relevant implementation:
+Bootstrap does four things that matter for the current architecture:
 
-- [modules/go/tools/dd_topt_go_bootstrap/main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
+1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.59.0")`
+2. Writes a managed `git_override` for `rules_go` pointing back to this repo
+   with `strip_prefix = "third_party/rules_go_orchestrion"`
+3. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension and
+   `use_repo(orchestrion, "rules_go_orchestrion_tool")`
+4. Runs `orchestrion pin` in the Go module and ensures:
+   - `go.mod`
+   - `go.sum`
+   - `orchestrion.tool.go`
+   - `orchestrion.yml`
 
-### 3. Macro expansion
+The important point is that bootstrap does not merely install an external tool.
+It aligns:
 
-`dd_topt_go_test` creates:
+- Bazel module wiring
+- the vendored `rules_go` fork
+- the Orchestrion source repo
+- the pinned Go module files that Orchestrion expects
+
+#### Why This Exists
+
+Bootstrap centralizes the one-time mutations needed to make Bazel and
+Orchestrion agree on the workspace shape. Without that central step, each test
+target would need to carry fragile setup knowledge.
+
+### 3. Test macro expansion
+
+`dd_topt_go_test` is the public macro surface.
+
+Implementation:
+- [topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
+
+The macro does three distinct jobs:
+
+1. Select Datadog payload data
+2. Prepare runtime env/data wiring for Test Optimization
+3. Route the compile through Orchestrion
+
+The macro expands into:
 
 - a hidden raw `go_test`
-- a public wrapper test target
+- a public `orch_go_test` wrapper
 
-The wrapper applies a transition that sets:
+The raw `go_test` receives the Orchestrion pin files as hidden data:
 
-- `@rules_go//go/private/orchestrion:enabled = True`
+- `go.mod`
+- `go.sum`
+- `orchestrion.tool.go`
+- `orchestrion.yml`
 
-Relevant implementation:
+That means the caller does not manage those files directly on each test target.
 
-- [modules/go/topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
-- [modules/go/topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
+#### Why This Exists
 
-### 4. Vendored toolchain execution
+The macro is the policy boundary. It keeps user BUILD files simple while
+combining payload selection, runtime wiring, and Orchestrion-enabled compilation
+in one place.
 
-When the transitioned raw target builds, the vendored `rules_go` implementation:
+### 4. Transitioned wrapper rule
 
-- enables Orchestrion in compile/link flows
-- stages pin files
-- manages synthetic module state
-- rebuilds stdlib where needed
-- compiles Bazel synthetic `testmain`
-- links the final test binary
+Implementation:
+- [topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
 
-## Public Macro Behavior
+The wrapper rule exists for one reason: it applies a function transition that
+sets:
 
-### `dd_topt_go_test`
+```bzl
+"@rules_go//go/private/orchestrion:enabled": True
+```
 
-The macro in [topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl):
+The wrapper then symlinks the executable produced by the raw target and returns
+the same runfiles.
 
-- resolves the correct Datadog service
-- normalizes user `data`
-- infers module labels via `importpath` / `embed`
-- appends Orchestrion pin files as hidden data:
-  - `go.mod`
-  - `go.sum`
-  - `orchestrion.tool.go`
-  - `orchestrion.yml`
-- creates a raw `go_test`
-- creates a public `orch_go_test` wrapper
+This preserves normal Bazel test ergonomics while moving the actual build onto
+an Orchestrion-enabled configuration.
 
-That means the user does not manually wire Orchestrion files into the test rule. The macro takes ownership of that.
+#### Why This Exists
 
-### `orch_go_test`
+The transition wrapper lets the raw test build under a different configuration
+without changing the public target shape that users and CI interact with.
 
-The wrapper rule in [topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl):
+## Why the Vendored `rules_go` Fork Exists
 
-- applies the Orchestrion transition
-- forwards executable and runfiles
-- preserves `.exe` on Windows
-
-The Windows preservation fix matters because otherwise Bazel would produce an extensionless wrapper executable name on Windows and test execution would fail.
-
-## Why a Vendored `rules_go` Was Needed
-
-Orchestrion is fundamentally a `toolexec`-style compile-time tool.
-
-In standard Go usage, the mental model is:
+Orchestrion is fundamentally a `toolexec`-style integration. In a plain Go
+workflow, the intended shape is conceptually:
 
 ```text
 go test -toolexec="orchestrion toolexec"
 ```
 
-But `rules_go` does not expose a simple public seam equivalent to “attach `toolexec` everywhere and let the normal Go toolchain handle the rest”.
+`rules_go` does not expose a single public seam that means "attach this
+toolexec everywhere and preserve normal Go behavior". Under Bazel, the Go
+pipeline is decomposed into builder actions:
 
-Because of that, the integration required a patched toolchain that could:
+- stdlib list and stdlib build
+- package compilation
+- synthetic `testmain` generation and compile
+- final link
 
-- enable Orchestrion across package compile
-- enable Orchestrion across stdlib compile
-- carry synthetic-module state
-- preserve archive consistency across compile and link
+For Orchestrion to behave correctly, all of those steps must agree on:
 
-That is why we vendored:
+- module context
+- GOROOT and SDK layout
+- importcfg contents
+- Datadog helper packagefiles
+- stdlib export family
+- synthetic test binary link inputs
 
-- [third_party/rules_go_orchestrion](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion)
+That is why the repository vendors a `rules_go` fork instead of trying to bolt
+Orchestrion on as an external wrapper.
 
-instead of depending on an external personal fork at runtime.
+### Why This Section Exists
 
-## How the Vendored Toolchain Works
+The vendored fork is the key architectural decision. If a maintainer does not
+understand why it exists, they will naturally try to simplify the wrong layer.
 
-### Compile path
+## Current Toolchain Topology
 
-At compile time:
-
-1. `archive.bzl` declares outputs for a package archive and, for synthetic testmain, a sidecar Orchestrion manifest.
-2. `compilepkg.bzl` passes those outputs into the builder.
-3. `compilepkg.go` compiles the package, and for synthetic testmain writes a sidecar file that records the Datadog helper packagefile selections used during compile.
-
-This is one of the final key fixes.
-
-### Link path
-
-At link time:
-
-1. `link.bzl` declares the sidecar manifest as an input to `GoLink`.
-2. `link.go` loads the sidecar for synthetic testmain.
-3. `link.go` reuses the compile-time helper packagefile family from the sidecar.
-4. `link.go` completes the broader Datadog helper closure from the **same** helper-export root.
-
-This prevents link-time regeneration from drifting into a second archive family.
-
-### Importcfg rewriting
-
-[importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go) is the core consistency layer.
-
-Its responsibilities include:
-
-- resolving stdlib packagefiles
-- resolving Datadog helper packagefiles
-- loading persisted stdlib export manifests
-- sanitizing module-export archives into `.nolinkdeps` variants
-- rewriting final synthetic importcfg entries coherently
-
-This file is where most of the “archive family drift” problems surfaced.
-
-### Orchestrion helper/bootstrap logic
-
-[orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go) handles:
-
-- synthetic module preparation
-- helper package warming
-- module cache setup
-- environment normalization
-- SDK path handling
-
-This file was responsible for several earlier bugs:
-
-- shared cache vs Bazel stdlib cache mismatches
-- incorrect absolute path handling
-- helper export drift caused by unstable module/cache assumptions
-
-## The Core Technical Problem
-
-The integration looked, at first, like a simple “turn on Orchestrion” problem.
-
-It was not.
-
-The real problem was that Bazel test builds do not end at package compile. The final linked test binary depends on a coherent combination of:
-
-- woven stdlib archives
-- woven user package archives
-- synthetic Bazel `testmain`
-- Datadog helper packagefile exports
-
-The failure mode that kept recurring was:
-
-- compile succeeds with one packagefile/archive family
-- link reconstructs another packagefile/archive family
-- runtime ends up missing the instrumentation behavior that compile had already proven
-
-That is why the final fix was not “more bootstrap”, “more env vars”, or “more logging”.
-
-It was making compile and link consume the **same instrumentation closure**.
-
-## Root Cause
-
-The final root cause had two parts.
-
-### Part 1. Wrong storage location for synthetic helper manifest
-
-The synthetic `testmain` compile persisted Datadog helper metadata inside the archive as:
-
-- `orchestrion.pack`
-
-That was fine as a debugging convenience but incorrect for Darwin external link.
-
-Darwin treated archive members as candidate objects and surfaced:
-
-```text
-ld64.lld: ... 000000.o: unhandled file type
+```mermaid
+flowchart LR
+    A[dd_topt_go_test] --> B[raw go_test]
+    B --> C[vendored rules_go actions]
+    C --> D[patched Orchestrion binary]
+    D --> E[go compile]
+    D --> F[go link]
+    C --> G[importcfg rewriting]
+    C --> H[stdlib cache/export handling]
+    C --> I[synthetic testmain manifest]
+    I --> F
 ```
 
-So the manifest could not live inside the `.a` archive.
+### Why This Section Exists
 
-### Part 2. Compile/link helper family drift
+This is the toolchain-only view of the system. It highlights where state is
+carried between compile and link, which is the part most maintainers need to
+reason about when something breaks.
 
-After moving the manifest out of the archive, we discovered the real semantic bug:
+## Vendored `rules_go`: What It Owns
 
-- synthetic `testmain` compile resolved `gotesting` / `integrations` / related helpers from one helper-export root
-- final synthetic link regenerated those helpers from another root
+The vendored fork owns the Orchestrion integration at the action and builder
+layer.
 
-That meant the final binary was not reusing the exact instrumented helper closure that compile had already validated.
+### Why This Section Exists
 
-This is the reason we could see intermediate proof like:
+The fork is not just a copy of upstream `rules_go`; it is the layer that makes
+the Bazel pipeline and Orchestrion pipeline behave coherently.
 
-- woven `testing.a`
-- tracer logs in some places
+### Starlark action layer
 
-while still missing the runtime CI Visibility hook in the final binary.
+- [archive.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
+- [compilepkg.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
+- [link.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/link.bzl)
 
-## The Final Fix Set
+Responsibilities:
 
-The changes between:
+- declare the outputs needed by Orchestrion-aware compile and link steps
+- pass the Orchestrion binary into builders
+- pass the synthetic `testmain` manifest sidecar through analysis and execution
 
-- `2f7871e` `go: checkpoint synthetic link fixes`
-- and `a0c0b01` `go: fix local orchestrion civisibility flow`
+#### Why This Exists
 
-contain the fix set that actually closed the issue.
+Starlark is where Bazel decides which files and arguments are real. If the
+manifest sidecar or Orchestrion tool are not declared here, the builders cannot
+use them later.
 
-### 1. Sidecar manifest for synthetic `testmain`
+### Builder layer
 
-Implemented in:
+- [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
+- [link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
+- [orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+- [stdlib.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/stdlib.go)
+- [stdliblist.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/stdliblist.go)
+
+Responsibilities:
+
+- prepare a safe Go module environment for Orchestrion
+- normalize GOROOT and SDK behavior in Bazel sandboxes
+- rewrite importcfg so woven stdlib and Datadog helper packages are resolvable
+- persist synthetic `testmain` helper selections across compile and link
+- ensure final link reuses the same helper export family chosen during compile
+
+#### Why This Exists
+
+Execution-time coherence cannot be solved in analysis alone. The builder layer
+is where the environment, importcfg, and archive family are made consistent.
+
+## Patched Orchestrion Source
+
+The vendored `rules_go` fork does not use upstream Orchestrion unchanged.
+
+Implementation:
+- [extensions.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+
+The Orchestrion repository rule downloads Orchestrion source and patches it
+before building the binary. The patches fall into a few categories:
+
+### Resolver and tempdir compatibility
+
+Orchestrion sometimes shells out to `go list` while resolving injectors and
+package files. Under Bazel, that has to work in a synthetic module layout and
+inside sandboxes.
+
+The patches make dependency resolution less recursive and more Bazel-friendly,
+and they create compatibility symlinks in temporary work directories where
+needed.
+
+#### Why This Exists
+
+Upstream Orchestrion expects a more conventional Go execution environment than
+Bazel provides. These patches adapt resolver behavior to Bazel sandboxes and
+synthetic work directories.
+
+### Compile proxy and archive metadata support
+
+The compile proxy is patched so it can correctly understand linker-object
+outputs and cooperate with the synthetic `testmain` flow.
+
+#### Why This Exists
+
+The synthetic `testmain` path needs metadata to survive across Bazel's separate
+compile and link stages. The compile proxy has to preserve that information.
+
+### Resolver-context patches
+
+The `oncompile`, `oncompile-main`, and `onlink` hooks are patched so dependency
+lookups run with the Bazel-specific import-path context they actually need, not
+only with upstream assumptions about a normal Go tool invocation.
+
+#### Why This Exists
+
+Under Bazel, package identity can differ from what upstream Orchestrion would
+infer from a normal `go` command. These patches keep lookup context aligned with
+the package Bazel is actually compiling.
+
+### Injector prefilter and stdlib lookup behavior
+
+Some patches keep Orchestrion from dropping required aspects too early or
+failing to discover stdlib archives when Bazel's importcfg layout differs from
+what upstream Orchestrion normally sees.
+
+#### Why This Exists
+
+If Orchestrion rejects a package too early or cannot locate stdlib archives,
+later steps cannot recover. These patches keep the instrumentation path open.
+
+The result is still "Orchestrion from source", but it is a Bazel-adapted build
+of Orchestrion, not a stock upstream binary.
+
+### Why This Section Exists
+
+The Orchestrion binary is part of the supported integration surface. This
+section explains why the current design depends on a Bazel-adapted Orchestrion
+build, not just on the vendored `rules_go` changes.
+
+## The Compile Path
+
+### Why This Section Exists
+
+Compile is where the system first moves from "configured for instrumentation"
+to "producing instrumented artifacts". This section explains that boundary.
+
+### Package compile
+
+The compile entry point is:
+
+- [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+
+At compile time, the builder:
+
+1. Parses the normal `rules_go` compile arguments
+2. Creates a work directory
+3. Prepares a Go module/cache environment for Orchestrion
+4. Filters sources and applies cgo/coverage/nogo handling as usual
+5. Invokes the Go compiler through Orchestrion when enabled
+
+The key Orchestrion-specific compile responsibilities are:
+
+- module/cache preparation
+- importcfg rewriting
+- synthetic `testmain` helper capture
+
+#### Why This Exists
+
+Package compile is the first place where wrong module context, wrong importcfg,
+or wrong stdlib selection can poison everything downstream.
+
+### Synthetic `testmain`
+
+`rules_go` synthesizes a `testmain.go` package for Go tests. That synthetic
+package is special because it is the point where Datadog CI Visibility hooks
+around `testing` become visible in the final test binary.
+
+For synthetic `testmain`, compilepkg generates a sidecar manifest:
+
+- logical manifest name inside the workdir: `orchestrion.pack`
+- declared Bazel sidecar output: `<archive>.a.orchestrion.pack`
+
+Implementation details:
 
 - [archive.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
 - [compilepkg.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
 - [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
 
-This introduced:
+The sidecar records the compile-time `packagefile` directives for the Datadog
+helper packages that synthetic `testmain` was rooted against. That is the
+contract between compile and final link.
 
-- a dedicated `~testmain.a.orchestrion.pack` sidecar file
-- propagation of that file through `GoArchiveData`
+#### Why This Exists
 
-Why it mattered:
+`testing` instrumentation enters through synthetic `testmain`. The sidecar
+exists so final link can reuse the exact helper package family chosen during
+compile instead of reconstructing a different one.
 
-- removed the Darwin archive-member object leak
-- created a first-class Bazel input for final link
+## Importcfg Management
 
-### 2. Sidecar consumption in final `GoLink`
+The importcfg layer is where the Bazel/Orchestrion integration becomes most
+concrete.
 
-Implemented in:
-
-- [link.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/link.bzl)
-- [link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
-
-This made final link:
-
-- read the synthetic compile-time helper manifest from the sidecar
-- reuse compile-time helper packagefiles when Orchestrion link is disabled for the synthetic path
-- append only the additional helper closure needed, from the same root
-
-Why it mattered:
-
-- final link stopped inventing a second helper universe
-
-### 3. Helper-root normalization
-
-Implemented in:
-
+Implementation:
 - [importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
 
-This normalized helper-export root parsing and coalesced roots that earlier experiments had split.
+This file owns several distinct jobs:
 
-Why it mattered:
+### Why This Section Exists
 
-- synthetic compile and final link started agreeing on what “the same helper root” actually means
+Importcfg is the explicit statement of what the toolchain can import. This
+section explains how the integration shapes that package universe.
 
-### 4. SDK/stdliblist path stabilization
+### 1. Stdlib archive resolution
 
-Implemented in:
+Orchestrion may need the woven stdlib archive family, not just the default one.
+The builder can source stdlib packagefiles from:
 
+- normal Bazel stdlib archives
+- seeded stdlib cache exports
+- persisted stdlib export manifests
+
+#### Why This Exists
+
+Orchestrion can weave stdlib packages, so compile and link need to resolve the
+woven stdlib archive family rather than silently falling back to the default
+unwoven one.
+
+### 2. Datadog helper package resolution
+
+The Datadog helper packages used for CI Visibility and tracing must exist as
+real `packagefile` entries in the importcfg seen by compile and link.
+
+#### Why This Exists
+
+Injected CI Visibility hooks become ordinary package dependencies after weaving.
+If their exports are missing from importcfg, the final binary cannot preserve
+the instrumentation path.
+
+### 3. Importcfg rewriting
+
+The builder rewrites existing `packagefile` directives and appends missing ones
+so the toolchain sees a coherent package universe.
+
+#### Why This Exists
+
+Bazel's default importcfg contents do not fully describe the instrumented build
+graph. Rewriting is how the builders present the package set Orchestrion
+actually needs.
+
+### 4. Helper-root reuse
+
+The final link must not invent a different Datadog helper export family than
+the one synthetic `testmain` compile already used. The importcfg layer is where
+that reuse is made explicit.
+
+#### Why This Exists
+
+Compile and link are separate actions. Helper-root reuse is the mechanism that
+keeps them inside the same Datadog package universe.
+
+## The Link Path
+
+The link entry point is:
+
+- [link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
+
+The link builder has two modes:
+
+- normal Orchestrion-enabled link
+- synthetic test binary link
+
+### Why This Section Exists
+
+Link is the last place where separate compile outputs can either converge into a
+coherent binary or drift apart. This section explains how the current design
+forces convergence.
+
+### Normal link
+
+When linking a normal main package, link can run through Orchestrion directly
+and can append the broader Datadog helper closure it needs for the final binary.
+
+#### Why This Exists
+
+Normal link establishes the baseline behavior: link may complete the helper
+closure, but it must still stay inside one consistent export family.
+
+### Synthetic test binary link
+
+When linking the Bazel synthetic test binary, the path is more constrained.
+
+`link.go` detects a synthetic test link from the main archive name:
+
+- `~testmain.a`
+
+For synthetic test links it:
+
+1. Reads the synthetic `testmain` sidecar manifest
+2. Applies those `packagefile` directives into the link importcfg
+3. Reuses the compile-time Datadog helper root
+4. Completes the broader Datadog closure from that same root when link itself is
+   still Orchestrion-enabled
+
+That is the core consistency rule of the current implementation:
+
+> synthetic `testmain` compile and final link must operate on the same Datadog
+> helper export family
+
+Without that, compile may instrument `testing`, but the final linked test binary
+may not preserve those hooks coherently.
+
+#### Why This Exists
+
+This is the highest-risk link path because Bazel's synthetic test wrapper and
+Datadog's `testing` instrumentation meet here. The sidecar manifest exists to
+make that join deterministic.
+
+## The Orchestrion Runtime Environment Inside Builders
+
+Implementation:
 - [orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
-- [stdliblist.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/stdliblist.go)
 
-These fixes removed a separate regression introduced by the path normalization work:
+This file centralizes the environment preparation Orchestrion needs under Bazel.
 
-- absolute SDK paths were correct for some builder flows
-- but `stdliblist` still required a relative `-sdk`
+Important responsibilities:
 
-Why it mattered:
+### Why This Section Exists
 
-- this prevented the main repo validation from regressing after the synthetic-link fix
+The builders do not run in a normal developer shell. This section explains the
+supporting environment that must exist before Orchestrion can do useful work.
 
-## What Did Not Turn Out To Be The Final Fix
+### Go cache and module cache provisioning
 
-These changes helped diagnose or unblock earlier failures, but they were not the final cause/fix pair:
+The builder ensures writable:
 
-- basic wrapper rule creation
-- Windows `.exe` wrapper preservation
-- bootstrap import tweaks alone
-- removing `dd-trace-go.v1` alone
-- enabling stdlib weaving alone
-- re-enabling synthetic `testmain` weaving alone
-- several generations of importcfg rewrite heuristics
-- forcing plain `go tool link` by itself
-- massive `TRACE` logging by itself
+- `GOPATH`
+- `GOMODCACHE`
+- `GOCACHE`
 
-Those changes were useful because they moved the problem to a narrower layer, but they did not close it.
+That matters because Orchestrion shells out to Go tooling while resolving
+injectors and package files.
 
-## Why The Debugging Took So Long
+#### Why This Exists
 
-This integration sits at the intersection of:
+Without writable caches and module storage, Orchestrion's internal `go` calls
+fail inside Bazel sandboxes even when the outer action is otherwise correct.
 
-- Bazel action graph semantics
-- `rules_go` internals
-- Orchestrion expectations
-- Go stdlib rebuilding
-- synthetic Bazel `testmain`
-- platform-specific linker behavior
+### Shared cache reuse
 
-The hard part was that many states looked “almost correct”.
+Bootstrap and sandboxed builder steps both use a stable shared cache root:
 
-Examples:
+- `datadog-orchestrion-go-cache`
 
-- Orchestrion was active, but final runtime hook still missing
-- `testing.a` was woven, but final binary still inconsistent
-- tracer logs were present, but `instrumentTestingM` was not
-- compile worked, but final link drifted into a different helper family
+This lets Orchestrion reuse fetched modules instead of redownloading them for
+each sandboxed step.
 
-That made it easy to fix a symptom and still miss the real boundary violation.
+#### Why This Exists
 
-## Validation Evidence
+The shared cache is not just a performance optimization. It keeps bootstrap-time
+pinning and sandboxed builder steps working against the same downloaded module
+set.
 
-### Local proof
+### GOROOT and SDK compatibility
 
-The final local proof came from the real `_tests` repository flow:
+Some Bazel sandboxes expose an SDK layout that differs from what Orchestrion's
+subprocesses assume. The builder normalizes that by:
 
-- target: `//src/go-project:hello_test`
-- with `DD_TRACE_DEBUG=true`
-- with `DD_CIVISIBILITY_ENABLED=true`
+- resolving absolute SDK/GOROOT paths
+- creating compatibility symlinks when `GOROOT/src` is missing
 
-Observed runtime signals:
+#### Why This Exists
 
-- `Datadog Tracer v2.6.0 DEBUG: ...`
-- `instrumentTestingTFunc: instrumenting test function`
-- `instrumentTestingM: finished with exit code: 0`
+Orchestrion and the Go toolchain expect a usable GOROOT layout. Bazel's SDK
+presentation can differ enough that the builders need to repair that view.
 
-### CI proof
+### Synthetic module preparation
 
-In CI:
+Orchestrion expects a real Go module context. The builder prepares a synthetic
+module environment when the Bazel workdir does not already match that shape.
 
-- Linux and macOS logs showed tracer logs and `instrumentTestingTFunc`
-- Windows logs showed:
-  - `testing.Testing()=true`
-  - `instrumentTestingM: finished with exit code: 0`
+#### Why This Exists
 
-Together with the local runtime proof, that is enough to call the end-to-end integration fixed.
+Orchestrion resolves injectors and pinned module files through Go module
+semantics. Synthetic module preparation gives it a workspace shape compatible
+with those expectations.
 
-## Engineering Lessons
+### Woven dependency warmup
 
-### 1. “Orchestrion enabled” is not the same as “final binary correctly instrumented”
+The builder can probe or warm the dependencies Orchestrion commonly weaves,
+especially Datadog tracing and profiling packages.
 
-It is possible to prove:
+#### Why This Exists
 
-- Orchestrion on compile
-- woven stdlib archives
-- even some runtime tracer activity
+Some required woven dependencies are first touched inside sandboxed steps.
+Warming them reduces failures caused by lazy first access in those contexts.
 
-while still shipping a final binary that does not use the exact instrumentation closure expected.
-
-### 2. Synthetic `testmain` is the sharpest edge
-
-Bazel’s synthetic test main is where:
-
-- the Go testing package
-- rules_go behavior
-- Datadog helper closure
-- final link semantics
-
-all meet.
-
-That is where the decisive fix ended up.
-
-### 3. When debugging toolchain instrumentation, archive family consistency matters more than isolated symbols
-
-Seeing symbols in `testing.a` was necessary but not sufficient.
-
-The real question was:
-
-- does the final linker consume the same archive/packagefile family that compile proved?
-
-### 4. Sidecar metadata is safer than archive-member metadata for synthetic-link hacks
-
-Embedding metadata inside `.a` archives is tempting, but Darwin external link is much less forgiving than that approach assumes.
-
-## Recommended Reading Order
-
-If someone needs to understand the final design quickly:
-
-1. [modules/go/topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
-2. [modules/go/topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
-3. [modules/go/tools/dd_topt_go_bootstrap/main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
-4. [third_party/rules_go_orchestrion/go/private/actions/archive.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
-5. [third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-6. [third_party/rules_go_orchestrion/go/tools/builders/link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
-7. [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-
-## Simplified Final Mental Model
+## End-to-End Flow for a Go Test
 
 ```mermaid
 sequenceDiagram
-    participant User as BUILD macro
+    participant User
+    participant Macro as dd_topt_go_test
     participant Wrapper as orch_go_test
-    participant Raw as raw go_test
     participant RG as vendored rules_go
-    participant Orch as Orchestrion
-    participant Link as final GoLink
+    participant Orch as patched Orchestrion
     participant Bin as final test binary
 
-    User->>Wrapper: dd_topt_go_test(name=...)
-    Wrapper->>Raw: transition orchestrion enabled
-    Raw->>RG: compile stdlib + user pkgs + synthetic testmain
-    RG->>Orch: toolexec compile
-    Orch-->>RG: woven archives + helper packagefiles
-    RG->>RG: write synthetic sidecar manifest next to ~testmain.a
-    RG->>Link: declared inputs include sidecar manifest
-    Link->>RG: reuse compile-time helper family
-    RG-->>Bin: final linked Bazel test binary
-    Bin-->>User: tracer logs + testing.T/testing.M instrumentation
+    User->>Macro: declare Go test
+    Macro->>Macro: select payload data + add pin files
+    Macro->>Wrapper: public test target
+    Wrapper->>RG: build raw go_test with transition enabled
+    RG->>Orch: compile packages through Orchestrion
+    RG->>Orch: compile woven stdlib as needed
+    RG->>Orch: compile synthetic testmain
+    RG->>RG: persist synthetic helper manifest sidecar
+    RG->>Orch: link final binary using same helper family
+    Orch->>Bin: produce instrumented test executable
+    Bin->>Bin: emit tracer / CI Visibility runtime
 ```
 
-## Bottom Line
+### Why This Section Exists
 
-The issue was fixed when we stopped treating synthetic final link as a place to rediscover Datadog helper state and instead made it reuse the exact helper state already proven during synthetic `testmain` compile.
+The system crosses many boundaries. This sequence compresses them into one path
+so a maintainer can reason from the declared test target to the observed runtime
+behavior.
 
-That is the core idea behind the final working implementation.
+## Runtime Result
+
+At runtime, a correctly wired binary shows evidence that the compile-time path
+worked:
+
+- Datadog tracer debug logs can appear when enabled
+- `instrumentTestingTFunc` is active
+- `instrumentTestingM` is active
+
+Those runtime markers are not produced by the macro alone. They depend on the
+compile, synthetic `testmain`, and final link steps all agreeing on the same
+instrumented package universe.
+
+### Why This Section Exists
+
+The global goal is not just "a successful build". It is a final test binary
+whose runtime behavior proves that CI Visibility instrumentation survived the
+full Bazel compile and link pipeline.
+
+## Invariants Maintainers Should Preserve
+
+If you change this system, keep these invariants intact.
+
+### Why This Section Exists
+
+This section marks the boundaries of safe refactoring. It separates incidental
+implementation details from the properties that actually make the design work.
+
+### 1. The public API stays Bazel-native
+
+Users should keep writing `dd_topt_go_test`, not a custom shell rule or an
+alternate test runner.
+
+#### Why This Exists
+
+The integration is meant to feel like normal Bazel usage to consumers. If the
+public entry point changes shape, the maintenance burden moves into every
+consumer workspace.
+
+### 2. Bootstrap owns workspace mutation
+
+The bootstrap tool is the place that mutates:
+
+- `MODULE.bazel`
+- `orchestrion.tool.go`
+- `orchestrion.yml`
+- pinned Go module files
+
+Do not push that complexity onto each test target.
+
+#### Why This Exists
+
+Workspace mutation has to happen in one place or the setup becomes fragile and
+non-idempotent. Bootstrap is that one place.
+
+### 3. Synthetic `testmain` compile and final link must share helper state
+
+The sidecar manifest and helper-root reuse are structural, not optional.
+
+#### Why This Exists
+
+This is the specific invariant that keeps `testing` instrumentation alive in the
+final binary. Losing it produces apparently successful builds with incomplete
+runtime behavior.
+
+### 4. Importcfg must remain the single place where package universes are made coherent
+
+If compile or link needs a packagefile and it is not in importcfg, that is an
+importcfg problem first.
+
+#### Why This Exists
+
+Putting package-universe fixes in multiple places makes the pipeline impossible
+to reason about. Importcfg must remain the primary source of truth.
+
+### 5. Orchestrion must run in a real-enough Go module context
+
+Builder-side synthetic module and cache preparation are not cosmetic. They are
+required because Orchestrion shells out to Go tooling internally.
+
+#### Why This Exists
+
+If Orchestrion cannot see a usable Go module environment, it stops behaving like
+the tool this design expects and starts failing in ways that look unrelated to
+the actual instrumentation logic.
+
+### 6. The Orchestrion binary is part of the integration surface
+
+The source patches in `extensions.bzl` are part of the supported design. Treat
+them as first-class integration code, not as temporary local hacks.
+
+#### Why This Exists
+
+The vendored `rules_go` changes alone are not enough. The built Orchestrion
+binary carries Bazel-specific behavior that the rest of the design relies on.
+
+## Practical Debugging Map
+
+When something breaks, this is the fastest place to look.
+
+### Why This Section Exists
+
+The implementation surface is large. This section shortens the feedback loop by
+mapping likely failure classes to the files that actually control them.
+
+### Bootstrap and workspace shape
+
+- [main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
+
+Look here if:
+
+- `MODULE.bazel` wiring is wrong
+- `rules_go_orchestrion_tool` is missing
+- `orchestrion.tool.go` was not pinned
+
+#### Why This Exists
+
+Many failures that look like compile bugs are really workspace-shape bugs. This
+section makes that distinction explicit.
+
+### Macro and transition behavior
+
+- [topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
+- [topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
+
+Look here if:
+
+- the wrapper target is not enabling Orchestrion
+- runfiles or executable naming are wrong
+- payload data selection is wrong
+
+#### Why This Exists
+
+This is the place to debug analysis-time mistakes before looking at builder
+internals. If the wrong target graph is produced, the toolchain never gets a
+chance to do the right thing.
+
+### Orchestrion source patching
+
+- [extensions.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+
+Look here if:
+
+- the Orchestrion tool fails during resolver or injector setup
+- dependency resolution differs from local `go` behavior
+- patched upstream assumptions drift
+
+#### Why This Exists
+
+Some failures originate inside the generated Orchestrion binary, not inside
+Starlark or the builders. This section points directly at that integration seam.
+
+### Compile/link consistency
+
+- [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
+- [link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
+
+Look here if:
+
+- stdlib weaving appears missing
+- Datadog helper packages are unresolved
+- synthetic test binaries lose instrumentation at final link
+
+#### Why This Exists
+
+Most correctness bugs eventually reduce to compile/link inconsistency. This is
+the fastest entry point for the class of bugs that most directly threaten the
+global goal.
+
+## Summary
+
+The current architecture is:
+
+- a Bazel-native public Go test macro
+- a bootstrap step that wires the workspace once
+- a vendored `rules_go` fork that integrates Orchestrion at the builder layer
+- a patched Orchestrion binary built from source
+- a synthetic `testmain` manifest contract that keeps compile and final link in
+  the same Datadog helper package universe
+
+That combination is what makes the current Go CI Visibility path work under
+Bazel while still behaving like a normal `go_test` target from the user's point
+of view.
+
+### Why This Section Exists
+
+The final summary compresses the design down to the few moving pieces that are
+actually carrying the integration. If a future simplification preserves these
+properties, it is likely safe.
