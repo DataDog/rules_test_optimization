@@ -22,23 +22,6 @@ import (
 	"syscall"
 )
 
-func filterBuildIDMustGetwd() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "<getwd error: " + err.Error() + ">"
-	}
-	return wd
-}
-
-func appendOrchestrionFilterLog(line string) {
-	f, err := os.OpenFile("/tmp/orchestrionfilterbuildid.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = f.WriteString(line + "\n")
-}
-
 // filterBuildID executes the tool on the command line, filtering out any
 // -buildid arguments. It is intended to be used with -toolexec.
 func filterBuildID(args []string) error {
@@ -85,7 +68,6 @@ func orchestrionFilterBuildID(args []string) error {
 
 	orchestrion := args[0]
 	toolArgs := args[1:]
-	debugTrace := os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1"
 	workdir := ""
 	if len(toolArgs) > 0 && strings.HasPrefix(toolArgs[0], "--workdir=") {
 		workdir = strings.TrimPrefix(toolArgs[0], "--workdir=")
@@ -94,24 +76,9 @@ func orchestrionFilterBuildID(args []string) error {
 	if workdir == "" {
 		workdir = strings.TrimSpace(os.Getenv("RULES_GO_ORCHESTRION_WORKDIR"))
 	}
-	mentionsTesting := strings.Contains(strings.Join(toolArgs, " "), "testing")
-	if mentionsTesting {
-		line := "orchestrionfilterbuildid: bootstrap ORCHESTRION_DEBUG_TRACE=" + os.Getenv("ORCHESTRION_DEBUG_TRACE") +
-			" workdir=" + workdir + " cwd_before=" + filterBuildIDMustGetwd()
-		_, _ = os.Stderr.WriteString(line + "\n")
-		appendOrchestrionFilterLog(line)
-	}
 	if workdir != "" {
 		if err := os.Chdir(workdir); err != nil {
-			line := "orchestrionfilterbuildid: failed chdir to RULES_GO_ORCHESTRION_WORKDIR=" + workdir + ": " + err.Error()
-			if debugTrace || mentionsTesting {
-				_, _ = os.Stderr.WriteString(line + "\n")
-			}
-			appendOrchestrionFilterLog(line)
-		} else if debugTrace || mentionsTesting {
-			line := "orchestrionfilterbuildid: chdir RULES_GO_ORCHESTRION_WORKDIR=" + workdir + " cwd_after=" + filterBuildIDMustGetwd()
-			_, _ = os.Stderr.WriteString(line + "\n")
-			appendOrchestrionFilterLog(line)
+			return err
 		}
 	}
 	newArgs := make([]string, 0, len(toolArgs))
@@ -123,45 +90,9 @@ func orchestrionFilterBuildID(args []string) error {
 		}
 		newArgs = append(newArgs, arg)
 	}
-	if debugTrace {
-		_, _ = os.Stderr.WriteString("orchestrionfilterbuildid: tool args=" + strings.Join(newArgs, " ") + "\n")
-		appendOrchestrionFilterLog("tool args=" + strings.Join(newArgs, " "))
-	}
-	logTestingPackage := false
 	if strings.TrimSpace(os.Getenv("TOOLEXEC_IMPORTPATH")) == "" {
 		if pkg := packageFromCompileArgs(newArgs); pkg != "" {
 			_ = os.Setenv("TOOLEXEC_IMPORTPATH", pkg)
-			logTestingPackage = pkg == "testing"
-			if debugTrace {
-				_, _ = os.Stderr.WriteString("orchestrionfilterbuildid: synthesized TOOLEXEC_IMPORTPATH=" + pkg + "\n")
-				appendOrchestrionFilterLog("synthesized TOOLEXEC_IMPORTPATH=" + pkg)
-			}
-		}
-	} else if debugTrace {
-		_, _ = os.Stderr.WriteString("orchestrionfilterbuildid: existing TOOLEXEC_IMPORTPATH=" + os.Getenv("TOOLEXEC_IMPORTPATH") + "\n")
-		appendOrchestrionFilterLog("existing TOOLEXEC_IMPORTPATH=" + os.Getenv("TOOLEXEC_IMPORTPATH"))
-		logTestingPackage = strings.TrimSpace(os.Getenv("TOOLEXEC_IMPORTPATH")) == "testing"
-	}
-	if logTestingPackage || mentionsTesting {
-		line := "orchestrionfilterbuildid: testing-related compile TOOLEXEC_IMPORTPATH=" + os.Getenv("TOOLEXEC_IMPORTPATH") + " args=" + strings.Join(newArgs, " ")
-		_, _ = os.Stderr.WriteString(line + "\n")
-		appendOrchestrionFilterLog(line)
-		if importcfg := importcfgFromArgs(newArgs); importcfg != "" {
-			if data, err := os.ReadFile(importcfg); err == nil {
-				for _, line := range strings.Split(string(data), "\n") {
-					if strings.HasPrefix(line, "packagefile runtime=") ||
-						strings.HasPrefix(line, "packagefile testing=") ||
-						strings.HasPrefix(line, "packagefile os=") ||
-						strings.HasPrefix(line, "packagefile os/exec=") ||
-						strings.HasPrefix(line, "packagefile flag=") ||
-						strings.HasPrefix(line, "packagefile fmt=") {
-						_, _ = os.Stderr.WriteString("orchestrionfilterbuildid: testing importcfg " + line + "\n")
-						appendOrchestrionFilterLog("testing importcfg " + line)
-					}
-				}
-			} else {
-				_, _ = os.Stderr.WriteString("orchestrionfilterbuildid: failed to read testing importcfg " + importcfg + ": " + err.Error() + "\n")
-			}
 		}
 	}
 	orchestrionArgs := []string{orchestrion}
@@ -184,15 +115,6 @@ func orchestrionFilterBuildID(args []string) error {
 func packageFromCompileArgs(args []string) string {
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-p" && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	return ""
-}
-
-func importcfgFromArgs(args []string) string {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "-importcfg" && i+1 < len(args) {
 			return args[i+1]
 		}
 	}

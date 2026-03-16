@@ -32,6 +32,36 @@ What is now true locally:
 
 The critical local runtime proof is now present.
 
+## Cleanup Status
+
+After the fix was proven locally and in CI, the vendored `rules_go` builders were cleaned up to remove investigation-only noise while preserving the structural synthetic-link fix.
+
+Cleaned up in:
+
+- `third_party/rules_go_orchestrion/go/tools/builders/builder.go`
+- `third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go`
+- `third_party/rules_go_orchestrion/go/tools/builders/filter_buildid.go`
+- `third_party/rules_go_orchestrion/go/tools/builders/link.go`
+- `third_party/rules_go_orchestrion/go/tools/builders/stdlib.go`
+
+Cleanup changes:
+
+- removed startup / argv / cwd debug spew from the top-level builder
+- removed synthetic compile/link temp-file dumps and `/tmp/...` artifact copies
+- removed synthetic-link forced debug tmpdir logic
+- removed ad hoc importcfg tracing in `compilepkg` and `link`
+- removed the standalone `/tmp/orchestrionfilterbuildid.log` logger and related testing-only tracing
+- stopped forcing `goenv.verbose = true` for all Orchestrion stdlib builds
+
+Post-cleanup validation still passes:
+
+- `./bazelw test //modules/go/tools/dd_topt_go_bootstrap:bootstrap_test --test_output=errors`
+- `./bazelw build //examples/single_service/src/go-project:hello_test`
+- `_tests` local runtime flow still emits:
+  - `Datadog Tracer ... DEBUG`
+  - `instrumentTestingTFunc: instrumenting test function`
+  - `instrumentTestingM: finished with exit code: 0`
+
 ## Root Cause We Ended Up Fixing
 
 This turned out to be a two-part synthetic-link problem:

@@ -31,22 +31,6 @@ import (
 	"strings"
 )
 
-var linkDebugPatterns = []string{
-	"github.com/DataDog/dd-trace-go/v2",
-	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations=",
-	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting=",
-	"packagefile flag=",
-	"packagefile fmt=",
-	"packagefile log=",
-	"packagefile log/slog=",
-	"packagefile net/http=",
-	"packagefile os=",
-	"packagefile os/exec=",
-	"packagefile runtime=",
-	"packagefile vendor/golang.org/x/net/http/httpguts=",
-	"packagefile testing=",
-}
-
 var orchestrionLinkClosurePackages = []string{
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
@@ -62,53 +46,6 @@ var orchestrionLinkStdlibRoots = []string{
 	"net/http",
 	"os",
 	"os/exec",
-}
-
-func dumpLinkDebugFile(prefix, packagePath string, payload []byte) {
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "" {
-		return
-	}
-	sanitized := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "@", "_").Replace(packagePath)
-	if sanitized == "" {
-		sanitized = "unknown"
-	}
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s-%d.txt", prefix, sanitized, os.Getpid()))
-	if err := os.WriteFile(path, payload, 0o644); err == nil {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: wrote %s\n", path)
-	} else {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: failed to write %s: %v\n", path, err)
-	}
-}
-
-func dumpInterestingImportcfgLines(importcfgName, packagePath string) {
-	data, err := os.ReadFile(importcfgName)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "link debug: failed to read importcfg %s: %v\n", importcfgName, err)
-		return
-	}
-	var interesting []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting=") ||
-			strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations=") ||
-			strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/ddtrace/tracer=") ||
-			strings.Contains(line, "github.com/DataDog/dd-trace-go/v2/profiler=") ||
-			strings.Contains(line, "github.com/DataDog/dd-trace-go/contrib/net/http/v2=") ||
-			strings.Contains(line, "github.com/DataDog/dd-trace-go/contrib/log/slog/v2=") ||
-			strings.HasPrefix(line, "packagefile runtime=") ||
-			strings.HasPrefix(line, "packagefile testing=") ||
-			strings.HasPrefix(line, "packagefile log=") ||
-			strings.HasPrefix(line, "packagefile flag=") ||
-			strings.HasPrefix(line, "packagefile fmt=") ||
-			strings.HasPrefix(line, "packagefile log/slog=") ||
-			strings.HasPrefix(line, "packagefile net/http=") {
-			interesting = append(interesting, line)
-		}
-	}
-	if len(interesting) == 0 {
-		fmt.Fprintf(os.Stderr, "link debug: no interesting importcfg lines for %s\n", packagePath)
-		return
-	}
-	fmt.Fprintf(os.Stderr, "link debug: importcfg packagePath=%s interesting=%q\n", packagePath, interesting)
 }
 
 func collectOrchestrionLinkClosurePackages(archives []archive) []string {
@@ -149,20 +86,14 @@ func isSyntheticTestBinaryLink(mainArchive, packagePath string) bool {
 func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive string) (bool, error) {
 	sidecarPath := syntheticTestmainPackagefileManifestSidecarPath(mainArchive)
 	data, err := os.ReadFile(sidecarPath)
-	if err == nil {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: loaded synthetic packagefile manifest sidecar %s\n", sidecarPath)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("read synthetic packagefile manifest sidecar %s: %w", sidecarPath, err)
-	} else {
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		data, err = readArchiveEntry(mainArchive, syntheticTestmainPackagefileManifestName)
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: synthetic packagefile manifest missing from sidecar %s and archive %s\n", sidecarPath, mainArchive)
-			}
 			return false, nil
 		}
 		return false, fmt.Errorf("read synthetic packagefile manifest from %s: %w", mainArchive, err)
@@ -180,9 +111,6 @@ func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive strin
 	}
 	if err := appendOrReplaceImportcfgDirectives(importcfgPath, filtered, "synthetic-testmain-manifest"); err != nil {
 		return false, err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: applied %d synthetic packagefile directives from %s\n", len(filtered), mainArchive)
 	}
 	return true, nil
 }
@@ -214,10 +142,6 @@ func link(args []string) error {
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "link: parsed packagePath=%q main=%q out=%q stdlib_cache=%q toolArgs=%q\n", *packagePath, *main, *outFile, goenv.stdlibCache, toolArgs)
-	}
-
 	// On Windows, take the absolute path of the output file and main file.
 	// This is needed on Windows because the relative path is frequently too long.
 	// os.Open on Windows converts absolute paths to some other path format with
@@ -257,9 +181,6 @@ func link(args []string) error {
 	linkOrchestrion := *orchestrion
 	if syntheticTestBinaryLink {
 		linkOrchestrion = ""
-	}
-	if *orchestrion != "" && !syntheticTestBinaryLink {
-		fmt.Fprintf(os.Stderr, "link: orchestrion precheck packagePath=%q main=%q mainBase=%q syntheticTestBinaryLink=%t orchestrion=%q\n", *packagePath, *main, filepath.Base(*main), syntheticTestBinaryLink, *orchestrion)
 	}
 	if *orchestrion != "" {
 		*orchestrion = abs(*orchestrion)
@@ -334,35 +255,6 @@ func link(args []string) error {
 	}
 
 	syntheticTestBinaryLink = isSyntheticTestBinaryLink(*main, *packagePath)
-	if linkOrchestrion != "" {
-		fmt.Fprintf(os.Stderr, "link: orchestrion recheck packagePath=%q main=%q mainBase=%q syntheticTestBinaryLink=%t orchestrion=%q\n", *packagePath, *main, filepath.Base(*main), syntheticTestBinaryLink, linkOrchestrion)
-	}
-	if syntheticTestBinaryLink {
-		fmt.Fprintf(os.Stderr, "link: synthetic test binary detected packagePath=%q main=%q orchestrion_enabled=%t debug=%t\n", *packagePath, *main, linkOrchestrion != "", os.Getenv("ORCHESTRION_DEBUG_TRACE") != "")
-	}
-	if syntheticTestBinaryLink {
-		debugTmpDir := filepath.Join(os.TempDir(), "orchestrion-link-debug-synthetic")
-		if err := os.MkdirAll(debugTmpDir, 0o755); err != nil {
-			return fmt.Errorf("create synthetic link debug tmpdir parent: %w", err)
-		}
-		entries, _ := os.ReadDir(debugTmpDir)
-		for _, entry := range entries {
-			_ = os.RemoveAll(filepath.Join(debugTmpDir, entry.Name()))
-		}
-		if err := os.MkdirAll(debugTmpDir, 0o755); err != nil {
-			return fmt.Errorf("recreate synthetic link debug tmpdir: %w", err)
-		}
-		if _, err := os.Stat(debugTmpDir); err != nil {
-			return fmt.Errorf("stat synthetic link debug tmpdir: %w", err)
-		}
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: forcing synthetic link tmpdir %s\n", debugTmpDir)
-		}
-		if err := os.Chmod(debugTmpDir, 0o755); err != nil {
-			return fmt.Errorf("chmod synthetic link debug tmpdir: %w", err)
-		}
-		goargs = append(goargs, "-tmpdir", debugTmpDir, "-v")
-	}
 
 	if linkOrchestrion != "" {
 		srcDirs := make([]string, 0, len(archives))
@@ -391,26 +283,19 @@ func link(args []string) error {
 			return fmt.Errorf("link: %w", err)
 		}
 		defer restoreOrchWorkDir()
-			if linkOrchestrion != "" {
-				cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose)
-				if err != nil {
-					return fmt.Errorf("link: %w", err)
-				}
-				defer cleanupGoMod()
+		if linkOrchestrion != "" {
+			cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose)
+			if err != nil {
+				return fmt.Errorf("link: %w", err)
 			}
+			defer cleanupGoMod()
+		}
 		if orchImportPath == "main" {
 			orchImportPath = ""
 		}
 		orchImportPath = resolveOrchestrionImportPath(orchImportPath, goenv.verbose)
 		if strings.HasSuffix(*main, "~testmain.a") && !strings.HasSuffix(orchImportPath, ".test") {
 			orchImportPath += ".test"
-			if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "link: synthetic test binary import path adjusted to %s\n", orchImportPath)
-			}
-		}
-		if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			cwd, _ := os.Getwd()
-			fmt.Fprintf(os.Stderr, "link: orchestrion cwd=%s packagePath=%s resolved_importpath=%s main=%s out=%s\n", cwd, *packagePath, orchImportPath, *main, *outFile)
 		}
 		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
 		if err != nil {
@@ -420,7 +305,7 @@ func link(args []string) error {
 			defer os.Remove(importcfgName)
 		}
 		if syntheticTestBinaryLink {
-			appliedManifest, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
+			_, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
 			if err != nil {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
@@ -433,14 +318,6 @@ func link(args []string) error {
 				if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
 					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
 				}
-			} else if appliedManifest && (goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "") {
-				fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; reusing compile-time Datadog helper packagefiles only\n")
-			}
-			dumpInterestingImportcfgLines(importcfgName, *packagePath)
-			if data, err := os.ReadFile(importcfgName); err == nil {
-				dumpLinkDebugFile("orchestrion-link-importcfg-synthetic", *packagePath, data)
-				_ = os.WriteFile("/tmp/orchestrion-link-importcfg-synthetic-latest.txt", data, 0o644)
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: copied synthetic importcfg to /tmp/orchestrion-link-importcfg-synthetic-latest.txt\n")
 			}
 		}
 		if goenv.stdlibCache != "" {
@@ -453,18 +330,10 @@ func link(args []string) error {
 				return fmt.Errorf("link: rewrite importcfg from cache stdlib closures: %w", err)
 			}
 		}
-		dumpInterestingImportcfgLines(importcfgName, *packagePath)
-		debugImportcfgState("before-link", importcfgName)
-		dumpLinkDebugFile("orchestrion-link-args", *packagePath, []byte(strings.Join(goargs, "\n")+"\n"))
-		if data, err := os.ReadFile(importcfgName); err == nil {
-			dumpLinkDebugFile("orchestrion-link-importcfg", *packagePath, data)
-		}
 		goargs = append(goargs, "-importcfg", importcfgName)
 		goargs = append(goargs, *main)
 		var jobserver *orchestrionJobserver
-		if syntheticTestBinaryLink {
-			fmt.Fprintf(os.Stderr, "link: synthetic test binary link using orchestrion path with jobserver disabled\n")
-		} else {
+		if !syntheticTestBinaryLink {
 			goRootPath := goenv.goroot
 			if goRootPath == "" {
 				goRootPath = os.Getenv("GOROOT")
@@ -476,10 +345,8 @@ func link(args []string) error {
 			defer jobserver.cleanup()
 		}
 		if err := goenv.runCommandWithJobserver(goargs, jobserver, orchImportPath); err != nil {
-			debugImportcfgState("after-link-error", importcfgName)
 			return err
 		}
-		debugImportcfgState("after-link-success", importcfgName)
 	} else {
 		var restoreOrchWorkDir func()
 		var cleanupGoMod func()
@@ -526,7 +393,7 @@ func link(args []string) error {
 			defer os.Remove(importcfgName)
 		}
 		if syntheticTestBinaryLink {
-			appliedManifest, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
+			_, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
 			if err != nil {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
@@ -534,26 +401,13 @@ func link(args []string) error {
 				if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
 					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
 				}
-			} else if goenv.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				if appliedManifest {
-					fmt.Fprintf(os.Stderr, "link: synthetic testmain manifest applied; reusing compile-time Datadog helper packagefiles only\n")
-				} else {
-				fmt.Fprintf(os.Stderr, "link: synthetic testmain has no orchestrion manifest and orchestrion link is disabled; skipping Datadog helper augmentation\n")
-				}
 			}
 			if goenv.stdlibCache != "" {
 				if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {
 					return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
 				}
 			}
-			dumpInterestingImportcfgLines(importcfgName, *packagePath)
-			if data, err := os.ReadFile(importcfgName); err == nil {
-				dumpLinkDebugFile("orchestrion-link-importcfg-synthetic", *packagePath, data)
-				_ = os.WriteFile("/tmp/orchestrion-link-importcfg-synthetic-latest.txt", data, 0o644)
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: copied synthetic importcfg to /tmp/orchestrion-link-importcfg-synthetic-latest.txt\n")
-			}
 		}
-		debugImportcfgState("before-link", importcfgName)
 		goargs = append(goargs, "-importcfg", importcfgName)
 		goargs = append(goargs, *main)
 		if clearGoRoot {
@@ -564,10 +418,8 @@ func link(args []string) error {
 			defer os.Setenv("GOROOT", oldroot)
 		}
 		if err := goenv.runCommand(goargs); err != nil {
-			debugImportcfgState("after-link-error", importcfgName)
 			return err
 		}
-		debugImportcfgState("after-link-success", importcfgName)
 	}
 
 	if *buildmode == "c-archive" {
@@ -577,53 +429,6 @@ func link(args []string) error {
 	}
 
 	return nil
-}
-
-func debugImportcfgState(stage, path string) {
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") == "" {
-		return
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: %s importcfg=%s read error: %v\n", stage, path, err)
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
-	packagefileCount := 0
-	interesting := make([]string, 0, len(lines))
-	malformed := make([]string, 0, 8)
-	for _, line := range lines {
-		if strings.HasPrefix(line, "packagefile ") {
-			packagefileCount++
-			rest := strings.TrimPrefix(line, "packagefile ")
-			parts := strings.SplitN(rest, "=", 2)
-			if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
-				malformed = append(malformed, line)
-			}
-		}
-		for _, pattern := range linkDebugPatterns {
-			if strings.Contains(line, pattern) {
-				interesting = append(interesting, line)
-				break
-			}
-		}
-	}
-
-	fmt.Fprintf(os.Stderr, "orchestrion link debug: %s importcfg=%s bytes=%d packagefiles=%d interesting=%d malformed=%d\n",
-		stage, path, len(data), packagefileCount, len(interesting), len(malformed))
-	for _, line := range interesting {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: %s %s\n", stage, line)
-	}
-	for _, line := range malformed {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: %s malformed %s\n", stage, line)
-	}
-
-	if dumpPath := os.Getenv("ORCHESTRION_DEBUG_IMPORTCFG_COPY"); dumpPath != "" {
-		_ = os.WriteFile(dumpPath, data, 0o644)
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: copied importcfg to %s\n", dumpPath)
-	}
 }
 
 var versionExp = regexp.MustCompile(`.*go1\.(\d+).*$`)

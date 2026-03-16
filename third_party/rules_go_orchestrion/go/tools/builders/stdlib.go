@@ -64,7 +64,6 @@ func stdlib(args []string) error {
 	}
 	if *orchestrion != "" {
 		*orchestrion = abs(*orchestrion)
-		goenv.verbose = true
 	}
 	goroot := os.Getenv("GOROOT")
 	if goroot == "" {
