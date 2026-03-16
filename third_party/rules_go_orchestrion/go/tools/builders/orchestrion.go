@@ -876,10 +876,6 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	} else {
 		cmd.Env = unsetEnv(cmd.Env, orchestrionJobserverURLEnvVar)
 		cmd.Env = unsetEnv(cmd.Env, orchestrionSkipPinEnvVar)
-		if verbose || getEnv(cmd.Env, "ORCHESTRION_DEBUG_TRACE") == "1" {
-			fmt.Fprintf(os.Stderr, "orchestrion: jobserver disabled for importpath=%s; cleared %s and %s\n",
-				importPath, orchestrionJobserverURLEnvVar, orchestrionSkipPinEnvVar)
-		}
 	}
 	if importPath != "" {
 		cmd.Env = setEnv(cmd.Env, toolexecImportPathEnvVar, importPath)
@@ -904,33 +900,6 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose); err != nil {
 		return fmt.Errorf("ensure woven dependencies available: %w", err)
 	}
-	if verbose {
-		fmt.Fprintf(os.Stderr, "orchestrion: command cwd=%s path=%s importpath=%s GOROOT=%s GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOFLAGS=%s GOTOOLCHAIN=%s GOPACKAGESDRIVER=%s DD_ORCHESTRION_IS_GOMOD_VERSION=%s\n",
-			mustGetwd(),
-			cmd.Path,
-			importPath,
-			getEnv(cmd.Env, "GOROOT"),
-			getEnv(cmd.Env, "GOPATH"),
-			getEnv(cmd.Env, "GOMODCACHE"),
-			getEnv(cmd.Env, "GOCACHE"),
-			getEnv(cmd.Env, "GOFLAGS"),
-			getEnv(cmd.Env, "GOTOOLCHAIN"),
-			getEnv(cmd.Env, "GOPACKAGESDRIVER"),
-			getEnv(cmd.Env, orchestrionSkipPinEnvVar),
-		)
-		stdlibDir := filepath.Join(getEnv(cmd.Env, "GOROOT"), "src", "log")
-		if info, err := os.Stat(stdlibDir); err == nil {
-			fmt.Fprintf(os.Stderr, "orchestrion: stdlib path %s present dir=%t\n", stdlibDir, info.IsDir())
-		} else {
-			fmt.Fprintf(os.Stderr, "orchestrion: stdlib path %s stat error: %v\n", stdlibDir, err)
-		}
-		if info, err := os.Stat(cmd.Path); err == nil {
-			fmt.Fprintf(os.Stderr, "orchestrion: command path %s present mode=%s size=%d\n", cmd.Path, info.Mode(), info.Size())
-		} else {
-			fmt.Fprintf(os.Stderr, "orchestrion: command path %s stat error: %v\n", cmd.Path, err)
-		}
-	}
-
 	return runAndLogCommand(cmd, verbose)
 }
 

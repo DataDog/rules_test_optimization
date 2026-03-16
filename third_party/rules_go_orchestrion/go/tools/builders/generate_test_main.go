@@ -95,7 +95,6 @@ package main
 import "github.com/bazelbuild/rules_go/go/tools/bzltestutil"
 
 import (
-	"fmt"
 	"flag"
 	"log"
 {{if eq .CoverFormat "lcov"}}
@@ -189,10 +188,6 @@ func main() {
 			exitCode = bzltestutil.TestWrapperAbnormalExit
 		}
 		os.Exit(exitCode)
-	}
-
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "bzltestmain: testing.Testing()=%t\n", testing.Testing())
 	}
 
 	{{if ne .CoverMode ""}}

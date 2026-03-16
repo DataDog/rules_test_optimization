@@ -202,9 +202,6 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 		if info, err := os.Stat(e.stdlibCache); err == nil && info.IsDir() {
 			cmd.Env = setEnv(cmd.Env, "GOCACHE", e.stdlibCache)
 			cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, e.stdlibCache)
-			if e.verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
-				fmt.Fprintf(os.Stderr, "orchestrion: preseeded GOCACHE=%s from stdlib_cache for jobserver command\n", e.stdlibCache)
-			}
 		}
 	}
 	goRootPath := e.goroot
@@ -343,7 +340,7 @@ func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
 	if verbose {
 		fmt.Fprintln(os.Stderr, formatCommand(cmd))
 	}
-	if verbose || os.Getenv("ORCHESTRION_DEBUG_TRACE") == "1" {
+	if verbose {
 		if cmd.Stdout == nil {
 			cmd.Stdout = os.Stdout
 		}

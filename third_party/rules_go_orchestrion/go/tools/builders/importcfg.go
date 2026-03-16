@@ -286,9 +286,6 @@ func rewriteImportcfgForOrchestrionStdlib(importcfgPath string, goenv *env) erro
 	if err := os.WriteFile(importcfgPath, []byte(updated), 0o644); err != nil {
 		return err
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries in %s\n", replaced, importcfgPath)
-	}
 	return nil
 }
 
@@ -311,7 +308,6 @@ func rewriteImportcfgForPersistedStdlib(importcfgPath string, goenv *env) error 
 
 	lines := strings.Split(string(data), "\n")
 	replaced := 0
-	replacementLog := make([]string, 0, 16)
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "packagefile ") {
 			continue
@@ -324,9 +320,6 @@ func rewriteImportcfgForPersistedStdlib(importcfgPath string, goenv *env) error 
 		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
 			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
 			replaced++
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				replacementLog = append(replacementLog, fmt.Sprintf("%s -> %s", parts[0], exportPath))
-			}
 		}
 	}
 	if replaced == 0 {
@@ -334,12 +327,6 @@ func rewriteImportcfgForPersistedStdlib(importcfgPath string, goenv *env) error 
 	}
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d packagefile entries from persisted stdlib exports in %s\n", replaced, importcfgPath)
-		for _, line := range replacementLog {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: persisted replacement %s\n", line)
-		}
 	}
 	return nil
 }
@@ -391,12 +378,6 @@ func appendMissingPersistedStdlibPackagefiles(importcfgPath string, goenv *env) 
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: appended %d persisted stdlib packagefile entries into %s\n", len(missing), importcfgPath)
-		if len(missing) <= 32 {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: appended packages=%v\n", missing)
-		}
-	}
 	return nil
 }
 
@@ -419,7 +400,6 @@ func rewriteImportcfgForStdlibRoots(importcfgPath string, goenv *env, roots []st
 
 	lines := strings.Split(string(data), "\n")
 	replaced := 0
-	replacementLog := make([]string, 0, 8)
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "packagefile ") {
 			continue
@@ -432,9 +412,6 @@ func rewriteImportcfgForStdlibRoots(importcfgPath string, goenv *env, roots []st
 		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
 			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
 			replaced++
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				replacementLog = append(replacementLog, fmt.Sprintf("%s -> %s", parts[0], exportPath))
-			}
 		}
 	}
 	if replaced == 0 {
@@ -442,12 +419,6 @@ func rewriteImportcfgForStdlibRoots(importcfgPath string, goenv *env, roots []st
 	}
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries from roots %v in %s\n", replaced, roots, importcfgPath)
-		for _, line := range replacementLog {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: root replacement %s\n", line)
-		}
 	}
 	return nil
 }
@@ -471,7 +442,6 @@ func rewriteImportcfgForCacheStdlibPackages(importcfgPath string, goenv *env, pa
 
 	lines := strings.Split(string(data), "\n")
 	replaced := 0
-	replacementLog := make([]string, 0, 8)
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "packagefile ") {
 			continue
@@ -484,9 +454,6 @@ func rewriteImportcfgForCacheStdlibPackages(importcfgPath string, goenv *env, pa
 		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
 			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
 			replaced++
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				replacementLog = append(replacementLog, fmt.Sprintf("%s -> %s", parts[0], exportPath))
-			}
 		}
 	}
 	if replaced == 0 {
@@ -494,12 +461,6 @@ func rewriteImportcfgForCacheStdlibPackages(importcfgPath string, goenv *env, pa
 	}
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries from cache exports in %s\n", replaced, importcfgPath)
-		for _, line := range replacementLog {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: cache replacement %s\n", line)
-		}
 	}
 	return nil
 }
@@ -521,7 +482,6 @@ func rewriteImportcfgForExactStdlibPackages(importcfgPath string, goenv *env, pa
 	}
 	lines := strings.Split(string(data), "\n")
 	replaced := 0
-	replacementLog := make([]string, 0, 8)
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "packagefile ") {
 			continue
@@ -534,9 +494,6 @@ func rewriteImportcfgForExactStdlibPackages(importcfgPath string, goenv *env, pa
 		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
 			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
 			replaced++
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				replacementLog = append(replacementLog, fmt.Sprintf("%s -> %s", parts[0], exportPath))
-			}
 		}
 	}
 	if replaced == 0 {
@@ -545,20 +502,11 @@ func rewriteImportcfgForExactStdlibPackages(importcfgPath string, goenv *env, pa
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: pinned %d exact stdlib packagefile entries %v in %s\n", replaced, packages, importcfgPath)
-		for _, line := range replacementLog {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: exact replacement %s\n", line)
-		}
-	}
 	return nil
 }
 
-func appendMissingPackagefiles(importcfgPath string, exports map[string]string, debugLabel string) error {
+func appendMissingPackagefiles(importcfgPath string, exports map[string]string, _ string) error {
 	if len(exports) == 0 {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: appendMissingPackagefiles label=%s importcfg=%s exports=0\n", debugLabel, importcfgPath)
-		}
 		return nil
 	}
 	data, err := os.ReadFile(importcfgPath)
@@ -579,25 +527,16 @@ func appendMissingPackagefiles(importcfgPath string, exports map[string]string, 
 		existing[parts[0]] = true
 	}
 	missing := make([]string, 0, len(exports))
-	skippedExisting := make([]string, 0, len(exports))
-	skippedEmpty := make([]string, 0, len(exports))
 	for pkg, exportPath := range exports {
 		if strings.TrimSpace(exportPath) == "" {
-			skippedEmpty = append(skippedEmpty, pkg)
 			continue
 		}
 		if existing[pkg] {
-			skippedExisting = append(skippedExisting, pkg)
 			continue
 		}
 		missing = append(missing, pkg)
 	}
 	if len(missing) == 0 {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			sort.Strings(skippedExisting)
-			sort.Strings(skippedEmpty)
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: appendMissingPackagefiles label=%s importcfg=%s appended=0 existing=%v empty=%v\n", debugLabel, importcfgPath, skippedExisting, skippedEmpty)
-		}
 		return nil
 	}
 	sort.Strings(missing)
@@ -607,27 +546,10 @@ func appendMissingPackagefiles(importcfgPath string, exports map[string]string, 
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: appended %d %s packagefile entries into %s\n", len(missing), debugLabel, importcfgPath)
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: appended %s packages=%v\n", debugLabel, missing)
-		sort.Strings(skippedExisting)
-		sort.Strings(skippedEmpty)
-		if len(skippedExisting) > 0 {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipped existing %s packages=%v\n", debugLabel, skippedExisting)
-		}
-		if len(skippedEmpty) > 0 {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipped empty %s packages=%v\n", debugLabel, skippedEmpty)
-		}
-		for _, pkg := range missing {
-			if strings.Contains(pkg, "github.com/DataDog/dd-trace-go/v2") {
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: appended %s packagefile %s=%s\n", debugLabel, pkg, exports[pkg])
-			}
-		}
-	}
 	return nil
 }
 
-func appendOrReplaceImportcfgDirectives(importcfgPath string, directives []string, debugLabel string) error {
+func appendOrReplaceImportcfgDirectives(importcfgPath string, directives []string, _ string) error {
 	if len(directives) == 0 {
 		return nil
 	}
@@ -654,8 +576,6 @@ func appendOrReplaceImportcfgDirectives(importcfgPath string, directives []strin
 		}
 	}
 
-	var appended []string
-	var replaced []string
 	for _, line := range directives {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -683,20 +603,15 @@ func appendOrReplaceImportcfgDirectives(importcfgPath string, directives []strin
 		if i, ok := indexes[key]; ok {
 			if lines[i] != line {
 				lines[i] = line
-				replaced = append(replaced, key)
 			}
 			continue
 		}
 		indexes[key] = len(lines)
 		lines = append(lines, line)
-		appended = append(appended, key)
 	}
 
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: appendOrReplaceImportcfgDirectives label=%s importcfg=%s appended=%v replaced=%v\n", debugLabel, importcfgPath, appended, replaced)
 	}
 	return nil
 }
@@ -709,22 +624,6 @@ func appendMissingModulePackagefiles(importcfgPath string, goenv *env, packages 
 	exports, err := resolveModuleExportsForPackagesWithRoot(goenv, packages, orchestrionPath, moduleDir, forcedExportRoot)
 	if err != nil {
 		return err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		keys := make([]string, 0, len(exports))
-		for pkg := range exports {
-			keys = append(keys, pkg)
-		}
-		sort.Strings(keys)
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: resolved %d module exports for synthetic link\n", len(keys))
-		for _, pkg := range keys {
-			if strings.Contains(pkg, "github.com/DataDog/dd-trace-go/v2") {
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: module export %s=%s\n", pkg, exports[pkg])
-			}
-		}
-		if forcedExportRoot != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: reusing existing module export root %s\n", forcedExportRoot)
-		}
 	}
 	directives := make([]string, 0, len(exports))
 	for pkg, exportPath := range exports {
@@ -795,15 +694,9 @@ func resolveBazelStdlibPkgArchives(goenv *env, packages []string) (map[string]st
 		archive := filepath.Join(pkgRoot, filepath.FromSlash(pkg)+".a")
 		info, err := os.Stat(archive)
 		if err != nil || info.IsDir() {
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: missing Bazel stdlib pkg archive for %s at %s err=%v\n", pkg, archive, err)
-			}
 			continue
 		}
 		exports[pkg] = archive
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: resolved Bazel stdlib pkg archives %v\n", exports)
 	}
 	return exports, nil
 }
@@ -819,7 +712,7 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if goenv.goroot != "" {
 		goenv.goroot = abs(goenv.goroot)
 		goenv.sdk = abs(goenv.sdk)
-		if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, os.Getenv("ORCHESTRION_DEBUG_TRACE") != ""); err != nil {
+		if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, false); err != nil {
 			return nil, err
 		}
 	}
@@ -871,16 +764,10 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	var gocache string
 	if forcedExportRoot != "" {
 		gocache = abs(forcedExportRoot)
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: module exports request moduleDir=%s forcedRoot=%s packages=%v\n", cmd.Dir, gocache, packages)
-		}
 	} else {
 		requestKey, err := moduleExportRequestKey(cmd.Dir)
 		if err != nil {
 			return nil, fmt.Errorf("derive module export request key: %w", err)
-		}
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: module exports request moduleDir=%s requestKey=%s packages=%v\n", cmd.Dir, requestKey, packages)
 		}
 		gocache = filepath.Join(gopath, "cache", "module-exports", requestKey)
 	}
@@ -924,11 +811,6 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if err != nil {
 		return nil, fmt.Errorf("go list module exports for %v: %w\n%s", packages, err, string(output))
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: module export command for %v output:\n%s\n", packages, string(output))
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: module export env GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOROOT=%s\n",
-			gopath, gomodcache, gocache, getEnv(cmd.Env, "GOROOT"))
-	}
 	exports := make(map[string]string)
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
@@ -966,9 +848,6 @@ func sanitizeModuleExportArchives(exports map[string]string) error {
 			}
 			if err := copyArchiveWithoutEntries(archivePath, sanitizedPath, map[string]bool{"link.deps": true}); err != nil {
 				return fmt.Errorf("sanitize module export archive for %s: %w", pkg, err)
-			}
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: stripped link.deps from module export archive %s -> %s\n", archivePath, sanitizedPath)
 			}
 		}
 		exports[pkg] = sanitizedPath
@@ -1126,9 +1005,6 @@ func seedWovenStdlibCache(goenv *env, cacheRoot string) error {
 	if err := os.WriteFile(manifestPath, []byte(manifest.String()), 0o644); err != nil {
 		return fmt.Errorf("write seeded stdlib cache manifest at %s: %w", manifestPath, err)
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: seeded module export cache %s from woven stdlib cache %s with %d packages\n", cacheRoot, goenv.stdlibCache, len(destExports))
-	}
 	return nil
 }
 
@@ -1230,9 +1106,6 @@ func rewriteImportcfgForStdlibClosure(importcfgPath string, goenv *env, pkg stri
 	if err := os.WriteFile(importcfgPath, []byte(updated), 0o644); err != nil {
 		return err
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries from closure of %s in %s\n", replaced, pkg, importcfgPath)
-	}
 	return nil
 }
 
@@ -1247,33 +1120,17 @@ func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string
 	if persisted, err := readPersistedOrchestrionStdlibExports(goenv); err != nil {
 		return nil, err
 	} else if len(persisted) > 0 {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			requested := append([]string{}, packages...)
-			sort.Strings(requested)
-			keys := make([]string, 0, len(persisted))
-			for pkg := range persisted {
-				keys = append(keys, pkg)
-			}
-			sort.Strings(keys)
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: using persisted stdlib exports requested=%v available=%d keys=%v\n", requested, len(persisted), keys)
-		}
 		return persisted, nil
 	}
 	exports := make(map[string]string, len(packages))
 	if info, err := os.Stat(goenv.goroot); err != nil || !info.IsDir() {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipping stdlib export resolution, goroot unavailable: %s err=%v\n", goenv.goroot, err)
-		}
 		return nil, nil
 	}
-	if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, os.Getenv("ORCHESTRION_DEBUG_TRACE") != ""); err != nil {
+	if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, false); err != nil {
 		return nil, err
 	}
 	gorootSrc := filepath.Join(goenv.goroot, "src")
 	if info, err := os.Stat(gorootSrc); err != nil || !info.IsDir() {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipping stdlib export resolution, goroot/src unavailable: %s err=%v\n", gorootSrc, err)
-		}
 		return nil, nil
 	}
 
@@ -1339,9 +1196,6 @@ func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string
 		}
 		exports[parts[0]] = parts[1]
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: resolved stdlib exports %v\n", exports)
-	}
 	return exports, nil
 }
 
@@ -1360,9 +1214,6 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 	cacheRoot = strings.TrimSpace(cacheRoot)
 	if cacheRoot != "" {
 		if manifestExports, err := readStdlibCacheManifest(cacheRoot, packages); err == nil && len(manifestExports) > 0 {
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				fmt.Fprintf(os.Stderr, "orchestrion link debug: resolved cache stdlib exports from manifest %s %v\n", cacheRoot, manifestExports)
-			}
 			return manifestExports, nil
 		}
 	}
@@ -1371,7 +1222,7 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 	if info, err := os.Stat(goenv.goroot); err != nil || !info.IsDir() {
 		return nil, nil
 	}
-	if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, os.Getenv("ORCHESTRION_DEBUG_TRACE") != ""); err != nil {
+	if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, false); err != nil {
 		return nil, err
 	}
 	gorootSrc := filepath.Join(goenv.goroot, "src")
@@ -1430,9 +1281,6 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 			continue
 		}
 		exports[parts[0]] = parts[1]
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: resolved cache stdlib exports from %s %v\n", cachePath, exports)
 	}
 	return exports, nil
 }
@@ -1586,9 +1434,6 @@ func rewriteImportcfgForAllStdlibExports(importcfgPath string, goenv *env) error
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
 	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries to export archives in %s\n", replaced, importcfgPath)
-	}
 	return nil
 }
 
@@ -1609,7 +1454,6 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	}
 	lines := strings.Split(string(data), "\n")
 	replaced := 0
-	replacementLog := make([]string, 0, len(orchestrionCacheStdlibPackages))
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "packagefile ") {
 			continue
@@ -1622,9 +1466,6 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
 			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
 			replaced++
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				replacementLog = append(replacementLog, fmt.Sprintf("%s -> %s", parts[0], exportPath))
-			}
 		}
 	}
 	if replaced == 0 {
@@ -1632,12 +1473,6 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	}
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries to default cache-family exports in %s\n", replaced, importcfgPath)
-		for _, line := range replacementLog {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: cache-family replacement %s\n", line)
-		}
 	}
 	return nil
 }
@@ -1678,7 +1513,6 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	}
 	lines := strings.Split(string(data), "\n")
 	replaced := 0
-	replacementLog := make([]string, 0, len(exports))
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "packagefile ") {
 			continue
@@ -1691,9 +1525,6 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 		if exportPath, ok := exports[parts[0]]; ok && exportPath != "" {
 			lines[i] = fmt.Sprintf("packagefile %s=%s", parts[0], exportPath)
 			replaced++
-			if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-				replacementLog = append(replacementLog, fmt.Sprintf("%s -> %s", parts[0], exportPath))
-			}
 		}
 	}
 	if replaced == 0 {
@@ -1701,12 +1532,6 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	}
 	if err := os.WriteFile(importcfgPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return err
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: rewrote %d stdlib packagefile entries from package closures %v in %s\n", replaced, packages, importcfgPath)
-		for _, line := range replacementLog {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: closure replacement %s\n", line)
-		}
 	}
 	return nil
 }
@@ -1805,19 +1630,13 @@ func resolveStdlibExportsForPackage(goenv *env, pkg string) (map[string]string, 
 		goenv.sdk = abs(goenv.sdk)
 	}
 	if info, err := os.Stat(goenv.goroot); err != nil || !info.IsDir() {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipping stdlib closure resolution, goroot unavailable: %s err=%v\n", goenv.goroot, err)
-		}
 		return nil, nil
 	}
-	if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, os.Getenv("ORCHESTRION_DEBUG_TRACE") != ""); err != nil {
+	if err := ensureGoRootCompatibility(goenv.goroot, goenv.sdk, false); err != nil {
 		return nil, err
 	}
 	gorootSrc := filepath.Join(goenv.goroot, "src")
 	if info, err := os.Stat(gorootSrc); err != nil || !info.IsDir() {
-		if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-			fmt.Fprintf(os.Stderr, "orchestrion link debug: skipping stdlib closure resolution, goroot/src unavailable: %s err=%v\n", gorootSrc, err)
-		}
 		return nil, nil
 	}
 
@@ -1883,9 +1702,6 @@ func resolveStdlibExportsForPackage(goenv *env, pkg string) (map[string]string, 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("go list stdlib closure exports for %s: %w\n%s", pkg, err, string(output))
-	}
-	if os.Getenv("ORCHESTRION_DEBUG_TRACE") != "" {
-		fmt.Fprintf(os.Stderr, "orchestrion link debug: stdlib closure export command for %s output:\n%s\n", pkg, string(output))
 	}
 	exports := make(map[string]string)
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {

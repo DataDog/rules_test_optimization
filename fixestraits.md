@@ -86,6 +86,33 @@ Second-pass runtime validation also passes:
 
 So the debug-only Orchestrion source injections are no longer needed.
 
+Third cleanup pass was done in the builder-side debug scaffolding:
+
+- `third_party/rules_go_orchestrion/go/tools/builders/env.go`
+- `third_party/rules_go_orchestrion/go/tools/builders/generate_test_main.go`
+- `third_party/rules_go_orchestrion/go/tools/builders/importcfg.go`
+- `third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go`
+
+Third-pass cleanup changes:
+
+- removed the remaining builder-side `ORCHESTRION_DEBUG_TRACE` stderr noise from the importcfg rewrite path
+- removed builder-side one-off environment/path diagnostics that were only useful during the debugging campaign
+- removed the generated `bzltestmain: testing.Testing()=%t` runtime marker
+- kept the optional `ORCHESTRION_LOG_LEVEL=TRACE` behavior when debug tracing is explicitly requested, so deep debugging is still possible without the custom log spam
+
+Third-pass validation also passes:
+
+- `./bazelw test //modules/go/tools/dd_topt_go_bootstrap:bootstrap_test --test_output=errors`
+- `./bazelw build //examples/single_service/src/go-project:hello_test`
+- real `_tests` run forced without test cache:
+  - `./bazelw test //src/go-project:hello_test --nocache_test_results ... --test_output=streamed`
+- runtime output still emits:
+  - `Datadog Tracer v2.6.0 DEBUG: ...`
+  - `instrumentTestingTFunc: instrumenting test function`
+  - `instrumentTestingM: finished with exit code: 0`
+
+So the remaining builder-side debug scaffolding is no longer needed either.
+
 ## Root Cause We Ended Up Fixing
 
 This turned out to be a two-part synthetic-link problem:
