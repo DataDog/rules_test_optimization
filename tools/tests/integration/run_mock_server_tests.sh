@@ -1547,7 +1547,9 @@ if [ "${1:-}" = "run" ] && [ "${2:-}" = "github.com/DataDog/orchestrion@v1.5.0" 
   cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
 package tools
 
-import _ "github.com/DataDog/orchestrion"
+import (
+  _ "github.com/DataDog/orchestrion" // integration
+)
 PIN_TOOL_EOF
   : > go.sum
   exit 0
@@ -1600,6 +1602,144 @@ if ! grep -q 'custom: true' "$BOOT_WS/orchestrion.yml"; then
   cat "$BOOT_WS/orchestrion.yml" || true
   exit 1
 fi
+
+# Scenario: guided bootstrap creates the Go sync wiring, root uploader target,
+# and local dd_go_test wrapper for a fresh single-service Go workspace.
+GUIDED_BOOT_WS="$TMP_WS/ws_bootstrap_guided"
+mkdir -p "$GUIDED_BOOT_WS/bin" "$GUIDED_BOOT_WS/src/go-project"
+cat > "$GUIDED_BOOT_WS/MODULE.bazel" <<MODULE_GUIDED_BOOT_EOF
+module(name = "topt-guided-bootstrap-integration", version = "0.0.0")
+
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+
+local_path_override(
+    module_name = "datadog-rules-test-optimization",
+    path = ${ESCAPED_REPO_ROOT},
+)
+local_path_override(
+    module_name = "datadog-rules-test-optimization-go",
+    path = ${ESCAPED_MODULES_GO},
+)
+MODULE_GUIDED_BOOT_EOF
+
+cat > "$GUIDED_BOOT_WS/go.mod" <<'GOMOD_GUIDED_BOOT_EOF'
+module example.com/guided-bootstrap-go
+
+go 1.24.0
+GOMOD_GUIDED_BOOT_EOF
+
+cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "run" ] && [ "${2:-}" = "github.com/DataDog/orchestrion@v1.5.0" ] && [ "${3:-}" = "pin" ]; then
+  cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
+package tools
+
+import (
+  _ "github.com/DataDog/orchestrion" // integration
+)
+PIN_TOOL_EOF
+  : > go.sum
+  exit 0
+fi
+
+echo "unexpected go invocation: $*" >&2
+exit 1
+FAKE_GO_GUIDED_EOF
+chmod +x "$GUIDED_BOOT_WS/bin/go"
+
+cat > "$GUIDED_BOOT_WS/src/go-project/main.go" <<'GO_MAIN_GUIDED_EOF'
+package main
+
+func Greeting() string {
+	return "Hello World from Go"
+}
+GO_MAIN_GUIDED_EOF
+
+cat > "$GUIDED_BOOT_WS/src/go-project/main_test.go" <<'GO_TEST_GUIDED_EOF'
+package main
+
+import "testing"
+
+func TestGreeting(t *testing.T) {
+	if Greeting() != "Hello World from Go" {
+		t.Fatalf("unexpected greeting")
+	}
+}
+GO_TEST_GUIDED_EOF
+
+cat > "$GUIDED_BOOT_WS/src/go-project/BUILD.bazel" <<'BUILD_GUIDED_EOF'
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/build:dd_go_test.bzl", "dd_go_test")
+
+go_library(
+    name = "hello_lib",
+    srcs = ["main.go"],
+)
+
+dd_go_test(
+    name = "hello_test",
+    srcs = ["main_test.go"],
+    embed = [":hello_lib"],
+)
+BUILD_GUIDED_EOF
+
+(
+  cd "$GUIDED_BOOT_WS"
+  PATH="$GUIDED_BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+    --workspace "$GUIDED_BOOT_WS" \
+    --guided \
+    --service "go-service" \
+    --runtime-version "1.2.3"
+)
+
+if ! grep -q '# BEGIN Datadog Go Guided Setup' "$GUIDED_BOOT_WS/MODULE.bazel"; then
+  echo "error: guided bootstrap did not add the managed Go guided setup block"
+  cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
+if ! grep -q 'test_optimization_go_extension' "$GUIDED_BOOT_WS/MODULE.bazel"; then
+  echo "error: guided bootstrap did not add Go sync extension wiring"
+  cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
+if [ ! -f "$GUIDED_BOOT_WS/BUILD.bazel" ]; then
+  echo "error: guided bootstrap did not create root BUILD.bazel"
+  exit 1
+fi
+if ! grep -q '# BEGIN Datadog Go Uploader' "$GUIDED_BOOT_WS/BUILD.bazel"; then
+  echo "error: guided bootstrap did not create the managed uploader block"
+  cat "$GUIDED_BOOT_WS/BUILD.bazel" || true
+  exit 1
+fi
+if [ ! -f "$GUIDED_BOOT_WS/tools/build/BUILD.bazel" ]; then
+  echo "error: guided bootstrap did not create tools/build/BUILD.bazel"
+  exit 1
+fi
+if [ ! -f "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl" ]; then
+  echo "error: guided bootstrap did not create tools/build/dd_go_test.bzl"
+  exit 1
+fi
+if ! grep -q '# BEGIN Datadog Go Wrapper' "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl"; then
+  echo "error: guided bootstrap did not mark dd_go_test.bzl as Datadog-managed"
+  cat "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl" || true
+  exit 1
+fi
+
+(
+  cd "$GUIDED_BOOT_WS"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" test //src/go-project:hello_test "${REPO_ENVS[@]}"
+)
+
+(
+  cd "$GUIDED_BOOT_WS"
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}"
+)
 
 MULTI_LOG_START="$MULTI_LOG_START" "$PYTHON" - <<'PY'
 import base64

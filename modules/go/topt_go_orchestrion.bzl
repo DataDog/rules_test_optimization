@@ -25,6 +25,12 @@ def _dep_exec_and_runfiles(dep):
     default_info = target[DefaultInfo]
     return default_info.files_to_run.executable, default_info.default_runfiles.merge(default_info.data_runfiles)
 
+def _dep_run_environment_info(dep):
+    target = _first_target(dep)
+    if RunEnvironmentInfo in target:
+        return target[RunEnvironmentInfo]
+    return None
+
 def _select_wrapper_output_name(label_name, executable_basename, is_windows):
     if is_windows and executable_basename.endswith(".exe"):
         return label_name + ".exe"
@@ -32,15 +38,18 @@ def _select_wrapper_output_name(label_name, executable_basename, is_windows):
 
 def _orch_go_test_impl(ctx):
     dep_exe, dep_runfiles = _dep_exec_and_runfiles(ctx.attr.actual)
+    dep_run_environment = _dep_run_environment_info(ctx.attr.actual)
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
     ctx.actions.symlink(output = out, target_file = dep_exe)
-
-    return [DefaultInfo(
+    providers = [DefaultInfo(
         files = depset([out]),
         runfiles = dep_runfiles,
         executable = out,
     )]
+    if dep_run_environment:
+        providers.append(dep_run_environment)
+    return providers
 
 orch_go_test = rule(
     implementation = _orch_go_test_impl,

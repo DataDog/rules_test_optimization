@@ -142,10 +142,43 @@ lives in companion modules:
 
 ### Go companion module
 
-If you use the Go convenience macro, load it from the companion module:
+For a fresh single-service Go workspace, the recommended path is:
+
+1. add the core + Go companion dependency/override block
+2. run guided bootstrap
+3. use the generated local wrapper
+
+Guided bootstrap command:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --guided \
+  --service go-service \
+  --runtime-version 1.24.0
+```
+
+If the Go module lives below the workspace root:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --guided \
+  --service go-service \
+  --runtime-version 1.24.0 \
+  --go-module-dir path/to/go-module
+```
+
+Guided bootstrap is intentionally only for fresh single-service Go workspaces.
+If the workspace already uses:
+- `test_optimization_sync_extension`
+- `test_optimization_multi_sync_extension`
+- a manual `test_optimization_go_extension` setup
+
+use the manual/advanced Go setup path instead.
+
+The generated package-facing API is:
 
 ```bzl
-load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("//tools/build:dd_go_test.bzl", "dd_go_test")
 ```
 
 ### Python companion module
@@ -444,6 +477,9 @@ Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags
 from `README.md` and `docs/Maintainers.md`.
 
 ### 6) Configure Go support in WORKSPACE (for `dd_topt_go_test`)
+
+This is the lower-level/manual setup path. For Bzlmod single-service Go
+workspaces, prefer guided bootstrap instead.
 
 If your repository already configures `rules_go`, keep your existing setup and
 skip to the BUILD snippet below.

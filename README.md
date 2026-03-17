@@ -105,15 +105,18 @@ exit $testStatus
 
 ### Bzlmod + Go companion (`dd_topt_go_test`)
 
-Start from the core-only quickstart above, then add the Go companion:
-
-Recommended usage:
-- Use `test_optimization_sync_extension` directly for non-Go runtimes and for mixed-language repos where each runtime should keep its own sync repo.
-- Use `test_optimization_go_extension` with `service = ...` for a single Go service.
-- Use `test_optimization_go_extension` with `services = [...]` only when every configured service is a Go service.
-- For mixed-language monorepos, keep using the core sync extension separately per runtime, then point each language companion at its own exported `topt_data`.
+For a fresh single-service Go workspace, start with the small manual
+prerequisite block below, then let the guided bootstrap finish the Go-specific
+setup.
 
 ```bzl
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+)
+
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
@@ -122,52 +125,52 @@ git_override(
     strip_prefix = "modules/go",
 )
 bazel_dep(name = "rules_go", version = "0.59.0")
-
-go_topt = use_extension(
-    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
-    "test_optimization_go_extension",
-)
-
-go_topt.test_optimization_go(
-    name = "test_optimization_data",
-    service = "go-service",
-    runtime_version = "1.24.0",
-)
-
-use_repo(go_topt, "test_optimization_data")
 ```
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
 Go module:
 
 ```bash
-bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --guided \
+  --service go-service \
+  --runtime-version 1.24.0
 ```
 
 If the Go module lives below the workspace root:
 
 ```bash
-bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-module-dir path/to/go-module
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --guided \
+  --service go-service \
+  --runtime-version 1.24.0 \
+  --go-module-dir path/to/go-module
 ```
 
 The bootstrap helper:
 - patches `MODULE.bazel` with a Datadog-managed `rules_go` override back to this repository's vendored `third_party/rules_go_orchestrion` module and the `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
+- adds the Datadog-managed single-service Go sync block (`test_optimization_go_extension`)
+- creates a root `dd_upload_payloads` target when missing
+- creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
 - runs `orchestrion pin`
 - writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing
 
-Then use `dd_topt_go_test` in your package:
+Then use the generated local wrapper in your package:
 
 ```bzl
-load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
-dd_topt_go_test(
+dd_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
-    topt_data = topt_data,
+    embed = [":pkg_lib"],
 )
 ```
+
+Use the manual `dd_topt_go_test(..., topt_data = ...)` path only when the
+workspace already has custom sync wiring, mixed-language layout, or multi-service
+Go setup.
 
 ### Bzlmod + Python companion (`dd_topt_py_test`)
 
@@ -751,7 +754,12 @@ Orchestrion-enabled wrapper target.
 By default, it also sets `rundir` to the current Bazel package when not
 explicitly provided.
 
-Before using it, configure the Go companion extension in `MODULE.bazel`:
+For a fresh single-service Go workspace, prefer the guided bootstrap flow above.
+It generates the local `dd_go_test` wrapper and the uploader target for you.
+
+Use the raw macro directly only when you need the lower-level API.
+
+Before using it directly, configure the Go companion extension in `MODULE.bazel`:
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
@@ -854,6 +862,9 @@ dd_topt_go_test(
 ```
 
 ### Multi-service usage
+
+This is the advanced/manual path. Guided bootstrap is intentionally limited to
+fresh single-service Go workspaces.
 
 ```bzl
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")

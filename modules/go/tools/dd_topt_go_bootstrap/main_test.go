@@ -18,11 +18,11 @@ func TestInsertAfterModuleDecl(t *testing.T) {
 	}
 }
 
-func TestReplaceManagedBlockAppendsWhenMissing(t *testing.T) {
+func TestReplaceManagedSectionAppendsWhenMissing(t *testing.T) {
 	input := "module(name = \"example\")\n"
-	got, err := replaceManagedBlock(input, managedBlockStart+"\nfoo\n"+managedBlockEnd+"\n")
+	got, err := replaceManagedSection(input, managedBlockStart, managedBlockEnd, managedBlockStart+"\nfoo\n"+managedBlockEnd+"\n")
 	if err != nil {
-		t.Fatalf("replaceManagedBlock error: %v", err)
+		t.Fatalf("replaceManagedSection error: %v", err)
 	}
 	if !strings.Contains(got, managedBlockStart) || !strings.Contains(got, "foo") {
 		t.Fatalf("expected managed block in output:\n%s", got)
@@ -61,8 +61,12 @@ git_override(
     commit = "deadbeef",
 )
 `
-	if _, err := replaceManagedBlock(input, managedBlockStart+"\nfoo\n"+managedBlockEnd+"\n"); err == nil {
-		t.Fatal("expected conflicting rules_go override to fail")
+	cfg := config{
+		rulesGoRemote: defaultRulesGoRemote,
+		rulesGoCommit: defaultRulesGoCommit,
+	}
+	if rulesGoOverrideCompatible(input, cfg) {
+		t.Fatal("expected incompatible rules_go override to be rejected")
 	}
 }
 
@@ -224,5 +228,211 @@ import (
 	}
 	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) {
 		t.Fatalf("expected v2 orchestrion import after legacy cleanup:\n%s", text)
+	}
+}
+
+func TestValidateGuidedPrerequisites(t *testing.T) {
+	input := `module(name = "example")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+`
+	if err := validateGuidedPrerequisites(input); err != nil {
+		t.Fatalf("validateGuidedPrerequisites error: %v", err)
+	}
+}
+
+func TestValidateGuidedPrerequisitesRequiresCoreAndGo(t *testing.T) {
+	input := `module(name = "example")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+`
+	if err := validateGuidedPrerequisites(input); err == nil {
+		t.Fatal("expected missing Go companion prerequisite to fail")
+	}
+}
+
+func TestShouldAddGuidedBlockExactSingleServiceMatch(t *testing.T) {
+	cfg := config{
+		syncRepoName:   "test_optimization_data",
+		service:        "go-service",
+		runtimeVersion: "1.24.0",
+	}
+	input := `module(name = "example")
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
+)
+
+go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.24.0",
+)
+
+use_repo(go_topt, "test_optimization_data")
+`
+	add, err := shouldAddGuidedBlock(input, cfg)
+	if err != nil {
+		t.Fatalf("shouldAddGuidedBlock error: %v", err)
+	}
+	if add {
+		t.Fatal("expected exact single-service setup to be tolerated without adding a managed block")
+	}
+}
+
+func TestShouldAddGuidedBlockRejectsCoreSyncSetup(t *testing.T) {
+	cfg := config{
+		syncRepoName:   "test_optimization_data",
+		service:        "go-service",
+		runtimeVersion: "1.24.0",
+	}
+	input := `module(name = "example")
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+`
+	if _, err := shouldAddGuidedBlock(input, cfg); err == nil {
+		t.Fatal("expected core sync setup to be rejected")
+	}
+}
+
+func TestShouldAddGuidedBlockUpdatesManagedBlockWhenPresent(t *testing.T) {
+	cfg := config{
+		syncRepoName:   "test_optimization_data",
+		service:        "go-service",
+		runtimeVersion: "1.24.0",
+	}
+	input := `module(name = "example")
+# BEGIN Datadog Go Guided Setup
+datadog_go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
+)
+datadog_go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.23.0",
+)
+use_repo(datadog_go_topt, "test_optimization_data")
+# END Datadog Go Guided Setup
+`
+	add, err := shouldAddGuidedBlock(input, cfg)
+	if err != nil {
+		t.Fatalf("shouldAddGuidedBlock error: %v", err)
+	}
+	if !add {
+		t.Fatal("expected managed guided block to be updated")
+	}
+}
+
+func TestShouldAddGuidedBlockRejectsConflictingSetupOutsideManagedBlock(t *testing.T) {
+	cfg := config{
+		syncRepoName:   "test_optimization_data",
+		service:        "go-service",
+		runtimeVersion: "1.24.0",
+	}
+	input := `module(name = "example")
+# BEGIN Datadog Go Guided Setup
+datadog_go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
+)
+datadog_go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.24.0",
+)
+use_repo(datadog_go_topt, "test_optimization_data")
+# END Datadog Go Guided Setup
+
+test_optimization_sync = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+`
+	if _, err := shouldAddGuidedBlock(input, cfg); err == nil {
+		t.Fatal("expected conflicting unmanaged sync setup to be rejected")
+	}
+}
+
+func TestEnsureLoadStatementInsertsBeforePackageCall(t *testing.T) {
+	input := `# workspace root
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["foo"])
+`
+	got, err := ensureLoadStatement(input, `load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")`)
+	if err != nil {
+		t.Fatalf("ensureLoadStatement error: %v", err)
+	}
+	loadIdx := strings.Index(got, `load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")`)
+	packageIdx := strings.Index(got, `package(default_visibility = ["//visibility:public"])`)
+	if loadIdx < 0 || packageIdx < 0 || loadIdx > packageIdx {
+		t.Fatalf("expected load before package() call:\n%s", got)
+	}
+}
+
+func TestEnsureGuidedRootBuildCreatesBuildBazel(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:       dir,
+		syncRepoName:       "test_optimization_data",
+		uploaderTargetName: "dd_upload_payloads",
+	}
+	if err := ensureGuidedRootBuild(cfg); err != nil {
+		t.Fatalf("ensureGuidedRootBuild error: %v", err)
+	}
+	path := filepath.Join(dir, "BUILD.bazel")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read BUILD.bazel: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, uploaderBlockStart) || !strings.Contains(text, `name = "dd_upload_payloads"`) {
+		t.Fatalf("expected managed uploader block in BUILD.bazel:\n%s", text)
+	}
+}
+
+func TestEnsureGuidedWrapperCreatesFiles(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir: dir,
+		syncRepoName: "test_optimization_data",
+	}
+	if err := ensureGuidedWrapper(cfg); err != nil {
+		t.Fatalf("ensureGuidedWrapper error: %v", err)
+	}
+	buildPath := filepath.Join(dir, "tools", "build", "BUILD.bazel")
+	if _, err := os.Stat(buildPath); err != nil {
+		t.Fatalf("expected tools/build/BUILD.bazel: %v", err)
+	}
+	wrapperPath := filepath.Join(dir, "tools", "build", "dd_go_test.bzl")
+	content, err := os.ReadFile(wrapperPath)
+	if err != nil {
+		t.Fatalf("read dd_go_test.bzl: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, wrapperBlockStart) || !strings.Contains(text, `load("@test_optimization_data//:export.bzl", "topt_data")`) {
+		t.Fatalf("expected managed wrapper content:\n%s", text)
+	}
+}
+
+func TestEnsureGuidedWrapperRejectsUnmanagedFileWithoutForce(t *testing.T) {
+	dir := t.TempDir()
+	wrapperDir := filepath.Join(dir, "tools", "build")
+	if err := os.MkdirAll(wrapperDir, 0o755); err != nil {
+		t.Fatalf("mkdir tools/build: %v", err)
+	}
+	wrapperPath := filepath.Join(wrapperDir, "dd_go_test.bzl")
+	if err := os.WriteFile(wrapperPath, []byte("custom"), 0o644); err != nil {
+		t.Fatalf("write dd_go_test.bzl: %v", err)
+	}
+	cfg := config{
+		workspaceDir: dir,
+		syncRepoName: "test_optimization_data",
+	}
+	if err := ensureGuidedWrapper(cfg); err == nil {
+		t.Fatal("expected unmanaged wrapper file to fail without force")
 	}
 }

@@ -50,6 +50,7 @@ def _go_test_capture_impl(ctx):
             runfiles = ctx.runfiles(files = [out]),
             executable = out,
         ),
+        RunEnvironmentInfo(environment = dict(ctx.attr.env)),
         ToptGoMacroCaptureInfo(
             data_labels = [str(dep.label) for dep in ctx.attr.data],
             env = dict(ctx.attr.env),
@@ -265,6 +266,12 @@ def _go_macro_public_wrapper_test_impl(ctx):
     files = target[DefaultInfo].files.to_list()
     asserts.equals(env, 1, len(files))
     asserts.equals(env, "go_macro_single_service_target", files[0].basename)
+    run_env = target[RunEnvironmentInfo].environment
+    manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
 def _resolve_topt_service_key_missing_target_impl(_ctx):
