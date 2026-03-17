@@ -99,6 +99,9 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		goenv.stdlibCache = cachePath
 	}
 	os.Setenv("GOCACHE", cachePath)
+	if err := os.MkdirAll(cachePath, 0o755); err != nil {
+		return fmt.Errorf("prepare stdlib gocache at %s: %w", cachePath, err)
+	}
 	if *orchestrion == "" {
 		defer os.RemoveAll(cachePath)
 	}

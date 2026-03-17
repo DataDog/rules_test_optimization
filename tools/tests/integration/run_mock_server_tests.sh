@@ -1568,6 +1568,10 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com
   exit 0
 fi
 
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ] && [ "${3:-}" = "-require=github.com/DataDog/dd-trace-go/v2@v2.6.0" ]; then
+  exit 0
+fi
+
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
   case "${3:-}" in
     github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
@@ -1673,6 +1677,10 @@ PIN_TOOL_EOF
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com/DataDog/dd-trace-go/v2" ]; then
+  exit 0
+fi
+
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ] && [ "${3:-}" = "-require=github.com/DataDog/dd-trace-go/v2@v2.6.0" ]; then
   exit 0
 fi
 
