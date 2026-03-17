@@ -122,6 +122,7 @@ jobs:
             # Keep Windows coverage on the non-Go examples until the vendored
             # rules_go Orchestrion stdlib action is stable there.
             ./bazelw --output_user_root=C:/b build \
+              -- \
               //examples/... \
               -//examples/single_service/src/go-project/... \
               -//examples/multi_service/src/go-project/...
@@ -135,6 +136,7 @@ jobs:
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             ./bazelw --output_user_root=C:/b test \
+              -- \
               //examples/... \
               -//examples/single_service/src/go-project/... \
               -//examples/multi_service/src/go-project/...

@@ -1587,7 +1587,30 @@ if [ "${1:-}" = "build" ]; then
     shift
   done
   if [ -n "$out" ]; then
-    printf '#!/bin/sh\nexit 0\n' > "$out"
+    cat > "$out" <<'ORCH_STUB_EOF'
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "server" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      -url-file=*)
+        url_file="${arg#-url-file=}"
+        printf 'http://127.0.0.1:43123\n' > "$url_file"
+        while :; do sleep 3600; done
+        ;;
+    esac
+  done
+  exit 0
+fi
+
+if [ "${1:-}" = "toolexec" ]; then
+  shift
+  exec "$@"
+fi
+
+exit 0
+ORCH_STUB_EOF
     chmod +x "$out"
     exit 0
   fi
@@ -1720,7 +1743,30 @@ if [ "${1:-}" = "build" ]; then
     shift
   done
   if [ -n "$out" ]; then
-    printf '#!/bin/sh\nexit 0\n' > "$out"
+    cat > "$out" <<'ORCH_STUB_EOF'
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = "server" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      -url-file=*)
+        url_file="${arg#-url-file=}"
+        printf 'http://127.0.0.1:43123\n' > "$url_file"
+        while :; do sleep 3600; done
+        ;;
+    esac
+  done
+  exit 0
+fi
+
+if [ "${1:-}" = "toolexec" ]; then
+  shift
+  exec "$@"
+fi
+
+exit 0
+ORCH_STUB_EOF
     chmod +x "$out"
     exit 0
   fi
