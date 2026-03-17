@@ -7,12 +7,16 @@ Maintainer goals covered here:
 - Keep service-resolution failure messages actionable for users.
 
 Why this harness exists:
-`dd_topt_go_test` requires a `go_test_rule` symbol from callers. These tests
-inject a lightweight fake rule to capture what the macro forwards, so we can
-assert behavior at analysis time without compiling Go code.
+`dd_topt_go_test` defaults to rules_go's `go_test`, but these tests override it
+with a lightweight fake executable rule so we can capture what the macro
+forwards at analysis time without compiling Go code.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
+load(
+    "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
+    "select_wrapper_output_name_for_tests",
+)
 load(
     "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "dd_topt_go_test",
@@ -20,7 +24,7 @@ load(
 )
 
 ToptGoMacroCaptureInfo = provider(
-    doc = "Captured arguments forwarded by dd_topt_go_test to go_test_rule.",
+    doc = "Captured arguments forwarded by dd_topt_go_test to the underlying go_test rule.",
     fields = {
         "data_labels": "Forwarded data dependency labels.",
         "env": "Forwarded environment map.",
@@ -29,14 +33,31 @@ ToptGoMacroCaptureInfo = provider(
     },
 )
 
+WrapperOutputNameInfo = provider(
+    doc = "Computed wrapper output file name for Orchestrion wrapper tests.",
+    fields = {
+        "output_name": "The output file name selected by the wrapper helper.",
+    },
+)
+
 def _go_test_capture_impl(ctx):
     """Capture macro-forwarded attributes for analysistest assertions."""
-    return [ToptGoMacroCaptureInfo(
-        data_labels = [str(dep.label) for dep in ctx.attr.data],
-        env = dict(ctx.attr.env),
-        importpath = ctx.attr.importpath,
-        rundir = ctx.attr.rundir,
-    )]
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
+    return [
+        DefaultInfo(
+            files = depset([out]),
+            runfiles = ctx.runfiles(files = [out]),
+            executable = out,
+        ),
+        RunEnvironmentInfo(environment = dict(ctx.attr.env)),
+        ToptGoMacroCaptureInfo(
+            data_labels = [str(dep.label) for dep in ctx.attr.data],
+            env = dict(ctx.attr.env),
+            importpath = ctx.attr.importpath,
+            rundir = ctx.attr.rundir,
+        ),
+    ]
 
 def _has_fragment(items, fragment):
     for item in items:
@@ -58,6 +79,25 @@ _go_test_capture_rule = rule(
         "env": attr.string_dict(),
         "importpath": attr.string(),
         "rundir": attr.string(),
+    },
+    executable = True,
+)
+
+def _wrapper_output_name_target_impl(ctx):
+    return [WrapperOutputNameInfo(
+        output_name = select_wrapper_output_name_for_tests(
+            ctx.attr.label_name,
+            ctx.attr.executable_basename,
+            ctx.attr.is_windows,
+        ),
+    )]
+
+wrapper_output_name_target_rule = rule(
+    implementation = _wrapper_output_name_target_impl,
+    attrs = {
+        "label_name": attr.string(mandatory = True),
+        "executable_basename": attr.string(mandatory = True),
+        "is_windows": attr.bool(mandatory = True),
     },
 )
 
@@ -219,6 +259,21 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     asserts.true(env, "rlocationpath" in manifest_env)
     return analysistest.end(env)
 
+def _go_macro_public_wrapper_test_impl(ctx):
+    """Assert the public target is now the wrapper executable."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    asserts.equals(env, 1, len(files))
+    asserts.equals(env, "go_macro_single_service_target", files[0].basename)
+    run_env = target[RunEnvironmentInfo].environment
+    manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
+    return analysistest.end(env)
+
 def _resolve_topt_service_key_missing_target_impl(_ctx):
     """Analysis target expected to fail on missing service in multi-service map."""
     resolve_topt_service_key_for_tests(
@@ -263,6 +318,20 @@ def _resolve_topt_service_key_unknown_failure_test_impl(ctx):
     asserts.expect_failure(env, "go_service, ruby_service")
     return analysistest.end(env)
 
+def _wrapper_output_name_non_windows_test_impl(ctx):
+    """Assert non-Windows wrapper names remain extensionless."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.equals(env, "hello_test", target[WrapperOutputNameInfo].output_name)
+    return analysistest.end(env)
+
+def _wrapper_output_name_windows_test_impl(ctx):
+    """Assert Windows wrapper names preserve the .exe suffix."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.equals(env, "hello_test.exe", target[WrapperOutputNameInfo].output_name)
+    return analysistest.end(env)
+
 go_macro_single_service_wiring_test = analysistest.make(
     _go_macro_single_service_wiring_test_impl,
 )
@@ -278,6 +347,9 @@ go_macro_env_none_wiring_test = analysistest.make(
 go_macro_select_inputs_wiring_test = analysistest.make(
     _go_macro_select_inputs_wiring_test_impl,
 )
+go_macro_public_wrapper_test = analysistest.make(
+    _go_macro_public_wrapper_test_impl,
+)
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,
     expect_failure = True,
@@ -285,4 +357,10 @@ resolve_topt_service_key_missing_failure_test = analysistest.make(
 resolve_topt_service_key_unknown_failure_test = analysistest.make(
     _resolve_topt_service_key_unknown_failure_test_impl,
     expect_failure = True,
+)
+wrapper_output_name_non_windows_test = analysistest.make(
+    _wrapper_output_name_non_windows_test_impl,
+)
+wrapper_output_name_windows_test = analysistest.make(
+    _wrapper_output_name_windows_test_impl,
 )

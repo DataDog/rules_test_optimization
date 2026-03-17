@@ -1,0 +1,7 @@
+---
+# yaml-language-server: $schema=https://datadoghq.dev/orchestrion/schema.json
+meta:
+  name: datadog/go-bootstrap
+  description: Datadog starter configuration for Orchestrion.
+
+aspects: []

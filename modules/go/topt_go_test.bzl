@@ -1,8 +1,7 @@
 """Macro: dd_topt_go_test.
 
-Wraps a rules_go `go_test` with Datadog Test Optimization support. The macro
-creates a single go_test target with the necessary environment variables and
-data dependencies for test optimization.
+Wraps a rules_go `go_test` with Datadog Test Optimization support and
+Orchestrion-backed compile-time instrumentation.
 
 Notes:
 - You must set up the sync repo once (via MODULE.bazel or WORKSPACE) so that
@@ -17,8 +16,9 @@ Notes:
   test_optimization_uploader.bzl) and run it via `bazel run` after tests.
 
 Macro design constraints:
-- This macro only wraps `go_test`; it does not create upload targets and does
-  not alter workspace-level upload behavior.
+- This macro creates a hidden raw `go_test` plus a public wrapper target.
+- It does not create upload targets and does not alter workspace-level upload
+  behavior.
 - Runtime behavior must remain hermetic: tests write payloads to
   `TEST_UNDECLARED_OUTPUTS_DIR`; uploads happen in a separate `bazel run` step.
 - Data selection should be predictable:
@@ -28,7 +28,8 @@ Macro design constraints:
 Maintenance notes:
 - This file belongs to the Go companion module and should be the only macro
   surface depending on rules_go behavior.
-- Keep this macro repository-agnostic by requiring `go_test_rule` injection.
+- Default to rules_go's `go_test`; keep `go_test_rule` only as an optional
+  override for tests and advanced callers.
 - Avoid hardcoding labels outside values exported by `@<repo>//:export.bzl`.
 - Preserve compatibility with both single-service (`topt_data`) and
   multi-service (`topt_data_by_service`) exports.
@@ -51,7 +52,9 @@ load(
     "service_mapping_entries",
     _is_dict = "is_dict",
 )
+load("@rules_go//go:def.bzl", "go_test")
 load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
+load("//:topt_go_orchestrion.bzl", "orch_go_test")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -73,12 +76,54 @@ def _build_module_labels(sync_repo_name, labels):
 
 build_module_labels_for_tests = _build_module_labels
 
+_WRAPPER_ONLY_ATTRS = [
+    "flaky",
+    "local",
+    "shard_count",
+    "size",
+    "tags",
+    "timeout",
+    "visibility",
+]
+
+_SHARED_TEST_ATTRS = [
+    "compatible_with",
+    "exec_compatible_with",
+    "restricted_to",
+    "target_compatible_with",
+    "testonly",
+]
+
+_ORCHESTRION_PIN_FILES = [
+    "go.mod",
+    "go.sum",
+    "orchestrion.tool.go",
+    "orchestrion.yml",
+]
+
+def _extract_wrapper_kwargs(kwargs):
+    """Split macro kwargs between raw go_test and public wrapper."""
+    wrapper_kwargs = {}
+    raw_passthrough = {}
+
+    for key in _WRAPPER_ONLY_ATTRS:
+        if key in kwargs:
+            wrapper_kwargs[key] = kwargs.pop(key)
+
+    for key in _SHARED_TEST_ATTRS:
+        if key in kwargs:
+            value = kwargs.pop(key)
+            wrapper_kwargs[key] = value
+            raw_passthrough[key] = value
+
+    return wrapper_kwargs, raw_passthrough
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
         topt_data,
-        # Required: pass the rules_go go_test rule symbol from your BUILD file (e.g., go_test_rule = go_test)
-        go_test_rule,
+        # Optional override for tests or advanced callers. Defaults to rules_go's go_test.
+        go_test_rule = go_test,
         # Optional: when using the multi-service aggregator, select the service
         # (raw or sanitized). Ignored when a single-service dict is passed.
         topt_service = None,
@@ -87,8 +132,8 @@ def dd_topt_go_test(
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
-    This macro creates a single go_test target with the necessary environment
-    variables for test optimization. Payloads are written to Bazel's
+    This macro creates a hidden raw go_test target plus a public
+    Orchestrion-enabled wrapper target. Payloads are written to Bazel's
     TEST_UNDECLARED_OUTPUTS_DIR and collected in bazel-testlogs/<target>/test.outputs/.
 
     After running tests, use a single workspace-level uploader target to upload
@@ -100,8 +145,8 @@ def dd_topt_go_test(
       topt_data: Either the single-service dict exported by @<repo>//:export.bzl, or the
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
         Used to derive the repo alias, go_module_path, and whether to include per-module files.
-      go_test_rule: The rules_go go_test rule symbol (e.g., go_test from @rules_go//go:def.bzl).
-        Required to avoid repo visibility issues.
+      go_test_rule: Optional override for the underlying rules_go go_test rule.
+        Defaults to `go_test` from `@rules_go//go:def.bzl`.
       topt_service: Optional when passing the aggregator mapping; selects which service to use.
         Accepts raw or sanitized service key (e.g., "go-service" or "go_service").
         If sanitization collisions exist, pass the deduped key (for example "go_service_2").
@@ -134,6 +179,8 @@ def dd_topt_go_test(
         # to preserve collision-safe keys while still accepting ergonomic input.
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
         _svc = service_entries[selected_key]
+
+    wrapper_kwargs, raw_passthrough = _extract_wrapper_kwargs(kwargs)
 
     # ------------------------------------------------------------------
     # Phase 2: Collect caller-provided inputs that we augment downstream.
@@ -239,6 +286,14 @@ def dd_topt_go_test(
     # This keeps go_test callsites simple while centralizing selection logic.
     data = _append_data_dependencies(data, [":" + selector_name])
 
+    # Stage local Orchestrion pin files as hidden data inputs. They remain
+    # runtime-inert for the test itself, but the vendored rules_go builder uses
+    # them to materialize the temporary module that Orchestrion expects during
+    # compile-time instrumentation.
+    orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
+    if orchestrion_pin_files:
+        data = _append_data_dependencies(data, orchestrion_pin_files)
+
     # Add manifest file reference for deriving the working directory.
     # Keep this dynamic via export metadata so custom out_dir values continue
     # to work without macro changes.
@@ -261,21 +316,32 @@ def dd_topt_go_test(
         macro_name = "dd_topt_go_test",
     )
 
-    # Allow caller to inject rules_go's go_test symbol to avoid repo visibility issues
-    # Keeping this explicit avoids hidden repository dependencies in the macro.
     if go_test_rule == None:
-        fail_with_prefix("dd_topt_go_test", "you must pass go_test_rule = go_test from @rules_go//go:def.bzl")
+        fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
     # Use the package directory as the default runtime working directory when
     # callers do not specify one. This keeps relative fixture paths stable.
     if "rundir" not in kwargs:
         kwargs["rundir"] = native.package_name()
 
-    # Create ONLY the go_test - NO uploader, NO test_suite.
-    # Users must create ONE uploader target per workspace and run it via `bazel run`.
+    raw_name = name + "__raw_go_test"
+    user_tags = wrapper_kwargs.get("tags")
+    kwargs["tags"] = (user_tags or []) + ["manual"]
+    kwargs["visibility"] = ["//visibility:private"]
+    for key, value in raw_passthrough.items():
+        kwargs[key] = value
+
+    # Create the hidden raw go_test first, then expose it through an
+    # Orchestrion-enabled public wrapper target.
     go_test_rule(
-        name = name,
+        name = raw_name,
         data = data,
         env = env,
         **kwargs
+    )
+
+    orch_go_test(
+        name = name,
+        actual = ":" + raw_name,
+        **wrapper_kwargs
     )

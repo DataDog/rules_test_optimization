@@ -1,4 +1,13 @@
+load("@rules_go//go:def.bzl", "go_binary")
+
 exports_files([
     "topt_go_test.bzl",
     "topt_go_infer.bzl",
+    "topt_go_extension.bzl",
 ], visibility = ["//visibility:public"])
+
+go_binary(
+    name = "dd_topt_go_bootstrap",
+    embed = ["//tools/dd_topt_go_bootstrap:bootstrap_lib"],
+    visibility = ["//visibility:public"],
+)

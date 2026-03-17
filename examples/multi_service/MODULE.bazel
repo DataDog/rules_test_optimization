@@ -5,6 +5,11 @@ bazel_dep(name = "gazelle", version = "0.39.0")
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 
+# Run:
+#   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-module-dir src/go-project
+# after adding your Go module files to let Datadog pin Orchestrion and patch
+# the managed rules_go override block required by dd_topt_go_test.
+
 # For local development before BCR publication, pin both modules from git:
 # git_override(
 #   module_name = "datadog-rules-test-optimization",
@@ -18,23 +23,21 @@ bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 #   strip_prefix = "modules/go",
 # )
 
-topt_multi = use_extension(
-  "@datadog-rules-test-optimization//tools/core:test_optimization_multi_sync.bzl",
-  "test_optimization_multi_sync_extension",
+go_topt = use_extension(
+  "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+  "test_optimization_go_extension",
 )
 
-topt_multi.test_optimization_multi_sync(
+go_topt.test_optimization_go(
   name = "test_optimization_data",
-  services = ["go-service", "ruby-service"],
-  runtime_name = "go",
+  services = ["go-service-a", "go-service-b"],
   runtime_version = "1.24.0",
   debug = True,
 )
 
 use_repo(
-  topt_multi,
+  go_topt,
   "test_optimization_data",
-  "test_optimization_data_go_service",
-  "test_optimization_data_ruby_service",
+  "test_optimization_data_go_service_a",
+  "test_optimization_data_go_service_b",
 )
-

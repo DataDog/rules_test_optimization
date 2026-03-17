@@ -4,8 +4,14 @@ module(
 )
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+local_path_override(
+    module_name = "rules_go",
+    path = "../../third_party/rules_go_orchestrion",
+)
 
 # Dev-only stub repository so companion-module tests can resolve
 # @test_optimization_data labels without network access.
@@ -16,6 +22,9 @@ example_stub_repo = use_extension(
 )
 example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
-    service_keys = ["go_service", "ruby_service"],
+    service_keys = [
+        "go_service",
+        "ruby_service",
+    ],
 )
 use_repo(example_stub_repo, "test_optimization_data")

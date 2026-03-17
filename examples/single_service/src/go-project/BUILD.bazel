@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -10,11 +10,11 @@ go_binary(
 go_library(
   name = "hello_lib",
   srcs = ["main.go"],
+  importpath = "example.com/single-service-go-project",
 )
 
 dd_topt_go_test(
   name = "hello_test",
-  go_test_rule = go_test,
   topt_data = topt_data,
   srcs = ["main_test.go"],
   embed = [":hello_lib"],  # lets the macro infer importpath via rules_go provider

@@ -1,7 +1,8 @@
 # Installation Reference
 
 This page contains full installation and setup flows. For fast onboarding, use
-the scenario quickstarts in `README.md`.
+the scenario quickstarts in `README.md`. For language-specific single-service
+and multi-service onboarding, use [`docs/Language_Onboarding.md`](Language_Onboarding.md).
 
 ## Bzlmod installation
 
@@ -142,10 +143,43 @@ lives in companion modules:
 
 ### Go companion module
 
-If you use the Go convenience macro, load it from the companion module:
+For a fresh single-service Go workspace, the recommended path is:
+
+1. add the core + Go companion dependency/override block
+2. run guided bootstrap
+3. use the generated local wrapper
+
+Guided bootstrap command:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --guided \
+  --service go-service \
+  --runtime-version 1.24.0
+```
+
+If the Go module lives below the workspace root:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --guided \
+  --service go-service \
+  --runtime-version 1.24.0 \
+  --go-module-dir path/to/go-module
+```
+
+Guided bootstrap is intentionally only for fresh single-service Go workspaces.
+If the workspace already uses:
+- `test_optimization_sync_extension`
+- `test_optimization_multi_sync_extension`
+- a manual `test_optimization_go_extension` setup
+
+use the manual/advanced Go setup path instead.
+
+The generated package-facing API is:
 
 ```bzl
-load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("//tools/build:dd_go_test.bzl", "dd_go_test")
 ```
 
 ### Python companion module
@@ -212,9 +246,9 @@ topt_multi = use_extension(
 
 topt_multi.test_optimization_multi_sync(
     name = "test_optimization_data",
-    services = ["go-service", "ruby-service"],
-    runtime_name = "go",
-    runtime_version = "1.24.0",
+    services = ["service-a", "service-b"],
+    runtime_name = "python",
+    runtime_version = "3.12",
     debug = True,
 )
 
@@ -223,26 +257,26 @@ use_repo(
     # Aggregator repo
     "test_optimization_data",
     # Per-service repos (auto-created, names include sanitized service key)
-    "test_optimization_data_go_service",
-    "test_optimization_data_ruby_service",
+    "test_optimization_data_service_a",
+    "test_optimization_data_service_b",
 )
 
 # Consuming labels (aggregator):
 #  - All files for one service
-#    @test_optimization_data//:test_optimization_files_go_service
+#    @test_optimization_data//:test_optimization_files_service_a
 #  - One module for one service (service + module label in the aggregator repo)
-#    @test_optimization_data//:module_go_service_core
+#    @test_optimization_data//:module_service_a_core
 # Per-service repos are primarily used for per-service exports like:
-#   load("@test_optimization_data_go_service//:export.bzl", "topt_data")
+#   load("@test_optimization_data_service_a//:export.bzl", "topt_data")
 
 # Macros that expect "topt_data" can use either:
 # 1) Select explicitly:
 #    load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-#    dd_topt_go_test(..., topt_data = topt_data_by_service["go_service"], go_test_rule = go_test)
+#    dd_topt_py_test(..., topt_data = topt_data_by_service["service_a"])
 # 2) Pass the mapping and choose via topt_service (keeps BUILD simpler):
-#    dd_topt_go_test(..., topt_data = topt_data_by_service, topt_service = "go_service", go_test_rule = go_test)
+#    dd_topt_py_test(..., topt_data = topt_data_by_service, topt_service = "service_a")
 #    When service names sanitize to the same key, pass the deduped key shown in
-#    the available list (for example "go_service_2").
+#    the available list (for example "service_a_2").
 ```
 
 Mixed-runtime note: keep runtime-specific sync repositories separate (for
@@ -378,8 +412,8 @@ Multi-service aggregator variant:
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data//:test_optimization_context_go_service",
-        "@test_optimization_data//:test_optimization_context_ruby_service",
+        "@test_optimization_data//:test_optimization_context_service_a",
+        "@test_optimization_data//:test_optimization_context_service_b",
     ],
 )
 ```
@@ -445,6 +479,9 @@ from `README.md` and `docs/Maintainers.md`.
 
 ### 6) Configure Go support in WORKSPACE (for `dd_topt_go_test`)
 
+This is the lower-level/manual setup path. For Bzlmod single-service Go
+workspaces, prefer guided bootstrap instead.
+
 If your repository already configures `rules_go`, keep your existing setup and
 skip to the BUILD snippet below.
 
@@ -494,7 +531,6 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],  # Enables provider-based importpath inference
     topt_data = topt_data,
-    go_test_rule = go_test,
 )
 ```
 

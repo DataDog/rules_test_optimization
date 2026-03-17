@@ -118,7 +118,9 @@ jobs:
       - name: Verify Go files are gofmt formatted
         shell: bash
         run: |
-          mapfile -t go_files < <(git ls-files '*.go')
+          mapfile -t go_files < <(
+            git ls-files -- '*.go' ':(exclude)third_party/**'
+          )
           if (( ${#go_files[@]} == 0 )); then
             exit 0
           fi

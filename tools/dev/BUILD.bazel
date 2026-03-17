@@ -1,11 +1,13 @@
 exports_files([
     "check_bazelversion_sync.py",
     "check_module_versions.py",
+    "diff_rules_go_fork.py",
     "dotnet_bootstrap.bzl",
     "go_bootstrap.bzl",
     "java_bootstrap.bzl",
     "lint_uploader_templates.py",
     "nodejs_bootstrap.bzl",
+    "orchestrion_stub.bzl",
     "python_bootstrap.bzl",
     "ruby_bootstrap.bzl",
 ], visibility = ["//visibility:public"])

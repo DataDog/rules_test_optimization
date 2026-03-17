@@ -116,12 +116,33 @@ jobs:
       - name: Build examples
         timeout-minutes: 10
         shell: bash
-        run: ./bazelw build //examples/...
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            # Linux/macOS already build the full example matrix, including Go.
+            # Keep Windows coverage on the non-Go examples until the vendored
+            # rules_go Orchestrion stdlib action is stable there.
+            ./bazelw --output_user_root=C:/b build \
+              -- \
+              //examples/... \
+              -//examples/single_service/src/go-project/... \
+              -//examples/multi_service/src/go-project/...
+          else
+            ./bazelw build //examples/...
+          fi
 
       - name: Test examples
         timeout-minutes: 10
         shell: bash
-        run: ./bazelw test //examples/...
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./bazelw --output_user_root=C:/b test \
+              -- \
+              //examples/... \
+              -//examples/single_service/src/go-project/... \
+              -//examples/multi_service/src/go-project/...
+          else
+            ./bazelw test //examples/...
+          fi
 
       - name: Exercise single-service runtests script (dry-run)
         shell: bash

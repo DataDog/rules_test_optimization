@@ -15,6 +15,10 @@ bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
 # Dev-only dependency for in-repo example builds that compile Go targets.
 # Consumer-facing core usage remains rules_go-free.
 bazel_dep(name = "rules_go", version = "0.59.0", dev_dependency = True)
+local_path_override(
+    module_name = "rules_go",
+    path = "third_party/rules_go_orchestrion",
+)
 
 # Dev-only dependency for in-repo Python companion/example builds.
 bazel_dep(name = "rules_python", version = "0.40.0", dev_dependency = True)
@@ -149,6 +153,8 @@ example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
     service_keys = [
         "go_service",
+        "go_service_a",
+        "go_service_b",
         "python_service",
         "java_service",
         "nodejs_service",
