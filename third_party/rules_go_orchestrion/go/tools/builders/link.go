@@ -278,7 +278,7 @@ func link(args []string) error {
 			}
 		}
 		for _, archive := range archives {
-			addSrcDir(filepath.Dir(archive.packagePath))
+			addSrcDir(filepath.Dir(archive.file))
 		}
 		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
 		if err != nil {

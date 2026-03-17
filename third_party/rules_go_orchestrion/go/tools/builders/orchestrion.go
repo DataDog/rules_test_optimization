@@ -549,58 +549,89 @@ func logOrchestrionTempModuleState() {
 // of Bazel's execroot when Orchestrion shells out during toolexec compilation.
 func enterOrchestrionWorkDir(srcDirs []string, verbose bool) (func(), error) {
 	for _, dir := range srcDirs {
-		for _, marker := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
-			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return nil, fmt.Errorf("determine cwd before orchestrion chdir: %w", err)
-				}
-				if cwd == dir {
-					return func() {}, nil
-				}
-				var cleanupPaths []string
-				for _, name := range []string{"bazel-out", "external"} {
-					srcPath := filepath.Join(cwd, name)
-					if _, err := os.Stat(srcPath); err != nil {
-						continue
-					}
-					dstPath := filepath.Join(dir, name)
-					if _, err := os.Lstat(dstPath); err == nil {
-						continue
-					} else if !os.IsNotExist(err) {
-						return nil, fmt.Errorf("stat orchestrion compatibility path %s: %w", dstPath, err)
-					}
-					linkTarget, err := computeCompatibilitySymlinkTarget(dir, srcPath)
-					if err != nil {
-						return nil, fmt.Errorf("compute orchestrion compatibility path for %s: %w", name, err)
-					}
-					if err := os.Symlink(linkTarget, dstPath); err != nil {
-						return nil, fmt.Errorf("create orchestrion compatibility symlink %s -> %s: %w", dstPath, linkTarget, err)
-					}
-					cleanupPaths = append(cleanupPaths, dstPath)
-					if verbose {
-						fmt.Fprintf(os.Stderr, "orchestrion: created compatibility symlink %s -> %s\n", dstPath, linkTarget)
-					}
-				}
-				if verbose {
-					fmt.Fprintf(os.Stderr, "orchestrion: chdir %s -> %s\n", cwd, dir)
-				}
-				if err := os.Chdir(dir); err != nil {
-					for _, cleanupPath := range cleanupPaths {
-						_ = os.Remove(cleanupPath)
-					}
-					return nil, fmt.Errorf("chdir to orchestrion work dir %s: %w", dir, err)
-				}
-				return func() {
-					_ = os.Chdir(cwd)
-					for _, cleanupPath := range cleanupPaths {
-						_ = os.Remove(cleanupPath)
-					}
-				}, nil
+		moduleDir := findContainingOrchestrionDir(dir)
+		if moduleDir == "" {
+			continue
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("determine cwd before orchestrion chdir: %w", err)
+		}
+		if cwd == moduleDir {
+			return func() {}, nil
+		}
+		var cleanupPaths []string
+		for _, name := range []string{"bazel-out", "external"} {
+			srcPath := filepath.Join(cwd, name)
+			if _, err := os.Stat(srcPath); err != nil {
+				continue
+			}
+			dstPath := filepath.Join(moduleDir, name)
+			if _, err := os.Lstat(dstPath); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("stat orchestrion compatibility path %s: %w", dstPath, err)
+			}
+			linkTarget, err := computeCompatibilitySymlinkTarget(moduleDir, srcPath)
+			if err != nil {
+				return nil, fmt.Errorf("compute orchestrion compatibility path for %s: %w", name, err)
+			}
+			if err := os.Symlink(linkTarget, dstPath); err != nil {
+				return nil, fmt.Errorf("create orchestrion compatibility symlink %s -> %s: %w", dstPath, linkTarget, err)
+			}
+			cleanupPaths = append(cleanupPaths, dstPath)
+			if verbose {
+				fmt.Fprintf(os.Stderr, "orchestrion: created compatibility symlink %s -> %s\n", dstPath, linkTarget)
 			}
 		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "orchestrion: chdir %s -> %s\n", cwd, moduleDir)
+		}
+		if err := os.Chdir(moduleDir); err != nil {
+			for _, cleanupPath := range cleanupPaths {
+				_ = os.Remove(cleanupPath)
+			}
+			return nil, fmt.Errorf("chdir to orchestrion work dir %s: %w", moduleDir, err)
+		}
+		return func() {
+			_ = os.Chdir(cwd)
+			for _, cleanupPath := range cleanupPaths {
+				_ = os.Remove(cleanupPath)
+			}
+		}, nil
 	}
 	return func() {}, nil
+}
+
+func findContainingOrchestrionDir(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	resolved := path
+	if absPath, err := filepath.Abs(path); err == nil {
+		if realPath, err := filepath.EvalSymlinks(absPath); err == nil {
+			resolved = realPath
+		} else {
+			resolved = absPath
+		}
+	}
+	info, err := os.Stat(resolved)
+	if err == nil && !info.IsDir() {
+		resolved = filepath.Dir(resolved)
+	}
+	for {
+		for _, marker := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
+			if _, err := os.Stat(filepath.Join(resolved, marker)); err == nil {
+				return resolved
+			}
+		}
+		parent := filepath.Dir(resolved)
+		if parent == resolved {
+			return ""
+		}
+		resolved = parent
+	}
 }
 
 func resolveOrchestrionImportPath(fallback string, verbose bool) string {

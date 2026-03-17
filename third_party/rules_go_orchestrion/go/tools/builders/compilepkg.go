@@ -571,30 +571,18 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 	}
 	moduleDir := ""
 	for _, dir := range embedLookupDirs {
-		dir = strings.TrimSpace(dir)
-		if dir == "" {
-			continue
-		}
-		dir = abs(dir)
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			moduleDir = dir
-			break
-		}
-		if _, err := os.Stat(filepath.Join(dir, "orchestrion.tool.go")); err == nil {
-			moduleDir = dir
-			break
-		}
-	}
-	for _, dep := range deps {
+		moduleDir = findContainingOrchestrionDir(dir)
 		if moduleDir != "" {
 			break
 		}
-		dir := filepath.Dir(strings.TrimSpace(dep.packagePath))
-		if dir == "." || dir == "" || strings.Contains(dir, "github.com/") {
-			continue
+	}
+	if moduleDir == "" {
+		for _, src := range srcs.goSrcs {
+			moduleDir = findContainingOrchestrionDir(src.filename)
+			if moduleDir != "" {
+				break
+			}
 		}
-		moduleDir = dir
-		break
 	}
 	exports, err := resolveModuleExportsForPackages(goenv, packages, orchestrion, moduleDir)
 	if err != nil {
