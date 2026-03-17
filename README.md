@@ -8,6 +8,7 @@ This repository provides Bazel integrations that fetch Datadog Test Optimization
 
 Pick the path that matches your repository:
 
+- **Per-language onboarding guide:** [`docs/Language_Onboarding.md`](docs/Language_Onboarding.md)
 - **Bzlmod + core only (any language):** sync + uploader integration without language-specific macros
 - **Bzlmod + Go companion:** `dd_topt_go_test` macro with importpath inference
 - **Bzlmod + Python companion:** `dd_topt_py_test` macro with analysis-time selection
@@ -478,7 +479,9 @@ For multi-service repos, either:
 
 Use the Go extension multi-service form only for multi-service Go setups. It is
 not a generic mixed-runtime extension; every service configured through it is
-materialized as `runtime_name = "go"`.
+materialized as `runtime_name = "go"`. For Python/Java/NodeJS/.NET/Ruby
+multi-service onboarding, use
+[`docs/Language_Onboarding.md`](docs/Language_Onboarding.md).
 
 ```bzl
 go_topt = use_extension(
@@ -885,7 +888,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     topt_data = topt_data_by_service,   # pass mapping
-    topt_service = "go_service",        # select service
+    topt_service = "go_service_a",      # select service
 )
 ```
 
@@ -954,6 +957,7 @@ Fast checks before diving deep:
 
 ## Reference links
 
+- Per-language onboarding guide: [`docs/Language_Onboarding.md`](docs/Language_Onboarding.md)
 - Maintainer/contributor workflows: [`docs/Maintainers.md`](docs/Maintainers.md)
 - Full installation reference: [`docs/Installation_Reference.md`](docs/Installation_Reference.md)
 - Full troubleshooting playbook: [`docs/Troubleshooting.md`](docs/Troubleshooting.md)

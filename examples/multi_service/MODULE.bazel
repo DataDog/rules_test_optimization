@@ -30,7 +30,7 @@ go_topt = use_extension(
 
 go_topt.test_optimization_go(
   name = "test_optimization_data",
-  services = ["go-service", "ruby-service"],
+  services = ["go-service-a", "go-service-b"],
   runtime_version = "1.24.0",
   debug = True,
 )
@@ -38,6 +38,6 @@ go_topt.test_optimization_go(
 use_repo(
   go_topt,
   "test_optimization_data",
-  "test_optimization_data_go_service",
-  "test_optimization_data_ruby_service",
+  "test_optimization_data_go_service_a",
+  "test_optimization_data_go_service_b",
 )

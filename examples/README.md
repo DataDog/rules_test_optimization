@@ -39,6 +39,8 @@ MODULE.bazel:
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.0.0")
@@ -59,6 +61,36 @@ git_override(
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
     strip_prefix = "modules/go",
+)
+git_override(
+    module_name = "datadog-rules-test-optimization-python",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/python",
+)
+git_override(
+    module_name = "datadog-rules-test-optimization-java",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/java",
+)
+git_override(
+    module_name = "datadog-rules-test-optimization-nodejs",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/nodejs",
+)
+git_override(
+    module_name = "datadog-rules-test-optimization-dotnet",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/dotnet",
+)
+git_override(
+    module_name = "datadog-rules-test-optimization-ruby",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<commit-sha>",
+    strip_prefix = "modules/ruby",
 )
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
@@ -83,9 +115,11 @@ use_repo(ruby, "ruby", "ruby_toolchains")
 register_toolchains("@ruby_toolchains//:all")
 ```
 
-Recommended when this workspace is configuring Go services only. For
-mixed-language repos, keep the core `test_optimization_sync_extension` path for
-non-Go runtimes and use separate exported repos per runtime.
+This mirrors the buildable `examples/single_service` workspace in this
+repository: one Datadog service shared across several runtime-specific test
+macros, with Go using the bootstrap-managed extension. If your team owns only
+Python, Java, NodeJS, .NET, or Ruby, the simpler runtime-specific setup is in
+[`docs/Language_Onboarding.md`](../docs/Language_Onboarding.md).
 
 Bootstrap once after adding the module prerequisites:
 
@@ -255,7 +289,7 @@ Dry-run mode for CI/debugging:
   the commands that would run without executing Bazel test/upload operations.
 - PowerShell wrappers honor the same `RUNTESTS_DRY_RUN=1` environment variable.
 
-## Multi-service (aggregator)
+## Multi-service (aggregator, Go-only example)
 
 MODULE.bazel:
 
@@ -313,6 +347,11 @@ Repository roles in multi-service mode:
 - This Go extension form is for multi-service Go only. Every configured service
   is materialized as `runtime_name = "go"`.
 
+For Python/Java/NodeJS/.NET/Ruby multi-service onboarding, use the core
+`test_optimization_multi_sync_extension` and the per-language guide in
+[`docs/Language_Onboarding.md`](../docs/Language_Onboarding.md). This `examples/multi_service` workspace is
+intentionally scoped to Go.
+
 BUILD.bazel — Option A (explicit selection, inference via embed):
 
 ```bzl
@@ -329,96 +368,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
-    topt_data = topt_data_by_service["go_service"],  # sanitized key
-)
-```
-
-BUILD.bazel — Python (mapping + key):
-
-```bzl
-load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
-load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-
-dd_topt_py_test(
-    name = "pkg_py_test",
-    srcs = ["test_*.py"],
-    deps = [":pkg_lib"],
-    topt_data = topt_data_by_service,
-    topt_service = "py_service",                # or raw "py-service"
-    py_test_rule = py_test,
-)
-```
-
-BUILD.bazel — Java (mapping + key):
-
-```bzl
-load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
-load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-
-dd_topt_java_test(
-    name = "pkg_java_test",
-    srcs = ["*Test.java"],
-    deps = [":pkg_lib"],
-    test_class = "com.example.pkg.SampleTest",
-    topt_data = topt_data_by_service,
-    topt_service = "java_service",              # or raw "java-service"
-    java_test_rule = java_test,
-)
-```
-
-BUILD.bazel — NodeJS (mapping + key):
-
-```bzl
-load("@aspect_rules_js//js:defs.bzl", "js_test")
-load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
-load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-
-dd_topt_nodejs_test(
-    name = "pkg_nodejs_test",
-    entry_point = "smoke_test.js",
-    copy_data_to_bin = False,  # Datadog payload data comes from external repos.
-    module_identifier = "apps/nodejs/pkg",
-    topt_data = topt_data_by_service,
-    topt_service = "nodejs_service",            # or raw "nodejs-service"
-    nodejs_test_rule = js_test,
-)
-```
-
-BUILD.bazel — .NET (mapping + key):
-
-```bzl
-load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
-load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-load(":dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
-
-dd_topt_dotnet_test(
-    name = "pkg_dotnet_test",
-    srcs = ["smoke_test.cs"],
-    target_frameworks = ["net8.0"],
-    module_identifier = "Company.Product.Package",
-    topt_data = topt_data_by_service,
-    topt_service = "dotnet_service",            # or raw "dotnet-service"
-    dotnet_test_rule = dotnet_csharp_test_adapter,
-)
-```
-
-`dotnet_test_adapter.bzl` wraps `@rules_dotnet//dotnet:defs.bzl` `csharp_test` and maps the Datadog macro's `env` to `csharp_test(envs = ...)`.
-
-BUILD.bazel — Ruby (mapping + key):
-
-```bzl
-load("@rules_ruby//ruby:defs.bzl", "rb_test")
-load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
-load("@test_optimization_data//:export.bzl", "topt_data_by_service")
-
-dd_topt_ruby_test(
-    name = "pkg_ruby_test",
-    srcs = ["smoke_test.rb"],
-    main = "smoke_test.rb",
-    module_identifier = "apps/ruby/pkg",
-    topt_data = topt_data_by_service,
-    topt_service = "ruby_service",              # or raw "ruby-service"
-    ruby_test_rule = rb_test,
+    topt_data = topt_data_by_service["go_service_a"],  # sanitized key
 )
 ```
 
@@ -470,8 +420,8 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
     topt_data = topt_data_by_service,
-    topt_service = "go_service",                 # or raw "go-service"
-    # If two services sanitize to the same key, use the deduped key (e.g. go_service_2).
+    topt_service = "go_service_a",               # or raw "go-service-a"
+    # If two services sanitize to the same key, use the deduped key (e.g. go_service_a_2).
 )
 ```
 
@@ -486,7 +436,7 @@ Per-module filegroup (aggregator):
 # Select a single module for a specific service
 filegroup(
   name = "dd_mod_core_go",
-  srcs = ["@test_optimization_data//:module_go_service_core"],
+  srcs = ["@test_optimization_data//:module_go_service_a_core"],
 )
 ```
 
@@ -498,8 +448,8 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 dd_payload_uploader(
   name = "dd_upload_payloads",
   data = [
-    "@test_optimization_data//:test_optimization_context_go_service",
-    "@test_optimization_data//:test_optimization_context_ruby_service",
+    "@test_optimization_data//:test_optimization_context_go_service_a",
+    "@test_optimization_data//:test_optimization_context_go_service_b",
   ],
 )
 ```

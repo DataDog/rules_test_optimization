@@ -16,7 +16,7 @@ go_library(
 dd_topt_go_test(
   name = "hello_test",
   topt_data = topt_data_by_service,  # pass mapping from aggregator
-  topt_service = "go_service",       # select one service (sanitized key)
+  topt_service = "go_service_a",     # select one service (sanitized key)
   srcs = ["main_test.go"],
   embed = [":hello_lib"],  # lets the macro infer importpath via rules_go provider
 )

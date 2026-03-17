@@ -85,8 +85,8 @@ Multi-service aggregator variant (include each service context):
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data//:test_optimization_context_go_service",
-        "@test_optimization_data//:test_optimization_context_ruby_service",
+        "@test_optimization_data//:test_optimization_context_service_a",
+        "@test_optimization_data//:test_optimization_context_service_b",
     ],
 )
 ```
