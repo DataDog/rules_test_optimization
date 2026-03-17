@@ -123,11 +123,19 @@ The consumer adds:
 - the core module
 - the Go companion module
 - `rules_go`
-- the sync extension repo
+- the Go companion extension repo
 
-The Go companion extension is responsible for the Go-specific repository wiring.
-The metadata repo exported by the sync extension still provides the per-service
-and per-module payload labels.
+In the current supported Go path, the consumer uses
+`test_optimization_go_extension`, which materializes the metadata repo used by
+`dd_topt_go_test`.
+
+- In guided single-service setup, bootstrap writes the managed
+  `test_optimization_go_extension` block and `use_repo(...)` call.
+- In manual single-service or multi-service setup, the same Go extension still
+  owns creation of the `test_optimization_data...` repositories.
+
+The generated metadata repo then provides the per-service and per-module
+payload labels consumed by `dd_topt_go_test`.
 
 #### Why This Exists
 
@@ -186,14 +194,20 @@ The macro expands into:
 - a hidden raw `go_test`
 - a public `orch_go_test` wrapper
 
-The raw `go_test` receives the Orchestrion pin files as hidden data:
+When present in the current Bazel package, the raw `go_test` stages the local
+Orchestrion pin files as hidden data:
 
 - `go.mod`
 - `go.sum`
 - `orchestrion.tool.go`
 - `orchestrion.yml`
 
-That means the caller does not manage those files directly on each test target.
+The macro discovers them with a package-local glob, so this is automatic for
+packages that contain those files, but it is not a cross-workspace guarantee
+for arbitrary subpackages.
+
+That keeps typical module-root packages simple without implying that every Go
+test target in every package automatically receives those files.
 
 #### Why This Exists
 
@@ -692,12 +706,17 @@ At runtime, a correctly wired binary shows evidence that the compile-time path
 worked:
 
 - Datadog tracer debug logs can appear when enabled
-- `instrumentTestingTFunc` is active
-- `instrumentTestingM` is active
+- CI Visibility hooks around Go `testing` are preserved in the final test binary
 
 Those runtime markers are not produced by the macro alone. They depend on the
 compile, synthetic `testmain`, and final link steps all agreeing on the same
 instrumented package universe.
+
+Separate from runtime behavior, the builders also use archive-content heuristics
+such as `instrumentTestingTFunc` and `instrumentTestingM` while scanning helper
+exports during compile/link consistency checks. Those names are useful
+build-time indicators, but they are not themselves user-visible runtime
+signals.
 
 ### Why This Section Exists
 
