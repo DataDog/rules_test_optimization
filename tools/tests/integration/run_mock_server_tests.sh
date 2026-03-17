@@ -1555,6 +1555,20 @@ PIN_TOOL_EOF
   exit 0
 fi
 
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com/DataDog/dd-trace-go/v2" ]; then
+  exit 0
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
+  case "${3:-}" in
+    github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
+    github.com/DataDog/dd-trace-go/v2/profiler|\
+    github.com/DataDog/dd-trace-go/v2/instrumentation/env)
+      exit 0
+      ;;
+  esac
+fi
+
 echo "unexpected go invocation: $*" >&2
 exit 1
 FAKE_GO_EOF
@@ -1643,6 +1657,20 @@ import (
 PIN_TOOL_EOF
   : > go.sum
   exit 0
+fi
+
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com/DataDog/dd-trace-go/v2" ]; then
+  exit 0
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
+  case "${3:-}" in
+    github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
+    github.com/DataDog/dd-trace-go/v2/profiler|\
+    github.com/DataDog/dd-trace-go/v2/instrumentation/env)
+      exit 0
+      ;;
+  esac
 fi
 
 echo "unexpected go invocation: $*" >&2
