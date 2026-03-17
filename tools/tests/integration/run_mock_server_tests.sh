@@ -1572,6 +1572,27 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ] && [ "${3:-}" = "-require=githu
   exit 0
 fi
 
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
+  exit 0
+fi
+
+if [ "${1:-}" = "build" ]; then
+  out=""
+  shift
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ] && [ "$#" -ge 2 ]; then
+      out="$2"
+      break
+    fi
+    shift
+  done
+  if [ -n "$out" ]; then
+    printf '#!/bin/sh\nexit 0\n' > "$out"
+    chmod +x "$out"
+    exit 0
+  fi
+fi
+
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
   case "${3:-}" in
     github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
@@ -1682,6 +1703,27 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ] && [ "${3:-}" = "-require=github.com/DataDog/dd-trace-go/v2@v2.6.0" ]; then
   exit 0
+fi
+
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
+  exit 0
+fi
+
+if [ "${1:-}" = "build" ]; then
+  out=""
+  shift
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ] && [ "$#" -ge 2 ]; then
+      out="$2"
+      break
+    fi
+    shift
+  done
+  if [ -n "$out" ]; then
+    printf '#!/bin/sh\nexit 0\n' > "$out"
+    chmod +x "$out"
+    exit 0
+  fi
 fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
