@@ -19,6 +19,17 @@ Pick the path that matches your repository:
 - **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled
 - **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
 
+## Maintainer note on the vendored rules_go fork
+
+The active Go integration still uses the in-repo fork at
+`third_party/rules_go_orchestrion` for runtime simplicity and debugging.
+Maintainers can track the Datadog delta against upstream `rules_go` without
+changing the live layout by using:
+
+- `third_party/rules_go_orchestrion.METADATA.json`
+- `third_party/rules_go_orchestrion.CHANGED_FILES.md`
+- `python3 tools/dev/diff_rules_go_fork.py --write-report`
+
 ## First-run checklist (all scenarios)
 
 Use this checklist before your first CI rollout:
