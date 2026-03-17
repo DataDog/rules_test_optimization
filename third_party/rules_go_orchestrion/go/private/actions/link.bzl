@@ -196,11 +196,14 @@ def emit_link(
     if go.orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
+
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(go.sdk.go)
+
         # The toolexec path may resolve woven dependencies during linking too,
         # so keep the SDK source tree available in sandboxed executions.
         inputs_transitive.append(go.sdk.srcs)
+
         # Stage rule data files for the link builder too so it can reuse the
         # same pinned module files seen during compile (for example go.mod,
         # go.sum, orchestrion.tool.go, orchestrion.yml).

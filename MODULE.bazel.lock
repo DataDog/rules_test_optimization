@@ -336,7 +336,7 @@
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "vvVSU4sSbDMKSTpGswqN5Lzt0/GkcR3+FMVsQWKWSYo=",
-        "usagesDigest": "71WEtJM30nBub+1514C0Kt3e+47gEP+FsiOkn7xW43M=",
+        "usagesDigest": "hbyg0fRneQMmF97jXWRY+GFcq8y/n1fJA31mNooQGng=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -347,6 +347,8 @@
               "repo_alias": "test_optimization_data",
               "service_keys": [
                 "go_service",
+                "go_service_a",
+                "go_service_b",
                 "python_service",
                 "java_service",
                 "nodejs_service",
@@ -501,7 +503,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "hnsYhOhaauyfN7BNSyT3CXPslwbHpmTfX3cXPUsqxZw=",
+        "bzlTransitiveDigest": "xqd7msAqjwB7XO8JYjCEabSWh5d2Lerx56p80R0Lv2c=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

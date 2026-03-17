@@ -38,8 +38,6 @@ Maintenance notes:
   service-key resolution.
 """
 
-load("@rules_go//go:def.bzl", "go_test")
-
 load(
     "@datadog-rules-test-optimization//tools/core:common_utils.bzl",
     "fail_with_prefix",
@@ -54,6 +52,7 @@ load(
     "service_mapping_entries",
     _is_dict = "is_dict",
 )
+load("@rules_go//go:def.bzl", "go_test")
 load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
 load("//:topt_go_orchestrion.bzl", "orch_go_test")
 

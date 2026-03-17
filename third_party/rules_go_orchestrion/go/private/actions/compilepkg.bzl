@@ -208,12 +208,15 @@ def emit_compilepkg(
     if go.orchestrion:
         compile_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
+
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(sdk.go)
+
         # Orchestrion shells out to `go list` for woven dependencies. That path
         # may need the SDK source tree to resolve standard library packages
         # (for example "log") inside Bazel's sandbox.
         inputs_transitive.append(sdk.srcs)
+
         # Stage rule data files for the builder so it can copy module pin files
         # (for example go.mod, go.sum, orchestrion.tool.go, orchestrion.yml)
         # into the temporary module it creates for Orchestrion instrumentation.
