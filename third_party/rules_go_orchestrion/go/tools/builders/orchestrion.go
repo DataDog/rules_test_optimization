@@ -446,15 +446,15 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 		return nil
 	}
 
-		run := func(label string, args ...string) error {
-			cmd := exec.Command(goExe, args...)
-			env := append([]string{}, os.Environ()...)
-			normalizedEnv, envErr := ensureGoModuleCacheEnv(env, verbose)
-			if envErr != nil {
-				return fmt.Errorf("prepare synthetic module cache env: %w", envErr)
-			}
-			env = normalizedEnv
-			var replaced bool
+	run := func(label string, args ...string) error {
+		cmd := exec.Command(goExe, args...)
+		env := append([]string{}, os.Environ()...)
+		normalizedEnv, envErr := ensureGoModuleCacheEnv(env, verbose)
+		if envErr != nil {
+			return fmt.Errorf("prepare synthetic module cache env: %w", envErr)
+		}
+		env = normalizedEnv
+		var replaced bool
 		for i, entry := range env {
 			if strings.HasPrefix(entry, "GO111MODULE=") {
 				env[i] = "GO111MODULE=on"
