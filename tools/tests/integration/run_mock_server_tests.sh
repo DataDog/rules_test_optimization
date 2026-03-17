@@ -45,6 +45,15 @@ export REPO_ROOT
 export LOG_FILE
 export SNAPSHOT_DIR
 
+RULES_GO_OVERRIDE_REMOTE="$("$PYTHON" - <<'PY' "$REPO_ROOT"
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).resolve().as_uri())
+PY
+)"
+RULES_GO_OVERRIDE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+
 if [[ "${KEEP_TMP:-0}" == "1" ]]; then
   echo "KEEP_TMP=1: temp workspace at $TMP_WS"
 fi
@@ -1577,7 +1586,9 @@ chmod +x "$BOOT_WS/bin/go"
 (
   cd "$BOOT_WS"
   PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-    --workspace "$BOOT_WS"
+    --workspace "$BOOT_WS" \
+    --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
+    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT"
 )
 
 if ! grep -q 'git_override(' "$BOOT_WS/MODULE.bazel"; then
@@ -1608,7 +1619,9 @@ printf 'custom: true\n' > "$BOOT_WS/orchestrion.yml"
 (
   cd "$BOOT_WS"
   PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-    --workspace "$BOOT_WS"
+    --workspace "$BOOT_WS" \
+    --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
+    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT"
 )
 
 if ! grep -q 'custom: true' "$BOOT_WS/orchestrion.yml"; then
@@ -1718,6 +1731,8 @@ BUILD_GUIDED_EOF
   cd "$GUIDED_BOOT_WS"
   PATH="$GUIDED_BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
     --workspace "$GUIDED_BOOT_WS" \
+    --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
+    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT" \
     --guided \
     --service "go-service" \
     --runtime-version "1.2.3"

@@ -116,12 +116,22 @@ jobs:
       - name: Build examples
         timeout-minutes: 10
         shell: bash
-        run: ./bazelw build //examples/...
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./bazelw --output_user_root=C:/b build //examples/...
+          else
+            ./bazelw build //examples/...
+          fi
 
       - name: Test examples
         timeout-minutes: 10
         shell: bash
-        run: ./bazelw test //examples/...
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./bazelw --output_user_root=C:/b test //examples/...
+          else
+            ./bazelw test //examples/...
+          fi
 
       - name: Exercise single-service runtests script (dry-run)
         shell: bash
