@@ -17,3 +17,8 @@ alias(
     visibility = ["//visibility:public"],
 )
 
+alias(
+    name = "dd_trace_go_version_file",
+    actual = "@rules_go_orchestrion_tool//:dd_trace_go_version_file",
+    visibility = ["//visibility:public"],
+)

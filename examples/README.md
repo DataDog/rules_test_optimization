@@ -127,8 +127,13 @@ Bootstrap once after adding the module prerequisites:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0
+  --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0
 ```
+
+`--dd-trace-go-version` is optional. If omitted, bootstrap uses the default
+`v2.6.0`. When you set it, bootstrap repins the local Go module to match that
+workspace version.
 
 BUILD.bazel (generated wrapper path, inference via embed):
 
@@ -332,8 +337,13 @@ use_repo(
 Bootstrap once after adding the Go module files:
 
 ```bash
-bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-module-dir src/go-project
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --go-module-dir src/go-project \
+  --dd-trace-go-version v2.6.0
 ```
+
+As in the single-service flow, `--dd-trace-go-version` is optional and defaults
+to `v2.6.0`.
 
 This multi-service path stays on the lower-level/manual API. Guided bootstrap is
 only for fresh single-service Go workspaces.

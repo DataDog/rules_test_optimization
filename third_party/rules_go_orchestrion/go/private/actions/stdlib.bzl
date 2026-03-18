@@ -171,6 +171,8 @@ def _build_stdlib(go):
     if go.orchestrion:
         args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
+        if getattr(go, "orchestrion_version_file", None):
+            inputs_direct.append(go.orchestrion_version_file)
         inputs_direct.append(sdk.go)
         inputs_transitive.append(sdk.srcs)
         if hasattr(go._ctx.files, "data"):

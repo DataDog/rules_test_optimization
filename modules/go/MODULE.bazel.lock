@@ -176,7 +176,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "l5DqUEX2Jgn7FuksPVYrRhqdaZ2MJqH3PP4sBkNyctI=",
+        "bzlTransitiveDigest": "WJSNOIRUpUzdq9ikJdYy9WYILm8ws+TphcxM4DxYjEo=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

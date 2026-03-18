@@ -40,6 +40,26 @@ var syntheticTestmainRootPackages = []struct {
 		alias:       "example.com/__orchestrion/integrations",
 		packagePath: "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations",
 	},
+	{
+		alias:       "example.com/__orchestrion/tracer",
+		packagePath: "github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	},
+	{
+		alias:       "example.com/__orchestrion/profiler",
+		packagePath: "github.com/DataDog/dd-trace-go/v2/profiler",
+	},
+	{
+		alias:       "example.com/__orchestrion/http",
+		packagePath: "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+	},
+	{
+		alias:       "example.com/__orchestrion/httpinternal",
+		packagePath: "github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
+	},
+	{
+		alias:       "example.com/__orchestrion/slog",
+		packagePath: "github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+	},
 }
 
 const syntheticTestmainPackagefileManifestName = "orchestrion.pack"

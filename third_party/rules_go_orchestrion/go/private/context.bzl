@@ -507,6 +507,7 @@ def go_context(
     go_config_info = None
     stdlib = None
     orchestrion = None
+    orchestrion_version_file = None
 
     if go_context_data == None:
         if hasattr(attr, "_go_context_data"):
@@ -525,11 +526,16 @@ def go_context(
 
     if go_context_info and go_context_info.orchestrion:
         orchestrion = go_context_info.orchestrion
+        orchestrion_version_file = getattr(go_context_info, "orchestrion_version_file", None)
     elif getattr(attr, "_orchestrion_enabled", None) and getattr(attr, "_orchestrion_tool_binary", None):
         if attr._orchestrion_enabled[BuildSettingInfo].value:
             orchestrion_files = attr._orchestrion_tool_binary.files.to_list()
             if orchestrion_files:
                 orchestrion = orchestrion_files[0]
+            if getattr(attr, "_orchestrion_version_file", None):
+                version_files = attr._orchestrion_version_file.files.to_list()
+                if version_files:
+                    orchestrion_version_file = version_files[0]
 
     if getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
         cgo_context_info = cgo_context_data_impl(ctx)
@@ -603,6 +609,9 @@ def go_context(
     if mode.arm:
         env["GOARM"] = mode.arm
 
+    if orchestrion_version_file:
+        env["RULES_GO_ORCHESTRION_VERSION_FILE"] = orchestrion_version_file.path
+
     if cgo_context_info:
         env.update(cgo_context_info.env)
         cc_toolchain_files = cgo_context_info.cc_toolchain_files
@@ -663,6 +672,7 @@ def go_context(
         nogo = go_context_info.nogo if go_context_info else None,
         coverdata = go_context_info.coverdata if go_context_info else None,
         orchestrion = orchestrion,
+        orchestrion_version_file = orchestrion_version_file,
         coverage_enabled = ctx.configuration.coverage_enabled,
         coverage_instrumented = ctx.coverage_instrumented(),
         export_stdlib = go_config_info.export_stdlib,
@@ -704,16 +714,21 @@ def _go_context_data_impl(ctx):
     # Get orchestrion binary if enabled
     orchestrion_enabled = ctx.attr._orchestrion_enabled[BuildSettingInfo].value
     orchestrion = None
+    orchestrion_version_file = None
     if orchestrion_enabled:
         orchestrion_files = ctx.attr._orchestrion_tool_binary.files.to_list()
         if orchestrion_files:
             orchestrion = orchestrion_files[0]
+        version_files = ctx.attr._orchestrion_version_file.files.to_list()
+        if version_files:
+            orchestrion_version_file = version_files[0]
 
     providers = [
         GoContextInfo(
             coverdata = ctx.attr.coverdata[0][GoArchive],
             nogo = ctx.attr.nogo[DefaultInfo].files_to_run,
             orchestrion = orchestrion,
+            orchestrion_version_file = orchestrion_version_file,
         ),
         ctx.attr.stdlib[GoStdLib],
         ctx.attr.go_config[GoConfigInfo],
@@ -752,6 +767,11 @@ go_context_data = rule(
         ),
         "_orchestrion_tool_binary": attr.label(
             default = "//go/private/orchestrion:tool_binary",
+            allow_files = True,
+            cfg = "exec",
+        ),
+        "_orchestrion_version_file": attr.label(
+            default = "//go/private/orchestrion:dd_trace_go_version_file",
             allow_files = True,
             cfg = "exec",
         ),

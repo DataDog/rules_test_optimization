@@ -32,6 +32,7 @@ func TestReplaceManagedSectionAppendsWhenMissing(t *testing.T) {
 func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	cfg := config{
 		orchestrionVersion: "v1.5.0",
+		ddTraceGoVersion:   "v2.5.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
 	}
@@ -45,8 +46,14 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `use_extension("@rules_go//go:extensions.bzl", "orchestrion")`) {
 		t.Fatalf("expected rules_go orchestrion extension in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `orchestrion.from_source(version = "v1.5.0")`) {
+	if !strings.Contains(got, `orchestrion.from_source(`) {
+		t.Fatalf("expected orchestrion extension call in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `version = "v1.5.0"`) {
 		t.Fatalf("expected orchestrion version in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `dd_trace_go_version = "v2.5.0"`) {
+		t.Fatalf("expected dd-trace-go version in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `use_repo(orchestrion, "rules_go_orchestrion_tool")`) {
 		t.Fatalf("expected rules_go orchestrion repo wiring in managed block:\n%s", got)
@@ -131,6 +138,12 @@ import (
 	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) {
 		t.Fatalf("expected v2 orchestrion import in orchestrion.tool.go:\n%s", text)
 	}
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration`) {
+		t.Fatalf("expected net/http integration import in orchestrion.tool.go:\n%s", text)
+	}
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration`) {
+		t.Fatalf("expected slog integration import in orchestrion.tool.go:\n%s", text)
+	}
 	if strings.Count(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) != 1 {
 		t.Fatalf("expected v2 orchestrion import to be added once:\n%s", text)
 	}
@@ -144,6 +157,8 @@ func TestEnsureCIVisibilityOrchestrionImportNoopWhenPresent(t *testing.T) {
 import (
 	_ "github.com/DataDog/orchestrion" // integration
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
 	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration
 )
 `
@@ -164,6 +179,12 @@ import (
 	if strings.Count(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) != 1 {
 		t.Fatalf("expected v2 orchestrion import to remain single:\n%s", text)
 	}
+	if strings.Count(text, `_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration`) != 1 {
+		t.Fatalf("expected net/http integration import to remain single:\n%s", text)
+	}
+	if strings.Count(text, `_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration`) != 1 {
+		t.Fatalf("expected slog integration import to remain single:\n%s", text)
+	}
 }
 
 func TestEnsureCIVisibilityOrchestrionImportHandlesBlankLinesAroundV2Import(t *testing.T) {
@@ -175,6 +196,8 @@ import (
 	_ "github.com/DataDog/orchestrion" // integration
 
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
 
 	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration
 )
@@ -195,6 +218,12 @@ import (
 	text := string(content)
 	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) {
 		t.Fatalf("expected v2 orchestrion import in orchestrion.tool.go:\n%s", text)
+	}
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration`) {
+		t.Fatalf("expected net/http integration import in orchestrion.tool.go:\n%s", text)
+	}
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration`) {
+		t.Fatalf("expected slog integration import in orchestrion.tool.go:\n%s", text)
 	}
 }
 
@@ -228,6 +257,12 @@ import (
 	}
 	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`) {
 		t.Fatalf("expected v2 orchestrion import after legacy cleanup:\n%s", text)
+	}
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration`) {
+		t.Fatalf("expected net/http integration import after legacy cleanup:\n%s", text)
+	}
+	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration`) {
+		t.Fatalf("expected slog integration import after legacy cleanup:\n%s", text)
 	}
 }
 

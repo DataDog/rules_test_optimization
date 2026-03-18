@@ -14,6 +14,9 @@ versioning.
   failure.
 - Standardized Go example formatting and test diagnostics across single-service
   and multi-service examples.
+- Added a workspace-wide Go `dd_trace_go_version` setting, bootstrap support
+  for repinning `dd-trace-go`, and mismatch checks that stop Bazel builds when
+  the workspace setting and local Go module pins drift apart.
 - Added CI hardening for Python dependency installation, Buildifier checks,
   gofmt checks, and fixture JSON validation.
 - Added release automation workflow (`.github/workflows/release.yml`) to codify

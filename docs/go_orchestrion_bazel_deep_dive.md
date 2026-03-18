@@ -149,14 +149,16 @@ The bootstrap binary is the one-time workspace mutation step.
 Implementation:
 - [main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
 
-Bootstrap does four things that matter for the current architecture:
+Bootstrap does five things that matter for the current architecture:
 
 1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.59.0")`
 2. Writes a managed `git_override` for `rules_go` pointing back to this repo
    with `strip_prefix = "third_party/rules_go_orchestrion"`
 3. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension and
    `use_repo(orchestrion, "rules_go_orchestrion_tool")`
-4. Runs `orchestrion pin` in the Go module and ensures:
+4. Sets the workspace-wide tracer version with
+   `orchestrion.from_source(..., dd_trace_go_version = "...")`
+5. Runs `orchestrion pin` in the Go module and ensures:
    - `go.mod`
    - `go.sum`
    - `orchestrion.tool.go`
@@ -167,8 +169,13 @@ It aligns:
 
 - Bazel module wiring
 - the vendored `rules_go` fork
+- the selected `dd-trace-go` version used by Bazel injection
 - the Orchestrion source repo
 - the pinned Go module files that Orchestrion expects
+
+If `dd_trace_go_version` is not set, the default is `v2.6.0`. Bootstrap keeps
+the local Go module on the same version, and the Bazel build now fails fast if
+the workspace setting and the local Go module pins drift apart.
 
 #### Why This Exists
 

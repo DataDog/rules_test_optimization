@@ -31,6 +31,8 @@ const syntheticOrchestrionToolGo = `package tools
 import (
 	_ "github.com/DataDog/orchestrion"
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"
+	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2"
+	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"
 )
 `
 
@@ -225,6 +227,8 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			syntheticDownloads := [][]string{
 				{"mod", "download", "github.com/DataDog/orchestrion"},
 				{"mod", "download", "github.com/DataDog/dd-trace-go/v2"},
+				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/net/http/v2"},
+				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"},
 			}
 			for _, dl := range syntheticDownloads {
 				if err := goenv.runCommand(goenv.goCmd(dl[0], dl[1:]...)); err != nil && goenv.verbose {

@@ -15,6 +15,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Uploader says no payload files | tracer file-mode contract + payload files under `bazel-testlogs/*/test.outputs/` | Uploader not finding payloads |
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
+| Go build fails with a tracer version mismatch | `dd_trace_go_version`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
 | Windows path/policy failures | PowerShell policy + path separators | Windows-specific issues |
 
 ## Repository rule not fetching data
@@ -167,6 +168,29 @@ full bundle.
        ...
    )
    ```
+
+## Go tracer version drift
+
+**Symptom**: Go bootstrap or Bazel build fails with a message showing a
+configured `dd_trace_go_version` and a different resolved local
+`dd-trace-go` version.
+
+**Solutions**:
+
+1. **If you use guided bootstrap**, rerun it with the version you want:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --dd-trace-go-version <version>
+   ```
+
+2. **If you wire Orchestrion manually**, make sure both places match:
+   - `orchestrion.from_source(..., dd_trace_go_version = "<version>")`
+   - the local Go module pins in `go.mod` and `orchestrion.tool.go`
+
+3. **If you omitted the version entirely**, remember the default is `v2.6.0`.
+
+The build fails on purpose here. It is preventing Bazel from injecting one
+tracer version while the local Go module still resolves another.
 
 ## Windows-specific issues
 

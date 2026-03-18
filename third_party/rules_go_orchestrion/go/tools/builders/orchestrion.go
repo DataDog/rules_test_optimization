@@ -54,16 +54,6 @@ const (
 	orchestrionLogLevelEnvVar = "ORCHESTRION_LOG_LEVEL"
 
 	orchestrionStdlibCacheEnvVar = "RULES_GO_ORCHESTRION_STDLIB_CACHE"
-
-	syntheticOrchestrionGoMod = `module bazel_orchestrion_temp
-
-go 1.21
-
-require (
-	github.com/DataDog/orchestrion v1.5.0
-	github.com/DataDog/dd-trace-go/v2 v2.6.0
-)
-`
 )
 
 var orchestrionWovenPackagePatterns = []string{
@@ -282,6 +272,10 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 	const orchestrionToolGo = "orchestrion.tool.go"
 
 	var filesToCleanup []string
+	configuredVersion, err := configuredDDTraceGoVersion()
+	if err != nil {
+		return nil, err
+	}
 
 	if verbose {
 		cwd, _ := os.Getwd()
@@ -326,7 +320,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 		}
 
 		if !copiedGoMod {
-			content := []byte(syntheticOrchestrionGoMod)
+			content := []byte(syntheticOrchestrionGoMod(configuredVersion))
 			if err := os.WriteFile(goModFile, content, 0644); err != nil {
 				return nil, fmt.Errorf("creating temporary go.mod: %w", err)
 			}
@@ -335,6 +329,15 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 				fmt.Fprintf(os.Stderr, "orchestrion: Created temporary go.mod\n")
 			}
 		}
+	}
+
+	if _, err := os.Stat(goModFile); err == nil {
+		goExe := resolveGoExecutable(goSdkPath)
+		if err := validateResolvedDDTraceGoVersion(goExe, ".", os.Environ(), verbose); err != nil {
+			return nil, err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat go.mod: %w", err)
 	}
 
 	// Look for orchestrion.yml in source directories and copy it to cwd
@@ -419,26 +422,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 }
 
 func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
-	goExe := ""
-	if goSdkPath != "" {
-		goExe = filepath.Join(abs(goSdkPath), "bin", "go")
-		if runtime.GOOS == "windows" {
-			goExe += ".exe"
-		}
-	}
-	if goExe == "" {
-		var err error
-		goExe, err = exec.LookPath("go")
-		if err != nil {
-			gorootGo := filepath.Join(getEnv(os.Environ(), "GOROOT"), "bin", "go")
-			if runtime.GOOS == "windows" {
-				gorootGo += ".exe"
-			}
-			if _, statErr := os.Stat(gorootGo); statErr == nil {
-				goExe = gorootGo
-			}
-		}
-	}
+	goExe := resolveGoExecutable(goSdkPath)
 	if goExe == "" {
 		if verbose {
 			fmt.Fprintf(os.Stderr, "orchestrion: skipping synthetic module preparation; go binary unavailable\n")
@@ -505,6 +489,8 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 	if err := run("download synthetic deps", "mod", "download",
 		"github.com/DataDog/orchestrion",
 		"github.com/DataDog/dd-trace-go/v2",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 	); err != nil {
 		return err
 	}

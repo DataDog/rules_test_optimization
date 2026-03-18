@@ -70,11 +70,16 @@ Bootstrap once:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0
+  --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0
 ```
 
 The bootstrap writes `//tools/build:dd_go_test.bzl` and creates
 `//:dd_upload_payloads` when it is missing.
+
+`--dd-trace-go-version` is optional. If omitted, the default is `v2.6.0`. If
+you set it, bootstrap repins the local Go module to the same version and later
+builds will fail fast if the workspace setting and local pins no longer match.
 
 ```bzl
 # package BUILD.bazel

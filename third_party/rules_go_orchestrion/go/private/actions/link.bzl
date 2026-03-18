@@ -196,6 +196,8 @@ def emit_link(
     if go.orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
+        if getattr(go, "orchestrion_version_file", None):
+            inputs_direct.append(go.orchestrion_version_file)
 
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(go.sdk.go)

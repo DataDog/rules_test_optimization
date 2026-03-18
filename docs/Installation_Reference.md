@@ -155,7 +155,8 @@ Guided bootstrap command:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0
+  --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0
 ```
 
 If the Go module lives below the workspace root:
@@ -165,8 +166,13 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0 \
   --go-module-dir path/to/go-module
 ```
+
+`--dd-trace-go-version` is optional. If omitted, the workspace uses the default
+`v2.6.0`. Bootstrap keeps the local Go module pins on the same version so Bazel
+and the Go module do not silently drift apart.
 
 Guided bootstrap is intentionally only for fresh single-service Go workspaces.
 If the workspace already uses:

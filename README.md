@@ -140,13 +140,15 @@ bazel_dep(name = "rules_go", version = "0.59.0")
 ```
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
-Go module:
+Go module. `--dd-trace-go-version` is optional; if you omit it, the default is
+`v2.6.0`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0
+  --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0
 ```
 
 If the Go module lives below the workspace root:
@@ -156,6 +158,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0 \
   --go-module-dir path/to/go-module
 ```
 
@@ -165,8 +168,10 @@ The bootstrap helper:
 - creates a root `dd_upload_payloads` target when missing
 - creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
 - runs `orchestrion pin`
+- repins `dd-trace-go` and the Orchestrion-managed Go helper packages to the configured `--dd-trace-go-version`
 - writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing
+- keeps Bazel's injected tracer version and the local Go module pins aligned, and the build fails fast if they drift apart
 
 Then use the generated local wrapper in your package:
 
@@ -794,11 +799,28 @@ use_repo(go_topt, "test_optimization_data")
 ```
 
 Then run the Datadog bootstrap helper once so Orchestrion is pinned into the
-workspace Go module:
+workspace Go module. Pass `--dd-trace-go-version <version>` if you want a
+non-default tracer version; otherwise the default is `v2.6.0`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
 ```
+
+If you wire Orchestrion manually instead of using bootstrap, you can also set
+the workspace-wide tracer version directly in `MODULE.bazel`:
+
+```bzl
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.5.0",
+    dd_trace_go_version = "v2.7.0-rc.4",
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+```
+
+If `dd_trace_go_version` is omitted there too, the default is `v2.6.0`. Manual
+setups must still keep the local Go module pins on the same version, or the
+build will stop with a mismatch error.
 
 ### Basic usage
 

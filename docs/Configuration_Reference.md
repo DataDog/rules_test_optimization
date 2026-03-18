@@ -2,6 +2,27 @@
 
 This page contains the full configuration and environment reference.
 
+## Go Orchestrion version selection
+
+Guided Go bootstrap accepts:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dd-trace-go-version` | `v2.6.0` | Workspace-wide `dd-trace-go` version to inject through Orchestrion |
+
+Manual Orchestrion wiring in `MODULE.bazel` accepts:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.6.0` | Workspace-wide tracer version used by Bazel's Orchestrion tool and fallback paths |
+
+Notes:
+
+- The selected version is workspace-wide for Go. There is no per-test override.
+- Bootstrap repins the local Go module to the same version.
+- If the workspace setting and the effective local Go module version differ,
+  the build fails instead of mixing versions.
+
 ## Sync extension attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`
