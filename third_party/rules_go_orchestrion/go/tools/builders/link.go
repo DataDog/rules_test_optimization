@@ -84,45 +84,38 @@ func isSyntheticTestmainLink(mainArchive, packagePath string) bool {
 	return strings.HasSuffix(mainBase, "~testmain.a") && (packagePath == "testmain" || packagePath == "")
 }
 
-func parseSyntheticTestmainPackagefileManifest(manifestPath string) ([]string, map[string]bool, error) {
-	data, err := os.ReadFile(manifestPath)
+func readSyntheticTestmainPackagefileManifest(mainArchive string) ([]string, error) {
+	sidecarPath := syntheticTestmainPackagefileManifestSidecarPath(mainArchive)
+	data, err := os.ReadFile(sidecarPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) && manifestPath != "" {
-			return nil, nil, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
 		}
-		return nil, nil, fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", manifestPath, err)
+		return nil, fmt.Errorf("read synthetic packagefile manifest sidecar %s: %w", sidecarPath, err)
 	}
 	directives := strings.Split(strings.TrimSpace(string(data)), "\n")
 	filtered := make([]string, 0, len(directives))
-	packages := make(map[string]bool, len(directives))
 	for _, line := range directives {
 		line = strings.TrimSpace(line)
-		pkg, _, ok := parsePackagefileDirective(line)
-		if !ok {
-			continue
+		if strings.HasPrefix(line, "packagefile ") {
+			filtered = append(filtered, line)
 		}
-		filtered = append(filtered, line)
-		packages[pkg] = true
 	}
-	return filtered, packages, nil
+	return filtered, nil
 }
 
-func readSyntheticTestmainPackagefileManifest(mainArchive string) ([]string, map[string]bool, error) {
-	return parseSyntheticTestmainPackagefileManifest(syntheticTestmainPackagefileManifestSidecarPath(mainArchive))
-}
-
-func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive string) (bool, map[string]bool, error) {
-	filtered, packages, err := readSyntheticTestmainPackagefileManifest(mainArchive)
+func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive string) (bool, error) {
+	filtered, err := readSyntheticTestmainPackagefileManifest(mainArchive)
 	if err != nil {
-		return false, nil, err
+		return false, err
 	}
 	if len(filtered) == 0 {
-		return false, nil, nil
+		return false, nil
 	}
 	if err := appendOrReplaceImportcfgDirectives(importcfgPath, filtered, "synthetic-testmain-manifest"); err != nil {
-		return false, nil, err
+		return false, err
 	}
-	return true, packages, nil
+	return true, nil
 }
 
 func link(args []string) error {
@@ -314,9 +307,8 @@ func link(args []string) error {
 		if !goenv.shouldPreserveWorkDir {
 			defer os.Remove(importcfgName)
 		}
-		var syntheticManifestPackages map[string]bool
 		if syntheticTestBinaryLink {
-			_, syntheticManifestPackages, err = appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
+			_, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
 			if err != nil {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
@@ -332,12 +324,12 @@ func link(args []string) error {
 			}
 		}
 		if goenv.stdlibCache != "" {
-			if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv, syntheticManifestPackages); err != nil {
+			if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {
 				return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
 			}
 		} else {
 			closurePackages := collectOrchestrionLinkClosurePackages(archives)
-			if err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages, syntheticManifestPackages); err != nil {
+			if err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages); err != nil {
 				return fmt.Errorf("link: rewrite importcfg from cache stdlib closures: %w", err)
 			}
 		}
@@ -403,9 +395,8 @@ func link(args []string) error {
 		if !goenv.shouldPreserveWorkDir {
 			defer os.Remove(importcfgName)
 		}
-		var syntheticManifestPackages map[string]bool
 		if syntheticTestBinaryLink {
-			_, syntheticManifestPackages, err = appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
+			_, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
 			if err != nil {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
@@ -415,7 +406,7 @@ func link(args []string) error {
 				}
 			}
 			if goenv.stdlibCache != "" {
-				if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv, syntheticManifestPackages); err != nil {
+				if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {
 					return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
 				}
 			}

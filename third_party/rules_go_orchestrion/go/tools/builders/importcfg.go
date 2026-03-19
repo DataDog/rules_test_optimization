@@ -1258,7 +1258,7 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string, skip map[string]bool) error {
+func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string) error {
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" || len(packages) == 0 {
 		return nil
 	}
@@ -1288,12 +1288,10 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	if len(exports) == 0 {
 		return nil
 	}
-	return rewriteImportcfgPackagefiles(importcfgPath, exports, func(pkg string) bool {
-		return skip[pkg]
-	})
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env, skip map[string]bool) error {
+func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) error {
 	if goenv == nil {
 		return nil
 	}
@@ -1342,9 +1340,7 @@ func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env, 
 	if len(exports) == 0 {
 		return nil
 	}
-	return rewriteImportcfgPackagefiles(importcfgPath, exports, func(pkg string) bool {
-		return skip[pkg]
-	})
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
 func resolveStdlibExportsForPackageSet(goenv *env, packages []string) (map[string]string, error) {

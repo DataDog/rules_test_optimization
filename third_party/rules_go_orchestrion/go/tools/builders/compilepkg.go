@@ -467,15 +467,6 @@ func compileArchive(
 	if err != nil {
 		return err
 	}
-	if syntheticTestmain && strings.TrimSpace(syntheticTestmainPackagefiles) != "" {
-		directives, _, err := parseSyntheticTestmainPackagefileManifest(syntheticTestmainPackagefiles)
-		if err != nil {
-			return fmt.Errorf("compilepkg: read synthetic testmain packagefile manifest: %w", err)
-		}
-		if err := appendOrReplaceImportcfgDirectives(importcfgPath, directives, "synthetic-testmain-compile-manifest"); err != nil {
-			return fmt.Errorf("compilepkg: apply synthetic testmain packagefile manifest: %w", err)
-		}
-	}
 
 	// Build an embedcfg file mapping embed patterns to filenames.
 	// Embed patterns are relative to any one of a list of root directories
@@ -647,6 +638,9 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 		if pkg == "" || exportPath == "" {
 			continue
 		}
+		if !strings.Contains(pkg, ".") {
+			continue
+		}
 		addManifestLine(fmt.Sprintf("packagefile %s=%s", pkg, exportPath))
 	}
 
@@ -714,7 +708,7 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 		return "", err
 	}
 	if shouldSkipOrchestrionForImportPath(importPath) {
-		if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv, nil); err != nil {
+		if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv); err != nil {
 			return "", fmt.Errorf("compilepkg: rewrite importcfg from helper package stdlib entries: %w", err)
 		}
 	} else {
