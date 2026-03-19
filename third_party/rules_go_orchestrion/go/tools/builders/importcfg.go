@@ -625,7 +625,7 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if forcedExportRoot != "" {
 		gocache = abs(forcedExportRoot)
 	} else {
-		requestKey, err := moduleExportRequestKey(cmd.Dir)
+		requestKey, err := moduleExportRequestKey(cmd.Dir, goenv)
 		if err != nil {
 			return nil, fmt.Errorf("derive module export request key: %w", err)
 		}
@@ -715,7 +715,7 @@ func sanitizeModuleExportArchives(exports map[string]string) error {
 	return nil
 }
 
-func moduleExportRequestKey(moduleDir string) (string, error) {
+func moduleExportRequestKey(moduleDir string, goenv *env) (string, error) {
 	moduleDir = abs(moduleDir)
 	var b strings.Builder
 	b.WriteString(moduleDir)
@@ -737,6 +737,13 @@ func moduleExportRequestKey(moduleDir string) (string, error) {
 		b.WriteString(fmt.Sprintf("%x", sum[:8]))
 		b.WriteString("\n")
 	}
+	stdlibKey, err := currentWovenStdlibCacheKey(goenv)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString("stdlib=")
+	b.WriteString(stdlibKey)
+	b.WriteString("\n")
 	key := sha256.Sum256([]byte(b.String()))
 	return fmt.Sprintf("%x", key[:8]), nil
 }
