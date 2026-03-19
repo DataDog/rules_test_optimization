@@ -566,12 +566,6 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if len(packages) == 0 || goenv == nil || goenv.sdk == "" {
 		return nil, nil
 	}
-	// These helper exports must be built against the already-prepared woven
-	// stdlib cache. Running them back through orchestrion's toolexec can cause
-	// Go to rebuild stdlib packages like testing inside the helper-local cache,
-	// which then diverges from the stdlib archives used by Bazel's final test
-	// link step.
-	_ = orchestrionPath
 	if goenv.goroot != "" {
 		goenv.goroot = abs(goenv.goroot)
 		goenv.sdk = abs(goenv.sdk)
@@ -635,18 +629,8 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if err := os.MkdirAll(gocache, 0o755); err != nil {
 		return nil, fmt.Errorf("prepare module gocache: %w", err)
 	}
-	if goenv.stdlibCache != "" {
-		// The Bazel stdlib cache is the right archive family, but it lives under
-		// a read-only output tree. Clone it into a writable helper cache so
-		// go list -export can build Datadog helper packages against the same woven
-		// stdlib artifacts without mutating Bazel outputs.
-		if err := syncDirectoryTree(goenv.stdlibCache, gocache); err != nil {
-			return nil, fmt.Errorf("clone woven stdlib cache into helper gocache: %w", err)
-		}
-	} else {
-		if err := seedWovenStdlibCache(goenv, gocache); err != nil {
-			return nil, fmt.Errorf("seed module gocache from woven stdlib cache: %w", err)
-		}
+	if err := seedWovenStdlibCache(goenv, gocache); err != nil {
+		return nil, fmt.Errorf("seed module gocache from woven stdlib cache: %w", err)
 	}
 	cmd.Env = setEnv(cmd.Env, "GOCACHE", gocache)
 	cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
@@ -720,6 +704,7 @@ func moduleExportRequestKey(moduleDir string, goenv *env) (string, error) {
 	var b strings.Builder
 	b.WriteString(moduleDir)
 	b.WriteString("\n")
+	b.WriteString("helper_cache_layout=manifest_seed_v1\n")
 	for _, name := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
 		path := filepath.Join(moduleDir, name)
 		data, err := os.ReadFile(path)

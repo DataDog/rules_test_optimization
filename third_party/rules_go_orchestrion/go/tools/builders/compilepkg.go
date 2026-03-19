@@ -18,10 +18,12 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -60,6 +62,18 @@ var syntheticTestmainRootPackages = []struct {
 		alias:       "example.com/__orchestrion/slog",
 		packagePath: "github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 	},
+}
+
+var syntheticTestmainSourceCompiledPackages = map[string]bool{
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting":          true,
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage": true,
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations":                    true,
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer":                                        true,
+	"github.com/DataDog/dd-trace-go/v2/internal":                                              true,
+	"github.com/DataDog/dd-trace-go/v2/profiler":                                              true,
+	"github.com/DataDog/dd-trace-go/contrib/net/http/v2":                                      true,
+	"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion":                 true,
+	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2":                                      true,
 }
 
 const syntheticTestmainPackagefileManifestName = "orchestrion.pack"
@@ -604,9 +618,45 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 			}
 		}
 	}
-	exports, err := resolveModuleExportsForPackages(goenv, packages, orchestrion, moduleDir)
-	if err != nil {
-		return srcs, deps, "", fmt.Errorf("resolve synthetic testmain root exports: %w", err)
+	exports := make(map[string]string)
+	compileExports := make(map[string]string)
+	exportPackages := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if syntheticTestmainSourceCompiledPackages[pkg] {
+			continue
+		}
+		exportPackages = append(exportPackages, pkg)
+	}
+
+	forcedExportRoot := ""
+	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, workDir, moduleDir, packages); err != nil {
+		return srcs, deps, "", fmt.Errorf("compile synthetic testmain source packages: %w", err)
+	} else {
+		forcedExportRoot = exportRoot
+		for pkg, archive := range sourceCompiledExports {
+			compileExports[pkg] = archive.compilePath
+			exports[pkg] = archive.linkPath
+			for depPkg, depPath := range archive.linkClosure {
+				if strings.TrimSpace(depPath) == "" {
+					continue
+				}
+				if _, ok := compileExports[depPkg]; ok {
+					continue
+				}
+				if _, ok := exports[depPkg]; !ok {
+					exports[depPkg] = depPath
+				}
+			}
+		}
+	}
+	if len(exportPackages) > 0 {
+		resolvedExports, err := resolveModuleExportsForPackagesWithRoot(goenv, exportPackages, orchestrion, moduleDir, forcedExportRoot)
+		if err != nil {
+			return srcs, deps, "", fmt.Errorf("resolve synthetic testmain root exports: %w", err)
+		}
+		for pkg, exportPath := range resolvedExports {
+			exports[pkg] = exportPath
+		}
 	}
 
 	var importLines []string
@@ -619,18 +669,22 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 		manifestLines[line] = struct{}{}
 	}
 	for _, root := range syntheticTestmainRootPackages {
-		exportPath := strings.TrimSpace(exports[root.packagePath])
-		if exportPath == "" {
+		compilePath := strings.TrimSpace(compileExports[root.packagePath])
+		linkPath := strings.TrimSpace(exports[root.packagePath])
+		if compilePath == "" {
+			compilePath = linkPath
+		}
+		if compilePath == "" || linkPath == "" {
 			return srcs, deps, "", fmt.Errorf("missing export for synthetic testmain root package %s", root.packagePath)
 		}
 		deps = append(deps, archive{
 			importPath:  root.alias,
 			packagePath: root.packagePath,
-			file:        exportPath,
+			file:        compilePath,
 		})
 		importLines = append(importLines, fmt.Sprintf("\t_ %q", root.alias))
 		addManifestLine(fmt.Sprintf("importmap %s=%s", root.alias, root.packagePath))
-		addManifestLine(fmt.Sprintf("packagefile %s=%s", root.packagePath, exportPath))
+		addManifestLine(fmt.Sprintf("packagefile %s=%s", root.packagePath, linkPath))
 	}
 	for pkg, exportPath := range exports {
 		pkg = strings.TrimSpace(pkg)
@@ -664,6 +718,375 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 	}
 	srcs.goSrcs = append(srcs.goSrcs, extraSrcs.goSrcs...)
 	return srcs, deps, manifestPath, nil
+}
+
+type modulePackageMetadata struct {
+	Dir        string
+	ImportPath string
+	Name       string
+	Root       string
+	GoFiles    []string
+	CgoFiles   []string
+	EmbedFiles []string
+	Imports    []string
+	Module     struct {
+		Dir string
+	}
+}
+
+type compiledModuleArchive struct {
+	compilePath string
+	linkPath    string
+	linkClosure map[string]string
+}
+
+func compileSyntheticTestmainSourcePackages(goenv *env, workDir, moduleDir string, packages []string) (map[string]compiledModuleArchive, string, error) {
+	selected := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if syntheticTestmainSourceCompiledPackages[pkg] {
+			selected = append(selected, pkg)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, "", nil
+	}
+
+	resolveModuleDir, err := prepareSyntheticTestmainModuleDir(workDir)
+	if err != nil {
+		return nil, "", err
+	}
+	exportRoot, err := prepareModuleExportRoot(goenv, resolveModuleDir)
+	if err != nil {
+		return nil, "", err
+	}
+	compiled := make(map[string]compiledModuleArchive, len(selected))
+	metaCache := make(map[string]*modulePackageMetadata)
+	sourceDecisions := make(map[string]bool)
+	sourceCompiledSet := make(map[string]bool, len(selected))
+	for _, pkg := range selected {
+		sourceCompiledSet[pkg] = true
+	}
+	for _, pkg := range selected {
+		if _, _, err := compileSyntheticTestmainSourcePackage(goenv, workDir, resolveModuleDir, exportRoot, sourceCompiledSet, sourceDecisions, metaCache, compiled, pkg); err != nil {
+			return nil, "", err
+		}
+	}
+	exports := make(map[string]compiledModuleArchive, len(compiled))
+	for pkg, archive := range compiled {
+		exports[pkg] = archive
+	}
+	return exports, exportRoot, nil
+}
+
+func prepareSyntheticTestmainModuleDir(workDir string) (string, error) {
+	versions, err := configuredDDTraceGoVersions()
+	if err != nil {
+		return "", err
+	}
+	moduleDir := filepath.Join(workDir, "synthetic_testmain_module")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		return "", fmt.Errorf("prepare synthetic testmain module dir: %w", err)
+	}
+	goModPath := filepath.Join(moduleDir, "go.mod")
+	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(versions)), 0o644); err != nil {
+		return "", fmt.Errorf("write synthetic testmain go.mod: %w", err)
+	}
+	return moduleDir, nil
+}
+
+func prepareModuleExportRoot(goenv *env, moduleDir string) (string, error) {
+	env := append([]string{}, os.Environ()...)
+	gopath := getEnv(env, "GOPATH")
+	if gopath == "" {
+		gopath = filepath.Join(os.TempDir(), "datadog-orchestrion-go-cache")
+	}
+	gopath = abs(gopath)
+	if err := os.MkdirAll(gopath, 0o755); err != nil {
+		return "", fmt.Errorf("prepare module gopath: %w", err)
+	}
+
+	requestKey, err := moduleExportRequestKey(moduleDir, goenv)
+	if err != nil {
+		return "", fmt.Errorf("derive module export request key: %w", err)
+	}
+	exportRoot := filepath.Join(gopath, "cache", "module-exports", requestKey)
+	exportRoot = abs(exportRoot)
+	if err := os.MkdirAll(exportRoot, 0o755); err != nil {
+		return "", fmt.Errorf("prepare module gocache: %w", err)
+	}
+	if err := seedWovenStdlibCache(goenv, exportRoot); err != nil {
+		return "", fmt.Errorf("seed module gocache from woven stdlib cache: %w", err)
+	}
+	return exportRoot, nil
+}
+
+func modulePackageCommandEnv(goenv *env, exportRoot string) ([]string, error) {
+	env := append([]string{}, os.Environ()...)
+	env = setEnv(env, "GO111MODULE", "on")
+	env = setEnv(env, "GOWORK", "off")
+	env = setEnv(env, orchestrionJobserverURLEnvVar, "")
+	env = setEnv(env, orchestrionSkipPinEnvVar, "")
+	if goenv.goroot != "" {
+		env = setEnv(env, "GOROOT", abs(goenv.goroot))
+	}
+
+	goBin := filepath.Join(abs(goenv.sdk), "bin")
+	env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
+
+	gopath := getEnv(env, "GOPATH")
+	if gopath == "" {
+		gopath = filepath.Join(os.TempDir(), "datadog-orchestrion-go-cache")
+	}
+	gopath = abs(gopath)
+	if err := os.MkdirAll(gopath, 0o755); err != nil {
+		return nil, fmt.Errorf("prepare module gopath: %w", err)
+	}
+	env = setEnv(env, "GOPATH", gopath)
+
+	gomodcache := getEnv(env, "GOMODCACHE")
+	if gomodcache == "" {
+		gomodcache = filepath.Join(gopath, "pkg", "mod")
+	}
+	gomodcache = abs(gomodcache)
+	if err := os.MkdirAll(gomodcache, 0o755); err != nil {
+		return nil, fmt.Errorf("prepare module gomodcache: %w", err)
+	}
+	env = setEnv(env, "GOMODCACHE", gomodcache)
+	env = setEnv(env, "GOCACHE", abs(exportRoot))
+	env = setEnv(env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
+
+	if getEnv(env, "GOPROXY") == "" {
+		env = setEnv(env, "GOPROXY", "https://proxy.golang.org,direct")
+	}
+	if getEnv(env, "GOSUMDB") == "" {
+		env = setEnv(env, "GOSUMDB", "sum.golang.org")
+	}
+	if getEnv(env, "GOFLAGS") == "" {
+		env = setEnv(env, "GOFLAGS", "-mod=mod")
+	}
+	if getEnv(env, "HOME") == "" {
+		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
+		if err := os.MkdirAll(homePath, 0o755); err != nil {
+			return nil, fmt.Errorf("prepare module home: %w", err)
+		}
+		env = setEnv(env, "HOME", homePath)
+	}
+	return env, nil
+}
+
+func loadModulePackageMetadata(goenv *env, moduleDir, exportRoot, pkg string) (*modulePackageMetadata, error) {
+	args := goenv.goCmd("list", "-json", pkg)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = "."
+	if moduleDir != "" {
+		cmd.Dir = abs(moduleDir)
+	}
+	env, err := modulePackageCommandEnv(goenv, exportRoot)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = env
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("go list package metadata for %s: %w\n%s", pkg, err, string(output))
+	}
+	var meta modulePackageMetadata
+	if err := json.Unmarshal(output, &meta); err != nil {
+		return nil, fmt.Errorf("parse package metadata for %s: %w", pkg, err)
+	}
+	if meta.Dir == "" || meta.ImportPath == "" || len(meta.GoFiles) == 0 {
+		return nil, fmt.Errorf("incomplete package metadata for %s", pkg)
+	}
+	return &meta, nil
+}
+
+func loadModulePackageMetadataCached(goenv *env, moduleDir, exportRoot string, cache map[string]*modulePackageMetadata, pkg string) (*modulePackageMetadata, error) {
+	if meta := cache[pkg]; meta != nil {
+		return meta, nil
+	}
+	meta, err := loadModulePackageMetadata(goenv, moduleDir, exportRoot, pkg)
+	if err != nil {
+		return nil, err
+	}
+	cache[pkg] = meta
+	return meta, nil
+}
+
+func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg string, rootSet map[string]bool, decisions map[string]bool, metaCache map[string]*modulePackageMetadata, visiting map[string]bool) (bool, error) {
+	if rootSet[pkg] {
+		decisions[pkg] = true
+		return true, nil
+	}
+	if decision, ok := decisions[pkg]; ok {
+		return decision, nil
+	}
+	if visiting[pkg] {
+		return false, nil
+	}
+	meta, err := loadModulePackageMetadataCached(goenv, moduleDir, exportRoot, metaCache, pkg)
+	if err != nil {
+		return false, err
+	}
+	if len(meta.CgoFiles) > 0 {
+		decisions[pkg] = false
+		return false, nil
+	}
+	visiting[pkg] = true
+	defer delete(visiting, pkg)
+	for _, imp := range meta.Imports {
+		imp = strings.TrimSpace(imp)
+		if imp == "" || !strings.Contains(imp, ".") {
+			switch imp {
+			case "flag", "log", "log/slog", "net/http", "os", "os/exec", "testing":
+				decisions[pkg] = true
+				return true, nil
+			}
+			continue
+		}
+		depNeedsCompile, err := packageNeedsSyntheticSourceCompile(goenv, moduleDir, exportRoot, imp, rootSet, decisions, metaCache, visiting)
+		if err != nil {
+			return false, err
+		}
+		if depNeedsCompile {
+			decisions[pkg] = true
+			return true, nil
+		}
+	}
+	decisions[pkg] = false
+	return false, nil
+}
+
+func compileSyntheticTestmainSourcePackage(goenv *env, workDir, moduleDir, exportRoot string, rootSet map[string]bool, sourceDecisions map[string]bool, metaCache map[string]*modulePackageMetadata, compiled map[string]compiledModuleArchive, pkg string) (string, string, error) {
+	if archive, ok := compiled[pkg]; ok {
+		return archive.compilePath, archive.linkPath, nil
+	}
+	meta, err := loadModulePackageMetadataCached(goenv, moduleDir, exportRoot, metaCache, pkg)
+	if err != nil {
+		return "", "", err
+	}
+	resolveModuleDir := moduleDir
+	linkClosure := make(map[string]string)
+	directDepPkgs := make([]string, 0, len(meta.Imports))
+	seenDeps := make(map[string]bool, len(meta.Imports))
+	imports := make(map[string]*archive, len(meta.Imports))
+	for _, imp := range meta.Imports {
+		imp = strings.TrimSpace(imp)
+		if imp == "" || imp == "C" {
+			continue
+		}
+		if strings.Contains(imp, ".") {
+			if !seenDeps[imp] {
+				seenDeps[imp] = true
+				sourceCompileDep, err := packageNeedsSyntheticSourceCompile(goenv, moduleDir, exportRoot, imp, rootSet, sourceDecisions, metaCache, map[string]bool{})
+				if err != nil {
+					return "", "", fmt.Errorf("inspect source-compile dependency %s for %s: %w", imp, pkg, err)
+				}
+				if sourceCompileDep {
+					compilePath, linkPath, err := compileSyntheticTestmainSourcePackage(goenv, workDir, moduleDir, exportRoot, rootSet, sourceDecisions, metaCache, compiled, imp)
+					if err != nil {
+						return "", "", fmt.Errorf("compile source dependency %s for %s: %w", imp, pkg, err)
+					}
+					imports[imp] = &archive{
+						importPath:  imp,
+						packagePath: imp,
+						file:        compilePath,
+					}
+					linkClosure[imp] = linkPath
+					if depArchive, ok := compiled[imp]; ok {
+						for depPkg, depPath := range depArchive.linkClosure {
+							linkClosure[depPkg] = depPath
+						}
+					}
+				} else {
+					directDepPkgs = append(directDepPkgs, imp)
+				}
+			}
+			continue
+		}
+		imports[imp] = nil
+	}
+
+	depExports, err := resolveModuleExportsForPackagesWithRoot(goenv, directDepPkgs, "", resolveModuleDir, exportRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve direct exports for %s: %w", pkg, err)
+	}
+	for depPkg, depPath := range depExports {
+		if strings.TrimSpace(depPath) != "" {
+			linkClosure[depPkg] = depPath
+		}
+	}
+	for _, imp := range directDepPkgs {
+		exportPath := strings.TrimSpace(depExports[imp])
+		if exportPath == "" {
+			return "", "", fmt.Errorf("missing direct export for %s dependency %s", pkg, imp)
+		}
+		imports[imp] = &archive{
+			importPath:  imp,
+			packagePath: imp,
+			file:        exportPath,
+		}
+	}
+
+	packageWorkDir := filepath.Join(workDir, "synthetic_testmain_source_"+sanitizePathForIdentifier(meta.ImportPath))
+	if err := os.MkdirAll(packageWorkDir, 0o755); err != nil {
+		return "", "", fmt.Errorf("prepare synthetic package work dir for %s: %w", pkg, err)
+	}
+	importcfgPath, err := buildImportcfgFileForCompile(imports, goenv.installSuffix, packageWorkDir)
+	if err != nil {
+		return "", "", fmt.Errorf("build importcfg for %s: %w", pkg, err)
+	}
+	if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv); err != nil {
+		return "", "", fmt.Errorf("rewrite stdlib importcfg for %s: %w", pkg, err)
+	}
+
+	srcPaths := make([]string, 0, len(meta.GoFiles))
+	for _, name := range meta.GoFiles {
+		srcPaths = append(srcPaths, filepath.Join(meta.Dir, name))
+	}
+	filteredSrcs, err := filterAndSplitFiles(srcPaths)
+	if err != nil {
+		return "", "", fmt.Errorf("parse Go files for %s: %w", pkg, err)
+	}
+	embedSrcPaths := make([]string, 0, len(meta.EmbedFiles))
+	for _, embedFile := range meta.EmbedFiles {
+		embedSrcPaths = append(embedSrcPaths, filepath.Join(meta.Dir, filepath.FromSlash(embedFile)))
+	}
+	embedcfgPath, err := buildEmbedcfgFile(filteredSrcs.goSrcs, embedSrcPaths, []string{meta.Dir}, packageWorkDir)
+	if err != nil {
+		return "", "", fmt.Errorf("build embedcfg for %s: %w", pkg, err)
+	}
+
+	archiveDir := filepath.Join(exportRoot, "manual")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return "", "", fmt.Errorf("prepare synthetic archive dir for %s: %w", pkg, err)
+	}
+	stem := fmt.Sprintf("%x", sha256.Sum256([]byte(meta.ImportPath)))[:16]
+	outLinkobjPath := filepath.Join(archiveDir, stem+".a")
+	outInterfacePath := filepath.Join(archiveDir, stem+".iface.a")
+	trimPath, err := createTrimPath()
+	if err != nil {
+		return "", "", fmt.Errorf("create trimpath for %s: %w", pkg, err)
+	}
+	gcFlags := []string{"-trimpath=" + trimPath}
+	goSrcs := make([]string, len(filteredSrcs.goSrcs))
+	for i, src := range filteredSrcs.goSrcs {
+		goSrcs[i] = src.filename
+	}
+	if err := compileGo(goenv, goSrcs, nil, meta.ImportPath, meta.ImportPath, importcfgPath, embedcfgPath, "", "", gcFlags, "", outLinkobjPath, outInterfacePath, "", ""); err != nil {
+		return "", "", fmt.Errorf("compile synthetic helper %s: %w", pkg, err)
+	}
+
+	compileExports := map[string]string{meta.ImportPath: outInterfacePath}
+	if err := sanitizeModuleExportArchives(compileExports); err != nil {
+		return "", "", fmt.Errorf("sanitize synthetic helper compile archive %s: %w", pkg, err)
+	}
+	result := compiledModuleArchive{
+		compilePath: compileExports[meta.ImportPath],
+		linkPath:    outLinkobjPath,
+		linkClosure: linkClosure,
+	}
+	compiled[pkg] = result
+	return result.compilePath, result.linkPath, nil
 }
 
 func shouldSkipOrchestrionForImportPath(importPath string) bool {
