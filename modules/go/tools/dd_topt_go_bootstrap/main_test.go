@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -57,6 +58,29 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	}
 	if !strings.Contains(got, `use_repo(orchestrion, "rules_go_orchestrion_tool")`) {
 		t.Fatalf("expected rules_go orchestrion repo wiring in managed block:\n%s", got)
+	}
+}
+
+func TestManagedModuleBlockIncludesPerModuleVersions(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.5.0",
+		ddTraceGoVersions: map[string]string{
+			"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
+			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+			"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+		},
+		rulesGoRemote: "https://github.com/example/repo.git",
+		rulesGoCommit: "deadbeef",
+	}
+	got := managedModuleBlock(cfg)
+	if !strings.Contains(got, `dd_trace_go_versions = {`) {
+		t.Fatalf("expected per-module dd-trace-go versions in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `"github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4"`) {
+		t.Fatalf("expected root tracer version in managed block:\n%s", got)
+	}
+	if strings.Contains(got, `dd_trace_go_version =`) {
+		t.Fatalf("expected shared dd_trace_go_version to be omitted in per-module mode:\n%s", got)
 	}
 }
 
@@ -264,6 +288,351 @@ import (
 	if !strings.Contains(text, `_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration`) {
 		t.Fatalf("expected slog integration import after legacy cleanup:\n%s", text)
 	}
+}
+
+func TestResolveDDTraceGoVersionQueryAcceptsCanonicalTag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -m -json github.com/DataDog/dd-trace-go/v2@v2.6.0"*)
+    printf '{"Version":"v2.6.0"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0"*)
+    printf '{"Version":"v2.6.0"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0"*)
+    printf '{"Version":"v2.6.0"}\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion"*)
+    printf 'github.com/DataDog/dd-trace-go/v2/orchestrion\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/net/http/v2\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/log/slog/v2\n'
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+
+	got, err := resolveDDTraceGoVersionQuery("v2.6.0", goPath, []string{"PATH=" + os.Getenv("PATH")})
+	if err != nil {
+		t.Fatalf("resolveDDTraceGoVersionQuery error: %v", err)
+	}
+	for _, modulePath := range ddTraceGoModules {
+		if got[modulePath] != "v2.6.0" {
+			t.Fatalf("resolveDDTraceGoVersionQuery[%q]=%q, want %q", modulePath, got[modulePath], "v2.6.0")
+		}
+	}
+}
+
+func TestResolveDDTraceGoVersionQueryNormalizesCommitSHA(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -m -json github.com/DataDog/dd-trace-go/v2@abc123def456"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2@abc123def456"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2@abc123def456"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion"*)
+    printf 'github.com/DataDog/dd-trace-go/v2/orchestrion\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/net/http/v2\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/log/slog/v2\n'
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+
+	got, err := resolveDDTraceGoVersionQuery("abc123def456", goPath, []string{"PATH=" + os.Getenv("PATH")})
+	if err != nil {
+		t.Fatalf("resolveDDTraceGoVersionQuery error: %v", err)
+	}
+	for _, modulePath := range ddTraceGoModules {
+		if got[modulePath] != "v2.7.0-rc.4" {
+			t.Fatalf("resolveDDTraceGoVersionQuery[%q]=%q, want %q", modulePath, got[modulePath], "v2.7.0-rc.4")
+		}
+	}
+}
+
+func TestResolveDDTraceGoVersionQuerySupportsDivergentModules(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -m -json github.com/DataDog/dd-trace-go/v2@main"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2@main"*)
+    printf '{"Version":"v2.6.0"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2@main"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion"*)
+    printf 'github.com/DataDog/dd-trace-go/v2/orchestrion\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/net/http/v2\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/log/slog/v2\n'
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+
+	got, err := resolveDDTraceGoVersionQuery("main", goPath, []string{"PATH=" + os.Getenv("PATH")})
+	if err != nil {
+		t.Fatalf("resolveDDTraceGoVersionQuery error: %v", err)
+	}
+	if got["github.com/DataDog/dd-trace-go/v2"] != "v2.7.0-rc.4" {
+		t.Fatalf("unexpected root tracer version: %#v", got)
+	}
+	if got["github.com/DataDog/dd-trace-go/contrib/net/http/v2"] != "v2.6.0" {
+		t.Fatalf("unexpected net/http tracer version: %#v", got)
+	}
+}
+
+func TestResolveDDTraceGoVersionQueryRejectsPackagePreflightFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -m -json github.com/DataDog/dd-trace-go/v2@deadbeef"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2@deadbeef"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2@deadbeef"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion"*)
+    printf 'github.com/DataDog/dd-trace-go/v2/orchestrion\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2"*)
+    echo 'missing package' >&2
+    exit 1
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/log/slog/v2\n'
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+
+	_, err := resolveDDTraceGoVersionQuery("deadbeef", goPath, []string{"PATH=" + os.Getenv("PATH")})
+	if err == nil {
+		t.Fatal("expected package preflight failure")
+	}
+	if !strings.Contains(err.Error(), `package preflight failed`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSyntheticDDTraceGoVersionCheckModUsesConfiguredVersions(t *testing.T) {
+	versions := map[string]string{
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.6.0",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0-rc.4",
+	}
+	got := syntheticDDTraceGoVersionCheckMod(versions)
+	for modulePath, version := range versions {
+		want := modulePath + " " + version
+		if !strings.Contains(got, want) {
+			t.Fatalf("syntheticDDTraceGoVersionCheckMod missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestNormalizedGoEnvForcesGoWorkOff(t *testing.T) {
+	got := normalizedGoEnv([]string{"GO111MODULE=off", "GOWORK=/tmp/example", "PATH=" + os.Getenv("PATH")})
+	if envValue(got, "GO111MODULE") != "on" {
+		t.Fatalf("GO111MODULE=%q, want %q", envValue(got, "GO111MODULE"), "on")
+	}
+	if envValue(got, "GOWORK") != "off" {
+		t.Fatalf("GOWORK=%q, want %q", envValue(got, "GOWORK"), "off")
+	}
+}
+
+func TestNormalizeDDTraceGoVersionMutatesConfigBeforePersistence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -m -json github.com/DataDog/dd-trace-go/v2@feature-branch"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2@feature-branch"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2@feature-branch"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion"*)
+    printf 'github.com/DataDog/dd-trace-go/v2/orchestrion\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/net/http/v2\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/log/slog/v2\n'
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+	t.Setenv("PATH", filepath.Dir(goPath))
+
+	cfg := config{ddTraceGoVersion: "feature-branch"}
+	if err := normalizeDDTraceGoVersion(&cfg); err != nil {
+		t.Fatalf("normalizeDDTraceGoVersion error: %v", err)
+	}
+	if cfg.ddTraceGoVersion != "v2.7.0-rc.4" {
+		t.Fatalf("cfg.ddTraceGoVersion=%q, want %q", cfg.ddTraceGoVersion, "v2.7.0-rc.4")
+	}
+	if !strings.Contains(managedModuleBlock(cfg), `dd_trace_go_version = "v2.7.0-rc.4"`) {
+		t.Fatalf("expected managed module block to use canonical version:\n%s", managedModuleBlock(cfg))
+	}
+}
+
+func TestNormalizeDDTraceGoVersionUsesPerModuleConfigWhenVersionsDiverge(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -m -json github.com/DataDog/dd-trace-go/v2@feature-branch"*)
+    printf '{"Version":"v2.7.0-rc.4"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2@feature-branch"*)
+    printf '{"Version":"v2.8.0-dev.0.20260316165907-0cdd3b7576b7"}\n'
+    ;;
+  *"list -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2@feature-branch"*)
+    printf '{"Version":"v2.8.0-dev.0.20260316165907-0cdd3b7576b7"}\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion"*)
+    printf 'github.com/DataDog/dd-trace-go/v2/orchestrion\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/net/http/v2\n'
+    ;;
+  *"list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2"*)
+    printf 'github.com/DataDog/dd-trace-go/contrib/log/slog/v2\n'
+    ;;
+  *)
+    echo "unexpected args: $*" >&2
+    exit 1
+    ;;
+esac
+`)
+	t.Setenv("PATH", filepath.Dir(goPath))
+
+	cfg := config{ddTraceGoVersion: "feature-branch"}
+	if err := normalizeDDTraceGoVersion(&cfg); err != nil {
+		t.Fatalf("normalizeDDTraceGoVersion error: %v", err)
+	}
+	if cfg.ddTraceGoVersion != "" {
+		t.Fatalf("cfg.ddTraceGoVersion=%q, want empty shared version", cfg.ddTraceGoVersion)
+	}
+	if cfg.ddTraceGoVersions["github.com/DataDog/dd-trace-go/v2"] != "v2.7.0-rc.4" {
+		t.Fatalf("unexpected per-module root version: %#v", cfg.ddTraceGoVersions)
+	}
+	if !strings.Contains(managedModuleBlock(cfg), `dd_trace_go_versions = {`) {
+		t.Fatalf("expected managed module block to use per-module config:\n%s", managedModuleBlock(cfg))
+	}
+}
+
+func TestEnsureBootstrapCanManageTracerConfigRejectsManualTracerConfig(t *testing.T) {
+	content := `module(name = "example")
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.5.0",
+    dd_trace_go_versions = {
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+    },
+)
+`
+	if err := ensureBootstrapCanManageTracerConfig(content); err == nil {
+		t.Fatal("expected external manual tracer config to fail")
+	}
+}
+
+func TestHydrateManagedTracerConfigPreservesPerModuleConfig(t *testing.T) {
+	content := `module(name = "example")
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "deadbeef",
+    strip_prefix = "third_party/rules_go_orchestrion",
+)
+
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.5.0",
+    dd_trace_go_versions = {
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+    },
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+# END Datadog Go Orchestrion bootstrap
+`
+	var cfg config
+	if err := hydrateManagedTracerConfig(&cfg, content); err != nil {
+		t.Fatalf("hydrateManagedTracerConfig error: %v", err)
+	}
+	if cfg.ddTraceGoVersion != "" {
+		t.Fatalf("expected shared tracer version to be empty, got %q", cfg.ddTraceGoVersion)
+	}
+	if cfg.ddTraceGoVersions["github.com/DataDog/dd-trace-go/v2"] != "v2.7.0-rc.4" {
+		t.Fatalf("unexpected managed per-module versions: %#v", cfg.ddTraceGoVersions)
+	}
+}
+
+func writeFakeGoTool(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "go")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake go tool: %v", err)
+	}
+	return path
 }
 
 func TestValidateGuidedPrerequisites(t *testing.T) {

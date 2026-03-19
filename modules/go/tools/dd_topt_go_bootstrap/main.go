@@ -49,6 +49,12 @@ var ddTraceGoModules = []string{
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
+var ddTraceGoPreflightPackages = []string{
+	"github.com/DataDog/dd-trace-go/v2/orchestrion",
+	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+}
+
 var ddTraceGoWarmPackages = []string{
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
 	"github.com/DataDog/dd-trace-go/v2/profiler",
@@ -58,19 +64,21 @@ var ddTraceGoWarmPackages = []string{
 }
 
 type config struct {
-	workspaceDir       string
-	moduleFile         string
-	goModuleDir        string
-	force              bool
-	guided             bool
-	service            string
-	runtimeVersion     string
-	syncRepoName       string
-	uploaderTargetName string
-	orchestrionVersion string
-	ddTraceGoVersion   string
-	rulesGoRemote      string
-	rulesGoCommit      string
+	workspaceDir        string
+	moduleFile          string
+	goModuleDir         string
+	force               bool
+	guided              bool
+	service             string
+	runtimeVersion      string
+	syncRepoName        string
+	uploaderTargetName  string
+	orchestrionVersion  string
+	ddTraceGoVersion    string
+	ddTraceGoVersions   map[string]string
+	ddTraceGoVersionSet bool
+	rulesGoRemote       string
+	rulesGoCommit       string
 }
 
 func main() {
@@ -102,6 +110,11 @@ func parseFlags() config {
 	flag.StringVar(&cfg.rulesGoRemote, "rules-go-remote", defaultRulesGoRemote, "rules_go fork remote used for Orchestrion support")
 	flag.StringVar(&cfg.rulesGoCommit, "rules-go-commit", defaultRulesGoCommit, "rules_go fork commit used for Orchestrion support")
 	flag.Parse()
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "dd-trace-go-version" {
+			cfg.ddTraceGoVersionSet = true
+		}
+	})
 	return cfg
 }
 
@@ -143,6 +156,30 @@ func run(cfg config) error {
 		return err
 	}
 
+	moduleContent, err := os.ReadFile(cfg.moduleFile)
+	if err != nil {
+		return fmt.Errorf("read MODULE.bazel: %w", err)
+	}
+
+	originalDDTraceGoVersionQuery := cfg.ddTraceGoVersion
+	if err := ensureBootstrapCanManageTracerConfig(string(moduleContent)); err != nil {
+		return err
+	}
+	if !cfg.ddTraceGoVersionSet {
+		if err := hydrateManagedTracerConfig(&cfg, string(moduleContent)); err != nil {
+			return err
+		}
+	}
+
+	if cfg.ddTraceGoVersionSet {
+		if err := normalizeDDTraceGoVersion(&cfg); err != nil {
+			return err
+		}
+	} else if !cfg.hasTracerConfig() {
+		cfg.ddTraceGoVersion = defaultDDTraceGoVersion
+		cfg.ddTraceGoVersions = nil
+	}
+
 	if err := patchModuleFile(cfg); err != nil {
 		return err
 	}
@@ -164,13 +201,19 @@ func run(cfg config) error {
 		return err
 	}
 	if err := verifyResolvedDDTraceGoVersion(cfg); err != nil {
-		return err
+		return fmt.Errorf("%w\nbootstrap may have already updated these files: MODULE.bazel, go.mod, go.sum, orchestrion.tool.go%s", err, maybeChangedStarterYML(cfg.goModuleDir))
 	}
 	if err := writeStarterOrchestrionYML(cfg); err != nil {
 		return err
 	}
 
 	fmt.Printf("Updated %s and pinned Orchestrion in %s\n", cfg.moduleFile, cfg.goModuleDir)
+	switch {
+	case cfg.ddTraceGoVersionSet && cfg.usesPerModuleTracerConfig():
+		fmt.Printf("Resolved dd-trace-go query %q to per-module versions and persisted the exact resolved versions.\n", originalDDTraceGoVersionQuery)
+	case cfg.ddTraceGoVersionSet && originalDDTraceGoVersionQuery != cfg.ddTraceGoVersion:
+		fmt.Printf("Normalized dd-trace-go query %q to canonical version %q and persisted the canonical version.\n", originalDDTraceGoVersionQuery, cfg.ddTraceGoVersion)
+	}
 	return nil
 }
 
@@ -258,11 +301,24 @@ git_override(
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "%s",
-    dd_trace_go_version = "%s",
+%s
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, defaultRulesGoStripPrefix, cfg.orchestrionVersion, cfg.ddTraceGoVersion, managedBlockEnd)
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, defaultRulesGoStripPrefix, cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd)
+}
+
+func managedTracerConfigBlock(cfg config) string {
+	if cfg.usesPerModuleTracerConfig() {
+		var buf strings.Builder
+		buf.WriteString("    dd_trace_go_versions = {\n")
+		for _, modulePath := range ddTraceGoModules {
+			buf.WriteString(fmt.Sprintf("        %q: %q,\n", modulePath, cfg.ddTraceGoVersions[modulePath]))
+		}
+		buf.WriteString("    },")
+		return buf.String()
+	}
+	return fmt.Sprintf("    dd_trace_go_version = %q,", cfg.ddTraceGoVersion)
 }
 
 func managedGuidedModuleBlock(cfg config) string {
@@ -663,6 +719,7 @@ func splitLinesPreserveNewline(content string) []string {
 }
 
 type callBlock struct {
+	assign   string
 	function string
 	text     string
 	start    int
@@ -671,7 +728,7 @@ type callBlock struct {
 
 func topLevelCallBlocks(content string) []callBlock {
 	lines := splitLinesPreserveNewline(content)
-	startPattern := regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\(`)
+	startPattern := regexp.MustCompile(`^\s*(?:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\(`)
 	offset := 0
 	blocks := []callBlock{}
 
@@ -694,14 +751,174 @@ func topLevelCallBlocks(content string) []callBlock {
 			offset += len(line)
 		}
 		blocks = append(blocks, callBlock{
+			assign:   match[1],
 			function: match[1],
 			text:     content[start:offset],
 			start:    start,
 			end:      offset,
 		})
+		if match[2] != "" {
+			blocks[len(blocks)-1].function = match[2]
+		}
+		if match[1] == "" {
+			blocks[len(blocks)-1].assign = ""
+		}
 		i = j
 	}
 	return blocks
+}
+
+type tracerConfig struct {
+	shared    string
+	perModule map[string]string
+}
+
+func (c tracerConfig) isSet() bool {
+	return strings.TrimSpace(c.shared) != "" || len(c.perModule) > 0
+}
+
+func (cfg config) hasTracerConfig() bool {
+	return strings.TrimSpace(cfg.ddTraceGoVersion) != "" || len(cfg.ddTraceGoVersions) > 0
+}
+
+func (cfg config) usesPerModuleTracerConfig() bool {
+	return len(cfg.ddTraceGoVersions) > 0
+}
+
+func (cfg config) effectiveDDTraceGoVersions() map[string]string {
+	if cfg.usesPerModuleTracerConfig() {
+		return copyDDTraceGoVersions(cfg.ddTraceGoVersions)
+	}
+	versions := make(map[string]string, len(ddTraceGoModules))
+	for _, modulePath := range ddTraceGoModules {
+		versions[modulePath] = cfg.ddTraceGoVersion
+	}
+	return versions
+}
+
+func copyDDTraceGoVersions(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func sharedDDTraceGoVersion(versions map[string]string) (string, bool) {
+	if len(versions) == 0 {
+		return "", false
+	}
+	shared := strings.TrimSpace(versions[ddTraceGoModules[0]])
+	if shared == "" {
+		return "", false
+	}
+	for _, modulePath := range ddTraceGoModules[1:] {
+		if strings.TrimSpace(versions[modulePath]) != shared {
+			return "", false
+		}
+	}
+	return shared, true
+}
+
+func managedTracerConfig(content string) (tracerConfig, error) {
+	start := strings.Index(content, managedBlockStart)
+	end := strings.Index(content, managedBlockEnd)
+	if start < 0 || end < 0 || end <= start {
+		return tracerConfig{}, nil
+	}
+	return parseTracerConfigFromContent(content[start:end])
+}
+
+func ensureBootstrapCanManageTracerConfig(content string) error {
+	stripped, _ := stripManagedSectionIfPresent(content, managedBlockStart, managedBlockEnd)
+	configs, err := parseTracerConfigsFromContent(stripped)
+	if err != nil {
+		return err
+	}
+	if len(configs) == 0 {
+		return nil
+	}
+	return errors.New("manual tracer configuration is already active outside the Datadog-managed block; remove or migrate that orchestrion.from_source(...) tracer config before rerunning bootstrap")
+}
+
+func hydrateManagedTracerConfig(cfg *config, content string) error {
+	managed, err := managedTracerConfig(content)
+	if err != nil {
+		return err
+	}
+	if !managed.isSet() {
+		return nil
+	}
+	cfg.ddTraceGoVersion = managed.shared
+	cfg.ddTraceGoVersions = copyDDTraceGoVersions(managed.perModule)
+	return nil
+}
+
+func parseTracerConfigsFromContent(content string) ([]tracerConfig, error) {
+	aliases := map[string]struct{}{}
+	for _, block := range topLevelCallBlocks(content) {
+		if block.function != "use_extension" || block.assign == "" {
+			continue
+		}
+		if strings.Contains(block.text, `"@rules_go//go:extensions.bzl"`) && strings.Contains(block.text, `"orchestrion"`) {
+			aliases[block.assign] = struct{}{}
+		}
+	}
+	configs := []tracerConfig{}
+	for _, block := range topLevelCallBlocks(content) {
+		parts := strings.Split(block.function, ".")
+		if len(parts) != 2 || parts[1] != "from_source" {
+			continue
+		}
+		if _, ok := aliases[parts[0]]; !ok {
+			continue
+		}
+		cfg, err := parseTracerConfigFromCall(block.text)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.isSet() {
+			configs = append(configs, cfg)
+		}
+	}
+	return configs, nil
+}
+
+func parseTracerConfigFromContent(content string) (tracerConfig, error) {
+	configs, err := parseTracerConfigsFromContent(content)
+	if err != nil {
+		return tracerConfig{}, err
+	}
+	if len(configs) == 0 {
+		return tracerConfig{}, nil
+	}
+	if len(configs) > 1 {
+		return tracerConfig{}, errors.New("multiple active orchestrion.from_source(...) tracer configs found")
+	}
+	return configs[0], nil
+}
+
+func parseTracerConfigFromCall(call string) (tracerConfig, error) {
+	sharedMatch := regexp.MustCompile(`(?m)^\s*dd_trace_go_version\s*=\s*"([^"]+)"`).FindStringSubmatch(call)
+	perModuleMatch := regexp.MustCompile(`(?s)dd_trace_go_versions\s*=\s*\{(.*?)\}`).FindStringSubmatch(call)
+	if len(sharedMatch) > 1 && len(perModuleMatch) > 1 {
+		return tracerConfig{}, errors.New("dd_trace_go_version and dd_trace_go_versions cannot both be set in the same orchestrion.from_source(...) call")
+	}
+	if len(sharedMatch) > 1 {
+		return tracerConfig{shared: sharedMatch[1]}, nil
+	}
+	if len(perModuleMatch) > 1 {
+		perModule := map[string]string{}
+		entryPattern := regexp.MustCompile(`"([^"]+)"\s*:\s*"([^"]+)"`)
+		for _, match := range entryPattern.FindAllStringSubmatch(perModuleMatch[1], -1) {
+			perModule[match[1]] = match[2]
+		}
+		return tracerConfig{perModule: perModule}, nil
+	}
+	return tracerConfig{}, nil
 }
 
 func hasNamedTarget(content, targetName string) bool {
@@ -762,11 +979,12 @@ func runOrchestrionPin(cfg config) error {
 
 func syncDDTraceGoVersion(cfg config) error {
 	commands := make([][]string, 0, len(ddTraceGoModules)+2)
+	versions := cfg.effectiveDDTraceGoVersions()
 	for _, modulePath := range ddTraceGoModules {
-		commands = append(commands, []string{"mod", "edit", "-require=" + modulePath + "@" + cfg.ddTraceGoVersion})
+		commands = append(commands, []string{"mod", "edit", "-require=" + modulePath + "@" + versions[modulePath]})
 	}
 	commands = append(commands,
-		[]string{"get", "github.com/DataDog/dd-trace-go/v2/orchestrion@" + cfg.ddTraceGoVersion},
+		[]string{"get", "github.com/DataDog/dd-trace-go/v2/orchestrion@" + versions["github.com/DataDog/dd-trace-go/v2"]},
 		[]string{"mod", "tidy"},
 	)
 
@@ -780,6 +998,21 @@ func syncDDTraceGoVersion(cfg config) error {
 			return fmt.Errorf("run `go %s` in %s: %w", strings.Join(args, " "), cfg.goModuleDir, err)
 		}
 	}
+	return nil
+}
+
+func normalizeDDTraceGoVersion(cfg *config) error {
+	resolvedVersions, err := resolveDDTraceGoVersionQuery(cfg.ddTraceGoVersion, "go", orchestrionBootstrapEnv())
+	if err != nil {
+		return err
+	}
+	if shared, ok := sharedDDTraceGoVersion(resolvedVersions); ok {
+		cfg.ddTraceGoVersion = shared
+		cfg.ddTraceGoVersions = nil
+		return nil
+	}
+	cfg.ddTraceGoVersion = ""
+	cfg.ddTraceGoVersions = copyDDTraceGoVersions(resolvedVersions)
 	return nil
 }
 
@@ -855,8 +1088,9 @@ func ensureCIVisibilityOrchestrionImport(cfg config) error {
 
 func warmOrchestrionModuleCache(cfg config) error {
 	commands := make([][]string, 0, len(ddTraceGoModules)+len(ddTraceGoWarmPackages))
+	versions := cfg.effectiveDDTraceGoVersions()
 	for _, modulePath := range ddTraceGoModules {
-		commands = append(commands, []string{"mod", "download", modulePath + "@" + cfg.ddTraceGoVersion})
+		commands = append(commands, []string{"mod", "download", modulePath + "@" + versions[modulePath]})
 	}
 	for _, packagePath := range ddTraceGoWarmPackages {
 		commands = append(commands, []string{"list", "-mod=mod", packagePath})
@@ -885,22 +1119,78 @@ type goListModule struct {
 }
 
 func verifyResolvedDDTraceGoVersion(cfg config) error {
+	expected := cfg.effectiveDDTraceGoVersions()
 	for _, modulePath := range ddTraceGoModules {
 		resolved, err := resolvedModuleVersion(cfg.goModuleDir, orchestrionBootstrapEnv(), modulePath)
 		if err != nil {
 			return err
 		}
-		if resolved != cfg.ddTraceGoVersion {
-			return fmt.Errorf("resolved dd-trace-go version mismatch in %s for %s: configured %s, resolved %s", cfg.goModuleDir, modulePath, cfg.ddTraceGoVersion, resolved)
+		if resolved != expected[modulePath] {
+			return fmt.Errorf("resolved dd-trace-go version mismatch in %s for %s: configured %s, resolved %s", cfg.goModuleDir, modulePath, expected[modulePath], resolved)
 		}
 	}
 	return nil
 }
 
+func resolveDDTraceGoVersionQuery(query, goExe string, env []string) (map[string]string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("dd-trace-go version query cannot be empty")
+	}
+
+	neutralModuleDir, err := os.MkdirTemp("", "dd-trace-go-version-check-")
+	if err != nil {
+		return nil, fmt.Errorf("create temporary module for dd-trace-go version resolution: %w", err)
+	}
+	defer os.RemoveAll(neutralModuleDir)
+
+	if err := os.WriteFile(filepath.Join(neutralModuleDir, "go.mod"), []byte("module ddtraceversioncheck\n\ngo 1.21\n"), 0o644); err != nil {
+		return nil, fmt.Errorf("write temporary go.mod for dd-trace-go version resolution: %w", err)
+	}
+
+	resolvedVersions := make(map[string]string, len(ddTraceGoModules))
+	for _, modulePath := range ddTraceGoModules {
+		resolvedVersion, err := resolveModuleVersionFromQuery(goExe, neutralModuleDir, env, modulePath, query)
+		if err != nil {
+			return nil, err
+		}
+		resolvedVersions[modulePath] = resolvedVersion
+	}
+
+	if err := os.WriteFile(filepath.Join(neutralModuleDir, "go.mod"), []byte(syntheticDDTraceGoVersionCheckMod(resolvedVersions)), 0o644); err != nil {
+		return nil, fmt.Errorf("write temporary go.mod for dd-trace-go package preflight: %w", err)
+	}
+	for _, packagePath := range ddTraceGoPreflightPackages {
+		if err := verifyPackageAvailable(goExe, neutralModuleDir, env, packagePath); err != nil {
+			return nil, fmt.Errorf("dd-trace-go query %q package preflight failed for %s: %w", query, packagePath, err)
+		}
+	}
+
+	return resolvedVersions, nil
+}
+
+func resolveModuleVersionFromQuery(goExe, moduleDir string, env []string, modulePath, query string) (string, error) {
+	cmd := exec.Command(goExe, "list", "-m", "-json", modulePath+"@"+query)
+	cmd.Dir = moduleDir
+	cmd.Env = normalizedGoEnv(env)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve dd-trace-go query %q for %s: %w: %s", query, modulePath, err, strings.TrimSpace(string(output)))
+	}
+	var module goListModule
+	if err := json.Unmarshal(output, &module); err != nil {
+		return "", fmt.Errorf("parse resolved dd-trace-go query %q for %s: %w", query, modulePath, err)
+	}
+	if strings.TrimSpace(module.Version) == "" {
+		return "", fmt.Errorf("resolve dd-trace-go query %q for %s: empty resolved version", query, modulePath)
+	}
+	return strings.TrimSpace(module.Version), nil
+}
+
 func resolvedModuleVersion(moduleDir string, env []string, modulePath string) (string, error) {
 	cmd := exec.Command("go", "list", "-mod=mod", "-m", "-json", modulePath)
 	cmd.Dir = moduleDir
-	cmd.Env = env
+	cmd.Env = normalizedGoEnv(env)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve %s version in %s: %w", modulePath, moduleDir, err)
@@ -921,6 +1211,71 @@ func resolvedModuleVersion(moduleDir string, env []string, modulePath string) (s
 	return module.Version, nil
 }
 
+func verifyPackageAvailable(goExe, moduleDir string, env []string, packagePath string) error {
+	cmd := exec.Command(goExe, "list", "-mod=mod", packagePath)
+	cmd.Dir = moduleDir
+	cmd.Env = normalizedGoEnv(env)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resolve %s in %s: %w: %s", packagePath, moduleDir, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func syntheticDDTraceGoVersionCheckMod(versions map[string]string) string {
+	var buf strings.Builder
+	buf.WriteString("module ddtraceversioncheck\n\n")
+	buf.WriteString("go 1.21\n\n")
+	buf.WriteString("require (\n")
+	for _, modulePath := range ddTraceGoModules {
+		buf.WriteString("\t")
+		buf.WriteString(modulePath)
+		buf.WriteString(" ")
+		buf.WriteString(versions[modulePath])
+		buf.WriteString("\n")
+	}
+	buf.WriteString(")\n")
+	return buf.String()
+}
+
+func normalizedGoEnv(env []string) []string {
+	normalized := append([]string{}, env...)
+	normalized = setEnvValue(normalized, "GO111MODULE", "on")
+	normalized = setEnvValue(normalized, "GOWORK", "off")
+	if strings.TrimSpace(envValue(normalized, "GOPROXY")) == "" {
+		normalized = setEnvValue(normalized, "GOPROXY", "https://proxy.golang.org,direct")
+	}
+	if strings.TrimSpace(envValue(normalized, "GOSUMDB")) == "" {
+		normalized = setEnvValue(normalized, "GOSUMDB", "sum.golang.org")
+	}
+	return normalized
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	replaced := false
+	for idx, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[idx] = prefix + value
+			replaced = true
+		}
+	}
+	if !replaced {
+		env = append(env, prefix+value)
+	}
+	return env
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
+}
+
 func orchestrionBootstrapEnv() []string {
 	env := append([]string{}, os.Environ()...)
 	cacheRoot := filepath.Join(os.TempDir(), sharedOrchestrionCacheDirName)
@@ -929,13 +1284,14 @@ func orchestrionBootstrapEnv() []string {
 
 	env = append(env,
 		"GO111MODULE=on",
+		"GOWORK=off",
 		"GOPATH="+cacheRoot,
 		"GOMODCACHE="+goModCache,
 		"GOCACHE="+goBuildCache,
 		"GOPROXY=https://proxy.golang.org,direct",
 		"GOSUMDB=sum.golang.org",
 	)
-	return env
+	return normalizedGoEnv(env)
 }
 
 func writeStarterOrchestrionYML(cfg config) error {
@@ -949,4 +1305,11 @@ func writeStarterOrchestrionYML(cfg config) error {
 		return fmt.Errorf("write orchestrion.yml: %w", err)
 	}
 	return nil
+}
+
+func maybeChangedStarterYML(goModuleDir string) string {
+	if _, err := os.Stat(filepath.Join(goModuleDir, "orchestrion.yml")); err == nil {
+		return ", orchestrion.yml"
+	}
+	return ""
 }

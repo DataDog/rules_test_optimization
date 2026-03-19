@@ -272,7 +272,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 	const orchestrionToolGo = "orchestrion.tool.go"
 
 	var filesToCleanup []string
-	configuredVersion, err := configuredDDTraceGoVersion()
+	configuredVersions, err := configuredDDTraceGoVersions()
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 		}
 
 		if !copiedGoMod {
-			content := []byte(syntheticOrchestrionGoMod(configuredVersion))
+			content := []byte(syntheticOrchestrionGoMod(configuredVersions))
 			if err := os.WriteFile(goModFile, content, 0644); err != nil {
 				return nil, fmt.Errorf("creating temporary go.mod: %w", err)
 			}

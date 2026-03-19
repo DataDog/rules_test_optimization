@@ -162,16 +162,23 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --go-module-dir path/to/go-module
 ```
 
+`--dd-trace-go-version` accepts a normal tag, a pseudo-version, a branch, or a
+commit SHA. Bootstrap resolves that input to exact Go module versions before it
+writes anything back to the workspace. If you rerun bootstrap without
+`--dd-trace-go-version`, it preserves the managed tracer config that is already
+in place.
+
 The bootstrap helper:
 - patches `MODULE.bazel` with a Datadog-managed `rules_go` override back to this repository's vendored `third_party/rules_go_orchestrion` module and the `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
 - adds the Datadog-managed single-service Go sync block (`test_optimization_go_extension`)
 - creates a root `dd_upload_payloads` target when missing
 - creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
 - runs `orchestrion pin`
-- repins `dd-trace-go` and the Orchestrion-managed Go helper packages to the configured `--dd-trace-go-version`
+- repins `dd-trace-go` and the Orchestrion-managed Go helper packages to the resolved tracer versions
 - writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing
-- keeps Bazel's injected tracer version and the local Go module pins aligned, and the build fails fast if they drift apart
+- writes either `dd_trace_go_version` or `dd_trace_go_versions` into the managed `MODULE.bazel` block, depending on whether the traced Go modules resolve to one shared version or different exact versions
+- keeps Bazel's injected tracer versions and the local Go module pins aligned, and the build fails fast if they drift apart
 
 Then use the generated local wrapper in your package:
 
@@ -799,7 +806,7 @@ use_repo(go_topt, "test_optimization_data")
 ```
 
 Then run the Datadog bootstrap helper once so Orchestrion is pinned into the
-workspace Go module. Pass `--dd-trace-go-version <version>` if you want a
+workspace Go module. Pass `--dd-trace-go-version <query>` if you want a
 non-default tracer version; otherwise the default is `v2.6.0`.
 
 ```bash
@@ -807,7 +814,9 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
 ```
 
 If you wire Orchestrion manually instead of using bootstrap, you can also set
-the workspace-wide tracer version directly in `MODULE.bazel`:
+the tracer versions directly in `MODULE.bazel`.
+
+Shared-version form:
 
 ```bzl
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
@@ -818,9 +827,27 @@ orchestrion.from_source(
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
 
-If `dd_trace_go_version` is omitted there too, the default is `v2.6.0`. Manual
-setups must still keep the local Go module pins on the same version, or the
-build will stop with a mismatch error.
+Per-module form:
+
+```bzl
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.5.0",
+    dd_trace_go_versions = {
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+    },
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+```
+
+If both settings are omitted, the default is still `v2.6.0`. Manual setups
+must keep the local Go module pins on the same effective versions, or the build
+will stop with a mismatch error. Do not set both `dd_trace_go_version` and
+`dd_trace_go_versions` in the same `orchestrion.from_source(...)` call.
+Bootstrap also refuses to take over tracer settings that are already managed
+manually outside its own managed block.
 
 ### Basic usage
 

@@ -171,8 +171,10 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
 ```
 
 `--dd-trace-go-version` is optional. If omitted, the workspace uses the default
-`v2.6.0`. Bootstrap keeps the local Go module pins on the same version so Bazel
-and the Go module do not silently drift apart.
+`v2.6.0`. It accepts a tag, pseudo-version, branch, or commit SHA. Bootstrap
+resolves that input to exact tracer versions, keeps the local Go module pins on
+those same versions, and prevents Bazel and the Go module from silently
+drifting apart.
 
 Guided bootstrap is intentionally only for fresh single-service Go workspaces.
 If the workspace already uses:

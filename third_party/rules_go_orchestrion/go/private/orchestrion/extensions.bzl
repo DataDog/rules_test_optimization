@@ -15,11 +15,203 @@
 """Module extension for configuring orchestrion in rules_go."""
 
 DEFAULT_DD_TRACE_GO_VERSION = "v2.6.0"
+_DD_TRACE_GO_MODULES = [
+    "github.com/DataDog/dd-trace-go/v2",
+    "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+    "github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+]
+_DD_TRACE_GO_PREFLIGHT_PACKAGES = [
+    "github.com/DataDog/dd-trace-go/v2/orchestrion",
+    "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+    "github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+]
+
+def _find_go_binary(ctx):
+    go_path = ctx.which("go")
+    if go_path:
+        return go_path
+    for path in ["/usr/local/go/bin/go", "/opt/homebrew/bin/go", "/usr/bin/go"]:
+        if ctx.path(path).exists:
+            return path
+    fail("Could not find 'go' binary. Please ensure Go is installed.")
+
+def _go_env(ctx):
+    return {
+        "GO111MODULE": "on",
+        "GOWORK": "off",
+        "GOTOOLCHAIN": "go1.25.0+auto",
+        "GOPROXY": "https://proxy.golang.org,direct",
+        "GOSUMDB": "sum.golang.org",
+        "GOMODCACHE": str(ctx.path(".gomodcache")),
+        "GOCACHE": str(ctx.path(".gocache")),
+    }
+
+def _dd_trace_go_versions_from_shared(version):
+    version_map = {}
+    for module_path in _DD_TRACE_GO_MODULES:
+        version_map[module_path] = version
+    return version_map
+
+def _copy_dd_trace_go_versions(version_map):
+    copied = {}
+    for module_path in version_map:
+        copied[module_path] = version_map[module_path]
+    return copied
+
+def _validate_dd_trace_go_versions_keys(version_map):
+    missing = [module_path for module_path in _DD_TRACE_GO_MODULES if module_path not in version_map]
+    extra = [module_path for module_path in version_map.keys() if module_path not in _DD_TRACE_GO_MODULES]
+    if missing or extra:
+        details = []
+        if missing:
+            details.append("missing keys: %s" % ", ".join(missing))
+        if extra:
+            details.append("unexpected keys: %s" % ", ".join(sorted(extra)))
+        fail("dd_trace_go_versions must contain exactly the supported tracer modules (%s)" % "; ".join(details))
+
+def _neutral_dd_trace_check_go_mod(version_map = None):
+    if version_map == None:
+        return """module ddtraceversioncheck
+
+go 1.21
+"""
+
+    lines = [
+        "module ddtraceversioncheck",
+        "",
+        "go 1.21",
+        "",
+        "require (",
+    ]
+    for module_path in _DD_TRACE_GO_MODULES:
+        lines.append("    %s %s" % (module_path, version_map[module_path]))
+    lines.extend([
+        ")",
+        "",
+    ])
+    return "\n".join(lines)
+
+def _ctx_execute_or_fail(ctx, args, env, error_prefix):
+    result = ctx.execute(args, timeout = 600, environment = env)
+    if result.return_code != 0:
+        fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
+    return result
+
+def _run_dd_trace_go_package_preflight(ctx, go_path, version_map):
+    env = _go_env(ctx)
+    check_dir = ".ddtrace_version_check"
+    ctx.file(check_dir + "/go.mod", _neutral_dd_trace_check_go_mod(version_map))
+
+    for package_path in _DD_TRACE_GO_PREFLIGHT_PACKAGES:
+        _ctx_execute_or_fail(
+            ctx,
+            [
+                str(go_path),
+                "-C",
+                check_dir,
+                "list",
+                "-mod=mod",
+                package_path,
+            ],
+            env,
+            "Failed dd-trace-go package preflight for %s" % package_path,
+        )
+
+def _validated_shared_dd_trace_go_versions(ctx, go_path, query):
+    env = _go_env(ctx)
+    check_dir = ".ddtrace_version_check"
+    ctx.file(check_dir + "/go.mod", _neutral_dd_trace_check_go_mod())
+
+    resolved_pairs = []
+    resolved_versions = []
+    for module_path in _DD_TRACE_GO_MODULES:
+        result = _ctx_execute_or_fail(
+            ctx,
+            [
+                str(go_path),
+                "-C",
+                check_dir,
+                "list",
+                "-m",
+                "-json",
+                "%s@%s" % (module_path, query),
+            ],
+            env,
+            "Failed to resolve dd-trace-go query %r for %s" % (query, module_path),
+        )
+        decoded = json.decode(result.stdout)
+        version = decoded.get("Version", "").strip()
+        if not version:
+            fail("Failed to resolve dd-trace-go query %r for %s: empty resolved version" % (query, module_path))
+        resolved_pairs.append("%s=%s" % (module_path, version))
+        resolved_versions.append(version)
+
+    canonical_version = resolved_versions[0]
+    for version in resolved_versions[1:]:
+        if version != canonical_version:
+            fail("dd-trace-go query %r resolved to inconsistent versions: %s" % (query, ", ".join(resolved_pairs)))
+
+    if canonical_version != query:
+        fail("dd_trace_go_version %r is not a canonical persisted version (resolved to %r). Use bootstrap with --dd-trace-go-version=%s if you want to pass a branch or commit SHA." % (query, canonical_version, query))
+
+    version_map = _dd_trace_go_versions_from_shared(canonical_version)
+    _run_dd_trace_go_package_preflight(ctx, go_path, version_map)
+    return version_map
+
+def _validated_per_module_dd_trace_go_versions(ctx, go_path, version_map):
+    _validate_dd_trace_go_versions_keys(version_map)
+
+    env = _go_env(ctx)
+    check_dir = ".ddtrace_version_check"
+    ctx.file(check_dir + "/go.mod", _neutral_dd_trace_check_go_mod())
+
+    for module_path in _DD_TRACE_GO_MODULES:
+        query = version_map[module_path]
+        result = _ctx_execute_or_fail(
+            ctx,
+            [
+                str(go_path),
+                "-C",
+                check_dir,
+                "list",
+                "-m",
+                "-json",
+                "%s@%s" % (module_path, query),
+            ],
+            env,
+            "Failed to validate dd_trace_go_versions[%r]=%r" % (module_path, query),
+        )
+        decoded = json.decode(result.stdout)
+        resolved = decoded.get("Version", "").strip()
+        if not resolved:
+            fail("Failed to validate dd_trace_go_versions[%r]=%r: empty resolved version" % (module_path, query))
+        if resolved != query:
+            fail("dd_trace_go_versions[%r] must already be canonical (resolved %r to %r)" % (module_path, query, resolved))
+
+    _run_dd_trace_go_package_preflight(ctx, go_path, version_map)
+    return _copy_dd_trace_go_versions(version_map)
+
+def _validated_dd_trace_go_versions(ctx, go_path, shared_query, version_map):
+    if shared_query and version_map:
+        fail("dd_trace_go_version and dd_trace_go_versions cannot both be set")
+    if version_map:
+        return _validated_per_module_dd_trace_go_versions(ctx, go_path, version_map)
+    if shared_query:
+        return _validated_shared_dd_trace_go_versions(ctx, go_path, shared_query)
+    return _dd_trace_go_versions_from_shared(DEFAULT_DD_TRACE_GO_VERSION)
+
+def _dd_trace_go_versions_json(version_map):
+    entries = []
+    for module_path in _DD_TRACE_GO_MODULES:
+        entries.append('    "%s": "%s"' % (module_path, version_map[module_path]))
+    return "{\n  \"modules\": {\n%s\n  }\n}\n" % ",\n".join(entries)
 
 def _orchestrion_build_impl(ctx):
     """Build orchestrion from source."""
     version = ctx.attr.version
-    dd_trace_go_version = ctx.attr.dd_trace_go_version
+    go_path = _find_go_binary(ctx)
+    dd_trace_go_versions = _validated_dd_trace_go_versions(ctx, go_path, ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
+    dd_trace_go_root_version = dd_trace_go_versions["github.com/DataDog/dd-trace-go/v2"]
     binary_name = "orchestrion.exe" if ctx.os.name.lower().startswith("windows") else "orchestrion_bin"
 
     # Download orchestrion source
@@ -217,36 +409,31 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
 
     # Build the patched Orchestrion tool from source with the same Go version
     # family the Bazel integration expects.
-    # Try to find go binary
-    go_path = ctx.which("go")
-    if not go_path:
-        # Common locations for go binary
-        for path in ["/usr/local/go/bin/go", "/opt/homebrew/bin/go", "/usr/bin/go"]:
-            if ctx.path(path).exists:
-                go_path = path
-                break
+    for module_path in _DD_TRACE_GO_MODULES:
+        upgrade_result = ctx.execute(
+            [
+                str(go_path),
+                "mod",
+                "edit",
+                "-require=%s@%s" % (module_path, dd_trace_go_versions[module_path]),
+            ],
+            timeout = 120,
+            environment = _go_env(ctx),
+        )
+        if upgrade_result.return_code != 0:
+            fail("Failed to upgrade dd-trace-go in orchestrion tool go.mod for %s: %s\n%s" % (module_path, upgrade_result.stdout, upgrade_result.stderr))
 
-    if not go_path:
-        fail("Could not find 'go' binary. Please ensure Go is installed.")
-
-    upgrade_result = ctx.execute(
+    pin_result = ctx.execute(
         [
             str(go_path),
-            "mod",
-            "edit",
-            "-require=github.com/DataDog/dd-trace-go/v2@%s" % dd_trace_go_version,
+            "get",
+            "github.com/DataDog/dd-trace-go/v2/orchestrion@%s" % dd_trace_go_root_version,
         ],
-        timeout = 120,
-        environment = {
-            "GO111MODULE": "on",
-            "GOTOOLCHAIN": "go1.25.0+auto",
-            "GOPROXY": "https://proxy.golang.org,direct",
-            "GOMODCACHE": str(ctx.path(".gomodcache")),
-            "GOCACHE": str(ctx.path(".gocache")),
-        },
+        timeout = 600,
+        environment = _go_env(ctx),
     )
-    if upgrade_result.return_code != 0:
-        fail("Failed to upgrade dd-trace-go in orchestrion tool go.mod: %s\n%s" % (upgrade_result.stdout, upgrade_result.stderr))
+    if pin_result.return_code != 0:
+        fail("Failed to pin dd-trace-go/v2/orchestrion in orchestrion tool go.mod: %s\n%s" % (pin_result.stdout, pin_result.stderr))
 
     tidy_result = ctx.execute(
         [
@@ -255,13 +442,7 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
             "tidy",
         ],
         timeout = 600,
-        environment = {
-            "GO111MODULE": "on",
-            "GOTOOLCHAIN": "go1.25.0+auto",
-            "GOPROXY": "https://proxy.golang.org,direct",
-            "GOMODCACHE": str(ctx.path(".gomodcache")),
-            "GOCACHE": str(ctx.path(".gocache")),
-        },
+        environment = _go_env(ctx),
     )
     if tidy_result.return_code != 0:
         fail("Failed to tidy orchestrion tool go.mod after upgrading dd-trace-go: %s\n%s" % (tidy_result.stdout, tidy_result.stderr))
@@ -278,19 +459,13 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
             ".",
         ],
         timeout = 600,
-        environment = {
-            "GO111MODULE": "on",
-            "GOTOOLCHAIN": "go1.25.0+auto",
-            "GOPROXY": "https://proxy.golang.org,direct",
-            "GOMODCACHE": str(ctx.path(".gomodcache")),
-            "GOCACHE": str(ctx.path(".gocache")),
-        },
+        environment = _go_env(ctx),
     )
     if result.return_code != 0:
         fail("Failed to build orchestrion: %s\n%s" % (result.stdout, result.stderr))
 
     # Create BUILD file
-    ctx.file("dd_trace_go_version.txt", dd_trace_go_version + "\n")
+    ctx.file("dd_trace_go_versions.json", _dd_trace_go_versions_json(dd_trace_go_versions))
     ctx.file("BUILD.bazel", """# Generated by rules_go orchestrion extension
 filegroup(
     name = "orchestrion",
@@ -300,7 +475,7 @@ filegroup(
 
 filegroup(
     name = "dd_trace_go_version_file",
-    srcs = ["dd_trace_go_version.txt"],
+    srcs = ["dd_trace_go_versions.json"],
     visibility = ["//visibility:public"],
 )
 """.format(binary_name = binary_name))
@@ -309,7 +484,8 @@ _orchestrion_build = repository_rule(
     implementation = _orchestrion_build_impl,
     attrs = {
         "version": attr.string(mandatory = True, doc = "Orchestrion version to build"),
-        "dd_trace_go_version": attr.string(default = DEFAULT_DD_TRACE_GO_VERSION, doc = "dd-trace-go version to build Orchestrion against"),
+        "dd_trace_go_version": attr.string(default = "", doc = "dd-trace-go version to build Orchestrion against"),
+        "dd_trace_go_versions": attr.string_dict(doc = "Per-module dd-trace-go versions to build Orchestrion against"),
     },
 )
 
@@ -337,13 +513,18 @@ _orchestrion_empty = repository_rule(
 def _orchestrion_ext_impl(module_ctx):
     # Look for orchestrion.from_source() calls from any module
     version = ""
-    dd_trace_go_version = DEFAULT_DD_TRACE_GO_VERSION
+    dd_trace_go_version = ""
+    dd_trace_go_versions = {}
     for mod in module_ctx.modules:
         for from_source in mod.tags.from_source:
             if from_source.version:
+                if from_source.dd_trace_go_version and from_source.dd_trace_go_versions:
+                    fail("dd_trace_go_version and dd_trace_go_versions cannot both be set in orchestrion.from_source()")
                 version = from_source.version
                 if from_source.dd_trace_go_version:
                     dd_trace_go_version = from_source.dd_trace_go_version
+                if from_source.dd_trace_go_versions:
+                    dd_trace_go_versions = from_source.dd_trace_go_versions
                 break
         if version:
             break
@@ -353,6 +534,7 @@ def _orchestrion_ext_impl(module_ctx):
             name = "rules_go_orchestrion_tool",
             version = version,
             dd_trace_go_version = dd_trace_go_version,
+            dd_trace_go_versions = dd_trace_go_versions,
         )
     else:
         _orchestrion_empty(
@@ -366,8 +548,11 @@ _from_source = tag_class(
             doc = "Orchestrion version to build (e.g., 'v1.5.0')",
         ),
         "dd_trace_go_version": attr.string(
-            default = DEFAULT_DD_TRACE_GO_VERSION,
+            default = "",
             doc = "dd-trace-go version to inject for Orchestrion-backed instrumentation.",
+        ),
+        "dd_trace_go_versions": attr.string_dict(
+            doc = "Per-module dd-trace-go versions to inject for Orchestrion-backed instrumentation.",
         ),
     },
 )
