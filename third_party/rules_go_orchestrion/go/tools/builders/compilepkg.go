@@ -409,7 +409,7 @@ func compileArchive(
 
 	syntheticTestmain := isSyntheticTestmainCompile(packagePath, goSrcs)
 	if syntheticTestmain && orchestrion != "" {
-		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, workDir, srcs, deps, embedLookupDirs, orchestrion)
+		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, pack, workDir, srcs, deps, embedLookupDirs, orchestrion)
 		if err != nil {
 			return err
 		}
@@ -592,7 +592,7 @@ func compileArchive(
 	return nil
 }
 
-func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs, deps []archive, embedLookupDirs []string, orchestrion string) (archiveSrcs, []archive, string, error) {
+func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiveSrcs, deps []archive, embedLookupDirs []string, orchestrion string) (archiveSrcs, []archive, string, error) {
 	packages := make([]string, 0, len(syntheticTestmainRootPackages)+len(orchestrionLinkClosurePackages))
 	for _, root := range syntheticTestmainRootPackages {
 		packages = append(packages, root.packagePath)
@@ -629,7 +629,7 @@ func augmentSyntheticTestmainRoots(goenv *env, workDir string, srcs archiveSrcs,
 	}
 
 	forcedExportRoot := ""
-	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, workDir, moduleDir, packages); err != nil {
+	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, pack, workDir, moduleDir, packages); err != nil {
 		return srcs, deps, "", fmt.Errorf("compile synthetic testmain source packages: %w", err)
 	} else {
 		forcedExportRoot = exportRoot
@@ -727,6 +727,9 @@ type modulePackageMetadata struct {
 	Root       string
 	GoFiles    []string
 	CgoFiles   []string
+	HFiles     []string
+	SFiles     []string
+	SysoFiles  []string
 	EmbedFiles []string
 	Imports    []string
 	Module     struct {
@@ -740,7 +743,7 @@ type compiledModuleArchive struct {
 	linkClosure map[string]string
 }
 
-func compileSyntheticTestmainSourcePackages(goenv *env, workDir, moduleDir string, packages []string) (map[string]compiledModuleArchive, string, error) {
+func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir string, packages []string) (map[string]compiledModuleArchive, string, error) {
 	selected := make([]string, 0, len(packages))
 	for _, pkg := range packages {
 		if syntheticTestmainSourceCompiledPackages[pkg] {
@@ -767,7 +770,7 @@ func compileSyntheticTestmainSourcePackages(goenv *env, workDir, moduleDir strin
 		sourceCompiledSet[pkg] = true
 	}
 	for _, pkg := range selected {
-		if _, _, err := compileSyntheticTestmainSourcePackage(goenv, workDir, resolveModuleDir, exportRoot, sourceCompiledSet, sourceDecisions, metaCache, compiled, pkg); err != nil {
+		if _, _, err := compileSyntheticTestmainSourcePackage(goenv, pack, workDir, resolveModuleDir, exportRoot, sourceCompiledSet, sourceDecisions, metaCache, compiled, pkg); err != nil {
 			return nil, "", err
 		}
 	}
@@ -956,7 +959,7 @@ func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg s
 	return false, nil
 }
 
-func compileSyntheticTestmainSourcePackage(goenv *env, workDir, moduleDir, exportRoot string, rootSet map[string]bool, sourceDecisions map[string]bool, metaCache map[string]*modulePackageMetadata, compiled map[string]compiledModuleArchive, pkg string) (string, string, error) {
+func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir, exportRoot string, rootSet map[string]bool, sourceDecisions map[string]bool, metaCache map[string]*modulePackageMetadata, compiled map[string]compiledModuleArchive, pkg string) (string, string, error) {
 	if archive, ok := compiled[pkg]; ok {
 		return archive.compilePath, archive.linkPath, nil
 	}
@@ -982,7 +985,7 @@ func compileSyntheticTestmainSourcePackage(goenv *env, workDir, moduleDir, expor
 					return "", "", fmt.Errorf("inspect source-compile dependency %s for %s: %w", imp, pkg, err)
 				}
 				if sourceCompileDep {
-					compilePath, linkPath, err := compileSyntheticTestmainSourcePackage(goenv, workDir, moduleDir, exportRoot, rootSet, sourceDecisions, metaCache, compiled, imp)
+					compilePath, linkPath, err := compileSyntheticTestmainSourcePackage(goenv, pack, workDir, moduleDir, exportRoot, rootSet, sourceDecisions, metaCache, compiled, imp)
 					if err != nil {
 						return "", "", fmt.Errorf("compile source dependency %s for %s: %w", imp, pkg, err)
 					}
@@ -1043,6 +1046,15 @@ func compileSyntheticTestmainSourcePackage(goenv *env, workDir, moduleDir, expor
 	for _, name := range meta.GoFiles {
 		srcPaths = append(srcPaths, filepath.Join(meta.Dir, name))
 	}
+	for _, name := range meta.HFiles {
+		srcPaths = append(srcPaths, filepath.Join(meta.Dir, name))
+	}
+	for _, name := range meta.SFiles {
+		srcPaths = append(srcPaths, filepath.Join(meta.Dir, name))
+	}
+	for _, name := range meta.SysoFiles {
+		srcPaths = append(srcPaths, filepath.Join(meta.Dir, name))
+	}
 	filteredSrcs, err := filterAndSplitFiles(srcPaths)
 	if err != nil {
 		return "", "", fmt.Errorf("parse Go files for %s: %w", pkg, err)
@@ -1072,8 +1084,53 @@ func compileSyntheticTestmainSourcePackage(goenv *env, workDir, moduleDir, expor
 	for i, src := range filteredSrcs.goSrcs {
 		goSrcs[i] = src.filename
 	}
-	if err := compileGo(goenv, goSrcs, nil, meta.ImportPath, meta.ImportPath, importcfgPath, embedcfgPath, "", "", gcFlags, "", outLinkobjPath, outInterfacePath, "", ""); err != nil {
+	asmHdrPath := ""
+	if len(filteredSrcs.sSrcs) > 0 {
+		asmHdrPath = filepath.Join(packageWorkDir, "go_asm.h")
+	}
+	var symabisPath string
+	if len(filteredSrcs.sSrcs) > 0 {
+		symabisPath, err = buildSymabisFile(goenv, meta.ImportPath, filteredSrcs.sSrcs, filteredSrcs.hSrcs, asmHdrPath)
+		if err != nil {
+			return "", "", fmt.Errorf("build symabis for %s: %w", pkg, err)
+		}
+	}
+	if err := compileGo(goenv, goSrcs, nil, meta.ImportPath, meta.ImportPath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, "", outLinkobjPath, outInterfacePath, "", ""); err != nil {
 		return "", "", fmt.Errorf("compile synthetic helper %s: %w", pkg, err)
+	}
+	objFiles := make([]string, 0, len(filteredSrcs.sSrcs)+len(filteredSrcs.sysoSrcs))
+	if len(filteredSrcs.sSrcs) > 0 {
+		includeSet := map[string]struct{}{
+			filepath.Join(os.Getenv("GOROOT"), "pkg", "include"): {},
+			packageWorkDir: {},
+		}
+		for _, hdr := range filteredSrcs.hSrcs {
+			includeSet[filepath.Dir(hdr.filename)] = struct{}{}
+		}
+		includes := make([]string, 0, len(includeSet))
+		for inc := range includeSet {
+			includes = append(includes, inc)
+		}
+		sort.Strings(includes)
+		asmFlags := make([]string, 0, len(includes)*2)
+		for _, inc := range includes {
+			asmFlags = append(asmFlags, "-I", inc)
+		}
+		for i, sSrc := range filteredSrcs.sSrcs {
+			obj := filepath.Join(packageWorkDir, fmt.Sprintf("s%d.o", i))
+			if err := asmFile(goenv, sSrc.filename, meta.ImportPath, asmFlags, obj); err != nil {
+				return "", "", fmt.Errorf("assemble synthetic helper %s: %w", pkg, err)
+			}
+			objFiles = append(objFiles, obj)
+		}
+	}
+	for _, src := range filteredSrcs.sysoSrcs {
+		objFiles = append(objFiles, src.filename)
+	}
+	if len(objFiles) > 0 {
+		if err := appendToArchive(goenv, pack, outLinkobjPath, objFiles); err != nil {
+			return "", "", fmt.Errorf("append synthetic helper objects for %s: %w", pkg, err)
+		}
 	}
 
 	compileExports := map[string]string{meta.ImportPath: outInterfacePath}
