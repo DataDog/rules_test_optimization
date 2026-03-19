@@ -566,6 +566,12 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if len(packages) == 0 || goenv == nil || goenv.sdk == "" {
 		return nil, nil
 	}
+	// These helper exports must be built against the already-prepared woven
+	// stdlib cache. Running them back through orchestrion's toolexec can cause
+	// Go to rebuild stdlib packages like testing inside the helper-local cache,
+	// which then diverges from the stdlib archives used by Bazel's final test
+	// link step.
+	_ = orchestrionPath
 	if goenv.goroot != "" {
 		goenv.goroot = abs(goenv.goroot)
 		goenv.sdk = abs(goenv.sdk)
@@ -574,9 +580,6 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 		}
 	}
 	args := goenv.goCmd("list")
-	if orchestrionPath != "" {
-		args = append(args, "-toolexec", abs(orchestrionPath)+" toolexec")
-	}
 	args = append(args,
 		"-export",
 		"-deps",
@@ -1255,7 +1258,7 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string) error {
+func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string, skip map[string]bool) error {
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" || len(packages) == 0 {
 		return nil
 	}
@@ -1285,10 +1288,12 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	if len(exports) == 0 {
 		return nil
 	}
-	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, func(pkg string) bool {
+		return skip[pkg]
+	})
 }
 
-func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) error {
+func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env, skip map[string]bool) error {
 	if goenv == nil {
 		return nil
 	}
@@ -1337,7 +1342,9 @@ func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) 
 	if len(exports) == 0 {
 		return nil
 	}
-	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
+	return rewriteImportcfgPackagefiles(importcfgPath, exports, func(pkg string) bool {
+		return skip[pkg]
+	})
 }
 
 func resolveStdlibExportsForPackageSet(goenv *env, packages []string) (map[string]string, error) {

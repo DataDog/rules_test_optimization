@@ -92,6 +92,18 @@ go_test(
     }),
 )
 
+go_test(
+    name = "synthetic_testmain_test",
+    size = "small",
+    srcs = [
+        ":builder_srcs",
+        "synthetic_testmain_test.go",
+    ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
+)
+
 filegroup(
     name = "builder_srcs",
     srcs = [
