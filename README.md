@@ -1002,7 +1002,7 @@ Fast checks before diving deep:
 - For RBE, rerun tests with `--remote_download_outputs=all`
 - Enable debug logging on sync/uploader rules for richer diagnostics
 - If needed, file an issue with sanitized logs:
-  - https://github.com/DataDog/rules_test_optimization/issues
+  - open an issue in the repository issue tracker
 
 ## Reference links
 

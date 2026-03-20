@@ -242,4 +242,4 @@ If issues persist:
    - Sanitized logs (remove API keys before sharing)
 
 3. **File an issue**:
-   - https://github.com/DataDog/rules_test_optimization/issues
+   - open an issue in the repository issue tracker with sanitized logs

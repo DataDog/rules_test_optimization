@@ -103,14 +103,14 @@ We propose standardizing this approach across Bazel‑based services as the supp
 4) Upload payloads from a dedicated workspace-level uploader (normal rule, not test) via `bazel run` after tests complete, enriching with non‑secret context, supporting both agentless and EVP proxy modes.  
 5) Provide thin language macros that compose these pieces for a smooth developer experience.
 
-The POC for this proposal can be found here: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)   
-There's also a repository to test the POC rules here: [https://github.com/DataDog/rules\_test\_optimization\_tests](https://github.com/DataDog/rules_test_optimization_tests) 
+The POC for this proposal can be found in this repository.   
+There is also a private companion repository used to validate these POC rules in real consumer scenarios. 
 
 ### Design Overview
 
 At a high level, the proposal moves all network‑dependent metadata fetching out of test actions and into Bazel's module/repository resolution phase, then ships results from a dedicated workspace-level uploader (via `bazel run`). This preserves hermeticity for user tests while maintaining complete Test Optimization functionality.
 
-- Phase 1 — [Sync at module/repo resolution](https://github.com/DataDog/rules_test_optimization/blob/main/tools/core/test_optimization_sync.bzl):  
+- Phase 1 — [Sync at module/repo resolution](../tools/core/test_optimization_sync.bzl):  
     
   - A module extension instantiates a repository rule that performs the Datadog API calls for Settings (always), Known Tests (when enabled), and Test Management tests (when enabled).  
 - The rule writes deterministic JSON outputs under a configurable directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags. It also writes a `manifest.txt` with a version marker (currently `version=1`) to track payload format changes.  
@@ -127,14 +127,14 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
   - Instrumented tests write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. No `--sandbox_writable_path` or custom environment variables needed.
 
 
-- Phase 3 — [Upload outside user tests](https://github.com/DataDog/rules_test_optimization/blob/main/tools/core/test_optimization_uploader.bzl):
+- Phase 3 — [Upload outside user tests](../tools/core/test_optimization_uploader.bzl):
 
   - A single workspace-level uploader target (normal rule, not test) runs via `bazel run` after tests complete.
   - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`), and deletes successfully uploaded files.
   - Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 
-- [Multi‑service monorepos](https://github.com/DataDog/rules_test_optimization/blob/main/tools/core/test_optimization_multi_sync.bzl):  
+- [Multi‑service monorepos](../tools/core/test_optimization_multi_sync.bzl):  
     
   - A higher‑level “multi‑sync” extension materializes one repository per service and an aggregator repository that re‑exports per‑service filegroups and a service mapping (`topt_data_by_service`). Macros can select services by key without hardcoding repo aliases.
 
@@ -248,7 +248,7 @@ Language Macros
   - The exported `topt_data["runtimes"]["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
 - Module dependency: the Go companion module (`datadog-rules-test-optimization-go`) declares `bazel_dep("rules_go", <version>)` to make provider loads visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.
 
-- [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](https://github.com/DataDog/rules_test_optimization/blob/main/modules/go/topt_go_test.bzl)
+- [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](../modules/go/topt_go_test.bzl)
 
 Security Considerations
 
