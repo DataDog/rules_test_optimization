@@ -57,3 +57,81 @@ func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 		t.Fatalf("moduleExportRequestKey did not change when stdlib cache changed: %q", keyV1)
 	}
 }
+
+func TestModuleExportRequestKeyIgnoresSyntheticTempDir(t *testing.T) {
+	moduleDirs := []string{
+		filepath.Join(t.TempDir(), "one"),
+		filepath.Join(t.TempDir(), "two"),
+	}
+	for _, moduleDir := range moduleDirs {
+		if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+			t.Fatalf("mkdir module dir: %v", err)
+		}
+		for name, content := range map[string]string{
+			"go.mod":              syntheticOrchestrionGoMod(defaultDDTraceGoVersions()),
+			"orchestrion.tool.go": syntheticOrchestrionToolGo,
+			"orchestrion.yml":     "injectors: []\n",
+		} {
+			if err := os.WriteFile(filepath.Join(moduleDir, name), []byte(content), 0o644); err != nil {
+				t.Fatalf("write %s: %v", name, err)
+			}
+		}
+	}
+	goenv := &env{}
+	key1, err := moduleExportRequestKey(moduleDirs[0], goenv)
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey dir1 error: %v", err)
+	}
+	key2, err := moduleExportRequestKey(moduleDirs[1], goenv)
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey dir2 error: %v", err)
+	}
+	if key1 != key2 {
+		t.Fatalf("synthetic module export key mismatch: %q != %q", key1, key2)
+	}
+}
+
+func TestSeedWovenStdlibCacheNoopWhenAlreadyReady(t *testing.T) {
+	sourceRoot := filepath.Join(t.TempDir(), "source")
+	destRoot := filepath.Join(t.TempDir(), "dest")
+	for _, root := range []string{sourceRoot, destRoot} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir root: %v", err)
+		}
+	}
+	sourceArchive := filepath.Join(sourceRoot, "aa", "testing.a")
+	if err := os.MkdirAll(filepath.Dir(sourceArchive), 0o755); err != nil {
+		t.Fatalf("mkdir source archive dir: %v", err)
+	}
+	if err := os.WriteFile(sourceArchive, []byte("source"), 0o644); err != nil {
+		t.Fatalf("write source archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, orchestrionStdlibCacheManifestName), []byte("testing=aa/testing.a\n"), 0o644); err != nil {
+		t.Fatalf("write source manifest: %v", err)
+	}
+	destArchive := filepath.Join(destRoot, "bb", "testing.a")
+	if err := os.MkdirAll(filepath.Dir(destArchive), 0o755); err != nil {
+		t.Fatalf("mkdir dest archive dir: %v", err)
+	}
+	if err := os.WriteFile(destArchive, []byte("dest"), 0o644); err != nil {
+		t.Fatalf("write dest archive: %v", err)
+	}
+	manifestPath := filepath.Join(destRoot, orchestrionStdlibCacheManifestName)
+	if err := os.WriteFile(manifestPath, []byte("testing=bb/testing.a\n"), 0o644); err != nil {
+		t.Fatalf("write dest manifest: %v", err)
+	}
+	before, err := os.ReadFile(destArchive)
+	if err != nil {
+		t.Fatalf("read dest archive before seed: %v", err)
+	}
+	if err := seedWovenStdlibCache(&env{stdlibCache: sourceRoot}, destRoot); err != nil {
+		t.Fatalf("seedWovenStdlibCache error: %v", err)
+	}
+	after, err := os.ReadFile(destArchive)
+	if err != nil {
+		t.Fatalf("read dest archive after seed: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("seedWovenStdlibCache rewrote ready archive: before=%q after=%q", string(before), string(after))
+	}
+}

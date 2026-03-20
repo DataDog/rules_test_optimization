@@ -272,6 +272,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 	const orchestrionToolGo = "orchestrion.tool.go"
 
 	var filesToCleanup []string
+	var copiedGoMod bool
 	configuredVersions, err := configuredDDTraceGoVersions()
 	if err != nil {
 		return nil, err
@@ -286,7 +287,6 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 	// needs the real module requirements from `orchestrion pin`; a synthetic
 	// minimal go.mod is only a fallback when the package has no module files.
 	if _, err := os.Stat(goModFile); os.IsNotExist(err) {
-		var copiedGoMod bool
 		for _, dir := range srcDirs {
 			goModSrc := filepath.Join(dir, goModFile)
 			if _, err := os.Stat(goModSrc); err == nil {
@@ -408,7 +408,20 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 			break
 		}
 	}
-	if shouldPrepareSynthetic {
+	if shouldPrepareSynthetic && !copiedGoMod {
+		cacheHit, err := restorePreparedSyntheticModule(goSdkPath, configuredVersions, verbose)
+		if err != nil {
+			return nil, err
+		}
+		if !cacheHit {
+			if err := prepareSyntheticOrchestrionModule(goSdkPath, verbose); err != nil {
+				return nil, err
+			}
+			if err := snapshotPreparedSyntheticModule(goSdkPath, configuredVersions); err != nil {
+				return nil, err
+			}
+		}
+	} else if shouldPrepareSynthetic {
 		if err := prepareSyntheticOrchestrionModule(goSdkPath, verbose); err != nil {
 			return nil, err
 		}
@@ -501,6 +514,123 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 		return err
 	}
 	return nil
+}
+
+type preparedSyntheticModuleManifest struct {
+	Key                  string `json:"key"`
+	HasGoSum             bool   `json:"has_go_sum"`
+	SyntheticModuleCache string `json:"synthetic_module_cache"`
+}
+
+func restorePreparedSyntheticModule(goSdkPath string, configuredVersions map[string]string, verbose bool) (bool, error) {
+	cacheDir, paths, err := preparedSyntheticModuleCachePaths(goSdkPath, configuredVersions)
+	if err != nil {
+		return false, err
+	}
+	if !cacheEntryReady(paths) {
+		return false, nil
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: synthetic module cache hit key=%s\n", filepath.Base(cacheDir))
+	}
+	if _, err := copyFileIfExists(filepath.Join(cacheDir, "go.mod"), "go.mod"); err != nil {
+		return false, fmt.Errorf("restore prepared synthetic go.mod: %w", err)
+	}
+	if _, err := copyFileIfExists(filepath.Join(cacheDir, "orchestrion.tool.go"), "orchestrion.tool.go"); err != nil {
+		return false, fmt.Errorf("restore prepared synthetic orchestrion.tool.go: %w", err)
+	}
+	hasGoSum, err := copyFileIfExists(filepath.Join(cacheDir, "go.sum"), "go.sum")
+	if err != nil {
+		return false, fmt.Errorf("restore prepared synthetic go.sum: %w", err)
+	}
+	if !hasGoSum {
+		_ = os.Remove("go.sum")
+	}
+	return true, nil
+}
+
+func snapshotPreparedSyntheticModule(goSdkPath string, configuredVersions map[string]string) error {
+	cacheDir, paths, err := preparedSyntheticModuleCachePaths(goSdkPath, configuredVersions)
+	if err != nil {
+		return err
+	}
+	releaseLock, err := acquireCacheLock(paths.lockDir, cacheLockTimeout, cacheLockStaleAfter)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+	if cacheEntryReady(paths) {
+		return nil
+	}
+	tempDir, err := os.MkdirTemp(filepath.Dir(paths.entryDir), filepath.Base(paths.entryDir)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create prepared synthetic module temp dir: %w", err)
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(tempDir)
+		}
+	}()
+	if _, err := copyFileIfExists("go.mod", filepath.Join(tempDir, "go.mod")); err != nil {
+		return fmt.Errorf("snapshot prepared synthetic go.mod: %w", err)
+	}
+	hasGoSum, err := copyFileIfExists("go.sum", filepath.Join(tempDir, "go.sum"))
+	if err != nil {
+		return fmt.Errorf("snapshot prepared synthetic go.sum: %w", err)
+	}
+	if _, err := copyFileIfExists("orchestrion.tool.go", filepath.Join(tempDir, "orchestrion.tool.go")); err != nil {
+		return fmt.Errorf("snapshot prepared synthetic orchestrion.tool.go: %w", err)
+	}
+	manifest := preparedSyntheticModuleManifest{
+		Key:                  filepath.Base(cacheDir),
+		HasGoSum:             hasGoSum,
+		SyntheticModuleCache: syntheticModuleCacheABIVersion,
+	}
+	if err := writeJSONAtomically(filepath.Join(tempDir, cacheManifestFileName), manifest); err != nil {
+		return fmt.Errorf("write prepared synthetic module manifest: %w", err)
+	}
+	if err := writeReadySentinel(filepath.Join(tempDir, cacheReadyFileName)); err != nil {
+		return fmt.Errorf("write prepared synthetic module ready file: %w", err)
+	}
+	if err := promoteCacheTempDir(tempDir, cacheDir); err != nil {
+		return fmt.Errorf("promote prepared synthetic module cache: %w", err)
+	}
+	success = true
+	return nil
+}
+
+func preparedSyntheticModuleCachePaths(goSdkPath string, configuredVersions map[string]string) (string, cachePaths, error) {
+	key, err := preparedSyntheticModuleCacheKey(goSdkPath, configuredVersions)
+	if err != nil {
+		return "", cachePaths{}, err
+	}
+	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	if err != nil {
+		return "", cachePaths{}, err
+	}
+	paths := orchestrionCachePaths(cacheRoot, "synthetic-module", key)
+	return paths.entryDir, paths, nil
+}
+
+func preparedSyntheticModuleCacheKey(goSdkPath string, configuredVersions map[string]string) (string, error) {
+	goModDigest, err := digestFileOrMissing("go.mod")
+	if err != nil {
+		return "", err
+	}
+	toolDigest, err := digestFileOrMissing("orchestrion.tool.go")
+	if err != nil {
+		return "", err
+	}
+	return stableDigestParts(
+		"go_mod="+goModDigest,
+		"tool_go="+toolDigest,
+		"configured_versions="+ddTraceVersionsDigest(configuredVersions),
+		"go_sdk="+abs(goSdkPath),
+		"orchestrion="+orchestrionVersionIdentity,
+		"target="+goTargetIdentity(os.Environ()),
+		"synthetic_module_cache="+syntheticModuleCacheABIVersion,
+	), nil
 }
 
 func logOrchestrionTempModuleState() {

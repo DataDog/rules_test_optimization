@@ -159,6 +159,49 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//go:extensions.bzl%orchestrion": {
+      "general": {
+        "bzlTransitiveDigest": "7zzs4cGnMGDdUvUMtiAUI3tGXVNjVfjP+1QQKGNYVks=",
+        "usagesDigest": "uzG4j+dPOAh/T8fqRnNWcwaH4INbm74AsvyHGrBh/Go=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "rules_go_orchestrion_tool": {
+            "bzlFile": "@@//go/private/orchestrion:extensions.bzl",
+            "ruleClassName": "_orchestrion_empty",
+            "attributes": {}
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ],
+          [
+            "",
+            "io_bazel_rules_go",
+            ""
+          ],
+          [
+            "",
+            "io_bazel_rules_go_bazel_features",
+            "bazel_features~"
+          ],
+          [
+            "bazel_features~",
+            "bazel_features_globals",
+            "bazel_features~~version_extension~bazel_features_globals"
+          ],
+          [
+            "bazel_features~",
+            "bazel_features_version",
+            "bazel_features~~version_extension~bazel_features_version"
+          ]
+        ]
+      }
+    },
     "@@rules_java~//java:rules_java_deps.bzl%compatibility_proxy": {
       "general": {
         "bzlTransitiveDigest": "wz/gaA3xHNx01lt9KMTpLRTOGQHRWnTsAPhRfjdk21k=",
