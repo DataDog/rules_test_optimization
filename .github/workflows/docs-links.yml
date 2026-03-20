@@ -55,7 +55,6 @@ jobs:
           lychee \
             --no-progress \
             --verbose \
-            --exclude-mail \
             --accept 429 \
             --max-retries 2 \
             --retry-wait-time 2 \
