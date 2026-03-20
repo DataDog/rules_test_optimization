@@ -42,20 +42,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s globstar nullglob
+          files=(
+            README.md
+            CONTRIBUTING.md
+            AGENTS.md
+            CHANGELOG.md
+            SECURITY.md
+            docs/**/*.md
+            examples/**/*.md
+          )
           lychee \
-            --glob \
             --no-progress \
             --verbose \
             --exclude-mail \
             --accept 429 \
             --max-retries 2 \
             --retry-wait-time 2 \
-            README.md \
-            CONTRIBUTING.md \
-            AGENTS.md \
-            CHANGELOG.md \
-            SECURITY.md \
-            docs/**/*.md \
-            examples/**/*.md
+            "${files[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
