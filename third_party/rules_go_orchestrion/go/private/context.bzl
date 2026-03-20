@@ -609,9 +609,6 @@ def go_context(
     if mode.arm:
         env["GOARM"] = mode.arm
 
-    if orchestrion_version_file:
-        env["RULES_GO_ORCHESTRION_VERSION_FILE"] = orchestrion_version_file.path
-
     if cgo_context_info:
         env.update(cgo_context_info.env)
         cc_toolchain_files = cgo_context_info.cc_toolchain_files

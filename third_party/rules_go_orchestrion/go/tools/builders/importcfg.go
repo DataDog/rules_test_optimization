@@ -701,36 +701,34 @@ func sanitizeModuleExportArchives(exports map[string]string) error {
 
 func moduleExportRequestKey(moduleDir string, goenv *env) (string, error) {
 	moduleDir = abs(moduleDir)
-	var b strings.Builder
-	b.WriteString(moduleDir)
-	b.WriteString("\n")
-	b.WriteString("helper_cache_layout=manifest_seed_v1\n")
-	for _, name := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
-		path := filepath.Join(moduleDir, name)
-		data, err := os.ReadFile(path)
+	parts := []string{
+		"helper_export_cache=" + helperExportCacheABIVersion,
+		"orchestrion=" + orchestrionVersionIdentity,
+		"sdk=" + abs(goenv.sdk),
+		"installsuffix=" + goenv.installSuffix,
+	}
+	syntheticModule, err := isSyntheticOrchestrionModuleDir(moduleDir)
+	if err != nil {
+		return "", err
+	}
+	if syntheticModule {
+		parts = append(parts, "module_root=synthetic")
+	} else {
+		parts = append(parts, "module_root="+moduleDir)
+	}
+	for _, name := range []string{"go.mod", "go.sum", "orchestrion.tool.go", "orchestrion.yml"} {
+		digest, err := digestFileOrMissing(filepath.Join(moduleDir, name))
 		if err != nil {
-			if os.IsNotExist(err) {
-				b.WriteString(name)
-				b.WriteString("=missing\n")
-				continue
-			}
 			return "", err
 		}
-		sum := sha256.Sum256(data)
-		b.WriteString(name)
-		b.WriteString("=")
-		b.WriteString(fmt.Sprintf("%x", sum[:8]))
-		b.WriteString("\n")
+		parts = append(parts, name+"="+digest)
 	}
 	stdlibKey, err := currentWovenStdlibCacheKey(goenv)
 	if err != nil {
 		return "", err
 	}
-	b.WriteString("stdlib=")
-	b.WriteString(stdlibKey)
-	b.WriteString("\n")
-	key := sha256.Sum256([]byte(b.String()))
-	return fmt.Sprintf("%x", key[:8]), nil
+	parts = append(parts, "stdlib="+stdlibKey)
+	return stableDigestParts(parts...), nil
 }
 
 func currentWovenStdlibCacheKey(goenv *env) (string, error) {
@@ -818,6 +816,9 @@ func seedWovenStdlibCache(goenv *env, cacheRoot string) error {
 	if len(packages) == 0 {
 		return nil
 	}
+	if seededStdlibCacheReady(cacheRoot, packages) {
+		return nil
+	}
 	destExports, err := resolveCacheStdlibExportsAt(goenv, packages, cacheRoot)
 	if err != nil {
 		return err
@@ -838,7 +839,7 @@ func seedWovenStdlibCache(goenv *env, cacheRoot string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		if err := copyArchiveFile(src, dst); err != nil {
+		if err := hardlinkOrCopyFile(src, dst); err != nil {
 			return fmt.Errorf("copy seeded stdlib archive %s -> %s: %w", src, dst, err)
 		}
 		relDst := dst
@@ -854,10 +855,38 @@ func seedWovenStdlibCache(goenv *env, cacheRoot string) error {
 		return nil
 	}
 	manifestPath := filepath.Join(abs(cacheRoot), orchestrionStdlibCacheManifestName)
-	if err := os.WriteFile(manifestPath, []byte(manifest.String()), 0o644); err != nil {
+	if err := writeFileAtomically(manifestPath, []byte(manifest.String()), 0o644); err != nil {
 		return fmt.Errorf("write seeded stdlib cache manifest at %s: %w", manifestPath, err)
 	}
 	return nil
+}
+
+func seededStdlibCacheReady(cacheRoot string, packages []string) bool {
+	existing, err := readAllStdlibCacheManifest(cacheRoot)
+	if err != nil || len(existing) == 0 {
+		return false
+	}
+	for _, pkg := range packages {
+		path := strings.TrimSpace(existing[pkg])
+		if path == "" {
+			return false
+		}
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func isSyntheticOrchestrionModuleDir(moduleDir string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(moduleDir, "go.mod"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.Contains(string(data), "module bazel_orchestrion_temp"), nil
 }
 
 func syncDirectoryTree(srcRoot, dstRoot string) error {

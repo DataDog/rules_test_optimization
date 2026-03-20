@@ -36,6 +36,13 @@ load(
 load("//go/private:sdk.bzl", "parse_version")
 load("//go/private/actions:utils.bzl", "quote_opts")
 
+def _orchestrion_action_env(base_env, version_file = None):
+    if not version_file:
+        return base_env
+    env = dict(base_env)
+    env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
+    return env
+
 def emit_stdlib(go):
     """Returns a standard library for the target configuration.
 
@@ -95,6 +102,7 @@ def _build_stdlib_list_json(go):
 
 def _build_env(go):
     env = go.env
+    env = _orchestrion_action_env(env, getattr(go, "orchestrion_version_file", None))
 
     if go.mode.pure:
         env.update({"CGO_ENABLED": "0"})

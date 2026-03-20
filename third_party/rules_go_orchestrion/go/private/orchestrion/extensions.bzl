@@ -69,6 +69,19 @@ def _validate_dd_trace_go_versions_keys(version_map):
             details.append("unexpected keys: %s" % ", ".join(sorted(extra)))
         fail("dd_trace_go_versions must contain exactly the supported tracer modules (%s)" % "; ".join(details))
 
+def _looks_like_canonical_dd_trace_go_version(version):
+    if not version or not version.startswith("v") or version.count(".") < 2:
+        return False
+    for idx in range(len(version)):
+        ch = version[idx]
+        if (("a" <= ch and ch <= "z") or
+            ("A" <= ch and ch <= "Z") or
+            ("0" <= ch and ch <= "9") or
+            ch in ".+-"):
+            continue
+        return False
+    return True
+
 def _neutral_dd_trace_check_go_mod(version_map = None):
     if version_map == None:
         return """module ddtraceversioncheck
@@ -97,52 +110,83 @@ def _ctx_execute_or_fail(ctx, args, env, error_prefix):
         fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
     return result
 
+def _parse_key_value_lines(output, expected_keys, error_prefix):
+    remaining = {key: True for key in expected_keys}
+    resolved = {}
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split("=", 1)
+        if len(parts) != 2:
+            fail("%s: unexpected output line %r" % (error_prefix, line))
+        key = parts[0].strip()
+        value = parts[1].strip()
+        if key not in remaining:
+            fail("%s: unexpected key %r in output" % (error_prefix, key))
+        if not value:
+            fail("%s: empty value for %r" % (error_prefix, key))
+        resolved[key] = value
+        remaining.pop(key)
+    if remaining:
+        fail("%s: missing output for %s" % (error_prefix, ", ".join(sorted(remaining.keys()))))
+    return resolved
+
+def _batch_resolve_module_versions(ctx, go_path, check_dir, query_by_module, error_prefix):
+    env = _go_env(ctx)
+    format_expr = "{{if .Path}}{{.Path}}={{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}{{end}}"
+    args = [
+        str(go_path),
+        "-C",
+        check_dir,
+        "list",
+        "-m",
+        "-mod=mod",
+        "-f",
+        format_expr,
+    ]
+    for module_path in _DD_TRACE_GO_MODULES:
+        args.append("%s@%s" % (module_path, query_by_module[module_path]))
+    result = _ctx_execute_or_fail(ctx, args, env, error_prefix)
+    return _parse_key_value_lines(result.stdout, _DD_TRACE_GO_MODULES, error_prefix)
+
 def _run_dd_trace_go_package_preflight(ctx, go_path, version_map):
     env = _go_env(ctx)
     check_dir = ".ddtrace_version_check"
     ctx.file(check_dir + "/go.mod", _neutral_dd_trace_check_go_mod(version_map))
 
-    for package_path in _DD_TRACE_GO_PREFLIGHT_PACKAGES:
-        _ctx_execute_or_fail(
-            ctx,
-            [
-                str(go_path),
-                "-C",
-                check_dir,
-                "list",
-                "-mod=mod",
-                package_path,
-            ],
-            env,
-            "Failed dd-trace-go package preflight for %s" % package_path,
-        )
+    _ctx_execute_or_fail(
+        ctx,
+        [
+            str(go_path),
+            "-C",
+            check_dir,
+            "list",
+            "-mod=mod",
+        ] + _DD_TRACE_GO_PREFLIGHT_PACKAGES,
+        env,
+        "Failed dd-trace-go package preflight",
+    )
 
 def _validated_shared_dd_trace_go_versions(ctx, go_path, query):
-    env = _go_env(ctx)
+    if _looks_like_canonical_dd_trace_go_version(query):
+        return _dd_trace_go_versions_from_shared(query)
+
     check_dir = ".ddtrace_version_check"
     ctx.file(check_dir + "/go.mod", _neutral_dd_trace_check_go_mod())
 
+    query_by_module = {module_path: query for module_path in _DD_TRACE_GO_MODULES}
+    resolved_by_module = _batch_resolve_module_versions(
+        ctx,
+        go_path,
+        check_dir,
+        query_by_module,
+        "Failed to resolve dd-trace-go query %r" % query,
+    )
     resolved_pairs = []
     resolved_versions = []
     for module_path in _DD_TRACE_GO_MODULES:
-        result = _ctx_execute_or_fail(
-            ctx,
-            [
-                str(go_path),
-                "-C",
-                check_dir,
-                "list",
-                "-m",
-                "-json",
-                "%s@%s" % (module_path, query),
-            ],
-            env,
-            "Failed to resolve dd-trace-go query %r for %s" % (query, module_path),
-        )
-        decoded = json.decode(result.stdout)
-        version = decoded.get("Version", "").strip()
-        if not version:
-            fail("Failed to resolve dd-trace-go query %r for %s: empty resolved version" % (query, module_path))
+        version = resolved_by_module[module_path]
         resolved_pairs.append("%s=%s" % (module_path, version))
         resolved_versions.append(version)
 
@@ -160,29 +204,22 @@ def _validated_shared_dd_trace_go_versions(ctx, go_path, query):
 
 def _validated_per_module_dd_trace_go_versions(ctx, go_path, version_map):
     _validate_dd_trace_go_versions_keys(version_map)
+    if all([_looks_like_canonical_dd_trace_go_version(version_map[module_path]) for module_path in _DD_TRACE_GO_MODULES]):
+        return _copy_dd_trace_go_versions(version_map)
 
-    env = _go_env(ctx)
     check_dir = ".ddtrace_version_check"
     ctx.file(check_dir + "/go.mod", _neutral_dd_trace_check_go_mod())
 
+    resolved_versions = _batch_resolve_module_versions(
+        ctx,
+        go_path,
+        check_dir,
+        version_map,
+        "Failed to validate dd_trace_go_versions",
+    )
     for module_path in _DD_TRACE_GO_MODULES:
         query = version_map[module_path]
-        result = _ctx_execute_or_fail(
-            ctx,
-            [
-                str(go_path),
-                "-C",
-                check_dir,
-                "list",
-                "-m",
-                "-json",
-                "%s@%s" % (module_path, query),
-            ],
-            env,
-            "Failed to validate dd_trace_go_versions[%r]=%r" % (module_path, query),
-        )
-        decoded = json.decode(result.stdout)
-        resolved = decoded.get("Version", "").strip()
+        resolved = resolved_versions[module_path]
         if not resolved:
             fail("Failed to validate dd_trace_go_versions[%r]=%r: empty resolved version" % (module_path, query))
         if resolved != query:
@@ -409,31 +446,20 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
 
     # Build the patched Orchestrion tool from source with the same Go version
     # family the Bazel integration expects.
+    edit_args = [
+        str(go_path),
+        "mod",
+        "edit",
+    ]
     for module_path in _DD_TRACE_GO_MODULES:
-        upgrade_result = ctx.execute(
-            [
-                str(go_path),
-                "mod",
-                "edit",
-                "-require=%s@%s" % (module_path, dd_trace_go_versions[module_path]),
-            ],
-            timeout = 120,
-            environment = _go_env(ctx),
-        )
-        if upgrade_result.return_code != 0:
-            fail("Failed to upgrade dd-trace-go in orchestrion tool go.mod for %s: %s\n%s" % (module_path, upgrade_result.stdout, upgrade_result.stderr))
-
-    pin_result = ctx.execute(
-        [
-            str(go_path),
-            "get",
-            "github.com/DataDog/dd-trace-go/v2/orchestrion@%s" % dd_trace_go_root_version,
-        ],
-        timeout = 600,
+        edit_args.append("-require=%s@%s" % (module_path, dd_trace_go_versions[module_path]))
+    upgrade_result = ctx.execute(
+        edit_args,
+        timeout = 120,
         environment = _go_env(ctx),
     )
-    if pin_result.return_code != 0:
-        fail("Failed to pin dd-trace-go/v2/orchestrion in orchestrion tool go.mod: %s\n%s" % (pin_result.stdout, pin_result.stderr))
+    if upgrade_result.return_code != 0:
+        fail("Failed to upgrade dd-trace-go in orchestrion tool go.mod: %s\n%s" % (upgrade_result.stdout, upgrade_result.stderr))
 
     tidy_result = ctx.execute(
         [
@@ -445,7 +471,7 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
         environment = _go_env(ctx),
     )
     if tidy_result.return_code != 0:
-        fail("Failed to tidy orchestrion tool go.mod after upgrading dd-trace-go: %s\n%s" % (tidy_result.stdout, tidy_result.stderr))
+        fail("Failed to tidy orchestrion tool modules after upgrading dd-trace-go: %s\n%s" % (tidy_result.stdout, tidy_result.stderr))
 
     result = ctx.execute(
         [

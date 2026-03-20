@@ -49,6 +49,13 @@ def _embedlookupdir_arg(src):
         root_relative = root_relative[1:]
     return root_relative
 
+def _orchestrion_action_env(base_env, version_file = None):
+    if not version_file:
+        return base_env
+    env = dict(base_env)
+    env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
+    return env
+
 def emit_compilepkg(
         go,
         sources = None,
@@ -171,12 +178,13 @@ def emit_compilepkg(
 
     # cgo and the linker action don't support path mapping yet
     # TODO: Remove the second condition after https://github.com/bazelbuild/bazel/pull/21921.
+    version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
     if cgo or "local" in go._ctx.attr.tags:
         # cgo doesn't support path mapping yet
-        env = go.env
+        env = _orchestrion_action_env(go.env, version_file)
         execution_requirements = {}
     else:
-        env = go.env_for_path_mapping
+        env = _orchestrion_action_env(go.env_for_path_mapping, version_file)
         execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT
     cgo_go_srcs = None
     if cgo:
@@ -208,8 +216,8 @@ def emit_compilepkg(
     if go.orchestrion:
         compile_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
-        if getattr(go, "orchestrion_version_file", None):
-            inputs_direct.append(go.orchestrion_version_file)
+        if version_file:
+            inputs_direct.append(version_file)
 
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(sdk.go)

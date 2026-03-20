@@ -1,4 +1,5 @@
 exports_files([
+    "benchmark_go_orchestrion_perf.py",
     "check_bazelversion_sync.py",
     "check_module_versions.py",
     "diff_rules_go_fork.py",
