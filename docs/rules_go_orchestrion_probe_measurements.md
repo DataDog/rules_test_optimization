@@ -258,6 +258,41 @@ Measured result from that kept variant:
   - `extensions.go_build_initial`: `55.091s` with fallback
   - `extensions.go_mod_tidy`: `30.131s`
   - `extensions.go_build_retry`: `37.981s`
+
+## Woven Stdlib Snapshot Rollback
+
+One later stdlib experiment looked good from the build timings and was pushed,
+but it had to be rolled back.
+
+### What happened
+
+The host-side woven stdlib snapshot cache made build/test timing look better,
+but it silently broke runtime weaving:
+
+- Bazel builds still succeeded
+- Bazel tests still passed
+- the test binary still contained `dd-trace-go`
+- but CI Visibility never started at runtime
+- tracer startup logs disappeared
+- payload files were not written
+- the uploader then had nothing to upload
+
+This failure reproduced both in CI and locally.
+
+### Practical lesson
+
+For stdlib-path changes, build success is not enough.
+
+Any future stdlib optimization must also be validated in
+`../rules_test_optimization_tests` with:
+
+- `DD_TRACE_DEBUG=1`
+- `DD_CIVISIBILITY_ENABLED=1`
+- confirmation that the tracer startup logs appear
+- confirmation that payload files are written under `test.outputs/payloads`
+
+If those runtime signals are missing, the optimization is not safe even if the
+build and test steps are green.
   - `extensions.orchestrion_build_total`: `216.628s`
   - end-to-end build: `305.653s` elapsed
 - warm bootstrap:

@@ -348,6 +348,13 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			return fmt.Errorf("stdlib: persist orchestrion stdlib exports: %w", err)
 		}
 		persistSpan.End(nil)
+		// Keep this path tied to the archives produced by the current stdlib
+		// install. A previous host-side stdlib snapshot reuse experiment made the
+		// build look correct while silently breaking runtime weaving: tests still
+		// passed, but CI Visibility never started and no payload files were
+		// emitted. Any future stdlib reuse optimization must be validated with a
+		// real consumer run that checks tracer startup logs and payload-file
+		// output, not just build success.
 		return nil
 	}
 	if err := goenv.runCommand(installArgs); err != nil {
