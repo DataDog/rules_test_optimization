@@ -220,21 +220,15 @@ func copyFileIfExists(src, dst string) (bool, error) {
 	return true, writeFileAtomically(dst, data, 0o644)
 }
 
-// hardlinkOrCopyFile refreshes dst from src while preferring a hardlink on
-// filesystems that support it. The cache directories in this fork treat these
-// archives as immutable content-addressed blobs, so linking is safe and avoids
-// an extra byte-for-byte copy on the common same-volume path.
+// hardlinkOrCopyFile refreshes dst from src. The helper keeps the old name
+// because multiple cache-seeding paths share it, but it intentionally uses a
+// plain copy so later cache warmup steps can rewrite destination files without
+// inheriting read-only permissions or link relationships from Go's cache.
 func hardlinkOrCopyFile(src, dst string) error {
-	if filepath.Clean(src) == filepath.Clean(dst) {
-		return nil
-	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
 	_ = os.Remove(dst)
-	if err := os.Link(src, dst); err == nil {
-		return nil
-	}
 	return copyArchiveFile(src, dst)
 }
 

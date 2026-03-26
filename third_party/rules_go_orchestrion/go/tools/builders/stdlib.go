@@ -413,7 +413,7 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		if err := hardlinkOrCopyFile(src, dst); err != nil {
+		if err := copyArchiveFile(src, dst); err != nil {
 			return fmt.Errorf("copy %s -> %s: %w", src, dst, err)
 		}
 		persistedExports[pkg] = dst
