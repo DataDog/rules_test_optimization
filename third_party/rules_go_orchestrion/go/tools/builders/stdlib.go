@@ -404,6 +404,7 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 		keys = append(keys, pkg)
 	}
 	sort.Strings(keys)
+	persistedExports := make(map[string]string, len(exports))
 	var manifest strings.Builder
 	for _, pkg := range keys {
 		src := exports[pkg]
@@ -412,9 +413,10 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		if err := copyArchiveFile(src, dst); err != nil {
+		if err := hardlinkOrCopyFile(src, dst); err != nil {
 			return fmt.Errorf("copy %s -> %s: %w", src, dst, err)
 		}
+		persistedExports[pkg] = dst
 		manifest.WriteString(pkg)
 		manifest.WriteString("=")
 		manifest.WriteString(relDst)
@@ -433,21 +435,11 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 	if verbose {
 		fmt.Fprintf(os.Stderr, "stdlib: wrote orchestrion export manifest %s\n", manifestPath)
 	}
-	for _, pkg := range keys {
-		relDst := filepath.FromSlash(pkg) + ".a"
-		src := filepath.Join(root, relDst)
-		dst := filepath.Join(pkgRoot, relDst)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := copyArchiveFile(src, dst); err != nil {
-			return fmt.Errorf("sync persisted stdlib archive %s -> %s: %w", src, dst, err)
-		}
-		if verbose {
-			fmt.Fprintf(os.Stderr, "stdlib: synced persisted orchestrion export %s -> %s\n", src, dst)
-		}
-	}
-	if err := syncPersistedOrchestrionExportsToCache(goenv, exports, verbose); err != nil {
+	// pkgRoot is already the source of truth for the woven stdlib archives we
+	// just copied into the persistent export root. Copying those same files back
+	// onto pkgRoot only rewrites the exact same paths and adds I/O without
+	// changing the current action outputs.
+	if err := syncPersistedOrchestrionExportsToCache(goenv, persistedExports, verbose); err != nil {
 		return fmt.Errorf("sync persisted stdlib archives into cache exports: %w", err)
 	}
 	return nil
