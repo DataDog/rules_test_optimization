@@ -93,6 +93,18 @@ go_test(
 )
 
 go_test(
+    name = "compilepkg_test",
+    size = "small",
+    srcs = [
+        "compilepkg_test.go",
+        ":builder_srcs",
+    ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
+)
+
+go_test(
     name = "importcfg_test",
     size = "small",
     srcs = [
@@ -115,6 +127,15 @@ go_test(
     x_defs = {
         "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
     },
+)
+
+go_test(
+    name = "probe_test",
+    size = "small",
+    srcs = [
+        "probe.go",
+        "probe_test.go",
+    ],
 )
 
 filegroup(

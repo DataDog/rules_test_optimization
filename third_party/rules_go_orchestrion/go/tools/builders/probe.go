@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,13 +30,28 @@ const (
 	// vendored rules_go fork when set to a truthy value.
 	orchestrionProbeEnvVar = "RULES_GO_ORCHESTRION_PROBE"
 
+	// orchestrionProbeFileEnvVar optionally mirrors builder probe lines into a
+	// host-visible file so successful Bazel actions do not hide the timings.
+	orchestrionProbeFileEnvVar = "RULES_GO_ORCHESTRION_PROBE_FILE"
+
 	// orchestrionProbePrefix is the stable line prefix emitted for every probe.
 	orchestrionProbePrefix = "RULES_GO_ORCHESTRION_PROBE"
+
+	// orchestrionProbeDefaultFileName is the default file name used when probe
+	// collection is mirrored into the shared Orchestrion cache.
+	orchestrionProbeDefaultFileName = "builder-probes.log"
+
+	// orchestrionProbeSharedCacheDirName matches the stable shared cache root
+	// already used by the Orchestrion builders for local persistent state.
+	orchestrionProbeSharedCacheDirName = "datadog-orchestrion-go-cache"
 )
 
 var (
-	orchestrionProbeEnabledOnce sync.Once
-	orchestrionProbeEnabledFlag bool
+	orchestrionProbeEnabledOnce  sync.Once
+	orchestrionProbeEnabledFlag  bool
+	orchestrionProbeFilePathOnce sync.Once
+	orchestrionProbeFilePath     string
+	orchestrionProbeWriteMu      sync.Mutex
 )
 
 // probeField is a single structured key/value attribute attached to a probe.
@@ -98,6 +114,7 @@ func emitProbeLine(phase string, elapsed time.Duration, fields ...probeField) {
 	merged := make([]probeField, 0, len(fields)+3)
 	merged = append(merged,
 		newProbeField("phase", phase),
+		newProbeField("pid", strconv.Itoa(os.Getpid())),
 		newProbeField("elapsed_ms", fmt.Sprintf("%.3f", float64(elapsed)/float64(time.Millisecond))),
 		newProbeField("ts_unix_ms", strconv.FormatInt(time.Now().UnixMilli(), 10)),
 	)
@@ -118,7 +135,9 @@ func emitProbeLine(phase string, elapsed time.Duration, fields ...probeField) {
 		b.WriteString(strconv.Quote(field.Value))
 	}
 	b.WriteByte('\n')
-	_, _ = os.Stderr.WriteString(b.String())
+	line := b.String()
+	_, _ = os.Stderr.WriteString(line)
+	appendProbeFile(line)
 }
 
 // probeStatus converts an error value into a stable probe status token.
@@ -137,4 +156,99 @@ func truthyEnv(value string) bool {
 	default:
 		return false
 	}
+}
+
+// probeFilePath returns the host-visible file used to mirror builder probe
+// lines for successful Bazel actions.
+func probeFilePath() string {
+	orchestrionProbeFilePathOnce.Do(func() {
+		configuredPath := strings.TrimSpace(os.Getenv(orchestrionProbeFileEnvVar))
+		if configuredPath == "" {
+			orchestrionProbeFilePath = defaultProbeFilePath()
+			return
+		}
+		if filepath.IsAbs(configuredPath) {
+			orchestrionProbeFilePath = configuredPath
+			return
+		}
+		orchestrionProbeFilePath = filepath.Join(orchestrionProbeDir(), configuredPath)
+	})
+	return orchestrionProbeFilePath
+}
+
+// appendProbeFile mirrors probe lines into a shared append-only file when the
+// caller requested it. This is best-effort instrumentation and must never
+// change builder behavior if the file is unavailable.
+func appendProbeFile(line string) {
+	path := probeFilePath()
+	if path == "" {
+		return
+	}
+
+	orchestrionProbeWriteMu.Lock()
+	defer orchestrionProbeWriteMu.Unlock()
+
+	if appendProbeLineToPath(path, line) == nil {
+		return
+	}
+	if path != defaultProbeFilePath() {
+		_ = appendProbeLineToPath(defaultProbeFilePath(), line)
+	}
+}
+
+// defaultProbeFilePath keeps probe collection under the same shared cache root
+// the Orchestrion builders already use for their persistent state.
+func defaultProbeFilePath() string {
+	return filepath.Join(orchestrionProbeDir(), orchestrionProbeDefaultFileName)
+}
+
+// orchestrionProbeDir is the stable directory where probe logs are collected.
+func orchestrionProbeDir() string {
+	return filepath.Join(orchestrionProbeCacheRoot(), "probes")
+}
+
+// appendProbeLineToPath best-effort appends a probe line to the requested
+// collection file without changing builder behavior on failure.
+func appendProbeLineToPath(path, line string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString(line)
+	return err
+}
+
+// orchestrionProbeCacheRoot mirrors the builder cache root selection so probe
+// files land in a location that survives across local Bazel output bases.
+func orchestrionProbeCacheRoot() string {
+	if cacheRoot := strings.TrimSpace(os.Getenv("GOPATH")); cacheRoot != "" {
+		return probeAbs(cacheRoot)
+	}
+	if cacheDir := strings.TrimSpace(os.Getenv("XDG_CACHE_HOME")); cacheDir != "" {
+		return filepath.Join(probeAbs(cacheDir), orchestrionProbeSharedCacheDirName)
+	}
+	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
+		return filepath.Join(probeAbs(cacheDir), orchestrionProbeSharedCacheDirName)
+	}
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(probeAbs(home), ".cache", orchestrionProbeSharedCacheDirName)
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil && strings.TrimSpace(homeDir) != "" {
+		return filepath.Join(probeAbs(homeDir), ".cache", orchestrionProbeSharedCacheDirName)
+	}
+	return filepath.Join(os.TempDir(), orchestrionProbeSharedCacheDirName)
+}
+
+// probeAbs normalizes probe cache paths without failing the builder if a path
+// cannot be absolutized.
+func probeAbs(path string) string {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return absPath
 }

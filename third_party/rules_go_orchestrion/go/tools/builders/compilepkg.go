@@ -767,16 +767,43 @@ type compiledModuleArchive struct {
 }
 
 type helperArchiveManifest struct {
-	Key                string                              `json:"key"`
-	ExportRoot         string                              `json:"export_root"`
-	HelperArchiveCache string                              `json:"helper_archive_cache"`
-	Packages           map[string]helperArchiveManifestPkg `json:"packages"`
+	Key                   string                              `json:"key"`
+	KeyParts              []string                            `json:"key_parts,omitempty"`
+	ExportRoot            string                              `json:"export_root"`
+	HelperArchiveCache    string                              `json:"helper_archive_cache"`
+	SourcePackages        []string                            `json:"source_packages,omitempty"`
+	ExternalPackages      []string                            `json:"external_packages,omitempty"`
+	DependencyClosureHash string                              `json:"dependency_closure_hash,omitempty"`
+	Packages              map[string]helperArchiveManifestPkg `json:"packages"`
 }
 
 type helperArchiveManifestPkg struct {
 	CompilePath string            `json:"compile_path"`
 	LinkPath    string            `json:"link_path"`
 	LinkClosure map[string]string `json:"link_closure"`
+}
+
+// helperDecisionManifest stores the reusable synthetic testmain dependency
+// classification so helper bundle rebuilds can skip rediscovering the same
+// source-compile closure on later cold misses.
+type helperDecisionManifest struct {
+	Key                   string                           `json:"key"`
+	KeyParts              []string                         `json:"key_parts,omitempty"`
+	HelperDecisionCache   string                           `json:"helper_decision_cache"`
+	SourceDecisions       map[string]bool                  `json:"source_decisions"`
+	SourcePackages        []string                         `json:"source_packages"`
+	ExternalPackages      []string                         `json:"external_packages"`
+	DependencyClosureHash string                           `json:"dependency_closure_hash,omitempty"`
+	Metadata              map[string]modulePackageMetadata `json:"metadata"`
+}
+
+// syntheticTestmainHelperDecisionState is the in-memory view of the persisted
+// helper decision manifest used while rebuilding helper bundles.
+type syntheticTestmainHelperDecisionState struct {
+	metaCache        map[string]*modulePackageMetadata
+	sourceDecisions  map[string]bool
+	sourcePackages   []string
+	externalPackages []string
 }
 
 func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir string, packages []string) (_ map[string]compiledModuleArchive, _ string, err error) {
@@ -797,7 +824,7 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 		return nil, "", nil
 	}
 
-	cachePaths, err := syntheticTestmainHelperCachePaths(goenv)
+	cachePaths, helperKeyParts, err := syntheticTestmainHelperCachePaths(goenv)
 	if err != nil {
 		return nil, "", err
 	}
@@ -818,6 +845,10 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 	)
 
 	resolveModuleDir, err := prepareSyntheticTestmainModuleDir(workDir)
+	if err != nil {
+		return nil, "", err
+	}
+	decisionCachePaths, decisionKeyParts, err := syntheticTestmainHelperDecisionCachePaths(goenv)
 	if err != nil {
 		return nil, "", err
 	}
@@ -847,31 +878,25 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 	if err := prepareModuleExportRootAt(goenv, exportRoot); err != nil {
 		return nil, "", err
 	}
-	metaCache, err := loadModulePackageMetadataBatch(goenv, resolveModuleDir, exportRoot, selected)
+	decisionState, err := loadOrBuildSyntheticTestmainHelperDecisionState(goenv, resolveModuleDir, decisionCachePaths, decisionKeyParts, selected)
 	if err != nil {
 		return nil, "", err
 	}
 	compiled := make(map[string]compiledModuleArchive, len(selected))
-	sourceDecisions := make(map[string]bool)
 	sourceCompiledSet := make(map[string]bool, len(selected))
 	for _, pkg := range selected {
 		sourceCompiledSet[pkg] = true
 	}
-	for _, pkg := range selected {
-		if _, err := packageNeedsSyntheticSourceCompile(goenv, resolveModuleDir, exportRoot, pkg, sourceCompiledSet, sourceDecisions, metaCache, map[string]bool{}); err != nil {
-			return nil, "", err
-		}
-	}
-	externalExports, err := resolveSyntheticTestmainExternalExports(goenv, resolveModuleDir, exportRoot, sourceCompiledSet, sourceDecisions, metaCache)
+	externalExports, err := resolveSyntheticTestmainExternalExports(goenv, resolveModuleDir, decisionState.externalPackages)
 	if err != nil {
 		return nil, "", err
 	}
 	for _, pkg := range selected {
-		if _, _, err := compileSyntheticTestmainSourcePackage(goenv, pack, workDir, resolveModuleDir, exportRoot, sourceCompiledSet, sourceDecisions, metaCache, compiled, externalExports, pkg); err != nil {
+		if _, _, err := compileSyntheticTestmainSourcePackage(goenv, pack, workDir, resolveModuleDir, exportRoot, sourceCompiledSet, decisionState.sourceDecisions, decisionState.metaCache, compiled, externalExports, pkg); err != nil {
 			return nil, "", err
 		}
 	}
-	if err := writeSyntheticTestmainHelperManifest(tempEntryDir, compiled); err != nil {
+	if err := writeSyntheticTestmainHelperManifest(tempEntryDir, compiled, decisionState, helperKeyParts); err != nil {
 		return nil, "", err
 	}
 	if err := writeReadySentinel(filepath.Join(tempEntryDir, cacheReadyFileName)); err != nil {
@@ -900,7 +925,9 @@ func prepareSyntheticTestmainModuleDir(workDir string) (string, error) {
 	return moduleDir, nil
 }
 
-func prepareModuleExportRoot(goenv *env, moduleDir string) (string, error) {
+// prepareModuleExportRoot returns the shared module-export cache root for a
+// specific module and request package set.
+func prepareModuleExportRoot(goenv *env, moduleDir string, packages []string) (string, error) {
 	env := append([]string{}, os.Environ()...)
 	gopath := getEnv(env, "GOPATH")
 	if gopath == "" {
@@ -911,7 +938,7 @@ func prepareModuleExportRoot(goenv *env, moduleDir string) (string, error) {
 		return "", fmt.Errorf("prepare module gopath: %w", err)
 	}
 
-	requestKey, err := moduleExportRequestKey(moduleDir, goenv)
+	requestKey, _, err := moduleExportRequestKey(moduleDir, goenv, packages)
 	if err != nil {
 		return "", fmt.Errorf("derive module export request key: %w", err)
 	}
@@ -1071,37 +1098,91 @@ func loadModulePackageMetadataCached(goenv *env, moduleDir, exportRoot string, c
 	return meta, nil
 }
 
-func syntheticTestmainHelperCachePaths(goenv *env) (cachePaths, error) {
+func syntheticTestmainHelperCachePaths(goenv *env) (cachePaths, []string, error) {
+	keyParts, err := syntheticTestmainHelperCacheKeyParts(goenv)
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	return orchestrionCachePaths(cacheRoot, "synthetic-testmain-helpers", stableDigestParts(keyParts...)), keyParts, nil
+}
+
+// syntheticTestmainHelperCacheKeyParts returns the exact inputs that define the
+// compiled helper bundle cache identity.
+func syntheticTestmainHelperCacheKeyParts(goenv *env) ([]string, error) {
 	configuredVersions, err := configuredDDTraceGoVersions()
 	if err != nil {
-		return cachePaths{}, err
+		return nil, err
+	}
+	sdkIdentity, err := goSDKCacheIdentity(goenv.sdk)
+	if err != nil {
+		return nil, err
 	}
 	stdlibKey, err := currentWovenStdlibCacheKey(goenv)
 	if err != nil {
-		return cachePaths{}, err
+		return nil, err
 	}
-	key := stableDigestParts(
-		"configured_versions="+ddTraceVersionsDigest(configuredVersions),
-		"sdk="+abs(goenv.sdk),
-		"installsuffix="+goenv.installSuffix,
-		"stdlib="+stdlibKey,
-		"orchestrion="+orchestrionVersionIdentity,
-		"source_set="+helperSourceSetVersion,
-		"helper_archive_cache="+helperArchiveCacheABIVersion,
-	)
-	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
-	if err != nil {
-		return cachePaths{}, err
-	}
-	return orchestrionCachePaths(cacheRoot, "synthetic-testmain-helpers", key), nil
+	return []string{
+		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
+		"sdk=" + sdkIdentity,
+		"target=" + goTargetIdentity(os.Environ()),
+		"installsuffix=" + goenv.installSuffix,
+		"stdlib=" + stdlibKey,
+		"orchestrion=" + orchestrionVersionIdentity,
+		"source_set=" + helperSourceSetVersion,
+		"helper_archive_cache=" + helperArchiveCacheABIVersion,
+	}, nil
 }
 
-func writeSyntheticTestmainHelperManifest(entryDir string, compiled map[string]compiledModuleArchive) error {
+// syntheticTestmainHelperDecisionCachePaths returns the reusable decision graph
+// cache used to avoid recomputing helper package classification on bundle
+// rebuilds.
+func syntheticTestmainHelperDecisionCachePaths(goenv *env) (cachePaths, []string, error) {
+	keyParts, err := syntheticTestmainHelperDecisionCacheKeyParts(goenv)
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	return orchestrionCachePaths(cacheRoot, "synthetic-testmain-helper-decisions", stableDigestParts(keyParts...)), keyParts, nil
+}
+
+// syntheticTestmainHelperDecisionCacheKeyParts returns the exact inputs that
+// define the helper package decision graph.
+func syntheticTestmainHelperDecisionCacheKeyParts(goenv *env) ([]string, error) {
+	configuredVersions, err := configuredDDTraceGoVersions()
+	if err != nil {
+		return nil, err
+	}
+	sdkIdentity, err := goSDKCacheIdentity(goenv.sdk)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
+		"sdk=" + sdkIdentity,
+		"target=" + goTargetIdentity(os.Environ()),
+		"orchestrion=" + orchestrionVersionIdentity,
+		"source_set=" + helperSourceSetVersion,
+		"helper_decision_cache=" + helperDecisionCacheABIVersion,
+	}, nil
+}
+
+func writeSyntheticTestmainHelperManifest(entryDir string, compiled map[string]compiledModuleArchive, decisionState syntheticTestmainHelperDecisionState, keyParts []string) error {
 	manifest := helperArchiveManifest{
-		Key:                filepath.Base(entryDir),
-		ExportRoot:         "exports",
-		HelperArchiveCache: helperArchiveCacheABIVersion,
-		Packages:           make(map[string]helperArchiveManifestPkg, len(compiled)),
+		Key:                   filepath.Base(entryDir),
+		KeyParts:              append([]string{}, keyParts...),
+		ExportRoot:            "exports",
+		HelperArchiveCache:    helperArchiveCacheABIVersion,
+		SourcePackages:        append([]string{}, decisionState.sourcePackages...),
+		ExternalPackages:      append([]string{}, decisionState.externalPackages...),
+		DependencyClosureHash: helperDecisionClosureHash(decisionState.metaCache),
+		Packages:              make(map[string]helperArchiveManifestPkg, len(compiled)),
 	}
 	for pkg, archive := range compiled {
 		linkClosure := make(map[string]string, len(archive.linkClosure))
@@ -1129,6 +1210,227 @@ func writeSyntheticTestmainHelperManifest(entryDir string, compiled map[string]c
 	return writeJSONAtomically(filepath.Join(entryDir, cacheManifestFileName), manifest)
 }
 
+// loadOrBuildSyntheticTestmainHelperDecisionState loads a reusable helper
+// decision graph if it is already cached; otherwise it rebuilds the graph once
+// and persists it for later helper bundle rebuilds.
+func loadOrBuildSyntheticTestmainHelperDecisionState(goenv *env, moduleDir string, paths cachePaths, keyParts []string, selected []string) (_ syntheticTestmainHelperDecisionState, err error) {
+	if cacheEntryReady(paths) {
+		state, loadErr := loadSyntheticTestmainHelperDecisionManifest(paths)
+		if loadErr == nil {
+			emitProbeLine(
+				"compilepkg.synthetic_testmain_helper_decision_cache_hit",
+				0,
+				newProbeField("entry_dir", paths.entryDir),
+				newProbeField("status", "ok"),
+			)
+			return state, nil
+		}
+		emitProbeLine(
+			"compilepkg.synthetic_testmain_helper_decision_cache_reload_failed",
+			0,
+			newProbeField("entry_dir", paths.entryDir),
+			newProbeField("status", probeStatus(loadErr)),
+		)
+	}
+	emitProbeLine(
+		"compilepkg.synthetic_testmain_helper_decision_cache_miss",
+		0,
+		newProbeField("entry_dir", paths.entryDir),
+		newProbeField("status", "ok"),
+	)
+
+	releaseLock, err := acquireCacheLock(paths.lockDir, cacheLockTimeout, cacheLockStaleAfter)
+	if err != nil {
+		return syntheticTestmainHelperDecisionState{}, err
+	}
+	defer releaseLock()
+
+	if cacheEntryReady(paths) {
+		state, loadErr := loadSyntheticTestmainHelperDecisionManifest(paths)
+		if loadErr == nil {
+			return state, nil
+		}
+		emitProbeLine(
+			"compilepkg.synthetic_testmain_helper_decision_cache_reload_failed",
+			0,
+			newProbeField("entry_dir", paths.entryDir),
+			newProbeField("status", probeStatus(loadErr)),
+		)
+	}
+
+	state, err := buildSyntheticTestmainHelperDecisionState(goenv, moduleDir, selected)
+	if err != nil {
+		return syntheticTestmainHelperDecisionState{}, err
+	}
+	if writeErr := persistSyntheticTestmainHelperDecisionManifest(paths, keyParts, state); writeErr != nil {
+		emitProbeLine(
+			"compilepkg.synthetic_testmain_helper_decision_cache_write_failed",
+			0,
+			newProbeField("entry_dir", paths.entryDir),
+			newProbeField("status", probeStatus(writeErr)),
+		)
+	}
+	return state, nil
+}
+
+// buildSyntheticTestmainHelperDecisionState resolves the helper metadata batch
+// and the recursive source-compile decision graph without compiling archives.
+func buildSyntheticTestmainHelperDecisionState(goenv *env, moduleDir string, selected []string) (_ syntheticTestmainHelperDecisionState, err error) {
+	exportRoot, err := prepareModuleExportRoot(goenv, moduleDir, selected)
+	if err != nil {
+		return syntheticTestmainHelperDecisionState{}, err
+	}
+	metaCache, err := loadModulePackageMetadataBatch(goenv, moduleDir, exportRoot, selected)
+	if err != nil {
+		return syntheticTestmainHelperDecisionState{}, err
+	}
+	sourceDecisions := make(map[string]bool)
+	rootSet := make(map[string]bool, len(selected))
+	for _, pkg := range selected {
+		rootSet[pkg] = true
+	}
+	for _, pkg := range selected {
+		if _, err := packageNeedsSyntheticSourceCompile(goenv, moduleDir, exportRoot, pkg, rootSet, sourceDecisions, metaCache, map[string]bool{}); err != nil {
+			return syntheticTestmainHelperDecisionState{}, err
+		}
+	}
+	return syntheticTestmainHelperDecisionState{
+		metaCache:        metaCache,
+		sourceDecisions:  sourceDecisions,
+		sourcePackages:   sortedTrueDecisionPackages(sourceDecisions),
+		externalPackages: collectSyntheticTestmainExternalPackages(rootSet, sourceDecisions, metaCache),
+	}, nil
+}
+
+// persistSyntheticTestmainHelperDecisionManifest best-effort stores the
+// computed helper dependency graph so later bundle rebuilds can reuse it.
+func persistSyntheticTestmainHelperDecisionManifest(paths cachePaths, keyParts []string, state syntheticTestmainHelperDecisionState) error {
+	tempEntryDir, err := os.MkdirTemp(filepath.Dir(paths.entryDir), filepath.Base(paths.entryDir)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create synthetic helper decision temp dir: %w", err)
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(tempEntryDir)
+		}
+	}()
+	if err := writeSyntheticTestmainHelperDecisionManifest(tempEntryDir, state, keyParts); err != nil {
+		return err
+	}
+	if err := writeReadySentinel(filepath.Join(tempEntryDir, cacheReadyFileName)); err != nil {
+		return fmt.Errorf("write synthetic helper decision ready file: %w", err)
+	}
+	if err := promoteCacheTempDir(tempEntryDir, paths.entryDir); err != nil {
+		return fmt.Errorf("promote synthetic helper decision cache: %w", err)
+	}
+	success = true
+	return nil
+}
+
+// writeSyntheticTestmainHelperDecisionManifest stores the metadata snapshot and
+// recursive source-compile decisions for the current synthetic helper graph.
+func writeSyntheticTestmainHelperDecisionManifest(entryDir string, state syntheticTestmainHelperDecisionState, keyParts []string) error {
+	manifest := helperDecisionManifest{
+		Key:                   filepath.Base(entryDir),
+		KeyParts:              append([]string{}, keyParts...),
+		HelperDecisionCache:   helperDecisionCacheABIVersion,
+		SourceDecisions:       copyBoolMap(state.sourceDecisions),
+		SourcePackages:        append([]string{}, state.sourcePackages...),
+		ExternalPackages:      append([]string{}, state.externalPackages...),
+		DependencyClosureHash: helperDecisionClosureHash(state.metaCache),
+		Metadata:              metadataSnapshotForManifest(state.metaCache),
+	}
+	return writeJSONAtomically(filepath.Join(entryDir, cacheManifestFileName), manifest)
+}
+
+// loadSyntheticTestmainHelperDecisionManifest loads the persisted helper
+// metadata snapshot and validates that the referenced snapshot is complete.
+func loadSyntheticTestmainHelperDecisionManifest(paths cachePaths) (syntheticTestmainHelperDecisionState, error) {
+	data, err := os.ReadFile(paths.manifestPath)
+	if err != nil {
+		return syntheticTestmainHelperDecisionState{}, fmt.Errorf("read synthetic helper decision manifest %s: %w", paths.manifestPath, err)
+	}
+	var manifest helperDecisionManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return syntheticTestmainHelperDecisionState{}, fmt.Errorf("parse synthetic helper decision manifest %s: %w", paths.manifestPath, err)
+	}
+	metaCache := make(map[string]*modulePackageMetadata, len(manifest.Metadata))
+	for pkg, meta := range manifest.Metadata {
+		copyMeta := meta
+		metaCache[pkg] = &copyMeta
+	}
+	if len(metaCache) == 0 {
+		return syntheticTestmainHelperDecisionState{}, fmt.Errorf("synthetic helper decision manifest %s has no metadata", paths.manifestPath)
+	}
+	for _, pkg := range manifest.SourcePackages {
+		if metaCache[pkg] == nil {
+			return syntheticTestmainHelperDecisionState{}, fmt.Errorf("synthetic helper decision manifest %s missing metadata for %s", paths.manifestPath, pkg)
+		}
+	}
+	return syntheticTestmainHelperDecisionState{
+		metaCache:        metaCache,
+		sourceDecisions:  copyBoolMap(manifest.SourceDecisions),
+		sourcePackages:   append([]string{}, manifest.SourcePackages...),
+		externalPackages: append([]string{}, manifest.ExternalPackages...),
+	}, nil
+}
+
+// metadataSnapshotForManifest converts the pointer-based metadata cache into a
+// stable JSON payload that can be written to disk.
+func metadataSnapshotForManifest(metaCache map[string]*modulePackageMetadata) map[string]modulePackageMetadata {
+	snapshot := make(map[string]modulePackageMetadata, len(metaCache))
+	for pkg, meta := range metaCache {
+		if meta == nil {
+			continue
+		}
+		snapshot[pkg] = *meta
+	}
+	return snapshot
+}
+
+// helperDecisionClosureHash summarizes the helper metadata graph in a stable
+// way so manifests can record which dependency closure they describe.
+func helperDecisionClosureHash(metaCache map[string]*modulePackageMetadata) string {
+	lines := make([]string, 0, len(metaCache))
+	for pkg, meta := range metaCache {
+		if meta == nil {
+			continue
+		}
+		imports := append([]string{}, meta.Imports...)
+		sort.Strings(imports)
+		lines = append(lines, pkg+"|"+strings.Join(imports, ","))
+	}
+	sort.Strings(lines)
+	return stableDigestParts(lines...)
+}
+
+// sortedTrueDecisionPackages returns the source-compiled package set in a
+// stable order so manifests remain deterministic across identical runs.
+func sortedTrueDecisionPackages(decisions map[string]bool) []string {
+	packages := make([]string, 0, len(decisions))
+	for pkg, decision := range decisions {
+		if decision {
+			packages = append(packages, pkg)
+		}
+	}
+	sort.Strings(packages)
+	return packages
+}
+
+// copyBoolMap returns a detached copy of a boolean decision map so cache
+// callers cannot accidentally mutate shared state.
+func copyBoolMap(source map[string]bool) map[string]bool {
+	if len(source) == 0 {
+		return map[string]bool{}
+	}
+	copyMap := make(map[string]bool, len(source))
+	for key, value := range source {
+		copyMap[key] = value
+	}
+	return copyMap
+}
+
 func loadSyntheticTestmainHelperCache(paths cachePaths) (map[string]compiledModuleArchive, string, error) {
 	data, err := os.ReadFile(paths.manifestPath)
 	if err != nil {
@@ -1153,7 +1455,9 @@ func loadSyntheticTestmainHelperCache(paths cachePaths) (map[string]compiledModu
 	return compiled, filepath.Join(paths.entryDir, manifest.ExportRoot), nil
 }
 
-func resolveSyntheticTestmainExternalExports(goenv *env, moduleDir, exportRoot string, rootSet map[string]bool, sourceDecisions map[string]bool, metaCache map[string]*modulePackageMetadata) (map[string]string, error) {
+// collectSyntheticTestmainExternalPackages returns the external helper
+// dependencies that still need archive resolution after source compilation.
+func collectSyntheticTestmainExternalPackages(rootSet map[string]bool, sourceDecisions map[string]bool, metaCache map[string]*modulePackageMetadata) []string {
 	externalDeps := make([]string, 0)
 	seen := make(map[string]bool)
 	for pkg, meta := range metaCache {
@@ -1176,7 +1480,13 @@ func resolveSyntheticTestmainExternalExports(goenv *env, moduleDir, exportRoot s
 		}
 	}
 	sort.Strings(externalDeps)
-	return resolveModuleExportsForPackagesWithRoot(goenv, externalDeps, "", moduleDir, exportRoot)
+	return externalDeps
+}
+
+// resolveSyntheticTestmainExternalExports resolves external helper dependency
+// archives through the shared request-keyed module export cache.
+func resolveSyntheticTestmainExternalExports(goenv *env, moduleDir string, externalPackages []string) (map[string]string, error) {
+	return resolveModuleExportsForPackages(goenv, externalPackages, "", moduleDir)
 }
 
 func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg string, rootSet map[string]bool, decisions map[string]bool, metaCache map[string]*modulePackageMetadata, visiting map[string]bool) (bool, error) {

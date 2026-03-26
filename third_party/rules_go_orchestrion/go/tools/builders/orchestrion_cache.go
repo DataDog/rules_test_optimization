@@ -14,8 +14,9 @@ import (
 const (
 	validationCacheABIVersion      = "v1"
 	syntheticModuleCacheABIVersion = "v1"
-	helperExportCacheABIVersion    = "v1"
-	helperArchiveCacheABIVersion   = "v1"
+	helperDecisionCacheABIVersion  = "v1"
+	helperExportCacheABIVersion    = "v2"
+	helperArchiveCacheABIVersion   = "v2"
 	helperSourceSetVersion         = "v1"
 	orchestrionVersionIdentity     = "v1.5.0"
 
@@ -236,6 +237,29 @@ func digestFileOrMissing(path string) (string, error) {
 		return "", err
 	}
 	return shortDigest(data), nil
+}
+
+// goSDKCacheIdentity returns a stable cache identity for the selected Go SDK
+// without depending on Bazel's output-base-specific execroot path. The identity
+// is derived from SDK file contents that remain stable across equivalent
+// checkouts of the same toolchain.
+func goSDKCacheIdentity(sdkPath string) (string, error) {
+	if strings.TrimSpace(sdkPath) == "" {
+		return "default", nil
+	}
+	sdkPath = abs(sdkPath)
+	versionDigest, err := digestFileOrMissing(filepath.Join(sdkPath, "VERSION"))
+	if err != nil {
+		return "", err
+	}
+	buildcfgDigest, err := digestFileOrMissing(filepath.Join(sdkPath, "src", "internal", "buildcfg", "zbootstrap.go"))
+	if err != nil {
+		return "", err
+	}
+	return stableDigestParts(
+		"version="+versionDigest,
+		"buildcfg="+buildcfgDigest,
+	), nil
 }
 
 func shortDigest(data []byte) string {
