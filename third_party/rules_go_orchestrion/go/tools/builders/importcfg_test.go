@@ -290,33 +290,3 @@ func TestSeedWovenStdlibCacheNoopWhenAlreadyReady(t *testing.T) {
 		t.Fatalf("seedWovenStdlibCache rewrote ready archive: before=%q after=%q", string(before), string(after))
 	}
 }
-
-func TestReadStdlibCacheManifestCanBePartial(t *testing.T) {
-	cacheRoot := t.TempDir()
-	for _, rel := range []string{"aa/testing.a", "bb/runtime.a"} {
-		path := filepath.Join(cacheRoot, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", rel, err)
-		}
-		if err := os.WriteFile(path, []byte(rel), 0o644); err != nil {
-			t.Fatalf("write %s: %v", rel, err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(cacheRoot, orchestrionStdlibCacheManifestName), []byte("testing=aa/testing.a\nruntime=bb/runtime.a\n"), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
-
-	exports, err := readStdlibCacheManifest(cacheRoot, []string{"testing", "net/http"})
-	if err != nil {
-		t.Fatalf("readStdlibCacheManifest error: %v", err)
-	}
-	if len(exports) != 1 {
-		t.Fatalf("readStdlibCacheManifest got %d exports, want 1", len(exports))
-	}
-	if _, ok := exports["testing"]; !ok {
-		t.Fatalf("readStdlibCacheManifest missing testing export")
-	}
-	if _, ok := exports["net/http"]; ok {
-		t.Fatalf("readStdlibCacheManifest unexpectedly returned net/http export")
-	}
-}

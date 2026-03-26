@@ -119,17 +119,13 @@ func stableCacheKeyPath(path string) string {
 	path = abs(path)
 	path = filepath.ToSlash(path)
 	for _, marker := range []string{
-		"/execroot/_main",
-		"/execroot/__main__",
-		"/bazel-out",
-		"/external",
+		"/execroot/_main/",
+		"/execroot/__main__/",
+		"/bazel-out/",
+		"/external/",
 	} {
 		if idx := strings.Index(path, marker); idx >= 0 {
-			stable := strings.TrimPrefix(path[idx+1:], "/")
-			if stable != "" {
-				return stable
-			}
-			return strings.TrimPrefix(marker, "/")
+			return path[idx+1:]
 		}
 	}
 	return path

@@ -1260,22 +1260,13 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 	cacheRoot = strings.TrimSpace(cacheRoot)
 	if cacheRoot != "" {
 		if manifestExports, err := readStdlibCacheManifest(cacheRoot, packages); err == nil && len(manifestExports) > 0 {
-			complete := true
-			for _, pkg := range packages {
-				if strings.TrimSpace(manifestExports[pkg]) == "" {
-					complete = false
-					break
-				}
-			}
-			if complete {
-				emitProbeLine(
-					"importcfg.resolve_cache_stdlib_exports_at.manifest_hit",
-					0,
-					newProbeField("package_count", strconv.Itoa(len(manifestExports))),
-					newProbeField("status", "ok"),
-				)
-				return manifestExports, nil
-			}
+			emitProbeLine(
+				"importcfg.resolve_cache_stdlib_exports_at.manifest_hit",
+				0,
+				newProbeField("package_count", strconv.Itoa(len(manifestExports))),
+				newProbeField("status", "ok"),
+			)
+			return manifestExports, nil
 		}
 	}
 	goenv.goroot = abs(goenv.goroot)
