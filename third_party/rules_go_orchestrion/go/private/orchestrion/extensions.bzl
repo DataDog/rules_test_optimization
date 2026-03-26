@@ -463,12 +463,42 @@ def _powershell_single_quoted_literal(value):
     """Render a string as a PowerShell single-quoted literal."""
     return "'%s'" % value.replace("'", "''")
 
+def _parse_certutil_sha256(output):
+    """Extract a SHA-256 digest from certutil -hashfile output."""
+    digest = ""
+    for line in output.splitlines():
+        candidate = line.strip().lower().replace(" ", "")
+        is_hex = bool(candidate)
+        for idx in range(len(candidate)):
+            if candidate[idx] not in "0123456789abcdef":
+                is_hex = False
+                break
+        if is_hex:
+            digest += candidate
+            if len(digest) >= 64:
+                return digest[:64]
+    return digest if len(digest) == 64 else ""
+
 def _binary_sha256(ctx, path):
     file_path = str(ctx.path(path))
     if _is_windows(ctx):
+        certutil = ctx.which("certutil.exe") or ctx.which("certutil")
+        if certutil:
+            result = _ctx_execute_checked(
+                ctx,
+                [str(certutil), "-hashfile", file_path, "SHA256"],
+                timeout = 120,
+            )
+            if result.return_code != 0:
+                fail("Failed to hash Orchestrion bootstrap binary %s with certutil: %s\n%s" % (file_path, result.stdout, result.stderr))
+            digest = _parse_certutil_sha256(result.stdout)
+            if digest:
+                return digest
+            fail("Failed to parse certutil SHA-256 output for %s: %s" % (file_path, result.stdout))
+
         powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
         if not powershell:
-            fail("Could not find PowerShell to hash %s" % file_path)
+            fail("Could not find certutil or PowerShell to hash %s" % file_path)
         command = "$ErrorActionPreference = 'Stop'; (Get-FileHash -Algorithm SHA256 -LiteralPath %s).Hash.ToLowerInvariant()" % _powershell_single_quoted_literal(file_path)
         result = _ctx_execute_checked(
             ctx,
@@ -546,6 +576,7 @@ def _restore_bootstrap_cache(ctx, paths, binary_name):
 
 orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
+    parse_certutil_sha256 = _parse_certutil_sha256,
     powershell_single_quoted_literal = _powershell_single_quoted_literal,
 )
 

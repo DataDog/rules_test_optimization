@@ -29,6 +29,22 @@ def _bootstrap_cache_key_stability_test(ctx):
 
 bootstrap_cache_key_stability_test = unittest.make(_bootstrap_cache_key_stability_test)
 
+def _parse_certutil_sha256_test(ctx):
+    env = unittest.begin(ctx)
+
+    output = """SHA256 hash of C:\\Users\\runneradmin\\orchestrion.exe:
+58 91 b5 b5 22 d5 df 08 6d 0f f0 b1 10 fb d9 d2
+1b b4 fc 71 63 af 34 d0 82 86 a2 e8 46 f6 be 03
+CertUtil: -hashfile command completed successfully.
+"""
+
+    digest = orchestrion_extension_test_helpers.parse_certutil_sha256(output)
+    asserts.equals(env, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03", digest)
+
+    return unittest.end(env)
+
+parse_certutil_sha256_test = unittest.make(_parse_certutil_sha256_test)
+
 def _powershell_single_quoted_literal_test(ctx):
     env = unittest.begin(ctx)
 
@@ -45,5 +61,6 @@ def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
         bootstrap_cache_key_stability_test,
+        parse_certutil_sha256_test,
         powershell_single_quoted_literal_test,
     )
