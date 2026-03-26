@@ -15,10 +15,10 @@
 """Module extension for configuring orchestrion in rules_go."""
 
 DEFAULT_DD_TRACE_GO_VERSION = "v2.6.0"
-ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v1"
+ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v2"
 # Bump this identifier whenever the in-repo Orchestrion patch block changes in
 # a way that should invalidate previously cached bootstrap binaries.
-ORCHESTRION_PATCHSET_ID = "20260326-bootstrap-cache-v1"
+ORCHESTRION_PATCHSET_ID = "20260326-bootstrap-cache-v2-no-tool-repin"
 _DD_TRACE_GO_MODULES = [
     "github.com/DataDog/dd-trace-go/v2",
     "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
@@ -565,7 +565,6 @@ def _orchestrion_build_impl(ctx):
     version_start_ms = _probe_now_ms(ctx)
     dd_trace_go_versions = _validated_dd_trace_go_versions(ctx, go_path, ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
     _probe_emit(ctx, "extensions.validate_dd_trace_go_versions", start_ms = version_start_ms)
-    dd_trace_go_root_version = dd_trace_go_versions["github.com/DataDog/dd-trace-go/v2"]
     binary_name = "orchestrion.exe" if _is_windows(ctx) else "orchestrion_bin"
     go_identity = _go_tool_identity(ctx, go_path)
     bootstrap_cache = _bootstrap_cache_paths(ctx, version, dd_trace_go_versions, go_identity, binary_name)
@@ -582,7 +581,7 @@ def _orchestrion_build_impl(ctx):
             ctx,
             "extensions.orchestrion_build_total",
             start_ms = total_start_ms,
-            extra = {"dd_trace_go_version": dd_trace_go_root_version},
+            extra = {"dd_trace_go_version": dd_trace_go_versions["github.com/DataDog/dd-trace-go/v2"]},
         )
         return
     _probe_emit(
@@ -794,47 +793,10 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     ctx.file(oncompile_diag_path, oncompile_diag_src)
     _probe_emit(ctx, "extensions.patch_source_tree", start_ms = patch_start_ms)
 
-    # Build the patched Orchestrion tool from source with the same Go version
-    # family the Bazel integration expects.
+    # Build the patched Orchestrion tool from its upstream module graph. The
+    # configured tracer versions are written to dd_trace_go_versions.json and
+    # enforced later against the target module by the builder/runtime path.
     go_env = _go_env(ctx)
-    edit_args = [
-        str(go_path),
-        "mod",
-        "edit",
-    ]
-    for module_path in _DD_TRACE_GO_MODULES:
-        edit_args.append("-require=%s@%s" % (module_path, dd_trace_go_versions[module_path]))
-    ctx.report_progress("rules_go_orchestrion: running go mod edit")
-    edit_start_ms = _probe_now_ms(ctx)
-    upgrade_result = ctx.execute(
-        edit_args,
-        timeout = 120,
-        environment = go_env,
-    )
-    _probe_emit(ctx, "extensions.go_mod_edit", start_ms = edit_start_ms, status = "ok" if upgrade_result.return_code == 0 else "error")
-    if upgrade_result.return_code != 0:
-        fail("Failed to upgrade dd-trace-go in orchestrion tool go.mod: %s\n%s" % (upgrade_result.stdout, upgrade_result.stderr))
-
-    download_args = [
-        str(go_path),
-        "mod",
-        "download",
-    ]
-    for module_path in _DD_TRACE_GO_MODULES:
-        download_args.append("%s@%s" % (module_path, dd_trace_go_versions[module_path]))
-    ctx.report_progress("rules_go_orchestrion: downloading pinned tracer modules")
-    download_mod_start_ms = _probe_now_ms(ctx)
-    download_result = ctx.execute(
-        download_args,
-        timeout = 600,
-        environment = go_env,
-    )
-    _probe_emit(ctx, "extensions.go_mod_download", start_ms = download_mod_start_ms, status = "ok" if download_result.return_code == 0 else "error")
-    if download_result.return_code != 0:
-        fail("Failed to download pinned dd-trace-go modules for orchestrion: %s\n%s" % (download_result.stdout, download_result.stderr))
-
-    # Build first and only fall back to `go mod tidy` when the module graph
-    # still needs explicit repair after the tracer-version edits above.
     build_args = [
         str(go_path),
         "build",
@@ -856,38 +818,7 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     if result.return_code == 0:
         _probe_emit(ctx, "extensions.go_build", start_ms = build_start_ms, status = "ok")
     else:
-        if not _needs_tidy_retry(result.stdout, result.stderr):
-            fail("Failed to build orchestrion without needing go mod tidy fallback: %s\n%s" % (result.stdout, result.stderr))
-
-        ctx.report_progress("rules_go_orchestrion: running go mod tidy fallback")
-        tidy_start_ms = _probe_now_ms(ctx)
-        tidy_result = ctx.execute(
-            [
-                str(go_path),
-                "mod",
-                "tidy",
-            ],
-            timeout = 600,
-            environment = go_env,
-        )
-        tidy_status = "ok" if tidy_result.return_code == 0 else "error"
-        _probe_emit(ctx, "extensions.go_mod_tidy_fallback", start_ms = tidy_start_ms, status = tidy_status)
-        _probe_emit(ctx, "extensions.go_mod_tidy", start_ms = tidy_start_ms, status = tidy_status)
-        if tidy_result.return_code != 0:
-            fail("Failed to tidy orchestrion tool modules after upgrading dd-trace-go: %s\n%s" % (tidy_result.stdout, tidy_result.stderr))
-
-        ctx.report_progress("rules_go_orchestrion: rebuilding orchestrion binary after tidy fallback")
-        retry_build_start_ms = _probe_now_ms(ctx)
-        result = ctx.execute(
-            build_args,
-            timeout = 600,
-            environment = go_env,
-        )
-        retry_status = "ok" if result.return_code == 0 else "error"
-        _probe_emit(ctx, "extensions.go_build_retry", start_ms = retry_build_start_ms, status = retry_status)
-        _probe_emit(ctx, "extensions.go_build", start_ms = retry_build_start_ms, status = retry_status)
-        if result.return_code != 0:
-            fail("Failed to build orchestrion after go mod tidy fallback: %s\n%s" % (result.stdout, result.stderr))
+        fail("Failed to build orchestrion from upstream module graph: %s\n%s" % (result.stdout, result.stderr))
 
     _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions)
     cache_write_start_ms = _probe_now_ms(ctx)
@@ -901,14 +832,14 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
             "cache_root": bootstrap_cache.cache_root,
         },
     )
-    _probe_emit(ctx, "extensions.orchestrion_build_total", start_ms = total_start_ms, extra = {"dd_trace_go_version": dd_trace_go_root_version})
+    _probe_emit(ctx, "extensions.orchestrion_build_total", start_ms = total_start_ms, extra = {"dd_trace_go_version": dd_trace_go_versions["github.com/DataDog/dd-trace-go/v2"]})
 
 _orchestrion_build = repository_rule(
     implementation = _orchestrion_build_impl,
     attrs = {
         "version": attr.string(mandatory = True, doc = "Orchestrion version to build"),
-        "dd_trace_go_version": attr.string(default = "", doc = "dd-trace-go version to build Orchestrion against"),
-        "dd_trace_go_versions": attr.string_dict(doc = "Per-module dd-trace-go versions to build Orchestrion against"),
+        "dd_trace_go_version": attr.string(default = "", doc = "dd-trace-go version to validate against the target module for Orchestrion-backed instrumentation"),
+        "dd_trace_go_versions": attr.string_dict(doc = "Per-module dd-trace-go versions to validate against the target module for Orchestrion-backed instrumentation"),
         "log_timing": attr.bool(default = False, doc = "Emit structured timing probes while building Orchestrion"),
     },
 )
@@ -976,10 +907,10 @@ _from_source = tag_class(
         ),
         "dd_trace_go_version": attr.string(
             default = "",
-            doc = "dd-trace-go version to inject for Orchestrion-backed instrumentation.",
+            doc = "dd-trace-go version to validate against the target module for Orchestrion-backed instrumentation.",
         ),
         "dd_trace_go_versions": attr.string_dict(
-            doc = "Per-module dd-trace-go versions to inject for Orchestrion-backed instrumentation.",
+            doc = "Per-module dd-trace-go versions to validate against the target module for Orchestrion-backed instrumentation.",
         ),
         "log_timing": attr.bool(
             default = False,
