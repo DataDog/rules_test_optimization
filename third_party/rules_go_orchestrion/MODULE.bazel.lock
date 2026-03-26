@@ -161,7 +161,7 @@
   "moduleExtensions": {
     "//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "7zzs4cGnMGDdUvUMtiAUI3tGXVNjVfjP+1QQKGNYVks=",
+        "bzlTransitiveDigest": "2nImxuweN9SuW0/3/CCZGZ08EE0lNfsUWx3NW9H8ZWs=",
         "usagesDigest": "uzG4j+dPOAh/T8fqRnNWcwaH4INbm74AsvyHGrBh/Go=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

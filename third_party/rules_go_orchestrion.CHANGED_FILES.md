@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `78`
-- Modified files: `63`
-- Added files: `12`
+- Total changed paths: `82`
+- Modified files: `64`
+- Added files: `15`
 - Removed files: `3`
 
 ## Modified files
@@ -70,6 +70,7 @@ This file is generated. Do not edit by hand.
 - `tests/core/go_binary/pie_darwin_amd64_test.go`
 - `tests/core/go_binary/pie_darwin_test.go`
 - `tests/core/go_binary/pie_linux_test.go`
+- `tests/core/starlark/BUILD.bazel`
 - `tests/core/starlark/sdk_tests.bzl`
 - `tests/core/stdlib/BUILD.bazel`
 - `tests/core/stdlib/buildid_test.go`
@@ -88,6 +89,7 @@ This file is generated. Do not edit by hand.
 - `go/private/orchestrion/BUILD`
 - `go/private/orchestrion/extensions.bzl`
 - `go/tools/.DS_Store`
+- `go/tools/builders/compilepkg_test.go`
 - `go/tools/builders/importcfg_test.go`
 - `go/tools/builders/orchestrion.go`
 - `go/tools/builders/orchestrion_cache.go`
@@ -96,7 +98,9 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/orchestrion_version.go`
 - `go/tools/builders/orchestrion_version_test.go`
 - `go/tools/builders/probe.go`
+- `go/tools/builders/probe_test.go`
 - `tests/core/runfiles/runfiles_remote_test/MODULE.bazel`
+- `tests/core/starlark/orchestrion_extension_tests.bzl`
 
 ## Removed files
 

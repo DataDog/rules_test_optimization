@@ -503,7 +503,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "Q3F9de8J9DVsNuaSVJKzKHHguWYbvtZlwBZhek2wyH4=",
+        "bzlTransitiveDigest": "JOP5B4kvUBd4Ig6QGfbYdeZGO5WZSTMcnMp8Pq63+lE=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

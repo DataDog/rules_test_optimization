@@ -15,6 +15,10 @@
 """Module extension for configuring orchestrion in rules_go."""
 
 DEFAULT_DD_TRACE_GO_VERSION = "v2.6.0"
+ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v1"
+# Bump this identifier whenever the in-repo Orchestrion patch block changes in
+# a way that should invalidate previously cached bootstrap binaries.
+ORCHESTRION_PATCHSET_ID = "20260326-bootstrap-cache-v1"
 _DD_TRACE_GO_MODULES = [
     "github.com/DataDog/dd-trace-go/v2",
     "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
@@ -35,15 +39,70 @@ def _find_go_binary(ctx):
             return path
     fail("Could not find 'go' binary. Please ensure Go is installed.")
 
+def _is_windows(ctx):
+    return ctx.os.name.lower().startswith("windows")
+
+def _path_join(ctx, *parts):
+    sep = "\\" if _is_windows(ctx) else "/"
+    cleaned = []
+    for index, part in enumerate(parts):
+        if part == None:
+            continue
+        text = str(part)
+        if not text:
+            continue
+        if index == 0:
+            cleaned.append(text.rstrip("/\\"))
+        else:
+            cleaned.append(text.strip("/\\"))
+    if not cleaned:
+        return ""
+    return sep.join(cleaned)
+
+def _bootstrap_repo_local_cache_root(ctx):
+    return str(ctx.path(".orchestrion_bootstrap_cache"))
+
+def _bootstrap_host_cache_root(ctx):
+    env = ctx.os.environ
+    xdg_cache_home = (env.get("XDG_CACHE_HOME") or "").strip()
+    if xdg_cache_home:
+        return _path_join(ctx, xdg_cache_home, "datadog-orchestrion-go-cache")
+
+    if _is_windows(ctx):
+        localappdata = (env.get("LOCALAPPDATA") or "").strip()
+        if localappdata:
+            return _path_join(ctx, localappdata, "datadog-orchestrion-go-cache")
+        userprofile = (env.get("USERPROFILE") or "").strip()
+        if userprofile:
+            return _path_join(ctx, userprofile, "AppData", "Local", "datadog-orchestrion-go-cache")
+        return ""
+
+    home = (env.get("HOME") or "").strip()
+    if not home:
+        return ""
+    if "mac" in ctx.os.name.lower() or "darwin" in ctx.os.name.lower():
+        return _path_join(ctx, home, "Library", "Caches", "datadog-orchestrion-go-cache")
+    return _path_join(ctx, home, ".cache", "datadog-orchestrion-go-cache")
+
+def _bootstrap_cache_root(ctx):
+    host_root = _bootstrap_host_cache_root(ctx)
+    if host_root:
+        return host_root
+    return _bootstrap_repo_local_cache_root(ctx)
+
+def _bootstrap_go_cache_root(ctx):
+    return _path_join(ctx, _bootstrap_cache_root(ctx), "go")
+
 def _go_env(ctx):
+    go_cache_root = _bootstrap_go_cache_root(ctx)
     return {
         "GO111MODULE": "on",
         "GOWORK": "off",
         "GOTOOLCHAIN": "go1.25.0+auto",
         "GOPROXY": "https://proxy.golang.org,direct",
         "GOSUMDB": "sum.golang.org",
-        "GOMODCACHE": str(ctx.path(".gomodcache")),
-        "GOCACHE": str(ctx.path(".gocache")),
+        "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
+        "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
     }
 
 def _probe_enabled(ctx):
@@ -79,6 +138,91 @@ def _probe_emit(ctx, phase, start_ms = None, status = "ok", extra = None):
         for key in sorted(extra.keys()):
             fields.append("%s=%r" % (key, str(extra[key])))
     print("RULES_GO_ORCHESTRION_PROBE " + " ".join(fields))
+
+def _sanitize_cache_fragment(value):
+    result = []
+    text = str(value)
+    for idx in range(len(text)):
+        ch = text[idx]
+        if (("a" <= ch and ch <= "z") or
+            ("A" <= ch and ch <= "Z") or
+            ("0" <= ch and ch <= "9") or
+            ch in "._-"):
+            result.append(ch)
+        else:
+            result.append("_")
+    return "".join(result).strip("._-") or "default"
+
+def _copy_ctx_env(ctx):
+    copied = {}
+    for key, value in ctx.os.environ.items():
+        copied[key] = value
+    return copied
+
+def _ctx_execute_checked(ctx, args, timeout = 600, environment = None):
+    if environment == None:
+        environment = _copy_ctx_env(ctx)
+    return ctx.execute(args, timeout = timeout, environment = environment)
+
+def _go_tool_identity(ctx, go_path):
+    version_result = _ctx_execute_checked(ctx, [str(go_path), "version"], timeout = 30)
+    if version_result.return_code != 0:
+        fail("Failed to detect Go tool version: %s\n%s" % (version_result.stdout, version_result.stderr))
+    env_result = _ctx_execute_checked(ctx, [str(go_path), "env", "GOOS", "GOARCH"], timeout = 30)
+    if env_result.return_code != 0:
+        fail("Failed to detect Go tool target: %s\n%s" % (env_result.stdout, env_result.stderr))
+    env_lines = [line.strip() for line in env_result.stdout.splitlines() if line.strip()]
+    if len(env_lines) != 2:
+        fail("Unexpected output from `go env GOOS GOARCH`: %r" % env_result.stdout)
+    return struct(
+        version = version_result.stdout.strip(),
+        goos = env_lines[0],
+        goarch = env_lines[1],
+    )
+
+def _dd_trace_go_versions_cache_fragment(version_map):
+    root_version = version_map["github.com/DataDog/dd-trace-go/v2"]
+    http_version = version_map["github.com/DataDog/dd-trace-go/contrib/net/http/v2"]
+    slog_version = version_map["github.com/DataDog/dd-trace-go/contrib/log/slog/v2"]
+    if root_version == http_version and root_version == slog_version:
+        return "shared-%s" % _sanitize_cache_fragment(root_version)
+    return "root-%s__http-%s__slog-%s" % (
+        _sanitize_cache_fragment(root_version),
+        _sanitize_cache_fragment(http_version),
+        _sanitize_cache_fragment(slog_version),
+    )
+
+def _bootstrap_cache_key(version, version_map, go_identity):
+    return "__".join([
+        "abi-%s" % ORCHESTRION_BOOTSTRAP_CACHE_ABI,
+        "patch-%s" % _sanitize_cache_fragment(ORCHESTRION_PATCHSET_ID),
+        "orch-%s" % _sanitize_cache_fragment(version),
+        "go-%s" % _sanitize_cache_fragment(go_identity.version),
+        "target-%s-%s" % (_sanitize_cache_fragment(go_identity.goos), _sanitize_cache_fragment(go_identity.goarch)),
+        "dd-%s" % _dd_trace_go_versions_cache_fragment(version_map),
+    ])
+
+def _bootstrap_cache_paths(ctx, version, version_map, go_identity, binary_name):
+    cache_root = _bootstrap_cache_root(ctx)
+    key = _bootstrap_cache_key(version, version_map, go_identity)
+    entry_dir = _path_join(ctx, cache_root, "bootstrap", key)
+    return struct(
+        cache_root = cache_root,
+        key = key,
+        entry_dir = entry_dir,
+        binary_path = _path_join(ctx, entry_dir, binary_name),
+        version_file_path = _path_join(ctx, entry_dir, "dd_trace_go_versions.json"),
+        manifest_path = _path_join(ctx, entry_dir, "manifest.json"),
+        ready_path = _path_join(ctx, entry_dir, "ready"),
+    )
+
+def _bootstrap_cache_entry_ready(ctx, paths):
+    return (
+        ctx.path(paths.binary_path).exists and
+        ctx.path(paths.version_file_path).exists and
+        ctx.path(paths.manifest_path).exists and
+        ctx.path(paths.ready_path).exists
+    )
 
 def _dd_trace_go_versions_from_shared(version):
     version_map = {}
@@ -291,6 +435,128 @@ def _dd_trace_go_versions_json(version_map):
         entries.append('    "%s": "%s"' % (module_path, version_map[module_path]))
     return "{\n  \"modules\": {\n%s\n  }\n}\n" % ",\n".join(entries)
 
+def _host_copy_file(ctx, src, dst, error_prefix):
+    src_path = str(ctx.path(src))
+    dst_path = str(ctx.path(dst))
+    parent = str(ctx.path(dst_path).dirname)
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            fail("%s: could not find PowerShell" % error_prefix)
+        command = "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path $args[0] | Out-Null; Copy-Item -LiteralPath $args[1] -Destination $args[2] -Force"
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command, parent, src_path, dst_path],
+            timeout = 120,
+        )
+    else:
+        shell = ctx.which("sh") or "/bin/sh"
+        result = _ctx_execute_checked(
+            ctx,
+            [str(shell), "-c", "mkdir -p \"$1\" && cp \"$2\" \"$3\"", "bootstrap-copy", parent, src_path, dst_path],
+            timeout = 120,
+        )
+    if result.return_code != 0:
+        fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
+
+def _binary_sha256(ctx, path):
+    file_path = str(ctx.path(path))
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            fail("Could not find PowerShell to hash %s" % file_path)
+        command = "$ErrorActionPreference = 'Stop'; (Get-FileHash -Algorithm SHA256 -LiteralPath $args[0]).Hash.ToLowerInvariant()"
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command, file_path],
+            timeout = 120,
+        )
+    else:
+        if ctx.which("shasum"):
+            result = _ctx_execute_checked(ctx, [str(ctx.which("shasum")), "-a", "256", file_path], timeout = 120)
+        elif ctx.which("sha256sum"):
+            result = _ctx_execute_checked(ctx, [str(ctx.which("sha256sum")), file_path], timeout = 120)
+        elif ctx.which("openssl"):
+            result = _ctx_execute_checked(ctx, [str(ctx.which("openssl")), "dgst", "-sha256", file_path], timeout = 120)
+        else:
+            fail("Could not find a SHA-256 tool to hash %s" % file_path)
+    if result.return_code != 0:
+        fail("Failed to hash Orchestrion bootstrap binary %s: %s\n%s" % (file_path, result.stdout, result.stderr))
+    digest = result.stdout.strip().lower()
+    if "=" in digest:
+        digest = digest.split("=")[-1].strip()
+    else:
+        digest = digest.split(" ")[0].strip()
+    return digest
+
+def _orchestrion_build_file(binary_name):
+    return """# Generated by rules_go orchestrion extension
+filegroup(
+    name = "orchestrion",
+    srcs = ["{binary_name}"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "dd_trace_go_version_file",
+    srcs = ["dd_trace_go_versions.json"],
+    visibility = ["//visibility:public"],
+)
+""".format(binary_name = binary_name)
+
+def _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions):
+    ctx.file("dd_trace_go_versions.json", _dd_trace_go_versions_json(dd_trace_go_versions))
+    ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
+
+def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
+    manifest_repo_path = ".orchestrion_bootstrap_manifest.json"
+    ready_repo_path = ".orchestrion_bootstrap_ready"
+    manifest = json.encode({
+        "abi": ORCHESTRION_BOOTSTRAP_CACHE_ABI,
+        "patchset_id": ORCHESTRION_PATCHSET_ID,
+        "cache_key": paths.key,
+        "orchestrion_version": version,
+        "go_identity": {
+            "version": go_identity.version,
+            "goos": go_identity.goos,
+            "goarch": go_identity.goarch,
+        },
+        "dd_trace_go_versions": version_map,
+        "binary_name": binary_name,
+        "binary_sha256": _binary_sha256(ctx, binary_name),
+    })
+    ctx.file(manifest_repo_path, manifest + "\n")
+    ctx.file(ready_repo_path, "ready\n")
+    _host_copy_file(ctx, binary_name, paths.binary_path, "Failed to persist cached Orchestrion binary")
+    _host_copy_file(ctx, "dd_trace_go_versions.json", paths.version_file_path, "Failed to persist cached Orchestrion version file")
+    _host_copy_file(ctx, manifest_repo_path, paths.manifest_path, "Failed to persist Orchestrion bootstrap manifest")
+    _host_copy_file(ctx, ready_repo_path, paths.ready_path, "Failed to persist Orchestrion bootstrap ready sentinel")
+
+def _restore_bootstrap_cache(ctx, paths, binary_name):
+    if not _bootstrap_cache_entry_ready(ctx, paths):
+        return False
+    _host_copy_file(ctx, paths.binary_path, binary_name, "Failed to restore cached Orchestrion binary")
+    _host_copy_file(ctx, paths.version_file_path, "dd_trace_go_versions.json", "Failed to restore cached Orchestrion version file")
+    ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
+    return True
+
+def _needs_tidy_retry(stdout, stderr):
+    text = ("%s\n%s" % (stdout or "", stderr or "")).lower()
+    if not text:
+        return False
+    return (
+        "missing go.sum entry" in text or
+        "updates to go.mod needed" in text or
+        "go.mod file indicates" in text or
+        "no required module provides package" in text
+    )
+
+# Exported only for vendored Starlark unit tests.
+orchestrion_extension_test_helpers = struct(
+    bootstrap_cache_key = _bootstrap_cache_key,
+    needs_tidy_retry = _needs_tidy_retry,
+)
+
 def _orchestrion_build_impl(ctx):
     """Build orchestrion from source."""
     total_start_ms = _probe_now_ms(ctx)
@@ -300,7 +566,33 @@ def _orchestrion_build_impl(ctx):
     dd_trace_go_versions = _validated_dd_trace_go_versions(ctx, go_path, ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
     _probe_emit(ctx, "extensions.validate_dd_trace_go_versions", start_ms = version_start_ms)
     dd_trace_go_root_version = dd_trace_go_versions["github.com/DataDog/dd-trace-go/v2"]
-    binary_name = "orchestrion.exe" if ctx.os.name.lower().startswith("windows") else "orchestrion_bin"
+    binary_name = "orchestrion.exe" if _is_windows(ctx) else "orchestrion_bin"
+    go_identity = _go_tool_identity(ctx, go_path)
+    bootstrap_cache = _bootstrap_cache_paths(ctx, version, dd_trace_go_versions, go_identity, binary_name)
+    if _restore_bootstrap_cache(ctx, bootstrap_cache, binary_name):
+        _probe_emit(
+            ctx,
+            "extensions.bootstrap_cache_hit",
+            extra = {
+                "cache_key": bootstrap_cache.key,
+                "cache_root": bootstrap_cache.cache_root,
+            },
+        )
+        _probe_emit(
+            ctx,
+            "extensions.orchestrion_build_total",
+            start_ms = total_start_ms,
+            extra = {"dd_trace_go_version": dd_trace_go_root_version},
+        )
+        return
+    _probe_emit(
+        ctx,
+        "extensions.bootstrap_cache_miss",
+        extra = {
+            "cache_key": bootstrap_cache.key,
+            "cache_root": bootstrap_cache.cache_root,
+        },
+    )
 
     # Download orchestrion source
     ctx.report_progress("rules_go_orchestrion: downloading orchestrion source")
@@ -504,6 +796,7 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
 
     # Build the patched Orchestrion tool from source with the same Go version
     # family the Bazel integration expects.
+    go_env = _go_env(ctx)
     edit_args = [
         str(go_path),
         "mod",
@@ -516,62 +809,98 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     upgrade_result = ctx.execute(
         edit_args,
         timeout = 120,
-        environment = _go_env(ctx),
+        environment = go_env,
     )
     _probe_emit(ctx, "extensions.go_mod_edit", start_ms = edit_start_ms, status = "ok" if upgrade_result.return_code == 0 else "error")
     if upgrade_result.return_code != 0:
         fail("Failed to upgrade dd-trace-go in orchestrion tool go.mod: %s\n%s" % (upgrade_result.stdout, upgrade_result.stderr))
 
-    ctx.report_progress("rules_go_orchestrion: running go mod tidy")
-    tidy_start_ms = _probe_now_ms(ctx)
-    tidy_result = ctx.execute(
-        [
-            str(go_path),
-            "mod",
-            "tidy",
-        ],
+    download_args = [
+        str(go_path),
+        "mod",
+        "download",
+    ]
+    for module_path in _DD_TRACE_GO_MODULES:
+        download_args.append("%s@%s" % (module_path, dd_trace_go_versions[module_path]))
+    ctx.report_progress("rules_go_orchestrion: downloading pinned tracer modules")
+    download_mod_start_ms = _probe_now_ms(ctx)
+    download_result = ctx.execute(
+        download_args,
         timeout = 600,
-        environment = _go_env(ctx),
+        environment = go_env,
     )
-    _probe_emit(ctx, "extensions.go_mod_tidy", start_ms = tidy_start_ms, status = "ok" if tidy_result.return_code == 0 else "error")
-    if tidy_result.return_code != 0:
-        fail("Failed to tidy orchestrion tool modules after upgrading dd-trace-go: %s\n%s" % (tidy_result.stdout, tidy_result.stderr))
+    _probe_emit(ctx, "extensions.go_mod_download", start_ms = download_mod_start_ms, status = "ok" if download_result.return_code == 0 else "error")
+    if download_result.return_code != 0:
+        fail("Failed to download pinned dd-trace-go modules for orchestrion: %s\n%s" % (download_result.stdout, download_result.stderr))
 
+    # Build first and only fall back to `go mod tidy` when the module graph
+    # still needs explicit repair after the tracer-version edits above.
+    build_args = [
+        str(go_path),
+        "build",
+        "-trimpath",
+        "-ldflags",
+        "-s -w",
+        "-o",
+        binary_name,
+        ".",
+    ]
     ctx.report_progress("rules_go_orchestrion: building orchestrion binary")
     build_start_ms = _probe_now_ms(ctx)
     result = ctx.execute(
-        [
-            str(go_path),
-            "build",
-            "-trimpath",
-            "-ldflags",
-            "-s -w",
-            "-o",
-            binary_name,
-            ".",
-        ],
+        build_args,
         timeout = 600,
-        environment = _go_env(ctx),
+        environment = go_env,
     )
-    _probe_emit(ctx, "extensions.go_build", start_ms = build_start_ms, status = "ok" if result.return_code == 0 else "error")
-    if result.return_code != 0:
-        fail("Failed to build orchestrion: %s\n%s" % (result.stdout, result.stderr))
+    _probe_emit(ctx, "extensions.go_build_initial", start_ms = build_start_ms, status = "ok" if result.return_code == 0 else "error")
+    if result.return_code == 0:
+        _probe_emit(ctx, "extensions.go_build", start_ms = build_start_ms, status = "ok")
+    else:
+        if not _needs_tidy_retry(result.stdout, result.stderr):
+            fail("Failed to build orchestrion without needing go mod tidy fallback: %s\n%s" % (result.stdout, result.stderr))
 
-    # Create BUILD file
-    ctx.file("dd_trace_go_versions.json", _dd_trace_go_versions_json(dd_trace_go_versions))
-    ctx.file("BUILD.bazel", """# Generated by rules_go orchestrion extension
-filegroup(
-    name = "orchestrion",
-    srcs = ["{binary_name}"],
-    visibility = ["//visibility:public"],
-)
+        ctx.report_progress("rules_go_orchestrion: running go mod tidy fallback")
+        tidy_start_ms = _probe_now_ms(ctx)
+        tidy_result = ctx.execute(
+            [
+                str(go_path),
+                "mod",
+                "tidy",
+            ],
+            timeout = 600,
+            environment = go_env,
+        )
+        tidy_status = "ok" if tidy_result.return_code == 0 else "error"
+        _probe_emit(ctx, "extensions.go_mod_tidy_fallback", start_ms = tidy_start_ms, status = tidy_status)
+        _probe_emit(ctx, "extensions.go_mod_tidy", start_ms = tidy_start_ms, status = tidy_status)
+        if tidy_result.return_code != 0:
+            fail("Failed to tidy orchestrion tool modules after upgrading dd-trace-go: %s\n%s" % (tidy_result.stdout, tidy_result.stderr))
 
-filegroup(
-    name = "dd_trace_go_version_file",
-    srcs = ["dd_trace_go_versions.json"],
-    visibility = ["//visibility:public"],
-)
-""".format(binary_name = binary_name))
+        ctx.report_progress("rules_go_orchestrion: rebuilding orchestrion binary after tidy fallback")
+        retry_build_start_ms = _probe_now_ms(ctx)
+        result = ctx.execute(
+            build_args,
+            timeout = 600,
+            environment = go_env,
+        )
+        retry_status = "ok" if result.return_code == 0 else "error"
+        _probe_emit(ctx, "extensions.go_build_retry", start_ms = retry_build_start_ms, status = retry_status)
+        _probe_emit(ctx, "extensions.go_build", start_ms = retry_build_start_ms, status = retry_status)
+        if result.return_code != 0:
+            fail("Failed to build orchestrion after go mod tidy fallback: %s\n%s" % (result.stdout, result.stderr))
+
+    _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions)
+    cache_write_start_ms = _probe_now_ms(ctx)
+    _write_bootstrap_cache(ctx, bootstrap_cache, version, dd_trace_go_versions, go_identity, binary_name)
+    _probe_emit(
+        ctx,
+        "extensions.bootstrap_cache_write",
+        start_ms = cache_write_start_ms,
+        extra = {
+            "cache_key": bootstrap_cache.key,
+            "cache_root": bootstrap_cache.cache_root,
+        },
+    )
     _probe_emit(ctx, "extensions.orchestrion_build_total", start_ms = total_start_ms, extra = {"dd_trace_go_version": dd_trace_go_root_version})
 
 _orchestrion_build = repository_rule(

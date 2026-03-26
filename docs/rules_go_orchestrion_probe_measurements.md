@@ -174,6 +174,122 @@ temporary Orchestrion module preparation and binary build.
 
 The largest single measured phase in that area is `go mod tidy`.
 
+## Bootstrap Cache Pass
+
+The next optimization pass focused only on the Orchestrion bootstrap path in
+`go/private/orchestrion/extensions.bzl`.
+
+### What changed
+
+This pass added:
+
+- a host-side bootstrap artifact cache for the built Orchestrion binary and its
+  `dd_trace_go_versions.json`
+- stable host-side `GOMODCACHE` and `GOCACHE` roots under the shared
+  `datadog-orchestrion-go-cache`
+- a bootstrap cache key that includes:
+  - Orchestrion version
+  - normalized `dd_trace_go_versions`
+  - host Go identity
+  - cache ABI version
+  - manual patchset identifier
+- a fast path that reuses the cached bootstrap artifact on a cache hit
+- a fallback path that still runs `go mod tidy` only when the first build says
+  the module graph is not ready
+- Starlark unit tests for the retry classifier and bootstrap cache-key
+  stability
+
+### Commands used for the bootstrap-only pass
+
+Cold verification:
+
+```bash
+BASE=/tmp/rto_bootstrap_eval7
+rm -rf "$BASE"
+mkdir -p "$BASE/cold" "$BASE/warm" "$BASE/cache_home"
+
+cd ../rules_test_optimization_tests
+source "$HOME/ddtrace.sh" >/dev/null 2>&1 || true
+
+PATH=/Users/tony.redondo/sdk/go1.24.0/bin:$PATH \
+RULES_GO_ORCHESTRION_PROBE=1 \
+XDG_CACHE_HOME="$BASE/cache_home" \
+RULES_GO_ORCHESTRION_PROBE_FILE="$BASE/cold/builder-probes.log" \
+./bazelw \
+  --output_base="$BASE/cold/output_base" \
+  build //src/go-project:hello_test \
+  --subcommands \
+  --verbose_failures \
+  >"$BASE/cold/run.log" 2>&1
+```
+
+Warm verification:
+
+```bash
+cd ../rules_test_optimization_tests
+source "$HOME/ddtrace.sh" >/dev/null 2>&1 || true
+
+PATH=/Users/tony.redondo/sdk/go1.24.0/bin:$PATH \
+RULES_GO_ORCHESTRION_PROBE=1 \
+XDG_CACHE_HOME=/tmp/rto_bootstrap_eval7/cache_home \
+RULES_GO_ORCHESTRION_PROBE_FILE=/tmp/rto_bootstrap_eval7/warm/builder-probes.log \
+./bazelw \
+  --output_base=/tmp/rto_bootstrap_eval7/warm/output_base \
+  build //src/go-project:hello_test \
+  --subcommands \
+  --verbose_failures \
+  >/tmp/rto_bootstrap_eval7/warm/run.log 2>&1
+```
+
+### Bootstrap cache result
+
+The best measured bootstrap variant kept three things:
+
+- the host-side bootstrap artifact cache
+- the persistent host-side Go caches
+- `go mod tidy` as a fallback instead of as an unconditional step
+
+Measured result from that kept variant:
+
+- cold bootstrap:
+  - `extensions.download_and_extract`: `21.907s`
+  - `extensions.go_mod_edit`: `9.831s`
+  - `extensions.go_mod_download`: `53.575s`
+  - `extensions.go_build_initial`: `55.091s` with fallback
+  - `extensions.go_mod_tidy`: `30.131s`
+  - `extensions.go_build_retry`: `37.981s`
+  - `extensions.orchestrion_build_total`: `216.628s`
+  - end-to-end build: `305.653s` elapsed
+- warm bootstrap:
+  - `extensions.bootstrap_cache_hit`: yes
+  - `extensions.orchestrion_build_total`: `3.097s`
+  - no `download_and_extract`, `go_mod_edit`, `go_mod_download`,
+    `go_mod_tidy`, or `go_build` phases executed on the hit
+  - end-to-end build: `91.957s` elapsed
+
+### Bootstrap pass conclusion
+
+This pass clearly improved warm bootstrap reuse. The host-side bootstrap cache
+removes almost all of the repeated Orchestrion setup cost across fresh Bazel
+output bases.
+
+It did **not** achieve the hoped-for cold-start reduction yet. Several follow-up
+experiments were measured locally, including:
+
+- using `go build -mod=mod` on the first build
+- skipping the explicit tracer-module download
+
+Those experiments made the cold bootstrap slower on this machine, so they were
+not kept.
+
+The practical outcome is:
+
+- warm bootstrap reuse is now real and large
+- cold bootstrap is still expensive
+- the next extension-focused pass should look for a better way to prepare the
+  Orchestrion module graph without paying for both a large module download and a
+  later rebuild
+
 ## Phase 0 Measurement Gates
 
 The first implementation pass used these measured gates:
