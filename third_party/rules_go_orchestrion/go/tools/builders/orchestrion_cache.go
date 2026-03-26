@@ -37,15 +37,34 @@ type cachePaths struct {
 }
 
 func orchestrionPersistentCacheRoot(env []string) (string, error) {
-	normalizedEnv, err := ensureGoModuleCacheEnv(env, false)
-	if err != nil {
-		return "", err
-	}
-	root := filepath.Join(abs(getEnv(normalizedEnv, "GOPATH")), "cache", orchestrionPersistentCacheDirName)
+	root := filepath.Join(orchestrionDefaultCacheRoot(env), "cache", orchestrionPersistentCacheDirName)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", fmt.Errorf("prepare orchestrion persistent cache root %s: %w", root, err)
 	}
 	return root, nil
+}
+
+// orchestrionDefaultCacheRoot returns a stable writable cache root that is not
+// tied to Bazel's ephemeral output bases. This keeps Orchestrion's module cache
+// reusable across local reruns while avoiding accidental dependence on whatever
+// GOPATH the user happens to have configured for unrelated work.
+func orchestrionDefaultCacheRoot(env []string) string {
+	if cacheRoot := strings.TrimSpace(getEnv(env, "GOPATH")); cacheRoot != "" {
+		return abs(cacheRoot)
+	}
+	if cacheDir := strings.TrimSpace(getEnv(env, "XDG_CACHE_HOME")); cacheDir != "" {
+		return filepath.Join(abs(cacheDir), orchestrionSharedCacheDirName)
+	}
+	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
+		return filepath.Join(abs(cacheDir), orchestrionSharedCacheDirName)
+	}
+	if home := strings.TrimSpace(getEnv(env, "HOME")); home != "" {
+		return filepath.Join(abs(home), ".cache", orchestrionSharedCacheDirName)
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil && strings.TrimSpace(homeDir) != "" {
+		return filepath.Join(abs(homeDir), ".cache", orchestrionSharedCacheDirName)
+	}
+	return filepath.Join(os.TempDir(), orchestrionSharedCacheDirName)
 }
 
 func orchestrionCachePaths(root, namespace, key string) cachePaths {

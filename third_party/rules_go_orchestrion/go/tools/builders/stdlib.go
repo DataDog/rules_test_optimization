@@ -23,10 +23,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
-const syntheticOrchestrionToolGo = `package tools
+const syntheticOrchestrionToolGo = `//go:build tools
+
+package tools
 
 import (
 	_ "github.com/DataDog/orchestrion"
@@ -40,7 +43,11 @@ const syntheticStdlibModulePath = "module github.com/DataDog/dd-trace-go/v2/baze
 const orchestrionStdlibCacheManifestName = ".orchestrion_stdlib_cache_manifest"
 
 // stdlib builds the standard library in the appropriate mode into a new goroot.
-func stdlib(args []string) error {
+func stdlib(args []string) (err error) {
+	span := beginProbe("stdlib.action")
+	defer func() {
+		span.End(err)
+	}()
 	// process the args
 	flags := flag.NewFlagSet("stdlib", flag.ExitOnError)
 	goenv := envFlags(flags)
@@ -80,11 +87,14 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	}
 
 	// Link in the bare minimum needed to the new GOROOT
+	replicateSpan := beginProbe("stdlib.replicate_goroot")
 	if err := replicate(goroot, output, replicatePaths("src", "pkg/tool", "pkg/include")); err != nil {
+		replicateSpan.End(err)
 		return err
 	}
+	replicateSpan.End(nil)
 
-	output, err := processPath(output)
+	output, err = processPath(output)
 	if err != nil {
 		return err
 	}
@@ -180,22 +190,30 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 				}
 			}
 		}
+		workDirSpan := beginProbe("stdlib.enter_orchestrion_workdir")
 		restoreOrchWorkDir, err := enterOrchestrionWorkDir(orchestrionSrcDirs, goenv.verbose)
+		workDirSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer restoreOrchWorkDir()
+		goModSpan := beginProbe("stdlib.ensure_go_mod_exists")
 		cleanupGoMod, err := ensureGoModExists(orchestrionSrcDirs, goenv.sdk, goenv.verbose)
+		goModSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer cleanupGoMod()
+		modulePathSpan := beginProbe("stdlib.ensure_importable_stdlib_module_path")
 		cleanupGoModModulePath, err := ensureImportableStdlibModulePath(goenv.verbose)
+		modulePathSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer cleanupGoModModulePath()
+		toolGoSpan := beginProbe("stdlib.ensure_synthetic_orchestrion_tool_go")
 		cleanupSyntheticToolGo, err := ensureSyntheticOrchestrionToolGo(goenv.verbose)
+		toolGoSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
@@ -231,31 +249,26 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"},
 			}
 			for _, dl := range syntheticDownloads {
+				downloadSpan := beginProbe("stdlib.synthetic_download", newProbeField("command", strings.Join(dl, " ")))
 				if err := goenv.runCommand(goenv.goCmd(dl[0], dl[1:]...)); err != nil && goenv.verbose {
+					downloadSpan.End(err)
 					fmt.Fprintf(os.Stderr, "stdlib: synthetic orchestrion download failed %q: %v\n", strings.Join(dl, " "), err)
+				} else {
+					downloadSpan.End(nil)
 				}
 			}
 			tidyArgs := []string{"mod", "tidy"}
+			tidySpan := beginProbe("stdlib.synthetic_module_tidy")
 			if err := goenv.runCommand(goenv.goCmd(tidyArgs[0], tidyArgs[1:]...)); err != nil {
+				tidySpan.End(err)
 				return fmt.Errorf("stdlib: synthetic orchestrion tidy failed: %w", err)
 			}
+			tidySpan.End(nil)
 			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: synthetic orchestrion tidy completed using dd-trace-go/v2/orchestrion tools-tagged integration imports\n")
 			}
 			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: skipping synthetic orchestrion pin; using synthesized module/tool files instead\n")
-			}
-		}
-		goFlags := strings.TrimSpace(os.Getenv("GOFLAGS"))
-		if !strings.Contains(goFlags, "-tags=tools") && !strings.Contains(goFlags, "-tags tools") {
-			if goFlags == "" {
-				goFlags = "-tags=tools"
-			} else {
-				goFlags += " -tags=tools"
-			}
-			_ = os.Setenv("GOFLAGS", goFlags)
-			if goenv.verbose {
-				fmt.Fprintf(os.Stderr, "stdlib: forcing GOFLAGS=%s\n", goFlags)
 			}
 		}
 		stdlibWorkDir := ""
@@ -316,17 +329,25 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	installArgs = append(installArgs, packages...)
 	if *orchestrion != "" {
 		sdkPath := abs(goenv.sdk)
+		jobserverSpan := beginProbe("stdlib.start_jobserver")
 		jobserver, err := startOrchestrionJobserver(*orchestrion, sdkPath, output, goenv.verbose)
+		jobserverSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: failed to start orchestrion jobserver: %w", err)
 		}
 		defer jobserver.cleanup()
+		runSpan := beginProbe("stdlib.run_install")
 		if err := goenv.runCommandWithJobserver(installArgs, jobserver, ""); err != nil {
+			runSpan.End(err)
 			return err
 		}
+		runSpan.End(nil)
+		persistSpan := beginProbe("stdlib.persist_orchestrion_stdlib_exports")
 		if err := persistOrchestrionStdlibExports(goenv, append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRoots...), goenv.verbose); err != nil {
+			persistSpan.End(err)
 			return fmt.Errorf("stdlib: persist orchestrion stdlib exports: %w", err)
 		}
+		persistSpan.End(nil)
 		return nil
 	}
 	if err := goenv.runCommand(installArgs); err != nil {
@@ -335,7 +356,11 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	return nil
 }
 
-func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool) error {
+func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool) (err error) {
+	span := beginProbe("stdlib.persist_exports", newProbeField("package_count", strconv.Itoa(len(packages))))
+	defer func() {
+		span.End(err)
+	}()
 	root := orchestrionStdlibExportRoot(goenv)
 	if root == "" {
 		return nil
@@ -428,7 +453,11 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 	return nil
 }
 
-func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]string, verbose bool) error {
+func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]string, verbose bool) (err error) {
+	span := beginProbe("stdlib.sync_persisted_exports_to_cache", newProbeField("export_count", strconv.Itoa(len(exports))))
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil || len(exports) == 0 {
 		return nil
 	}

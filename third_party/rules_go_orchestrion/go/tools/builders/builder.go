@@ -79,7 +79,10 @@ func main() {
 	}
 	log.SetPrefix(verb + ": ")
 
-	if err := action(rest); err != nil {
+	actionProbe := beginProbe("builder."+verb, newProbeField("argv0", os.Args[0]))
+	err = action(rest)
+	actionProbe.End(err)
+	if err != nil {
 		log.Fatal(err)
 	}
 }

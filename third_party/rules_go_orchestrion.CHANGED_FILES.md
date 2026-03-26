@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `70`
+- Total changed paths: `78`
 - Modified files: `63`
-- Added files: `4`
+- Added files: `12`
 - Removed files: `3`
 
 ## Modified files
@@ -87,7 +87,15 @@ This file is generated. Do not edit by hand.
 
 - `go/private/orchestrion/BUILD`
 - `go/private/orchestrion/extensions.bzl`
+- `go/tools/.DS_Store`
+- `go/tools/builders/importcfg_test.go`
 - `go/tools/builders/orchestrion.go`
+- `go/tools/builders/orchestrion_cache.go`
+- `go/tools/builders/orchestrion_cache_test.go`
+- `go/tools/builders/orchestrion_test.go`
+- `go/tools/builders/orchestrion_version.go`
+- `go/tools/builders/orchestrion_version_test.go`
+- `go/tools/builders/probe.go`
 - `tests/core/runfiles/runfiles_remote_test/MODULE.bazel`
 
 ## Removed files

@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -562,7 +563,16 @@ func resolveModuleExportsForPackages(goenv *env, packages []string, orchestrionP
 	return resolveModuleExportsForPackagesWithRoot(goenv, packages, orchestrionPath, moduleDir, "")
 }
 
-func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orchestrionPath, moduleDir, forcedExportRoot string) (map[string]string, error) {
+func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orchestrionPath, moduleDir, forcedExportRoot string) (_ map[string]string, err error) {
+	span := beginProbe(
+		"importcfg.resolve_module_exports_for_packages",
+		newProbeField("package_count", strconv.Itoa(len(packages))),
+		newProbeField("module_dir", moduleDir),
+		newProbeField("forced_export_root", strconv.FormatBool(forcedExportRoot != "")),
+	)
+	defer func() {
+		span.End(err)
+	}()
 	if len(packages) == 0 || goenv == nil || goenv.sdk == "" {
 		return nil, nil
 	}
@@ -629,7 +639,10 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if err := os.MkdirAll(gocache, 0o755); err != nil {
 		return nil, fmt.Errorf("prepare module gocache: %w", err)
 	}
-	if err := seedWovenStdlibCache(goenv, gocache); err != nil {
+	seedSpan := beginProbe("importcfg.resolve_module_exports_for_packages.seed_woven_stdlib_cache")
+	err = seedWovenStdlibCache(goenv, gocache)
+	seedSpan.End(err)
+	if err != nil {
 		return nil, fmt.Errorf("seed module gocache from woven stdlib cache: %w", err)
 	}
 	cmd.Env = setEnv(cmd.Env, "GOCACHE", gocache)
@@ -651,7 +664,9 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 		cmd.Env = setEnv(cmd.Env, "HOME", homePath)
 	}
 
+	runSpan := beginProbe("importcfg.resolve_module_exports_for_packages.go_list_export_deps", newProbeField("package_count", strconv.Itoa(len(packages))))
 	output, err := cmd.CombinedOutput()
+	runSpan.End(err)
 	if err != nil {
 		return nil, fmt.Errorf("go list module exports for %v: %w\n%s", packages, err, string(output))
 	}
@@ -1057,13 +1072,27 @@ func resolveCacheStdlibExports(goenv *env, packages []string) (map[string]string
 	return resolveCacheStdlibExportsAt(goenv, packages, cacheRoot)
 }
 
-func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string) (map[string]string, error) {
+func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string) (_ map[string]string, err error) {
+	span := beginProbe(
+		"importcfg.resolve_cache_stdlib_exports_at",
+		newProbeField("package_count", strconv.Itoa(len(packages))),
+		newProbeField("cache_root", cacheRoot),
+	)
+	defer func() {
+		span.End(err)
+	}()
 	if len(packages) == 0 || goenv == nil || goenv.goroot == "" || goenv.sdk == "" {
 		return nil, nil
 	}
 	cacheRoot = strings.TrimSpace(cacheRoot)
 	if cacheRoot != "" {
 		if manifestExports, err := readStdlibCacheManifest(cacheRoot, packages); err == nil && len(manifestExports) > 0 {
+			emitProbeLine(
+				"importcfg.resolve_cache_stdlib_exports_at.manifest_hit",
+				0,
+				newProbeField("package_count", strconv.Itoa(len(manifestExports))),
+				newProbeField("status", "ok"),
+			)
 			return manifestExports, nil
 		}
 	}
@@ -1116,7 +1145,9 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = gorootSrc
 	cmd.Env = append([]string{}, baseEnv...)
+	runSpan := beginProbe("importcfg.resolve_cache_stdlib_exports_at.go_list_export_deps", newProbeField("package_count", strconv.Itoa(len(packages))))
 	output, err := cmd.CombinedOutput()
+	runSpan.End(err)
 	if err != nil {
 		return nil, fmt.Errorf("go list cache stdlib exports: %w\n%s", err, string(output))
 	}
@@ -1265,7 +1296,11 @@ func rewriteImportcfgForAllStdlibExports(importcfgPath string, goenv *env) error
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *env) error {
+func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *env) (err error) {
+	span := beginProbe("importcfg.rewrite_default_cache_stdlib_exports", newProbeField("importcfg", importcfgPath))
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" {
 		return nil
 	}
@@ -1279,7 +1314,15 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string) error {
+func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string) (err error) {
+	span := beginProbe(
+		"importcfg.rewrite_cache_stdlib_closures",
+		newProbeField("importcfg", importcfgPath),
+		newProbeField("package_count", strconv.Itoa(len(packages))),
+	)
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" || len(packages) == 0 {
 		return nil
 	}
@@ -1312,7 +1355,11 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) error {
+func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) (err error) {
+	span := beginProbe("importcfg.rewrite_from_current_stdlib_entries", newProbeField("importcfg", importcfgPath))
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil {
 		return nil
 	}
