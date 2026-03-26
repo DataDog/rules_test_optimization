@@ -443,10 +443,14 @@ def _host_copy_file(ctx, src, dst, error_prefix):
         powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
         if not powershell:
             fail("%s: could not find PowerShell" % error_prefix)
-        command = "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path $args[0] | Out-Null; Copy-Item -LiteralPath $args[1] -Destination $args[2] -Force"
+        command = "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path %s | Out-Null; Copy-Item -LiteralPath %s -Destination %s -Force" % (
+            _powershell_single_quoted_literal(parent),
+            _powershell_single_quoted_literal(src_path),
+            _powershell_single_quoted_literal(dst_path),
+        )
         result = _ctx_execute_checked(
             ctx,
-            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command, parent, src_path, dst_path],
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
             timeout = 120,
         )
     else:
