@@ -15,6 +15,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/build"
@@ -41,6 +42,36 @@ import (
 
 const syntheticStdlibModulePath = "module github.com/DataDog/dd-trace-go/v2/bazel_orchestrion_stdlib"
 const orchestrionStdlibCacheManifestName = ".orchestrion_stdlib_cache_manifest"
+
+const (
+	// stdlibSnapshotCacheABIVersion invalidates host-side woven stdlib snapshots
+	// when their on-disk layout or cache key inputs change.
+	stdlibSnapshotCacheABIVersion = "v1"
+
+	// stdlibSnapshotPackageTreeDirName stores the compiled stdlib archive tree
+	// rooted at GOROOT/pkg/<installsuffix>.
+	stdlibSnapshotPackageTreeDirName = "pkg"
+
+	// stdlibSnapshotPersistedExportsDirName stores the current action's
+	// persisted stdlib export manifest and archive copies.
+	stdlibSnapshotPersistedExportsDirName = "persisted_exports"
+
+	// stdlibSnapshotGoCacheDirName stores the woven stdlib export cache tree
+	// consumed by later compile/link actions and synthetic helper seeding.
+	stdlibSnapshotGoCacheDirName = "gocache"
+)
+
+// stdlibSnapshotManifest records the host-stable woven stdlib snapshot layout.
+// The manifest is intentionally small: it only names the directories restored
+// into a fresh action output tree and preserves the exact cache key inputs.
+type stdlibSnapshotManifest struct {
+	Key                 string   `json:"key"`
+	KeyParts            []string `json:"key_parts,omitempty"`
+	StdlibSnapshotCache string   `json:"stdlib_snapshot_cache"`
+	PackageTreeDir      string   `json:"package_tree_dir"`
+	PersistedExportsDir string   `json:"persisted_exports_dir"`
+	GoCacheDir          string   `json:"go_cache_dir"`
+}
 
 // stdlib builds the standard library in the appropriate mode into a new goroot.
 func stdlib(args []string) (err error) {
@@ -328,6 +359,24 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 
 	installArgs = append(installArgs, packages...)
 	if *orchestrion != "" {
+		snapshotPaths, snapshotKeyParts, err := stdlibSnapshotCachePaths(goenv, packages, gcflags, *race, *msan, *shared, *dynlink)
+		if err != nil {
+			return fmt.Errorf("stdlib: derive snapshot cache key: %w", err)
+		}
+		restoreSpan := beginProbe("stdlib.restore_snapshot", newProbeField("entry_dir", snapshotPaths.entryDir))
+		restored, restoreErr := restoreStdlibSnapshot(snapshotPaths, goenv, goenv.verbose)
+		restoreSpan.End(restoreErr)
+		if restoreErr != nil {
+			return fmt.Errorf("stdlib: restore woven stdlib snapshot: %w", restoreErr)
+		}
+		if restored {
+			emitProbeLine("stdlib.restore_snapshot_hit", 0, newProbeField("entry_dir", snapshotPaths.entryDir))
+			if goenv.verbose {
+				fmt.Fprintf(os.Stderr, "stdlib: restored woven stdlib snapshot from %s\n", snapshotPaths.entryDir)
+			}
+			return nil
+		}
+		emitProbeLine("stdlib.restore_snapshot_miss", 0, newProbeField("entry_dir", snapshotPaths.entryDir))
 		sdkPath := abs(goenv.sdk)
 		jobserverSpan := beginProbe("stdlib.start_jobserver")
 		jobserver, err := startOrchestrionJobserver(*orchestrion, sdkPath, output, goenv.verbose)
@@ -348,6 +397,20 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			return fmt.Errorf("stdlib: persist orchestrion stdlib exports: %w", err)
 		}
 		persistSpan.End(nil)
+		snapshotPersistSpan := beginProbe("stdlib.persist_snapshot", newProbeField("entry_dir", snapshotPaths.entryDir))
+		snapshotErr := persistStdlibSnapshot(snapshotPaths, snapshotKeyParts, goenv, goenv.verbose)
+		snapshotPersistSpan.End(snapshotErr)
+		if snapshotErr != nil {
+			emitProbeLine(
+				"stdlib.persist_snapshot_failed",
+				0,
+				newProbeField("entry_dir", snapshotPaths.entryDir),
+				newProbeField("status", probeStatus(snapshotErr)),
+			)
+			if goenv.verbose {
+				fmt.Fprintf(os.Stderr, "stdlib: failed to persist woven stdlib snapshot at %s: %v\n", snapshotPaths.entryDir, snapshotErr)
+			}
+		}
 		return nil
 	}
 	if err := goenv.runCommand(installArgs); err != nil {
@@ -521,6 +584,16 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 			if !ok || dst == "" {
 				continue
 			}
+			// The stdlib install step already populated the Bazel-declared cache
+			// root when cachePath matches goenv.stdlibCache. In that case we only
+			// need to verify the resolved archive still exists and record it in the
+			// manifest instead of rewriting the same cache entry again.
+			skipCopy := filepath.Clean(cachePath) == filepath.Clean(goenv.stdlibCache)
+			if skipCopy {
+				if _, err := os.Stat(dst); err == nil {
+					goto recordManifest
+				}
+			}
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return err
 			}
@@ -530,6 +603,7 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 			if verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: synced persisted orchestrion export %s -> cache %s\n", src, dst)
 			}
+		recordManifest:
 			relDst := dst
 			if rel, err := filepath.Rel(cachePath, dst); err == nil {
 				relDst = rel
@@ -567,6 +641,318 @@ func copyArchiveFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// stdlibSnapshotCachePaths returns the host-stable cache entry for a woven
+// stdlib build. The key intentionally avoids Bazel output-base paths so a
+// fresh output base can restore a matching snapshot instead of rebuilding.
+func stdlibSnapshotCachePaths(goenv *env, packages, gcflags []string, race, msan, shared, dynlink bool) (cachePaths, []string, error) {
+	configuredVersions, err := configuredDDTraceGoVersions()
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	sdkIdentity, err := goSDKCacheIdentity(goenv.sdk)
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	keyParts := []string{
+		"stdlib_snapshot_cache=" + stdlibSnapshotCacheABIVersion,
+		"orchestrion=" + orchestrionVersionIdentity,
+		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
+		"sdk=" + sdkIdentity,
+		"target=" + goTargetIdentity(os.Environ()),
+		"installsuffix=" + goenv.installSuffix,
+		"packages=" + strings.Join(normalizeStdlibSnapshotValues(packages), ","),
+		"gcflags=" + strings.Join(gcflags, "\x1f"),
+		"race=" + strconv.FormatBool(race),
+		"msan=" + strconv.FormatBool(msan),
+		"shared=" + strconv.FormatBool(shared),
+		"dynlink=" + strconv.FormatBool(dynlink),
+		"build_env=" + stdlibBuildEnvIdentity(os.Environ()),
+	}
+	return orchestrionCachePaths(cacheRoot, "woven-stdlib", stableDigestParts(keyParts...)), keyParts, nil
+}
+
+// normalizeStdlibSnapshotValues deduplicates and sorts cache-key lists so
+// equivalent requests resolve to the same host snapshot entry.
+func normalizeStdlibSnapshotValues(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		normalized = append(normalized, value)
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+// stdlibBuildEnvIdentity captures the environment settings that materially
+// affect a stdlib build so host snapshots do not cross incompatible toolchain
+// or cgo configurations.
+func stdlibBuildEnvIdentity(env []string) string {
+	keys := []string{
+		"CGO_ENABLED",
+		"CC",
+		"CXX",
+		"AR",
+		"CGO_CFLAGS",
+		"CGO_CXXFLAGS",
+		"CGO_CPPFLAGS",
+		"CGO_LDFLAGS",
+		"GOAMD64",
+		"GOARM",
+		"GO386",
+		"GOMIPS",
+		"GOMIPS64",
+		"GOPPC64",
+		"GORISCV64",
+		"GOEXPERIMENT",
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+normalizeStdlibBuildEnvValue(key, getEnv(env, key)))
+	}
+	return stableDigestParts(parts...)
+}
+
+// normalizeStdlibBuildEnvValue removes output-base-specific path churn from
+// environment values that materially affect stdlib builds while preserving the
+// actual toolchain identity. This lets equivalent fresh Bazel output bases hit
+// the same host-side woven stdlib snapshot cache entry.
+func normalizeStdlibBuildEnvValue(key, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	switch key {
+	case "CC", "CXX", "AR":
+		return normalizeStdlibBuildEnvToken(value)
+	case "CGO_CFLAGS", "CGO_CXXFLAGS", "CGO_CPPFLAGS", "CGO_LDFLAGS":
+		parts, err := splitQuoted(value)
+		if err != nil {
+			return value
+		}
+		for i, part := range parts {
+			parts[i] = normalizeStdlibBuildEnvToken(part)
+		}
+		return strings.Join(parts, " ")
+	default:
+		return value
+	}
+}
+
+// normalizeStdlibBuildEnvToken keeps compiler and cgo flag tokens stable
+// across equivalent output bases by normalizing embedded execroot and
+// bazel-out paths while leaving non-Bazel host tool paths unchanged.
+func normalizeStdlibBuildEnvToken(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(token, "-fdebug-prefix-map="), strings.HasPrefix(token, "-ffile-prefix-map="):
+		prefixEnd := strings.Index(token, "=") + 1
+		mapping := token[prefixEnd:]
+		oldPath, newPath, ok := strings.Cut(mapping, "=")
+		if !ok {
+			return token[:prefixEnd] + stableCacheKeyPath(oldPath)
+		}
+		return token[:prefixEnd] + stableCacheKeyPath(oldPath) + "=" + newPath
+	case strings.HasPrefix(token, "-fuse-ld="):
+		prefixEnd := strings.Index(token, "=") + 1
+		return token[:prefixEnd] + stableCacheKeyPath(token[prefixEnd:])
+	case strings.HasPrefix(token, "-I"), strings.HasPrefix(token, "-L"), strings.HasPrefix(token, "-F"):
+		if len(token) > 2 {
+			return token[:2] + stableCacheKeyPath(token[2:])
+		}
+		return token
+	case filepath.IsAbs(token):
+		return stableCacheKeyPath(token)
+	default:
+		return token
+	}
+}
+
+// restoreStdlibSnapshot copies a host-stable woven stdlib snapshot into the
+// current action output tree and cache root. A cache miss is silent and falls
+// back to the normal stdlib build path.
+func restoreStdlibSnapshot(paths cachePaths, goenv *env, verbose bool) (bool, error) {
+	if !cacheEntryReady(paths) {
+		return false, nil
+	}
+	manifest, err := loadStdlibSnapshotManifest(paths)
+	if err != nil {
+		emitProbeLine(
+			"stdlib.restore_snapshot_reload_failed",
+			0,
+			newProbeField("entry_dir", paths.entryDir),
+			newProbeField("status", probeStatus(err)),
+		)
+		return false, nil
+	}
+	emitProbeLine(
+		"stdlib.restore_snapshot_hit",
+		0,
+		newProbeField("entry_dir", paths.entryDir),
+		newProbeField("status", "ok"),
+	)
+	pkgRoot := filepath.Join(abs(goenv.goroot), "pkg", goenv.installSuffix)
+	if err := restoreStdlibSnapshotTree(filepath.Join(paths.entryDir, manifest.PackageTreeDir), pkgRoot); err != nil {
+		return false, fmt.Errorf("restore stdlib package tree: %w", err)
+	}
+	persistedRoot := orchestrionStdlibExportRoot(goenv)
+	if persistedRoot != "" {
+		if err := restoreStdlibSnapshotTree(filepath.Join(paths.entryDir, manifest.PersistedExportsDir), persistedRoot); err != nil {
+			return false, fmt.Errorf("restore persisted stdlib exports: %w", err)
+		}
+	}
+	if goenv.stdlibCache != "" {
+		if err := restoreStdlibSnapshotTree(filepath.Join(paths.entryDir, manifest.GoCacheDir), goenv.stdlibCache); err != nil {
+			return false, fmt.Errorf("restore stdlib gocache: %w", err)
+		}
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "stdlib: restored woven stdlib snapshot into GOROOT=%s GOCACHE=%s\n", goenv.goroot, goenv.stdlibCache)
+	}
+	return true, nil
+}
+
+// persistStdlibSnapshot best-effort stores the woven stdlib outputs in a
+// host-stable cache entry so future fresh output bases can restore them.
+func persistStdlibSnapshot(paths cachePaths, keyParts []string, goenv *env, verbose bool) error {
+	releaseLock, err := acquireCacheLock(paths.lockDir, cacheLockTimeout, cacheLockStaleAfter)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+
+	if cacheEntryReady(paths) {
+		return nil
+	}
+
+	tempEntryDir, err := os.MkdirTemp(filepath.Dir(paths.entryDir), filepath.Base(paths.entryDir)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create stdlib snapshot temp dir: %w", err)
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(tempEntryDir)
+		}
+	}()
+
+	pkgRoot := filepath.Join(abs(goenv.goroot), "pkg", goenv.installSuffix)
+	if err := copyStdlibSnapshotTree(pkgRoot, filepath.Join(tempEntryDir, stdlibSnapshotPackageTreeDirName)); err != nil {
+		return fmt.Errorf("copy stdlib package tree: %w", err)
+	}
+	persistedRoot := orchestrionStdlibExportRoot(goenv)
+	if persistedRoot != "" {
+		if err := copyStdlibSnapshotTree(persistedRoot, filepath.Join(tempEntryDir, stdlibSnapshotPersistedExportsDirName)); err != nil {
+			return fmt.Errorf("copy persisted stdlib exports: %w", err)
+		}
+	}
+	if goenv.stdlibCache != "" {
+		if err := copyStdlibSnapshotTree(goenv.stdlibCache, filepath.Join(tempEntryDir, stdlibSnapshotGoCacheDirName)); err != nil {
+			return fmt.Errorf("copy stdlib gocache: %w", err)
+		}
+	}
+
+	manifest := stdlibSnapshotManifest{
+		Key:                 filepath.Base(paths.entryDir),
+		KeyParts:            append([]string{}, keyParts...),
+		StdlibSnapshotCache: stdlibSnapshotCacheABIVersion,
+		PackageTreeDir:      stdlibSnapshotPackageTreeDirName,
+		PersistedExportsDir: stdlibSnapshotPersistedExportsDirName,
+		GoCacheDir:          stdlibSnapshotGoCacheDirName,
+	}
+	if err := writeJSONAtomically(filepath.Join(tempEntryDir, cacheManifestFileName), manifest); err != nil {
+		return fmt.Errorf("write stdlib snapshot manifest: %w", err)
+	}
+	if err := writeReadySentinel(filepath.Join(tempEntryDir, cacheReadyFileName)); err != nil {
+		return fmt.Errorf("write stdlib snapshot ready file: %w", err)
+	}
+	if err := promoteCacheTempDir(tempEntryDir, paths.entryDir); err != nil {
+		return fmt.Errorf("promote stdlib snapshot cache: %w", err)
+	}
+	success = true
+	if verbose {
+		fmt.Fprintf(os.Stderr, "stdlib: persisted woven stdlib snapshot at %s\n", paths.entryDir)
+	}
+	return nil
+}
+
+// loadStdlibSnapshotManifest validates the on-disk snapshot metadata before a
+// restore path trusts it.
+func loadStdlibSnapshotManifest(paths cachePaths) (stdlibSnapshotManifest, error) {
+	data, err := os.ReadFile(paths.manifestPath)
+	if err != nil {
+		return stdlibSnapshotManifest{}, fmt.Errorf("read stdlib snapshot manifest %s: %w", paths.manifestPath, err)
+	}
+	var manifest stdlibSnapshotManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return stdlibSnapshotManifest{}, fmt.Errorf("parse stdlib snapshot manifest %s: %w", paths.manifestPath, err)
+	}
+	required := map[string]string{
+		"package tree":      manifest.PackageTreeDir,
+		"persisted exports": manifest.PersistedExportsDir,
+		"go cache":          manifest.GoCacheDir,
+	}
+	for label, relPath := range required {
+		if strings.TrimSpace(relPath) == "" {
+			return stdlibSnapshotManifest{}, fmt.Errorf("stdlib snapshot manifest %s missing %s path", paths.manifestPath, label)
+		}
+		info, err := os.Stat(filepath.Join(paths.entryDir, relPath))
+		if err != nil {
+			return stdlibSnapshotManifest{}, fmt.Errorf("stat stdlib snapshot %s at %s: %w", label, filepath.Join(paths.entryDir, relPath), err)
+		}
+		if !info.IsDir() {
+			return stdlibSnapshotManifest{}, fmt.Errorf("stdlib snapshot %s at %s is not a directory", label, filepath.Join(paths.entryDir, relPath))
+		}
+	}
+	return manifest, nil
+}
+
+// restoreStdlibSnapshotTree replaces dstRoot with a copied snapshot tree so
+// the current action owns regular writable files rather than linked cache
+// entries from the host cache.
+func restoreStdlibSnapshotTree(srcRoot, dstRoot string) error {
+	if err := os.RemoveAll(dstRoot); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dstRoot), 0o755); err != nil {
+		return err
+	}
+	return syncDirectoryTree(srcRoot, dstRoot)
+}
+
+// copyStdlibSnapshotTree materializes a snapshot source tree under temp cache
+// storage. Missing optional roots are ignored so cache writes stay best-effort.
+func copyStdlibSnapshotTree(srcRoot, dstRoot string) error {
+	info, err := os.Stat(srcRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(dstRoot, 0o755)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", srcRoot)
+	}
+	if err := os.RemoveAll(dstRoot); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(dstRoot, 0o755); err != nil {
+		return err
+	}
+	return syncDirectoryTree(srcRoot, dstRoot)
 }
 
 func ensureSyntheticOrchestrionToolGo(verbose bool) (func(), error) {
