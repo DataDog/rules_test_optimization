@@ -290,6 +290,79 @@ The practical outcome is:
   Orchestrion module graph without paying for both a large module download and a
   later rebuild
 
+## No-Tool-Repin Bootstrap Pass
+
+The next pass removed the tool-side module rewrite entirely. Bazel still:
+
+- downloads and patches the Orchestrion source tree
+- writes `dd_trace_go_versions.json`
+- validates the configured tracer version against the target module later in
+  the builder/runtime path
+
+But it no longer runs `go mod edit`, `go mod download`, or `go mod tidy`
+against the downloaded Orchestrion repo itself.
+
+### Commands used for the no-tool-repin pass
+
+Consumer validation:
+
+```bash
+cd ../rules_test_optimization_tests
+eval "$(sed -n '/^export DD_API_KEY=/p;/^export DD_SITE=/p' ~/ddtrace.sh)"
+
+TEST_TARGET=//src/go-project:hello_test \
+DD_TRACE_DEBUG=1 \
+./runtests
+
+TEST_TARGET=//src/go-project:hello_test \
+DD_TRACE_DEBUG=1 \
+./runtests-hermetic
+```
+
+Tracer log validation:
+
+```bash
+cd ../rules_test_optimization_tests
+eval "$(sed -n '/^export DD_API_KEY=/p;/^export DD_SITE=/p' ~/ddtrace.sh)"
+
+TEST_TARGET=//src/go-project:hello_test \
+DD_TRACE_DEBUG=1 \
+DD_CIVISIBILITY_ENABLED=1 \
+./runtests
+```
+
+### Final bootstrap numbers
+
+Cold bootstrap with the no-tool-repin flow:
+
+- `extensions.validate_dd_trace_go_versions`: `87 ms`
+- `extensions.download_and_extract`: `22.192 s`
+- `extensions.patch_source_tree`: `61 ms`
+- `extensions.go_build_initial`: `25.886 s`
+- `extensions.bootstrap_cache_write`: `430 ms`
+- `extensions.orchestrion_build_total`: `49.742 s`
+
+Removed phases on that cold run:
+
+- `extensions.go_mod_edit`: `0`
+- `extensions.go_mod_download`: `0`
+- `extensions.go_mod_tidy`: `0`
+- `extensions.go_mod_tidy_fallback`: `0`
+
+Comparison to the earlier cold bootstrap baseline:
+
+- before: about `175.2 s`
+- after: about `49.7 s`
+- improvement: about `125.5 s` faster, roughly `71.6%` lower
+
+Target-side verification:
+
+- `./runtests` passed
+- `./runtests-hermetic` passed
+- with `DD_CIVISIBILITY_ENABLED=1`, the tracer logs showed
+  `Datadog Tracer v2.7.0-dev.1`, confirming that the pinned target tracer
+  version was still the one loaded by the test binary
+
 ## Phase 0 Measurement Gates
 
 The first implementation pass used these measured gates:

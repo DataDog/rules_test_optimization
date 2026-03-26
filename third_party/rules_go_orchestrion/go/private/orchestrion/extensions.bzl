@@ -459,16 +459,20 @@ def _host_copy_file(ctx, src, dst, error_prefix):
     if result.return_code != 0:
         fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
 
+def _powershell_single_quoted_literal(value):
+    """Render a string as a PowerShell single-quoted literal."""
+    return "'%s'" % value.replace("'", "''")
+
 def _binary_sha256(ctx, path):
     file_path = str(ctx.path(path))
     if _is_windows(ctx):
         powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
         if not powershell:
             fail("Could not find PowerShell to hash %s" % file_path)
-        command = "$ErrorActionPreference = 'Stop'; (Get-FileHash -Algorithm SHA256 -LiteralPath $args[0]).Hash.ToLowerInvariant()"
+        command = "$ErrorActionPreference = 'Stop'; (Get-FileHash -Algorithm SHA256 -LiteralPath %s).Hash.ToLowerInvariant()" % _powershell_single_quoted_literal(file_path)
         result = _ctx_execute_checked(
             ctx,
-            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command, file_path],
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
             timeout = 120,
         )
     else:
@@ -540,21 +544,9 @@ def _restore_bootstrap_cache(ctx, paths, binary_name):
     ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
     return True
 
-def _needs_tidy_retry(stdout, stderr):
-    text = ("%s\n%s" % (stdout or "", stderr or "")).lower()
-    if not text:
-        return False
-    return (
-        "missing go.sum entry" in text or
-        "updates to go.mod needed" in text or
-        "go.mod file indicates" in text or
-        "no required module provides package" in text
-    )
-
-# Exported only for vendored Starlark unit tests.
 orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
-    needs_tidy_retry = _needs_tidy_retry,
+    powershell_single_quoted_literal = _powershell_single_quoted_literal,
 )
 
 def _orchestrion_build_impl(ctx):

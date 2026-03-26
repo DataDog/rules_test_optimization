@@ -14,13 +14,16 @@ Manual Orchestrion wiring in `MODULE.bazel` accepts:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.6.0` | Shared tracer version used by Bazel's Orchestrion tool and fallback paths |
-| `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact per-module tracer versions for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.6.0` | Shared tracer version that Bazel validates against the target Go module and uses for synthetic fallback paths |
+| `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact per-module tracer versions that Bazel validates against the target Go module for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
 
 Notes:
 
 - The selected version is workspace-wide for Go. There is no per-test override.
 - Bootstrap repins the local Go module to the same effective versions.
+- The Orchestrion tool bootstrap records these versions in
+  `dd_trace_go_versions.json`, but it no longer rewrites the downloaded
+  Orchestrion source repo's own `go.mod`.
 - Bootstrap writes `dd_trace_go_version` when all traced modules resolve to one
   shared version, and `dd_trace_go_versions` when they resolve to different
   exact versions.

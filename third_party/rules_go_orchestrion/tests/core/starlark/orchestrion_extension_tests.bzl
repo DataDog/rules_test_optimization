@@ -1,57 +1,6 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 
-def _needs_tidy_retry_cases_test(ctx):
-    env = unittest.begin(ctx)
-
-    asserts.true(
-        env,
-        orchestrion_extension_test_helpers.needs_tidy_retry(
-            "",
-            "go: missing go.sum entry for module providing package github.com/DataDog/dd-trace-go/v2",
-        ),
-    )
-    asserts.true(
-        env,
-        orchestrion_extension_test_helpers.needs_tidy_retry(
-            "",
-            "go: updates to go.mod needed; to update it:\n\tgo mod tidy",
-        ),
-    )
-    asserts.true(
-        env,
-        orchestrion_extension_test_helpers.needs_tidy_retry(
-            "",
-            "go: github.com/DataDog/dd-trace-go/v2@v2.7.0: go.mod file indicates go 1.24, but maximum supported version is 1.23",
-        ),
-    )
-    asserts.true(
-        env,
-        orchestrion_extension_test_helpers.needs_tidy_retry(
-            "",
-            "internal/bootstrap.go:12:2: no required module provides package github.com/DataDog/dd-trace-go/v2/orchestrion; to add it:\n\tgo get github.com/DataDog/dd-trace-go/v2/orchestrion",
-        ),
-    )
-
-    asserts.false(
-        env,
-        orchestrion_extension_test_helpers.needs_tidy_retry(
-            "",
-            "internal/bootstrap.go:15:2: undefined: someIdentifier",
-        ),
-    )
-    asserts.false(
-        env,
-        orchestrion_extension_test_helpers.needs_tidy_retry(
-            "",
-            "Could not patch Orchestrion resolver in internal/jobserver/pkgs/resolve.go",
-        ),
-    )
-
-    return unittest.end(env)
-
-needs_tidy_retry_cases_test = unittest.make(_needs_tidy_retry_cases_test)
-
 def _bootstrap_cache_key_stability_test(ctx):
     env = unittest.begin(ctx)
 
@@ -80,9 +29,21 @@ def _bootstrap_cache_key_stability_test(ctx):
 
 bootstrap_cache_key_stability_test = unittest.make(_bootstrap_cache_key_stability_test)
 
+def _powershell_single_quoted_literal_test(ctx):
+    env = unittest.begin(ctx)
+
+    path = "C:/Users/O'Reilly Runner/orchestrion.exe"
+    quoted = orchestrion_extension_test_helpers.powershell_single_quoted_literal(path)
+
+    asserts.equals(env, "'C:/Users/O''Reilly Runner/orchestrion.exe'", quoted)
+
+    return unittest.end(env)
+
+powershell_single_quoted_literal_test = unittest.make(_powershell_single_quoted_literal_test)
+
 def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
-        needs_tidy_retry_cases_test,
         bootstrap_cache_key_stability_test,
+        powershell_single_quoted_literal_test,
     )
