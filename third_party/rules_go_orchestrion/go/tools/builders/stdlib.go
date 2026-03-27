@@ -443,16 +443,16 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 		fmt.Fprintf(os.Stderr, "stdlib: wrote orchestrion export manifest %s\n", manifestPath)
 	}
 	// pkgRoot is already the source of truth for the woven stdlib archives we
-	// just copied into the persistent export root. Copying those same files back
-	// onto pkgRoot only rewrites the exact same paths and adds I/O without
-	// changing the current action outputs.
-	if err := syncPersistedOrchestrionExportsToCache(goenv, persistedExports, verbose); err != nil {
+	// just copied into the persistent export root. Sync only the cache-local
+	// closure that later compile/link paths actually request from the stdlib
+	// cache, rather than rewriting every persisted archive back into cache paths.
+	if err := syncPersistedOrchestrionExportsToCache(goenv, persistedExports, packages, verbose); err != nil {
 		return fmt.Errorf("sync persisted stdlib archives into cache exports: %w", err)
 	}
 	return nil
 }
 
-func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]string, verbose bool) (err error) {
+func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]string, roots []string, verbose bool) (err error) {
 	span := beginProbe("stdlib.sync_persisted_exports_to_cache", newProbeField("export_count", strconv.Itoa(len(exports))))
 	defer func() {
 		span.End(err)
@@ -460,11 +460,6 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 	if goenv == nil || len(exports) == 0 {
 		return nil
 	}
-	packages := make([]string, 0, len(exports))
-	for pkg := range exports {
-		packages = append(packages, pkg)
-	}
-	sort.Strings(packages)
 
 	// We have two cache families to keep consistent:
 	// 1. the Bazel-declared stdlib cache consumed by later compile/link actions
@@ -517,16 +512,24 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 			fmt.Fprintf(os.Stderr, "stdlib: resolving cache-family exports against GOCACHE=%s\n", cachePath)
 		}
 
-		cacheExports, err := resolveCacheStdlibExportsAt(goenv, packages, cachePath)
+		cacheExports, err := resolveCacheStdlibExportsAt(goenv, roots, cachePath)
 		if err != nil {
 			return err
 		}
+		packages := make([]string, 0, len(cacheExports))
+		for pkg := range cacheExports {
+			packages = append(packages, pkg)
+		}
+		sort.Strings(packages)
 		var manifest strings.Builder
 		for _, pkg := range packages {
 			src := exports[pkg]
 			dst, ok := cacheExports[pkg]
 			if !ok || dst == "" {
 				continue
+			}
+			if strings.TrimSpace(src) == "" {
+				return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
 			}
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return err
