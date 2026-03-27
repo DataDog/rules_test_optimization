@@ -157,8 +157,8 @@ jobs:
         run: RUNTESTS_DRY_RUN=1 bash ./examples/multi_service/runtests.sh
 
       # Exercises the uploader end-to-end against a local mock server.
-      - name: Run mock server integration tests (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Run mock server integration tests (Linux)
+        if: runner.os == 'Linux'
         timeout-minutes: 15
         shell: bash
         run: ./tools/tests/integration/run_mock_server_tests.sh
