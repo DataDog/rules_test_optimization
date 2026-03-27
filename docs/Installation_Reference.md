@@ -446,10 +446,27 @@ common --repo_env=DD_SERVICE
 common --repo_env=DD_ENV
 common --repo_env=DD_GIT_REPOSITORY_URL
 common --repo_env=DD_GIT_BRANCH
+common --repo_env=DD_GIT_TAG
 common --repo_env=DD_GIT_COMMIT_SHA
 common --repo_env=DD_GIT_HEAD_COMMIT
 common --repo_env=DD_GIT_COMMIT_MESSAGE
 common --repo_env=DD_GIT_HEAD_MESSAGE
+common --repo_env=DD_GIT_COMMIT_AUTHOR_NAME
+common --repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL
+common --repo_env=DD_GIT_COMMIT_AUTHOR_DATE
+common --repo_env=DD_GIT_COMMIT_COMMITTER_NAME
+common --repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL
+common --repo_env=DD_GIT_COMMIT_COMMITTER_DATE
+common --repo_env=DD_GIT_HEAD_AUTHOR_NAME
+common --repo_env=DD_GIT_HEAD_AUTHOR_EMAIL
+common --repo_env=DD_GIT_HEAD_AUTHOR_DATE
+common --repo_env=DD_GIT_HEAD_COMMITTER_NAME
+common --repo_env=DD_GIT_HEAD_COMMITTER_EMAIL
+common --repo_env=DD_GIT_HEAD_COMMITTER_DATE
+common --repo_env=DD_GIT_PR_BASE_BRANCH
+common --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
+common --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
+common --repo_env=DD_PR_NUMBER
 # Optional: override detected Go module path for export.bzl
 common --repo_env=GO_MODULE_PATH
 # Optional: provide Python module path hint for export.bzl
@@ -484,6 +501,11 @@ Security note: keep secret values out of `.bazelrc`. Forward variable names
 with `--repo_env=DD_API_KEY` and provide values via shell/CI secret stores.
 In Bazel file-mode workflows, tests do not require `DD_API_KEY`/`DD_SITE`;
 those credentials are only needed for the post-test uploader step.
+
+Git metadata note: wrappers in this repository and the sibling fixture repo can
+fill in current commit author and committer fields automatically when a CI
+provider does not expose them. Explicit `DD_GIT_*` values still win over both
+provider-derived metadata and wrapper synthesis.
 
 Repository policy note: this repository intentionally has no root `.bazelrc`.
 Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags

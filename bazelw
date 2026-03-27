@@ -81,6 +81,37 @@ sanitize_repository_url() {
   printf '%s' "${raw}"
 }
 
+# Return success when a supported CI provider is already exposing metadata.
+# In that mode the wrapper only fills gaps that provider env does not cover well.
+has_supported_ci_provider() {
+  [[ -n "${APPVEYOR:-}" ]] || \
+  [[ -n "${TF_BUILD:-}" ]] || \
+  [[ -n "${BITBUCKET_COMMIT:-}" ]] || \
+  [[ -n "${BUDDY:-}" ]] || \
+  [[ -n "${BUILDKITE:-}" ]] || \
+  [[ -n "${CIRCLECI:-}" ]] || \
+  [[ -n "${GITHUB_SHA:-}" ]] || \
+  [[ -n "${GITLAB_CI:-}" ]] || \
+  [[ -n "${JENKINS_URL:-}" ]] || \
+  [[ -n "${TEAMCITY_VERSION:-}" ]] || \
+  [[ -n "${TRAVIS:-}" ]] || \
+  [[ -n "${BITRISE_BUILD_SLUG:-}" ]] || \
+  [[ -n "${CF_BUILD_ID:-}" ]] || \
+  [[ -n "${CODEBUILD_INITIATOR:-}" ]] || \
+  [[ -n "${DRONE:-}" ]]
+}
+
+# Read a single git pretty-format field and keep it on one line for --repo_env.
+git_pretty_value() {
+  local format="${1:-}"
+  git log -1 --date=iso-strict --pretty="${format}" 2>/dev/null | tr -d '\r\n' || true
+}
+
+# Return the first exact tag pointing at HEAD, or empty when HEAD is untagged.
+git_head_tag() {
+  git tag --points-at HEAD 2>/dev/null | sed -n '1p' | tr -d '\r\n' || true
+}
+
 # Split args into startup args (leading dashes) and the command
 startup_args=()
 cmd=""
@@ -113,46 +144,103 @@ fi
 cmdline+=("${cmd}")
 
 if [[ "${cmd}" =~ ^(build|test|run|sync|fetch|query|cquery|aquery|coverage|info)$ ]]; then
-  # Compute Git metadata if available; ignore failures (e.g., detached or not a repo)
+  # The wrapper has two modes:
+  # - CI-provider mode preserves richer provider-derived branch/PR metadata.
+  # - Local-git mode preserves the existing local branch/SHA autodetection behavior.
+  provider_mode=0
+  if has_supported_ci_provider; then
+    provider_mode=1
+  fi
+
+  # Compute git metadata best-effort; wrapper execution must not fail on git issues.
   git_dirty=""
-  dd_git_repo_url=""
-  dd_git_branch=""
-  dd_git_commit=""
-  dd_git_head_commit=""
-  dd_git_commit_message=""
-  dd_git_head_message=""
+  local_git_repo_url=""
+  local_git_branch=""
+  local_git_tag=""
+  local_git_commit=""
+  local_git_commit_message=""
+  local_git_commit_author_name=""
+  local_git_commit_author_email=""
+  local_git_commit_author_date=""
+  local_git_commit_committer_name=""
+  local_git_commit_committer_email=""
+  local_git_commit_committer_date=""
   if command -v git >/dev/null 2>&1; then
     if git rev-parse --git-dir >/dev/null 2>&1; then
-      dd_git_commit=$(git rev-parse HEAD 2>/dev/null || true)
-      # Use the one-line subject to avoid newlines in --repo_env
-      dd_git_commit_message=$(git log -1 --pretty=%s 2>/dev/null || true)
-      dd_git_head_commit="${dd_git_commit}"
-      dd_git_head_message="${dd_git_commit_message}"
+      local_git_commit=$(git rev-parse HEAD 2>/dev/null || true)
+      local_git_commit_message="$(git_pretty_value '%s')"
+      local_git_commit_author_name="$(git_pretty_value '%an')"
+      local_git_commit_author_email="$(git_pretty_value '%ae')"
+      local_git_commit_author_date="$(git_pretty_value '%aI')"
+      local_git_commit_committer_name="$(git_pretty_value '%cn')"
+      local_git_commit_committer_email="$(git_pretty_value '%ce')"
+      local_git_commit_committer_date="$(git_pretty_value '%cI')"
+      local_git_tag="$(git_head_tag)"
       if git diff-index --quiet HEAD -- 2>/dev/null; then
         git_dirty="clean"
       else
         git_dirty="dirty"
       fi
-      # Datadog-specific vars
-      dd_git_repo_url=$(git config --get remote.origin.url 2>/dev/null || true)
-      dd_git_repo_url="$(sanitize_repository_url "${dd_git_repo_url}")"
-      # Prefer symbolic ref; fallback to abbrev-ref; on detached HEAD output empty and we'll default later
-      dd_git_branch=$(git symbolic-ref --short -q HEAD 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-      if [[ -z "${dd_git_branch}" || "${dd_git_branch}" == "HEAD" ]]; then
-        dd_git_branch="auto:git-detached-head"
+      local_git_repo_url=$(git config --get remote.origin.url 2>/dev/null || true)
+      local_git_repo_url="$(sanitize_repository_url "${local_git_repo_url}")"
+      local_git_branch=$(git symbolic-ref --short -q HEAD 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+      if [[ -z "${local_git_branch}" || "${local_git_branch}" == "HEAD" ]]; then
+        local_git_branch="auto:git-detached-head"
       fi
     fi
   fi
 
   cmdline+=("--repo_env=FETCH_SALT=${salt}")
-  # Allow user-provided env to override computed values
-  if [[ -n "${DD_GIT_REPOSITORY_URL:-}" ]]; then dd_git_repo_url="${DD_GIT_REPOSITORY_URL}"; fi
+  # Explicit DD_GIT_* values always win over wrapper synthesis.
+  dd_git_repo_url="${DD_GIT_REPOSITORY_URL:-}"
+  dd_git_branch="${DD_GIT_BRANCH:-}"
+  dd_git_tag="${DD_GIT_TAG:-}"
+  dd_git_commit="${DD_GIT_COMMIT_SHA:-}"
+  dd_git_head_commit="${DD_GIT_HEAD_COMMIT:-}"
+  dd_git_commit_message="${DD_GIT_COMMIT_MESSAGE:-}"
+  dd_git_head_message="${DD_GIT_HEAD_MESSAGE:-}"
+  dd_git_commit_author_name="${DD_GIT_COMMIT_AUTHOR_NAME:-}"
+  dd_git_commit_author_email="${DD_GIT_COMMIT_AUTHOR_EMAIL:-}"
+  dd_git_commit_author_date="${DD_GIT_COMMIT_AUTHOR_DATE:-}"
+  dd_git_commit_committer_name="${DD_GIT_COMMIT_COMMITTER_NAME:-}"
+  dd_git_commit_committer_email="${DD_GIT_COMMIT_COMMITTER_EMAIL:-}"
+  dd_git_commit_committer_date="${DD_GIT_COMMIT_COMMITTER_DATE:-}"
+  dd_git_head_author_name="${DD_GIT_HEAD_AUTHOR_NAME:-}"
+  dd_git_head_author_email="${DD_GIT_HEAD_AUTHOR_EMAIL:-}"
+  dd_git_head_author_date="${DD_GIT_HEAD_AUTHOR_DATE:-}"
+  dd_git_head_committer_name="${DD_GIT_HEAD_COMMITTER_NAME:-}"
+  dd_git_head_committer_email="${DD_GIT_HEAD_COMMITTER_EMAIL:-}"
+  dd_git_head_committer_date="${DD_GIT_HEAD_COMMITTER_DATE:-}"
+  dd_git_pr_base_branch="${DD_GIT_PR_BASE_BRANCH:-}"
+  dd_git_pr_base_branch_sha="${DD_GIT_PR_BASE_BRANCH_SHA:-}"
+  dd_git_pr_base_branch_head_sha="${DD_GIT_PR_BASE_BRANCH_HEAD_SHA:-}"
+  dd_pr_number="${DD_PR_NUMBER:-}"
+
+  if [[ "${provider_mode}" -eq 1 ]]; then
+    if [[ -z "${dd_git_commit_message}" ]]; then dd_git_commit_message="${local_git_commit_message}"; fi
+    if [[ -z "${dd_git_commit_author_name}" ]]; then dd_git_commit_author_name="${local_git_commit_author_name}"; fi
+    if [[ -z "${dd_git_commit_author_email}" ]]; then dd_git_commit_author_email="${local_git_commit_author_email}"; fi
+    if [[ -z "${dd_git_commit_author_date}" ]]; then dd_git_commit_author_date="${local_git_commit_author_date}"; fi
+    if [[ -z "${dd_git_commit_committer_name}" ]]; then dd_git_commit_committer_name="${local_git_commit_committer_name}"; fi
+    if [[ -z "${dd_git_commit_committer_email}" ]]; then dd_git_commit_committer_email="${local_git_commit_committer_email}"; fi
+    if [[ -z "${dd_git_commit_committer_date}" ]]; then dd_git_commit_committer_date="${local_git_commit_committer_date}"; fi
+  else
+    if [[ -z "${dd_git_repo_url}" ]]; then dd_git_repo_url="${local_git_repo_url}"; fi
+    if [[ -z "${dd_git_branch}" ]]; then dd_git_branch="${local_git_branch}"; fi
+    if [[ -z "${dd_git_tag}" ]]; then dd_git_tag="${local_git_tag}"; fi
+    if [[ -z "${dd_git_commit}" ]]; then dd_git_commit="${local_git_commit}"; fi
+    if [[ -z "${dd_git_head_commit}" ]]; then dd_git_head_commit="${local_git_commit}"; fi
+    if [[ -z "${dd_git_commit_message}" ]]; then dd_git_commit_message="${local_git_commit_message}"; fi
+    if [[ -z "${dd_git_head_message}" ]]; then dd_git_head_message="${local_git_commit_message}"; fi
+    if [[ -z "${dd_git_commit_author_name}" ]]; then dd_git_commit_author_name="${local_git_commit_author_name}"; fi
+    if [[ -z "${dd_git_commit_author_email}" ]]; then dd_git_commit_author_email="${local_git_commit_author_email}"; fi
+    if [[ -z "${dd_git_commit_author_date}" ]]; then dd_git_commit_author_date="${local_git_commit_author_date}"; fi
+    if [[ -z "${dd_git_commit_committer_name}" ]]; then dd_git_commit_committer_name="${local_git_commit_committer_name}"; fi
+    if [[ -z "${dd_git_commit_committer_email}" ]]; then dd_git_commit_committer_email="${local_git_commit_committer_email}"; fi
+    if [[ -z "${dd_git_commit_committer_date}" ]]; then dd_git_commit_committer_date="${local_git_commit_committer_date}"; fi
+  fi
+
   dd_git_repo_url="$(sanitize_repository_url "${dd_git_repo_url}")"
-  if [[ -n "${DD_GIT_BRANCH:-}" ]]; then dd_git_branch="${DD_GIT_BRANCH}"; fi
-  if [[ -n "${DD_GIT_COMMIT_SHA:-}" ]]; then dd_git_commit="${DD_GIT_COMMIT_SHA}"; fi
-  if [[ -n "${DD_GIT_HEAD_COMMIT:-}" ]]; then dd_git_head_commit="${DD_GIT_HEAD_COMMIT}"; fi
-  if [[ -n "${DD_GIT_COMMIT_MESSAGE:-}" ]]; then dd_git_commit_message="${DD_GIT_COMMIT_MESSAGE}"; fi
-  if [[ -n "${DD_GIT_HEAD_MESSAGE:-}" ]]; then dd_git_head_message="${DD_GIT_HEAD_MESSAGE}"; fi
 
   if [[ -n "${dd_git_commit}" ]]; then
     cmdline+=("--repo_env=DD_GIT_COMMIT_SHA=${dd_git_commit}")
@@ -166,6 +254,9 @@ if [[ "${cmd}" =~ ^(build|test|run|sync|fetch|query|cquery|aquery|coverage|info)
   if [[ -n "${dd_git_branch}" ]]; then
     cmdline+=("--repo_env=DD_GIT_BRANCH=${dd_git_branch}")
   fi
+  if [[ -n "${dd_git_tag}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_TAG=${dd_git_tag}")
+  fi
   if [[ -n "${dd_git_head_commit}" ]]; then
     cmdline+=("--repo_env=DD_GIT_HEAD_COMMIT=${dd_git_head_commit}")
   fi
@@ -175,6 +266,54 @@ if [[ "${cmd}" =~ ^(build|test|run|sync|fetch|query|cquery|aquery|coverage|info)
   if [[ -n "${dd_git_head_message}" ]]; then
     cmdline+=("--repo_env=DD_GIT_HEAD_MESSAGE=${dd_git_head_message}")
   fi
+  if [[ -n "${dd_git_commit_author_name}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_AUTHOR_NAME=${dd_git_commit_author_name}")
+  fi
+  if [[ -n "${dd_git_commit_author_email}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL=${dd_git_commit_author_email}")
+  fi
+  if [[ -n "${dd_git_commit_author_date}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_AUTHOR_DATE=${dd_git_commit_author_date}")
+  fi
+  if [[ -n "${dd_git_commit_committer_name}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_COMMITTER_NAME=${dd_git_commit_committer_name}")
+  fi
+  if [[ -n "${dd_git_commit_committer_email}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL=${dd_git_commit_committer_email}")
+  fi
+  if [[ -n "${dd_git_commit_committer_date}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_COMMIT_COMMITTER_DATE=${dd_git_commit_committer_date}")
+  fi
+  if [[ -n "${dd_git_head_author_name}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_AUTHOR_NAME=${dd_git_head_author_name}")
+  fi
+  if [[ -n "${dd_git_head_author_email}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_AUTHOR_EMAIL=${dd_git_head_author_email}")
+  fi
+  if [[ -n "${dd_git_head_author_date}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_AUTHOR_DATE=${dd_git_head_author_date}")
+  fi
+  if [[ -n "${dd_git_head_committer_name}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_COMMITTER_NAME=${dd_git_head_committer_name}")
+  fi
+  if [[ -n "${dd_git_head_committer_email}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_COMMITTER_EMAIL=${dd_git_head_committer_email}")
+  fi
+  if [[ -n "${dd_git_head_committer_date}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_HEAD_COMMITTER_DATE=${dd_git_head_committer_date}")
+  fi
+  if [[ -n "${dd_git_pr_base_branch}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_PR_BASE_BRANCH=${dd_git_pr_base_branch}")
+  fi
+  if [[ -n "${dd_git_pr_base_branch_sha}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_PR_BASE_BRANCH_SHA=${dd_git_pr_base_branch_sha}")
+  fi
+  if [[ -n "${dd_git_pr_base_branch_head_sha}" ]]; then
+    cmdline+=("--repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA=${dd_git_pr_base_branch_head_sha}")
+  fi
+  if [[ -n "${dd_pr_number}" ]]; then
+    cmdline+=("--repo_env=DD_PR_NUMBER=${dd_pr_number}")
+  fi
 fi
 
 if (( ${#rest_args[@]} )); then
@@ -182,5 +321,4 @@ if (( ${#rest_args[@]} )); then
 fi
 
 exec "${cmdline[@]}"
-
 
