@@ -92,9 +92,10 @@ At the time of this analysis, that layer:
 This is a fetch-time cost, not a per-compile cost, but it is part of the total
 integration overhead.
 
-Later work on this branch removed the tool-side `go mod tidy` path and stopped
-rewriting the downloaded Orchestrion repo's own `go.mod`. See the maintainer
-state and probe measurement docs for that newer design.
+Later work on this branch removed the extension/bootstrap rewrite and tidy of
+the downloaded Orchestrion repo's own `go.mod`. See the maintainer-state and
+probe measurement docs for that newer design and for the remaining builder-side
+synthetic-module work.
 
 ### 2. Orchestrion is threaded through `rules_go` itself
 

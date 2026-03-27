@@ -188,12 +188,15 @@ module version.
 2. **If you wire Orchestrion manually**, make sure both places match:
    - `orchestrion.from_source(..., dd_trace_go_version = "<version>")`
    - or `orchestrion.from_source(..., dd_trace_go_versions = {...})`
-   - the local Go module pins in `go.mod` and `orchestrion.tool.go`
+   - the effective local module graph resolved from `go.mod` and `go.sum`
 
 3. **If you omitted the version entirely**, remember the default is `v2.6.0`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one
 set of tracer versions while the local Go module still resolves another.
+
+`orchestrion.tool.go` still matters, but as required import/config wiring for
+Orchestrion, not as the source of truth for tracer versions.
 
 ## Windows-specific issues
 

@@ -130,14 +130,14 @@ The consumer adds:
 - `rules_go`
 - the Go companion extension repo
 
-In the current supported Go path, the consumer uses
-`test_optimization_go_extension`, which materializes the metadata repo used by
-`dd_topt_go_test`.
+In the guided Go path, bootstrap writes `test_optimization_go_extension`, which
+materializes the metadata repo used by `dd_topt_go_test`.
 
 - In guided single-service setup, bootstrap writes the managed
   `test_optimization_go_extension` block and `use_repo(...)` call.
-- In manual single-service or multi-service setup, the same Go extension still
-  owns creation of the `test_optimization_data...` repositories.
+- In manual single-service or multi-service setup, the Go macro only requires a
+  compatible exported `topt_data` shape. That can come from the Go extension or
+  from the core sync and multi-sync extensions.
 
 The generated metadata repo then provides the per-service and per-module
 payload labels consumed by `dd_topt_go_test`.
@@ -641,12 +641,16 @@ fail inside Bazel sandboxes even when the outer action is otherwise correct.
 
 ### Shared cache reuse
 
-Bootstrap and sandboxed builder steps both use a stable shared cache root:
+Bootstrap and sandboxed builder steps share the
+`datadog-orchestrion-go-cache` namespace, but not always the exact same root
+path.
 
-- `datadog-orchestrion-go-cache`
+- the builder and extension prefer a persistent host cache root
+- the guided bootstrap CLI uses a temp-rooted cache location for its own local
+  workflow unless you override the environment
 
-This lets Orchestrion reuse fetched modules instead of redownloading them for
-each sandboxed step.
+This still lets Orchestrion reuse fetched modules instead of redownloading them
+for each sandboxed step.
 
 #### Why This Exists
 

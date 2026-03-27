@@ -224,9 +224,13 @@ From the cold extension setup pass:
 The biggest startup cost before normal Bazel Go actions even begin is the
 temporary Orchestrion module preparation and binary build.
 
-The largest single measured phase in that area is `go mod tidy`.
+In that earlier baseline, the largest single measured phase in that area was
+`go mod tidy`.
 
-## Bootstrap Cache Pass
+## Historical Bootstrap Cache Pass
+
+This section records the intermediate bootstrap-cache experiment that preceded
+the later no-tool-repin design.
 
 The next optimization pass focused only on the Orchestrion bootstrap path in
 `go/private/orchestrion/extensions.bzl`.
@@ -293,15 +297,15 @@ RULES_GO_ORCHESTRION_PROBE_FILE=/tmp/rto_bootstrap_eval7/warm/builder-probes.log
   >/tmp/rto_bootstrap_eval7/warm/run.log 2>&1
 ```
 
-### Bootstrap cache result
+### Historical bootstrap cache result
 
-The best measured bootstrap variant kept three things:
+The best measured variant at that stage kept three things:
 
 - the host-side bootstrap artifact cache
 - the persistent host-side Go caches
 - `go mod tidy` as a fallback instead of as an unconditional step
 
-Measured result from that kept variant:
+Measured result from that intermediate variant:
 
 - cold bootstrap:
   - `extensions.download_and_extract`: `21.907s`
@@ -566,6 +570,13 @@ rebuild path.
 
 ## What The Measurements Changed
 
+This section is partly historical.
+
+It records the priority order as it looked immediately after the Phase 1/2
+synthetic-helper cache work, before the later bootstrap redesign removed the
+tool-side `go mod tidy` path. For the current maintained summary, prefer
+[go_orchestrion_maintainer_state.md](./go_orchestrion_maintainer_state.md).
+
 Before measuring, the likely hot paths were:
 
 - Orchestrion bootstrap/setup
@@ -580,7 +591,7 @@ After the baseline pass, the priority order was:
 3. stdlib install plus export persistence/sync
 4. repeated export discovery through `go list -export -deps`
 
-After the first implementation pass, the priority order is now:
+After the first implementation pass, the priority order was:
 
 1. remaining synthetic helper source compilation
 2. Orchestrion extension `go mod tidy`
@@ -589,6 +600,10 @@ After the first implementation pass, the priority order is now:
 
 That means the next pass should continue on the synthetic helper source
 compilation logic itself, not go back to export resolution for this path.
+
+That priority list is only accurate for the pre-no-tool-repin phase of the
+investigation. Later work removed the extension-side `go mod tidy` path, so it
+is no longer a current hotspot on this branch.
 
 ## First-Pass Answers
 
@@ -710,7 +725,11 @@ and kept the lower-layer caches warm. The resulting probe lines showed:
 So the direct answer is no longer theoretical. The result now survives across
 similar synthetic testmain actions when the shared cache key matches.
 
-## Next Ranked Optimization Plan
+## Historical Next Ranked Optimization Plan
+
+This was the next ranked plan at that point in the investigation. Later work on
+this branch changed the bootstrap design substantially, so the current next
+steps are different from the list below.
 
 ### 1. Keep attacking synthetic testmain helper preparation
 
@@ -727,7 +746,8 @@ Specific focus areas now:
 
 ### 2. Reduce extension-side `go mod tidy` cost
 
-This is the largest measured startup phase before the Go actions even begin.
+At that time, this was the largest measured startup phase before the Go actions
+even began.
 
 Specific focus areas:
 
@@ -736,6 +756,9 @@ Specific focus areas:
   full tidy
 - investigate whether a more reusable cache layout can avoid paying this cost
   repeatedly in local runs
+
+This item is historical. The later no-tool-repin change removed that
+extension-side module rewrite and tidy path from the current design.
 
 ### 3. Reduce stdlib export persistence and cache sync work
 
@@ -769,7 +792,9 @@ The first implementation pass was verified with:
 
 All of those checks passed locally.
 
-## Practical Next Steps
+## Historical Practical Next Steps
+
+These were the practical next steps before the later bootstrap redesign.
 
 The next optimization pass should start with the synthetic testmain path in:
 

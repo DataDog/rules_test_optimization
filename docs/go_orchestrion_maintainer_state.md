@@ -159,13 +159,19 @@ Effect:
 Kept in the extension path:
 
 - no more `go mod edit -require=...`
-- no more unconditional `go mod tidy`
+- no more unconditional `go mod tidy` in the extension/bootstrap build of the
+  downloaded Orchestrion repo
 - build the patched tool from Orchestrion's upstream module graph
 
 Effect:
 
 - large cold bootstrap reduction
 - no loss of runtime tracer correctness in the target binary
+
+The builder still has its own synthetic-module preparation in some paths. In
+particular, stdlib weaving can still run a synthetic-module tidy on the
+no-`orchsrc` path. The optimization here was specific to the extension-side
+tool bootstrap flow.
 
 ### 4. Safer stdlib persistence/sync trimming
 
