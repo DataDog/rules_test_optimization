@@ -43,6 +43,7 @@ load(
 load(
     "//tools/tests/core:test_sync_utils.bzl",
     "apply_dd_git_overrides_test",
+    "apply_github_event_payload_defensive_test",
     "decode_json_object_array_failure_test",
     "decode_json_object_array_target_rule",
     "dd_site_invalid_failure_test",
@@ -97,6 +98,7 @@ load(
     "partition_unix_headers_test",
     "partition_unix_headers_without_api_key_test",
     "sanitize_repository_url_test",
+    "sync_environment_keys_allowlist_test",
     "record_sync_extension_repo_owner_duplicate_failure_test",
     "record_sync_extension_repo_owner_duplicate_target_rule",
     "record_sync_extension_repo_owner_success_test",
@@ -228,6 +230,18 @@ collect_env_from_environ_empty_test(
 
 collect_env_ctx_wrapper_test(
     name = "collect_env_ctx_wrapper_test",
+    size = "small",
+    timeout = "short",
+)
+
+apply_github_event_payload_defensive_test(
+    name = "apply_github_event_payload_defensive_test",
+    size = "small",
+    timeout = "short",
+)
+
+sync_environment_keys_allowlist_test(
+    name = "sync_environment_keys_allowlist_test",
     size = "small",
     timeout = "short",
 )

@@ -169,10 +169,27 @@ When set, these override auto-detected CI/git metadata:
 |----------|
 | `DD_GIT_REPOSITORY_URL` |
 | `DD_GIT_BRANCH` |
+| `DD_GIT_TAG` |
 | `DD_GIT_COMMIT_SHA` |
 | `DD_GIT_HEAD_COMMIT` |
 | `DD_GIT_COMMIT_MESSAGE` |
 | `DD_GIT_HEAD_MESSAGE` |
+| `DD_GIT_COMMIT_AUTHOR_NAME` |
+| `DD_GIT_COMMIT_AUTHOR_EMAIL` |
+| `DD_GIT_COMMIT_AUTHOR_DATE` |
+| `DD_GIT_COMMIT_COMMITTER_NAME` |
+| `DD_GIT_COMMIT_COMMITTER_EMAIL` |
+| `DD_GIT_COMMIT_COMMITTER_DATE` |
+| `DD_GIT_HEAD_AUTHOR_NAME` |
+| `DD_GIT_HEAD_AUTHOR_EMAIL` |
+| `DD_GIT_HEAD_AUTHOR_DATE` |
+| `DD_GIT_HEAD_COMMITTER_NAME` |
+| `DD_GIT_HEAD_COMMITTER_EMAIL` |
+| `DD_GIT_HEAD_COMMITTER_DATE` |
+| `DD_GIT_PR_BASE_BRANCH` |
+| `DD_GIT_PR_BASE_BRANCH_SHA` |
+| `DD_GIT_PR_BASE_BRANCH_HEAD_SHA` |
+| `DD_PR_NUMBER` |
 
 ### CI provider detection coverage
 
@@ -190,16 +207,18 @@ Auto-detection currently maps CI metadata from:
 - TeamCity
 - Bitrise
 - Codefresh
-- AWS CodeBuild
+- AWS CodePipeline
 - Drone
 
-Provider-name note: AWS CodeBuild is emitted as `awscodebuild` in sync
+Provider-name note: AWS CodePipeline is emitted as `awscodepipeline` in sync
 metadata (`ci.provider.name`).
 
 Provider precedence note:
 - explicit `DD_GIT_*` overrides win first;
 - CI-provider environment detection is second;
-- git CLI fallback (`git rev-parse`, `git log`, etc.) is last.
+- wrapper git synthesis (`git rev-parse`, `git log`, etc.) is last and is used
+  mainly for local workflows or to fill GitHub metadata gaps such as commit
+  author and committer identity.
 
 Additional mapped metadata inputs include:
 
