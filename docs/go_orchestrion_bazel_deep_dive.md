@@ -13,6 +13,11 @@ It focuses on the current steady-state design:
 - how stdlib weaving, synthetic `testmain`, and final link stay consistent
 - which invariants matter if you need to maintain or extend this path
 
+If you need the current optimization status, the experiments that were kept or
+reverted, or the latest measured bottlenecks, start with
+[go_orchestrion_maintainer_state.md](./go_orchestrion_maintainer_state.md) and
+then return here for the lower-level architectural detail.
+
 This is a maintainer document. It intentionally describes the current system,
 not the debugging history that produced it.
 

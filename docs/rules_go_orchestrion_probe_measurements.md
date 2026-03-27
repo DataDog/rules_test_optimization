@@ -12,6 +12,8 @@ this document is based on measured local runs, not just code reading.
 
 Measurement date: `2026-03-26`
 
+Latest baseline refresh: `2026-03-27`
+
 ## Scope And Limits
 
 These measurements came from a local consumer-style run in the sibling fixture
@@ -29,6 +31,56 @@ repository:
 This is a useful first baseline, but it is still one machine, one target, and
 one cold-start-oriented scenario. The timings below should be treated as
 representative local data, not universal constants.
+
+For the current state summary that ties these measurements to the architecture
+and the kept or reverted experiments, see
+[go_orchestrion_maintainer_state.md](./go_orchestrion_maintainer_state.md).
+
+## Latest Baseline Refresh
+
+After the later stdlib experiments and rollbacks, the branch was re-measured
+from the current good state using three runs in the sibling fixture repo:
+
+- cold build:
+  fresh `--output_base` plus isolated `XDG_CACHE_HOME`
+- warm build:
+  fresh `--output_base` while reusing that same cache root
+- runtime validation:
+  fresh test execution with `DD_TRACE_DEBUG=1` and
+  `DD_CIVISIBILITY_ENABLED=1`
+
+Measured result:
+
+- cold build:
+  - total elapsed: `249.053s`
+  - critical path: `75.20s`
+  - `extensions.orchestrion_build_total`: `153.057s`
+  - `extensions.download_and_extract`: `32.066s`
+  - `extensions.go_build`: `113.334s`
+- warm build:
+  - total elapsed: `86.281s`
+  - critical path: `68.91s`
+  - `extensions.orchestrion_build_total`: `3.955s`
+- runtime validation:
+  - total elapsed: `96.620s`
+  - critical path: `81.32s`
+  - `extensions.orchestrion_build_total`: `3.532s`
+
+Runtime validation also confirmed that the current branch still behaves
+correctly:
+
+- tracer startup logs were present
+- CI Visibility initialized
+- the test binary reported `Datadog Tracer v2.7.0-dev.1`
+- the test wrote a payload file under `test.outputs/payloads/tests`
+
+This latest baseline keeps the same broad conclusion as the earlier
+measurements:
+
+- on a true cold start, the Orchestrion tool build is still the largest
+  remaining cost
+- once bootstrap reuse kicks in, stdlib becomes the most visible remaining
+  build step
 
 ## Probe Collection Setup
 

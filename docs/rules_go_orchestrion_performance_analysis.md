@@ -13,6 +13,16 @@ This document captures a code-reading analysis of the vendored
 
 This is a maintainer note for future reference.
 
+This document is intentionally historical. It reflects the code-reading view
+from `2026-03-25`, before the later measured bootstrap changes on this branch.
+
+For the current state:
+
+- use [go_orchestrion_maintainer_state.md](./go_orchestrion_maintainer_state.md)
+  for the maintained summary
+- use [rules_go_orchestrion_probe_measurements.md](./rules_go_orchestrion_probe_measurements.md)
+  for the measured results and later rollbacks
+
 ## Scope And Limits
 
 This analysis is based on:
@@ -51,7 +61,8 @@ Analysis date: `2026-03-25`
 
 The fork is deep, not a thin wrapper.
 
-It changes 70 paths against upstream `rules_go v0.59.0`, including:
+At the time of this analysis, the fork was already deep and touched dozens of
+paths against upstream `rules_go v0.59.0`, including:
 
 - module extension setup for Orchestrion
 - `rules_go` analysis-time context wiring
@@ -70,17 +81,20 @@ path, not from one isolated bootstrap helper.
 The fork adds a dedicated module-extension layer in
 [go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl).
 
-That layer:
+At the time of this analysis, that layer:
 
 - validates the configured `dd-trace-go` versions
 - resolves package/module versions up front
 - downloads the Orchestrion source
 - patches upstream files for Bazel compatibility
-- runs `go mod tidy`
 - builds the Orchestrion binary used later by the toolchain
 
 This is a fetch-time cost, not a per-compile cost, but it is part of the total
 integration overhead.
+
+Later work on this branch removed the tool-side `go mod tidy` path and stopped
+rewriting the downloaded Orchestrion repo's own `go.mod`. See the maintainer
+state and probe measurement docs for that newer design.
 
 ### 2. Orchestrion is threaded through `rules_go` itself
 
