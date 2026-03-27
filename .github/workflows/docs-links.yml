@@ -52,10 +52,10 @@ jobs:
             docs/**/*.md
             examples/**/*.md
           )
+          # lychee replaces the default success-code set when --accept is present.
           lychee \
             --no-progress \
             --verbose \
-            # lychee replaces the default success-code set when --accept is present.
             --accept '200..=299,429' \
             --max-retries 2 \
             --retry-wait-time 2 \
