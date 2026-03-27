@@ -149,6 +149,7 @@ _PROVIDER_ENVIRONMENT_KEYS = {
     "github": [
         "GITHUB_SHA",
         "GITHUB_HEAD_REF",
+        "GITHUB_BASE_REF",
         "GITHUB_REF",
         "GITHUB_REPOSITORY",
         "GITHUB_SERVER_URL",
@@ -236,6 +237,7 @@ _PROVIDER_ENVIRONMENT_KEYS = {
     "bitrise": [
         "BITRISE_BUILD_SLUG",
         "GIT_REPOSITORY_URL",
+        "BITRISE_GIT_REPOSITORY_URL",
         "BITRISE_GIT_COMMIT",
         "GIT_CLONE_COMMIT_HASH",
         "BITRISEIO_PULL_REQUEST_HEAD_BRANCH",
@@ -302,7 +304,7 @@ def _unique_env_keys(keys):
 
 SYNC_ENVIRONMENT_KEYS = _unique_env_keys(
     _BASE_SYNC_ENVIRONMENT_KEYS +
-    [key for provider_keys in _PROVIDER_ENVIRONMENT_KEYS.values() for key in provider_keys]
+    [key for provider_keys in _PROVIDER_ENVIRONMENT_KEYS.values() for key in provider_keys],
 )
 ALL_SYNC_ENV_KEYS = SYNC_ENVIRONMENT_KEYS
 

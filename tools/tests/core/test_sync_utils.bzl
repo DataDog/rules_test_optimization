@@ -3,9 +3,9 @@
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_sync.bzl",
+    "all_sync_env_keys_for_tests",
     "apply_dd_git_overrides_for_tests",
     "apply_github_event_payload_for_tests",
-    "all_sync_env_keys_for_tests",
     "build_module_label_map_for_tests",
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
@@ -25,6 +25,7 @@ load(
     "http_max_time_seconds_for_tests",
     "http_retry_attempts_for_tests",
     "http_retry_delay_seconds_for_tests",
+    "load_github_event_payload_for_tests",
     "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
@@ -646,6 +647,56 @@ def _collect_env_ctx_wrapper_test(ctx):
     asserts.equals(env, "abc999", collected.get("sha"))
     return unittest.end(env)
 
+def _load_github_event_payload_ctx_test(ctx):
+    """Validate event-payload loading accepts the file-read helper contract."""
+    env = unittest.begin(ctx)
+
+    def _execute(cmd):
+        rendered = " ".join(cmd)
+        if "Test-Path -LiteralPath" in rendered:
+            return struct(return_code = 0, stdout = "True", stderr = "")
+        if "Get-Content -Raw -LiteralPath" in rendered:
+            return struct(
+                return_code = 0,
+                stdout = json.encode({
+                    "number": 42,
+                    "pull_request": {
+                        "head": {"sha": "head-sha-42"},
+                        "base": {
+                            "ref": "release/1.2",
+                            "sha": "base-head-sha-42",
+                        },
+                    },
+                }),
+                stderr = "",
+            )
+        fail("unexpected execute command: %s" % rendered)
+
+    fake_ctx = struct(
+        execute = _execute,
+        os = struct(environ = {
+            "ComSpec": "C:\\Windows\\System32\\cmd.exe",
+            "GITHUB_EVENT_PATH": "C:/tmp/github_event.json",
+        }),
+    )
+    payload = load_github_event_payload_for_tests(fake_ctx)
+    asserts.true(env, payload != None)
+
+    env_data = {
+        "head_sha": "",
+        "pr_base_branch": "",
+        "pr_base_branch_head_sha": "",
+        "pr_number": "",
+        "repository_url": "https://github.example/org/repo.git",
+        "sha": "merge-sha",
+    }
+    apply_github_event_payload_for_tests(env_data, payload)
+    asserts.equals(env, "head-sha-42", env_data.get("head_sha"))
+    asserts.equals(env, "release/1.2", env_data.get("pr_base_branch"))
+    asserts.equals(env, "base-head-sha-42", env_data.get("pr_base_branch_head_sha"))
+    asserts.equals(env, "42", env_data.get("pr_number"))
+    return unittest.end(env)
+
 def _apply_github_event_payload_defensive_test(ctx):
     """Validate non-PR GitHub event payloads leave existing metadata intact."""
     env = unittest.begin(ctx)
@@ -670,11 +721,13 @@ def _sync_environment_keys_allowlist_test(ctx):
         "DD_GIT_PR_BASE_BRANCH_HEAD_SHA",
         "DD_PR_NUMBER",
         "GITHUB_EVENT_PATH",
+        "GITHUB_BASE_REF",
         "GITHUB_RUN_ATTEMPT",
         "CI_COMMIT_AUTHOR",
         "CI_COMMIT_TIMESTAMP",
         "CI_MERGE_REQUEST_DIFF_BASE_SHA",
         "BUILDKITE_BUILD_AUTHOR",
+        "BITRISE_GIT_REPOSITORY_URL",
         "SYSTEM_PULLREQUEST_TARGETBRANCH",
         "CODEBUILD_INITIATOR",
     ]:
@@ -1373,6 +1426,7 @@ set_context_tag_from_env_test = unittest.make(_set_context_tag_from_env_test)
 collect_env_from_environ_provider_mapping_test = unittest.make(_collect_env_from_environ_provider_mapping_test)
 collect_env_from_environ_empty_test = unittest.make(_collect_env_from_environ_empty_test)
 collect_env_ctx_wrapper_test = unittest.make(_collect_env_ctx_wrapper_test)
+load_github_event_payload_ctx_test = unittest.make(_load_github_event_payload_ctx_test)
 apply_github_event_payload_defensive_test = unittest.make(_apply_github_event_payload_defensive_test)
 sync_environment_keys_allowlist_test = unittest.make(_sync_environment_keys_allowlist_test)
 read_abs_file_command_escaping_test = unittest.make(_read_abs_file_command_escaping_test)

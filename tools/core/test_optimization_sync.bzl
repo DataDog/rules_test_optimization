@@ -1276,9 +1276,9 @@ def _load_github_event_payload(ctx):
     if not event_path:
         return None
     read_result = _try_read_abs_file(ctx, event_path)
-    if read_result["status"] != "ok":
+    if not read_result.get("ok"):
         return None
-    content = (read_result.get("content") or "").strip()
+    content = (read_result.get("value") or "").strip()
     if not content:
         return None
     return content
@@ -1294,6 +1294,7 @@ def _collect_env(ctx):
 # Public aliases for tests (helpers defined after the first alias section).
 collect_env_for_tests = _collect_env
 collect_env_from_environ_for_tests = _collect_env_from_environ
+load_github_event_payload_for_tests = _load_github_event_payload
 build_windows_read_abs_file_command_for_tests = _build_windows_read_abs_file_command
 build_unix_read_abs_file_command_for_tests = _build_unix_read_abs_file_command
 apply_github_event_payload_for_tests = _apply_github_event_payload
