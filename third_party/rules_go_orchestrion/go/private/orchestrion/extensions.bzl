@@ -165,20 +165,53 @@ def _ctx_execute_checked(ctx, args, timeout = 600, environment = None):
         environment = _copy_ctx_env(ctx)
     return ctx.execute(args, timeout = timeout, environment = environment)
 
-def _go_tool_identity(ctx, go_path):
-    version_result = _ctx_execute_checked(ctx, [str(go_path), "version"], timeout = 30)
-    if version_result.return_code != 0:
-        fail("Failed to detect Go tool version: %s\n%s" % (version_result.stdout, version_result.stderr))
-    env_result = _ctx_execute_checked(ctx, [str(go_path), "env", "GOOS", "GOARCH"], timeout = 30)
-    if env_result.return_code != 0:
-        fail("Failed to detect Go tool target: %s\n%s" % (env_result.stdout, env_result.stderr))
-    env_lines = [line.strip() for line in env_result.stdout.splitlines() if line.strip()]
-    if len(env_lines) != 2:
-        fail("Unexpected output from `go env GOOS GOARCH`: %r" % env_result.stdout)
+def _normalize_host_goos(os_name):
+    goos = str(os_name).lower()
+    if goos == "mac os x":
+        return "darwin"
+    if goos.startswith("windows"):
+        return "windows"
+    return goos
+
+def _normalize_host_goarch(os_arch):
+    goarch = str(os_arch).lower()
+    if goarch == "aarch64":
+        return "arm64"
+    if goarch == "x86_64":
+        return "amd64"
+    return goarch
+
+def _fallback_go_tool_identity(ctx):
     return struct(
-        version = version_result.stdout.strip(),
-        goos = env_lines[0],
-        goarch = env_lines[1],
+        version = "unknown-go-version",
+        goos = _normalize_host_goos(ctx.os.name),
+        goarch = _normalize_host_goarch(ctx.os.arch),
+    )
+
+def _go_tool_identity(ctx, go_path):
+    # Some integration tests and bootstrap environments intentionally wrap
+    # `go` with a narrow shim that supports only the commands needed to build
+    # Orchestrion itself. Keep the precise cache key for real Go toolchains,
+    # but fall back to the host platform when those wrappers reject `go version`
+    # or `go env`.
+    fallback = _fallback_go_tool_identity(ctx)
+
+    version_result = _ctx_execute_checked(ctx, [str(go_path), "version"], timeout = 30)
+    version = version_result.stdout.strip() if version_result.return_code == 0 and version_result.stdout.strip() else fallback.version
+
+    env_result = _ctx_execute_checked(ctx, [str(go_path), "env", "GOOS", "GOARCH"], timeout = 30)
+    env_lines = [line.strip() for line in env_result.stdout.splitlines() if line.strip()] if env_result.return_code == 0 else []
+    if len(env_lines) == 2:
+        goos = env_lines[0]
+        goarch = env_lines[1]
+    else:
+        goos = fallback.goos
+        goarch = fallback.goarch
+
+    return struct(
+        version = version,
+        goos = goos,
+        goarch = goarch,
     )
 
 def _dd_trace_go_versions_cache_fragment(version_map):
@@ -625,7 +658,10 @@ def _restore_bootstrap_cache(ctx, paths, binary_name):
 
 orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
+    fallback_go_tool_identity = _fallback_go_tool_identity,
     host_path_is_writable = _host_path_is_writable,
+    normalize_host_goarch = _normalize_host_goarch,
+    normalize_host_goos = _normalize_host_goos,
     parse_certutil_sha256 = _parse_certutil_sha256,
     powershell_single_quoted_literal = _powershell_single_quoted_literal,
 )

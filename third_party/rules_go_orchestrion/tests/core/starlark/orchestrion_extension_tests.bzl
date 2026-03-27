@@ -57,10 +57,45 @@ def _powershell_single_quoted_literal_test(ctx):
 
 powershell_single_quoted_literal_test = unittest.make(_powershell_single_quoted_literal_test)
 
+def _host_platform_normalization_test(ctx):
+    env = unittest.begin(ctx)
+
+    asserts.equals(env, "darwin", orchestrion_extension_test_helpers.normalize_host_goos("mac os x"))
+    asserts.equals(env, "windows", orchestrion_extension_test_helpers.normalize_host_goos("windows_nt"))
+    asserts.equals(env, "linux", orchestrion_extension_test_helpers.normalize_host_goos("linux"))
+    asserts.equals(env, "arm64", orchestrion_extension_test_helpers.normalize_host_goarch("aarch64"))
+    asserts.equals(env, "amd64", orchestrion_extension_test_helpers.normalize_host_goarch("x86_64"))
+    asserts.equals(env, "riscv64", orchestrion_extension_test_helpers.normalize_host_goarch("riscv64"))
+
+    return unittest.end(env)
+
+host_platform_normalization_test = unittest.make(_host_platform_normalization_test)
+
+def _fallback_go_tool_identity_test(ctx):
+    env = unittest.begin(ctx)
+
+    fallback = orchestrion_extension_test_helpers.fallback_go_tool_identity(
+        struct(
+            os = struct(
+                name = "mac os x",
+                arch = "aarch64",
+            ),
+        ),
+    )
+    asserts.equals(env, "unknown-go-version", fallback.version)
+    asserts.equals(env, "darwin", fallback.goos)
+    asserts.equals(env, "arm64", fallback.goarch)
+
+    return unittest.end(env)
+
+fallback_go_tool_identity_test = unittest.make(_fallback_go_tool_identity_test)
+
 def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
         bootstrap_cache_key_stability_test,
+        fallback_go_tool_identity_test,
+        host_platform_normalization_test,
         parse_certutil_sha256_test,
         powershell_single_quoted_literal_test,
     )
