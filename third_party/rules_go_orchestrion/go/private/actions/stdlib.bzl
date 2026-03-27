@@ -36,10 +36,19 @@ load(
 load("//go/private:sdk.bzl", "parse_version")
 load("//go/private/actions:utils.bzl", "quote_opts")
 
-def _orchestrion_action_env(base_env, version_file = None):
-    if not version_file:
-        return base_env
+_ORCHESTRION_PROBE_ENV_VARS = (
+    "RULES_GO_ORCHESTRION_PROBE",
+    "RULES_GO_ORCHESTRION_PROBE_FILE",
+)
+
+def _orchestrion_action_env(go, base_env, version_file = None):
     env = dict(base_env)
+    shell_env = go._ctx.configuration.default_shell_env
+    for name in _ORCHESTRION_PROBE_ENV_VARS:
+        if name in shell_env:
+            env[name] = shell_env[name]
+    if not version_file:
+        return env
     env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
     return env
 
@@ -102,7 +111,7 @@ def _build_stdlib_list_json(go):
 
 def _build_env(go):
     env = go.env
-    env = _orchestrion_action_env(env, getattr(go, "orchestrion_version_file", None))
+    env = _orchestrion_action_env(go, env, getattr(go, "orchestrion_version_file", None))
 
     if go.mode.pure:
         env.update({"CGO_ENABLED": "0"})

@@ -172,6 +172,11 @@ func (e *env) goCmd(cmd string, args ...string) []string {
 // runCommand executes a subprocess that inherits stdout, stderr, and the
 // environment from this process.
 func (e *env) runCommand(args []string) error {
+	span := beginProbe(
+		"env.run_command",
+		newProbeField("argv0", filepath.Base(args[0])),
+		newProbeField("arg_count", strconv.Itoa(len(args)-1)),
+	)
 	cmd := exec.Command(args[0], args[1:]...)
 	// Redirecting stdout to stderr. This mirrors behavior in the go command:
 	// https://go.googlesource.com/go/+/refs/tags/go1.15.2/src/cmd/go/internal/work/exec.go#1958
@@ -179,6 +184,7 @@ func (e *env) runCommand(args []string) error {
 	cmd.Stdout = buf
 	cmd.Stderr = buf
 	err := runAndLogCommand(cmd, e.verbose)
+	span.End(err)
 	os.Stderr.Write(relativizePaths(buf.Bytes()))
 	return err
 }
@@ -188,6 +194,13 @@ func (e *env) runCommand(args []string) error {
 // TOOLEXEC_IMPORTPATH is also set for orchestrion. The Go SDK's bin directory
 // is prepended to PATH so orchestrion can find the `go` binary.
 func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobserver, importPath string) error {
+	span := beginProbe(
+		"env.run_command_with_jobserver",
+		newProbeField("argv0", filepath.Base(args[0])),
+		newProbeField("arg_count", strconv.Itoa(len(args)-1)),
+		newProbeField("import_path", importPath),
+		newProbeField("jobserver", strconv.FormatBool(jobserver != nil && jobserver.URL() != "")),
+	)
 	cmd := exec.Command(args[0], args[1:]...)
 	buf := &bytes.Buffer{}
 	cmd.Stdout = buf
@@ -206,6 +219,7 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 		goRootPath = os.Getenv("GOROOT")
 	}
 	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose)
+	span.End(err)
 	os.Stderr.Write(relativizePaths(buf.Bytes()))
 	return err
 }

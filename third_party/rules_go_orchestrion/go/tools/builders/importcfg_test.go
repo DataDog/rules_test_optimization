@@ -32,7 +32,7 @@ func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 	}
 
 	goenv := &env{stdlibCache: cacheDir}
-	keyV1, err := moduleExportRequestKey(moduleDir, goenv)
+	keyV1, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
 	if err != nil {
 		t.Fatalf("moduleExportRequestKey v1 error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 		t.Fatalf("write manifest v2: %v", err)
 	}
 
-	keyV2, err := moduleExportRequestKey(moduleDir, goenv)
+	keyV2, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
 	if err != nil {
 		t.Fatalf("moduleExportRequestKey v2 error: %v", err)
 	}
@@ -78,16 +78,171 @@ func TestModuleExportRequestKeyIgnoresSyntheticTempDir(t *testing.T) {
 		}
 	}
 	goenv := &env{}
-	key1, err := moduleExportRequestKey(moduleDirs[0], goenv)
+	key1, _, err := moduleExportRequestKey(moduleDirs[0], goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
 	if err != nil {
 		t.Fatalf("moduleExportRequestKey dir1 error: %v", err)
 	}
-	key2, err := moduleExportRequestKey(moduleDirs[1], goenv)
+	key2, _, err := moduleExportRequestKey(moduleDirs[1], goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
 	if err != nil {
 		t.Fatalf("moduleExportRequestKey dir2 error: %v", err)
 	}
 	if key1 != key2 {
 		t.Fatalf("synthetic module export key mismatch: %q != %q", key1, key2)
+	}
+}
+
+func TestModuleExportRequestKeyIgnoresSyntheticGoModGoSumDrift(t *testing.T) {
+	moduleDirs := []string{
+		filepath.Join(t.TempDir(), "one"),
+		filepath.Join(t.TempDir(), "two"),
+	}
+	for idx, moduleDir := range moduleDirs {
+		if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+			t.Fatalf("mkdir module dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(syntheticOrchestrionGoMod(defaultDDTraceGoVersions())+"\n// temp drift\n"), 0o644); err != nil {
+			t.Fatalf("write go.mod: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(moduleDir, "orchestrion.tool.go"), []byte(syntheticOrchestrionToolGo), 0o644); err != nil {
+			t.Fatalf("write orchestrion.tool.go: %v", err)
+		}
+		if idx == 0 {
+			if err := os.WriteFile(filepath.Join(moduleDir, "go.sum"), []byte("transient-sum\n"), 0o644); err != nil {
+				t.Fatalf("write go.sum: %v", err)
+			}
+		}
+	}
+	goenv := &env{}
+	key1, _, err := moduleExportRequestKey(moduleDirs[0], goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey dir1 error: %v", err)
+	}
+	key2, _, err := moduleExportRequestKey(moduleDirs[1], goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey dir2 error: %v", err)
+	}
+	if key1 != key2 {
+		t.Fatalf("synthetic module export key changed with transient go.mod/go.sum drift: %q != %q", key1, key2)
+	}
+}
+
+func TestModuleExportRequestKeyIncludesNormalizedPackageSet(t *testing.T) {
+	moduleDir := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":              "module example.com/test\n",
+		"orchestrion.tool.go": syntheticOrchestrionToolGo,
+		"orchestrion.yml":     "injectors: []\n",
+	} {
+		if err := os.WriteFile(filepath.Join(moduleDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	goenv := &env{}
+	keyA, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"b/pkg", "a/pkg", "b/pkg"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey keyA error: %v", err)
+	}
+	keyB, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"a/pkg", "b/pkg"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey keyB error: %v", err)
+	}
+	keyC, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"a/pkg"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey keyC error: %v", err)
+	}
+	if keyA != keyB {
+		t.Fatalf("normalized package set mismatch: %q != %q", keyA, keyB)
+	}
+	if keyA == keyC {
+		t.Fatalf("moduleExportRequestKey ignored package set: %q", keyA)
+	}
+}
+
+func TestModuleExportRequestKeyIgnoresSdkExecrootPath(t *testing.T) {
+	moduleDir := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":              "module example.com/test\n",
+		"orchestrion.tool.go": syntheticOrchestrionToolGo,
+		"orchestrion.yml":     "injectors: []\n",
+	} {
+		if err := os.WriteFile(filepath.Join(moduleDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	makeSDK := func(root string) string {
+		sdk := filepath.Join(root, "external", "rules_go++go_sdk+go_default_sdk")
+		if err := os.MkdirAll(filepath.Join(sdk, "src", "internal", "buildcfg"), 0o755); err != nil {
+			t.Fatalf("mkdir sdk tree: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(sdk, "VERSION"), []byte("go1.24.0\n"), 0o644); err != nil {
+			t.Fatalf("write VERSION: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(sdk, "src", "internal", "buildcfg", "zbootstrap.go"), []byte("package buildcfg\n"), 0o644); err != nil {
+			t.Fatalf("write zbootstrap.go: %v", err)
+		}
+		return sdk
+	}
+
+	keyA, _, err := moduleExportRequestKey(moduleDir, &env{sdk: makeSDK(filepath.Join(t.TempDir(), "execroot-a"))}, []string{"a/pkg", "b/pkg"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey sdk A error: %v", err)
+	}
+	keyB, _, err := moduleExportRequestKey(moduleDir, &env{sdk: makeSDK(filepath.Join(t.TempDir(), "execroot-b"))}, []string{"a/pkg", "b/pkg"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey sdk B error: %v", err)
+	}
+	if keyA != keyB {
+		t.Fatalf("moduleExportRequestKey changed across equivalent sdk paths: %q != %q", keyA, keyB)
+	}
+}
+
+func TestModuleExportCacheManifestRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	paths := orchestrionCachePaths(root, "module-exports", "abc123")
+	if err := os.MkdirAll(paths.entryDir, 0o755); err != nil {
+		t.Fatalf("mkdir entry dir: %v", err)
+	}
+	archivePath := filepath.Join(paths.entryDir, "aa", "pkg.a.nolinkdeps")
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+		t.Fatalf("mkdir archive dir: %v", err)
+	}
+	if err := os.WriteFile(archivePath, []byte("archive"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	exports := map[string]string{"example.com/pkg": archivePath}
+	if err := writeModuleExportCache(paths, []string{"packages=example.com/pkg"}, []string{"example.com/pkg"}, exports); err != nil {
+		t.Fatalf("writeModuleExportCache error: %v", err)
+	}
+	got, err := loadModuleExportCache(paths)
+	if err != nil {
+		t.Fatalf("loadModuleExportCache error: %v", err)
+	}
+	if got["example.com/pkg"] != archivePath {
+		t.Fatalf("loadModuleExportCache got %q, want %q", got["example.com/pkg"], archivePath)
+	}
+}
+
+func TestModuleExportCacheManifestRejectsMissingArchive(t *testing.T) {
+	root := t.TempDir()
+	paths := orchestrionCachePaths(root, "module-exports", "abc123")
+	if err := os.MkdirAll(paths.entryDir, 0o755); err != nil {
+		t.Fatalf("mkdir entry dir: %v", err)
+	}
+	manifest := moduleExportCacheManifest{
+		Key:         "abc123",
+		ExportCache: helperExportCacheABIVersion,
+		Packages:    []string{"example.com/pkg"},
+		Exports:     map[string]string{"example.com/pkg": "missing/pkg.a.nolinkdeps"},
+	}
+	if err := writeJSONAtomically(paths.manifestPath, manifest); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := writeReadySentinel(paths.readyPath); err != nil {
+		t.Fatalf("write ready: %v", err)
+	}
+	if _, err := loadModuleExportCache(paths); err == nil {
+		t.Fatal("loadModuleExportCache unexpectedly succeeded with missing archive")
 	}
 }
 

@@ -34,13 +34,22 @@ load(
     "rpath",
 )
 
+_ORCHESTRION_PROBE_ENV_VARS = (
+    "RULES_GO_ORCHESTRION_PROBE",
+    "RULES_GO_ORCHESTRION_PROBE_FILE",
+)
+
 def _format_archive(d):
     return "{}={}={}".format(d.label, d.importmap, d.file.path)
 
-def _orchestrion_action_env(base_env, version_file = None):
-    if not version_file:
-        return base_env
+def _orchestrion_action_env(go, base_env, version_file = None):
     env = dict(base_env)
+    shell_env = go._ctx.configuration.default_shell_env
+    for name in _ORCHESTRION_PROBE_ENV_VARS:
+        if name in shell_env:
+            env[name] = shell_env[name]
+    if not version_file:
+        return env
     env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
     return env
 
@@ -228,7 +237,7 @@ def emit_link(
         mnemonic = "GoLink",
         executable = go.toolchain._builder,
         arguments = [builder_args, "--", tool_args],
-        env = _orchestrion_action_env(go.env, version_file),
+        env = _orchestrion_action_env(go, go.env, version_file),
         toolchain = GO_TOOLCHAIN_LABEL,
     )
 

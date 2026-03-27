@@ -176,13 +176,17 @@ resolves that input to exact tracer versions, keeps the local Go module pins on
 those same versions, and prevents Bazel and the Go module from silently
 drifting apart.
 
-Guided bootstrap is intentionally only for fresh single-service Go workspaces.
-If the workspace already uses:
+Guided bootstrap is intentionally for single-service Go workspaces. If the
+workspace already uses conflicting or multi-service sync wiring:
 - `test_optimization_sync_extension`
 - `test_optimization_multi_sync_extension`
-- a manual `test_optimization_go_extension` setup
+- a conflicting `test_optimization_go_extension` setup
 
 use the manual/advanced Go setup path instead.
+
+If the workspace already has a matching single-service
+`test_optimization_go_extension` plus `use_repo(...)`, guided bootstrap can
+reuse that wiring and continue.
 
 The generated package-facing API is:
 

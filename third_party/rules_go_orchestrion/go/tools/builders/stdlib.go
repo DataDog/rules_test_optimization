@@ -23,10 +23,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
-const syntheticOrchestrionToolGo = `package tools
+const syntheticOrchestrionToolGo = `//go:build tools
+
+package tools
 
 import (
 	_ "github.com/DataDog/orchestrion"
@@ -40,7 +43,11 @@ const syntheticStdlibModulePath = "module github.com/DataDog/dd-trace-go/v2/baze
 const orchestrionStdlibCacheManifestName = ".orchestrion_stdlib_cache_manifest"
 
 // stdlib builds the standard library in the appropriate mode into a new goroot.
-func stdlib(args []string) error {
+func stdlib(args []string) (err error) {
+	span := beginProbe("stdlib.action")
+	defer func() {
+		span.End(err)
+	}()
 	// process the args
 	flags := flag.NewFlagSet("stdlib", flag.ExitOnError)
 	goenv := envFlags(flags)
@@ -80,11 +87,14 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	}
 
 	// Link in the bare minimum needed to the new GOROOT
+	replicateSpan := beginProbe("stdlib.replicate_goroot")
 	if err := replicate(goroot, output, replicatePaths("src", "pkg/tool", "pkg/include")); err != nil {
+		replicateSpan.End(err)
 		return err
 	}
+	replicateSpan.End(nil)
 
-	output, err := processPath(output)
+	output, err = processPath(output)
 	if err != nil {
 		return err
 	}
@@ -180,22 +190,30 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 				}
 			}
 		}
+		workDirSpan := beginProbe("stdlib.enter_orchestrion_workdir")
 		restoreOrchWorkDir, err := enterOrchestrionWorkDir(orchestrionSrcDirs, goenv.verbose)
+		workDirSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer restoreOrchWorkDir()
+		goModSpan := beginProbe("stdlib.ensure_go_mod_exists")
 		cleanupGoMod, err := ensureGoModExists(orchestrionSrcDirs, goenv.sdk, goenv.verbose)
+		goModSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer cleanupGoMod()
+		modulePathSpan := beginProbe("stdlib.ensure_importable_stdlib_module_path")
 		cleanupGoModModulePath, err := ensureImportableStdlibModulePath(goenv.verbose)
+		modulePathSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer cleanupGoModModulePath()
+		toolGoSpan := beginProbe("stdlib.ensure_synthetic_orchestrion_tool_go")
 		cleanupSyntheticToolGo, err := ensureSyntheticOrchestrionToolGo(goenv.verbose)
+		toolGoSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
@@ -231,31 +249,26 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"},
 			}
 			for _, dl := range syntheticDownloads {
+				downloadSpan := beginProbe("stdlib.synthetic_download", newProbeField("command", strings.Join(dl, " ")))
 				if err := goenv.runCommand(goenv.goCmd(dl[0], dl[1:]...)); err != nil && goenv.verbose {
+					downloadSpan.End(err)
 					fmt.Fprintf(os.Stderr, "stdlib: synthetic orchestrion download failed %q: %v\n", strings.Join(dl, " "), err)
+				} else {
+					downloadSpan.End(nil)
 				}
 			}
 			tidyArgs := []string{"mod", "tidy"}
+			tidySpan := beginProbe("stdlib.synthetic_module_tidy")
 			if err := goenv.runCommand(goenv.goCmd(tidyArgs[0], tidyArgs[1:]...)); err != nil {
+				tidySpan.End(err)
 				return fmt.Errorf("stdlib: synthetic orchestrion tidy failed: %w", err)
 			}
+			tidySpan.End(nil)
 			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: synthetic orchestrion tidy completed using dd-trace-go/v2/orchestrion tools-tagged integration imports\n")
 			}
 			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: skipping synthetic orchestrion pin; using synthesized module/tool files instead\n")
-			}
-		}
-		goFlags := strings.TrimSpace(os.Getenv("GOFLAGS"))
-		if !strings.Contains(goFlags, "-tags=tools") && !strings.Contains(goFlags, "-tags tools") {
-			if goFlags == "" {
-				goFlags = "-tags=tools"
-			} else {
-				goFlags += " -tags=tools"
-			}
-			_ = os.Setenv("GOFLAGS", goFlags)
-			if goenv.verbose {
-				fmt.Fprintf(os.Stderr, "stdlib: forcing GOFLAGS=%s\n", goFlags)
 			}
 		}
 		stdlibWorkDir := ""
@@ -316,17 +329,32 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	installArgs = append(installArgs, packages...)
 	if *orchestrion != "" {
 		sdkPath := abs(goenv.sdk)
+		jobserverSpan := beginProbe("stdlib.start_jobserver")
 		jobserver, err := startOrchestrionJobserver(*orchestrion, sdkPath, output, goenv.verbose)
+		jobserverSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: failed to start orchestrion jobserver: %w", err)
 		}
 		defer jobserver.cleanup()
+		runSpan := beginProbe("stdlib.run_install")
 		if err := goenv.runCommandWithJobserver(installArgs, jobserver, ""); err != nil {
+			runSpan.End(err)
 			return err
 		}
+		runSpan.End(nil)
+		persistSpan := beginProbe("stdlib.persist_orchestrion_stdlib_exports")
 		if err := persistOrchestrionStdlibExports(goenv, append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRoots...), goenv.verbose); err != nil {
+			persistSpan.End(err)
 			return fmt.Errorf("stdlib: persist orchestrion stdlib exports: %w", err)
 		}
+		persistSpan.End(nil)
+		// Keep this path tied to the archives produced by the current stdlib
+		// install. A previous host-side stdlib snapshot reuse experiment made the
+		// build look correct while silently breaking runtime weaving: tests still
+		// passed, but CI Visibility never started and no payload files were
+		// emitted. Any future stdlib reuse optimization must be validated with a
+		// real consumer run that checks tracer startup logs and payload-file
+		// output, not just build success.
 		return nil
 	}
 	if err := goenv.runCommand(installArgs); err != nil {
@@ -335,7 +363,11 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	return nil
 }
 
-func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool) error {
+func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool) (err error) {
+	span := beginProbe("stdlib.persist_exports", newProbeField("package_count", strconv.Itoa(len(packages))))
+	defer func() {
+		span.End(err)
+	}()
 	root := orchestrionStdlibExportRoot(goenv)
 	if root == "" {
 		return nil
@@ -379,6 +411,7 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 		keys = append(keys, pkg)
 	}
 	sort.Strings(keys)
+	persistedExports := make(map[string]string, len(exports))
 	var manifest strings.Builder
 	for _, pkg := range keys {
 		src := exports[pkg]
@@ -390,6 +423,7 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 		if err := copyArchiveFile(src, dst); err != nil {
 			return fmt.Errorf("copy %s -> %s: %w", src, dst, err)
 		}
+		persistedExports[pkg] = dst
 		manifest.WriteString(pkg)
 		manifest.WriteString("=")
 		manifest.WriteString(relDst)
@@ -408,35 +442,24 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 	if verbose {
 		fmt.Fprintf(os.Stderr, "stdlib: wrote orchestrion export manifest %s\n", manifestPath)
 	}
-	for _, pkg := range keys {
-		relDst := filepath.FromSlash(pkg) + ".a"
-		src := filepath.Join(root, relDst)
-		dst := filepath.Join(pkgRoot, relDst)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := copyArchiveFile(src, dst); err != nil {
-			return fmt.Errorf("sync persisted stdlib archive %s -> %s: %w", src, dst, err)
-		}
-		if verbose {
-			fmt.Fprintf(os.Stderr, "stdlib: synced persisted orchestrion export %s -> %s\n", src, dst)
-		}
-	}
-	if err := syncPersistedOrchestrionExportsToCache(goenv, exports, verbose); err != nil {
+	// pkgRoot is already the source of truth for the woven stdlib archives we
+	// just copied into the persistent export root. Sync only the cache-local
+	// closure that later compile/link paths actually request from the stdlib
+	// cache, rather than rewriting every persisted archive back into cache paths.
+	if err := syncPersistedOrchestrionExportsToCache(goenv, persistedExports, packages, verbose); err != nil {
 		return fmt.Errorf("sync persisted stdlib archives into cache exports: %w", err)
 	}
 	return nil
 }
 
-func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]string, verbose bool) error {
+func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]string, roots []string, verbose bool) (err error) {
+	span := beginProbe("stdlib.sync_persisted_exports_to_cache", newProbeField("export_count", strconv.Itoa(len(exports))))
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil || len(exports) == 0 {
 		return nil
 	}
-	packages := make([]string, 0, len(exports))
-	for pkg := range exports {
-		packages = append(packages, pkg)
-	}
-	sort.Strings(packages)
 
 	// We have two cache families to keep consistent:
 	// 1. the Bazel-declared stdlib cache consumed by later compile/link actions
@@ -489,16 +512,24 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 			fmt.Fprintf(os.Stderr, "stdlib: resolving cache-family exports against GOCACHE=%s\n", cachePath)
 		}
 
-		cacheExports, err := resolveCacheStdlibExportsAt(goenv, packages, cachePath)
+		cacheExports, err := resolveCacheStdlibExportsAt(goenv, roots, cachePath)
 		if err != nil {
 			return err
 		}
+		packages := make([]string, 0, len(cacheExports))
+		for pkg := range cacheExports {
+			packages = append(packages, pkg)
+		}
+		sort.Strings(packages)
 		var manifest strings.Builder
 		for _, pkg := range packages {
 			src := exports[pkg]
 			dst, ok := cacheExports[pkg]
 			if !ok || dst == "" {
 				continue
+			}
+			if strings.TrimSpace(src) == "" {
+				return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
 			}
 			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 				return err

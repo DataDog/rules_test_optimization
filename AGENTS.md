@@ -120,6 +120,12 @@ The sync rule creates `@test_optimization_data//` containing:
   - Minimum expectation: use that repo's documented integration entrypoints (`./runtests`, `./runtests-hermetic`, or `./bazelw test //src/...`) to confirm this repo still works in a consumer-style workspace before calling the change done.
   - Use local overrides there while validating local work: enable the commented `local_path_override(...)` entries in `../rules_test_optimization_tests/MODULE.bazel` for `datadog-rules-test-optimization` and each affected companion module so the fixture tests the current checkout instead of the pinned GitHub commit.
   - When validating changes under `third_party/rules_go_orchestrion/` or related Go bootstrap/orchestrion wiring, add a matching temporary `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion")` in the fixture repo before running its tests.
+- Local vs CI troubleshooting for `../rules_test_optimization_tests`:
+  - If local fixture results differ from CI, compare the local environment to CI before assuming the fork is broken.
+  - Match the host Go version used in CI when reproducing Go or Orchestrion issues. For the current fixture setup, use Go `1.24.0`.
+  - Reset long-lived local state early when debugging: run `./bazelw shutdown`, then clear the stable Orchestrion cache under `~/Library/Caches/datadog-orchestrion-go-cache`.
+  - Global Git configuration can change `go mod` and Orchestrion behavior. In particular, HTTPS-to-SSH rewrites or interactive Git prompts can make local runs diverge from CI.
+  - When results still look suspicious, retry from a fresh checkout or worktree so Bazel analysis state and external repo state are not inherited from earlier experiments.
 - In consumer workspaces, prefer `./bazelw test //...` when package layout permits.
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.

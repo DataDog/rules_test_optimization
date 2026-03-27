@@ -14,8 +14,9 @@ import (
 const (
 	validationCacheABIVersion      = "v1"
 	syntheticModuleCacheABIVersion = "v1"
-	helperExportCacheABIVersion    = "v1"
-	helperArchiveCacheABIVersion   = "v1"
+	helperDecisionCacheABIVersion  = "v1"
+	helperExportCacheABIVersion    = "v2"
+	helperArchiveCacheABIVersion   = "v2"
 	helperSourceSetVersion         = "v1"
 	orchestrionVersionIdentity     = "v1.5.0"
 
@@ -37,15 +38,34 @@ type cachePaths struct {
 }
 
 func orchestrionPersistentCacheRoot(env []string) (string, error) {
-	normalizedEnv, err := ensureGoModuleCacheEnv(env, false)
-	if err != nil {
-		return "", err
-	}
-	root := filepath.Join(abs(getEnv(normalizedEnv, "GOPATH")), "cache", orchestrionPersistentCacheDirName)
+	root := filepath.Join(orchestrionDefaultCacheRoot(env), "cache", orchestrionPersistentCacheDirName)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", fmt.Errorf("prepare orchestrion persistent cache root %s: %w", root, err)
 	}
 	return root, nil
+}
+
+// orchestrionDefaultCacheRoot returns a stable writable cache root that is not
+// tied to Bazel's ephemeral output bases. This keeps Orchestrion's module cache
+// reusable across local reruns while avoiding accidental dependence on whatever
+// GOPATH the user happens to have configured for unrelated work.
+func orchestrionDefaultCacheRoot(env []string) string {
+	if cacheRoot := strings.TrimSpace(getEnv(env, "GOPATH")); cacheRoot != "" {
+		return abs(cacheRoot)
+	}
+	if cacheDir := strings.TrimSpace(getEnv(env, "XDG_CACHE_HOME")); cacheDir != "" {
+		return filepath.Join(abs(cacheDir), orchestrionSharedCacheDirName)
+	}
+	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
+		return filepath.Join(abs(cacheDir), orchestrionSharedCacheDirName)
+	}
+	if home := strings.TrimSpace(getEnv(env, "HOME")); home != "" {
+		return filepath.Join(abs(home), ".cache", orchestrionSharedCacheDirName)
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil && strings.TrimSpace(homeDir) != "" {
+		return filepath.Join(abs(homeDir), ".cache", orchestrionSharedCacheDirName)
+	}
+	return filepath.Join(os.TempDir(), orchestrionSharedCacheDirName)
 }
 
 func orchestrionCachePaths(root, namespace, key string) cachePaths {
@@ -200,6 +220,10 @@ func copyFileIfExists(src, dst string) (bool, error) {
 	return true, writeFileAtomically(dst, data, 0o644)
 }
 
+// hardlinkOrCopyFile refreshes dst from src. The helper keeps the old name
+// because multiple cache-seeding paths share it, but it intentionally uses a
+// plain copy so later cache warmup steps can rewrite destination files without
+// inheriting read-only permissions or link relationships from Go's cache.
 func hardlinkOrCopyFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
@@ -217,6 +241,29 @@ func digestFileOrMissing(path string) (string, error) {
 		return "", err
 	}
 	return shortDigest(data), nil
+}
+
+// goSDKCacheIdentity returns a stable cache identity for the selected Go SDK
+// without depending on Bazel's output-base-specific execroot path. The identity
+// is derived from SDK file contents that remain stable across equivalent
+// checkouts of the same toolchain.
+func goSDKCacheIdentity(sdkPath string) (string, error) {
+	if strings.TrimSpace(sdkPath) == "" {
+		return "default", nil
+	}
+	sdkPath = abs(sdkPath)
+	versionDigest, err := digestFileOrMissing(filepath.Join(sdkPath, "VERSION"))
+	if err != nil {
+		return "", err
+	}
+	buildcfgDigest, err := digestFileOrMissing(filepath.Join(sdkPath, "src", "internal", "buildcfg", "zbootstrap.go"))
+	if err != nil {
+		return "", err
+	}
+	return stableDigestParts(
+		"version="+versionDigest,
+		"buildcfg="+buildcfgDigest,
+	), nil
 }
 
 func shortDigest(data []byte) string {

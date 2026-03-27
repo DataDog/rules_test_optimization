@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -55,6 +57,17 @@ const orchestrionStdlibExportDirName = "orchestrioncache"
 type archive struct {
 	label, importPath, packagePath, file string
 	importPathAliases                    []string
+}
+
+// moduleExportCacheManifest stores the sanitized export map produced by
+// `go list -export -deps` so similar actions can skip the expensive command on
+// later cache hits.
+type moduleExportCacheManifest struct {
+	Key         string            `json:"key"`
+	KeyParts    []string          `json:"key_parts,omitempty"`
+	ExportCache string            `json:"export_cache"`
+	Packages    []string          `json:"packages"`
+	Exports     map[string]string `json:"exports"`
 }
 
 // checkImports verifies that each import in files refers to a
@@ -562,8 +575,18 @@ func resolveModuleExportsForPackages(goenv *env, packages []string, orchestrionP
 	return resolveModuleExportsForPackagesWithRoot(goenv, packages, orchestrionPath, moduleDir, "")
 }
 
-func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orchestrionPath, moduleDir, forcedExportRoot string) (map[string]string, error) {
-	if len(packages) == 0 || goenv == nil || goenv.sdk == "" {
+func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orchestrionPath, moduleDir, forcedExportRoot string) (_ map[string]string, err error) {
+	normalizedPackages := normalizeModuleExportPackages(packages)
+	span := beginProbe(
+		"importcfg.resolve_module_exports_for_packages",
+		newProbeField("package_count", strconv.Itoa(len(normalizedPackages))),
+		newProbeField("module_dir", moduleDir),
+		newProbeField("forced_export_root", strconv.FormatBool(forcedExportRoot != "")),
+	)
+	defer func() {
+		span.End(err)
+	}()
+	if len(normalizedPackages) == 0 || goenv == nil || goenv.sdk == "" {
 		return nil, nil
 	}
 	if goenv.goroot != "" {
@@ -580,7 +603,7 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 		"-f",
 		"{{if .Export}}{{.ImportPath}}={{.Export}}{{end}}",
 	)
-	args = append(args, packages...)
+	args = append(args, normalizedPackages...)
 
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = "."
@@ -615,22 +638,69 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 		return nil, fmt.Errorf("prepare module gomodcache: %w", err)
 	}
 	cmd.Env = setEnv(cmd.Env, "GOMODCACHE", gomodcache)
-	var gocache string
+	var (
+		gocache             string
+		sharedCachePaths    cachePaths
+		sharedCacheKeyParts []string
+	)
 	if forcedExportRoot != "" {
 		gocache = abs(forcedExportRoot)
 	} else {
-		requestKey, err := moduleExportRequestKey(cmd.Dir, goenv)
+		sharedCachePaths, sharedCacheKeyParts, err = moduleExportCachePaths(cmd.Dir, goenv, normalizedPackages)
 		if err != nil {
-			return nil, fmt.Errorf("derive module export request key: %w", err)
+			return nil, fmt.Errorf("derive module export cache path: %w", err)
 		}
-		gocache = filepath.Join(gopath, "cache", "module-exports", requestKey)
+		if cacheEntryReady(sharedCachePaths) {
+			exports, loadErr := loadModuleExportCache(sharedCachePaths)
+			if loadErr == nil {
+				emitProbeLine(
+					"importcfg.resolve_module_exports_for_packages.cache_hit",
+					0,
+					newProbeField("entry_dir", sharedCachePaths.entryDir),
+					newProbeField("status", "ok"),
+				)
+				return exports, nil
+			}
+			emitProbeLine(
+				"importcfg.resolve_module_exports_for_packages.cache_reload_failed",
+				0,
+				newProbeField("entry_dir", sharedCachePaths.entryDir),
+				newProbeField("status", probeStatus(loadErr)),
+			)
+		}
+		emitProbeLine(
+			"importcfg.resolve_module_exports_for_packages.cache_miss",
+			0,
+			newProbeField("entry_dir", sharedCachePaths.entryDir),
+			newProbeField("status", "ok"),
+		)
+		releaseLock, lockErr := acquireCacheLock(sharedCachePaths.lockDir, cacheLockTimeout, cacheLockStaleAfter)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer releaseLock()
+		if cacheEntryReady(sharedCachePaths) {
+			exports, loadErr := loadModuleExportCache(sharedCachePaths)
+			if loadErr == nil {
+				return exports, nil
+			}
+			emitProbeLine(
+				"importcfg.resolve_module_exports_for_packages.cache_reload_failed",
+				0,
+				newProbeField("entry_dir", sharedCachePaths.entryDir),
+				newProbeField("status", probeStatus(loadErr)),
+			)
+		}
+		if err := os.RemoveAll(sharedCachePaths.entryDir); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reset module export cache %s: %w", sharedCachePaths.entryDir, err)
+		}
+		gocache = abs(sharedCachePaths.entryDir)
 	}
-	gocache = abs(gocache)
-	if err := os.MkdirAll(gocache, 0o755); err != nil {
+	seedSpan := beginProbe("importcfg.resolve_module_exports_for_packages.seed_woven_stdlib_cache")
+	err = prepareModuleExportRootAt(goenv, gocache)
+	seedSpan.End(err)
+	if err != nil {
 		return nil, fmt.Errorf("prepare module gocache: %w", err)
-	}
-	if err := seedWovenStdlibCache(goenv, gocache); err != nil {
-		return nil, fmt.Errorf("seed module gocache from woven stdlib cache: %w", err)
 	}
 	cmd.Env = setEnv(cmd.Env, "GOCACHE", gocache)
 	cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
@@ -651,9 +721,11 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 		cmd.Env = setEnv(cmd.Env, "HOME", homePath)
 	}
 
+	runSpan := beginProbe("importcfg.resolve_module_exports_for_packages.go_list_export_deps", newProbeField("package_count", strconv.Itoa(len(normalizedPackages))))
 	output, err := cmd.CombinedOutput()
+	runSpan.End(err)
 	if err != nil {
-		return nil, fmt.Errorf("go list module exports for %v: %w\n%s", packages, err, string(output))
+		return nil, fmt.Errorf("go list module exports for %v: %w\n%s", normalizedPackages, err, string(output))
 	}
 	exports := make(map[string]string)
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
@@ -669,6 +741,16 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	}
 	if err := sanitizeModuleExportArchives(exports); err != nil {
 		return nil, err
+	}
+	if forcedExportRoot == "" {
+		if writeErr := writeModuleExportCache(sharedCachePaths, sharedCacheKeyParts, normalizedPackages, exports); writeErr != nil {
+			emitProbeLine(
+				"importcfg.resolve_module_exports_for_packages.cache_write_failed",
+				0,
+				newProbeField("entry_dir", sharedCachePaths.entryDir),
+				newProbeField("status", probeStatus(writeErr)),
+			)
+		}
 	}
 	return exports, nil
 }
@@ -699,36 +781,138 @@ func sanitizeModuleExportArchives(exports map[string]string) error {
 	return nil
 }
 
-func moduleExportRequestKey(moduleDir string, goenv *env) (string, error) {
+// normalizeModuleExportPackages deduplicates and sorts requested packages so
+// export cache keys stay stable across equivalent calls.
+func normalizeModuleExportPackages(packages []string) []string {
+	seen := make(map[string]bool, len(packages))
+	normalized := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" || seen[pkg] {
+			continue
+		}
+		seen[pkg] = true
+		normalized = append(normalized, pkg)
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+// moduleExportCachePaths returns the shared cache location and key material for
+// a specific module export request.
+func moduleExportCachePaths(moduleDir string, goenv *env, packages []string) (cachePaths, []string, error) {
+	requestKey, keyParts, err := moduleExportRequestKey(moduleDir, goenv, packages)
+	if err != nil {
+		return cachePaths{}, nil, err
+	}
+	env := append([]string{}, os.Environ()...)
+	gopath := getEnv(env, "GOPATH")
+	if gopath == "" {
+		gopath = filepath.Join(os.TempDir(), "datadog-orchestrion-go-cache")
+	}
+	gopath = abs(gopath)
+	return orchestrionCachePaths(filepath.Join(gopath, "cache", "module-exports"), "", requestKey), keyParts, nil
+}
+
+// loadModuleExportCache reloads a persisted export manifest and validates that
+// every recorded archive still exists before treating it as a hit.
+func loadModuleExportCache(paths cachePaths) (map[string]string, error) {
+	data, err := os.ReadFile(paths.manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("read module export cache manifest %s: %w", paths.manifestPath, err)
+	}
+	var manifest moduleExportCacheManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("parse module export cache manifest %s: %w", paths.manifestPath, err)
+	}
+	exports := make(map[string]string, len(manifest.Exports))
+	for pkg, exportPath := range manifest.Exports {
+		exportPath = strings.TrimSpace(exportPath)
+		if exportPath == "" {
+			return nil, fmt.Errorf("module export cache manifest %s missing export for %s", paths.manifestPath, pkg)
+		}
+		if !filepath.IsAbs(exportPath) {
+			exportPath = filepath.Join(paths.entryDir, exportPath)
+		}
+		if _, err := os.Stat(exportPath); err != nil {
+			return nil, fmt.Errorf("stat module export cache archive %s: %w", exportPath, err)
+		}
+		exports[pkg] = exportPath
+	}
+	return exports, nil
+}
+
+// writeModuleExportCache best-effort stores the sanitized export map for later
+// reuse by equivalent module export requests.
+func writeModuleExportCache(paths cachePaths, keyParts, packages []string, exports map[string]string) error {
+	manifest := moduleExportCacheManifest{
+		Key:         filepath.Base(paths.entryDir),
+		KeyParts:    append([]string{}, keyParts...),
+		ExportCache: helperExportCacheABIVersion,
+		Packages:    append([]string{}, packages...),
+		Exports:     make(map[string]string, len(exports)),
+	}
+	for pkg, exportPath := range exports {
+		relPath, err := filepath.Rel(paths.entryDir, exportPath)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			manifest.Exports[pkg] = exportPath
+			continue
+		}
+		manifest.Exports[pkg] = relPath
+	}
+	if err := writeJSONAtomically(paths.manifestPath, manifest); err != nil {
+		return err
+	}
+	return writeReadySentinel(paths.readyPath)
+}
+
+func moduleExportRequestKey(moduleDir string, goenv *env, packages []string) (string, []string, error) {
 	moduleDir = abs(moduleDir)
+	sdkIdentity, err := goSDKCacheIdentity(goenv.sdk)
+	if err != nil {
+		return "", nil, err
+	}
 	parts := []string{
 		"helper_export_cache=" + helperExportCacheABIVersion,
 		"orchestrion=" + orchestrionVersionIdentity,
-		"sdk=" + abs(goenv.sdk),
+		"sdk=" + sdkIdentity,
 		"installsuffix=" + goenv.installSuffix,
 	}
 	syntheticModule, err := isSyntheticOrchestrionModuleDir(moduleDir)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if syntheticModule {
 		parts = append(parts, "module_root=synthetic")
+		configuredVersions, err := configuredDDTraceGoVersions()
+		if err != nil {
+			return "", nil, err
+		}
+		parts = append(parts,
+			"configured_versions="+ddTraceVersionsDigest(configuredVersions),
+			"go.mod="+shortDigest([]byte(syntheticOrchestrionGoMod(configuredVersions))),
+			"go.sum=synthetic",
+			"orchestrion.tool.go="+shortDigest([]byte(syntheticOrchestrionToolGo)),
+			"orchestrion.yml=missing",
+		)
 	} else {
 		parts = append(parts, "module_root="+moduleDir)
-	}
-	for _, name := range []string{"go.mod", "go.sum", "orchestrion.tool.go", "orchestrion.yml"} {
-		digest, err := digestFileOrMissing(filepath.Join(moduleDir, name))
-		if err != nil {
-			return "", err
+		for _, name := range []string{"go.mod", "go.sum", "orchestrion.tool.go", "orchestrion.yml"} {
+			digest, err := digestFileOrMissing(filepath.Join(moduleDir, name))
+			if err != nil {
+				return "", nil, err
+			}
+			parts = append(parts, name+"="+digest)
 		}
-		parts = append(parts, name+"="+digest)
 	}
+	normalizedPackages := normalizeModuleExportPackages(packages)
+	parts = append(parts, "packages="+strings.Join(normalizedPackages, ","))
 	stdlibKey, err := currentWovenStdlibCacheKey(goenv)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	parts = append(parts, "stdlib="+stdlibKey)
-	return stableDigestParts(parts...), nil
+	return stableDigestParts(parts...), parts, nil
 }
 
 func currentWovenStdlibCacheKey(goenv *env) (string, error) {
@@ -749,9 +933,13 @@ func currentWovenStdlibCacheKey(goenv *env) (string, error) {
 	}
 	sort.Strings(keys)
 	for _, pkg := range keys {
+		archiveDigest, err := digestFileOrMissing(exports[pkg])
+		if err != nil {
+			return "", err
+		}
 		b.WriteString(pkg)
 		b.WriteString("=")
-		b.WriteString(filepath.Base(exports[pkg]))
+		b.WriteString(archiveDigest)
 		b.WriteString("\n")
 	}
 	sum := sha256.Sum256([]byte(b.String()))
@@ -1057,13 +1245,27 @@ func resolveCacheStdlibExports(goenv *env, packages []string) (map[string]string
 	return resolveCacheStdlibExportsAt(goenv, packages, cacheRoot)
 }
 
-func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string) (map[string]string, error) {
+func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string) (_ map[string]string, err error) {
+	span := beginProbe(
+		"importcfg.resolve_cache_stdlib_exports_at",
+		newProbeField("package_count", strconv.Itoa(len(packages))),
+		newProbeField("cache_root", cacheRoot),
+	)
+	defer func() {
+		span.End(err)
+	}()
 	if len(packages) == 0 || goenv == nil || goenv.goroot == "" || goenv.sdk == "" {
 		return nil, nil
 	}
 	cacheRoot = strings.TrimSpace(cacheRoot)
 	if cacheRoot != "" {
 		if manifestExports, err := readStdlibCacheManifest(cacheRoot, packages); err == nil && len(manifestExports) > 0 {
+			emitProbeLine(
+				"importcfg.resolve_cache_stdlib_exports_at.manifest_hit",
+				0,
+				newProbeField("package_count", strconv.Itoa(len(manifestExports))),
+				newProbeField("status", "ok"),
+			)
 			return manifestExports, nil
 		}
 	}
@@ -1116,7 +1318,9 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = gorootSrc
 	cmd.Env = append([]string{}, baseEnv...)
+	runSpan := beginProbe("importcfg.resolve_cache_stdlib_exports_at.go_list_export_deps", newProbeField("package_count", strconv.Itoa(len(packages))))
 	output, err := cmd.CombinedOutput()
+	runSpan.End(err)
 	if err != nil {
 		return nil, fmt.Errorf("go list cache stdlib exports: %w\n%s", err, string(output))
 	}
@@ -1265,7 +1469,11 @@ func rewriteImportcfgForAllStdlibExports(importcfgPath string, goenv *env) error
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *env) error {
+func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *env) (err error) {
+	span := beginProbe("importcfg.rewrite_default_cache_stdlib_exports", newProbeField("importcfg", importcfgPath))
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" {
 		return nil
 	}
@@ -1279,7 +1487,15 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string) error {
+func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, packages []string) (err error) {
+	span := beginProbe(
+		"importcfg.rewrite_cache_stdlib_closures",
+		newProbeField("importcfg", importcfgPath),
+		newProbeField("package_count", strconv.Itoa(len(packages))),
+	)
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" || len(packages) == 0 {
 		return nil
 	}
@@ -1312,7 +1528,11 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) error {
+func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) (err error) {
+	span := beginProbe("importcfg.rewrite_from_current_stdlib_entries", newProbeField("importcfg", importcfgPath))
+	defer func() {
+		span.End(err)
+	}()
 	if goenv == nil {
 		return nil
 	}
