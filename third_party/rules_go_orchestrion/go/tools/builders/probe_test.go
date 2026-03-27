@@ -79,3 +79,66 @@ func TestEmitProbeLineUsesDefaultProbeFilePath(t *testing.T) {
 		t.Fatalf("default probe file missing phase: %q", string(data))
 	}
 }
+
+func TestProbeFilePathAllowsAbsoluteTempPath(t *testing.T) {
+	t.Setenv(orchestrionProbeEnvVar, "1")
+	probeFile := filepath.Join(t.TempDir(), "nested", "builder-probes.log")
+	t.Setenv(orchestrionProbeFileEnvVar, probeFile)
+	resetProbeState(t)
+
+	emitProbeLine("probe.temp", 5*time.Millisecond)
+
+	if _, err := os.Stat(probeFile); err != nil {
+		t.Fatalf("stat allowed probe file: %v", err)
+	}
+}
+
+func TestProbeFilePathRejectsTraversalOutsideProbeDir(t *testing.T) {
+	t.Setenv(orchestrionProbeEnvVar, "1")
+	t.Setenv(orchestrionProbeFileEnvVar, "../escape.log")
+	t.Setenv("GOPATH", "")
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	resetProbeState(t)
+
+	emitProbeLine("probe.default", 10*time.Millisecond)
+
+	defaultProbeFile := filepath.Join(
+		cacheRoot,
+		orchestrionProbeSharedCacheDirName,
+		"probes",
+		orchestrionProbeDefaultFileName,
+	)
+	if _, err := os.Stat(defaultProbeFile); err != nil {
+		t.Fatalf("stat default fallback probe file: %v", err)
+	}
+	escapedProbeFile := filepath.Join(cacheRoot, "escape.log")
+	if _, err := os.Stat(escapedProbeFile); !os.IsNotExist(err) {
+		t.Fatalf("expected traversal target to stay unused, got err=%v", err)
+	}
+}
+
+func TestProbeFilePathRejectsAbsolutePathOutsideAllowedRoots(t *testing.T) {
+	t.Setenv(orchestrionProbeEnvVar, "1")
+	t.Setenv("GOPATH", "")
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	forbiddenProbeFile := filepath.Join(string(os.PathSeparator), "Users", "forbidden", "builder-probes.log")
+	t.Setenv(orchestrionProbeFileEnvVar, forbiddenProbeFile)
+	resetProbeState(t)
+
+	emitProbeLine("probe.default", 10*time.Millisecond)
+
+	defaultProbeFile := filepath.Join(
+		cacheRoot,
+		orchestrionProbeSharedCacheDirName,
+		"probes",
+		orchestrionProbeDefaultFileName,
+	)
+	if _, err := os.Stat(defaultProbeFile); err != nil {
+		t.Fatalf("stat default fallback probe file: %v", err)
+	}
+	if _, err := os.Stat(forbiddenProbeFile); !os.IsNotExist(err) {
+		t.Fatalf("expected forbidden probe file to stay unused, got err=%v", err)
+	}
+}

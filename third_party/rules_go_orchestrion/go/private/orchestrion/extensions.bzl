@@ -16,6 +16,7 @@
 
 DEFAULT_DD_TRACE_GO_VERSION = "v2.6.0"
 ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v2"
+
 # Bump this identifier whenever the in-repo Orchestrion patch block changes in
 # a way that should invalidate previously cached bootstrap binaries.
 ORCHESTRION_PATCHSET_ID = "20260326-bootstrap-cache-v2-no-tool-repin"
@@ -509,15 +510,14 @@ def _binary_sha256(ctx, path):
             [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
             timeout = 120,
         )
+    elif ctx.which("shasum"):
+        result = _ctx_execute_checked(ctx, [str(ctx.which("shasum")), "-a", "256", file_path], timeout = 120)
+    elif ctx.which("sha256sum"):
+        result = _ctx_execute_checked(ctx, [str(ctx.which("sha256sum")), file_path], timeout = 120)
+    elif ctx.which("openssl"):
+        result = _ctx_execute_checked(ctx, [str(ctx.which("openssl")), "dgst", "-sha256", file_path], timeout = 120)
     else:
-        if ctx.which("shasum"):
-            result = _ctx_execute_checked(ctx, [str(ctx.which("shasum")), "-a", "256", file_path], timeout = 120)
-        elif ctx.which("sha256sum"):
-            result = _ctx_execute_checked(ctx, [str(ctx.which("sha256sum")), file_path], timeout = 120)
-        elif ctx.which("openssl"):
-            result = _ctx_execute_checked(ctx, [str(ctx.which("openssl")), "dgst", "-sha256", file_path], timeout = 120)
-        else:
-            fail("Could not find a SHA-256 tool to hash %s" % file_path)
+        fail("Could not find a SHA-256 tool to hash %s" % file_path)
     if result.return_code != 0:
         fail("Failed to hash Orchestrion bootstrap binary %s: %s\n%s" % (file_path, result.stdout, result.stderr))
     digest = result.stdout.strip().lower()

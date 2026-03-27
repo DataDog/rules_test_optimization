@@ -167,11 +167,7 @@ func probeFilePath() string {
 			orchestrionProbeFilePath = defaultProbeFilePath()
 			return
 		}
-		if filepath.IsAbs(configuredPath) {
-			orchestrionProbeFilePath = configuredPath
-			return
-		}
-		orchestrionProbeFilePath = filepath.Join(orchestrionProbeDir(), configuredPath)
+		orchestrionProbeFilePath = sanitizedProbeFilePath(configuredPath)
 	})
 	return orchestrionProbeFilePath
 }
@@ -220,6 +216,42 @@ func appendProbeLineToPath(path, line string) error {
 	defer file.Close()
 	_, err = file.WriteString(line)
 	return err
+}
+
+// sanitizedProbeFilePath constrains custom probe mirrors to locations the
+// builders already own so probe logging cannot be redirected to arbitrary host
+// paths. Absolute paths must stay under the shared probe cache or the system
+// temp directory; relative paths stay rooted under the shared probe directory.
+func sanitizedProbeFilePath(configuredPath string) string {
+	defaultPath := defaultProbeFilePath()
+	if configuredPath == "" {
+		return defaultPath
+	}
+	if filepath.IsAbs(configuredPath) {
+		cleanedPath := filepath.Clean(configuredPath)
+		if probePathWithinBase(cleanedPath, os.TempDir()) || probePathWithinBase(cleanedPath, orchestrionProbeCacheRoot()) {
+			return cleanedPath
+		}
+		return defaultPath
+	}
+
+	rootedPath := filepath.Clean(filepath.Join(orchestrionProbeDir(), configuredPath))
+	if probePathWithinBase(rootedPath, orchestrionProbeDir()) {
+		return rootedPath
+	}
+	return defaultPath
+}
+
+// probePathWithinBase reports whether the target path stays inside the base
+// directory after path normalization.
+func probePathWithinBase(targetPath, baseDir string) bool {
+	cleanBase := filepath.Clean(baseDir)
+	cleanTarget := filepath.Clean(targetPath)
+	relPath, err := filepath.Rel(cleanBase, cleanTarget)
+	if err != nil {
+		return false
+	}
+	return relPath == "." || (relPath != ".." && !strings.HasPrefix(relPath, ".."+string(os.PathSeparator)))
 }
 
 // orchestrionProbeCacheRoot mirrors the builder cache root selection so probe
