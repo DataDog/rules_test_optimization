@@ -87,7 +87,7 @@ def _bootstrap_host_cache_root(ctx):
 
 def _bootstrap_cache_root(ctx):
     host_root = _bootstrap_host_cache_root(ctx)
-    if host_root:
+    if host_root and _host_path_is_writable(ctx, host_root):
         return host_root
     return _bootstrap_repo_local_cache_root(ctx)
 
@@ -437,13 +437,20 @@ def _dd_trace_go_versions_json(version_map):
     return "{\n  \"modules\": {\n%s\n  }\n}\n" % ",\n".join(entries)
 
 def _host_copy_file(ctx, src, dst, error_prefix):
+    copied, stdout, stderr = _host_copy_file_result(ctx, src, dst)
+    if not copied:
+        fail("%s: %s\n%s" % (error_prefix, stdout, stderr))
+
+def _host_copy_file_result(ctx, src, dst):
+    # Bootstrap cache restore is best-effort, so callers sometimes need the raw
+    # copy result instead of an immediate repository-rule failure.
     src_path = str(ctx.path(src))
     dst_path = str(ctx.path(dst))
     parent = str(ctx.path(dst_path).dirname)
     if _is_windows(ctx):
         powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
         if not powershell:
-            fail("%s: could not find PowerShell" % error_prefix)
+            return (False, "", "could not find PowerShell")
         command = "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path %s | Out-Null; Copy-Item -LiteralPath %s -Destination %s -Force" % (
             _powershell_single_quoted_literal(parent),
             _powershell_single_quoted_literal(src_path),
@@ -462,7 +469,41 @@ def _host_copy_file(ctx, src, dst, error_prefix):
             timeout = 120,
         )
     if result.return_code != 0:
-        fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
+        return (False, result.stdout, result.stderr)
+    return (True, result.stdout, result.stderr)
+
+def _host_path_is_writable(ctx, path):
+    # Repository rules may see HOME/XDG cache paths that exist but are mounted
+    # read-only in CI or hermetic environments. Probe writability before using
+    # them so bootstrap can fall back to the repo-local cache root.
+    probe_dir = _path_join(ctx, path, ".bootstrap-write-check")
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            return False
+        command = "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path %s | Out-Null; $probe = Join-Path %s '.probe'; Set-Content -LiteralPath $probe -Value 'ok'; Remove-Item -LiteralPath $probe -Force" % (
+            _powershell_single_quoted_literal(probe_dir),
+            _powershell_single_quoted_literal(probe_dir),
+        )
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            timeout = 30,
+        )
+    else:
+        shell = ctx.which("sh") or "/bin/sh"
+        result = _ctx_execute_checked(
+            ctx,
+            [
+                str(shell),
+                "-c",
+                "mkdir -p \"$1\" && touch \"$1/.probe\" && rm -f \"$1/.probe\"",
+                "bootstrap-write-check",
+                probe_dir,
+            ],
+            timeout = 30,
+        )
+    return result.return_code == 0
 
 def _powershell_single_quoted_literal(value):
     """Render a string as a PowerShell single-quoted literal."""
@@ -573,13 +614,18 @@ def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary
 def _restore_bootstrap_cache(ctx, paths, binary_name):
     if not _bootstrap_cache_entry_ready(ctx, paths):
         return False
-    _host_copy_file(ctx, paths.binary_path, binary_name, "Failed to restore cached Orchestrion binary")
-    _host_copy_file(ctx, paths.version_file_path, "dd_trace_go_versions.json", "Failed to restore cached Orchestrion version file")
+    binary_restored, _, _ = _host_copy_file_result(ctx, paths.binary_path, binary_name)
+    if not binary_restored:
+        return False
+    versions_restored, _, _ = _host_copy_file_result(ctx, paths.version_file_path, "dd_trace_go_versions.json")
+    if not versions_restored:
+        return False
     ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
     return True
 
 orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
+    host_path_is_writable = _host_path_is_writable,
     parse_certutil_sha256 = _parse_certutil_sha256,
     powershell_single_quoted_literal = _powershell_single_quoted_literal,
 )
