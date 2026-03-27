@@ -13,6 +13,11 @@ It focuses on the current steady-state design:
 - how stdlib weaving, synthetic `testmain`, and final link stay consistent
 - which invariants matter if you need to maintain or extend this path
 
+If you need the current optimization status, the experiments that were kept or
+reverted, or the latest measured bottlenecks, start with
+[go_orchestrion_maintainer_state.md](./go_orchestrion_maintainer_state.md) and
+then return here for the lower-level architectural detail.
+
 This is a maintainer document. It intentionally describes the current system,
 not the debugging history that produced it.
 
@@ -33,17 +38,17 @@ The Go integration spans four layers:
 
 Primary implementation entry points:
 
-- [modules/go/topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
-- [modules/go/topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
-- [modules/go/tools/dd_topt_go_bootstrap/main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
-- [third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
-- [third_party/rules_go_orchestrion/go/private/actions/archive.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
-- [third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
-- [third_party/rules_go_orchestrion/go/private/actions/link.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/link.bzl)
-- [third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+- [modules/go/topt_go_test.bzl](../modules/go/topt_go_test.bzl)
+- [modules/go/topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
+- [modules/go/tools/dd_topt_go_bootstrap/main.go](../modules/go/tools/dd_topt_go_bootstrap/main.go)
+- [third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+- [third_party/rules_go_orchestrion/go/private/actions/archive.bzl](../third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
+- [third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl](../third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
+- [third_party/rules_go_orchestrion/go/private/actions/link.bzl](../third_party/rules_go_orchestrion/go/private/actions/link.bzl)
+- [third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
+- [third_party/rules_go_orchestrion/go/tools/builders/link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
+- [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](../third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
 
 ### Why This Section Exists
 
@@ -125,14 +130,14 @@ The consumer adds:
 - `rules_go`
 - the Go companion extension repo
 
-In the current supported Go path, the consumer uses
-`test_optimization_go_extension`, which materializes the metadata repo used by
-`dd_topt_go_test`.
+In the guided Go path, bootstrap writes `test_optimization_go_extension`, which
+materializes the metadata repo used by `dd_topt_go_test`.
 
 - In guided single-service setup, bootstrap writes the managed
   `test_optimization_go_extension` block and `use_repo(...)` call.
-- In manual single-service or multi-service setup, the same Go extension still
-  owns creation of the `test_optimization_data...` repositories.
+- In manual single-service or multi-service setup, the Go macro only requires a
+  compatible exported `topt_data` shape. That can come from the Go extension or
+  from the core sync and multi-sync extensions.
 
 The generated metadata repo then provides the per-service and per-module
 payload labels consumed by `dd_topt_go_test`.
@@ -147,16 +152,19 @@ setup creates the repos and exports the macro needs later.
 The bootstrap binary is the one-time workspace mutation step.
 
 Implementation:
-- [main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
+- [main.go](../modules/go/tools/dd_topt_go_bootstrap/main.go)
 
-Bootstrap does four things that matter for the current architecture:
+Bootstrap does five things that matter for the current architecture:
 
 1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.59.0")`
 2. Writes a managed `git_override` for `rules_go` pointing back to this repo
    with `strip_prefix = "third_party/rules_go_orchestrion"`
 3. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension and
    `use_repo(orchestrion, "rules_go_orchestrion_tool")`
-4. Runs `orchestrion pin` in the Go module and ensures:
+4. Sets the workspace-wide tracer selection with either
+   `orchestrion.from_source(..., dd_trace_go_version = "...")` or
+   `orchestrion.from_source(..., dd_trace_go_versions = {...})`
+5. Runs `orchestrion pin` in the Go module and ensures:
    - `go.mod`
    - `go.sum`
    - `orchestrion.tool.go`
@@ -167,8 +175,18 @@ It aligns:
 
 - Bazel module wiring
 - the vendored `rules_go` fork
-- the Orchestrion source repo
+- the selected `dd-trace-go` version used by Bazel injection
 - the pinned Go module files that Orchestrion expects
+
+If no tracer setting is present, the default is still `v2.6.0`. Bootstrap keeps
+the local Go module on the same effective versions, and the Bazel build now
+fails fast if the workspace setting and the local Go module pins drift apart.
+
+The downloaded Orchestrion tool source is still patched before Bazel builds the
+binary, but Bazel now builds that tool from Orchestrion's upstream module graph
+instead of rewriting the tool repo's own `go.mod`. The selected tracer version
+is enforced later against the target module through the emitted
+`dd_trace_go_versions.json` file and the builder-side validation path.
 
 #### Why This Exists
 
@@ -181,7 +199,7 @@ target would need to carry fragile setup knowledge.
 `dd_topt_go_test` is the public macro surface.
 
 Implementation:
-- [topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
+- [topt_go_test.bzl](../modules/go/topt_go_test.bzl)
 
 The macro does three distinct jobs:
 
@@ -218,7 +236,7 @@ in one place.
 ### 4. Transitioned wrapper rule
 
 Implementation:
-- [topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
+- [topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 
 The wrapper rule exists for one reason: it applies a function transition that
 sets:
@@ -306,9 +324,9 @@ the Bazel pipeline and Orchestrion pipeline behave coherently.
 
 ### Starlark action layer
 
-- [archive.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
-- [compilepkg.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
-- [link.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/link.bzl)
+- [archive.bzl](../third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
+- [compilepkg.bzl](../third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
+- [link.bzl](../third_party/rules_go_orchestrion/go/private/actions/link.bzl)
 
 Responsibilities:
 
@@ -324,12 +342,12 @@ use them later.
 
 ### Builder layer
 
-- [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-- [importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
-- [orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
-- [stdlib.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/stdlib.go)
-- [stdliblist.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/stdliblist.go)
+- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
+- [link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
+- [orchestrion.go](../third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+- [stdlib.go](../third_party/rules_go_orchestrion/go/tools/builders/stdlib.go)
+- [stdliblist.go](../third_party/rules_go_orchestrion/go/tools/builders/stdliblist.go)
 
 Responsibilities:
 
@@ -349,7 +367,7 @@ is where the environment, importcfg, and archive family are made consistent.
 The vendored `rules_go` fork does not use upstream Orchestrion unchanged.
 
 Implementation:
-- [extensions.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+- [extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
 
 The Orchestrion repository rule downloads Orchestrion source and patches it
 before building the binary. The patches fall into a few categories:
@@ -423,7 +441,7 @@ to "producing instrumented artifacts". This section explains that boundary.
 
 The compile entry point is:
 
-- [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
 
 At compile time, the builder:
 
@@ -457,9 +475,9 @@ For synthetic `testmain`, compilepkg generates a sidecar manifest:
 
 Implementation details:
 
-- [archive.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
-- [compilepkg.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
-- [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [archive.bzl](../third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
+- [compilepkg.bzl](../third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
+- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
 
 The sidecar records the compile-time `packagefile` directives for the Datadog
 helper packages that synthetic `testmain` was rooted against. That is the
@@ -477,7 +495,7 @@ The importcfg layer is where the Bazel/Orchestrion integration becomes most
 concrete.
 
 Implementation:
-- [importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
+- [importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
 
 This file owns several distinct jobs:
 
@@ -538,7 +556,7 @@ keeps them inside the same Datadog package universe.
 
 The link entry point is:
 
-- [link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
+- [link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
 
 The link builder has two modes:
 
@@ -594,7 +612,7 @@ make that join deterministic.
 ## The Orchestrion Runtime Environment Inside Builders
 
 Implementation:
-- [orchestrion.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+- [orchestrion.go](../third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
 
 This file centralizes the environment preparation Orchestrion needs under Bazel.
 
@@ -623,12 +641,16 @@ fail inside Bazel sandboxes even when the outer action is otherwise correct.
 
 ### Shared cache reuse
 
-Bootstrap and sandboxed builder steps both use a stable shared cache root:
+Bootstrap and sandboxed builder steps share the
+`datadog-orchestrion-go-cache` namespace, but not always the exact same root
+path.
 
-- `datadog-orchestrion-go-cache`
+- the builder and extension prefer a persistent host cache root
+- the guided bootstrap CLI uses a temp-rooted cache location for its own local
+  workflow unless you override the environment
 
-This lets Orchestrion reuse fetched modules instead of redownloading them for
-each sandboxed step.
+This still lets Orchestrion reuse fetched modules instead of redownloading them
+for each sandboxed step.
 
 #### Why This Exists
 
@@ -812,7 +834,7 @@ mapping likely failure classes to the files that actually control them.
 
 ### Bootstrap and workspace shape
 
-- [main.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap/main.go)
+- [main.go](../modules/go/tools/dd_topt_go_bootstrap/main.go)
 
 Look here if:
 
@@ -827,8 +849,8 @@ section makes that distinction explicit.
 
 ### Macro and transition behavior
 
-- [topt_go_test.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_test.bzl)
-- [topt_go_orchestrion.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/modules/go/topt_go_orchestrion.bzl)
+- [topt_go_test.bzl](../modules/go/topt_go_test.bzl)
+- [topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 
 Look here if:
 
@@ -844,7 +866,7 @@ chance to do the right thing.
 
 ### Orchestrion source patching
 
-- [extensions.bzl](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+- [extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
 
 Look here if:
 
@@ -859,9 +881,9 @@ Starlark or the builders. This section points directly at that integration seam.
 
 ### Compile/link consistency
 
-- [compilepkg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-- [importcfg.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [link.go](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/third_party/rules_go_orchestrion/go/tools/builders/link.go)
+- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
+- [link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
 
 Look here if:
 

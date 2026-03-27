@@ -64,7 +64,9 @@ load(
 )
 load(
     "//tools/core:test_optimization_sync_env.bzl",
+    _ALL_SYNC_ENV_KEYS = "ALL_SYNC_ENV_KEYS",
     _apply_dd_git_overrides = "apply_dd_git_overrides",
+    _apply_github_event_payload = "apply_github_event_payload",
     _collect_env_from_environ = "collect_env_from_environ",
     _first_env = "first_env",
     _first_env_from_environ = "first_env_from_environ",
@@ -1268,15 +1270,35 @@ render_module_runfiles_bzl_for_tests = _render_module_runfiles_bzl
 # CI environment detection
 # ##########################################################################
 
+def _load_github_event_payload(ctx):
+    """Best-effort load the GitHub Actions event payload JSON text."""
+    event_path = ctx.os.environ.get("GITHUB_EVENT_PATH") or ""
+    if not event_path:
+        return None
+    read_result = _try_read_abs_file(ctx, event_path)
+    if not read_result.get("ok"):
+        return None
+    content = (read_result.get("value") or "").strip()
+    if not content:
+        return None
+    return content
+
 def _collect_env(ctx):
     """Collect CI/git/service context into a normalized metadata dict."""
-    return _collect_env_from_environ(ctx.os.environ, getattr(ctx.attr, "service", None))
+    return _collect_env_from_environ(
+        ctx.os.environ,
+        getattr(ctx.attr, "service", None),
+        _load_github_event_payload(ctx),
+    )
 
 # Public aliases for tests (helpers defined after the first alias section).
 collect_env_for_tests = _collect_env
 collect_env_from_environ_for_tests = _collect_env_from_environ
+load_github_event_payload_for_tests = _load_github_event_payload
 build_windows_read_abs_file_command_for_tests = _build_windows_read_abs_file_command
 build_unix_read_abs_file_command_for_tests = _build_unix_read_abs_file_command
+apply_github_event_payload_for_tests = _apply_github_event_payload
+all_sync_env_keys_for_tests = _ALL_SYNC_ENV_KEYS
 
 def _build_configurations_json(ctx, debug, osinfo = None):
     """Build Datadog `configurations` payload from OS/runtime attributes."""
@@ -1335,11 +1357,13 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     tags["test.bazel.rule_name"] = TEST_BAZEL_RULE_NAME
     tags["test.bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
 
-    # Git tags (base)
+    # Git tags
     if env_data.get("repository_url"):
         tags["git.repository_url"] = env_data.get("repository_url")
     if env_data.get("branch"):
         tags["git.branch"] = env_data.get("branch")
+    if env_data.get("tag"):
+        tags["git.tag"] = env_data.get("tag")
     if env_data.get("sha"):
         tags["git.commit.sha"] = env_data.get("sha")
     if env_data.get("head_sha"):
@@ -1348,28 +1372,38 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
         tags["git.commit.message"] = env_data.get("commit_message")
     if env_data.get("head_message"):
         tags["git.commit.head.message"] = env_data.get("head_message")
-
-    # Git overrides / extended tags via DD_* env.
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_TAG", "git.tag")
-
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_AUTHOR_NAME", "git.commit.author.name")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_AUTHOR_EMAIL", "git.commit.author.email")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_AUTHOR_DATE", "git.commit.author.date")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_COMMITTER_NAME", "git.commit.committer.name")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_COMMITTER_EMAIL", "git.commit.committer.email")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_COMMIT_COMMITTER_DATE", "git.commit.committer.date")
-
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_AUTHOR_NAME", "git.commit.head.author.name")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_AUTHOR_EMAIL", "git.commit.head.author.email")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_AUTHOR_DATE", "git.commit.head.author.date")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_COMMITTER_NAME", "git.commit.head.committer.name")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_COMMITTER_EMAIL", "git.commit.head.committer.email")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_HEAD_COMMITTER_DATE", "git.commit.head.committer.date")
-
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_PR_BASE_BRANCH", "git.pull_request.base_branch")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_PR_BASE_BRANCH_SHA", "git.pull_request.base_branch_sha")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_GIT_PR_BASE_BRANCH_HEAD_SHA", "git.pull_request.base_branch_head_sha")
-    _set_context_tag_from_env(ctx.os.environ, tags, "DD_PR_NUMBER", "pr.number")
+    if env_data.get("commit_author_name"):
+        tags["git.commit.author.name"] = env_data.get("commit_author_name")
+    if env_data.get("commit_author_email"):
+        tags["git.commit.author.email"] = env_data.get("commit_author_email")
+    if env_data.get("commit_author_date"):
+        tags["git.commit.author.date"] = env_data.get("commit_author_date")
+    if env_data.get("commit_committer_name"):
+        tags["git.commit.committer.name"] = env_data.get("commit_committer_name")
+    if env_data.get("commit_committer_email"):
+        tags["git.commit.committer.email"] = env_data.get("commit_committer_email")
+    if env_data.get("commit_committer_date"):
+        tags["git.commit.committer.date"] = env_data.get("commit_committer_date")
+    if env_data.get("head_author_name"):
+        tags["git.commit.head.author.name"] = env_data.get("head_author_name")
+    if env_data.get("head_author_email"):
+        tags["git.commit.head.author.email"] = env_data.get("head_author_email")
+    if env_data.get("head_author_date"):
+        tags["git.commit.head.author.date"] = env_data.get("head_author_date")
+    if env_data.get("head_committer_name"):
+        tags["git.commit.head.committer.name"] = env_data.get("head_committer_name")
+    if env_data.get("head_committer_email"):
+        tags["git.commit.head.committer.email"] = env_data.get("head_committer_email")
+    if env_data.get("head_committer_date"):
+        tags["git.commit.head.committer.date"] = env_data.get("head_committer_date")
+    if env_data.get("pr_base_branch"):
+        tags["git.pull_request.base_branch"] = env_data.get("pr_base_branch")
+    if env_data.get("pr_base_branch_sha"):
+        tags["git.pull_request.base_branch_sha"] = env_data.get("pr_base_branch_sha")
+    if env_data.get("pr_base_branch_head_sha"):
+        tags["git.pull_request.base_branch_head_sha"] = env_data.get("pr_base_branch_head_sha")
+    if env_data.get("pr_number"):
+        tags["pr.number"] = env_data.get("pr_number")
 
     # CI provider/name
     if env_data.get("ci_provider_name"):
@@ -1381,103 +1415,30 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     if env_data.get("environment"):
         tags["env"] = env_data.get("environment")
 
-    # CI workspace path
-    ws = _first_env(ctx, [
-        "CI_PROJECT_DIR",
-        "GITHUB_WORKSPACE",
-        "WORKSPACE",
-        "BUILDKITE_BUILD_CHECKOUT_PATH",
-        "TRAVIS_BUILD_DIR",
-    ])
-    if ws:
-        tags["ci.workspace_path"] = ws
-
-    # CI pipeline identifiers
-    pipeline_id = _first_env(ctx, [
-        "CI_PIPELINE_ID",
-        "GITHUB_RUN_ID",
-        "TRAVIS_BUILD_ID",
-        "BUILDKITE_BUILD_ID",
-        "BUILD_BUILDID",
-        "CIRCLE_WORKFLOW_ID",
-    ])
-    if pipeline_id:
-        tags["ci.pipeline.id"] = pipeline_id
-
-    pipeline_number = _first_env(ctx, [
-        "CI_PIPELINE_IID",
-        "GITHUB_RUN_NUMBER",
-        "TRAVIS_BUILD_NUMBER",
-        "BUILDKITE_BUILD_NUMBER",
-        "BUILD_BUILDNUMBER",
-    ])
-    if pipeline_number:
-        tags["ci.pipeline.number"] = pipeline_number
-
-    # CI pipeline URL: prefer provider URL then synthesize for GitHub
-    # Synthesis keeps context useful even when provider URL vars are absent
-    # but core GitHub Actions identifiers are available.
-    pipeline_url = _first_env(ctx, [
-        "CI_PIPELINE_URL",
-        "TRAVIS_BUILD_WEB_URL",
-        "CIRCLE_BUILD_URL",
-        "BUILDKITE_BUILD_URL",
-        "BUILD_BUILDURI",
-    ])
-    if not pipeline_url:
-        gh_server = ctx.os.environ.get("GITHUB_SERVER_URL") or ""
-        gh_repo = ctx.os.environ.get("GITHUB_REPOSITORY") or ""
-        gh_run_id = ctx.os.environ.get("GITHUB_RUN_ID") or ""
-        if gh_server and gh_repo and gh_run_id:
-            pipeline_url = "%s/%s/actions/runs/%s" % (gh_server, gh_repo, gh_run_id)
-    if pipeline_url:
-        tags["ci.pipeline.url"] = pipeline_url
-
-    # CI pipeline name (best-effort)
-    # Keep this intentionally sparse to avoid provider-specific heuristics that
-    # could emit unstable names across CI configurations.
-    pipeline_name = _first_env(ctx, [
-        "GITHUB_WORKFLOW",
-        "CI_PROJECT_PATH",
-    ])
-    if pipeline_name:
-        tags["ci.pipeline.name"] = pipeline_name
-
-    # CI job identifiers
-    job_id = _first_env(ctx, [
-        "CI_JOB_ID",
-        "BUILD_ID",
-        "TRAVIS_JOB_ID",
-    ])
-    if job_id:
-        tags["ci.job.id"] = job_id
-
-    job_name = _first_env(ctx, [
-        "CI_JOB_NAME",
-        "GITHUB_JOB",
-        "JOB_NAME",
-    ])
-    if job_name:
-        tags["ci.job.name"] = job_name
-
-    job_url = _first_env(ctx, [
-        "CI_JOB_URL",
-        "TRAVIS_JOB_WEB_URL",
-        "BUILD_URL",
-    ])
-    if job_url:
-        tags["ci.job.url"] = job_url
-
-    # CI stage, node
-    stage_name = ctx.os.environ.get("CI_JOB_STAGE")
-    if stage_name:
-        tags["ci.stage.name"] = stage_name
-    node_name = ctx.os.environ.get("NODE_NAME")
-    if node_name:
-        tags["ci.node.name"] = node_name
-    node_labels = ctx.os.environ.get("NODE_LABELS")
-    if node_labels:
-        tags["ci.node.labels"] = node_labels
+    if env_data.get("ci_workspace_path"):
+        tags["ci.workspace_path"] = env_data.get("ci_workspace_path")
+    if env_data.get("ci_pipeline_id"):
+        tags["ci.pipeline.id"] = env_data.get("ci_pipeline_id")
+    if env_data.get("ci_pipeline_number"):
+        tags["ci.pipeline.number"] = env_data.get("ci_pipeline_number")
+    if env_data.get("ci_pipeline_url"):
+        tags["ci.pipeline.url"] = env_data.get("ci_pipeline_url")
+    if env_data.get("ci_pipeline_name"):
+        tags["ci.pipeline.name"] = env_data.get("ci_pipeline_name")
+    if env_data.get("ci_job_id"):
+        tags["ci.job.id"] = env_data.get("ci_job_id")
+    if env_data.get("ci_job_name"):
+        tags["ci.job.name"] = env_data.get("ci_job_name")
+    if env_data.get("ci_job_url"):
+        tags["ci.job.url"] = env_data.get("ci_job_url")
+    if env_data.get("ci_stage_name"):
+        tags["ci.stage.name"] = env_data.get("ci_stage_name")
+    if env_data.get("ci_node_name"):
+        tags["ci.node.name"] = env_data.get("ci_node_name")
+    if env_data.get("ci_node_labels"):
+        tags["ci.node.labels"] = env_data.get("ci_node_labels")
+    if env_data.get("ci_env_vars_json"):
+        tags["ci.env_vars"] = env_data.get("ci_env_vars_json")
 
     # Embed a non-reversible fingerprint to validate uploader key parity.
     # This is intentionally low-entropy/non-secret metadata that lets tests
@@ -2135,131 +2096,9 @@ test_optimization_sync = repository_rule(
         "COMSPEC",  # Alternate casing for Windows command processor
         "PROCESSOR_ARCHITECTURE",  # Windows arch detection
         "PROCESSOR_ARCHITEW6432",  # Windows WOW64 arch detection
-        "DD_ENV",  # Optional: settings payload attribute "env"
-        "DD_SERVICE",  # Optional: settings payload attribute "service"
-        # If the following are unset, they will be inferred via git in the workspace
-        "DD_GIT_REPOSITORY_URL",  # Optional: settings payload "repository_url" (fallback: git remote.origin.url)
-        "DD_GIT_BRANCH",  # Optional: settings payload "branch" (fallback: git rev-parse --abbrev-ref HEAD)
-        "DD_GIT_COMMIT_SHA",  # Optional: settings payload "sha" (fallback: git rev-parse HEAD)
-        # Additional optional context used by requests (test management prefers head values)
-        "DD_GIT_HEAD_COMMIT",  # Optional: preferred head commit SHA
-        "DD_GIT_COMMIT_MESSAGE",  # Optional: commit message
-        "DD_GIT_HEAD_MESSAGE",  # Optional: preferred head commit message
-        # Extended git tags used for context.json (non-secret)
-        "DD_GIT_TAG",
-        "DD_GIT_COMMIT_AUTHOR_NAME",
-        "DD_GIT_COMMIT_AUTHOR_EMAIL",
-        "DD_GIT_COMMIT_AUTHOR_DATE",
-        "DD_GIT_COMMIT_COMMITTER_NAME",
-        "DD_GIT_COMMIT_COMMITTER_EMAIL",
-        "DD_GIT_COMMIT_COMMITTER_DATE",
-        "DD_GIT_HEAD_AUTHOR_NAME",
-        "DD_GIT_HEAD_AUTHOR_EMAIL",
-        "DD_GIT_HEAD_AUTHOR_DATE",
-        "DD_GIT_HEAD_COMMITTER_NAME",
-        "DD_GIT_HEAD_COMMITTER_EMAIL",
-        "DD_GIT_HEAD_COMMITTER_DATE",
-        "DD_GIT_PR_BASE_BRANCH",
-        "DD_GIT_PR_BASE_BRANCH_SHA",
-        "DD_GIT_PR_BASE_BRANCH_HEAD_SHA",
-        "DD_PR_NUMBER",
-        # CI provider detection envs (adds robustness to repo rule caching)
-        "APPVEYOR",
-        "APPVEYOR_REPO_NAME",
-        "APPVEYOR_REPO_PROVIDER",
-        "APPVEYOR_PULL_REQUEST_HEAD_REPO_BRANCH",
-        "APPVEYOR_REPO_BRANCH",
-        "APPVEYOR_REPO_COMMIT",
-        "TF_BUILD",
-        "BUILD_REPOSITORY_URI",
-        "BUILD_SOURCEVERSION",
-        "BUILD_SOURCEBRANCH",
-        "BUILD_SOURCEVERSIONMESSAGE",
-        "BITBUCKET_COMMIT",
-        "BITBUCKET_REPO_SLUG",
-        "BITBUCKET_BRANCH",
-        "BITBUCKET_GIT_HTTP_ORIGIN",
-        "BUDDY",
-        "BUILDKITE",
-        "BUILDKITE_REPO",
-        "BUILDKITE_COMMIT",
-        "BUILDKITE_BRANCH",
-        "BUILDKITE_MESSAGE",
-        "CIRCLECI",
-        "CIRCLE_REPOSITORY_URL",
-        "CIRCLE_SHA1",
-        "CIRCLE_BRANCH",
-        "GITHUB_SHA",
-        "GITHUB_REPOSITORY",
-        "GITHUB_SERVER_URL",
-        "GITHUB_REF",
-        "GITLAB_CI",
-        "CI_REPOSITORY_URL",
-        "CI_COMMIT_SHA",
-        "CI_COMMIT_BRANCH",
-        "CI_COMMIT_MESSAGE",
-        "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA",
-        "JENKINS_URL",
-        "GIT_URL",
-        "GIT_URL_1",
-        "GIT_COMMIT",
-        "GIT_BRANCH",
-        "TEAMCITY_VERSION",
-        "TRAVIS",
-        "TRAVIS_REPO_SLUG",
-        "TRAVIS_COMMIT",
-        "TRAVIS_PULL_REQUEST_BRANCH",
-        "TRAVIS_BRANCH",
-        "TRAVIS_COMMIT_MESSAGE",
-        "BITRISE_BUILD_SLUG",
-        "BITRISE_GIT_REPOSITORY_URL",
-        "BITRISE_GIT_COMMIT",
-        "BITRISE_GIT_BRANCH",
-        "CF_BUILD_ID",
-        "CF_BRANCH",
-        "CODEBUILD_INITIATOR",
-        "DRONE",
-        "DRONE_GIT_HTTP_URL",
-        "DRONE_COMMIT_SHA",
-        "DRONE_BRANCH",
-        "DRONE_COMMIT_MESSAGE",
-        # Additional CI and workspace envs used in context.json
-        "CI_PROJECT_DIR",
-        "CI_PROJECT_PATH",
-        "GITHUB_WORKSPACE",
-        "GITHUB_WORKFLOW",
-        "WORKSPACE",
-        "BUILDKITE_BUILD_CHECKOUT_PATH",
-        "TRAVIS_BUILD_DIR",
-        "CI_PIPELINE_ID",
-        "GITHUB_RUN_ID",
-        "TRAVIS_BUILD_ID",
-        "BUILDKITE_BUILD_ID",
-        "BUILD_BUILDID",
-        "CIRCLE_WORKFLOW_ID",
-        "CI_PIPELINE_IID",
-        "GITHUB_RUN_NUMBER",
-        "TRAVIS_BUILD_NUMBER",
-        "BUILDKITE_BUILD_NUMBER",
-        "BUILD_BUILDNUMBER",
-        "CI_PIPELINE_URL",
-        "TRAVIS_BUILD_WEB_URL",
-        "CIRCLE_BUILD_URL",
-        "BUILDKITE_BUILD_URL",
-        "BUILD_BUILDURI",
-        "CI_JOB_ID",
-        "BUILD_ID",
-        "TRAVIS_JOB_ID",
-        "CI_JOB_NAME",
-        "GITHUB_JOB",
-        "JOB_NAME",
-        "CI_JOB_URL",
-        "TRAVIS_JOB_WEB_URL",
-        "BUILD_URL",
-        "CI_JOB_STAGE",
-        "NODE_NAME",
-        "NODE_LABELS",
-    ],
+        # Shared CI/git metadata inputs are centralized in test_optimization_sync_env.bzl
+        # so provider extraction and repository_rule cache keys cannot drift apart.
+    ] + _ALL_SYNC_ENV_KEYS,
     # Repository rules run during workspace/module resolution; keep local=True
     # so host tooling/env detection remains predictable across environments.
     local = True,

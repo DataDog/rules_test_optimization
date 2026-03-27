@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -54,16 +55,6 @@ const (
 	orchestrionLogLevelEnvVar = "ORCHESTRION_LOG_LEVEL"
 
 	orchestrionStdlibCacheEnvVar = "RULES_GO_ORCHESTRION_STDLIB_CACHE"
-
-	syntheticOrchestrionGoMod = `module bazel_orchestrion_temp
-
-go 1.21
-
-require (
-	github.com/DataDog/orchestrion v1.5.0
-	github.com/DataDog/dd-trace-go/v2 v2.6.0
-)
-`
 )
 
 var orchestrionWovenPackagePatterns = []string{
@@ -77,31 +68,18 @@ var orchestrionWovenPackagePatterns = []string{
 // GOMODCACHE, but orchestrion shells out to `go list` while loading injector
 // configuration from orchestrion.tool.go.
 func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
-	cacheRoot := getEnv(env, "GOPATH")
-	if cacheRoot == "" {
-		if home := getEnv(env, "HOME"); home != "" {
-			cacheRoot = filepath.Join(home, "go")
-		}
-	}
-	if cacheRoot == "" {
-		if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
-			cacheRoot = filepath.Join(homeDir, "go")
-		}
-	}
-	if cacheRoot == "" {
-		cacheRoot = filepath.Join(os.TempDir(), orchestrionSharedCacheDirName)
-	}
-
-	goModCache := getEnv(env, "GOMODCACHE")
-	if goModCache == "" {
-		goModCache = filepath.Join(cacheRoot, "pkg", "mod")
-	}
-
 	goBuildCache := strings.TrimSpace(getEnv(env, orchestrionStdlibCacheEnvVar))
 	explicitBuildCache := goBuildCache != ""
 	if goBuildCache == "" {
 		goBuildCache = getEnv(env, "GOCACHE")
 		explicitBuildCache = goBuildCache != ""
+	}
+	cacheRoot := strings.TrimSpace(getEnv(env, "GOPATH"))
+	if cacheRoot == "" {
+		// Keep the compiled object cache in Bazel's declared output tree when it
+		// is provided, but anchor GOPATH/GOMODCACHE in a stable user cache root so
+		// local reruns are not coupled to a fresh TMPDIR or output_base.
+		cacheRoot = filepath.Join(orchestrionDefaultCacheRoot(env), "gopath")
 	}
 	if goBuildCache == "" {
 		goBuildCache = filepath.Join(cacheRoot, "cache")
@@ -111,6 +89,11 @@ func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
 			sum := sha256.Sum256([]byte(stableCacheKeyPath(goroot)))
 			goBuildCache = filepath.Join(cacheRoot, "cache", hex.EncodeToString(sum[:8]))
 		}
+	}
+
+	goModCache := strings.TrimSpace(getEnv(env, "GOMODCACHE"))
+	if goModCache == "" {
+		goModCache = filepath.Join(cacheRoot, "pkg", "mod")
 	}
 
 	for _, dir := range []string{goModCache, goBuildCache} {
@@ -148,7 +131,11 @@ func stableCacheKeyPath(path string) string {
 	return path
 }
 
-func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) error {
+func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) (err error) {
+	span := beginProbe("orchestrion.ensure_woven_packages_available")
+	defer func() {
+		span.End(err)
+	}()
 	goExe := ""
 	if goSdkPath != "" {
 		goExe = filepath.Join(abs(goSdkPath), "bin", "go")
@@ -181,6 +168,11 @@ func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) 
 	}
 
 	runProbe := func(label string, args ...string) error {
+		probe := beginProbe(
+			"orchestrion.ensure_woven_packages_available."+strings.ReplaceAll(label, " ", "_"),
+			newProbeField("argv0", filepath.Base(goExe)),
+			newProbeField("arg_count", strconv.Itoa(len(args))),
+		)
 		cmd := exec.Command(goExe, args...)
 		cmd.Env = env
 		cmd.Dir = mustGetwd()
@@ -196,10 +188,13 @@ func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) 
 				if verbose {
 					fmt.Fprintf(os.Stderr, "orchestrion: %s returned non-zero but included all requested woven packages; continuing\n", label)
 				}
+				probe.End(nil, newProbeField("result", "non_zero_but_complete"))
 				return nil
 			}
+			probe.End(err)
 			return fmt.Errorf("%s failed: %w", label, err)
 		}
+		probe.End(nil)
 		return nil
 	}
 
@@ -276,12 +271,21 @@ type orchestrionJobserver struct {
 // current directory so orchestrion can find its configuration.
 // Returns a cleanup function that removes the temporary files we created.
 func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanup func(), err error) {
+	span := beginProbe("orchestrion.ensure_go_mod_exists", newProbeField("src_dir_count", strconv.Itoa(len(srcDirs))))
+	defer func() {
+		span.End(err)
+	}()
 	const goModFile = "go.mod"
 	const goSumFile = "go.sum"
 	const orchestrionYML = "orchestrion.yml"
 	const orchestrionToolGo = "orchestrion.tool.go"
 
 	var filesToCleanup []string
+	var copiedGoMod bool
+	configuredVersions, err := configuredDDTraceGoVersions()
+	if err != nil {
+		return nil, err
+	}
 
 	if verbose {
 		cwd, _ := os.Getwd()
@@ -292,7 +296,6 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 	// needs the real module requirements from `orchestrion pin`; a synthetic
 	// minimal go.mod is only a fallback when the package has no module files.
 	if _, err := os.Stat(goModFile); os.IsNotExist(err) {
-		var copiedGoMod bool
 		for _, dir := range srcDirs {
 			goModSrc := filepath.Join(dir, goModFile)
 			if _, err := os.Stat(goModSrc); err == nil {
@@ -326,7 +329,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 		}
 
 		if !copiedGoMod {
-			content := []byte(syntheticOrchestrionGoMod)
+			content := []byte(syntheticOrchestrionGoMod(configuredVersions))
 			if err := os.WriteFile(goModFile, content, 0644); err != nil {
 				return nil, fmt.Errorf("creating temporary go.mod: %w", err)
 			}
@@ -335,6 +338,15 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 				fmt.Fprintf(os.Stderr, "orchestrion: Created temporary go.mod\n")
 			}
 		}
+	}
+
+	if _, err := os.Stat(goModFile); err == nil {
+		goExe := resolveGoExecutable(goSdkPath)
+		if err := validateResolvedDDTraceGoVersion(goExe, ".", os.Environ(), verbose); err != nil {
+			return nil, err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat go.mod: %w", err)
 	}
 
 	// Look for orchestrion.yml in source directories and copy it to cwd
@@ -405,7 +417,20 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 			break
 		}
 	}
-	if shouldPrepareSynthetic {
+	if shouldPrepareSynthetic && !copiedGoMod {
+		cacheHit, err := restorePreparedSyntheticModule(goSdkPath, configuredVersions, verbose)
+		if err != nil {
+			return nil, err
+		}
+		if !cacheHit {
+			if err := prepareSyntheticOrchestrionModule(goSdkPath, verbose); err != nil {
+				return nil, err
+			}
+			if err := snapshotPreparedSyntheticModule(goSdkPath, configuredVersions); err != nil {
+				return nil, err
+			}
+		}
+	} else if shouldPrepareSynthetic {
 		if err := prepareSyntheticOrchestrionModule(goSdkPath, verbose); err != nil {
 			return nil, err
 		}
@@ -418,27 +443,12 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 	}, nil
 }
 
-func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
-	goExe := ""
-	if goSdkPath != "" {
-		goExe = filepath.Join(abs(goSdkPath), "bin", "go")
-		if runtime.GOOS == "windows" {
-			goExe += ".exe"
-		}
-	}
-	if goExe == "" {
-		var err error
-		goExe, err = exec.LookPath("go")
-		if err != nil {
-			gorootGo := filepath.Join(getEnv(os.Environ(), "GOROOT"), "bin", "go")
-			if runtime.GOOS == "windows" {
-				gorootGo += ".exe"
-			}
-			if _, statErr := os.Stat(gorootGo); statErr == nil {
-				goExe = gorootGo
-			}
-		}
-	}
+func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) (err error) {
+	span := beginProbe("orchestrion.prepare_synthetic_module")
+	defer func() {
+		span.End(err)
+	}()
+	goExe := resolveGoExecutable(goSdkPath)
 	if goExe == "" {
 		if verbose {
 			fmt.Fprintf(os.Stderr, "orchestrion: skipping synthetic module preparation; go binary unavailable\n")
@@ -447,6 +457,11 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 	}
 
 	run := func(label string, args ...string) error {
+		probe := beginProbe(
+			"orchestrion.prepare_synthetic_module."+strings.ReplaceAll(label, " ", "_"),
+			newProbeField("argv0", filepath.Base(goExe)),
+			newProbeField("arg_count", strconv.Itoa(len(args))),
+		)
 		cmd := exec.Command(goExe, args...)
 		env := append([]string{}, os.Environ()...)
 		normalizedEnv, envErr := ensureGoModuleCacheEnv(env, verbose)
@@ -497,14 +512,18 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 			}
 		}
 		if err != nil {
+			probe.End(err)
 			return fmt.Errorf("%s failed: %w", label, err)
 		}
+		probe.End(nil)
 		return nil
 	}
 
 	if err := run("download synthetic deps", "mod", "download",
 		"github.com/DataDog/orchestrion",
 		"github.com/DataDog/dd-trace-go/v2",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 	); err != nil {
 		return err
 	}
@@ -515,6 +534,123 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) error {
 		return err
 	}
 	return nil
+}
+
+type preparedSyntheticModuleManifest struct {
+	Key                  string `json:"key"`
+	HasGoSum             bool   `json:"has_go_sum"`
+	SyntheticModuleCache string `json:"synthetic_module_cache"`
+}
+
+func restorePreparedSyntheticModule(goSdkPath string, configuredVersions map[string]string, verbose bool) (bool, error) {
+	cacheDir, paths, err := preparedSyntheticModuleCachePaths(goSdkPath, configuredVersions)
+	if err != nil {
+		return false, err
+	}
+	if !cacheEntryReady(paths) {
+		return false, nil
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "orchestrion: synthetic module cache hit key=%s\n", filepath.Base(cacheDir))
+	}
+	if _, err := copyFileIfExists(filepath.Join(cacheDir, "go.mod"), "go.mod"); err != nil {
+		return false, fmt.Errorf("restore prepared synthetic go.mod: %w", err)
+	}
+	if _, err := copyFileIfExists(filepath.Join(cacheDir, "orchestrion.tool.go"), "orchestrion.tool.go"); err != nil {
+		return false, fmt.Errorf("restore prepared synthetic orchestrion.tool.go: %w", err)
+	}
+	hasGoSum, err := copyFileIfExists(filepath.Join(cacheDir, "go.sum"), "go.sum")
+	if err != nil {
+		return false, fmt.Errorf("restore prepared synthetic go.sum: %w", err)
+	}
+	if !hasGoSum {
+		_ = os.Remove("go.sum")
+	}
+	return true, nil
+}
+
+func snapshotPreparedSyntheticModule(goSdkPath string, configuredVersions map[string]string) error {
+	cacheDir, paths, err := preparedSyntheticModuleCachePaths(goSdkPath, configuredVersions)
+	if err != nil {
+		return err
+	}
+	releaseLock, err := acquireCacheLock(paths.lockDir, cacheLockTimeout, cacheLockStaleAfter)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+	if cacheEntryReady(paths) {
+		return nil
+	}
+	tempDir, err := os.MkdirTemp(filepath.Dir(paths.entryDir), filepath.Base(paths.entryDir)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create prepared synthetic module temp dir: %w", err)
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(tempDir)
+		}
+	}()
+	if _, err := copyFileIfExists("go.mod", filepath.Join(tempDir, "go.mod")); err != nil {
+		return fmt.Errorf("snapshot prepared synthetic go.mod: %w", err)
+	}
+	hasGoSum, err := copyFileIfExists("go.sum", filepath.Join(tempDir, "go.sum"))
+	if err != nil {
+		return fmt.Errorf("snapshot prepared synthetic go.sum: %w", err)
+	}
+	if _, err := copyFileIfExists("orchestrion.tool.go", filepath.Join(tempDir, "orchestrion.tool.go")); err != nil {
+		return fmt.Errorf("snapshot prepared synthetic orchestrion.tool.go: %w", err)
+	}
+	manifest := preparedSyntheticModuleManifest{
+		Key:                  filepath.Base(cacheDir),
+		HasGoSum:             hasGoSum,
+		SyntheticModuleCache: syntheticModuleCacheABIVersion,
+	}
+	if err := writeJSONAtomically(filepath.Join(tempDir, cacheManifestFileName), manifest); err != nil {
+		return fmt.Errorf("write prepared synthetic module manifest: %w", err)
+	}
+	if err := writeReadySentinel(filepath.Join(tempDir, cacheReadyFileName)); err != nil {
+		return fmt.Errorf("write prepared synthetic module ready file: %w", err)
+	}
+	if err := promoteCacheTempDir(tempDir, cacheDir); err != nil {
+		return fmt.Errorf("promote prepared synthetic module cache: %w", err)
+	}
+	success = true
+	return nil
+}
+
+func preparedSyntheticModuleCachePaths(goSdkPath string, configuredVersions map[string]string) (string, cachePaths, error) {
+	key, err := preparedSyntheticModuleCacheKey(goSdkPath, configuredVersions)
+	if err != nil {
+		return "", cachePaths{}, err
+	}
+	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	if err != nil {
+		return "", cachePaths{}, err
+	}
+	paths := orchestrionCachePaths(cacheRoot, "synthetic-module", key)
+	return paths.entryDir, paths, nil
+}
+
+func preparedSyntheticModuleCacheKey(goSdkPath string, configuredVersions map[string]string) (string, error) {
+	goModDigest, err := digestFileOrMissing("go.mod")
+	if err != nil {
+		return "", err
+	}
+	toolDigest, err := digestFileOrMissing("orchestrion.tool.go")
+	if err != nil {
+		return "", err
+	}
+	return stableDigestParts(
+		"go_mod="+goModDigest,
+		"tool_go="+toolDigest,
+		"configured_versions="+ddTraceVersionsDigest(configuredVersions),
+		"go_sdk="+abs(goSdkPath),
+		"orchestrion="+orchestrionVersionIdentity,
+		"target="+goTargetIdentity(os.Environ()),
+		"synthetic_module_cache="+syntheticModuleCacheABIVersion,
+	), nil
 }
 
 func logOrchestrionTempModuleState() {
@@ -717,7 +853,14 @@ func copyOrchFile(src, dst string) error {
 // goRootPath is the GOROOT tree that should be exposed to `go list` / asm
 // resolution inside the jobserver. Under Bazel this is often the cloned stdlib
 // tree, not the SDK root.
-func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, verbose bool) (*orchestrionJobserver, error) {
+func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, verbose bool) (_ *orchestrionJobserver, err error) {
+	span := beginProbe(
+		"orchestrion.start_jobserver",
+		newProbeField("orchestrion", strconv.FormatBool(orchestrionPath != "")),
+	)
+	defer func() {
+		span.End(err)
+	}()
 	if orchestrionPath == "" {
 		return nil, nil
 	}
@@ -742,8 +885,9 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 	// Set up environment with proper PATH and GOROOT for the server process
 	// The server needs access to the go binary to load its configuration
 	cmd.Env = os.Environ()
-	var err error
+	cacheSpan := beginProbe("orchestrion.start_jobserver.ensure_cache_env")
 	cmd.Env, err = ensureGoModuleCacheEnv(cmd.Env, verbose)
+	cacheSpan.End(err)
 	if err != nil {
 		return nil, err
 	}
@@ -772,19 +916,30 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
 
 	}
-	if err := ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose); err != nil {
+	goRootSpan := beginProbe("orchestrion.start_jobserver.ensure_goroot_compatibility")
+	err = ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose)
+	goRootSpan.End(err)
+	if err != nil {
 		return nil, err
 	}
-	if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose); err != nil {
+	warmSpan := beginProbe("orchestrion.start_jobserver.warm_woven_packages")
+	err = ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose)
+	warmSpan.End(err)
+	if err != nil {
 		return nil, fmt.Errorf("warm woven dependencies before jobserver: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
+	startSpan := beginProbe("orchestrion.start_jobserver.spawn")
+	err = cmd.Start()
+	startSpan.End(err)
+	if err != nil {
 		return nil, fmt.Errorf("failed to start orchestrion jobserver: %w", err)
 	}
 
 	// Wait for the URL file to be created and populated
+	waitSpan := beginProbe("orchestrion.start_jobserver.wait_for_url")
 	url, err := waitForURLFile(urlFile, jobserverStartTimeout)
+	waitSpan.End(err)
 	if err != nil {
 		// Kill the process if we failed to get the URL
 		_ = cmd.Process.Kill()
@@ -844,7 +999,16 @@ func waitForURLFile(path string, timeout time.Duration) (string, error) {
 // TOOLEXEC_IMPORTPATH is also set (required by orchestrion toolexec).
 // If goSdkPath is non-empty, the Go SDK's bin directory is prepended to PATH.
 // If goRootPath is non-empty, it is used as GOROOT for the command.
-func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver, importPath, goSdkPath, goRootPath string, verbose bool) error {
+func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver, importPath, goSdkPath, goRootPath string, verbose bool) (err error) {
+	span := beginProbe(
+		"orchestrion.execute_command_with_jobserver",
+		newProbeField("argv0", filepath.Base(cmd.Path)),
+		newProbeField("import_path", importPath),
+		newProbeField("jobserver", strconv.FormatBool(jobserver != nil && jobserver.URL() != "")),
+	)
+	defer func() {
+		span.End(err)
+	}()
 	if goSdkPath != "" {
 		// Set PATH in the current process so that child processes inherit it
 		// This is needed because exec.Command looks up the path using the current process's PATH
@@ -867,12 +1031,16 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
-	var err error
+	cacheSpan := beginProbe("orchestrion.execute_command_with_jobserver.ensure_cache_env")
 	cmd.Env, err = ensureGoModuleCacheEnv(cmd.Env, verbose)
+	cacheSpan.End(err)
 	if err != nil {
 		return err
 	}
-	if err := ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose); err != nil {
+	goRootSpan := beginProbe("orchestrion.execute_command_with_jobserver.ensure_goroot_compatibility")
+	err = ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose)
+	goRootSpan.End(err)
+	if err != nil {
 		return err
 	}
 
@@ -924,7 +1092,10 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose); err != nil {
 		return fmt.Errorf("ensure woven dependencies available: %w", err)
 	}
-	return runAndLogCommand(cmd, verbose)
+	runSpan := beginProbe("orchestrion.execute_command_with_jobserver.run")
+	err = runAndLogCommand(cmd, verbose)
+	runSpan.End(err)
+	return err
 }
 
 func mustGetwd() string {

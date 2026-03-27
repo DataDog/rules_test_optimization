@@ -2,6 +2,45 @@
 
 This page contains the full configuration and environment reference.
 
+## Go Orchestrion version selection
+
+Guided Go bootstrap accepts:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dd-trace-go-version` | `v2.6.0` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
+
+Manual Orchestrion wiring in `MODULE.bazel` accepts:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.6.0` | Shared canonical tracer version that Bazel validates against the target Go module and uses for synthetic fallback paths |
+| `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact canonical per-module tracer versions that Bazel validates against the target Go module for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
+
+Notes:
+
+- The selected version is workspace-wide for Go. There is no per-test override.
+- Bootstrap repins the local Go module to the same effective versions.
+- Bootstrap accepts tags, pseudo-versions, branches, and commit SHAs through
+  `--dd-trace-go-version` and resolves them to canonical persisted versions.
+- Manual `orchestrion.from_source(...)` tracer settings must already use
+  canonical persisted versions. Branches and commit SHAs are rejected there.
+- The Orchestrion tool bootstrap records these versions in
+  `dd_trace_go_versions.json`, but it no longer rewrites the downloaded
+  Orchestrion source repo's own `go.mod`.
+- Bootstrap writes `dd_trace_go_version` when all traced modules resolve to one
+  shared version, and `dd_trace_go_versions` when they resolve to different
+  exact versions.
+- If you rerun bootstrap without `--dd-trace-go-version`, it preserves the
+  existing bootstrap-managed tracer config instead of resetting it.
+- Bootstrap refuses to proceed when active tracer settings already exist in
+  `orchestrion.from_source(...)` calls outside its managed block. Those manual
+  settings must be removed or migrated first.
+- Do not set both `dd_trace_go_version` and `dd_trace_go_versions` in the same
+  `orchestrion.from_source(...)` call.
+- If the workspace setting and the effective local Go module versions differ,
+  the build fails instead of mixing versions.
+
 ## Sync extension attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`
@@ -130,10 +169,27 @@ When set, these override auto-detected CI/git metadata:
 |----------|
 | `DD_GIT_REPOSITORY_URL` |
 | `DD_GIT_BRANCH` |
+| `DD_GIT_TAG` |
 | `DD_GIT_COMMIT_SHA` |
 | `DD_GIT_HEAD_COMMIT` |
 | `DD_GIT_COMMIT_MESSAGE` |
 | `DD_GIT_HEAD_MESSAGE` |
+| `DD_GIT_COMMIT_AUTHOR_NAME` |
+| `DD_GIT_COMMIT_AUTHOR_EMAIL` |
+| `DD_GIT_COMMIT_AUTHOR_DATE` |
+| `DD_GIT_COMMIT_COMMITTER_NAME` |
+| `DD_GIT_COMMIT_COMMITTER_EMAIL` |
+| `DD_GIT_COMMIT_COMMITTER_DATE` |
+| `DD_GIT_HEAD_AUTHOR_NAME` |
+| `DD_GIT_HEAD_AUTHOR_EMAIL` |
+| `DD_GIT_HEAD_AUTHOR_DATE` |
+| `DD_GIT_HEAD_COMMITTER_NAME` |
+| `DD_GIT_HEAD_COMMITTER_EMAIL` |
+| `DD_GIT_HEAD_COMMITTER_DATE` |
+| `DD_GIT_PR_BASE_BRANCH` |
+| `DD_GIT_PR_BASE_BRANCH_SHA` |
+| `DD_GIT_PR_BASE_BRANCH_HEAD_SHA` |
+| `DD_PR_NUMBER` |
 
 ### CI provider detection coverage
 
@@ -151,16 +207,18 @@ Auto-detection currently maps CI metadata from:
 - TeamCity
 - Bitrise
 - Codefresh
-- AWS CodeBuild
+- AWS CodePipeline
 - Drone
 
-Provider-name note: AWS CodeBuild is emitted as `awscodebuild` in sync
+Provider-name note: AWS CodePipeline is emitted as `awscodepipeline` in sync
 metadata (`ci.provider.name`).
 
 Provider precedence note:
 - explicit `DD_GIT_*` overrides win first;
 - CI-provider environment detection is second;
-- git CLI fallback (`git rev-parse`, `git log`, etc.) is last.
+- wrapper git synthesis (`git rev-parse`, `git log`, etc.) is last and is used
+  mainly for local workflows or to fill GitHub metadata gaps such as commit
+  author and committer identity.
 
 Additional mapped metadata inputs include:
 

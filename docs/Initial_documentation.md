@@ -20,7 +20,7 @@ The steps are:
    Notes:
    - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; ASCII whitespace is trimmed and value is normalized to `https://api.<site>`.
    - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
-   Reference implementation: [https://github.com/DataDog/rules\_test\_optimization](https://github.com/DataDog/rules_test_optimization)
+  Reference implementation: this repository
 
 2. **Test instrumentation**:
    Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (for example through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.

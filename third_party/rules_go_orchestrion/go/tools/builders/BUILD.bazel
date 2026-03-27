@@ -80,6 +80,64 @@ go_test(
     ],
 )
 
+go_test(
+    name = "orchestrion_version_test",
+    size = "small",
+    srcs = [
+        "orchestrion_version_test.go",
+        ":builder_srcs",
+    ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
+)
+
+go_test(
+    name = "compilepkg_test",
+    size = "small",
+    srcs = [
+        "compilepkg_test.go",
+        ":builder_srcs",
+    ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
+)
+
+go_test(
+    name = "importcfg_test",
+    size = "small",
+    srcs = [
+        "importcfg_test.go",
+        ":builder_srcs",
+    ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
+)
+
+go_test(
+    name = "orchestrion_test",
+    size = "small",
+    srcs = [
+        "orchestrion_cache_test.go",
+        "orchestrion_test.go",
+        ":builder_srcs",
+    ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
+)
+
+go_test(
+    name = "probe_test",
+    size = "small",
+    srcs = [
+        "probe.go",
+        "probe_test.go",
+    ],
+)
+
 filegroup(
     name = "builder_srcs",
     srcs = [
@@ -104,6 +162,9 @@ filegroup(
         "nogo.go",
         "nogo_validation.go",
         "orchestrion.go",
+        "orchestrion_cache.go",
+        "orchestrion_version.go",
+        "probe.go",
         "read.go",
         "replicate.go",
         "stdlib.go",

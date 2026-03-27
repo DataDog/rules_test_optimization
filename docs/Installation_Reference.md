@@ -155,7 +155,8 @@ Guided bootstrap command:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0
+  --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0
 ```
 
 If the Go module lives below the workspace root:
@@ -165,16 +166,27 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.24.0 \
+  --dd-trace-go-version v2.6.0 \
   --go-module-dir path/to/go-module
 ```
 
-Guided bootstrap is intentionally only for fresh single-service Go workspaces.
-If the workspace already uses:
+`--dd-trace-go-version` is optional. If omitted, the workspace uses the default
+`v2.6.0`. It accepts a tag, pseudo-version, branch, or commit SHA. Bootstrap
+resolves that input to exact tracer versions, keeps the local Go module pins on
+those same versions, and prevents Bazel and the Go module from silently
+drifting apart.
+
+Guided bootstrap is intentionally for single-service Go workspaces. If the
+workspace already uses conflicting or multi-service sync wiring:
 - `test_optimization_sync_extension`
 - `test_optimization_multi_sync_extension`
-- a manual `test_optimization_go_extension` setup
+- a conflicting `test_optimization_go_extension` setup
 
 use the manual/advanced Go setup path instead.
+
+If the workspace already has a matching single-service
+`test_optimization_go_extension` plus `use_repo(...)`, guided bootstrap can
+reuse that wiring and continue.
 
 The generated package-facing API is:
 
@@ -434,10 +446,27 @@ common --repo_env=DD_SERVICE
 common --repo_env=DD_ENV
 common --repo_env=DD_GIT_REPOSITORY_URL
 common --repo_env=DD_GIT_BRANCH
+common --repo_env=DD_GIT_TAG
 common --repo_env=DD_GIT_COMMIT_SHA
 common --repo_env=DD_GIT_HEAD_COMMIT
 common --repo_env=DD_GIT_COMMIT_MESSAGE
 common --repo_env=DD_GIT_HEAD_MESSAGE
+common --repo_env=DD_GIT_COMMIT_AUTHOR_NAME
+common --repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL
+common --repo_env=DD_GIT_COMMIT_AUTHOR_DATE
+common --repo_env=DD_GIT_COMMIT_COMMITTER_NAME
+common --repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL
+common --repo_env=DD_GIT_COMMIT_COMMITTER_DATE
+common --repo_env=DD_GIT_HEAD_AUTHOR_NAME
+common --repo_env=DD_GIT_HEAD_AUTHOR_EMAIL
+common --repo_env=DD_GIT_HEAD_AUTHOR_DATE
+common --repo_env=DD_GIT_HEAD_COMMITTER_NAME
+common --repo_env=DD_GIT_HEAD_COMMITTER_EMAIL
+common --repo_env=DD_GIT_HEAD_COMMITTER_DATE
+common --repo_env=DD_GIT_PR_BASE_BRANCH
+common --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
+common --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
+common --repo_env=DD_PR_NUMBER
 # Optional: override detected Go module path for export.bzl
 common --repo_env=GO_MODULE_PATH
 # Optional: provide Python module path hint for export.bzl
@@ -472,6 +501,11 @@ Security note: keep secret values out of `.bazelrc`. Forward variable names
 with `--repo_env=DD_API_KEY` and provide values via shell/CI secret stores.
 In Bazel file-mode workflows, tests do not require `DD_API_KEY`/`DD_SITE`;
 those credentials are only needed for the post-test uploader step.
+
+Git metadata note: wrappers in this repository and the sibling fixture repo can
+fill in current commit author and committer fields automatically when a CI
+provider does not expose them. Explicit `DD_GIT_*` values still win over both
+provider-derived metadata and wrapper synthesis.
 
 Repository policy note: this repository intentionally has no root `.bazelrc`.
 Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags

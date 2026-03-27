@@ -99,7 +99,10 @@ Use this checklist when adding `dd_topt_<language>_test` support.
 
 This repository includes `bazelw` to forward repo env vars consistently:
 
-- Computes Git metadata when a Git repo is present and forwards via `--repo_env`.
+- In CI-provider mode, preserves provider-derived branch and PR metadata and
+  only fills Git gaps such as current commit author and committer identity.
+- Outside supported CI providers, computes Git metadata from the local repo and
+  forwards it via `--repo_env`.
 - Exported `DD_GIT_*` values override computed metadata.
 - Repository policy: keep root `.bazelrc` absent; prefer explicit flags in CI
   and example-local `.bazelrc` files.
@@ -117,6 +120,8 @@ FETCH_SALT_TTL=3600 ./bazelw build //tools/... //examples/...
 DD_GIT_REPOSITORY_URL=https://github.com/acme/api.git \
 DD_GIT_BRANCH=main \
 DD_GIT_COMMIT_SHA=$(git rev-parse HEAD) \
+DD_GIT_COMMIT_AUTHOR_NAME="$(git log -1 --format=%an)" \
+DD_GIT_COMMIT_COMMITTER_EMAIL="$(git log -1 --format=%ce)" \
 ./bazelw test //tools/...
 ```
 
@@ -132,6 +137,8 @@ $env:FETCH_SALT_TTL = "3600"
 $env:DD_GIT_REPOSITORY_URL = "https://github.com/acme/api.git"
 $env:DD_GIT_BRANCH = "main"
 $env:DD_GIT_COMMIT_SHA = (git rev-parse HEAD)
+$env:DD_GIT_COMMIT_AUTHOR_NAME = (git log -1 --format=%an)
+$env:DD_GIT_COMMIT_COMMITTER_EMAIL = (git log -1 --format=%ce)
 .\bazelw test //tools/...
 ```
 

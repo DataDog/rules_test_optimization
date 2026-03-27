@@ -19,6 +19,11 @@ load(
 )
 load("//go/private/actions:utils.bzl", "quote_opts")
 
+_ORCHESTRION_PROBE_ENV_VARS = (
+    "RULES_GO_ORCHESTRION_PROBE",
+    "RULES_GO_ORCHESTRION_PROBE_FILE",
+)
+
 def _archive(v):
     importpaths = [v.data.importpath]
     importpaths.extend(v.data.importpath_aliases)
@@ -48,6 +53,17 @@ def _embedlookupdir_arg(src):
     if root_relative.startswith("/"):
         root_relative = root_relative[1:]
     return root_relative
+
+def _orchestrion_action_env(go, base_env, version_file = None):
+    env = dict(base_env)
+    shell_env = go._ctx.configuration.default_shell_env
+    for name in _ORCHESTRION_PROBE_ENV_VARS:
+        if name in shell_env:
+            env[name] = shell_env[name]
+    if not version_file:
+        return env
+    env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
+    return env
 
 def emit_compilepkg(
         go,
@@ -171,12 +187,13 @@ def emit_compilepkg(
 
     # cgo and the linker action don't support path mapping yet
     # TODO: Remove the second condition after https://github.com/bazelbuild/bazel/pull/21921.
+    version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
     if cgo or "local" in go._ctx.attr.tags:
         # cgo doesn't support path mapping yet
-        env = go.env
+        env = _orchestrion_action_env(go, go.env, version_file)
         execution_requirements = {}
     else:
-        env = go.env_for_path_mapping
+        env = _orchestrion_action_env(go, go.env_for_path_mapping, version_file)
         execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT
     cgo_go_srcs = None
     if cgo:
@@ -208,6 +225,8 @@ def emit_compilepkg(
     if go.orchestrion:
         compile_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
+        if version_file:
+            inputs_direct.append(version_file)
 
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(sdk.go)

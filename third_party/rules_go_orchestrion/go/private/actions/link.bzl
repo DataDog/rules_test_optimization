@@ -34,8 +34,24 @@ load(
     "rpath",
 )
 
+_ORCHESTRION_PROBE_ENV_VARS = (
+    "RULES_GO_ORCHESTRION_PROBE",
+    "RULES_GO_ORCHESTRION_PROBE_FILE",
+)
+
 def _format_archive(d):
     return "{}={}={}".format(d.label, d.importmap, d.file.path)
+
+def _orchestrion_action_env(go, base_env, version_file = None):
+    env = dict(base_env)
+    shell_env = go._ctx.configuration.default_shell_env
+    for name in _ORCHESTRION_PROBE_ENV_VARS:
+        if name in shell_env:
+            env[name] = shell_env[name]
+    if not version_file:
+        return env
+    env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
+    return env
 
 def emit_link(
         go,
@@ -178,10 +194,12 @@ def emit_link(
     tool_args.add_joined("-extldflags", extldflags, join_with = " ")
 
     inputs_direct = stamp_inputs + [go.sdk.package_list]
-    if hasattr(archive.data, "_synthetic_testmain_manifest") and archive.data._synthetic_testmain_manifest:
-        inputs_direct.append(archive.data._synthetic_testmain_manifest)
+    synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
+    if synthetic_testmain_manifest:
+        inputs_direct.append(synthetic_testmain_manifest)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
+    version_file = getattr(go, "orchestrion_version_file", None) if synthetic_testmain_manifest else None
 
     inputs_transitive = [
         archive.libs,
@@ -196,6 +214,8 @@ def emit_link(
     if go.orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
+        if version_file:
+            inputs_direct.append(version_file)
 
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(go.sdk.go)
@@ -217,7 +237,7 @@ def emit_link(
         mnemonic = "GoLink",
         executable = go.toolchain._builder,
         arguments = [builder_args, "--", tool_args],
-        env = go.env,
+        env = _orchestrion_action_env(go, go.env, version_file),
         toolchain = GO_TOOLCHAIN_LABEL,
     )
 

@@ -58,6 +58,11 @@ stdlib = rule(
             allow_files = True,
             cfg = "exec",
         ),
+        "_orchestrion_version_file": attr.label(
+            default = "//go/private/orchestrion:dd_trace_go_version_file",
+            allow_files = True,
+            cfg = "exec",
+        ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),

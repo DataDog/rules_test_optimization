@@ -1552,6 +1552,11 @@ cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
 #!/bin/sh
 set -eu
 
+if [ "${1:-}" = "-C" ] && [ "$#" -ge 3 ]; then
+  cd "$2"
+  shift 2
+fi
+
 if [ "${1:-}" = "run" ] && [ "${2:-}" = "github.com/DataDog/orchestrion@v1.5.0" ] && [ "${3:-}" = "pin" ]; then
   cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
 package tools
@@ -1568,12 +1573,65 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com
   exit 0
 fi
 
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ] && [ "${3:-}" = "-require=github.com/DataDog/dd-trace-go/v2@v2.6.0" ]; then
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
+  case "${3:-}" in
+    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
+  case "${3:-}" in
+    -require=github.com/DataDog/dd-trace-go/v2@v2.6.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.6.0" ]; then
   exit 0
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
   exit 0
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4:-}" = "{{.Version}}" ]; then
+  case "${5:-}" in
+    github.com/DataDog/dd-trace-go/v2|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
+      printf 'v2.6.0\n'
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
+  case "${4:-}" in
+    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+      printf '{"Version":"v2.6.0"}\n'
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ]; then
+  case "${5:-}" in
+    github.com/DataDog/dd-trace-go/v2|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
+      printf '{"Version":"v2.6.0"}\n'
+      exit 0
+      ;;
+  esac
 fi
 
 if [ "${1:-}" = "build" ]; then
@@ -1618,6 +1676,9 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
   case "${3:-}" in
+    github.com/DataDog/dd-trace-go/v2/orchestrion|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
     github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
     github.com/DataDog/dd-trace-go/v2/profiler|\
     github.com/DataDog/dd-trace-go/v2/instrumentation/env)
@@ -1708,6 +1769,11 @@ cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
 #!/bin/sh
 set -eu
 
+if [ "${1:-}" = "-C" ] && [ "$#" -ge 3 ]; then
+  cd "$2"
+  shift 2
+fi
+
 if [ "${1:-}" = "run" ] && [ "${2:-}" = "github.com/DataDog/orchestrion@v1.5.0" ] && [ "${3:-}" = "pin" ]; then
   cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
 package tools
@@ -1724,12 +1790,65 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com
   exit 0
 fi
 
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ] && [ "${3:-}" = "-require=github.com/DataDog/dd-trace-go/v2@v2.6.0" ]; then
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
+  case "${3:-}" in
+    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
+  case "${3:-}" in
+    -require=github.com/DataDog/dd-trace-go/v2@v2.6.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.6.0" ]; then
   exit 0
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
   exit 0
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4:-}" = "{{.Version}}" ]; then
+  case "${5:-}" in
+    github.com/DataDog/dd-trace-go/v2|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
+      printf 'v2.6.0\n'
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
+  case "${4:-}" in
+    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+      printf '{"Version":"v2.6.0"}\n'
+      exit 0
+      ;;
+  esac
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ]; then
+  case "${5:-}" in
+    github.com/DataDog/dd-trace-go/v2|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
+      printf '{"Version":"v2.6.0"}\n'
+      exit 0
+      ;;
+  esac
 fi
 
 if [ "${1:-}" = "build" ]; then
@@ -1774,6 +1893,9 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
   case "${3:-}" in
+    github.com/DataDog/dd-trace-go/v2/orchestrion|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
     github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
     github.com/DataDog/dd-trace-go/v2/profiler|\
     github.com/DataDog/dd-trace-go/v2/instrumentation/env)

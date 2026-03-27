@@ -33,9 +33,12 @@ import (
 
 var orchestrionLinkClosurePackages = []string{
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage",
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	"github.com/DataDog/dd-trace-go/v2/internal",
 	"github.com/DataDog/dd-trace-go/v2/profiler",
 	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+	"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
@@ -117,9 +120,13 @@ func appendSyntheticTestmainPackagefileManifest(importcfgPath, mainArchive strin
 	return true, nil
 }
 
-func link(args []string) error {
+func link(args []string) (err error) {
+	span := beginProbe("link.action")
+	defer func() {
+		span.End(err)
+	}()
 	// Parse arguments.
-	args, _, err := expandParamsFiles(args)
+	args, _, err = expandParamsFiles(args)
 	if err != nil {
 		return err
 	}
@@ -280,13 +287,17 @@ func link(args []string) error {
 		for _, archive := range archives {
 			addSrcDir(filepath.Dir(archive.file))
 		}
+		workDirSpan := beginProbe("link.enter_orchestrion_workdir")
 		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+		workDirSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("link: %w", err)
 		}
 		defer restoreOrchWorkDir()
 		if linkOrchestrion != "" {
+			goModSpan := beginProbe("link.ensure_go_mod_exists")
 			cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose)
+			goModSpan.End(err)
 			if err != nil {
 				return fmt.Errorf("link: %w", err)
 			}
@@ -299,7 +310,9 @@ func link(args []string) error {
 		if strings.HasSuffix(*main, "~testmain.a") && !strings.HasSuffix(orchImportPath, ".test") {
 			orchImportPath += ".test"
 		}
+		importcfgSpan := beginProbe("link.build_importcfg")
 		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
+		importcfgSpan.End(err)
 		if err != nil {
 			return err
 		}
@@ -307,7 +320,9 @@ func link(args []string) error {
 			defer os.Remove(importcfgName)
 		}
 		if syntheticTestBinaryLink {
+			synthManifestSpan := beginProbe("link.append_synthetic_testmain_manifest")
 			_, err := appendSyntheticTestmainPackagefileManifest(importcfgName, *main)
+			synthManifestSpan.End(err)
 			if err != nil {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
@@ -317,18 +332,27 @@ func link(args []string) error {
 				// the broader Datadog closure (for example tracer/profiler). Append the
 				// closure only when link itself is orchestrion-enabled; plain synthetic
 				// links must reuse the compile-time manifest only.
-				if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
+				modulePkgSpan := beginProbe("link.append_missing_module_packagefiles")
+				err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, ".")
+				modulePkgSpan.End(err)
+				if err != nil {
 					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
 				}
 			}
 		}
 		if goenv.stdlibCache != "" {
-			if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {
+			rewriteSpan := beginProbe("link.rewrite_importcfg_from_current_stdlib_entries")
+			err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv)
+			rewriteSpan.End(err)
+			if err != nil {
 				return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
 			}
 		} else {
 			closurePackages := collectOrchestrionLinkClosurePackages(archives)
-			if err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages); err != nil {
+			rewriteSpan := beginProbe("link.rewrite_importcfg_for_cache_stdlib_closures", newProbeField("closure_count", strconv.Itoa(len(closurePackages))))
+			err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages)
+			rewriteSpan.End(err)
+			if err != nil {
 				return fmt.Errorf("link: rewrite importcfg from cache stdlib closures: %w", err)
 			}
 		}
@@ -340,15 +364,20 @@ func link(args []string) error {
 			if goRootPath == "" {
 				goRootPath = os.Getenv("GOROOT")
 			}
+			jobserverSpan := beginProbe("link.start_jobserver")
 			jobserver, err = startOrchestrionJobserver(linkOrchestrion, sdkPath, goRootPath, goenv.verbose)
+			jobserverSpan.End(err)
 			if err != nil {
 				return fmt.Errorf("link: failed to start orchestrion jobserver: %w", err)
 			}
 			defer jobserver.cleanup()
 		}
+		runSpan := beginProbe("link.run_command", newProbeField("import_path", orchImportPath))
 		if err := goenv.runCommandWithJobserver(goargs, jobserver, orchImportPath); err != nil {
+			runSpan.End(err)
 			return err
 		}
+		runSpan.End(nil)
 	} else {
 		var restoreOrchWorkDir func()
 		var cleanupGoMod func()

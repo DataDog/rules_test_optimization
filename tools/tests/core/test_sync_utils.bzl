@@ -3,7 +3,9 @@
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_sync.bzl",
+    "all_sync_env_keys_for_tests",
     "apply_dd_git_overrides_for_tests",
+    "apply_github_event_payload_for_tests",
     "build_module_label_map_for_tests",
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
@@ -23,6 +25,7 @@ load(
     "http_max_time_seconds_for_tests",
     "http_retry_attempts_for_tests",
     "http_retry_delay_seconds_for_tests",
+    "load_github_event_payload_for_tests",
     "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
     "parse_go_module_path_for_tests",
@@ -251,25 +254,76 @@ def _apply_dd_git_overrides_test(ctx):
     data = {
         "repository_url": "https://github.com/original/repo.git",
         "branch": "refs/heads/main",
+        "tag": "",
         "sha": "original-sha",
         "head_sha": "",
         "commit_message": "",
         "head_message": "",
+        "commit_author_name": "",
+        "commit_author_email": "",
+        "commit_author_date": "",
+        "commit_committer_name": "",
+        "commit_committer_email": "",
+        "commit_committer_date": "",
+        "head_author_name": "",
+        "head_author_email": "",
+        "head_author_date": "",
+        "head_committer_name": "",
+        "head_committer_email": "",
+        "head_committer_date": "",
+        "pr_base_branch": "",
+        "pr_base_branch_sha": "",
+        "pr_base_branch_head_sha": "",
+        "pr_number": "",
     }
     apply_dd_git_overrides_for_tests(data, {
         "DD_GIT_REPOSITORY_URL": "https://token@github.com/override/repo.git",
         "DD_GIT_BRANCH": "refs/remotes/origin/release",
+        "DD_GIT_TAG": "refs/tags/v2.0.0",
         "DD_GIT_COMMIT_SHA": "override-sha",
         "DD_GIT_HEAD_COMMIT": "override-head",
         "DD_GIT_COMMIT_MESSAGE": "override-message",
         "DD_GIT_HEAD_MESSAGE": "override-head-message",
+        "DD_GIT_COMMIT_AUTHOR_NAME": "Author Name",
+        "DD_GIT_COMMIT_AUTHOR_EMAIL": "author@example.com",
+        "DD_GIT_COMMIT_AUTHOR_DATE": "2026-03-27T11:31:46+01:00",
+        "DD_GIT_COMMIT_COMMITTER_NAME": "Committer Name",
+        "DD_GIT_COMMIT_COMMITTER_EMAIL": "committer@example.com",
+        "DD_GIT_COMMIT_COMMITTER_DATE": "2026-03-27T11:35:00+01:00",
+        "DD_GIT_HEAD_AUTHOR_NAME": "Head Author",
+        "DD_GIT_HEAD_AUTHOR_EMAIL": "head-author@example.com",
+        "DD_GIT_HEAD_AUTHOR_DATE": "2026-03-27T11:36:00+01:00",
+        "DD_GIT_HEAD_COMMITTER_NAME": "Head Committer",
+        "DD_GIT_HEAD_COMMITTER_EMAIL": "head-committer@example.com",
+        "DD_GIT_HEAD_COMMITTER_DATE": "2026-03-27T11:37:00+01:00",
+        "DD_GIT_PR_BASE_BRANCH": "refs/remotes/origin/main",
+        "DD_GIT_PR_BASE_BRANCH_SHA": "base-sha",
+        "DD_GIT_PR_BASE_BRANCH_HEAD_SHA": "base-head-sha",
+        "DD_PR_NUMBER": "42",
     })
     asserts.equals(env, "https://github.com/override/repo.git", data.get("repository_url"))
     asserts.equals(env, "release", data.get("branch"))
+    asserts.equals(env, "v2.0.0", data.get("tag"))
     asserts.equals(env, "override-sha", data.get("sha"))
     asserts.equals(env, "override-head", data.get("head_sha"))
     asserts.equals(env, "override-message", data.get("commit_message"))
     asserts.equals(env, "override-head-message", data.get("head_message"))
+    asserts.equals(env, "Author Name", data.get("commit_author_name"))
+    asserts.equals(env, "author@example.com", data.get("commit_author_email"))
+    asserts.equals(env, "2026-03-27T11:31:46+01:00", data.get("commit_author_date"))
+    asserts.equals(env, "Committer Name", data.get("commit_committer_name"))
+    asserts.equals(env, "committer@example.com", data.get("commit_committer_email"))
+    asserts.equals(env, "2026-03-27T11:35:00+01:00", data.get("commit_committer_date"))
+    asserts.equals(env, "Head Author", data.get("head_author_name"))
+    asserts.equals(env, "head-author@example.com", data.get("head_author_email"))
+    asserts.equals(env, "2026-03-27T11:36:00+01:00", data.get("head_author_date"))
+    asserts.equals(env, "Head Committer", data.get("head_committer_name"))
+    asserts.equals(env, "head-committer@example.com", data.get("head_committer_email"))
+    asserts.equals(env, "2026-03-27T11:37:00+01:00", data.get("head_committer_date"))
+    asserts.equals(env, "main", data.get("pr_base_branch"))
+    asserts.equals(env, "base-sha", data.get("pr_base_branch_sha"))
+    asserts.equals(env, "base-head-sha", data.get("pr_base_branch_head_sha"))
+    asserts.equals(env, "42", data.get("pr_number"))
     return unittest.end(env)
 
 def _set_context_tag_from_env_test(ctx):
@@ -295,7 +349,7 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "GITHUB_SERVER_URL": "https://github.example",
         "GITHUB_REF": "refs/heads/main",
     }, None)
-    asserts.equals(env, "github_actions", github.get("ci_provider_name"))
+    asserts.equals(env, "github", github.get("ci_provider_name"))
     asserts.equals(env, "https://github.example/org/repo.git", github.get("repository_url"))
     asserts.equals(env, "main", github.get("branch"))
     asserts.equals(env, "abc123", github.get("sha"))
@@ -309,9 +363,46 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "GITHUB_REF": "refs/pull/42/merge",
         "GITHUB_HEAD_REF": "feature/pr-branch",
     }, None)
-    asserts.equals(env, "github_actions", github_pr.get("ci_provider_name"))
+    asserts.equals(env, "github", github_pr.get("ci_provider_name"))
     asserts.equals(env, "feature/pr-branch", github_pr.get("branch"))
     asserts.equals(env, "def456", github_pr.get("sha"))
+
+    github_base_ref = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITHUB_SHA": "def456",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_SERVER_URL": "https://github.example",
+        "GITHUB_REF": "refs/pull/42/merge",
+        "GITHUB_HEAD_REF": "feature/pr-branch",
+        "GITHUB_BASE_REF": "refs/heads/main",
+    }, None)
+    asserts.equals(env, "github", github_base_ref.get("ci_provider_name"))
+    asserts.equals(env, "main", github_base_ref.get("pr_base_branch"))
+
+    github_event = collect_env_from_environ_for_tests({
+        "DD_SITE": "datadoghq.com",
+        "GITHUB_SHA": "11223344",
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_SERVER_URL": "https://github.example",
+        "GITHUB_REF": "refs/pull/42/merge",
+        "GITHUB_BASE_REF": "refs/heads/main",
+    }, None, json.encode({
+        "number": 42,
+        "pull_request": {
+            "head": {
+                "sha": "head-sha-42",
+            },
+            "base": {
+                "ref": "release/1.2",
+                "sha": "base-head-sha-42",
+            },
+        },
+    }))
+    asserts.equals(env, "github", github_event.get("ci_provider_name"))
+    asserts.equals(env, "head-sha-42", github_event.get("head_sha"))
+    asserts.equals(env, "release/1.2", github_event.get("pr_base_branch"))
+    asserts.equals(env, "base-head-sha-42", github_event.get("pr_base_branch_head_sha"))
+    asserts.equals(env, "42", github_event.get("pr_number"))
 
     github_tag = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -320,8 +411,8 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "GITHUB_SERVER_URL": "https://github.example",
         "GITHUB_REF": "refs/tags/v1.2.3",
     }, None)
-    asserts.equals(env, "github_actions", github_tag.get("ci_provider_name"))
-    asserts.equals(env, "v1.2.3", github_tag.get("branch"))
+    asserts.equals(env, "github", github_tag.get("ci_provider_name"))
+    asserts.equals(env, "v1.2.3", github_tag.get("tag"))
     asserts.equals(env, "ffeeddcc", github_tag.get("sha"))
 
     overridden = collect_env_from_environ_for_tests({
@@ -380,11 +471,16 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "CI_REPOSITORY_URL": "https://gitlab.example/org/repo.git",
         "CI_COMMIT_BRANCH": "refs/heads/main",
         "CI_COMMIT_SHA": "f00dbabe",
+        "CI_COMMIT_AUTHOR": "Jane Doe <jane@example.com>",
+        "CI_COMMIT_TIMESTAMP": "2026-03-27T12:00:00Z",
     }, None)
     asserts.equals(env, "gitlab", gitlab.get("ci_provider_name"))
     asserts.equals(env, "https://gitlab.example/org/repo.git", gitlab.get("repository_url"))
     asserts.equals(env, "main", gitlab.get("branch"))
     asserts.equals(env, "f00dbabe", gitlab.get("sha"))
+    asserts.equals(env, "Jane Doe", gitlab.get("commit_author_name"))
+    asserts.equals(env, "jane@example.com", gitlab.get("commit_author_email"))
+    asserts.equals(env, "2026-03-27T12:00:00Z", gitlab.get("commit_author_date"))
 
     jenkins = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -406,7 +502,7 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "BUILD_SOURCEBRANCH": "refs/heads/main",
         "BUILD_SOURCEVERSIONMESSAGE": "merge commit",
     }, None)
-    asserts.equals(env, "azure_pipelines", azure.get("ci_provider_name"))
+    asserts.equals(env, "azurepipelines", azure.get("ci_provider_name"))
     asserts.equals(env, "https://dev.azure.com/org/repo", azure.get("repository_url"))
     asserts.equals(env, "main", azure.get("branch"))
     asserts.equals(env, "aabbccdd", azure.get("sha"))
@@ -454,9 +550,9 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "GIT_BRANCH": "refs/heads/tc-branch",
     }, None)
     asserts.equals(env, "teamcity", teamcity.get("ci_provider_name"))
-    asserts.equals(env, "https://tc.example/org/repo.git", teamcity.get("repository_url"))
-    asserts.equals(env, "tc-branch", teamcity.get("branch"))
-    asserts.equals(env, "feed1234", teamcity.get("sha"))
+    asserts.equals(env, "", teamcity.get("repository_url"))
+    asserts.equals(env, "", teamcity.get("branch"))
+    asserts.equals(env, "", teamcity.get("sha"))
 
     travis = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -492,8 +588,8 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
     }, None)
     asserts.equals(env, "codefresh", codefresh.get("ci_provider_name"))
     asserts.equals(env, "cf-main", codefresh.get("branch"))
-    asserts.equals(env, "cf-rev-1234", codefresh.get("sha"))
-    asserts.equals(env, "https://github.com/cf-org/cf-repo.git", codefresh.get("repository_url"))
+    asserts.equals(env, "", codefresh.get("sha"))
+    asserts.equals(env, "", codefresh.get("repository_url"))
 
     codebuild = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -502,10 +598,10 @@ def _collect_env_from_environ_provider_mapping_test(ctx):
         "CODEBUILD_RESOLVED_SOURCE_VERSION": "abcdef12",
         "CODEBUILD_WEBHOOK_HEAD_REF": "refs/heads/cb-main",
     }, None)
-    asserts.equals(env, "awscodebuild", codebuild.get("ci_provider_name"))
-    asserts.equals(env, "https://github.com/org/repo.git", codebuild.get("repository_url"))
-    asserts.equals(env, "cb-main", codebuild.get("branch"))
-    asserts.equals(env, "abcdef12", codebuild.get("sha"))
+    asserts.equals(env, "awscodepipeline", codebuild.get("ci_provider_name"))
+    asserts.equals(env, "", codebuild.get("repository_url"))
+    asserts.equals(env, "", codebuild.get("branch"))
+    asserts.equals(env, "", codebuild.get("sha"))
 
     drone = collect_env_from_environ_for_tests({
         "DD_SITE": "datadoghq.com",
@@ -547,8 +643,95 @@ def _collect_env_ctx_wrapper_test(ctx):
     )
     collected = collect_env_for_tests(fake_ctx)
     asserts.equals(env, "svc-from-ctx", collected.get("service"))
-    asserts.equals(env, "github_actions", collected.get("ci_provider_name"))
+    asserts.equals(env, "github", collected.get("ci_provider_name"))
     asserts.equals(env, "abc999", collected.get("sha"))
+    return unittest.end(env)
+
+def _load_github_event_payload_ctx_test(ctx):
+    """Validate event-payload loading accepts the file-read helper contract."""
+    env = unittest.begin(ctx)
+
+    def _execute(cmd):
+        rendered = " ".join(cmd)
+        if "Test-Path -LiteralPath" in rendered:
+            return struct(return_code = 0, stdout = "True", stderr = "")
+        if "Get-Content -Raw -LiteralPath" in rendered:
+            return struct(
+                return_code = 0,
+                stdout = json.encode({
+                    "number": 42,
+                    "pull_request": {
+                        "head": {"sha": "head-sha-42"},
+                        "base": {
+                            "ref": "release/1.2",
+                            "sha": "base-head-sha-42",
+                        },
+                    },
+                }),
+                stderr = "",
+            )
+        fail("unexpected execute command: %s" % rendered)
+
+    fake_ctx = struct(
+        execute = _execute,
+        os = struct(environ = {
+            "ComSpec": "C:\\Windows\\System32\\cmd.exe",
+            "GITHUB_EVENT_PATH": "C:/tmp/github_event.json",
+        }),
+    )
+    payload = load_github_event_payload_for_tests(fake_ctx)
+    asserts.true(env, payload != None)
+
+    env_data = {
+        "head_sha": "",
+        "pr_base_branch": "",
+        "pr_base_branch_head_sha": "",
+        "pr_number": "",
+        "repository_url": "https://github.example/org/repo.git",
+        "sha": "merge-sha",
+    }
+    apply_github_event_payload_for_tests(env_data, payload)
+    asserts.equals(env, "head-sha-42", env_data.get("head_sha"))
+    asserts.equals(env, "release/1.2", env_data.get("pr_base_branch"))
+    asserts.equals(env, "base-head-sha-42", env_data.get("pr_base_branch_head_sha"))
+    asserts.equals(env, "42", env_data.get("pr_number"))
+    return unittest.end(env)
+
+def _apply_github_event_payload_defensive_test(ctx):
+    """Validate non-PR GitHub event payloads leave existing metadata intact."""
+    env = unittest.begin(ctx)
+    env_data = {
+        "repository_url": "https://github.example/org/repo.git",
+        "sha": "merge-sha",
+        "pr_base_branch": "main",
+    }
+    apply_github_event_payload_for_tests(env_data, json.encode({"workflow_run": {"id": 1}}))
+    asserts.equals(env, "https://github.example/org/repo.git", env_data.get("repository_url"))
+    asserts.equals(env, "merge-sha", env_data.get("sha"))
+    asserts.equals(env, "main", env_data.get("pr_base_branch"))
+    return unittest.end(env)
+
+def _sync_environment_keys_allowlist_test(ctx):
+    """Validate the repository-rule environ contract includes parity inputs."""
+    env = unittest.begin(ctx)
+    for key in [
+        "DD_GIT_COMMIT_AUTHOR_NAME",
+        "DD_GIT_COMMIT_COMMITTER_EMAIL",
+        "DD_GIT_HEAD_COMMITTER_DATE",
+        "DD_GIT_PR_BASE_BRANCH_HEAD_SHA",
+        "DD_PR_NUMBER",
+        "GITHUB_EVENT_PATH",
+        "GITHUB_BASE_REF",
+        "GITHUB_RUN_ATTEMPT",
+        "CI_COMMIT_AUTHOR",
+        "CI_COMMIT_TIMESTAMP",
+        "CI_MERGE_REQUEST_DIFF_BASE_SHA",
+        "BUILDKITE_BUILD_AUTHOR",
+        "BITRISE_GIT_REPOSITORY_URL",
+        "SYSTEM_PULLREQUEST_TARGETBRANCH",
+        "CODEBUILD_INITIATOR",
+    ]:
+        asserts.true(env, key in all_sync_env_keys_for_tests, "missing allowlisted env key: %s" % key)
     return unittest.end(env)
 
 def _read_abs_file_command_escaping_test(ctx):
@@ -1243,6 +1426,9 @@ set_context_tag_from_env_test = unittest.make(_set_context_tag_from_env_test)
 collect_env_from_environ_provider_mapping_test = unittest.make(_collect_env_from_environ_provider_mapping_test)
 collect_env_from_environ_empty_test = unittest.make(_collect_env_from_environ_empty_test)
 collect_env_ctx_wrapper_test = unittest.make(_collect_env_ctx_wrapper_test)
+load_github_event_payload_ctx_test = unittest.make(_load_github_event_payload_ctx_test)
+apply_github_event_payload_defensive_test = unittest.make(_apply_github_event_payload_defensive_test)
+sync_environment_keys_allowlist_test = unittest.make(_sync_environment_keys_allowlist_test)
 read_abs_file_command_escaping_test = unittest.make(_read_abs_file_command_escaping_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 runtime_module_path_from_environ_test = unittest.make(_runtime_module_path_from_environ_test)
