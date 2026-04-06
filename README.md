@@ -761,6 +761,9 @@ exit $testStatus
 2. Use a single uploader target per workspace (do not run concurrent uploaders).
 3. Tests must run locally, or use `--remote_download_outputs=all`.
 4. Run uploader on the same machine/workspace where tests executed.
+5. Optional advanced optimization: set `DD_TEST_OPTIMIZATION_CONTEXT_JSON` to a
+   previously generated `context.json` path if you want uploader enrichment
+   without re-resolving context through external repo labels.
 
 ### Full uploader reference
 

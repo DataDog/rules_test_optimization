@@ -234,26 +234,40 @@ resolve_artifact_path() {
     echo ""
 }
 
-# Resolve context.json path (used by upload functions for payload enrichment)
-# Path is determined at rule implementation time from data files
+# Resolve context.json path (used by upload functions for payload enrichment).
+# Runtime override wins first so callers can reuse an already-fetched context
+# file without making `bazel run //:dd_upload_payloads` depend on sync labels.
 CONTEXT_JSON_RLOC="__DDTPL_CONTEXT_JSON_RLOC__"
 CONTEXT_JSON_PATH="__DDTPL_CONTEXT_JSON_PATH__"
-dbg "context.json resolution inputs: path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC'"
-CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")
-if [[ -n "$CONTEXT_JSON" ]]; then
-    # Direct artifact path is fastest and most deterministic when available.
-    dbg "context.json resolved via direct path: '$CONTEXT_JSON'"
-elif [[ -n "$CONTEXT_JSON_RLOC" ]]; then
-    # Runfiles lookup supports launcher/platform variants and bzlmod naming.
-    CONTEXT_JSON=$(resolve_runfile "$CONTEXT_JSON_RLOC")
-    if [[ -z "$CONTEXT_JSON" ]]; then
-        log "warning: context.json not found in runfiles; payloads will not be enriched"
+CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"
+dbg "context.json resolution inputs: override='$CONTEXT_JSON_OVERRIDE' path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC'"
+CONTEXT_JSON=""
+CONTEXT_JSON_FROM_OVERRIDE=0
+if [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
+    CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_OVERRIDE")
+    if [[ -n "$CONTEXT_JSON" ]]; then
+        CONTEXT_JSON_FROM_OVERRIDE=1
+        dbg "context.json resolved via runtime override: '$CONTEXT_JSON'"
     else
-        dbg "context.json resolved via runfiles: '$CONTEXT_JSON'"
+        log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     fi
-else
-    CONTEXT_JSON=""
-    dbg "context.json not configured in data files; enrichment disabled"
+fi
+if [[ -z "$CONTEXT_JSON" ]]; then
+    CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")
+    if [[ -n "$CONTEXT_JSON" ]]; then
+        # Direct artifact path is fastest and most deterministic when available.
+        dbg "context.json resolved via direct path: '$CONTEXT_JSON'"
+    elif [[ -n "$CONTEXT_JSON_RLOC" ]]; then
+        # Runfiles lookup supports launcher/platform variants and bzlmod naming.
+        CONTEXT_JSON=$(resolve_runfile "$CONTEXT_JSON_RLOC")
+        if [[ -z "$CONTEXT_JSON" ]]; then
+            log "warning: context.json not found in runfiles; payloads will not be enriched"
+        else
+            dbg "context.json resolved via runfiles: '$CONTEXT_JSON'"
+        fi
+    else
+        dbg "context.json not configured in data files; enrichment disabled"
+    fi
 fi
 
 # Resolve schema and validator paths (used for payload validation)

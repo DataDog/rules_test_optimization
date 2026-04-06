@@ -300,26 +300,40 @@ function Log-StartTimeStats([string]$FilePath) {
     }
 }
 
-# Resolve context.json path (used by upload functions for payload enrichment)
-# Path is determined at rule implementation time from data files
+# Resolve context.json path (used by upload functions for payload enrichment).
+# Runtime override wins first so callers can reuse an already-fetched context
+# file without reintroducing sync repo dependencies at uploader run time.
 $ContextJsonRloc = "__DDTPL_CONTEXT_JSON_RLOC__"
 $ContextJsonPath = "__DDTPL_CONTEXT_JSON_PATH__"
-Dbg "context.json resolution inputs: path='$ContextJsonPath' rloc='$ContextJsonRloc'"
-$script:ContextJson = Resolve-ArtifactPath $ContextJsonPath
-if ($script:ContextJson) {
-    # Direct artifact path is preferred when launcher preserves it.
-    Dbg "context.json resolved via direct path: '$script:ContextJson'"
-} elseif ($ContextJsonRloc) {
-    # Runfiles fallback supports manifest-only and bzlmod path variants.
-    $script:ContextJson = Resolve-Runfile $ContextJsonRloc
-    if (-not $script:ContextJson) {
-        Log "warning: context.json not found in runfiles; payloads will not be enriched"
+$ContextJsonOverride = $env:DD_TEST_OPTIMIZATION_CONTEXT_JSON
+Dbg "context.json resolution inputs: override='$ContextJsonOverride' path='$ContextJsonPath' rloc='$ContextJsonRloc'"
+$script:ContextJson = $null
+$contextJsonFromOverride = $false
+if ($ContextJsonOverride) {
+    $script:ContextJson = Resolve-ArtifactPath $ContextJsonOverride
+    if ($script:ContextJson) {
+        $contextJsonFromOverride = $true
+        Dbg "context.json resolved via runtime override: '$script:ContextJson'"
     } else {
-        Dbg "context.json resolved via runfiles: '$script:ContextJson'"
+        Log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     }
-} else {
-    $script:ContextJson = $null
-    Dbg "context.json not configured in data files; enrichment disabled"
+}
+if (-not $script:ContextJson) {
+    $script:ContextJson = Resolve-ArtifactPath $ContextJsonPath
+    if ($script:ContextJson) {
+        # Direct artifact path is preferred when launcher preserves it.
+        Dbg "context.json resolved via direct path: '$script:ContextJson'"
+    } elseif ($ContextJsonRloc) {
+        # Runfiles fallback supports manifest-only and bzlmod path variants.
+        $script:ContextJson = Resolve-Runfile $ContextJsonRloc
+        if (-not $script:ContextJson) {
+            Log "warning: context.json not found in runfiles; payloads will not be enriched"
+        } else {
+            Dbg "context.json resolved via runfiles: '$script:ContextJson'"
+        }
+    } else {
+        Dbg "context.json not configured in data files; enrichment disabled"
+    }
 }
 
 # Resolve schema + validator paths (used for payload validation)
