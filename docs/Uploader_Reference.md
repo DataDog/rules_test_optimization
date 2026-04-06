@@ -148,6 +148,7 @@ bazel run //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
+| `DD_TEST_OPTIMIZATION_CONTEXT_JSON` | unset | Advanced: explicit `context.json` path for enrichment, resolved before any `data`-provided context file |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
 
 ### `DD_TEST_OPTIMIZATION_FILTER_PREFIX` behavior
@@ -199,13 +200,19 @@ payload discovery/quiescence before proceeding.
 
 ## Metadata enrichment (`context.json`)
 
-- When `context.json` is present in runfiles (provided via `data`), the uploader
-  enriches each test payload by merging all non-null keys from `context.json`
-  into `metadata.*`.
+- The uploader resolves `context.json` in this order:
+  1. `DD_TEST_OPTIMIZATION_CONTEXT_JSON` when it points to a readable file
+  2. a direct artifact path bundled via `data`
+  3. a runfiles path bundled via `data`
+  4. no enrichment
+- When a `context.json` file is available, the uploader enriches each test
+  payload by merging all non-null keys from `context.json` into `metadata.*`.
 - If `context.json` is not present (or `jq` is unavailable on Unix), test
   payloads are uploaded as-is.
 - `context.json` contains non-secret CI/Git/OS/runtime tags suitable for reuse
   at test time.
+- `DD_TEST_OPTIMIZATION_CONTEXT_JSON` is a runtime uploader override only. Do
+  not pass it via `--repo_env`, and do not treat it as sync-time configuration.
 - Bazel rule identity is included as stable tags:
   `test.bazel.rule_name` and `test.bazel.rule_version`.
 - `test`, `test_suite_end`, `test_module_end`, and `test_session_end` events
@@ -223,6 +230,19 @@ payload discovery/quiescence before proceeding.
 - Matching uses GitHub-style glob semantics with "last matching rule wins".
 - CODEOWNERS enrichment is best-effort: parse/lookup failures and misses do not
   fail uploads; debug mode logs counters and skip reasons.
+
+### Advanced: reuse an already-fetched context file
+
+If your workflow already resolved Test Optimization data during the test
+command, you can avoid re-resolving the uploader context through external repo
+labels by passing the existing `context.json` path directly at uploader runtime:
+
+```bash
+DD_API_KEY="$DD_API_KEY" \
+DD_SITE="$DD_SITE" \
+DD_TEST_OPTIMIZATION_CONTEXT_JSON="/abs/path/to/context.json" \
+bazel run //:dd_upload_payloads
+```
 
 ## Payload schema validation (best effort)
 

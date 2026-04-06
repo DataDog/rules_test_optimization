@@ -838,6 +838,21 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn('log "warning: context enrichment failed for payload:', bash_text)
         self.assertIn('cp "$infile" "$tmpfile"', bash_text)
 
+    def test_bash_runtime_prefers_context_override_before_runfiles(self) -> None:
+        """Validate bash runtime prefers explicit context override before data files."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        self.assertIn('CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"', bash_text)
+        self.assertIn('context.json resolved via runtime override', bash_text)
+        self.assertIn(
+            'warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data',
+            bash_text,
+        )
+        self.assertLess(
+            bash_text.index('CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"'),
+            bash_text.index('CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")'),
+        )
+        self.assertIn('if [[ -z "$CONTEXT_JSON" ]]; then', bash_text)
+
     def test_bash_runtime_guards_curl_command_substitutions(self) -> None:
         """Validate bash runtime captures curl failures without set -e aborts."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
@@ -862,6 +877,23 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("warning: DD_TEST_OPTIMIZATION_MAX_DEPTH ignored", powershell_text)
+
+    def test_powershell_runtime_prefers_context_override_before_runfiles(self) -> None:
+        """Validate PowerShell runtime prefers explicit context override before data files."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("$ContextJsonOverride = $env:DD_TEST_OPTIMIZATION_CONTEXT_JSON", powershell_text)
+        self.assertIn("context.json resolved via runtime override", powershell_text)
+        self.assertIn(
+            "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data",
+            powershell_text,
+        )
+        self.assertLess(
+            powershell_text.index("$ContextJsonOverride = $env:DD_TEST_OPTIMIZATION_CONTEXT_JSON"),
+            powershell_text.index("$script:ContextJson = Resolve-ArtifactPath $ContextJsonPath"),
+        )
+        self.assertIn("if (-not $script:ContextJson) {", powershell_text)
 
 
 class MockDdServerTests(unittest.TestCase):

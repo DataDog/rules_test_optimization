@@ -2047,11 +2047,22 @@ if missing:
     sys.exit(1)
 PY
 
+# Refresh the active bazel-testlogs path before the context-oriented uploader
+# scenarios so they all read the same payload tree produced earlier in this
+# workspace, even after other workspaces reuse the shared output base.
+CONTEXT_SCENARIO_TESTLOGS_DIR="$("$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs)"
+if [[ ! -d "$CONTEXT_SCENARIO_TESTLOGS_DIR/write_payloads_test/test.outputs/payloads/tests" ]]; then
+  echo "error: expected write_payloads_test payloads under refreshed bazel-testlogs path"
+  echo "refreshed bazel-testlogs: $CONTEXT_SCENARIO_TESTLOGS_DIR"
+  find "$CONTEXT_SCENARIO_TESTLOGS_DIR" -maxdepth 3 -type d 2>/dev/null | sort || true
+  exit 1
+fi
+
 # Capture current log offset so we can isolate uploads produced specifically
 # by the context-enriched uploader run below.
 LOG_LINES_BEFORE_CONTEXT="$(log_line_count)"
 UPLOADER_CONTEXT_LOG="$TMP_WS/uploader_with_context.log"
-if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
 DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
 DD_API_KEY=mock \
@@ -2127,6 +2138,175 @@ for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
     if key not in meta:
         print(f"error: expected context tag missing in context-enriched payload: {key}")
         sys.exit(1)
+PY
+
+# Scenario: runtime context override enriches uploads without re-running sync.
+# This proves the uploader can reuse a previously-fetched context.json file
+# while avoiding extra settings/test-management requests during `bazel run`.
+CONTEXT_CQUERY_FAST_PATH=$("$BAZEL" "${BAZEL_FLAGS[@]}" cquery @test_optimization_data//:test_optimization_context --output=files \
+  "${REPO_ENVS[@]}")
+CONTEXT_JSON_FAST_PATH=$(echo "$CONTEXT_CQUERY_FAST_PATH" | awk 'NF { print; exit }')
+if [[ -z "$CONTEXT_JSON_FAST_PATH" ]]; then
+  echo "error: failed to resolve context.json for runtime override scenario"
+  echo "$CONTEXT_CQUERY_FAST_PATH"
+  exit 1
+fi
+if [[ "$CONTEXT_JSON_FAST_PATH" != /* && ! "$CONTEXT_JSON_FAST_PATH" =~ ^[A-Za-z]:[\\/] ]]; then
+  for base in "$OUT_BASE" "$EXECROOT" "$WORKSPACE"; do
+    [[ -z "$base" ]] && continue
+    if [[ -f "$base/$CONTEXT_JSON_FAST_PATH" ]]; then
+      CONTEXT_JSON_FAST_PATH="$base/$CONTEXT_JSON_FAST_PATH"
+      break
+    fi
+  done
+fi
+if [[ ! -f "$CONTEXT_JSON_FAST_PATH" ]]; then
+  echo "error: runtime override context.json not found: $CONTEXT_JSON_FAST_PATH"
+  echo "$CONTEXT_CQUERY_FAST_PATH"
+  exit 1
+fi
+
+LOG_LINES_BEFORE_CONTEXT_OVERRIDE="$(log_line_count)"
+UPLOADER_CONTEXT_OVERRIDE_LOG="$TMP_WS/uploader_context_override.log"
+if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CONTEXT_JSON="$CONTEXT_JSON_FAST_PATH" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_CONTEXT_OVERRIDE_LOG" 2>&1; then
+  echo "error: uploader command with runtime context override failed"
+  cat "$UPLOADER_CONTEXT_OVERRIDE_LOG" || true
+  exit 1
+fi
+
+LOG_LINES_BEFORE_CONTEXT_OVERRIDE="$LOG_LINES_BEFORE_CONTEXT_OVERRIDE" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("LOG_LINES_BEFORE_CONTEXT_OVERRIDE", "0") or "0")
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+if not records:
+    print("error: expected runtime-context uploader run to add log records")
+    sys.exit(1)
+
+setting_requests = [rec for rec in records if rec.get("path") == "/api/v2/libraries/tests/services/setting"]
+if setting_requests:
+    print("error: runtime-context uploader run unexpectedly reissued settings requests")
+    sys.exit(1)
+
+tm_requests = [rec for rec in records if rec.get("path") == "/api/v2/test/libraries/test-management/tests"]
+if tm_requests:
+    print("error: runtime-context uploader run unexpectedly reissued test-management requests")
+    sys.exit(1)
+
+target_resource = "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"
+target_evt = None
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
+        continue
+    try:
+        cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    for evt in cycle_payload.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        content = evt.get("content") or {}
+        if content.get("resource") != target_resource:
+            continue
+        evt_meta = content.get("meta") or {}
+        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
+            target_evt = evt
+            break
+    if target_evt is not None:
+        break
+if target_evt is None:
+    print("error: missing context-enriched test event after runtime-context uploader run")
+    sys.exit(1)
+PY
+
+# Scenario: an unreadable runtime override must fall back to bundled context
+# data instead of disabling enrichment entirely.
+LOG_LINES_BEFORE_BAD_OVERRIDE="$(log_line_count)"
+UPLOADER_BAD_OVERRIDE_LOG="$TMP_WS/uploader_bad_context_override.log"
+if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CONTEXT_JSON="$TMP_WS/does-not-exist/context.json" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_BAD_OVERRIDE_LOG" 2>&1; then
+  echo "error: uploader command with invalid runtime context override failed"
+  cat "$UPLOADER_BAD_OVERRIDE_LOG" || true
+  exit 1
+fi
+
+LOG_LINES_BEFORE_BAD_OVERRIDE="$LOG_LINES_BEFORE_BAD_OVERRIDE" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("LOG_LINES_BEFORE_BAD_OVERRIDE", "0") or "0")
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+target_resource = "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"
+target_evt = None
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
+        continue
+    try:
+        cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    for evt in cycle_payload.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        content = evt.get("content") or {}
+        if content.get("resource") != target_resource:
+            continue
+        evt_meta = content.get("meta") or {}
+        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
+            target_evt = evt
+            break
+    if target_evt is not None:
+        break
+
+if target_evt is None:
+    print("error: invalid runtime override did not fall back to bundled context enrichment")
+    sys.exit(1)
 PY
 
 ORIG_CODEOWNERS="$WORKSPACE/CODEOWNERS.orig"
