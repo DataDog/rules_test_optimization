@@ -554,10 +554,24 @@ filegroup(
     "tracer_version": "3.40.0"
   },
   "payload": {
-    "marker": "windows"
+    "marker": "windows-a"
   }
 }
-'@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_windows_010.json") -Encoding UTF8
+'@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_A_010.json") -Encoding UTF8
+  @'
+{
+  "api_version": "v2",
+  "request_type": "app-closing",
+  "runtime_id": "windows-runtime-telemetry-b",
+  "application": {
+    "language_name": "dotnet",
+    "tracer_version": "3.40.0"
+  },
+  "payload": {
+    "marker": "windows-b"
+  }
+}
+'@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_a_002.json") -Encoding UTF8
 
   Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader
 
@@ -602,6 +616,21 @@ filegroup(
     if (-not ($paths -contains $requiredPath)) {
       throw "missing expected uploader request path in mock log: $requiredPath"
     }
+  }
+
+  $agentlessTelemetry = @(
+    $entries |
+      Where-Object { $_.path -eq "/api/v2/apmtelemetry" } |
+      ForEach-Object {
+        $payload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)) | ConvertFrom-Json -ErrorAction Stop
+        [PSCustomObject]@{
+          Marker = $payload.payload.marker
+        }
+      }
+  )
+  $agentlessMarkers = @($agentlessTelemetry | ForEach-Object { $_.Marker })
+  if (($agentlessMarkers -join ",") -ne "windows-a,windows-b") {
+    throw "unexpected Windows telemetry upload order: $($agentlessMarkers -join ',')"
   }
 
   Write-Host "Windows integration harness passed (PowerShell-only uploader path)."

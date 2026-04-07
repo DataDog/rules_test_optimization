@@ -600,7 +600,21 @@ function Find-TestOutputs {
 # Cache the list of test.outputs directories for efficiency (avoid rescanning on each loop iteration)
 $script:TestOutputsCache = @()
 function Update-TestOutputsCache {
-    $script:TestOutputsCache = @(Find-TestOutputs | Sort-Object -Property FullName)
+    $dirs = @(Find-TestOutputs)
+    if ($dirs.Count -gt 1) {
+        [Array]::Sort(
+            $dirs,
+            [System.Collections.Generic.Comparer[object]]::Create(
+                [System.Comparison[object]]{
+                    param($left, $right)
+                    $leftPath = if ($null -eq $left) { "" } else { [string]$left.FullName }
+                    $rightPath = if ($null -eq $right) { "" } else { [string]$right.FullName }
+                    return [System.StringComparer]::Ordinal.Compare($leftPath, $rightPath)
+                }
+            )
+        )
+    }
+    $script:TestOutputsCache = $dirs
 }
 
 function Get-LatestMTimeAll {
@@ -1570,7 +1584,21 @@ function Test-PrefixFilter([string]$FilePath, [string]$ExpectedPrefix) {
 # Enumerate JSON payload files in deterministic lexicographic order.
 function Get-SortedPayloadFiles([string]$DirPath) {
     if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
-    return @(Get-ChildItem -Path $DirPath -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object -Property Name)
+    $files = @(Get-ChildItem -Path $DirPath -Filter "*.json" -File -ErrorAction SilentlyContinue)
+    if ($files.Count -gt 1) {
+        [Array]::Sort(
+            $files,
+            [System.Collections.Generic.Comparer[object]]::Create(
+                [System.Comparison[object]]{
+                    param($left, $right)
+                    $leftName = if ($null -eq $left) { "" } else { [string]$left.Name }
+                    $rightName = if ($null -eq $right) { "" } else { [string]$right.Name }
+                    return [System.StringComparer]::Ordinal.Compare($leftName, $rightName)
+                }
+            )
+        )
+    }
+    return $files
 }
 
 # Delete file unless KeepPayloads is set
