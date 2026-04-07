@@ -110,6 +110,14 @@ load(
     "sync_environment_keys_allowlist_test",
 )
 load(
+    "//tools/tests/core:test_topt_macro_utils.bzl",
+    "merge_optional_env_defaults_ignores_empty_defaults_test",
+    "merge_optional_env_defaults_injects_missing_key_test",
+    "merge_optional_env_defaults_none_env_test",
+    "merge_optional_env_defaults_preserves_explicit_value_test",
+    "merge_optional_env_defaults_select_passthrough_test",
+)
+load(
     "//tools/tests/core:test_uploader_utils.bzl",
     "bash_curl_retry_flags_test",
     "codeowners_compile_regex_edge_cases_test",
@@ -249,6 +257,36 @@ apply_github_event_payload_defensive_test(
 
 sync_environment_keys_allowlist_test(
     name = "sync_environment_keys_allowlist_test",
+    size = "small",
+    timeout = "short",
+)
+
+merge_optional_env_defaults_none_env_test(
+    name = "merge_optional_env_defaults_none_env_test",
+    size = "small",
+    timeout = "short",
+)
+
+merge_optional_env_defaults_injects_missing_key_test(
+    name = "merge_optional_env_defaults_injects_missing_key_test",
+    size = "small",
+    timeout = "short",
+)
+
+merge_optional_env_defaults_preserves_explicit_value_test(
+    name = "merge_optional_env_defaults_preserves_explicit_value_test",
+    size = "small",
+    timeout = "short",
+)
+
+merge_optional_env_defaults_select_passthrough_test(
+    name = "merge_optional_env_defaults_select_passthrough_test",
+    size = "small",
+    timeout = "short",
+)
+
+merge_optional_env_defaults_ignores_empty_defaults_test(
+    name = "merge_optional_env_defaults_ignores_empty_defaults_test",
     size = "small",
     timeout = "short",
 )
@@ -852,6 +890,11 @@ test_suite(
         ":load_github_event_payload_ctx_test",
         ":log_helpers_and_is_dict_test",
         ":manifest_trim_and_bom_helpers_test",
+        ":merge_optional_env_defaults_ignores_empty_defaults_test",
+        ":merge_optional_env_defaults_injects_missing_key_test",
+        ":merge_optional_env_defaults_none_env_test",
+        ":merge_optional_env_defaults_preserves_explicit_value_test",
+        ":merge_optional_env_defaults_select_passthrough_test",
         ":module_label_map_collision_test",
         ":module_label_map_empty_inputs_test",
         ":normalize_out_dir_absolute_failure_test",

@@ -104,6 +104,7 @@ wrapper_output_name_target_rule = rule(
 def _single_service_topt_data():
     return {
         "repo_name": "test_optimization_data",
+        "service_name": "go-service",
         "manifest_path": ".testoptimization/manifest.txt",
         "labels": [],
         "set": {},
@@ -120,6 +121,7 @@ def _multi_service_topt_data():
     selected = _single_service_topt_data()
     not_selected = dict(selected)
     not_selected["repo_name"] = "unused_repo_for_selection_test"
+    not_selected["service_name"] = "ruby-service"
     return {
         "go_service": selected,
         "ruby_service": not_selected,
@@ -173,6 +175,18 @@ def go_macro_env_none_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_explicit_service_target(name, tags = None):
+    """Target under test for explicit DD_SERVICE passthrough."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        env = {
+            "DD_SERVICE": "caller-service",
+        },
+        tags = tags,
+    )
+
 def go_macro_select_inputs_target(name, tags = None):
     """Target under test for configurable data/env handling."""
     dd_topt_go_test(
@@ -209,6 +223,7 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
 
@@ -221,6 +236,7 @@ def _go_macro_multi_service_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_multi_service_target_topt_payloads"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "example.com/override/pkg", captured.importpath)
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
@@ -239,6 +255,7 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -253,10 +270,20 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_select_inputs_target_topt_payloads"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _go_macro_explicit_service_wiring_test_impl(ctx):
+    """Assert explicit caller DD_SERVICE is preserved."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.equals(env, "caller-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     return analysistest.end(env)
 
 def _go_macro_public_wrapper_test_impl(ctx):
@@ -346,6 +373,9 @@ go_macro_env_none_wiring_test = analysistest.make(
 )
 go_macro_select_inputs_wiring_test = analysistest.make(
     _go_macro_select_inputs_wiring_test_impl,
+)
+go_macro_explicit_service_wiring_test = analysistest.make(
+    _go_macro_explicit_service_wiring_test_impl,
 )
 go_macro_public_wrapper_test = analysistest.make(
     _go_macro_public_wrapper_test_impl,

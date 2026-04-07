@@ -55,6 +55,7 @@ def _has_label_suffix(items, suffix):
 def _single_service_topt_data():
     return {
         "repo_name": "test_optimization_data",
+        "service_name": "ruby-service",
         "manifest_path": ".testoptimization/manifest.txt",
         "labels": [],
         "set": {},
@@ -96,6 +97,7 @@ def _multi_service_topt_data():
     selected = _single_service_topt_data()
     not_selected = dict(selected)
     not_selected["repo_name"] = "unused_repo_for_selection_test"
+    not_selected["service_name"] = "nodejs-service"
     return {
         "ruby_service": selected,
         "nodejs_service": not_selected,
@@ -137,6 +139,17 @@ def ruby_macro_env_none_target(name, tags = None):
         tags = tags,
     )
 
+def ruby_macro_explicit_service_target(name, tags = None):
+    dd_topt_ruby_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        ruby_test_rule = _ruby_test_capture_rule,
+        env = {
+            "DD_SERVICE": "caller-service",
+        },
+        tags = tags,
+    )
+
 def ruby_macro_select_inputs_target(name, tags = None):
     dd_topt_ruby_test(
         name = name,
@@ -174,6 +187,7 @@ def _ruby_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "ruby-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "apps/ruby/pkg", captured.require_path)
     asserts.equals(env, "spec/pkg_spec.rb", captured.main)
     return analysistest.end(env)
@@ -186,6 +200,7 @@ def _ruby_macro_multi_service_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":ruby_macro_multi_service_target_topt_payloads"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, "ruby-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "apps/ruby/multi", captured.require_path)
     asserts.equals(env, "spec/multi_spec.rb", captured.main)
     return analysistest.end(env)
@@ -195,6 +210,7 @@ def _ruby_macro_env_none_wiring_test_impl(ctx):
     target = analysistest.target_under_test(env)
     captured = target[ToptRubyMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, "ruby-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -208,11 +224,20 @@ def _ruby_macro_select_inputs_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":ruby_macro_select_inputs_target_topt_payloads"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "apps/ruby/select/pkg", captured.require_path)
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _ruby_macro_explicit_service_wiring_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptRubyMacroCaptureInfo]
+    asserts.equals(env, "caller-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     return analysistest.end(env)
 
 def _resolve_topt_service_key_missing_target_impl(_ctx):
@@ -305,6 +330,9 @@ ruby_macro_env_none_wiring_test = analysistest.make(
 )
 ruby_macro_select_inputs_wiring_test = analysistest.make(
     _ruby_macro_select_inputs_wiring_test_impl,
+)
+ruby_macro_explicit_service_wiring_test = analysistest.make(
+    _ruby_macro_explicit_service_wiring_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

@@ -178,6 +178,11 @@ The bootstrap helper:
 - writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing
 - writes either `dd_trace_go_version` or `dd_trace_go_versions` into the managed `MODULE.bazel` block, depending on whether the traced Go modules resolve to one shared version or different exact versions
+
+By default, `dd_topt_go_test` also sets `DD_SERVICE` from the selected sync
+metadata service name. If you already set `DD_SERVICE` in the test target's
+`env`, the macro preserves your explicit value. If you pass `env = select(...)`,
+the macro leaves that configurable env unchanged in this release.
 - keeps Bazel's injected tracer versions and the local Go module pins aligned, and the build fails fast if they drift apart
 
 Then use the generated local wrapper in your package:
@@ -985,6 +990,10 @@ args, wrapper script, etc.), but the required contract is always:
 1. Resolve `DD_TEST_OPTIMIZATION_MANIFEST_FILE` via runfiles
 2. Set `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
 3. Write payloads to `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
+
+First-class companion macros in this repository also default `DD_SERVICE` from
+the selected sync metadata service name. They never override an explicit caller
+`DD_SERVICE`, and they leave `env = select(...)` unchanged.
 
 ### Building a first-class companion module
 
