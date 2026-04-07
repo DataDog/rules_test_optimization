@@ -65,6 +65,10 @@ Use this checklist when adding `dd_topt_<language>_test` support.
    - Ensure it appends selector + manifest labels to `data` and sets:
      - `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
      - `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
+   - Default `DD_SERVICE` from `topt_data["service_name"]` when callers do not
+     provide it explicitly; preserve caller-provided `DD_SERVICE` and leave
+     `env = select(...)` unchanged unless you add dedicated configurable-merge
+     support.
 
 2. **Selector / inference rule**
    - Add analysis-time selection logic in `modules/<language>/`:
@@ -84,8 +88,8 @@ Use this checklist when adding `dd_topt_<language>_test` support.
 4. **Runtime metadata keys**
    - Extend sync-exported runtime metadata under:
      - `topt_data["runtimes"]["<language>"]`
-   - Keep core keys stable (`repo_name`, `manifest_path`, `labels`, `set`) and
-     avoid changing generated public label names.
+   - Keep core keys stable (`repo_name`, `service_name`, `manifest_path`,
+     `labels`, `set`) and avoid changing generated public label names.
 
 5. **Tests**
    - Add unit tests for:

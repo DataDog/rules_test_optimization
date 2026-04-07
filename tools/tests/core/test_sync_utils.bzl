@@ -908,6 +908,7 @@ def _export_bzl_manifest_path_test(ctx):
     env = unittest.begin(ctx)
     content = render_export_bzl_for_tests(
         "repo",
+        "service-name",
         ["a"],
         "{}",
         "example.com/mod",
@@ -930,6 +931,7 @@ def _export_bzl_manifest_path_test(ctx):
         sanitized_ruby_module_path = "apps_ruby_service",
         ruby_module_included = False,
     )
+    asserts.true(env, "\"service_name\": \"service-name\"" in content)
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
     asserts.true(env, "\"runtimes\": {" in content)
     asserts.true(env, "\"go\": {" in content)
@@ -951,6 +953,7 @@ def _export_bzl_escaping_test(ctx):
     env = unittest.begin(ctx)
     content = render_export_bzl_for_tests(
         "repo\"name",
+        "service\\\"name",
         ["a"],
         "{}",
         "go\"mod",
@@ -974,6 +977,7 @@ def _export_bzl_escaping_test(ctx):
         ruby_module_included = False,
     )
     asserts.true(env, "\"repo_name\": \"repo\\\"name\"" in content)
+    asserts.true(env, "\"service_name\": \"service\\\\\\\"name\"" in content)
     asserts.true(env, "\"manifest_path\": \"path\\\\to\\\\manifest.txt\"" in content)
     asserts.true(env, "\"module_path\": \"go\\\"mod\"" in content)
     asserts.true(env, "\"sanitized_module_path\": \"sanitized\\\\path\"" in content)

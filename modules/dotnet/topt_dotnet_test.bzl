@@ -12,6 +12,7 @@ load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "append_data_dependencies",
     "build_module_labels",
+    "merge_optional_env_defaults",
     "merge_user_env",
     "normalize_user_data",
     "resolve_topt_service_key",
@@ -24,6 +25,7 @@ load("//:topt_dotnet_infer.bzl", "topt_dotnet_payloads_selector")
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
+_merge_optional_env_defaults = merge_optional_env_defaults
 _merge_user_env = merge_user_env
 
 def _resolve_topt_service_key(service_entries, topt_service):
@@ -134,6 +136,13 @@ def dd_topt_dotnet_test(
     )
 
     user_env = kwargs.pop("env", None)
+
+    # Default DD_SERVICE from sync metadata without overriding caller intent.
+    user_env = _merge_optional_env_defaults(
+        user_env,
+        {"DD_SERVICE": _svc.get("service_name")},
+        macro_name = "dd_topt_dotnet_test",
+    )
 
     data = _append_data_dependencies(data, [":" + selector_name])
 

@@ -46,6 +46,7 @@ load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "append_data_dependencies",
     "build_module_labels",
+    "merge_optional_env_defaults",
     "merge_user_env",
     "normalize_user_data",
     "resolve_topt_service_key",
@@ -59,6 +60,7 @@ load("//:topt_go_orchestrion.bzl", "orch_go_test")
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
+_merge_optional_env_defaults = merge_optional_env_defaults
 _merge_user_env = merge_user_env
 
 def _resolve_topt_service_key(service_entries, topt_service):
@@ -240,6 +242,14 @@ def dd_topt_go_test(
     # Prepare env map using a selector rule that infers importpath via aspect
     # Same `pop` pattern keeps final go_test kwargs clean and explicit.
     user_env = kwargs.pop("env", None)
+
+    # Default DD_SERVICE from sync metadata so the tracer does not fall back
+    # to platform-specific executable names when callers omit the service.
+    user_env = _merge_optional_env_defaults(
+        user_env,
+        {"DD_SERVICE": _svc.get("service_name")},
+        macro_name = "dd_topt_go_test",
+    )
 
     # Build the list of per-module groups once (if any were exported)
     # Use exported sanitized labels directly to avoid re-deriving naming policy

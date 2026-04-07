@@ -92,6 +92,40 @@ def merge_user_env(user_env, required_env, macro_name = "dd_topt_macro"):
     # Required keys intentionally win over caller-provided values.
     return base | required_env
 
+def merge_optional_env_defaults(user_env, default_env, macro_name = "dd_topt_macro"):
+    """Merge optional env defaults without overriding caller-provided values.
+
+    Args:
+      user_env: Caller-provided env value (None/dict/select).
+      default_env: Dict containing optional default env values.
+      macro_name: Macro name included in validation error text.
+
+    Returns:
+      A dict/select preserving caller-provided values while adding only missing
+      non-empty defaults.
+    """
+    if default_env == None or not is_dict(default_env):
+        fail_with_prefix("topt_macro_utils", "%s: default_env must be a dict" % macro_name)
+
+    filtered_defaults = {}
+    for key, value in default_env.items():
+        if value != None and value != "":
+            filtered_defaults[key] = value
+
+    if user_env == None:
+        return filtered_defaults
+    if is_dict(user_env):
+        merged = dict(user_env)
+        for key, value in filtered_defaults.items():
+            if key not in merged:
+                merged[key] = value
+        return merged
+    if is_select(user_env):
+        return user_env
+
+    fail_with_prefix("topt_macro_utils", "%s: env must be None, dict, or select; got %s" % (macro_name, type(user_env)))
+    return {}
+
 def build_module_labels(sync_repo_name, labels, macro_name = "dd_topt_macro"):
     """Build per-module filegroup labels from sanitized module fragments.
 
