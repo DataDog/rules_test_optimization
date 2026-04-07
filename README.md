@@ -630,14 +630,14 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 
 Optional tooling:
 - **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
-- **python3** - Used for uploader payload schema validation. If missing, uploads proceed without schema validation.
+- **python3** - Used for uploader payload schema validation and Unix telemetry metadata extraction. If missing, schema validation is skipped and telemetry files fail individually with a warning.
 
 ### Contract gate checklist
 
 Before rollout in a consumer repository, confirm the tracer/runtime implementation:
 - resolves `DD_TEST_OPTIMIZATION_MANIFEST_FILE` through Bazel runfiles
 - enables file-mode output when `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true`
-- writes JSON payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests` and `TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage`
+- writes JSON payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests`, `TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage`, and `TEST_UNDECLARED_OUTPUTS_DIR/payloads/telemetry`
 
 The extension performs these HTTP POST transactions (via host HTTP tooling: curl on Unix/macOS, PowerShell on Windows):
 
@@ -713,16 +713,22 @@ For complete setup matrices and advanced options, use:
 - [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for full Bzlmod/WORKSPACE flows
 - [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md) for attribute and environment details
 
-## Uploading test and coverage payloads
+## Uploading test, coverage, and telemetry payloads
 
 The uploader is a normal Bazel rule (not a test) that runs via `bazel run` after your tests complete. It discovers all test payloads written to `TEST_UNDECLARED_OUTPUTS_DIR` (Bazel's built-in directory for undeclared test outputs) and uploads them to Datadog.
 
 ### How it works
 
-1. Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests/*.json` and `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`
+1. Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests/*.json`, `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`, and `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/telemetry/*.json`
 2. Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`
 3. After tests complete, run the uploader via `bazel run`
 4. The uploader discovers all `test.outputs/` directories, waits for quiescence, uploads, and deletes files
+
+Telemetry-specific notes:
+- Telemetry files must contain one raw top-level tracer telemetry request body per file.
+- Telemetry uploads are reconstructed from the raw body plus the uploader mode.
+- Telemetry does not use test-payload enrichment (`context.json`, CODEOWNERS, or schema validation).
+- `DD_TEST_OPTIMIZATION_FILTER_PREFIX=1` still filters only test and coverage filenames; telemetry files remain eligible regardless of filename prefix.
 
 ### Basic usage
 

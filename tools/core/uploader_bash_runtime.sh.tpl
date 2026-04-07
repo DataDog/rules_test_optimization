@@ -395,6 +395,9 @@ DEBUG=$(normalize_bool "${DD_TEST_OPTIMIZATION_DEBUG:-__DDTPL_DEBUG__}")
 GZIP_PAYLOADS=$(normalize_bool "${DD_TEST_OPTIMIZATION_GZIP:-__DDTPL_GZIP_PAYLOADS__}")
 RULES_VERSION="__DDTPL_RULES_VERSION__"
 RUNTIME_ID=$(generate_uuid)
+# Reuse one uploader-local session fallback for telemetry files that do not
+# carry a runtime_id in their raw body.
+TELEMETRY_SESSION_FALLBACK=$(generate_uuid)
 
 # Validate numeric environment variables
 validate_numeric "QUIESCENT_SEC" "$QUIESCENT_SEC"
@@ -610,7 +613,7 @@ find_test_outputs() {
         depth_args=(-maxdepth "$MAX_DEPTH")
         dbg "limiting find depth to $MAX_DEPTH"
     fi
-    find "$TESTLOGS_DIR" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null || true
+    find "$TESTLOGS_DIR" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null | LC_ALL=C sort || true
 }
 
 # Warn if MAX_DEPTH is set and no test.outputs found (likely depth too shallow)
@@ -631,13 +634,13 @@ if stat -c %Y / >/dev/null 2>&1; then
 fi
 dbg "stat detection: STAT_FLAVOR=$STAT_FLAVOR (uname=$(uname -s))"
 
-# Get latest mtime across payloads/tests and payloads/coverage in test.outputs.
+# Get latest mtime across payload directories in test.outputs.
 # Note: Only scans payload directories, not all files under test.outputs
 latest_mtime_all() {
     local max_mtime=0
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        for subdir in "payloads/tests" "payloads/coverage"; do
+        for subdir in "payloads/tests" "payloads/coverage" "payloads/telemetry"; do
             local dir="$outputs_dir/$subdir"
             [[ -d "$dir" ]] || continue
             local mt
@@ -662,6 +665,7 @@ count_payload_files() {
         [[ -z "$outputs_dir" ]] && continue
         local tests_dir="$outputs_dir/payloads/tests"
         local cov_dir="$outputs_dir/payloads/coverage"
+        local telemetry_dir="$outputs_dir/payloads/telemetry"
         if [[ -d "$tests_dir" ]]; then
             local tests_count
             tests_count=$(find "$tests_dir" -name "*.json" 2>/dev/null | wc -l)
@@ -671,6 +675,11 @@ count_payload_files() {
             local cov_count
             cov_count=$(find "$cov_dir" -name "*.json" 2>/dev/null | wc -l)
             count=$((count + cov_count))
+        fi
+        if [[ -d "$telemetry_dir" ]]; then
+            local telemetry_count
+            telemetry_count=$(find "$telemetry_dir" -name "*.json" 2>/dev/null | wc -l)
+            count=$((count + telemetry_count))
         fi
     done < <(echo "$TEST_OUTPUTS_CACHE")
     echo "$count"
@@ -776,22 +785,25 @@ if [[ -z "${DD_TEST_OPTIMIZATION_AGENT_URL:-}" ]]; then
     BASE="${INTAKE_BASE%/}"
     TEST_URL="${BASE}/api/v2/citestcycle"
     COV_URL="${BASE}/api/v2/citestcov"
+    TELEMETRY_URL="${BASE}/api/v2/apmtelemetry"
     dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL override active: $BASE"
   else
     TEST_URL="https://citestcycle-intake.${DD_SITE}/api/v2/citestcycle"
     COV_URL="https://citestcov-intake.${DD_SITE}/api/v2/citestcov"
+    TELEMETRY_URL="https://instrumentation-telemetry-intake.${DD_SITE}/api/v2/apmtelemetry"
   fi
 else
   # EVP mode: route through agent endpoint with required subdomain headers.
   AGENTLESS=0
   TEST_URL="${DD_TEST_OPTIMIZATION_AGENT_URL}/evp_proxy/v2/api/v2/citestcycle"
   COV_URL="${DD_TEST_OPTIMIZATION_AGENT_URL}/evp_proxy/v2/api/v2/citestcov"
+  TELEMETRY_URL="${DD_TEST_OPTIMIZATION_AGENT_URL}/telemetry/proxy/api/v2/apmtelemetry"
   if [[ -n "$INTAKE_BASE" ]]; then
     dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL ignored in EVP mode"
   fi
 fi
 dbg "mode: AGENTLESS=$AGENTLESS DD_SITE=$DD_SITE"
-dbg "endpoints: TEST_URL=$TEST_URL COV_URL=$COV_URL"
+dbg "endpoints: TEST_URL=$TEST_URL COV_URL=$COV_URL TELEMETRY_URL=$TELEMETRY_URL"
 
 HEADER_LANG_DEFAULT="bazel-starlark"
 HEADER_LANG_VERSION_DEFAULT="n/a"
@@ -1797,6 +1809,12 @@ matches_filter() {
     fi
 }
 
+# List JSON payload files in deterministic lexicographic order.
+list_sorted_payload_files() {
+    local dir="$1"
+    find "$dir" -maxdepth 1 -type f -name "*.json" -print 2>/dev/null | LC_ALL=C sort
+}
+
 # Delete file unless KEEP_PAYLOADS is set
 cleanup_file() {
     local file="$1"
@@ -1831,6 +1849,114 @@ validate_payload() {
     if ! python3 "$SCHEMA_VALIDATOR" "$SCHEMA_JSON" "$file"; then
         # Keep warning-only behavior so schema drift does not drop payloads.
         log "warning: schema validation failed for payload: $file"
+    fi
+    return 0
+}
+
+# Parse telemetry metadata using python3 and emit shell-safe assignments.
+extract_telemetry_metadata() {
+    local file="$1"
+    local meta_file="$2"
+    local err_file=""
+    err_file="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_meta_err.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$err_file" ]]; then
+        log "warning: failed to create telemetry metadata temp file for $file"
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        log "warning: python3 required for telemetry metadata extraction: $file"
+        rm -f "$err_file" 2>/dev/null || true
+        return 1
+    fi
+    if ! python3 - "$file" >"$meta_file" 2>"$err_file" <<'PY'
+import json
+import shlex
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "rb") as handle:
+        raw = handle.read()
+except OSError as exc:
+    print(f"failed to read telemetry body: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    payload = json.loads(raw.decode("utf-8-sig"))
+except (UnicodeDecodeError, json.JSONDecodeError):
+    print("invalid JSON body", file=sys.stderr)
+    raise SystemExit(1)
+
+if not isinstance(payload, dict):
+    print("body is not a JSON object", file=sys.stderr)
+    raise SystemExit(1)
+
+def nested_str(obj, *keys):
+    cur = obj
+    for key in keys:
+        if not isinstance(cur, dict):
+            return ""
+        cur = cur.get(key)
+    return cur if isinstance(cur, str) else ""
+
+api_version = payload.get("api_version")
+if not isinstance(api_version, str) or not api_version:
+    print("missing or invalid api_version", file=sys.stderr)
+    raise SystemExit(1)
+
+request_type = payload.get("request_type")
+if not isinstance(request_type, str) or not request_type:
+    print("missing or invalid request_type", file=sys.stderr)
+    raise SystemExit(1)
+
+fields = {
+    "TELEMETRY_API_VERSION": api_version,
+    "TELEMETRY_REQUEST_TYPE": request_type,
+    "TELEMETRY_RUNTIME_ID": nested_str(payload, "runtime_id"),
+    "TELEMETRY_APPLICATION_LANGUAGE": nested_str(payload, "application", "language_name"),
+    "TELEMETRY_TRACER_VERSION": nested_str(payload, "application", "tracer_version"),
+}
+
+for key, value in fields.items():
+    print(f"{key}={shlex.quote(value)}")
+PY
+    then
+        local reason=""
+        reason=$(head -n 1 "$err_file" 2>/dev/null || true)
+        [[ -z "$reason" ]] && reason="telemetry metadata extraction failed"
+        log "warning: failed to parse telemetry payload '$file': $reason"
+        rm -f "$err_file" 2>/dev/null || true
+        return 1
+    fi
+    rm -f "$err_file" 2>/dev/null || true
+    return 0
+}
+
+# Build telemetry headers from the raw tracer body without mutating the body.
+build_telemetry_headers() {
+    local file="$1"
+    local meta_file="$2"
+    if ! extract_telemetry_metadata "$file" "$meta_file"; then
+        return 1
+    fi
+    # shellcheck disable=SC1090
+    . "$meta_file"
+
+    local session_id="$TELEMETRY_RUNTIME_ID"
+    if [[ -z "$session_id" ]]; then
+        session_id="$TELEMETRY_SESSION_FALLBACK"
+    fi
+
+    TELEMETRY_HDRS=(
+        -H "DD-Telemetry-API-Version: $TELEMETRY_API_VERSION"
+        -H "DD-Telemetry-Request-Type: $TELEMETRY_REQUEST_TYPE"
+        -H "DD-Session-ID: $session_id"
+    )
+    if [[ -n "$TELEMETRY_APPLICATION_LANGUAGE" ]]; then
+        TELEMETRY_HDRS+=( -H "DD-Client-Library-Language: $TELEMETRY_APPLICATION_LANGUAGE" )
+    fi
+    if [[ -n "$TELEMETRY_TRACER_VERSION" ]]; then
+        TELEMETRY_HDRS+=( -H "DD-Client-Library-Version: $TELEMETRY_TRACER_VERSION" )
     fi
     return 0
 }
@@ -1990,6 +2116,63 @@ upload_single_coverage() {
     return 0
 }
 
+# Handle upload single telemetry behavior.
+upload_single_telemetry() {
+    local file="$1"
+    local meta_file resp http rc
+    meta_file="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_meta.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$meta_file" ]]; then
+        dbg "upload_single_telemetry: failed to create metadata temp file"
+        return 1
+    fi
+    if ! build_telemetry_headers "$file" "$meta_file"; then
+        rm -f "$meta_file" 2>/dev/null || true
+        return 1
+    fi
+    dbg "upload_single_telemetry: posting '$file'"
+    if [[ "$DEBUG" == "1" ]]; then
+        echo "[dd-uploader][dbg] telemetry content for '$file':" >&2
+        cat "$file" >&2
+        echo "" >&2
+        dbg "request: POST $TELEMETRY_URL"
+        dbg_headers "telemetry" "${TELEMETRY_HDRS[@]}"
+        dbg "headers: Content-Type=application/json"
+    fi
+    resp="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_resp.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$resp" ]]; then
+        dbg "upload_single_telemetry: failed to create response temp file"
+        rm -f "$meta_file" 2>/dev/null || true
+        return 1
+    fi
+    if (( AGENTLESS == 1 )); then
+      if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
+    else
+      if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
+    fi
+    http="${http:-000}"
+    if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        dbg "upload_single_telemetry: HTTP $http (rc=$rc)"
+        if [[ -s "$resp" ]]; then
+            dbg "upload_single_telemetry response: $(head -c 2000 "$resp")"
+        fi
+    fi
+    rm -f "$resp" "$meta_file" 2>/dev/null || true
+    if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        return 1
+    fi
+    return 0
+}
+
 # Handle upload all tests behavior.
 upload_all_tests() {
     local total=0
@@ -2001,7 +2184,7 @@ upload_all_tests() {
         local tests_dir="$outputs_dir/payloads/tests"
         [[ -d "$tests_dir" ]] || continue
 
-        for f in "$tests_dir"/*.json; do
+        while IFS= read -r f; do
             [[ -f "$f" ]] || continue
             # Skip files not matching prefix filter (when enabled)
             if ! matches_filter "$f" "span_events_"; then
@@ -2020,7 +2203,7 @@ upload_all_tests() {
                 ((++failed))
                 ((++UPLOAD_FAILURES))
             fi
-        done
+        done < <(list_sorted_payload_files "$tests_dir")
     done < <(echo "$TEST_OUTPUTS_CACHE")
     log "uploaded $total test payloads"
     if (( failed > 0 )); then
@@ -2042,7 +2225,7 @@ upload_all_coverage() {
         local cov_dir="$outputs_dir/payloads/coverage"
         [[ -d "$cov_dir" ]] || continue
 
-        for f in "$cov_dir"/*.json; do
+        while IFS= read -r f; do
             [[ -f "$f" ]] || continue
             # Skip files not matching prefix filter (when enabled)
             if ! matches_filter "$f" "coverage_"; then
@@ -2061,7 +2244,7 @@ upload_all_coverage() {
                 ((++failed))
                 ((++UPLOAD_FAILURES))
             fi
-        done
+        done < <(list_sorted_payload_files "$cov_dir")
     done < <(echo "$TEST_OUTPUTS_CACHE")
     log "uploaded $total coverage payloads"
     if (( failed > 0 )); then
@@ -2072,8 +2255,37 @@ upload_all_coverage() {
     fi
 }
 
+# Handle upload all telemetry behavior.
+upload_all_telemetry() {
+    local total=0
+    local failed=0
+    while IFS= read -r outputs_dir; do
+        [[ -z "$outputs_dir" ]] && continue
+        local telemetry_dir="$outputs_dir/payloads/telemetry"
+        [[ -d "$telemetry_dir" ]] || continue
+
+        while IFS= read -r f; do
+            [[ -f "$f" ]] || continue
+            if upload_single_telemetry "$f"; then
+                log "uploaded telemetry payload: $f"
+                cleanup_file "$f"
+                ((++total))
+            else
+                log "warning: failed to upload $f"
+                ((++failed))
+                ((++UPLOAD_FAILURES))
+            fi
+        done < <(list_sorted_payload_files "$telemetry_dir")
+    done < <(echo "$TEST_OUTPUTS_CACHE")
+    log "uploaded $total telemetry payloads"
+    if (( failed > 0 )); then
+        log "warning: $failed telemetry payloads failed to upload"
+    fi
+}
+
 upload_all_tests
 upload_all_coverage
+upload_all_telemetry
 
 # Exit with appropriate code based on upload results
 if (( UPLOAD_FAILURES > 0 )); then
