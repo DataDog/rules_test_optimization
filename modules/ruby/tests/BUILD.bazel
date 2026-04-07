@@ -363,6 +363,7 @@ test_suite(
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":resolve_topt_service_key_unknown_failure_test",
         ":ruby_macro_env_none_wiring_test",
+        ":ruby_macro_explicit_service_wiring_test",
         ":ruby_macro_multi_service_wiring_test",
         ":ruby_macro_select_inputs_wiring_test",
         ":ruby_macro_single_service_wiring_test",
