@@ -540,9 +540,24 @@ filegroup(
   $testOutputsRoot = Join-Path $tempRoot "bazel-testlogs/pkg/target/test.outputs"
   $testsDir = Join-Path $testOutputsRoot "payloads/tests"
   $coverageDir = Join-Path $testOutputsRoot "payloads/coverage"
-  New-Item -ItemType Directory -Force -Path $testsDir, $coverageDir | Out-Null
+  $telemetryDir = Join-Path $testOutputsRoot "payloads/telemetry"
+  New-Item -ItemType Directory -Force -Path $testsDir, $coverageDir, $telemetryDir | Out-Null
   Copy-Item -LiteralPath $snapshotFile -Destination (Join-Path $testsDir "span_events_windows.json") -Force
   '{"mock_mode":"ok"}' | Set-Content -LiteralPath (Join-Path $coverageDir "coverage_windows.json") -Encoding UTF8
+  @'
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "runtime_id": "windows-runtime-telemetry",
+  "application": {
+    "language_name": "dotnet",
+    "tracer_version": "3.40.0"
+  },
+  "payload": {
+    "marker": "windows"
+  }
+}
+'@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_windows_010.json") -Encoding UTF8
 
   Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader
 
@@ -578,8 +593,10 @@ filegroup(
   $requiredPaths = @(
     "/api/v2/citestcycle",
     "/api/v2/citestcov",
+    "/api/v2/apmtelemetry",
     "/evp_proxy/v2/api/v2/citestcycle",
-    "/evp_proxy/v2/api/v2/citestcov"
+    "/evp_proxy/v2/api/v2/citestcov",
+    "/telemetry/proxy/api/v2/apmtelemetry"
   )
   foreach ($requiredPath in $requiredPaths) {
     if (-not ($paths -contains $requiredPath)) {

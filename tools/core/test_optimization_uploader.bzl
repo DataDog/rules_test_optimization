@@ -735,7 +735,7 @@ _dd_payload_uploader_rule = rule(
         "fail_on_error": attr.bool(default = False, doc = "Exit with error when tests appear to have run but no payloads are found"),
         "debug": attr.bool(default = False, doc = "Enable debug logging"),
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TEST_OPTIMIZATION_KEEP_PAYLOADS)"),
-        "filter_prefix": attr.bool(default = False, doc = "Boolean gate: only upload files matching span_events_*.json or coverage_*.json (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
+        "filter_prefix": attr.bool(default = False, doc = "Boolean gate: only upload files matching span_events_*.json or coverage_*.json; telemetry uploads are always eligible (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
@@ -750,11 +750,12 @@ _dd_payload_uploader_rule = rule(
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
     doc = """
-Uploads CI Visibility test and coverage payloads to Datadog.
+Uploads CI Visibility test, coverage, and telemetry payloads to Datadog.
 
 This rule discovers all test.outputs directories in bazel-testlogs (created by
-TEST_UNDECLARED_OUTPUTS_DIR), reads payload JSONs from `payloads/tests` and
-`payloads/coverage`, waits for quiescence, and uploads payloads.
+TEST_UNDECLARED_OUTPUTS_DIR), reads payload JSONs from `payloads/tests`,
+`payloads/coverage`, and `payloads/telemetry`, waits for quiescence, and
+uploads payloads.
 
 Behavior model:
     1) Resolve payload roots:
@@ -772,6 +773,10 @@ Behavior model:
        - Continue uploading remaining files after individual failures.
        - Aggregate failures into final process exit code.
        - `fail_on_error=True` escalates "tests ran but no payloads" to failure.
+    5) Telemetry handling:
+       - Telemetry files are uploaded as raw JSON request bodies from `payloads/telemetry`.
+       - URL and headers are reconstructed from uploader mode plus telemetry body fields.
+       - Telemetry does not use `context.json`, CODEOWNERS enrichment, or schema validation.
 
 Path resolution notes:
     - Runtime scripts resolve optional artifacts (context/schema/validator)
@@ -805,7 +810,7 @@ Optional environment variables:
     TESTLOGS_DIR - Override testlogs directory (for non-standard setups)
     DD_TEST_OPTIMIZATION_AGENTLESS_URL - Override intake base URL (agentless only, test/dev)
     DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 - Retain payloads after upload
-    DD_TEST_OPTIMIZATION_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json
+    DD_TEST_OPTIMIZATION_FILTER_PREFIX=1 - Only upload span_events_*.json and coverage_*.json (telemetry files are not filtered)
     DD_TEST_OPTIMIZATION_MAX_WAIT_SEC - Override max wait time (0 skips waiting when no payloads are present)
     DD_TEST_OPTIMIZATION_QUIESCENT_SEC - Override quiescence wait time
     DD_TEST_OPTIMIZATION_MAX_DEPTH - Limit find depth for large testlogs trees

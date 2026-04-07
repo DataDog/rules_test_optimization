@@ -451,6 +451,14 @@ class _Handler(BaseHTTPRequestHandler):
             return data if isinstance(data, dict) else None
         return None
 
+    def _decode_uploader_telemetry_payload(self, body):
+        """Decode telemetry JSON payload."""
+        try:
+            payload = json.loads(body.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def _payload_contains_resource(self, payload, resource):
         """Return True when payload events contain a specific resource."""
         events = payload.get("events") if isinstance(payload, dict) else None
@@ -494,6 +502,76 @@ class _Handler(BaseHTTPRequestHandler):
         content_type = content_type or ""
         if not content_type.startswith("multipart/form-data"):
             return "expected multipart/form-data content type"
+        return None
+
+    def _validate_uploader_telemetry(self, body, agentless: bool):
+        """Validate uploader telemetry payload request."""
+        if agentless:
+            api_key, api_key_err = _require_single_header(self.headers, "DD-API-KEY")
+            if api_key_err:
+                return api_key_err
+            if not api_key:
+                return "missing DD-API-KEY"
+        else:
+            api_key, api_key_err = _require_single_header(self.headers, "DD-API-KEY")
+            if api_key_err:
+                return api_key_err
+            if api_key:
+                return "DD-API-KEY must be omitted in telemetry proxy mode"
+
+        content_type, content_type_err = _require_single_header(self.headers, "Content-Type")
+        if content_type_err:
+            return content_type_err
+        content_type = content_type or ""
+        if "application/json" not in content_type:
+            return "expected Content-Type application/json"
+
+        content_encoding, content_encoding_err = _require_single_header(self.headers, "Content-Encoding")
+        if content_encoding_err:
+            return content_encoding_err
+        if content_encoding:
+            return "Content-Encoding must be omitted for telemetry uploads"
+
+        payload = self._decode_uploader_telemetry_payload(body)
+        if payload is None:
+            return "invalid JSON body"
+
+        api_version_hdr, api_version_hdr_err = _require_single_header(self.headers, "DD-Telemetry-API-Version")
+        if api_version_hdr_err:
+            return api_version_hdr_err
+        request_type_hdr, request_type_hdr_err = _require_single_header(self.headers, "DD-Telemetry-Request-Type")
+        if request_type_hdr_err:
+            return request_type_hdr_err
+        session_id_hdr, session_id_hdr_err = _require_single_header(self.headers, "DD-Session-ID")
+        if session_id_hdr_err:
+            return session_id_hdr_err
+
+        if not api_version_hdr:
+            return "missing DD-Telemetry-API-Version"
+        if not request_type_hdr:
+            return "missing DD-Telemetry-Request-Type"
+        if not session_id_hdr:
+            return "missing DD-Session-ID"
+
+        expected_api_version = payload.get("api_version")
+        if not isinstance(expected_api_version, str) or not expected_api_version:
+            return "missing or invalid api_version"
+        if api_version_hdr != expected_api_version:
+            return "DD-Telemetry-API-Version does not match body api_version"
+
+        expected_request_type = payload.get("request_type")
+        if not isinstance(expected_request_type, str) or not expected_request_type:
+            return "missing or invalid request_type"
+        if request_type_hdr != expected_request_type:
+            return "DD-Telemetry-Request-Type does not match body request_type"
+
+        runtime_id = payload.get("runtime_id")
+        if isinstance(runtime_id, str) and runtime_id:
+            if session_id_hdr != runtime_id:
+                return "DD-Session-ID does not match body runtime_id"
+        elif not session_id_hdr.strip():
+            return "DD-Session-ID must be present when runtime_id is absent"
+
         return None
 
     def do_POST(self):  # noqa: N802 (Bazel style)
@@ -638,6 +716,15 @@ class _Handler(BaseHTTPRequestHandler):
                 )
                 return
             self._send_json(200, {})
+            return
+
+        # Uploader telemetry endpoint (agentless + proxy forms).
+        if path in ("/api/v2/apmtelemetry", "/telemetry/proxy/api/v2/apmtelemetry"):
+            err = self._validate_uploader_telemetry(body, agentless = not path.startswith("/telemetry/proxy/"))
+            if err:
+                self._send_json(400, _json_error(err))
+                return
+            self._send_json(202, {})
             return
 
         # Keep unknown routes explicit to surface fixture drift quickly.

@@ -278,7 +278,7 @@ cat > payload_writer.sh <<'PAYLOAD_EOF'
 set -euo pipefail
 
 out="${TEST_UNDECLARED_OUTPUTS_DIR:?}"
-mkdir -p "$out/payloads/tests" "$out/payloads/coverage"
+mkdir -p "$out/payloads/tests" "$out/payloads/coverage" "$out/payloads/telemetry"
 fixture_name="citestcycle_payload.json"
 
 resolve_from_manifest() {
@@ -375,6 +375,20 @@ cat > "$out/payloads/coverage/cov1.json" <<'JSON_EOF'
       "segments": [[1, 0, 1, 0, 0]]
     }
   ]
+}
+JSON_EOF
+cat > "$out/payloads/telemetry/telemetry_writer_010.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "runtime_id": "writer-runtime-telemetry",
+  "application": {
+    "language_name": "go",
+    "tracer_version": "1.72.1"
+  },
+  "payload": {
+    "marker": "writer"
+  }
 }
 JSON_EOF
 PAYLOAD_EOF
@@ -589,6 +603,7 @@ required = {
     "/api/v2/test/libraries/test-management/tests",
     "/api/v2/citestcycle",
     "/api/v2/citestcov",
+    "/api/v2/apmtelemetry",
 }
 seen = set()
 with open(log_path, "r", encoding="utf-8") as handle:
@@ -3139,11 +3154,191 @@ if expect_gzip and not (gzip_header_seen or gzip_hint_seen):
         sys.exit(1)
 PY
 
+# Scenario: telemetry uploads should ignore prefix filtering, preserve
+# lexicographic ordering across directories/files, reuse fallback session IDs,
+# and fail malformed files individually without blocking later uploads.
+TELEMETRY_TESTLOGS="$TMP_WS/telemetry_testlogs"
+TELEMETRY_A="$TELEMETRY_TESTLOGS/manual_telemetry_a/test.outputs/payloads/telemetry"
+TELEMETRY_B="$TELEMETRY_TESTLOGS/manual_telemetry_b/test.outputs/payloads/telemetry"
+mkdir -p "$TELEMETRY_A" "$TELEMETRY_B"
+cat > "$TELEMETRY_A/dynamicprefix_alpha_001.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "application": {
+    "language_name": "go",
+    "tracer_version": "1.72.1"
+  },
+  "payload": {
+    "marker": "a01"
+  }
+}
+JSON_EOF
+cat > "$TELEMETRY_A/dynamicprefix_zeta_010.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-closing",
+  "runtime_id": "telemetry-runtime-a10",
+  "application": {
+    "language_name": "dotnet",
+    "tracer_version": "3.40.0"
+  },
+  "payload": {
+    "marker": "a10"
+  }
+}
+JSON_EOF
+cat > "$TELEMETRY_B/dynamicprefix_beta_002.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "generate-metrics",
+  "application": {
+    "language_name": "ruby",
+    "tracer_version": "2.1.0"
+  },
+  "payload": {
+    "marker": "b02"
+  }
+}
+JSON_EOF
+cat > "$TELEMETRY_B/dynamicprefix_invalid_020.json" <<'JSON_EOF'
+{invalid-json
+JSON_EOF
+cat > "$TELEMETRY_B/dynamicprefix_non_object_021.json" <<'JSON_EOF'
+[
+  {
+    "api_version": "v2"
+  }
+]
+JSON_EOF
+cat > "$TELEMETRY_B/dynamicprefix_missing_api_022.json" <<'JSON_EOF'
+{
+  "request_type": "app-started",
+  "payload": {
+    "marker": "missing-api"
+  }
+}
+JSON_EOF
+cat > "$TELEMETRY_B/dynamicprefix_missing_request_023.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "payload": {
+    "marker": "missing-request"
+  }
+}
+JSON_EOF
+
+TELEMETRY_LOG_START="$(log_line_count)"
+UPLOADER_TELEMETRY_LOG="$TMP_WS/uploader_telemetry.log"
+set +e
+TESTLOGS_DIR="$TELEMETRY_TESTLOGS" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_FILTER_PREFIX=1 \
+DD_TEST_OPTIMIZATION_GZIP=1 \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_API_KEY=mock \
+DD_SITE=datadoghq.com \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" >"$UPLOADER_TELEMETRY_LOG" 2>&1
+TELEMETRY_STATUS=$?
+set -e
+if [[ "$TELEMETRY_STATUS" -ne 1 ]]; then
+  echo "error: telemetry scenario expected uploader exit code 1, got $TELEMETRY_STATUS"
+  cat "$UPLOADER_TELEMETRY_LOG" || true
+  exit 1
+fi
+
+TELEMETRY_LOG_START="$TELEMETRY_LOG_START" UPLOADER_TELEMETRY_LOG="$UPLOADER_TELEMETRY_LOG" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("TELEMETRY_LOG_START", "0") or "0")
+uploader_log_path = os.environ["UPLOADER_TELEMETRY_LOG"]
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+telemetry_records = [rec for rec in records if rec.get("path") == "/api/v2/apmtelemetry"]
+if len(telemetry_records) != 3:
+    print(f"error: telemetry scenario expected 3 successful uploads, saw {len(telemetry_records)}")
+    sys.exit(1)
+
+markers = []
+session_ids = {}
+for rec in telemetry_records:
+    headers = {str(k).lower(): str(v) for k, v in ((rec.get("headers") or {}).items())}
+    if headers.get("content-type") != "application/json":
+        print("error: telemetry upload missing application/json content type")
+        sys.exit(1)
+    if "content-encoding" in headers:
+        print("error: telemetry upload unexpectedly included Content-Encoding")
+        sys.exit(1)
+    if not headers.get("dd-api-key"):
+        print("error: telemetry agentless upload missing DD-API-KEY")
+        sys.exit(1)
+    try:
+        payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        print(f"error: failed to decode telemetry payload from mock log: {exc}")
+        sys.exit(1)
+    marker = ((payload.get("payload") or {}).get("marker"))
+    markers.append(marker)
+    session_ids[marker] = headers.get("dd-session-id", "")
+    if headers.get("dd-telemetry-api-version") != payload.get("api_version"):
+        print("error: telemetry api version header/body mismatch in mock log")
+        sys.exit(1)
+    if headers.get("dd-telemetry-request-type") != payload.get("request_type"):
+        print("error: telemetry request type header/body mismatch in mock log")
+        sys.exit(1)
+
+if markers != ["a01", "a10", "b02"]:
+    print(f"error: telemetry upload ordering mismatch: {markers!r}")
+    sys.exit(1)
+
+if session_ids["a10"] != "telemetry-runtime-a10":
+    print("error: telemetry runtime_id should map directly to DD-Session-ID")
+    sys.exit(1)
+if not session_ids["a01"] or not session_ids["b02"]:
+    print("error: telemetry fallback DD-Session-ID should be present for missing runtime_id")
+    sys.exit(1)
+if session_ids["a01"] != session_ids["b02"]:
+    print("error: telemetry fallback DD-Session-ID should be reused across missing-runtime files")
+    sys.exit(1)
+
+with open(uploader_log_path, "r", encoding="utf-8", errors="replace") as handle:
+    uploader_log = handle.read()
+
+expected_failures = [
+    "dynamicprefix_invalid_020.json",
+    "dynamicprefix_non_object_021.json",
+    "dynamicprefix_missing_api_022.json",
+    "dynamicprefix_missing_request_023.json",
+]
+for name in expected_failures:
+    if name not in uploader_log:
+        print(f"error: uploader log missing telemetry failure reference for {name}")
+        sys.exit(1)
+PY
+
 # Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
 # This validates mode switching behavior: EVP must use evp_proxy routes and
 # EVP subdomain headers, and must not send DD-API-KEY.
 MANUAL_EVP="$TESTLOGS_DIR/manual_evp_mode/test.outputs"
-mkdir -p "$MANUAL_EVP/payloads/tests" "$MANUAL_EVP/payloads/coverage"
+mkdir -p "$MANUAL_EVP/payloads/tests" "$MANUAL_EVP/payloads/coverage" "$MANUAL_EVP/payloads/telemetry"
 cat > "$MANUAL_EVP/payloads/tests/manual_evp_mode.json" <<'JSON_EOF'
 {
   "metadata": {
@@ -3166,6 +3361,20 @@ cat > "$MANUAL_EVP/payloads/tests/manual_evp_mode.json" <<'JSON_EOF'
 }
 JSON_EOF
 echo '{}' > "$MANUAL_EVP/payloads/coverage/manual_evp_mode_cov.json"
+cat > "$MANUAL_EVP/payloads/telemetry/manual_evp_mode_telemetry.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "runtime_id": "telemetry-runtime-evp",
+  "application": {
+    "language_name": "dotnet",
+    "tracer_version": "3.40.0"
+  },
+  "payload": {
+    "marker": "evp"
+  }
+}
+JSON_EOF
 
 EVP_LOG_START="$(log_line_count)"
 UPLOADER_EVP_LOG="$TMP_WS/uploader_evp.log"
@@ -3244,6 +3453,34 @@ if cov_headers.get("x-datadog-evp-subdomain") != "citestcov-intake":
     sys.exit(1)
 if "dd-api-key" in cov_headers:
     print("error: EVP-mode coverage upload unexpectedly included DD-API-KEY header")
+    sys.exit(1)
+
+telemetry_record = None
+for rec in reversed(records):
+    if rec.get("path") != "/telemetry/proxy/api/v2/apmtelemetry":
+        continue
+    try:
+        payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    marker = ((payload.get("payload") or {}).get("marker"))
+    if marker == "evp":
+        telemetry_record = rec
+        break
+
+if telemetry_record is None:
+    print("error: EVP-mode run missing telemetry upload")
+    sys.exit(1)
+
+telemetry_headers = lower_headers(telemetry_record)
+if "dd-api-key" in telemetry_headers:
+    print("error: EVP-mode telemetry upload unexpectedly included DD-API-KEY header")
+    sys.exit(1)
+if telemetry_headers.get("dd-session-id") != "telemetry-runtime-evp":
+    print("error: EVP-mode telemetry upload missing expected DD-Session-ID header")
+    sys.exit(1)
+if telemetry_headers.get("dd-telemetry-request-type") != "app-started":
+    print("error: EVP-mode telemetry upload missing expected DD-Telemetry-Request-Type header")
     sys.exit(1)
 PY
 

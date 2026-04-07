@@ -388,6 +388,9 @@ if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {
 # Runtime defaults
 $script:RulesVersion = "__DDTPL_RULES_VERSION__"
 $script:RuntimeId = [guid]::NewGuid().ToString()
+# Reuse one uploader-local session fallback for telemetry files that do not
+# carry a runtime_id in their raw body.
+$script:TelemetrySessionFallback = [guid]::NewGuid().ToString()
 
 # Normalize boolean value (handles True/False from Starlark, 1/0, true/false)
 function Normalize-Bool([string]$val) {
@@ -597,13 +600,13 @@ function Find-TestOutputs {
 # Cache the list of test.outputs directories for efficiency (avoid rescanning on each loop iteration)
 $script:TestOutputsCache = @()
 function Update-TestOutputsCache {
-    $script:TestOutputsCache = @(Find-TestOutputs)
+    $script:TestOutputsCache = @(Find-TestOutputs | Sort-Object -Property FullName)
 }
 
 function Get-LatestMTimeAll {
     $maxTime = [DateTime]::MinValue
     foreach ($outputsDir in $script:TestOutputsCache) {
-        foreach ($subdir in @("payloads/tests", "payloads/coverage")) {
+        foreach ($subdir in @("payloads/tests", "payloads/coverage", "payloads/telemetry")) {
             $dir = Join-Path $outputsDir.FullName $subdir
             if (-not (Test-Path -LiteralPath $dir)) { continue }
             $files = Get-ChildItem -Path $dir -Filter "*.json" -File -ErrorAction SilentlyContinue
@@ -622,11 +625,15 @@ function Count-PayloadFiles {
     foreach ($outputsDir in $script:TestOutputsCache) {
         $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
         $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
+        $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
         if (Test-Path -LiteralPath $testsDir) {
             $count += @(Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
         }
         if (Test-Path -LiteralPath $covDir) {
             $count += @(Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+        }
+        if (Test-Path -LiteralPath $telemetryDir) {
+            $count += @(Get-ChildItem -Path $telemetryDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
         }
     }
     return $count
@@ -728,19 +735,22 @@ if ($Agentless) {
     $Base = $IntakeBase.TrimEnd('/')
     $TestUrl = "$Base/api/v2/citestcycle"
     $CovUrl = "$Base/api/v2/citestcov"
+    $TelemetryUrl = "$Base/api/v2/apmtelemetry"
     Dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL override active: $Base"
   } else {
     $TestUrl = "https://citestcycle-intake.$DD_Site/api/v2/citestcycle"
     $CovUrl = "https://citestcov-intake.$DD_Site/api/v2/citestcov"
+    $TelemetryUrl = "https://instrumentation-telemetry-intake.$DD_Site/api/v2/apmtelemetry"
   }
 } else {
   # EVP mode tunnels through agent endpoint and requires EVP subdomain headers.
   $TestUrl = "$($env:DD_TEST_OPTIMIZATION_AGENT_URL)/evp_proxy/v2/api/v2/citestcycle"
   $CovUrl = "$($env:DD_TEST_OPTIMIZATION_AGENT_URL)/evp_proxy/v2/api/v2/citestcov"
+  $TelemetryUrl = "$($env:DD_TEST_OPTIMIZATION_AGENT_URL)/telemetry/proxy/api/v2/apmtelemetry"
   if (-not [string]::IsNullOrEmpty($IntakeBase)) { Dbg "DD_TEST_OPTIMIZATION_AGENTLESS_URL ignored in EVP mode" }
 }
 Dbg "mode: Agentless=$Agentless Site=$DD_Site"
-Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl"
+Dbg "endpoints: TestUrl=$TestUrl CovUrl=$CovUrl TelemetryUrl=$TelemetryUrl"
 
 $script:HeaderLangDefault = 'bazel-starlark'
 $script:HeaderLangVersionDefault = 'n/a'
@@ -1557,6 +1567,12 @@ function Test-PrefixFilter([string]$FilePath, [string]$ExpectedPrefix) {
     return $basename.StartsWith($ExpectedPrefix)
 }
 
+# Enumerate JSON payload files in deterministic lexicographic order.
+function Get-SortedPayloadFiles([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
+    return @(Get-ChildItem -Path $DirPath -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object -Property Name)
+}
+
 # Delete file unless KeepPayloads is set
 function Remove-PayloadFile([string]$FilePath) {
     if (-not $KeepPayloads) {
@@ -1647,6 +1663,104 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
       if ($client) { $client.Dispose() }
     }
     # Fixed retry delay keeps behavior deterministic across hosts/CI lanes.
+    Start-Sleep -Seconds $retryDelay
+  }
+  return [bool]$false
+}
+
+function Get-TelemetryHeaders([string]$FilePath) {
+    try {
+        $payloadObj = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Log "warning: failed to parse telemetry payload '$FilePath': invalid JSON body"
+        return $null
+    }
+
+    if (($payloadObj -isnot [System.Management.Automation.PSCustomObject]) -and ($payloadObj -isnot [System.Collections.IDictionary])) {
+        Log "warning: failed to parse telemetry payload '$FilePath': body is not a JSON object"
+        return $null
+    }
+
+    $payload = Ensure-Hashtable $payloadObj
+    $apiVersion = Get-MapValue $payload 'api_version'
+    if (($apiVersion -isnot [string]) -or [string]::IsNullOrWhiteSpace($apiVersion)) {
+        Log "warning: failed to parse telemetry payload '$FilePath': missing or invalid api_version"
+        return $null
+    }
+
+    $requestType = Get-MapValue $payload 'request_type'
+    if (($requestType -isnot [string]) -or [string]::IsNullOrWhiteSpace($requestType)) {
+        Log "warning: failed to parse telemetry payload '$FilePath': missing or invalid request_type"
+        return $null
+    }
+
+    $runtimeId = Get-MapValue $payload 'runtime_id'
+    $application = Ensure-Hashtable (Get-MapValue $payload 'application')
+    $languageName = Get-MapValue $application 'language_name'
+    $tracerVersion = Get-MapValue $application 'tracer_version'
+    $sessionId = if (($runtimeId -is [string]) -and -not [string]::IsNullOrWhiteSpace($runtimeId)) { $runtimeId } else { $script:TelemetrySessionFallback }
+
+    $headers = @{
+        'DD-Telemetry-API-Version' = [string]$apiVersion
+        'DD-Telemetry-Request-Type' = [string]$requestType
+        'DD-Session-ID' = [string]$sessionId
+    }
+    if (($languageName -is [string]) -and -not [string]::IsNullOrWhiteSpace($languageName)) {
+        $headers['DD-Client-Library-Language'] = [string]$languageName
+    }
+    if (($tracerVersion -is [string]) -and -not [string]::IsNullOrWhiteSpace($tracerVersion)) {
+        $headers['DD-Client-Library-Version'] = [string]$tracerVersion
+    }
+    if ($Agentless) {
+        $headers['DD-API-KEY'] = $env:DD_API_KEY
+    }
+    return $headers
+}
+
+function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
+  $maxRetries = 3
+  $retryDelay = 2
+  if (-not (Ensure-HttpClientTypes)) {
+    Log "upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
+    return [bool]$false
+  }
+  for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+    $client = $null
+    try {
+      $client = New-Object System.Net.Http.HttpClient
+      $client.Timeout = [TimeSpan]::FromSeconds(60)
+      foreach ($k in $headers.Keys) {
+        $null = $client.DefaultRequestHeaders.Add($k, [string]$headers[$k])
+      }
+      Dbg "Send-PostRawJson: POST $url (file '$file'; attempt $attempt/$maxRetries)"
+      $bytes = [IO.File]::ReadAllBytes($file)
+      $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $bytes)
+      $content.Headers.ContentType = 'application/json'
+      Dbg "Send-PostRawJson: Content-Type=application/json"
+      $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
+      if ($resp.IsSuccessStatusCode) {
+        if ($script:DebugMode) {
+          $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+          if ($body) { Dbg "Send-PostRawJson response: $body" }
+        }
+        return [bool]$true
+      } else {
+        $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        Dbg "Send-PostRawJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
+        if ($attempt -eq $maxRetries) {
+          Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
+          return [bool]$false
+        }
+      }
+    } catch {
+      Dbg "Send-PostRawJson: Exception on attempt $attempt - $_"
+      if ($attempt -eq $maxRetries) {
+        Log "upload failed: $_"
+        return [bool]$false
+      }
+    } finally {
+      if ($client) { $client.Dispose() }
+    }
     Start-Sleep -Seconds $retryDelay
   }
   return [bool]$false
@@ -1756,6 +1870,27 @@ function Upload-SingleCoverage([string]$FilePath) {
     return [bool]$uploaded
 }
 
+function Upload-SingleTelemetry([string]$FilePath) {
+    $hdrs = Get-TelemetryHeaders $FilePath
+    if (-not $hdrs) {
+        return [bool]$false
+    }
+    Dbg "Upload-SingleTelemetry: posting '$FilePath'"
+    if ($script:DebugMode) {
+        Write-Host "[dd-uploader][dbg] telemetry content for '$FilePath':"
+        Write-Host (Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8)
+        Dbg "request: POST $TelemetryUrl"
+        Dbg-Headers "telemetry" $hdrs
+        Dbg "headers: Content-Type=application/json"
+    }
+    $resultStream = @(Send-PostRawJson $TelemetryUrl $hdrs $FilePath)
+    $result = $false
+    if ($resultStream.Count -gt 0) {
+        $result = [bool]$resultStream[-1]
+    }
+    return [bool]$result
+}
+
 function Upload-AllTests {
     $total = 0
     $failed = 0
@@ -1763,7 +1898,7 @@ function Upload-AllTests {
     foreach ($outputsDir in $script:TestOutputsCache) {
         $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
         if (-not (Test-Path -LiteralPath $testsDir)) { continue }
-        $files = Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue
+        $files = Get-SortedPayloadFiles $testsDir
         foreach ($f in $files) {
             if (-not (Test-PrefixFilter $f.FullName "span_events_")) {
                 Dbg "skipping (prefix filter): $($f.FullName)"
@@ -1799,7 +1934,7 @@ function Upload-AllCoverage {
     foreach ($outputsDir in $script:TestOutputsCache) {
         $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
         if (-not (Test-Path -LiteralPath $covDir)) { continue }
-        $files = Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue
+        $files = Get-SortedPayloadFiles $covDir
         foreach ($f in $files) {
             if (-not (Test-PrefixFilter $f.FullName "coverage_")) {
                 Dbg "skipping (prefix filter): $($f.FullName)"
@@ -1828,12 +1963,41 @@ function Upload-AllCoverage {
     if ($skipped -gt 0) { Dbg "skipped $skipped files (prefix filter)" }
 }
 
+function Upload-AllTelemetry {
+    $total = 0
+    $failed = 0
+    foreach ($outputsDir in $script:TestOutputsCache) {
+        $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
+        if (-not (Test-Path -LiteralPath $telemetryDir)) { continue }
+        $files = Get-SortedPayloadFiles $telemetryDir
+        foreach ($f in $files) {
+            $uploadedResult = @(Upload-SingleTelemetry $f.FullName)
+            $uploaded = $false
+            if ($uploadedResult.Count -gt 0) {
+                $uploaded = [bool]$uploadedResult[-1]
+            }
+            if ($uploaded) {
+                Log "uploaded telemetry payload: $($f.FullName)"
+                Remove-PayloadFile $f.FullName
+                $total++
+            } else {
+                Log "warning: failed to upload $($f.FullName)"
+                $failed++
+                $script:UploadFailures++
+            }
+        }
+    }
+    Log "uploaded $total telemetry payloads"
+    if ($failed -gt 0) { Log "warning: $failed telemetry payloads failed to upload" }
+}
+
 # Main upload logic wrapped in try/finally for proper cleanup
 try {
     # Run tests first, then coverage. This ordering mirrors historical behavior
     # and keeps log/snapshot expectations stable across platforms.
     Upload-AllTests
     Upload-AllCoverage
+    Upload-AllTelemetry
 
     # Exit with appropriate code based on upload results
     if ($script:UploadFailures -gt 0) {
