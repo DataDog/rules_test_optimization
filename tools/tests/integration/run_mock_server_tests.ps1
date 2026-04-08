@@ -220,6 +220,47 @@ function Read-JsonLog {
   return $entries
 }
 
+# Read one JSON document into a deterministic dictionary-oriented shape so the
+# assertions do not depend on platform-specific PSCustomObject behavior.
+function Read-JsonMap {
+  param([string]$JsonText)
+  return ($JsonText | ConvertFrom-Json -AsHashtable -NoEnumerate -ErrorAction Stop)
+}
+
+# Read one key from either a dictionary or a PSCustomObject produced by
+# ConvertFrom-Json.
+function Get-JsonValue {
+  param(
+    $Object,
+    [string]$Key
+  )
+  if ($null -eq $Object) { return $null }
+  if ($Object -is [System.Collections.IDictionary]) {
+    return $Object[$Key]
+  }
+  $property = $Object.PSObject.Properties[$Key]
+  if ($property) { return $property.Value }
+  return $null
+}
+
+# Collect metric names from a telemetry message-batch while accepting either
+# array-backed or singleton-object JSON materialization.
+function Get-TelemetryMetricNames {
+  param($Payload)
+
+  $metricNames = @()
+  foreach ($message in @(Get-JsonValue -Object $Payload -Key "payload")) {
+    $messagePayload = Get-JsonValue -Object $message -Key "payload"
+    foreach ($series in @(Get-JsonValue -Object $messagePayload -Key "series")) {
+      $metric = Get-JsonValue -Object $series -Key "metric"
+      if (($metric -is [string]) -and -not [string]::IsNullOrWhiteSpace($metric)) {
+        $metricNames += $metric
+      }
+    }
+  }
+  return $metricNames
+}
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Get-RepoRoot -StartPath $scriptDir
 $python = Get-PythonCommand
@@ -704,10 +745,11 @@ filegroup(
     $entries |
       Where-Object { $_.path -eq "/api/v2/apmtelemetry" } |
       ForEach-Object {
-        $payload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)) | ConvertFrom-Json -ErrorAction Stop
+        $payload = Read-JsonMap -JsonText ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)))
         $payloadMarker = $null
-        if ($payload.payload -and (($payload.payload -is [System.Collections.IDictionary]) -or ($payload.payload -is [System.Management.Automation.PSCustomObject]))) {
-          $payloadMarker = $payload.payload.marker
+        $payloadBody = Get-JsonValue -Object $payload -Key "payload"
+        if ($payloadBody -and (($payloadBody -is [System.Collections.IDictionary]) -or ($payloadBody -is [System.Management.Automation.PSCustomObject]))) {
+          $payloadMarker = Get-JsonValue -Object $payloadBody -Key "marker"
         }
         [PSCustomObject]@{
           Marker = $payloadMarker
@@ -723,20 +765,15 @@ filegroup(
     $entries |
       Where-Object { $_.path -eq "/api/v2/apmtelemetry" } |
       ForEach-Object {
-        $payload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)) | ConvertFrom-Json -ErrorAction Stop
-        $application = $payload.application
-        if ($payload.request_type -ne "message-batch") { return }
+        $payload = Read-JsonMap -JsonText ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)))
+        $application = Get-JsonValue -Object $payload -Key "application"
+        if ((Get-JsonValue -Object $payload -Key "request_type") -ne "message-batch") { return }
         if (-not $application) { return }
-        if ($application.service_name -ne "mock-service" -or $application.language_name -ne "go") { return }
-        $metricNames = @()
-        foreach ($message in @($payload.payload)) {
-          foreach ($series in @($message.payload.series)) {
-            if ($series.metric) { $metricNames += [string]$series.metric }
-          }
-        }
+        if ((Get-JsonValue -Object $application -Key "service_name") -ne "mock-service" -or (Get-JsonValue -Object $application -Key "language_name") -ne "go") { return }
+        $metricNames = @(Get-TelemetryMetricNames -Payload $payload)
         [PSCustomObject]@{
-          RuntimeId = $payload.runtime_id
-          SeqId = $payload.seq_id
+          RuntimeId = Get-JsonValue -Object $payload -Key "runtime_id"
+          SeqId = Get-JsonValue -Object $payload -Key "seq_id"
           MetricNames = $metricNames
         }
       } |
@@ -753,7 +790,7 @@ filegroup(
   }
   foreach ($requiredMetric in @("git_requests.settings", "known_tests.response_tests", "test_management_tests.request")) {
     if (-not ($agentlessAugmented[0].MetricNames -contains $requiredMetric)) {
-      throw "augmented Windows telemetry missing expected rule metric: $requiredMetric"
+      throw "augmented Windows telemetry missing expected rule metric: $requiredMetric (saw: $($agentlessAugmented[0].MetricNames -join ','))"
     }
   }
 
