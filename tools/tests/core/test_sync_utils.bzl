@@ -7,8 +7,11 @@ load(
     "apply_dd_git_overrides_for_tests",
     "apply_github_event_payload_for_tests",
     "build_module_label_map_for_tests",
+    "build_settings_response_tags_for_tests",
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
+    "count_known_tests_response_tests_for_tests",
+    "count_test_management_response_tests_for_tests",
     "clone_payload_with_detached_attributes_for_tests",
     "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
@@ -28,8 +31,12 @@ load(
     "load_github_event_payload_for_tests",
     "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
+    "parse_curl_time_ms_for_tests",
     "parse_go_module_path_for_tests",
     "partition_unix_headers_for_tests",
+    "new_telemetry_facts_for_tests",
+    "append_telemetry_count_for_tests",
+    "append_telemetry_distribution_for_tests",
     "record_sync_extension_repo_owner_or_fail_for_tests",
     "redact_url_userinfo_for_tests",
     "render_export_bzl_for_tests",
@@ -1087,6 +1094,7 @@ def _example_stub_includes_manifest_in_files_test(ctx):
     known_tests = ".testoptimization/cache/http/known_tests.json"
     test_management = ".testoptimization/cache/http/test_management.json"
     context = ".testoptimization/context.json"
+    telemetry_facts = ".testoptimization/telemetry_facts.json"
 
     content = render_stub_build_for_tests(
         settings,
@@ -1094,6 +1102,7 @@ def _example_stub_includes_manifest_in_files_test(ctx):
         known_tests,
         test_management,
         context,
+        telemetry_facts,
     )
     filegroup_start = content.find('name = "test_optimization_files"')
     context_group_start = content.find('name = "test_optimization_context"')
@@ -1109,6 +1118,7 @@ def _example_stub_includes_manifest_in_files_test(ctx):
     asserts.true(env, exports_start > context_group_start)
     context_group_block = content[context_group_start:exports_start]
     asserts.true(env, context in context_group_block)
+    asserts.true(env, telemetry_facts in context_group_block)
     return unittest.end(env)
 
 def _example_stub_service_keys_targets_test(ctx):
@@ -1120,6 +1130,7 @@ def _example_stub_service_keys_targets_test(ctx):
         ".testoptimization/cache/http/known_tests.json",
         ".testoptimization/cache/http/test_management.json",
         ".testoptimization/context.json",
+        ".testoptimization/telemetry_facts.json",
         service_keys = ["go_service", "ruby_service"],
     )
     asserts.true(env, 'name = "test_optimization_files_go_service"' in content)
@@ -1148,6 +1159,90 @@ def _http_execute_timeout_seconds_test(ctx):
     )
     asserts.equals(env, expected, http_execute_timeout_seconds_for_tests)
     asserts.true(env, http_execute_timeout_seconds_for_tests > (http_retry_attempts_for_tests * http_max_time_seconds_for_tests))
+    return unittest.end(env)
+
+def _parse_curl_time_ms_test(ctx):
+    """Validate curl seconds parsing into integer milliseconds."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, 0, parse_curl_time_ms_for_tests(""))
+    asserts.equals(env, 1200, parse_curl_time_ms_for_tests("1.2"))
+    asserts.equals(env, 1234, parse_curl_time_ms_for_tests("1.2349"))
+    asserts.equals(env, 250, parse_curl_time_ms_for_tests("0.25"))
+    return unittest.end(env)
+
+def _telemetry_facts_document_test(ctx):
+    """Validate normalized sync telemetry facts document helpers."""
+    env = unittest.begin(ctx)
+    facts = new_telemetry_facts_for_tests("svc-a", runtime_name = "go", env = "prod")
+    append_telemetry_count_for_tests(facts, "git_requests.settings", tags = ["coverage_enabled"])
+    append_telemetry_distribution_for_tests(facts, "known_tests.request_ms", 42, tags = ["status_code:200"])
+    asserts.equals(env, 1, facts.get("schema_version"))
+    asserts.equals(env, "svc-a", facts.get("service_name"))
+    asserts.equals(env, "go", facts.get("runtime_name"))
+    asserts.equals(env, "prod", facts.get("env"))
+    asserts.equals(env, "git_requests.settings", facts.get("counts")[0].get("name"))
+    asserts.equals(env, ["coverage_enabled"], facts.get("counts")[0].get("tags"))
+    asserts.equals(env, 42, facts.get("distributions")[0].get("value"))
+    return unittest.end(env)
+
+def _settings_response_tags_test(ctx):
+    """Validate combined settings-response tags match the tracer contract."""
+    env = unittest.begin(ctx)
+    tags = build_settings_response_tags_for_tests({
+        "code_coverage": True,
+        "tests_skipping": True,
+        "early_flake_detection": {"enabled": True},
+        "flaky_test_retries_enabled": True,
+        "test_management": {"enabled": True},
+    })
+    asserts.equals(
+        env,
+        [
+            "coverage_enabled",
+            "itrskip_enabled",
+            "early_flake_detection_enabled:true",
+            "flaky_test_retries_enabled:true",
+            "test_management_enabled:true",
+        ],
+        tags,
+    )
+    return unittest.end(env)
+
+def _telemetry_response_counts_test(ctx):
+    """Validate response test counters for known-tests and test-management."""
+    env = unittest.begin(ctx)
+    known_tests = {
+        "data": {
+            "attributes": {
+                "tests": {
+                    "module_a": {
+                        "suite_one": ["a", "b"],
+                        "suite_two": ["c"],
+                    },
+                },
+            },
+        },
+    }
+    test_management = {
+        "data": {
+            "attributes": {
+                "modules": {
+                    "module_a": {
+                        "suites": {
+                            "suite_one": {
+                                "tests": {
+                                    "test_a": {},
+                                    "test_b": {},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+    asserts.equals(env, 3, count_known_tests_response_tests_for_tests(known_tests))
+    asserts.equals(env, 2, count_test_management_response_tests_for_tests(test_management))
     return unittest.end(env)
 
 def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
@@ -1449,6 +1544,10 @@ example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_inclu
 example_stub_service_keys_targets_test = unittest.make(_example_stub_service_keys_targets_test)
 example_stub_export_string_escaping_test = unittest.make(_example_stub_export_string_escaping_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
+parse_curl_time_ms_test = unittest.make(_parse_curl_time_ms_test)
+telemetry_facts_document_test = unittest.make(_telemetry_facts_document_test)
+settings_response_tags_test = unittest.make(_settings_response_tags_test)
+telemetry_response_counts_test = unittest.make(_telemetry_response_counts_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 render_module_runfiles_bzl_escaping_test = unittest.make(_render_module_runfiles_bzl_escaping_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)

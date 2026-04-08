@@ -335,7 +335,7 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "vvVSU4sSbDMKSTpGswqN5Lzt0/GkcR3+FMVsQWKWSYo=",
+        "bzlTransitiveDigest": "0Qa7Ud/u30dtfW9FXeWlQZ99CTI7OjgIpNY3XxODrfY=",
         "usagesDigest": "hbyg0fRneQMmF97jXWRY+GFcq8y/n1fJA31mNooQGng=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

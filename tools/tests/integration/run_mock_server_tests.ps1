@@ -177,7 +177,9 @@ function Wait-ForPort {
 function Render-UploaderTemplate {
   param(
     [string]$TemplatePath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$ContextJsonPath = "",
+    [string]$TelemetryFactsManifestPath = ""
   )
   $content = Get-Content -LiteralPath $TemplatePath -Raw -Encoding UTF8
   $replacements = @{
@@ -190,7 +192,9 @@ function Render-UploaderTemplate {
     "__DDTPL_GZIP_PAYLOADS__" = "false"
     "__DDTPL_UPLOADER_VERSION__" = "integration-test"
     "__DDTPL_CONTEXT_JSON_RLOC__" = ""
-    "__DDTPL_CONTEXT_JSON_PATH__" = ""
+    "__DDTPL_CONTEXT_JSON_PATH__" = $ContextJsonPath
+    "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__" = ""
+    "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__" = $TelemetryFactsManifestPath
     "__DDTPL_SCHEMA_JSON_RLOC__" = ""
     "__DDTPL_SCHEMA_JSON_PATH__" = ""
     "__DDTPL_SCHEMA_VALIDATOR_RLOC__" = ""
@@ -526,6 +530,16 @@ filegroup(
   $toptHttpDir = Split-Path -Parent $settingsPath
   $toptCacheDir = Split-Path -Parent $toptHttpDir
   $toptDir = Split-Path -Parent $toptCacheDir
+  $contextPath = Join-Path $toptDir "context.json"
+  $telemetryFactsPath = Join-Path $toptDir "telemetry_facts.json"
+  if (-not (Test-Path -LiteralPath $contextPath -PathType Leaf)) {
+    throw "missing context.json after sync preflight at $contextPath"
+  }
+  if (-not (Test-Path -LiteralPath $telemetryFactsPath -PathType Leaf)) {
+    throw "missing telemetry_facts.json after sync preflight at $telemetryFactsPath"
+  }
+  $telemetryFactsManifest = Join-Path $tempRoot "telemetry_facts_manifest.txt"
+  [System.IO.File]::WriteAllText($telemetryFactsManifest, "`t$telemetryFactsPath`n", (New-Object System.Text.UTF8Encoding($false)))
   $exportPath = Join-Path (Split-Path -Parent $toptDir) "export.bzl"
   if (-not (Test-Path -LiteralPath $exportPath -PathType Leaf)) {
     throw "missing export.bzl after sync preflight at $exportPath"
@@ -572,8 +586,76 @@ filegroup(
   }
 }
 '@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_a_002.json") -Encoding UTF8
+  @'
+{
+  "api_version": "v2",
+  "request_type": "message-batch",
+  "runtime_id": "windows-augment-runtime",
+  "seq_id": 11,
+  "tracer_time": 1710000000,
+  "application": {
+    "service_name": "mock-service",
+    "env": "ci",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "payload": [
+    {
+      "request_type": "generate-metrics",
+      "payload": {
+        "namespace": "civisibility",
+        "series": [
+          {
+            "metric": "existing.windows.metric",
+            "points": [[1710000000, 1]],
+            "type": "count",
+            "tags": ["marker:windows-existing"],
+            "common": true,
+            "namespace": "civisibility"
+          }
+        ]
+      }
+    }
+  ]
+}
+'@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_aug_020.json") -Encoding UTF8
 
-  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader
+  $manualTelemetryFactsPath = Join-Path $tempRoot "manual_telemetry_facts.json"
+  @'
+{
+  "schema_version": 1,
+  "service_name": "mock-service",
+  "runtime_name": "go",
+  "env": "ci",
+  "counts": [
+    {
+      "name": "git_requests.settings",
+      "value": 1,
+      "tags": []
+    },
+    {
+      "name": "known_tests.request",
+      "value": 1,
+      "tags": []
+    },
+    {
+      "name": "test_management_tests.request",
+      "value": 1,
+      "tags": []
+    }
+  ],
+  "distributions": [
+    {
+      "name": "known_tests.response_tests",
+      "value": 0,
+      "tags": []
+    }
+  ]
+}
+'@ | Set-Content -LiteralPath $manualTelemetryFactsPath -Encoding UTF8
+  [System.IO.File]::WriteAllText($telemetryFactsManifest, "`t$manualTelemetryFactsPath`n", (New-Object System.Text.UTF8Encoding($false)))
+
+  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextJsonPath $contextPath -TelemetryFactsManifestPath $telemetryFactsManifest
 
   $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
   $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS = "1"
@@ -623,14 +705,56 @@ filegroup(
       Where-Object { $_.path -eq "/api/v2/apmtelemetry" } |
       ForEach-Object {
         $payload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)) | ConvertFrom-Json -ErrorAction Stop
+        $payloadMarker = $null
+        if ($payload.payload -and (($payload.payload -is [System.Collections.IDictionary]) -or ($payload.payload -is [System.Management.Automation.PSCustomObject]))) {
+          $payloadMarker = $payload.payload.marker
+        }
         [PSCustomObject]@{
-          Marker = $payload.payload.marker
+          Marker = $payloadMarker
         }
       }
   )
-  $agentlessMarkers = @($agentlessTelemetry | ForEach-Object { $_.Marker })
+  $agentlessMarkers = @($agentlessTelemetry | ForEach-Object { $_.Marker } | Where-Object { $_ })
   if (($agentlessMarkers -join ",") -ne "windows-a,windows-b") {
     throw "unexpected Windows telemetry upload order: $($agentlessMarkers -join ',')"
+  }
+
+  $agentlessAugmented = @(
+    $entries |
+      Where-Object { $_.path -eq "/api/v2/apmtelemetry" } |
+      ForEach-Object {
+        $payload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)) | ConvertFrom-Json -ErrorAction Stop
+        $application = $payload.application
+        if ($payload.request_type -ne "message-batch") { return }
+        if (-not $application) { return }
+        if ($application.service_name -ne "mock-service" -or $application.language_name -ne "go") { return }
+        $metricNames = @()
+        foreach ($message in @($payload.payload)) {
+          foreach ($series in @($message.payload.series)) {
+            if ($series.metric) { $metricNames += [string]$series.metric }
+          }
+        }
+        [PSCustomObject]@{
+          RuntimeId = $payload.runtime_id
+          SeqId = $payload.seq_id
+          MetricNames = $metricNames
+        }
+      } |
+      Where-Object { $_ }
+  )
+  if ($agentlessAugmented.Count -ne 1) {
+    throw "expected exactly one augmented Windows telemetry batch, saw $($agentlessAugmented.Count)"
+  }
+  if ($agentlessAugmented[0].RuntimeId -ne "windows-augment-runtime") {
+    throw "unexpected augmented Windows telemetry runtime_id: $($agentlessAugmented[0].RuntimeId)"
+  }
+  if ($agentlessAugmented[0].SeqId -ne 11) {
+    throw "unexpected augmented Windows telemetry seq_id: $($agentlessAugmented[0].SeqId)"
+  }
+  foreach ($requiredMetric in @("git_requests.settings", "known_tests.response_tests", "test_management_tests.request")) {
+    if (-not ($agentlessAugmented[0].MetricNames -contains $requiredMetric)) {
+      throw "augmented Windows telemetry missing expected rule metric: $requiredMetric"
+    }
   }
 
   Write-Host "Windows integration harness passed (PowerShell-only uploader path)."

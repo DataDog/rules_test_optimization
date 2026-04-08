@@ -13,7 +13,7 @@ def _bzl_string_literal(value):
     s = s.replace("\r", "\\r")
     return "\"" + s + "\""
 
-def _render_stub_build(settings, manifest, known_tests, test_management, context, service_keys = None):
+def _render_stub_build(settings, manifest, known_tests, test_management, context, telemetry_facts, service_keys = None):
     """Render BUILD content for stub repo targets."""
 
     def _append_filegroups(name_suffix, srcs):
@@ -27,7 +27,7 @@ def _render_stub_build(settings, manifest, known_tests, test_management, context
         lines.append(
             "filegroup(\n" +
             ('    name = "test_optimization_context%s",\n' % name_suffix) +
-            ("    srcs = %s,\n" % repr([context])) +
+            ("    srcs = %s,\n" % repr([context, telemetry_facts])) +
             '    visibility = ["//visibility:public"],\n' +
             ")\n\n",
         )
@@ -51,12 +51,14 @@ def _example_stub_repo_impl(ctx):
     known_tests = ".testoptimization/cache/http/known_tests.json"
     test_management = ".testoptimization/cache/http/test_management.json"
     context = ".testoptimization/context.json"
+    telemetry_facts = ".testoptimization/telemetry_facts.json"
 
     ctx.file(manifest, manifest + "\n")
     ctx.file(settings, "{}\n")
     ctx.file(known_tests, '{"data": {"attributes": {"tests": {}}}}\n')
     ctx.file(test_management, '{"data": {"attributes": {"modules": {}}}}\n')
     ctx.file(context, "{}\n")
+    ctx.file(telemetry_facts, '{"schema_version": 1, "service_name": "stub", "counts": [], "distributions": []}\n')
 
     service_keys = list(ctx.attr.service_keys or [])
     if not service_keys:
@@ -116,6 +118,7 @@ def _example_stub_repo_impl(ctx):
         known_tests,
         test_management,
         context,
+        telemetry_facts,
         service_keys = service_keys,
     )
     ctx.file("BUILD", build)

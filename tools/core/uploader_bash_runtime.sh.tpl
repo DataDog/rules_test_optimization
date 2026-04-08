@@ -239,6 +239,8 @@ resolve_artifact_path() {
 # file without making `bazel run //:dd_upload_payloads` depend on sync labels.
 CONTEXT_JSON_RLOC="__DDTPL_CONTEXT_JSON_RLOC__"
 CONTEXT_JSON_PATH="__DDTPL_CONTEXT_JSON_PATH__"
+TELEMETRY_FACTS_MANIFEST_RLOC="__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__"
+TELEMETRY_FACTS_MANIFEST_PATH="__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"
 CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"
 dbg "context.json resolution inputs: override='$CONTEXT_JSON_OVERRIDE' path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC'"
 CONTEXT_JSON=""
@@ -268,6 +270,22 @@ if [[ -z "$CONTEXT_JSON" ]]; then
     else
         dbg "context.json not configured in data files; enrichment disabled"
     fi
+fi
+
+dbg "telemetry facts manifest resolution inputs: path='$TELEMETRY_FACTS_MANIFEST_PATH' rloc='$TELEMETRY_FACTS_MANIFEST_RLOC'"
+TELEMETRY_FACTS_MANIFEST=$(resolve_artifact_path "$TELEMETRY_FACTS_MANIFEST_PATH")
+if [[ -n "$TELEMETRY_FACTS_MANIFEST" ]]; then
+    dbg "telemetry facts manifest resolved via direct path: '$TELEMETRY_FACTS_MANIFEST'"
+elif [[ -n "$TELEMETRY_FACTS_MANIFEST_RLOC" ]]; then
+    TELEMETRY_FACTS_MANIFEST=$(resolve_runfile "$TELEMETRY_FACTS_MANIFEST_RLOC")
+    if [[ -n "$TELEMETRY_FACTS_MANIFEST" ]]; then
+        dbg "telemetry facts manifest resolved via runfiles: '$TELEMETRY_FACTS_MANIFEST'"
+    else
+        dbg "telemetry facts manifest not found in runfiles"
+    fi
+else
+    TELEMETRY_FACTS_MANIFEST=""
+    dbg "telemetry facts manifest not configured in data files"
 fi
 
 # Resolve schema and validator paths (used for payload validation)
@@ -1961,6 +1979,400 @@ build_telemetry_headers() {
     return 0
 }
 
+# Canonicalize a resolved file path so manifest and override sources dedupe
+# reliably even when they are reachable through different runfile paths.
+canonicalize_existing_file() {
+    local file="$1"
+    if [[ -z "$file" || ! -f "$file" ]]; then
+        echo ""
+        return
+    fi
+    local dir base abs_dir
+    dir=$(dirname "$file")
+    base=$(basename "$file")
+    abs_dir=$(cd "$dir" 2>/dev/null && pwd -P || true)
+    if [[ -z "$abs_dir" ]]; then
+        echo ""
+        return
+    fi
+    echo "$abs_dir/$base"
+}
+
+# Resolve every telemetry-facts source the runtime should consider. The manifest
+# covers normal uploader data deps; override-based runs can contribute one
+# sibling telemetry_facts.json next to the override context.json.
+resolve_telemetry_facts_sources() {
+    local tmp_sources raw_path raw_rloc resolved canonical sibling
+    tmp_sources="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_facts_sources.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$tmp_sources" ]]; then
+        log "warning: failed to create telemetry facts source list"
+        return 1
+    fi
+    : >"$tmp_sources"
+
+    if [[ -n "$TELEMETRY_FACTS_MANIFEST" && -f "$TELEMETRY_FACTS_MANIFEST" ]]; then
+        while IFS=$'\t' read -r raw_rloc raw_path; do
+            [[ -z "$raw_rloc$raw_path" ]] && continue
+            resolved=$(resolve_artifact_path "$raw_path")
+            if [[ -z "$resolved" && -n "$raw_rloc" ]]; then
+                resolved=$(resolve_runfile "$raw_rloc")
+            fi
+            canonical=$(canonicalize_existing_file "$resolved")
+            if [[ -n "$canonical" ]]; then
+                printf '%s\n' "$canonical" >>"$tmp_sources"
+            fi
+        done <"$TELEMETRY_FACTS_MANIFEST"
+    fi
+
+    if (( CONTEXT_JSON_FROM_OVERRIDE == 1 )) && [[ -n "$CONTEXT_JSON" ]]; then
+        sibling="$(dirname "$CONTEXT_JSON")/telemetry_facts.json"
+        canonical=$(canonicalize_existing_file "$sibling")
+        if [[ -n "$canonical" ]]; then
+            printf '%s\n' "$canonical" >>"$tmp_sources"
+        fi
+    fi
+
+    if [[ ! -s "$tmp_sources" ]]; then
+        rm -f "$tmp_sources" 2>/dev/null || true
+        return 0
+    fi
+    LC_ALL=C sort -u "$tmp_sources"
+    rm -f "$tmp_sources" 2>/dev/null || true
+}
+
+# Enumerate telemetry payload files in the same directory and filename order as
+# the normal upload loop so augmentation planning matches real send order.
+list_all_sorted_telemetry_files() {
+    while IFS= read -r outputs_dir; do
+        [[ -z "$outputs_dir" ]] && continue
+        local telemetry_dir="$outputs_dir/payloads/telemetry"
+        [[ -d "$telemetry_dir" ]] || continue
+        list_sorted_payload_files "$telemetry_dir"
+    done < <(printf '%s\n' "$TEST_OUTPUTS_CACHE")
+}
+
+# Look up one replacement or synthetic body path from the augmentation plan.
+lookup_telemetry_plan_body() {
+    local plan_file="$1"
+    local mode="$2"
+    local anchor_path="$3"
+    [[ -n "$plan_file" && -f "$plan_file" ]] || return 0
+    awk -F '\t' -v mode="$mode" -v anchor="$anchor_path" '
+        $1 == mode && $2 == anchor {
+            print $3
+            exit
+        }
+    ' "$plan_file"
+}
+
+# Remove temporary augmented telemetry bodies after the upload pass completes.
+cleanup_telemetry_augmentation_plan() {
+    local plan_file="$1"
+    [[ -n "$plan_file" && -f "$plan_file" ]] || return 0
+    awk -F '\t' 'NF >= 3 { print $3 }' "$plan_file" | while IFS= read -r body_path; do
+        [[ -n "$body_path" ]] || continue
+        rm -f "$body_path" 2>/dev/null || true
+    done
+    rm -f "$plan_file" 2>/dev/null || true
+}
+
+# Build a best-effort plan describing which tracer telemetry files should be
+# augmented in-flight and which synthetic message-batch uploads should be sent
+# after the normal tracer telemetry loop.
+build_telemetry_augmentation_plan() {
+    local plan_file="$1"
+    local facts_list telemetry_list
+    : >"$plan_file"
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        dbg "telemetry augmentation skipped: python3 not available"
+        return 0
+    fi
+
+    facts_list="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_facts_inputs.XXXXXX" 2>/dev/null || true)"
+    telemetry_list="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_input_files.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$facts_list" || -z "$telemetry_list" ]]; then
+        log "warning: failed to create telemetry augmentation input lists"
+        rm -f "$facts_list" "$telemetry_list" 2>/dev/null || true
+        return 0
+    fi
+
+    resolve_telemetry_facts_sources >"$facts_list" || true
+    list_all_sorted_telemetry_files >"$telemetry_list" || true
+
+    if [[ ! -s "$facts_list" || ! -s "$telemetry_list" ]]; then
+        rm -f "$facts_list" "$telemetry_list" 2>/dev/null || true
+        return 0
+    fi
+
+    if ! python3 - "$plan_file" "$facts_list" "$telemetry_list" "$TMP_PAYLOAD_DIR" <<'PY'
+import copy
+import json
+import os
+import sys
+import tempfile
+import time
+
+plan_path, facts_list_path, telemetry_list_path, tmp_dir = sys.argv[1:5]
+
+def _read_paths(path):
+    values = []
+    with open(path, "r", encoding = "utf-8") as handle:
+        for line in handle:
+            item = line.strip()
+            if item:
+                values.append(item)
+    return values
+
+def _load_json_object(path, *, allow_any = False):
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError as exc:
+        print(f"[dd-uploader] warning: failed to read telemetry input '{path}': {exc}", file = sys.stderr)
+        return None
+    try:
+        payload = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        if not allow_any:
+            print(f"[dd-uploader] warning: skipped telemetry anchor candidate with invalid JSON: {path}", file = sys.stderr)
+        return None
+    if allow_any:
+        return payload
+    if not isinstance(payload, dict):
+        print(f"[dd-uploader] warning: skipped telemetry anchor candidate with non-object JSON: {path}", file = sys.stderr)
+        return None
+    return payload
+
+facts_sources = _read_paths(facts_list_path)
+telemetry_files = _read_paths(telemetry_list_path)
+
+if not facts_sources or not telemetry_files:
+    raise SystemExit(0)
+
+candidates = []
+for path in telemetry_files:
+    payload = _load_json_object(path)
+    if payload is None:
+        continue
+    application = payload.get("application")
+    if not isinstance(application, dict):
+        continue
+    service_name = application.get("service_name")
+    language_name = application.get("language_name")
+    api_version = payload.get("api_version")
+    request_type = payload.get("request_type")
+    if not isinstance(service_name, str) or not service_name:
+        continue
+    if not isinstance(language_name, str) or not language_name:
+        continue
+    if not isinstance(api_version, str) or not api_version:
+        continue
+    if not isinstance(request_type, str) or not request_type:
+        continue
+    runtime_id = payload.get("runtime_id")
+    if not isinstance(runtime_id, str):
+        runtime_id = ""
+    env = application.get("env")
+    if not isinstance(env, str):
+        env = ""
+    seq_id = payload.get("seq_id")
+    if not isinstance(seq_id, int):
+        seq_id = None
+    candidates.append({
+        "path": path,
+        "payload": payload,
+        "service_name": service_name,
+        "language_name": language_name,
+        "env": env,
+        "runtime_id": runtime_id,
+        "seq_id": seq_id,
+        "request_type": request_type,
+    })
+
+if not candidates:
+    raise SystemExit(0)
+
+augmentations = {}
+
+for facts_path in facts_sources:
+    facts = _load_json_object(facts_path, allow_any = True)
+    if not isinstance(facts, dict):
+        print(f"[dd-uploader] warning: skipped invalid telemetry facts file: {facts_path}", file = sys.stderr)
+        continue
+    service_name = facts.get("service_name")
+    if not isinstance(service_name, str) or not service_name:
+        print(f"[dd-uploader] warning: skipped telemetry facts without service_name: {facts_path}", file = sys.stderr)
+        continue
+    runtime_name = facts.get("runtime_name")
+    if not isinstance(runtime_name, str) or not runtime_name:
+        runtime_name = ""
+    env = facts.get("env")
+    if not isinstance(env, str) or not env:
+        env = ""
+    counts = facts.get("counts")
+    distributions = facts.get("distributions")
+    if not isinstance(counts, list):
+        counts = []
+    if not isinstance(distributions, list):
+        distributions = []
+    if not counts and not distributions:
+        continue
+
+    matched = [c for c in candidates if c["service_name"] == service_name]
+    if env:
+        matched = [c for c in matched if c["env"] == env]
+    if not matched:
+        print(f"[dd-uploader] warning: skipped telemetry facts without matching tracer anchor: {facts_path}", file = sys.stderr)
+        continue
+
+    languages = sorted({c["language_name"] for c in matched})
+    if len(languages) == 1:
+        selected = matched
+    else:
+        if runtime_name:
+            selected = [c for c in matched if c["language_name"] == runtime_name]
+            remaining_languages = sorted({c["language_name"] for c in selected})
+            if len(remaining_languages) != 1:
+                print(f"[dd-uploader] warning: skipped ambiguous telemetry facts across tracer languages: {facts_path}", file = sys.stderr)
+                continue
+        else:
+            print(f"[dd-uploader] warning: skipped ambiguous telemetry facts across tracer languages: {facts_path}", file = sys.stderr)
+            continue
+
+    batch_candidates = [c for c in selected if c["request_type"] == "message-batch"]
+    anchor = max(batch_candidates or selected, key = lambda item: item["path"])
+    entry = augmentations.setdefault(anchor["path"], {
+        "anchor": anchor,
+        "counts": [],
+        "distributions": [],
+    })
+    entry["counts"].extend(counts)
+    entry["distributions"].extend(distributions)
+
+def _build_count_series(facts, timestamp):
+    series = []
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        name = fact.get("name")
+        value = fact.get("value")
+        tags = fact.get("tags")
+        if not isinstance(name, str) or not name:
+            continue
+        if not isinstance(tags, list):
+            tags = []
+        series.append({
+            "metric": name,
+            "points": [[timestamp, value]],
+            "type": "count",
+            "tags": tags,
+            "common": True,
+            "namespace": "civisibility",
+        })
+    return series
+
+def _build_distribution_series(facts):
+    series = []
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        name = fact.get("name")
+        value = fact.get("value")
+        tags = fact.get("tags")
+        if not isinstance(name, str) or not name:
+            continue
+        if not isinstance(tags, list):
+            tags = []
+        series.append({
+            "metric": name,
+            "points": [value],
+            "tags": tags,
+            "common": True,
+            "namespace": "civisibility",
+        })
+    return series
+
+def _build_inner_messages(counts, distributions, timestamp):
+    messages = []
+    count_series = _build_count_series(counts, timestamp)
+    if count_series:
+        messages.append({
+            "request_type": "generate-metrics",
+            "payload": {
+                "namespace": "civisibility",
+                "series": count_series,
+            },
+        })
+    distribution_series = _build_distribution_series(distributions)
+    if distribution_series:
+        messages.append({
+            "request_type": "distributions",
+            "payload": {
+                "namespace": "",
+                "series": distribution_series,
+            },
+        })
+    return messages
+
+plan_entries = []
+for anchor_path in sorted(augmentations):
+    entry = augmentations[anchor_path]
+    timestamp = int(time.time())
+    inner_messages = _build_inner_messages(entry["counts"], entry["distributions"], timestamp)
+    if not inner_messages:
+        continue
+    anchor = entry["anchor"]
+    anchor_payload = copy.deepcopy(anchor["payload"])
+    try:
+        if anchor["request_type"] == "message-batch":
+            payload_items = anchor_payload.get("payload")
+            if not isinstance(payload_items, list):
+                print(f"[dd-uploader] warning: skipped telemetry augmentation for '{anchor_path}': message-batch payload is not an array", file = sys.stderr)
+                continue
+            payload_items.extend(inner_messages)
+            outbound = anchor_payload
+            mode = "replace"
+        else:
+            max_seq_id = 0
+            for candidate in candidates:
+                if candidate["runtime_id"] == anchor["runtime_id"] and isinstance(candidate["seq_id"], int) and candidate["seq_id"] > max_seq_id:
+                    max_seq_id = candidate["seq_id"]
+            outbound = {
+                "api_version": anchor_payload.get("api_version"),
+                "request_type": "message-batch",
+                "runtime_id": anchor_payload.get("runtime_id"),
+                "seq_id": max_seq_id + 1,
+                "tracer_time": timestamp,
+                "application": anchor_payload.get("application"),
+                "host": anchor_payload.get("host"),
+                "payload": inner_messages,
+            }
+            if "debug" in anchor_payload:
+                outbound["debug"] = anchor_payload["debug"]
+            mode = "synthetic"
+        fd, temp_path = tempfile.mkstemp(prefix = "telemetry_aug_", suffix = ".json", dir = tmp_dir)
+        os.close(fd)
+        with open(temp_path, "w", encoding = "utf-8", newline = "\n") as handle:
+            json.dump(outbound, handle, separators = (",", ":"), ensure_ascii = False)
+            handle.write("\n")
+        plan_entries.append((mode, anchor_path, temp_path))
+    except Exception as exc:
+        print(f"[dd-uploader] warning: skipped telemetry augmentation for '{anchor_path}': {exc}", file = sys.stderr)
+
+with open(plan_path, "w", encoding = "utf-8", newline = "\n") as handle:
+    for mode, anchor_path, temp_path in sorted(plan_entries, key = lambda item: (item[0] != "replace", item[1], item[2])):
+        handle.write(f"{mode}\t{anchor_path}\t{temp_path}\n")
+PY
+    then
+        log "warning: failed to build telemetry augmentation plan; continuing with raw tracer telemetry uploads"
+        : >"$plan_file"
+    fi
+
+    rm -f "$facts_list" "$telemetry_list" 2>/dev/null || true
+    return 0
+}
+
 # Track upload failures globally
 UPLOAD_FAILURES=0
 
@@ -2118,7 +2530,8 @@ upload_single_coverage() {
 
 # Handle upload single telemetry behavior.
 upload_single_telemetry() {
-    local file="$1"
+    local display_file="$1"
+    local file="${2:-$display_file}"
     local meta_file resp http rc
     meta_file="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_meta.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$meta_file" ]]; then
@@ -2129,9 +2542,9 @@ upload_single_telemetry() {
         rm -f "$meta_file" 2>/dev/null || true
         return 1
     fi
-    dbg "upload_single_telemetry: posting '$file'"
+    dbg "upload_single_telemetry: posting '$display_file' (body '$file')"
     if [[ "$DEBUG" == "1" ]]; then
-        echo "[dd-uploader][dbg] telemetry content for '$file':" >&2
+        echo "[dd-uploader][dbg] telemetry content for '$display_file':" >&2
         cat "$file" >&2
         echo "" >&2
         dbg "request: POST $TELEMETRY_URL"
@@ -2259,6 +2672,13 @@ upload_all_coverage() {
 upload_all_telemetry() {
     local total=0
     local failed=0
+    local plan_file replacement_body synthetic_body anchor_path
+    plan_file="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_plan.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$plan_file" ]]; then
+        log "warning: failed to create telemetry augmentation plan file; continuing without rule telemetry augmentation"
+    else
+        build_telemetry_augmentation_plan "$plan_file"
+    fi
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
         local telemetry_dir="$outputs_dir/payloads/telemetry"
@@ -2266,7 +2686,11 @@ upload_all_telemetry() {
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
-            if upload_single_telemetry "$f"; then
+            replacement_body=$(lookup_telemetry_plan_body "$plan_file" "replace" "$f")
+            if [[ -n "$replacement_body" ]]; then
+                dbg "telemetry augmentation: using temporary outbound body '$replacement_body' for '$f'"
+            fi
+            if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
                 cleanup_file "$f"
                 ((++total))
@@ -2277,6 +2701,23 @@ upload_all_telemetry() {
             fi
         done < <(list_sorted_payload_files "$telemetry_dir")
     done < <(echo "$TEST_OUTPUTS_CACHE")
+
+    if [[ -n "$plan_file" && -f "$plan_file" ]]; then
+        while IFS=$'\t' read -r mode anchor_path synthetic_body; do
+            [[ "$mode" == "synthetic" ]] || continue
+            [[ -n "$synthetic_body" && -f "$synthetic_body" ]] || continue
+            if upload_single_telemetry "$anchor_path" "$synthetic_body"; then
+                log "uploaded telemetry payload: $anchor_path"
+                ((++total))
+            else
+                log "warning: failed to upload synthetic telemetry augmentation for $anchor_path"
+                ((++failed))
+                ((++UPLOAD_FAILURES))
+            fi
+        done <"$plan_file"
+    fi
+
+    cleanup_telemetry_augmentation_plan "$plan_file"
     log "uploaded $total telemetry payloads"
     if (( failed > 0 )); then
         log "warning: $failed telemetry payloads failed to upload"
