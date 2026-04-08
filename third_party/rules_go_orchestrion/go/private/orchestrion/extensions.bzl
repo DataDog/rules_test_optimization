@@ -14,7 +14,7 @@
 
 """Module extension for configuring orchestrion in rules_go."""
 
-DEFAULT_DD_TRACE_GO_VERSION = "v2.6.0"
+DEFAULT_DD_TRACE_GO_VERSION = "v2.9.0-dev.0.20260408120305-80f98e63de50"
 ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v2"
 
 # Bump this identifier whenever the in-repo Orchestrion patch block changes in

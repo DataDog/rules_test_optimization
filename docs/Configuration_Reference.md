@@ -8,13 +8,13 @@ Guided Go bootstrap accepts:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dd-trace-go-version` | `v2.6.0` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
+| `--dd-trace-go-version` | `v2.9.0-dev.0.20260408120305-80f98e63de50` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
 
 Manual Orchestrion wiring in `MODULE.bazel` accepts:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.6.0` | Shared canonical tracer version that Bazel validates against the target Go module and uses for synthetic fallback paths |
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.9.0-dev.0.20260408120305-80f98e63de50` | Shared canonical tracer version that Bazel validates against the target Go module and uses for synthetic fallback paths |
 | `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact canonical per-module tracer versions that Bazel validates against the target Go module for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
 
 Notes:
