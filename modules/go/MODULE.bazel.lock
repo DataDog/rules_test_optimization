@@ -148,7 +148,7 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "8xe6XNA7BMxalJmB6zA0paahOCobGd6IfXMHYi4v2Ck=",
+        "bzlTransitiveDigest": "Xg0xFTDJOAMGbKkmpWQGwGhqRDzJARUXScdoe5YFR/4=",
         "usagesDigest": "a1wQerCK9quAagJ4aWUcSvy9i58+wzoosGKCp8Tjsgo=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -176,7 +176,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "EWMQ+Zz5GlfI7rOzwgIOEOFonbI9FbGNpL52uu1aqqA=",
+        "bzlTransitiveDigest": "mpLC5MiIzIL5IpIeB32n5rXiXbQwzDym55T3W4Xbe34=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
