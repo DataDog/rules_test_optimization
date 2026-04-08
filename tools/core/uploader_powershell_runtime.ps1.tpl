@@ -919,6 +919,17 @@ function Get-MapValue($MapObj, [string]$Key) {
   return $null
 }
 
+function Convert-ToObjectArray($Value) {
+  if ($null -eq $Value) { return @() }
+  if (($Value -is [System.Collections.IDictionary]) -or ($Value -is [PSCustomObject])) {
+    return ,$Value
+  }
+  if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
+    return @($Value)
+  }
+  return ,$Value
+}
+
 $script:CodeOwnersInitialized = $false
 $script:CodeOwnersEnabled = $false
 $script:CodeOwnersPath = $null
@@ -1988,9 +1999,9 @@ function New-TelemetryAugmentationPlan {
         $envValue = Get-MapValue $facts 'env'
         if ($envValue -isnot [string]) { $envValue = "" }
         $counts = Get-MapValue $facts 'counts'
-        if ($counts -isnot [System.Collections.IEnumerable] -or ($counts -is [string])) { $counts = @() } else { $counts = @($counts) }
+        if ($counts -is [string]) { $counts = @() } else { $counts = @(Convert-ToObjectArray $counts) }
         $distributions = Get-MapValue $facts 'distributions'
-        if ($distributions -isnot [System.Collections.IEnumerable] -or ($distributions -is [string])) { $distributions = @() } else { $distributions = @($distributions) }
+        if ($distributions -is [string]) { $distributions = @() } else { $distributions = @(Convert-ToObjectArray $distributions) }
         if ($counts.Count -eq 0 -and $distributions.Count -eq 0) { continue }
 
         $matched = @($candidates | Where-Object {
@@ -2042,11 +2053,11 @@ function New-TelemetryAugmentationPlan {
             if ($anchor.RequestType -eq "message-batch") {
                 $outbound = Copy-MutableObject $anchor.Payload
                 $payloadItems = Get-MapValue $outbound 'payload'
-                if ($payloadItems -isnot [System.Collections.IEnumerable] -or ($payloadItems -is [string])) {
+                if ($payloadItems -is [string] -or $null -eq $payloadItems) {
                     Log "warning: skipped telemetry augmentation for '$anchorPath': message-batch payload is not an array"
                     continue
                 }
-                $mergedPayload = @($payloadItems)
+                $mergedPayload = @(Convert-ToObjectArray $payloadItems)
                 $mergedPayload += @($innerMessages)
                 $outbound['payload'] = $mergedPayload
                 $bodyPath = Write-TelemetryTempBody $outbound
