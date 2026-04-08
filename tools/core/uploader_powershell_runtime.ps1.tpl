@@ -1842,9 +1842,19 @@ function Copy-MutableObject($Value) {
     return Convert-ToMutableObject $Value
 }
 
+function ConvertFrom-JsonCompat([string]$JsonText) {
+    try {
+        return ($JsonText | ConvertFrom-Json -AsHashtable -NoEnumerate -ErrorAction Stop)
+    } catch {
+        # Windows PowerShell 5.1 does not support -AsHashtable/-NoEnumerate.
+        # Fall back to plain ConvertFrom-Json and normalize the result later.
+        return ($JsonText | ConvertFrom-Json -ErrorAction Stop)
+    }
+}
+
 function Read-JsonObjectFile([string]$FilePath, [string]$WarningMessage) {
     try {
-        $payload = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -NoEnumerate -ErrorAction Stop
+        $payload = ConvertFrom-JsonCompat (Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8)
     } catch {
         if ($WarningMessage) { Log "warning: $WarningMessage" }
         return $null
