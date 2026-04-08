@@ -1839,7 +1839,18 @@ function Get-AllSortedTelemetryFiles {
 }
 
 function Copy-MutableObject($Value) {
-    return Convert-ToMutableObject $Value
+  return Convert-ToMutableObject $Value
+}
+
+function New-TelemetryOutboundBody([object]$PayloadObject, [string]$EnvOverride) {
+    $outbound = Copy-MutableObject $PayloadObject
+    if (-not [string]::IsNullOrWhiteSpace($EnvOverride)) {
+        $application = Get-MapValue $outbound 'application'
+        if ($application -is [System.Collections.IDictionary]) {
+            $application['env'] = $EnvOverride
+        }
+    }
+    return $outbound
 }
 
 function ConvertFrom-JsonCompat([string]$JsonText) {
@@ -1871,6 +1882,46 @@ function Get-LexicographicallyLastTelemetryCandidate($Candidates) {
     foreach ($candidate in $Candidates) {
         if ($null -eq $selected -or [System.StringComparer]::Ordinal.Compare([string]$candidate.Path, [string]$selected.Path) -gt 0) {
             $selected = $candidate
+        }
+    }
+    return $selected
+}
+
+function Get-TelemetryStreamSummaries($Candidates) {
+    $summaries = @()
+    foreach ($stream in @($Candidates | Group-Object -Property RuntimeId)) {
+        $streamCandidates = @($stream.Group)
+        if ($streamCandidates.Count -eq 0) { continue }
+
+        $batchCandidates = @($streamCandidates | Where-Object { $_.RequestType -eq "message-batch" })
+        $selectionCandidates = if ($batchCandidates.Count -gt 0) { $batchCandidates } else { $streamCandidates }
+        $bestCandidate = Get-LexicographicallyLastTelemetryCandidate $selectionCandidates
+        if (-not $bestCandidate) { continue }
+
+        $summaries += ,([PSCustomObject]@{
+            RuntimeId = [string]$stream.Name
+            Candidates = $streamCandidates
+            HasBatch = ($batchCandidates.Count -gt 0)
+            BestPath = [string]$bestCandidate.Path
+            Representative = $bestCandidate
+        })
+    }
+    return $summaries
+}
+
+function Select-TelemetryStreamSummary($Summaries) {
+    $selected = $null
+    foreach ($summary in @($Summaries)) {
+        if ($null -eq $selected) {
+            $selected = $summary
+            continue
+        }
+        if ($summary.HasBatch -and -not $selected.HasBatch) {
+            $selected = $summary
+            continue
+        }
+        if (($summary.HasBatch -eq $selected.HasBatch) -and ([System.StringComparer]::Ordinal.Compare([string]$summary.BestPath, [string]$selected.BestPath) -gt 0)) {
+            $selected = $summary
         }
     }
     return $selected
@@ -1945,6 +1996,9 @@ function Write-TelemetryTempBody($PayloadObject) {
     return $path
 }
 
+# Build the best-effort telemetry rewrite plan. Matching is based on tracer
+# service and language identity because sandboxed tracer telemetry can emit
+# application.env="none" even when Bazel sync still knows the real CI env.
 function New-TelemetryAugmentationPlan {
     $plan = @{
         ReplaceMap = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
@@ -1973,8 +2027,6 @@ function New-TelemetryAugmentationPlan {
         if (($requestType -isnot [string]) -or [string]::IsNullOrWhiteSpace($requestType)) { continue }
         $runtimeId = Get-MapValue $payload 'runtime_id'
         if ($runtimeId -isnot [string]) { $runtimeId = "" }
-        $envValue = Get-MapValue $application 'env'
-        if ($envValue -isnot [string]) { $envValue = "" }
         $seqIdValue = Get-MapValue $payload 'seq_id'
         $seqId = $null
         if ($seqIdValue -is [sbyte] -or $seqIdValue -is [byte] -or $seqIdValue -is [int16] -or $seqIdValue -is [uint16] -or $seqIdValue -is [int32] -or $seqIdValue -is [uint32] -or $seqIdValue -is [int64] -or $seqIdValue -is [uint64]) {
@@ -1985,7 +2037,6 @@ function New-TelemetryAugmentationPlan {
             Payload = $payload
             ServiceName = [string]$serviceName
             LanguageName = [string]$languageName
-            Env = [string]$envValue
             RuntimeId = [string]$runtimeId
             SeqId = $seqId
             RequestType = [string]$requestType
@@ -1995,7 +2046,7 @@ function New-TelemetryAugmentationPlan {
         return $plan
     }
 
-    $augmentations = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $groups = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
     foreach ($factsPath in $factsSources) {
         $facts = Read-JsonObjectFile $factsPath "skipped invalid telemetry facts file: $factsPath"
         if (-not $facts) { continue }
@@ -2012,95 +2063,160 @@ function New-TelemetryAugmentationPlan {
         if ($counts -is [string]) { $counts = @() } else { $counts = @(Convert-ToObjectArray $counts) }
         $distributions = Get-MapValue $facts 'distributions'
         if ($distributions -is [string]) { $distributions = @() } else { $distributions = @(Convert-ToObjectArray $distributions) }
-        if ($counts.Count -eq 0 -and $distributions.Count -eq 0) { continue }
 
-        $matched = @($candidates | Where-Object {
-            $_.ServiceName -eq $serviceName -and (
-                [string]::IsNullOrEmpty($envValue) -or $_.Env -eq $envValue
-            )
-        })
+        $matched = @($candidates | Where-Object { $_.ServiceName -eq $serviceName })
         if ($matched.Count -eq 0) {
             Log "warning: skipped telemetry facts without matching tracer anchor: $factsPath"
             continue
         }
 
         $languages = @($matched | ForEach-Object { $_.LanguageName } | Select-Object -Unique)
-        if ($languages.Count -eq 1) {
-            $selected = $matched
-        } elseif (-not [string]::IsNullOrWhiteSpace($runtimeName)) {
-            $selected = @($matched | Where-Object { $_.LanguageName -eq $runtimeName })
-            $remainingLanguages = @($selected | ForEach-Object { $_.LanguageName } | Select-Object -Unique)
-            if ($remainingLanguages.Count -ne 1) {
+        if ($languages.Count -gt 1) {
+            if ([string]::IsNullOrWhiteSpace($runtimeName)) {
                 Log "warning: skipped ambiguous telemetry facts across tracer languages: $factsPath"
                 continue
             }
-        } else {
-            Log "warning: skipped ambiguous telemetry facts across tracer languages: $factsPath"
+            $matched = @($matched | Where-Object { $_.LanguageName -eq $runtimeName })
+            $languages = @($matched | ForEach-Object { $_.LanguageName } | Select-Object -Unique)
+            if ($languages.Count -ne 1) {
+                Log "warning: skipped ambiguous telemetry facts across tracer languages: $factsPath"
+                continue
+            }
+        }
+
+        if ($languages.Count -ne 1) {
+            Log "warning: skipped telemetry facts without matching tracer language: $factsPath"
             continue
         }
 
-        $batchCandidates = @($selected | Where-Object { $_.RequestType -eq "message-batch" })
-        $anchor = if ($batchCandidates.Count -gt 0) { Get-LexicographicallyLastTelemetryCandidate $batchCandidates } else { Get-LexicographicallyLastTelemetryCandidate $selected }
-        if (-not $anchor) { continue }
-        if (-not $augmentations.Contains($anchor.Path)) {
-            $augmentations[$anchor.Path] = @{
-                Anchor = $anchor
+        $groupKey = "{0}`t{1}" -f $serviceName, [string]$languages[0]
+        if (-not $groups.Contains($groupKey)) {
+            $groups[$groupKey] = @{
+                ServiceName = [string]$serviceName
+                LanguageName = [string]$languages[0]
                 Counts = @()
                 Distributions = @()
+                EnvValues = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
             }
         }
-        $augmentations[$anchor.Path].Counts += @($counts)
-        $augmentations[$anchor.Path].Distributions += @($distributions)
+        $group = $groups[$groupKey]
+        $group.Counts += @($counts)
+        $group.Distributions += @($distributions)
+        if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+            $null = $group.EnvValues.Add([string]$envValue)
+        }
     }
 
-    foreach ($anchorPath in (Get-OrdinalSortedStrings @($augmentations.Keys))) {
-        $entry = $augmentations[$anchorPath]
+    foreach ($groupKey in @(Get-OrdinalSortedStrings @($groups.Keys))) {
+        $group = $groups[$groupKey]
+        $candidateSet = @($candidates | Where-Object {
+            $_.ServiceName -eq $group.ServiceName -and $_.LanguageName -eq $group.LanguageName
+        })
+        if ($candidateSet.Count -eq 0) { continue }
+
+        $envOverride = ""
+        if ($group.EnvValues.Count -gt 1) {
+            Log "warning: skipped telemetry augmentation for service='$($group.ServiceName)' language='$($group.LanguageName)' because telemetry facts provided conflicting env values"
+            continue
+        } elseif ($group.EnvValues.Count -eq 1) {
+            $envOverride = [string](@($group.EnvValues)[0])
+        }
+
+        $streamSummaries = @(Get-TelemetryStreamSummaries $candidateSet)
+        $selectedStream = Select-TelemetryStreamSummary $streamSummaries
+        if (-not $selectedStream) { continue }
+        $anchor = $selectedStream.Representative
+        if (-not $anchor) { continue }
+
+        $envOverrideLog = if ([string]::IsNullOrWhiteSpace($envOverride)) { "<none>" } else { $envOverride }
+        Dbg "telemetry group selected: service='$($group.ServiceName)' language='$($group.LanguageName)' runtime_id='$($selectedStream.RuntimeId)' anchor='$($anchor.Path)' env_override='$envOverrideLog'"
+
         $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        $innerMessages = @(New-TelemetryInnerMessages $entry.Counts $entry.Distributions $timestamp)
-        if ($innerMessages.Count -eq 0) { continue }
-        $anchor = $entry.Anchor
-        try {
-            if ($anchor.RequestType -eq "message-batch") {
-                $outbound = Copy-MutableObject $anchor.Payload
-                $payloadItems = Get-MapValue $outbound 'payload'
-                if ($payloadItems -is [string] -or $null -eq $payloadItems) {
-                    Log "warning: skipped telemetry augmentation for '$anchorPath': message-batch payload is not an array"
+        $innerMessages = @(New-TelemetryInnerMessages $group.Counts $group.Distributions $timestamp)
+        $hasBazelMetrics = ($innerMessages.Count -gt 0)
+
+        foreach ($candidate in $candidateSet) {
+            $isAnchor = ($candidate.Path -eq $anchor.Path)
+            $needsTempBody = (-not [string]::IsNullOrWhiteSpace($envOverride)) -or ($isAnchor -and $hasBazelMetrics -and $anchor.RequestType -eq "message-batch")
+            if (-not $needsTempBody) { continue }
+
+            try {
+                $outbound = New-TelemetryOutboundBody $candidate.Payload $envOverride
+                if ($isAnchor -and $hasBazelMetrics -and $anchor.RequestType -eq "message-batch") {
+                    $payloadItems = Get-MapValue $outbound 'payload'
+                    if (($payloadItems -is [string]) -or ($null -eq $payloadItems)) {
+                        Log "warning: skipped telemetry augmentation for '$($anchor.Path)': message-batch payload is not an array"
+                        if ([string]::IsNullOrWhiteSpace($envOverride)) {
+                            continue
+                        }
+                    } else {
+                        $mergedPayload = @(Convert-ToObjectArray $payloadItems)
+                        $mergedPayload += @($innerMessages)
+                        $outbound['payload'] = $mergedPayload
+                        Dbg "telemetry augmentation: appended rule metrics to anchor '$($anchor.Path)'"
+                    }
+                }
+
+                $bodyPath = Write-TelemetryTempBody $outbound
+                if ([string]::IsNullOrWhiteSpace($bodyPath) -or -not (Test-Path -LiteralPath $bodyPath -PathType Leaf)) {
+                    throw "failed to create temporary telemetry body"
+                }
+                $plan.ReplaceMap[$candidate.Path] = $bodyPath
+                $plan.TempFiles += ,$bodyPath
+                Dbg "telemetry augmentation: created temporary body '$bodyPath' for '$($candidate.Path)'"
+            } catch {
+                Log "warning: skipped telemetry rewrite for '$($candidate.Path)': $_"
+            }
+        }
+
+        if (($anchor.RequestType -ne "message-batch") -and $hasBazelMetrics) {
+            try {
+                $anchorPayload = Ensure-Hashtable $anchor.Payload
+                $application = Get-MapValue $anchorPayload 'application'
+                if ($application -isnot [System.Collections.IDictionary]) {
+                    Log "warning: skipped synthetic telemetry augmentation for '$($anchor.Path)': anchor application is missing or invalid"
                     continue
                 }
-                $mergedPayload = @(Convert-ToObjectArray $payloadItems)
-                $mergedPayload += @($innerMessages)
-                $outbound['payload'] = $mergedPayload
-                $bodyPath = Write-TelemetryTempBody $outbound
-                $plan.ReplaceMap[$anchorPath] = $bodyPath
-                $plan.TempFiles += ,$bodyPath
-            } else {
                 [int64]$maxSeqId = 0
-                foreach ($candidate in $candidates) {
-                    if ($candidate.RuntimeId -eq $anchor.RuntimeId -and $candidate.SeqId -ne $null -and [int64]$candidate.SeqId -gt $maxSeqId) {
+                foreach ($candidate in $selectedStream.Candidates) {
+                    if ($candidate.SeqId -ne $null -and [int64]$candidate.SeqId -gt $maxSeqId) {
                         $maxSeqId = [int64]$candidate.SeqId
                     }
                 }
-                $anchorPayload = Ensure-Hashtable $anchor.Payload
+
                 $synthetic = [ordered]@{
                     api_version = Get-MapValue $anchorPayload 'api_version'
                     request_type = "message-batch"
+                    runtime_id = Get-MapValue $anchorPayload 'runtime_id'
                     seq_id = $maxSeqId + 1
                     tracer_time = $timestamp
                     payload = @($innerMessages)
                 }
-                if ($anchorPayload.Contains('runtime_id')) { $synthetic['runtime_id'] = Get-MapValue $anchorPayload 'runtime_id' }
-                if ($anchorPayload.Contains('application')) { $synthetic['application'] = Get-MapValue $anchorPayload 'application' }
+
+                $appCopy = Copy-MutableObject $application
+                if ($appCopy -is [System.Collections.IDictionary] -and -not [string]::IsNullOrWhiteSpace($envOverride)) {
+                    $appCopy['env'] = $envOverride
+                }
+                $synthetic['application'] = $appCopy
                 if ($anchorPayload.Contains('host')) { $synthetic['host'] = Get-MapValue $anchorPayload 'host' }
                 if ($anchorPayload.Contains('debug')) { $synthetic['debug'] = Get-MapValue $anchorPayload 'debug' }
+
                 $bodyPath = Write-TelemetryTempBody $synthetic
+                if ([string]::IsNullOrWhiteSpace($bodyPath) -or -not (Test-Path -LiteralPath $bodyPath -PathType Leaf)) {
+                    Log "warning: skipped synthetic telemetry augmentation for '$($anchor.Path)': failed to create synthetic body path"
+                    continue
+                }
                 $plan.SyntheticEntries += ,([PSCustomObject]@{
-                    AnchorPath = $anchorPath
+                    AnchorPath = [string]$anchor.Path
                     BodyPath = $bodyPath
+                    ServiceName = $group.ServiceName
+                    LanguageName = $group.LanguageName
                 })
                 $plan.TempFiles += ,$bodyPath
+                Dbg "telemetry augmentation: created synthetic body '$bodyPath' for anchor '$($anchor.Path)'"
+            } catch {
+                Log "warning: skipped synthetic telemetry augmentation for '$($anchor.Path)': $_"
             }
-        } catch {
-            Log "warning: skipped telemetry augmentation for '$anchorPath': $_"
         }
     }
 
@@ -2276,8 +2392,20 @@ function Upload-SingleCoverage([string]$FilePath) {
 }
 
 function Upload-SingleTelemetry([string]$DisplayPath, [string]$BodyPath = $null) {
+    if ([string]::IsNullOrWhiteSpace($DisplayPath)) {
+        Log "warning: skipped telemetry upload because the display path was empty"
+        return [bool]$false
+    }
     if ([string]::IsNullOrWhiteSpace($BodyPath)) {
         $BodyPath = $DisplayPath
+    }
+    if ([string]::IsNullOrWhiteSpace($BodyPath)) {
+        Log "warning: skipped telemetry upload for '$DisplayPath' because the body path was empty"
+        return [bool]$false
+    }
+    if (-not (Test-Path -LiteralPath $BodyPath -PathType Leaf)) {
+        Log "warning: skipped telemetry upload for '$DisplayPath' because the body path does not exist: $BodyPath"
+        return [bool]$false
     }
     $hdrs = Get-TelemetryHeaders $BodyPath
     if (-not $hdrs) {
@@ -2404,6 +2532,11 @@ function Upload-AllTelemetry {
             }
         }
         foreach ($entry in @($plan.SyntheticEntries)) {
+            if (($null -eq $entry) -or [string]::IsNullOrWhiteSpace([string]$entry.AnchorPath) -or [string]::IsNullOrWhiteSpace([string]$entry.BodyPath) -or -not (Test-Path -LiteralPath $entry.BodyPath -PathType Leaf)) {
+                Log "warning: skipped synthetic telemetry augmentation because the queued path was invalid: anchor='$([string]$entry.AnchorPath)' body='$([string]$entry.BodyPath)'"
+                continue
+            }
+            Dbg "telemetry augmentation: uploading synthetic body '$($entry.BodyPath)' for anchor '$($entry.AnchorPath)'"
             $uploadedResult = @(Upload-SingleTelemetry $entry.AnchorPath $entry.BodyPath)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {

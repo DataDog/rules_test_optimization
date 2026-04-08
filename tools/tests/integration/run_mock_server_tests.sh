@@ -3335,7 +3335,8 @@ for name in expected_failures:
 PY
 
 # Scenario: sync telemetry facts should append missing rule metrics into an
-# existing tracer message-batch while preserving the tracer identity fields.
+# existing tracer message-batch while preserving tracer identity, and should
+# normalize outbound application.env across every matched tracer runtime.
 TELEMETRY_AUG_TESTLOGS="$TMP_WS/telemetry_aug_testlogs"
 TELEMETRY_AUG_DIR="$TELEMETRY_AUG_TESTLOGS/manual_telemetry_aug/test.outputs/payloads/telemetry"
 mkdir -p "$TELEMETRY_AUG_DIR"
@@ -3349,7 +3350,7 @@ cat > "$TELEMETRY_AUG_FILE" <<'JSON_EOF'
   "tracer_time": 1710000000,
   "application": {
     "service_name": "mock-service",
-    "env": "ci",
+    "env": "none",
     "language_name": "go",
     "tracer_version": "2.9.0-dev"
   },
@@ -3376,6 +3377,28 @@ cat > "$TELEMETRY_AUG_FILE" <<'JSON_EOF'
   ]
 }
 JSON_EOF
+TELEMETRY_AUG_PEER="$TELEMETRY_AUG_DIR/telemetry_peer_011.json"
+cat > "$TELEMETRY_AUG_PEER" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "runtime_id": "augment-runtime-peer",
+  "seq_id": 5,
+  "tracer_time": 1710000100,
+  "application": {
+    "service_name": "mock-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "host": {
+    "hostname": "mock-host"
+  },
+  "payload": {
+    "marker": "peer"
+  }
+}
+JSON_EOF
 
 TELEMETRY_AUG_LOG_START="$(log_line_count)"
 UPLOADER_TELEMETRY_AUG_LOG="$TMP_WS/uploader_telemetry_aug.log"
@@ -3395,7 +3418,7 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-TELEMETRY_AUG_LOG_START="$TELEMETRY_AUG_LOG_START" TELEMETRY_AUG_FILE="$TELEMETRY_AUG_FILE" "$PYTHON" - <<'PY'
+TELEMETRY_AUG_LOG_START="$TELEMETRY_AUG_LOG_START" TELEMETRY_AUG_FILE="$TELEMETRY_AUG_FILE" TELEMETRY_AUG_PEER="$TELEMETRY_AUG_PEER" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
@@ -3404,6 +3427,7 @@ import sys
 log_path = os.environ["LOG_FILE"]
 start_line = int(os.environ.get("TELEMETRY_AUG_LOG_START", "0") or "0")
 anchor_file = os.environ["TELEMETRY_AUG_FILE"]
+peer_file = os.environ["TELEMETRY_AUG_PEER"]
 
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
@@ -3416,14 +3440,18 @@ with open(log_path, "r", encoding="utf-8") as handle:
             continue
 
 telemetry_records = [rec for rec in records if rec.get("path") == "/api/v2/apmtelemetry"]
-if len(telemetry_records) != 1:
-    print(f"error: augmentation scenario expected 1 telemetry upload, saw {len(telemetry_records)}")
+if len(telemetry_records) != 2:
+    print(f"error: augmentation scenario expected 2 telemetry uploads, saw {len(telemetry_records)}")
     sys.exit(1)
 
-record = telemetry_records[0]
-payload = json.loads(base64.b64decode(record["body_b64"]).decode("utf-8"))
-if payload.get("request_type") != "message-batch":
+decoded = [json.loads(base64.b64decode(rec["body_b64"]).decode("utf-8")) for rec in telemetry_records]
+peer_payload = next((payload for payload in decoded if payload.get("request_type") == "app-started"), None)
+payload = next((payload for payload in decoded if payload.get("request_type") == "message-batch"), None)
+if payload is None:
     print("error: augmented telemetry should stay a message-batch")
+    sys.exit(1)
+if peer_payload is None:
+    print("error: augmentation scenario should keep the non-anchor tracer payload")
     sys.exit(1)
 if payload.get("runtime_id") != "augment-runtime":
     print("error: augmented telemetry should preserve runtime_id")
@@ -3434,6 +3462,14 @@ if payload.get("seq_id") != 41:
 app = payload.get("application") or {}
 if app.get("service_name") != "mock-service" or app.get("language_name") != "go":
     print("error: augmented telemetry should preserve tracer application identity")
+    sys.exit(1)
+if app.get("env") != "ci":
+    print(f"error: augmented telemetry should rewrite application.env from facts, saw {app.get('env')!r}")
+    sys.exit(1)
+
+peer_app = peer_payload.get("application") or {}
+if peer_app.get("env") != "ci":
+    print(f"error: peer tracer payload should also rewrite application.env from facts, saw {peer_app.get('env')!r}")
     sys.exit(1)
 
 existing_seen = False
@@ -3499,11 +3535,19 @@ with open(anchor_file, "r", encoding="utf-8") as handle:
 if "git_requests.settings" in raw_anchor:
     print("error: tracer telemetry file on disk should remain unchanged after augmentation")
     sys.exit(1)
+if '"env": "none"' not in raw_anchor:
+    print("error: tracer anchor file on disk should keep its original env")
+    sys.exit(1)
+with open(peer_file, "r", encoding="utf-8") as handle:
+    raw_peer = handle.read()
+if '"env": "none"' not in raw_peer:
+    print("error: peer tracer file on disk should keep its original env")
+    sys.exit(1)
 PY
 
 # Scenario: when no tracer message-batch exists, the uploader should keep the
-# raw tracer telemetry files intact and send one synthetic tracer-derived batch
-# after the normal telemetry loop.
+# raw tracer telemetry files intact, normalize outbound env across the matched
+# tracer set, and send one synthetic tracer-derived batch after the normal loop.
 TELEMETRY_SYNTH_TESTLOGS="$TMP_WS/telemetry_synth_testlogs"
 TELEMETRY_SYNTH_DIR="$TELEMETRY_SYNTH_TESTLOGS/manual_telemetry_synth/test.outputs/payloads/telemetry"
 mkdir -p "$TELEMETRY_SYNTH_DIR"
@@ -3515,7 +3559,7 @@ cat > "$TELEMETRY_SYNTH_DIR/telemetry_alpha_001.json" <<'JSON_EOF'
   "seq_id": 7,
   "application": {
     "service_name": "mock-service",
-    "env": "ci",
+    "env": "none",
     "language_name": "go",
     "tracer_version": "2.9.0-dev"
   },
@@ -3533,7 +3577,7 @@ cat > "$TELEMETRY_SYNTH_LAST" <<'JSON_EOF'
   "seq_id": 8,
   "application": {
     "service_name": "mock-service",
-    "env": "ci",
+    "env": "none",
     "language_name": "go",
     "tracer_version": "2.9.0-dev"
   },
@@ -3603,6 +3647,9 @@ app = synthetic.get("application") or {}
 if app.get("service_name") != "mock-service" or app.get("language_name") != "go":
     print("error: synthetic telemetry should preserve tracer application identity")
     sys.exit(1)
+if app.get("env") != "ci":
+    print(f"error: synthetic telemetry should rewrite application.env from facts, saw {app.get('env')!r}")
+    sys.exit(1)
 metric_names = []
 for message in synthetic.get("payload", []):
     body = message.get("payload") or {}
@@ -3610,11 +3657,19 @@ for message in synthetic.get("payload", []):
 if "git_requests.settings" not in metric_names or "known_tests.response_tests" not in metric_names:
     print(f"error: synthetic telemetry missing expected rule metrics: {metric_names!r}")
     sys.exit(1)
+for raw_payload in decoded[:-1]:
+    raw_app = raw_payload.get("application") or {}
+    if raw_app.get("env") != "ci":
+        print(f"error: raw tracer uploads should also rewrite application.env from facts, saw {raw_app.get('env')!r}")
+        sys.exit(1)
 
 with open(last_anchor_file, "r", encoding="utf-8") as handle:
     raw_anchor = handle.read()
 if '"request_type": "message-batch"' in raw_anchor or "git_requests.settings" in raw_anchor:
     print("error: raw non-batch telemetry file should remain unchanged on disk")
+    sys.exit(1)
+if '"env": "none"' not in raw_anchor:
+    print("error: raw non-batch telemetry file should keep its original env on disk")
     sys.exit(1)
 PY
 

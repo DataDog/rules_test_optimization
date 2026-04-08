@@ -2077,8 +2077,11 @@ cleanup_telemetry_augmentation_plan() {
 }
 
 # Build a best-effort plan describing which tracer telemetry files should be
-# augmented in-flight and which synthetic message-batch uploads should be sent
-# after the normal tracer telemetry loop.
+# augmented in-flight, which tracer streams should have their outbound env
+# normalized, and which synthetic message-batch uploads should be sent after
+# the normal tracer telemetry loop. Matching is based on tracer service and
+# language identity because sandboxed tracer telemetry can legitimately emit
+# application.env="none" while Bazel sync still knows the real CI env.
 build_telemetry_augmentation_plan() {
     local plan_file="$1"
     local facts_list telemetry_list
@@ -2114,6 +2117,11 @@ import tempfile
 import time
 
 plan_path, facts_list_path, telemetry_list_path, tmp_dir = sys.argv[1:5]
+debug_mode = os.environ.get("DEBUG") == "1"
+
+def _dbg(message):
+    if debug_mode:
+        print(f"[dd-uploader][dbg] {message}", file = sys.stderr)
 
 def _read_paths(path):
     values = []
@@ -2193,7 +2201,16 @@ for path in telemetry_files:
 if not candidates:
     raise SystemExit(0)
 
-augmentations = {}
+def _stream_best_path(items):
+    batch_paths = sorted(item["path"] for item in items if item["request_type"] == "message-batch")
+    if batch_paths:
+        return batch_paths[-1]
+    return max(item["path"] for item in items)
+
+grouped_facts = {}
+grouped_candidates = {}
+for candidate in candidates:
+    grouped_candidates.setdefault((candidate["service_name"], candidate["language_name"]), []).append(candidate)
 
 for facts_path in facts_sources:
     facts = _load_json_object(facts_path, allow_any = True)
@@ -2208,7 +2225,7 @@ for facts_path in facts_sources:
     if not isinstance(runtime_name, str) or not runtime_name:
         runtime_name = ""
     env = facts.get("env")
-    if not isinstance(env, str) or not env:
+    if not isinstance(env, str):
         env = ""
     counts = facts.get("counts")
     distributions = facts.get("distributions")
@@ -2216,12 +2233,8 @@ for facts_path in facts_sources:
         counts = []
     if not isinstance(distributions, list):
         distributions = []
-    if not counts and not distributions:
-        continue
 
     matched = [c for c in candidates if c["service_name"] == service_name]
-    if env:
-        matched = [c for c in matched if c["env"] == env]
     if not matched:
         print(f"[dd-uploader] warning: skipped telemetry facts without matching tracer anchor: {facts_path}", file = sys.stderr)
         continue
@@ -2240,15 +2253,18 @@ for facts_path in facts_sources:
             print(f"[dd-uploader] warning: skipped ambiguous telemetry facts across tracer languages: {facts_path}", file = sys.stderr)
             continue
 
-    batch_candidates = [c for c in selected if c["request_type"] == "message-batch"]
-    anchor = max(batch_candidates or selected, key = lambda item: item["path"])
-    entry = augmentations.setdefault(anchor["path"], {
-        "anchor": anchor,
-        "counts": [],
-        "distributions": [],
+    language_name = selected[0]["language_name"]
+    group_key = (service_name, language_name)
+    grouped_facts.setdefault(group_key, []).append({
+        "path": facts_path,
+        "env": env,
+        "counts": counts,
+        "distributions": distributions,
     })
-    entry["counts"].extend(counts)
-    entry["distributions"].extend(distributions)
+    _dbg(
+        "telemetry augmentation: matched facts '%s' to service='%s' language='%s'" %
+        (facts_path, service_name, language_name)
+    )
 
 def _build_count_series(facts, timestamp):
     series = []
@@ -2316,49 +2332,136 @@ def _build_inner_messages(counts, distributions, timestamp):
     return messages
 
 plan_entries = []
-for anchor_path in sorted(augmentations):
-    entry = augmentations[anchor_path]
-    timestamp = int(time.time())
-    inner_messages = _build_inner_messages(entry["counts"], entry["distributions"], timestamp)
-    if not inner_messages:
+for group_key in sorted(grouped_facts):
+    service_name, language_name = group_key
+    candidate_set = sorted(grouped_candidates.get(group_key, []), key = lambda item: item["path"])
+    if not candidate_set:
         continue
-    anchor = entry["anchor"]
-    anchor_payload = copy.deepcopy(anchor["payload"])
+
+    facts_entries = sorted(grouped_facts[group_key], key = lambda item: item["path"])
+    non_empty_envs = sorted({entry["env"] for entry in facts_entries if entry["env"]})
+    if len(non_empty_envs) > 1:
+        print(
+            "[dd-uploader] warning: skipped telemetry augmentation for service='%s' language='%s' because telemetry facts disagree on env: %s" %
+            (service_name, language_name, ",".join(non_empty_envs)),
+            file = sys.stderr,
+        )
+        continue
+    env_override = non_empty_envs[0] if non_empty_envs else ""
+    _dbg(
+        "telemetry augmentation: service='%s' language='%s' env_override='%s' candidate_count=%d" %
+        (service_name, language_name, env_override or "<none>", len(candidate_set))
+    )
+
+    counts = []
+    distributions = []
+    for facts_entry in facts_entries:
+        counts.extend(facts_entry["counts"])
+        distributions.extend(facts_entry["distributions"])
+
+    streams = {}
+    for candidate in candidate_set:
+        streams.setdefault(candidate["runtime_id"], []).append(candidate)
+    stream_infos = []
+    for runtime_id, stream_candidates in streams.items():
+        best_path = _stream_best_path(stream_candidates)
+        stream_infos.append({
+            "runtime_id": runtime_id,
+            "candidates": sorted(stream_candidates, key = lambda item: item["path"]),
+            "best_path": best_path,
+            "has_batch": any(item["request_type"] == "message-batch" for item in stream_candidates),
+        })
+    chosen_stream = max(stream_infos, key = lambda item: (item["has_batch"], item["best_path"]))
+    anchor_stream = chosen_stream["candidates"]
+    batch_candidates = [c for c in anchor_stream if c["request_type"] == "message-batch"]
+    anchor = max(batch_candidates or anchor_stream, key = lambda item: item["path"])
+    _dbg(
+        "telemetry augmentation: selected runtime_id='%s' anchor='%s'" %
+        (chosen_stream["runtime_id"], anchor["path"])
+    )
+
+    replacements = {}
+    if env_override:
+        for candidate in candidate_set:
+            try:
+                outbound = copy.deepcopy(candidate["payload"])
+                application = outbound.get("application")
+                if not isinstance(application, dict):
+                    continue
+                application["env"] = env_override
+                replacements[candidate["path"]] = outbound
+            except Exception as exc:
+                print(
+                    f"[dd-uploader] warning: failed to normalize outbound telemetry env for '{candidate['path']}': {exc}",
+                    file = sys.stderr,
+                )
+
+    timestamp = int(time.time())
+    inner_messages = _build_inner_messages(counts, distributions, timestamp)
+    synthetic_outbound = None
+    if inner_messages:
+        try:
+            if anchor["request_type"] == "message-batch":
+                anchor_outbound = copy.deepcopy(replacements.get(anchor["path"], anchor["payload"]))
+                payload_items = anchor_outbound.get("payload")
+                if not isinstance(payload_items, list):
+                    print(
+                        f"[dd-uploader] warning: skipped telemetry augmentation for '{anchor['path']}': message-batch payload is not an array",
+                        file = sys.stderr,
+                    )
+                else:
+                    payload_items.extend(inner_messages)
+                    replacements[anchor["path"]] = anchor_outbound
+            else:
+                anchor_payload = copy.deepcopy(anchor["payload"])
+                application = anchor_payload.get("application")
+                if not isinstance(application, dict):
+                    print(
+                        f"[dd-uploader] warning: skipped telemetry augmentation for '{anchor['path']}': tracer anchor is missing top-level application identity",
+                        file = sys.stderr,
+                    )
+                else:
+                    if env_override:
+                        application["env"] = env_override
+                    max_seq_id = 0
+                    for candidate in anchor_stream:
+                        if isinstance(candidate["seq_id"], int) and candidate["seq_id"] > max_seq_id:
+                            max_seq_id = candidate["seq_id"]
+                    synthetic_outbound = {
+                        "api_version": anchor_payload.get("api_version"),
+                        "request_type": "message-batch",
+                        "runtime_id": anchor_payload.get("runtime_id"),
+                        "seq_id": max_seq_id + 1,
+                        "tracer_time": timestamp,
+                        "application": application,
+                        "host": anchor_payload.get("host"),
+                        "payload": inner_messages,
+                    }
+                    if "debug" in anchor_payload:
+                        synthetic_outbound["debug"] = anchor_payload["debug"]
+        except Exception as exc:
+            print(f"[dd-uploader] warning: skipped telemetry augmentation for '{anchor['path']}': {exc}", file = sys.stderr)
+
     try:
-        if anchor["request_type"] == "message-batch":
-            payload_items = anchor_payload.get("payload")
-            if not isinstance(payload_items, list):
-                print(f"[dd-uploader] warning: skipped telemetry augmentation for '{anchor_path}': message-batch payload is not an array", file = sys.stderr)
-                continue
-            payload_items.extend(inner_messages)
-            outbound = anchor_payload
-            mode = "replace"
-        else:
-            max_seq_id = 0
-            for candidate in candidates:
-                if candidate["runtime_id"] == anchor["runtime_id"] and isinstance(candidate["seq_id"], int) and candidate["seq_id"] > max_seq_id:
-                    max_seq_id = candidate["seq_id"]
-            outbound = {
-                "api_version": anchor_payload.get("api_version"),
-                "request_type": "message-batch",
-                "runtime_id": anchor_payload.get("runtime_id"),
-                "seq_id": max_seq_id + 1,
-                "tracer_time": timestamp,
-                "application": anchor_payload.get("application"),
-                "host": anchor_payload.get("host"),
-                "payload": inner_messages,
-            }
-            if "debug" in anchor_payload:
-                outbound["debug"] = anchor_payload["debug"]
-            mode = "synthetic"
-        fd, temp_path = tempfile.mkstemp(prefix = "telemetry_aug_", suffix = ".json", dir = tmp_dir)
-        os.close(fd)
-        with open(temp_path, "w", encoding = "utf-8", newline = "\n") as handle:
-            json.dump(outbound, handle, separators = (",", ":"), ensure_ascii = False)
-            handle.write("\n")
-        plan_entries.append((mode, anchor_path, temp_path))
+        for path, outbound in sorted(replacements.items()):
+            fd, temp_path = tempfile.mkstemp(prefix = "telemetry_aug_", suffix = ".json", dir = tmp_dir)
+            os.close(fd)
+            with open(temp_path, "w", encoding = "utf-8", newline = "\n") as handle:
+                json.dump(outbound, handle, separators = (",", ":"), ensure_ascii = False)
+                handle.write("\n")
+            plan_entries.append(("replace", path, temp_path))
+        if synthetic_outbound is not None:
+            fd, temp_path = tempfile.mkstemp(prefix = "telemetry_aug_", suffix = ".json", dir = tmp_dir)
+            os.close(fd)
+            with open(temp_path, "w", encoding = "utf-8", newline = "\n") as handle:
+                json.dump(synthetic_outbound, handle, separators = (",", ":"), ensure_ascii = False)
+                handle.write("\n")
+            plan_entries.append(("synthetic", anchor["path"], temp_path))
     except Exception as exc:
-        print(f"[dd-uploader] warning: skipped telemetry augmentation for '{anchor_path}': {exc}", file = sys.stderr)
+        print(
+            f"[dd-uploader] warning: failed to materialize telemetry augmentation plan for service='{service_name}' language='{language_name}': {exc}",
+            file = sys.stderr,
+        )
 
 with open(plan_path, "w", encoding = "utf-8", newline = "\n") as handle:
     for mode, anchor_path, temp_path in sorted(plan_entries, key = lambda item: (item[0] != "replace", item[1], item[2])):
