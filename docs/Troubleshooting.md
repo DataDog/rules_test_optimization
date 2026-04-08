@@ -190,7 +190,7 @@ module version.
    - or `orchestrion.from_source(..., dd_trace_go_versions = {...})`
    - the effective local module graph resolved from `go.mod` and `go.sum`
 
-3. **If you omitted the version entirely**, remember the default is `v2.9.0-dev.0.20260408120305-80f98e63de50`.
+3. **If you omitted the version entirely**, remember the default is `v2.9.0-dev.0.20260408173856-00e7bd515e27`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one
 set of tracer versions while the local Go module still resolves another.
