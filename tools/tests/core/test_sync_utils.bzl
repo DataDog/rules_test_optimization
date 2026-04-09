@@ -655,6 +655,68 @@ def _collect_env_ctx_wrapper_test(ctx):
     asserts.equals(env, "abc999", collected.get("sha"))
     return unittest.end(env)
 
+def _collect_env_ctx_git_fallback_test(ctx):
+    """Validate missing GitHub commit metadata falls back to workspace git data."""
+    env = unittest.begin(ctx)
+
+    git_outputs = {
+        ("merge-sha", "%s"): "Merge head-sha into base-sha",
+        ("merge-sha", "%an"): "Tony Redondo",
+        ("merge-sha", "%ae"): "tonyredondo@gmail.com",
+        ("merge-sha", "%aI"): "2026-04-09T17:50:56Z",
+        ("merge-sha", "%cn"): "GitHub",
+        ("merge-sha", "%ce"): "noreply@github.com",
+        ("merge-sha", "%cI"): "2026-04-09T17:50:56Z",
+        ("head-sha", "%s"): "Pin rules_test_optimization to rebased rules_go fork",
+        ("head-sha", "%an"): "Tony Redondo",
+        ("head-sha", "%ae"): "tonyredondo@gmail.com",
+        ("head-sha", "%aI"): "2026-04-09T17:48:12Z",
+        ("head-sha", "%cn"): "Tony Redondo",
+        ("head-sha", "%ce"): "tonyredondo@gmail.com",
+        ("head-sha", "%cI"): "2026-04-09T17:48:12Z",
+    }
+
+    def _execute(args, timeout = 0):
+        if args[:3] != ["git", "-C", "/workspace/repo"]:
+            fail("unexpected execute args: %s" % args)
+        if len(args) != 8 or args[3:6] != ["log", "-1", "--date=iso-strict"]:
+            fail("unexpected git args: %s" % args)
+        pretty = args[6].replace("--pretty=", "", 1)
+        revision = args[7]
+        value = git_outputs.get((revision, pretty))
+        if value == None:
+            return struct(return_code = 1, stdout = "", stderr = "missing")
+        return struct(return_code = 0, stdout = value + "\n", stderr = "")
+
+    fake_ctx = struct(
+        execute = _execute,
+        os = struct(environ = {
+            "GITHUB_SHA": "merge-sha",
+            "GITHUB_REPOSITORY": "org/repo",
+            "GITHUB_REF": "refs/pull/31/merge",
+            "GITHUB_BASE_REF": "main",
+            "GITHUB_WORKSPACE": "/workspace/repo",
+            "DD_GIT_HEAD_COMMIT": "head-sha",
+        }),
+        attr = struct(service = "svc-from-ctx"),
+    )
+    collected = collect_env_for_tests(fake_ctx)
+    asserts.equals(env, "Merge head-sha into base-sha", collected.get("commit_message"))
+    asserts.equals(env, "Tony Redondo", collected.get("commit_author_name"))
+    asserts.equals(env, "tonyredondo@gmail.com", collected.get("commit_author_email"))
+    asserts.equals(env, "2026-04-09T17:50:56Z", collected.get("commit_author_date"))
+    asserts.equals(env, "GitHub", collected.get("commit_committer_name"))
+    asserts.equals(env, "noreply@github.com", collected.get("commit_committer_email"))
+    asserts.equals(env, "2026-04-09T17:50:56Z", collected.get("commit_committer_date"))
+    asserts.equals(env, "Pin rules_test_optimization to rebased rules_go fork", collected.get("head_message"))
+    asserts.equals(env, "Tony Redondo", collected.get("head_author_name"))
+    asserts.equals(env, "tonyredondo@gmail.com", collected.get("head_author_email"))
+    asserts.equals(env, "2026-04-09T17:48:12Z", collected.get("head_author_date"))
+    asserts.equals(env, "Tony Redondo", collected.get("head_committer_name"))
+    asserts.equals(env, "tonyredondo@gmail.com", collected.get("head_committer_email"))
+    asserts.equals(env, "2026-04-09T17:48:12Z", collected.get("head_committer_date"))
+    return unittest.end(env)
+
 def _load_github_event_payload_ctx_test(ctx):
     """Validate event-payload loading accepts the file-read helper contract."""
     env = unittest.begin(ctx)
@@ -1606,6 +1668,7 @@ set_context_tag_from_env_test = unittest.make(_set_context_tag_from_env_test)
 collect_env_from_environ_provider_mapping_test = unittest.make(_collect_env_from_environ_provider_mapping_test)
 collect_env_from_environ_empty_test = unittest.make(_collect_env_from_environ_empty_test)
 collect_env_ctx_wrapper_test = unittest.make(_collect_env_ctx_wrapper_test)
+collect_env_ctx_git_fallback_test = unittest.make(_collect_env_ctx_git_fallback_test)
 load_github_event_payload_ctx_test = unittest.make(_load_github_event_payload_ctx_test)
 apply_github_event_payload_defensive_test = unittest.make(_apply_github_event_payload_defensive_test)
 sync_environment_keys_allowlist_test = unittest.make(_sync_environment_keys_allowlist_test)

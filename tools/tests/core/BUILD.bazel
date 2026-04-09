@@ -47,6 +47,7 @@ load(
     "build_context_tags_test",
     "clone_payload_with_detached_attributes_test",
     "clone_payload_with_nested_structure_test",
+    "collect_env_ctx_git_fallback_test",
     "collect_env_ctx_wrapper_test",
     "collect_env_from_environ_empty_test",
     "collect_env_from_environ_provider_mapping_test",
@@ -245,6 +246,12 @@ collect_env_from_environ_empty_test(
 
 collect_env_ctx_wrapper_test(
     name = "collect_env_ctx_wrapper_test",
+    size = "small",
+    timeout = "short",
+)
+
+collect_env_ctx_git_fallback_test(
+    name = "collect_env_ctx_git_fallback_test",
     size = "small",
     timeout = "short",
 )
