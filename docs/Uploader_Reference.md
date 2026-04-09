@@ -213,8 +213,10 @@ payload discovery/quiescence before proceeding.
   at test time.
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` is a runtime uploader override only. Do
   not pass it via `--repo_env`, and do not treat it as sync-time configuration.
-- Bazel rule identity is included as stable tags:
-  `test.bazel.rule_name` and `test.bazel.rule_version`.
+- Bazel metadata is included as stable tags:
+  `bazel.rule_name`, `bazel.rule_version`, `bazel.os`, and `bazel.arch`.
+- When enrichment is active, those Bazel keys are merged into test payload
+  `metadata.*` alongside the existing CI, Git, OS, and runtime tags.
 - `test`, `test_suite_end`, `test_module_end`, and `test_session_end` events
   may also be enriched with `test.codeowners` when source resolution and owner
   lookup succeed and the field is not already present.

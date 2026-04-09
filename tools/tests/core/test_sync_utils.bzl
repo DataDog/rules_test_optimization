@@ -8,6 +8,7 @@ load(
     "append_telemetry_distribution_for_tests",
     "apply_dd_git_overrides_for_tests",
     "apply_github_event_payload_for_tests",
+    "build_context_tags_for_tests",
     "build_module_label_map_for_tests",
     "build_settings_response_tags_for_tests",
     "build_unix_read_abs_file_command_for_tests",
@@ -1185,6 +1186,42 @@ def _telemetry_facts_document_test(ctx):
     asserts.equals(env, 42, facts.get("distributions")[0].get("value"))
     return unittest.end(env)
 
+def _build_context_tags_test(ctx):
+    """Validate Bazel context tags use the `bazel.*` namespace."""
+    env = unittest.begin(ctx)
+    fake_ctx = struct(attr = struct(
+        runtime_name = "go",
+        runtime_version = "1.24.0",
+        runtime_arch = "arm64",
+    ))
+    tags = build_context_tags_for_tests(
+        fake_ctx,
+        {},
+        "",
+        False,
+        osinfo = {
+            "platform": "darwin",
+            "version": "24.0.0",
+            "arch": "arm64",
+        },
+    )
+
+    asserts.equals(env, "datadog-rules-test-optimization", tags.get("bazel.rule_name"))
+    asserts.true(env, bool(tags.get("bazel.rule_version")))
+    asserts.equals(env, "darwin", tags.get("bazel.os"))
+    asserts.equals(env, "arm64", tags.get("bazel.arch"))
+    asserts.equals(env, None, tags.get("test.bazel.rule_name"))
+    asserts.equals(env, None, tags.get("test.bazel.rule_version"))
+    asserts.equals(env, "darwin", tags.get("os.platform"))
+    asserts.equals(env, "24.0.0", tags.get("os.version"))
+    asserts.equals(env, "arm64", tags.get("os.architecture"))
+    asserts.equals(env, "go", tags.get("runtime.name"))
+    asserts.equals(env, "1.24.0", tags.get("runtime.version"))
+    asserts.equals(env, "arm64", tags.get("runtime.architecture"))
+    asserts.equals(env, tags.get("os.platform"), tags.get("bazel.os"))
+    asserts.equals(env, tags.get("os.architecture"), tags.get("bazel.arch"))
+    return unittest.end(env)
+
 def _settings_response_tags_test(ctx):
     """Validate combined settings-response tags match the tracer contract."""
     env = unittest.begin(ctx)
@@ -1590,6 +1627,7 @@ example_stub_export_string_escaping_test = unittest.make(_example_stub_export_st
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
 parse_curl_time_ms_test = unittest.make(_parse_curl_time_ms_test)
 telemetry_facts_document_test = unittest.make(_telemetry_facts_document_test)
+build_context_tags_test = unittest.make(_build_context_tags_test)
 settings_response_tags_test = unittest.make(_settings_response_tags_test)
 sync_success_metric_tags_parity_test = unittest.make(_sync_success_metric_tags_parity_test)
 telemetry_response_counts_test = unittest.make(_telemetry_response_counts_test)

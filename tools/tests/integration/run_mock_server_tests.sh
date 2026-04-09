@@ -2093,14 +2093,21 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-LOG_LINES_BEFORE_CONTEXT="$LOG_LINES_BEFORE_CONTEXT" "$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_CONTEXT="$LOG_LINES_BEFORE_CONTEXT" CONTEXT_JSON_PATH="$TOPT_DIR/context.json" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
 start_line = int(os.environ.get("LOG_LINES_BEFORE_CONTEXT", "0") or "0")
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for idx, line in enumerate(handle):
@@ -2130,10 +2137,8 @@ for rec in reversed(records):
         content = evt.get("content") or {}
         if content.get("resource") != target_resource:
             continue
-        evt_meta = content.get("meta") or {}
-        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
-            target_evt = evt
-            break
+        target_evt = evt
+        break
     if target_evt is not None:
         break
 if target_evt is None:
@@ -2149,9 +2154,13 @@ except json.JSONDecodeError:
 if owners != ["@DataDog/ci-app-libraries-dotnet"]:
     print("error: expected CODEOWNERS value missing in context-enriched payload")
     sys.exit(1)
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: expected context tag mismatch in context-enriched payload: {key} -> {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
 for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
-    if key not in meta:
-        print(f"error: expected context tag missing in context-enriched payload: {key}")
+    if key in meta:
+        print(f"error: legacy context tag unexpectedly present in context-enriched payload: {key}")
         sys.exit(1)
 PY
 
@@ -2200,14 +2209,21 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-LOG_LINES_BEFORE_CONTEXT_OVERRIDE="$LOG_LINES_BEFORE_CONTEXT_OVERRIDE" "$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_CONTEXT_OVERRIDE="$LOG_LINES_BEFORE_CONTEXT_OVERRIDE" CONTEXT_JSON_PATH="$TOPT_DIR/context.json" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
 start_line = int(os.environ.get("LOG_LINES_BEFORE_CONTEXT_OVERRIDE", "0") or "0")
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for idx, line in enumerate(handle):
@@ -2247,15 +2263,22 @@ for rec in reversed(records):
         content = evt.get("content") or {}
         if content.get("resource") != target_resource:
             continue
-        evt_meta = content.get("meta") or {}
-        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
-            target_evt = evt
-            break
+        target_evt = evt
+        break
     if target_evt is not None:
         break
 if target_evt is None:
     print("error: missing context-enriched test event after runtime-context uploader run")
     sys.exit(1)
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: runtime-context uploader run missing expected context tag {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
+    if key in meta:
+        print(f"error: runtime-context uploader run still contains legacy context tag: {key}")
+        sys.exit(1)
 PY
 
 # Scenario: an unreadable runtime override must fall back to bundled context
@@ -2279,14 +2302,21 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-LOG_LINES_BEFORE_BAD_OVERRIDE="$LOG_LINES_BEFORE_BAD_OVERRIDE" "$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_BAD_OVERRIDE="$LOG_LINES_BEFORE_BAD_OVERRIDE" CONTEXT_JSON_PATH="$TOPT_DIR/context.json" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
 start_line = int(os.environ.get("LOG_LINES_BEFORE_BAD_OVERRIDE", "0") or "0")
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for idx, line in enumerate(handle):
@@ -2312,16 +2342,23 @@ for rec in reversed(records):
         content = evt.get("content") or {}
         if content.get("resource") != target_resource:
             continue
-        evt_meta = content.get("meta") or {}
-        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
-            target_evt = evt
-            break
+        target_evt = evt
+        break
     if target_evt is not None:
         break
 
 if target_evt is None:
     print("error: invalid runtime override did not fall back to bundled context enrichment")
     sys.exit(1)
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: invalid runtime override fallback missing expected context tag {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
+    if key in meta:
+        print(f"error: invalid runtime override fallback still contains legacy context tag: {key}")
+        sys.exit(1)
 PY
 
 ORIG_CODEOWNERS="$WORKSPACE/CODEOWNERS.orig"
@@ -4238,6 +4275,7 @@ run_manifest_uploader "$MANIFEST_SUFFIX_FOR_UPLOADER" "$UPLOADER_MANIFEST_SUFFIX
 
 UPLOADER_MANIFEST_EXACT_LOG="$UPLOADER_MANIFEST_EXACT_LOG" \
 UPLOADER_MANIFEST_SUFFIX_LOG="$UPLOADER_MANIFEST_SUFFIX_LOG" \
+CONTEXT_JSON_PATH="$CONTEXT_JSON_REAL_PATH" \
 "$PYTHON" - <<'PY'
 import base64
 import json
@@ -4245,6 +4283,13 @@ import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:
@@ -4310,9 +4355,14 @@ def assert_manifest_resource(resource):
         print_manifest_logs()
         sys.exit(1)
     meta = ((target.get("content") or {}).get("meta") or {})
+    for key, value in expected_tags.items():
+        if meta.get(key) != value:
+            print(f"error: manifest fallback run missing context tag {key} for {resource}: {meta.get(key)!r} != {value!r}")
+            print_manifest_logs()
+            sys.exit(1)
     for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
-        if key not in meta:
-            print(f"error: manifest fallback run missing context tag {key} for {resource}")
+        if key in meta:
+            print(f"error: manifest fallback run still contains legacy context tag {key} for {resource}")
             print_manifest_logs()
             sys.exit(1)
     if owners_for(meta) != ["@org/owned"]:

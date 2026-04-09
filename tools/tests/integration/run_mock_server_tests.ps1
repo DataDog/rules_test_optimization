@@ -655,6 +655,63 @@ filegroup(
   if (-not (Test-Path -LiteralPath $contextPath -PathType Leaf)) {
     throw "missing context.json after sync preflight at $contextPath"
   }
+  $contextMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $contextPath -Raw -Encoding UTF8)
+  $enforceBazelContextKeys = $contextPath -notlike "*+example_stub_repo_extension*"
+  if ($enforceBazelContextKeys -and [string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $contextMap -Key "bazel.rule_name"))) {
+    $contextCandidates = @()
+    $knownSettingsCandidates = @()
+    $settingsCandidatesVar = Get-Variable -Name settingsCandidates -ErrorAction SilentlyContinue
+    if ($settingsCandidatesVar) {
+      $knownSettingsCandidates = @($settingsCandidatesVar.Value | Sort-Object Score, Path)
+    }
+    foreach ($settingsCandidate in $knownSettingsCandidates) {
+      $candidateToptDir = Split-Path -Parent (Split-Path -Parent $settingsCandidate.Path)
+      $candidateContextPath = Join-Path $candidateToptDir "context.json"
+      if (-not (Test-Path -LiteralPath $candidateContextPath -PathType Leaf)) { continue }
+      $candidateMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $candidateContextPath -Raw -Encoding UTF8)
+      if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $candidateMap -Key "bazel.rule_name"))) { continue }
+      $contextCandidates += [pscustomobject]@{
+        Path = $candidateContextPath
+        Map = $candidateMap
+      }
+    }
+    foreach ($externalRoot in $externalRoots) {
+      if (-not (Test-Path -LiteralPath $externalRoot -PathType Container)) { continue }
+      $candidatePaths = Get-ChildItem -LiteralPath $externalRoot -Recurse -File -Filter "context.json" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*/.testoptimization/context.json" }
+      foreach ($candidate in $candidatePaths) {
+        $candidateMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $candidate.FullName -Raw -Encoding UTF8)
+        if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $candidateMap -Key "bazel.rule_name"))) { continue }
+        $contextCandidates += [pscustomobject]@{
+          Path = $candidate.FullName
+          Map = $candidateMap
+        }
+      }
+    }
+    if ($contextCandidates.Count -gt 0) {
+      $preferredContext = $contextCandidates | Sort-Object Path | Select-Object -First 1
+      $contextPath = $preferredContext.Path
+      $contextMap = $preferredContext.Map
+    }
+  }
+  if ($enforceBazelContextKeys) {
+    foreach ($key in @("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")) {
+      if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $contextMap -Key $key))) {
+        throw "context.json missing Bazel metadata key '$key' after sync preflight"
+      }
+    }
+    foreach ($key in @("test.bazel.rule_name", "test.bazel.rule_version")) {
+      if ($null -ne (Get-JsonValue -Object $contextMap -Key $key)) {
+        throw "context.json unexpectedly contains legacy Bazel metadata key '$key' after sync preflight"
+      }
+    }
+    if ((Get-JsonValue -Object $contextMap -Key "bazel.os") -ne (Get-JsonValue -Object $contextMap -Key "os.platform")) {
+      throw "context.json bazel.os must match os.platform after sync preflight"
+    }
+    if ((Get-JsonValue -Object $contextMap -Key "bazel.arch") -ne (Get-JsonValue -Object $contextMap -Key "os.architecture")) {
+      throw "context.json bazel.arch must match os.architecture after sync preflight"
+    }
+  }
   if (-not (Test-Path -LiteralPath $telemetryFactsPath -PathType Leaf)) {
     throw "missing telemetry_facts.json after sync preflight at $telemetryFactsPath"
   }

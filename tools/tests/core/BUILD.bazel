@@ -44,6 +44,7 @@ load(
     "//tools/tests/core:test_sync_utils.bzl",
     "apply_dd_git_overrides_test",
     "apply_github_event_payload_defensive_test",
+    "build_context_tags_test",
     "clone_payload_with_detached_attributes_test",
     "clone_payload_with_nested_structure_test",
     "collect_env_ctx_wrapper_test",
@@ -588,6 +589,12 @@ parse_curl_time_ms_test(
 
 telemetry_facts_document_test(
     name = "telemetry_facts_document_test",
+    size = "small",
+    timeout = "short",
+)
+
+build_context_tags_test(
+    name = "build_context_tags_test",
     size = "small",
     timeout = "short",
 )

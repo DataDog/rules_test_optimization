@@ -1507,9 +1507,11 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     if ctx.attr.runtime_arch:
         tags["runtime.architecture"] = ctx.attr.runtime_arch
 
-    # Bazel rules identity tags (stable constants for this ruleset).
-    tags["test.bazel.rule_name"] = TEST_BAZEL_RULE_NAME
-    tags["test.bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
+    # Bazel metadata tags describe the ruleset identity and Bazel host.
+    tags["bazel.rule_name"] = TEST_BAZEL_RULE_NAME
+    tags["bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
+    tags["bazel.os"] = osinfo.get("platform") or "unknown"
+    tags["bazel.arch"] = osinfo.get("arch") or "unknown"
 
     # Git tags
     if env_data.get("repository_url"):
@@ -1604,6 +1606,8 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
 
     log_debug(debug, "context", "context.json tags: %s" % json.encode(tags))
     return tags
+
+build_context_tags_for_tests = _build_context_tags
 
 # ##########################################################################
 # Request builders
