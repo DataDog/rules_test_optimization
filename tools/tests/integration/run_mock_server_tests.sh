@@ -3544,6 +3544,18 @@ if settings_tags != ["test_management_enabled:true"]:
     print(f"error: unexpected settings_response tags: {settings_tags!r}")
     sys.exit(1)
 
+for metric_name in ("git_requests.settings", "known_tests.request", "test_management_tests.request"):
+    tags = count_metrics[metric_name].get("tags") or []
+    if tags != []:
+        print(f"error: expected uncompressed count metric {metric_name} to be tagless, saw {tags!r}")
+        sys.exit(1)
+
+for metric_name in expected_distributions:
+    tags = distribution_metrics[metric_name].get("tags") or []
+    if tags != []:
+        print(f"error: expected uncompressed distribution metric {metric_name} to be tagless, saw {tags!r}")
+        sys.exit(1)
+
 timestamps = set()
 for metric_name in expected_counts:
     series = count_metrics[metric_name]

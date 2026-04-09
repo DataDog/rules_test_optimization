@@ -109,6 +109,7 @@ load(
     "sanitize_repository_url_test",
     "set_context_tag_from_env_test",
     "settings_response_tags_test",
+    "sync_success_metric_tags_parity_test",
     "sync_environment_keys_allowlist_test",
     "telemetry_facts_document_test",
     "telemetry_response_counts_test",
@@ -593,6 +594,12 @@ telemetry_facts_document_test(
 
 settings_response_tags_test(
     name = "settings_response_tags_test",
+    size = "small",
+    timeout = "short",
+)
+
+sync_success_metric_tags_parity_test(
+    name = "sync_success_metric_tags_parity_test",
     size = "small",
     timeout = "short",
 )

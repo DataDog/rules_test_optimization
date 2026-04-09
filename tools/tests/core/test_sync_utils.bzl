@@ -1208,6 +1208,50 @@ def _settings_response_tags_test(ctx):
     )
     return unittest.end(env)
 
+def _sync_success_metric_tags_parity_test(ctx):
+    """Validate sync success metrics keep the tracer's current tag parity."""
+    env = unittest.begin(ctx)
+    facts = new_telemetry_facts_for_tests("svc-a", runtime_name = "go", env = "ci")
+
+    # dd-trace-go only tags these metrics on the successful path when
+    # compression is enabled, which Bazel sync does not do today.
+    append_telemetry_count_for_tests(facts, "git_requests.settings")
+    append_telemetry_distribution_for_tests(facts, "git_requests.settings_ms", 12)
+    append_telemetry_count_for_tests(
+        facts,
+        "git_requests.settings_response",
+        tags = build_settings_response_tags_for_tests({"test_management": {"enabled": True}}),
+    )
+    append_telemetry_count_for_tests(facts, "known_tests.request")
+    append_telemetry_distribution_for_tests(facts, "known_tests.request_ms", 15)
+    append_telemetry_distribution_for_tests(facts, "known_tests.response_bytes", 128)
+    append_telemetry_distribution_for_tests(facts, "known_tests.response_tests", 3)
+    append_telemetry_count_for_tests(facts, "test_management_tests.request")
+    append_telemetry_distribution_for_tests(facts, "test_management_tests.request_ms", 20)
+    append_telemetry_distribution_for_tests(facts, "test_management_tests.response_bytes", 96)
+    append_telemetry_distribution_for_tests(facts, "test_management_tests.response_tests", 2)
+
+    count_tags = {}
+    for metric in facts.get("counts"):
+        count_tags[metric.get("name")] = metric.get("tags")
+    distribution_tags = {}
+    for metric in facts.get("distributions"):
+        distribution_tags[metric.get("name")] = metric.get("tags")
+
+    asserts.equals(env, [], count_tags.get("git_requests.settings"))
+    asserts.equals(env, ["test_management_enabled:true"], count_tags.get("git_requests.settings_response"))
+    asserts.equals(env, [], count_tags.get("known_tests.request"))
+    asserts.equals(env, [], count_tags.get("test_management_tests.request"))
+
+    asserts.equals(env, [], distribution_tags.get("git_requests.settings_ms"))
+    asserts.equals(env, [], distribution_tags.get("known_tests.request_ms"))
+    asserts.equals(env, [], distribution_tags.get("known_tests.response_bytes"))
+    asserts.equals(env, [], distribution_tags.get("known_tests.response_tests"))
+    asserts.equals(env, [], distribution_tags.get("test_management_tests.request_ms"))
+    asserts.equals(env, [], distribution_tags.get("test_management_tests.response_bytes"))
+    asserts.equals(env, [], distribution_tags.get("test_management_tests.response_tests"))
+    return unittest.end(env)
+
 def _telemetry_response_counts_test(ctx):
     """Validate response test counters for known-tests and test-management."""
     env = unittest.begin(ctx)
@@ -1547,6 +1591,7 @@ http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_
 parse_curl_time_ms_test = unittest.make(_parse_curl_time_ms_test)
 telemetry_facts_document_test = unittest.make(_telemetry_facts_document_test)
 settings_response_tags_test = unittest.make(_settings_response_tags_test)
+sync_success_metric_tags_parity_test = unittest.make(_sync_success_metric_tags_parity_test)
 telemetry_response_counts_test = unittest.make(_telemetry_response_counts_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 render_module_runfiles_bzl_escaping_test = unittest.make(_render_module_runfiles_bzl_escaping_test)

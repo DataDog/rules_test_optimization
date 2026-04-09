@@ -299,7 +299,11 @@ function Get-TelemetryMetricTags {
     $messagePayload = Get-JsonValue -Object $message -Key "payload"
     foreach ($series in @(Get-JsonValue -Object $messagePayload -Key "series")) {
       if ((Get-JsonValue -Object $series -Key "metric") -ne $MetricName) { continue }
-      return @((Get-JsonValue -Object $series -Key "tags"))
+      $tags = Get-JsonValue -Object $series -Key "tags"
+      if ($null -eq $tags) {
+        return @()
+      }
+      return @($tags | Where-Object { $null -ne $_ -and $_ -ne "" })
     }
   }
   return @()
@@ -887,6 +891,18 @@ $anchorPayload
   }
   if ($existingWindowsTags -contains "provider:bazel") {
     throw "expected existing.windows.metric to stop sending the bare provider:bazel tag when a provider is detected"
+  }
+  $settingsTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "git_requests.settings")
+  if ($settingsTags.Count -ne 0) {
+    throw "expected git_requests.settings to remain tagless on the uncompressed sync path, saw $($settingsTags -join ',')"
+  }
+  $knownTestsResponseTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "known_tests.response_tests")
+  if ($knownTestsResponseTags.Count -ne 0) {
+    throw "expected known_tests.response_tests to remain tagless on the uncompressed sync path, saw $($knownTestsResponseTags -join ',')"
+  }
+  $testManagementRequestTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "test_management_tests.request")
+  if ($testManagementRequestTags.Count -ne 0) {
+    throw "expected test_management_tests.request to remain tagless on the uncompressed sync path, saw $($testManagementRequestTags -join ',')"
   }
   if (Test-TranscriptContains -TranscriptPath $mismatchTranscript -ForbiddenText "posting '' (body '')") {
     throw "env-mismatch transcript unexpectedly contained an empty synthetic upload"

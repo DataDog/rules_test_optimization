@@ -1954,6 +1954,11 @@ def _impl(ctx):
     # successfully enough for repository generation to continue. A hard fetch
     # failure still aborts repo resolution before the uploader can replay any
     # stored facts, so request-error restoration remains a follow-up concern.
+    #
+    # Keep the successful request metrics aligned with dd-trace-go:
+    # - request/request_ms/response_tests are tagless on the uncompressed path
+    # - response_bytes only gains tags when the response is compressed
+    # - settings_response carries the feature-state tags returned by settings
     _append_telemetry_count(telemetry_facts, "git_requests.settings")
     _append_telemetry_distribution(telemetry_facts, "git_requests.settings_ms", settings_result.get("duration_ms", 0))
     _append_telemetry_count(
