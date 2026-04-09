@@ -1590,9 +1590,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
@@ -1600,15 +1600,15 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   case "${3:-}" in
-    -require=github.com/DataDog/dd-trace-go/v2@v2.6.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.6.0" ]; then
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260409102143-ddd4e03ab47d" ]; then
   exit 0
 fi
 
@@ -1621,7 +1621,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.6.0\n'
+      printf 'v2.9.0-dev.0.20260409102143-ddd4e03ab47d\n'
       exit 0
       ;;
   esac
@@ -1629,10 +1629,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
-      printf '{"Version":"v2.6.0"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
@@ -1643,7 +1643,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.6.0"}\n'
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
@@ -1807,9 +1807,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
@@ -1817,15 +1817,15 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   case "${3:-}" in
-    -require=github.com/DataDog/dd-trace-go/v2@v2.6.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.6.0" ]; then
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260409102143-ddd4e03ab47d" ]; then
   exit 0
 fi
 
@@ -1838,7 +1838,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.6.0\n'
+      printf 'v2.9.0-dev.0.20260409102143-ddd4e03ab47d\n'
       exit 0
       ;;
   esac
@@ -1846,10 +1846,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.6.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.6.0)
-      printf '{"Version":"v2.6.0"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
@@ -1860,7 +1860,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.6.0"}\n'
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
@@ -2093,14 +2093,21 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-LOG_LINES_BEFORE_CONTEXT="$LOG_LINES_BEFORE_CONTEXT" "$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_CONTEXT="$LOG_LINES_BEFORE_CONTEXT" CONTEXT_JSON_PATH="$TOPT_DIR/context.json" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
 start_line = int(os.environ.get("LOG_LINES_BEFORE_CONTEXT", "0") or "0")
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for idx, line in enumerate(handle):
@@ -2130,10 +2137,8 @@ for rec in reversed(records):
         content = evt.get("content") or {}
         if content.get("resource") != target_resource:
             continue
-        evt_meta = content.get("meta") or {}
-        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
-            target_evt = evt
-            break
+        target_evt = evt
+        break
     if target_evt is not None:
         break
 if target_evt is None:
@@ -2149,9 +2154,13 @@ except json.JSONDecodeError:
 if owners != ["@DataDog/ci-app-libraries-dotnet"]:
     print("error: expected CODEOWNERS value missing in context-enriched payload")
     sys.exit(1)
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: expected context tag mismatch in context-enriched payload: {key} -> {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
 for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
-    if key not in meta:
-        print(f"error: expected context tag missing in context-enriched payload: {key}")
+    if key in meta:
+        print(f"error: legacy context tag unexpectedly present in context-enriched payload: {key}")
         sys.exit(1)
 PY
 
@@ -2200,14 +2209,21 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-LOG_LINES_BEFORE_CONTEXT_OVERRIDE="$LOG_LINES_BEFORE_CONTEXT_OVERRIDE" "$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_CONTEXT_OVERRIDE="$LOG_LINES_BEFORE_CONTEXT_OVERRIDE" CONTEXT_JSON_PATH="$TOPT_DIR/context.json" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
 start_line = int(os.environ.get("LOG_LINES_BEFORE_CONTEXT_OVERRIDE", "0") or "0")
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for idx, line in enumerate(handle):
@@ -2247,15 +2263,22 @@ for rec in reversed(records):
         content = evt.get("content") or {}
         if content.get("resource") != target_resource:
             continue
-        evt_meta = content.get("meta") or {}
-        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
-            target_evt = evt
-            break
+        target_evt = evt
+        break
     if target_evt is not None:
         break
 if target_evt is None:
     print("error: missing context-enriched test event after runtime-context uploader run")
     sys.exit(1)
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: runtime-context uploader run missing expected context tag {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
+    if key in meta:
+        print(f"error: runtime-context uploader run still contains legacy context tag: {key}")
+        sys.exit(1)
 PY
 
 # Scenario: an unreadable runtime override must fall back to bundled context
@@ -2279,14 +2302,21 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-LOG_LINES_BEFORE_BAD_OVERRIDE="$LOG_LINES_BEFORE_BAD_OVERRIDE" "$PYTHON" - <<'PY'
+LOG_LINES_BEFORE_BAD_OVERRIDE="$LOG_LINES_BEFORE_BAD_OVERRIDE" CONTEXT_JSON_PATH="$TOPT_DIR/context.json" "$PYTHON" - <<'PY'
 import base64
 import json
 import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
 start_line = int(os.environ.get("LOG_LINES_BEFORE_BAD_OVERRIDE", "0") or "0")
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for idx, line in enumerate(handle):
@@ -2312,16 +2342,23 @@ for rec in reversed(records):
         content = evt.get("content") or {}
         if content.get("resource") != target_resource:
             continue
-        evt_meta = content.get("meta") or {}
-        if "test.bazel.rule_name" in evt_meta and "test.bazel.rule_version" in evt_meta:
-            target_evt = evt
-            break
+        target_evt = evt
+        break
     if target_evt is not None:
         break
 
 if target_evt is None:
     print("error: invalid runtime override did not fall back to bundled context enrichment")
     sys.exit(1)
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: invalid runtime override fallback missing expected context tag {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
+    if key in meta:
+        print(f"error: invalid runtime override fallback still contains legacy context tag: {key}")
+        sys.exit(1)
 PY
 
 ORIG_CODEOWNERS="$WORKSPACE/CODEOWNERS.orig"
@@ -3334,6 +3371,476 @@ for name in expected_failures:
         sys.exit(1)
 PY
 
+# Scenario: sync telemetry facts should append missing rule metrics into an
+# existing tracer message-batch while preserving tracer identity, and should
+# normalize outbound application.env across every matched tracer runtime.
+TELEMETRY_AUG_TESTLOGS="$TMP_WS/telemetry_aug_testlogs"
+TELEMETRY_AUG_DIR="$TELEMETRY_AUG_TESTLOGS/manual_telemetry_aug/test.outputs/payloads/telemetry"
+mkdir -p "$TELEMETRY_AUG_DIR"
+TELEMETRY_AUG_FILE="$TELEMETRY_AUG_DIR/telemetry_anchor_010.json"
+cat > "$TELEMETRY_AUG_FILE" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "message-batch",
+  "runtime_id": "augment-runtime",
+  "seq_id": 41,
+  "tracer_time": 1710000000,
+  "application": {
+    "service_name": "mock-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "host": {
+    "hostname": "mock-host"
+  },
+  "payload": [
+    {
+      "request_type": "generate-metrics",
+      "payload": {
+        "namespace": "civisibility",
+        "series": [
+          {
+            "metric": "existing.metric",
+            "points": [[1710000000, 1]],
+            "type": "count",
+            "tags": ["marker:existing", "provider:bazel"],
+            "common": true,
+            "namespace": "civisibility"
+          }
+        ]
+      }
+    }
+  ]
+}
+JSON_EOF
+TELEMETRY_AUG_PEER="$TELEMETRY_AUG_DIR/telemetry_peer_011.json"
+cat > "$TELEMETRY_AUG_PEER" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "runtime_id": "augment-runtime-peer",
+  "seq_id": 5,
+  "tracer_time": 1710000100,
+  "application": {
+    "service_name": "mock-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "host": {
+    "hostname": "mock-host"
+  },
+  "payload": {
+    "marker": "peer"
+  }
+}
+JSON_EOF
+TELEMETRY_AUG_CONTEXT_DIR="$TMP_WS/telemetry_aug_context"
+mkdir -p "$TELEMETRY_AUG_CONTEXT_DIR"
+cp "$TOPT_DIR/context.json" "$TELEMETRY_AUG_CONTEXT_DIR/context.json"
+TELEMETRY_AUG_CONTEXT_JSON="$TELEMETRY_AUG_CONTEXT_DIR/context.json"
+TELEMETRY_AUG_CONTEXT_JSON="$TELEMETRY_AUG_CONTEXT_JSON" "$PYTHON" - <<'PY'
+import json
+import os
+
+path = os.environ["TELEMETRY_AUG_CONTEXT_JSON"]
+with open(path, "r", encoding = "utf-8-sig") as handle:
+    payload = json.load(handle)
+payload["ci.provider.name"] = "github"
+with open(path, "w", encoding = "utf-8", newline = "\n") as handle:
+    json.dump(payload, handle, separators = (",", ":"), ensure_ascii = False)
+    handle.write("\n")
+PY
+
+TELEMETRY_AUG_LOG_START="$(log_line_count)"
+UPLOADER_TELEMETRY_AUG_LOG="$TMP_WS/uploader_telemetry_aug.log"
+if ! TESTLOGS_DIR="$TELEMETRY_AUG_TESTLOGS" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CONTEXT_JSON="$TELEMETRY_AUG_CONTEXT_JSON" \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_API_KEY=mock \
+DD_SITE=datadoghq.com \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_TELEMETRY_AUG_LOG" 2>&1; then
+  echo "error: telemetry augmentation scenario failed"
+  cat "$UPLOADER_TELEMETRY_AUG_LOG" || true
+  exit 1
+fi
+
+TELEMETRY_AUG_LOG_START="$TELEMETRY_AUG_LOG_START" TELEMETRY_AUG_FILE="$TELEMETRY_AUG_FILE" TELEMETRY_AUG_PEER="$TELEMETRY_AUG_PEER" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("TELEMETRY_AUG_LOG_START", "0") or "0")
+anchor_file = os.environ["TELEMETRY_AUG_FILE"]
+peer_file = os.environ["TELEMETRY_AUG_PEER"]
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+telemetry_records = [rec for rec in records if rec.get("path") == "/api/v2/apmtelemetry"]
+if len(telemetry_records) != 2:
+    print(f"error: augmentation scenario expected 2 telemetry uploads, saw {len(telemetry_records)}")
+    sys.exit(1)
+
+decoded = [json.loads(base64.b64decode(rec["body_b64"]).decode("utf-8")) for rec in telemetry_records]
+peer_payload = next((payload for payload in decoded if payload.get("request_type") == "app-started"), None)
+payload = next((payload for payload in decoded if payload.get("request_type") == "message-batch"), None)
+if payload is None:
+    print("error: augmented telemetry should stay a message-batch")
+    sys.exit(1)
+if peer_payload is None:
+    print("error: augmentation scenario should keep the non-anchor tracer payload")
+    sys.exit(1)
+if payload.get("runtime_id") != "augment-runtime":
+    print("error: augmented telemetry should preserve runtime_id")
+    sys.exit(1)
+if payload.get("seq_id") != 41:
+    print("error: augmented telemetry should preserve original seq_id")
+    sys.exit(1)
+app = payload.get("application") or {}
+if app.get("service_name") != "mock-service" or app.get("language_name") != "go":
+    print("error: augmented telemetry should preserve tracer application identity")
+    sys.exit(1)
+if app.get("env") != "ci":
+    print(f"error: augmented telemetry should rewrite application.env from facts, saw {app.get('env')!r}")
+    sys.exit(1)
+
+peer_app = peer_payload.get("application") or {}
+if peer_app.get("env") != "ci":
+    print(f"error: peer tracer payload should also rewrite application.env from facts, saw {peer_app.get('env')!r}")
+    sys.exit(1)
+
+existing_seen = False
+count_metrics = {}
+distribution_metrics = {}
+for message in payload.get("payload", []):
+    body = message.get("payload") or {}
+    for series in body.get("series", []):
+        metric = series.get("metric")
+        if metric == "existing.metric":
+            existing_seen = True
+        if message.get("request_type") == "generate-metrics":
+            count_metrics[metric] = series
+        elif message.get("request_type") == "distributions":
+            distribution_metrics[metric] = series
+
+if not existing_seen:
+    print("error: augmented telemetry should keep original tracer metric messages")
+    sys.exit(1)
+existing_tags = count_metrics["existing.metric"].get("tags") or []
+if "provider:bazel/github" not in existing_tags:
+    print(f"error: augmented telemetry should rewrite provider:bazel using detected provider, saw {existing_tags!r}")
+    sys.exit(1)
+if "provider:bazel" in existing_tags:
+    print(f"error: augmented telemetry should not keep the bare provider:bazel tag when a provider is detected: {existing_tags!r}")
+    sys.exit(1)
+
+expected_counts = {
+    "git_requests.settings",
+    "git_requests.settings_response",
+    "known_tests.request",
+    "test_management_tests.request",
+}
+missing_counts = sorted(expected_counts.difference(count_metrics))
+if missing_counts:
+    print(f"error: augmented telemetry missing count metrics: {missing_counts!r}")
+    sys.exit(1)
+
+expected_distributions = {
+    "git_requests.settings_ms",
+    "known_tests.request_ms",
+    "known_tests.response_bytes",
+    "known_tests.response_tests",
+    "test_management_tests.request_ms",
+    "test_management_tests.response_bytes",
+    "test_management_tests.response_tests",
+}
+missing_distributions = sorted(expected_distributions.difference(distribution_metrics))
+if missing_distributions:
+    print(f"error: augmented telemetry missing distribution metrics: {missing_distributions!r}")
+    sys.exit(1)
+
+settings_tags = count_metrics["git_requests.settings_response"].get("tags") or []
+if settings_tags != ["test_management_enabled:true"]:
+    print(f"error: unexpected settings_response tags: {settings_tags!r}")
+    sys.exit(1)
+
+for metric_name in ("git_requests.settings", "known_tests.request", "test_management_tests.request"):
+    tags = count_metrics[metric_name].get("tags") or []
+    if tags != []:
+        print(f"error: expected uncompressed count metric {metric_name} to be tagless, saw {tags!r}")
+        sys.exit(1)
+
+for metric_name in expected_distributions:
+    tags = distribution_metrics[metric_name].get("tags") or []
+    if tags != []:
+        print(f"error: expected uncompressed distribution metric {metric_name} to be tagless, saw {tags!r}")
+        sys.exit(1)
+
+timestamps = set()
+for metric_name in expected_counts:
+    series = count_metrics[metric_name]
+    points = series.get("points") or []
+    if points and isinstance(points[0], list) and points[0]:
+        timestamps.add(points[0][0])
+if len(timestamps) != 1:
+    print(f"error: expected one shared timestamp for appended count metrics, saw {timestamps!r}")
+    sys.exit(1)
+
+with open(anchor_file, "r", encoding="utf-8") as handle:
+    raw_anchor = handle.read()
+if "git_requests.settings" in raw_anchor:
+    print("error: tracer telemetry file on disk should remain unchanged after augmentation")
+    sys.exit(1)
+if '"env": "none"' not in raw_anchor:
+    print("error: tracer anchor file on disk should keep its original env")
+    sys.exit(1)
+with open(peer_file, "r", encoding="utf-8") as handle:
+    raw_peer = handle.read()
+if '"env": "none"' not in raw_peer:
+    print("error: peer tracer file on disk should keep its original env")
+    sys.exit(1)
+PY
+
+# Scenario: when no tracer message-batch exists, the uploader should keep the
+# raw tracer telemetry files intact, normalize outbound env across the matched
+# tracer set, and send one synthetic tracer-derived batch after the normal loop.
+TELEMETRY_SYNTH_TESTLOGS="$TMP_WS/telemetry_synth_testlogs"
+TELEMETRY_SYNTH_DIR="$TELEMETRY_SYNTH_TESTLOGS/manual_telemetry_synth/test.outputs/payloads/telemetry"
+mkdir -p "$TELEMETRY_SYNTH_DIR"
+cat > "$TELEMETRY_SYNTH_DIR/telemetry_alpha_001.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "runtime_id": "synthetic-runtime",
+  "seq_id": 7,
+  "application": {
+    "service_name": "mock-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "payload": {
+    "marker": "alpha"
+  }
+}
+JSON_EOF
+TELEMETRY_SYNTH_LAST="$TELEMETRY_SYNTH_DIR/telemetry_omega_010.json"
+cat > "$TELEMETRY_SYNTH_LAST" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "app-closing",
+  "runtime_id": "synthetic-runtime",
+  "seq_id": 8,
+  "application": {
+    "service_name": "mock-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "payload": {
+    "marker": "omega"
+  }
+}
+JSON_EOF
+
+TELEMETRY_SYNTH_LOG_START="$(log_line_count)"
+UPLOADER_TELEMETRY_SYNTH_LOG="$TMP_WS/uploader_telemetry_synth.log"
+if ! TESTLOGS_DIR="$TELEMETRY_SYNTH_TESTLOGS" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_API_KEY=mock \
+DD_SITE=datadoghq.com \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_TELEMETRY_SYNTH_LOG" 2>&1; then
+  echo "error: synthetic telemetry scenario failed"
+  cat "$UPLOADER_TELEMETRY_SYNTH_LOG" || true
+  exit 1
+fi
+
+TELEMETRY_SYNTH_LOG_START="$TELEMETRY_SYNTH_LOG_START" TELEMETRY_SYNTH_LAST="$TELEMETRY_SYNTH_LAST" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("TELEMETRY_SYNTH_LOG_START", "0") or "0")
+last_anchor_file = os.environ["TELEMETRY_SYNTH_LAST"]
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+telemetry_records = [rec for rec in records if rec.get("path") == "/api/v2/apmtelemetry"]
+if len(telemetry_records) != 3:
+    print(f"error: synthetic scenario expected 3 telemetry uploads, saw {len(telemetry_records)}")
+    sys.exit(1)
+
+decoded = [json.loads(base64.b64decode(rec["body_b64"]).decode("utf-8")) for rec in telemetry_records]
+request_types = [payload.get("request_type") for payload in decoded]
+if request_types != ["app-started", "app-closing", "message-batch"]:
+    print(f"error: synthetic scenario expected message-batch after raw tracer uploads, saw {request_types!r}")
+    sys.exit(1)
+
+synthetic = decoded[-1]
+if synthetic.get("runtime_id") != "synthetic-runtime":
+    print("error: synthetic telemetry should preserve runtime_id from tracer anchor")
+    sys.exit(1)
+if synthetic.get("seq_id") != 9:
+    print(f"error: synthetic telemetry expected seq_id 9, got {synthetic.get('seq_id')!r}")
+    sys.exit(1)
+app = synthetic.get("application") or {}
+if app.get("service_name") != "mock-service" or app.get("language_name") != "go":
+    print("error: synthetic telemetry should preserve tracer application identity")
+    sys.exit(1)
+if app.get("env") != "ci":
+    print(f"error: synthetic telemetry should rewrite application.env from facts, saw {app.get('env')!r}")
+    sys.exit(1)
+metric_names = []
+for message in synthetic.get("payload", []):
+    body = message.get("payload") or {}
+    metric_names.extend(series.get("metric") for series in body.get("series", []))
+if "git_requests.settings" not in metric_names or "known_tests.response_tests" not in metric_names:
+    print(f"error: synthetic telemetry missing expected rule metrics: {metric_names!r}")
+    sys.exit(1)
+for raw_payload in decoded[:-1]:
+    raw_app = raw_payload.get("application") or {}
+    if raw_app.get("env") != "ci":
+        print(f"error: raw tracer uploads should also rewrite application.env from facts, saw {raw_app.get('env')!r}")
+        sys.exit(1)
+
+with open(last_anchor_file, "r", encoding="utf-8") as handle:
+    raw_anchor = handle.read()
+if '"request_type": "message-batch"' in raw_anchor or "git_requests.settings" in raw_anchor:
+    print("error: raw non-batch telemetry file should remain unchanged on disk")
+    sys.exit(1)
+if '"env": "none"' not in raw_anchor:
+    print("error: raw non-batch telemetry file should keep its original env on disk")
+    sys.exit(1)
+PY
+
+# Scenario: when no provider is present in the resolved context, telemetry tag
+# rewriting must leave provider:bazel unchanged.
+TELEMETRY_NOPROV_TESTLOGS="$TMP_WS/telemetry_no_provider_testlogs"
+TELEMETRY_NOPROV_DIR="$TELEMETRY_NOPROV_TESTLOGS/manual_telemetry_no_provider/test.outputs/payloads/telemetry"
+mkdir -p "$TELEMETRY_NOPROV_DIR"
+cat > "$TELEMETRY_NOPROV_DIR/telemetry_no_provider_001.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "message-batch",
+  "runtime_id": "no-provider-runtime",
+  "seq_id": 13,
+  "tracer_time": 1710000200,
+  "application": {
+    "service_name": "no-provider-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "payload": [
+    {
+      "request_type": "generate-metrics",
+      "payload": {
+        "namespace": "civisibility",
+        "series": [
+          {
+            "metric": "existing.no_provider.metric",
+            "points": [[1710000200, 1]],
+            "type": "count",
+            "tags": ["provider:bazel", "marker:no-provider"],
+            "common": true,
+            "namespace": "civisibility"
+          }
+        ]
+      }
+    }
+  ]
+}
+JSON_EOF
+TELEMETRY_NOPROV_CONTEXT_DIR="$TMP_WS/telemetry_no_provider_context"
+mkdir -p "$TELEMETRY_NOPROV_CONTEXT_DIR"
+printf '{}\n' > "$TELEMETRY_NOPROV_CONTEXT_DIR/context.json"
+TELEMETRY_NOPROV_LOG_START="$(log_line_count)"
+UPLOADER_TELEMETRY_NOPROV_LOG="$TMP_WS/uploader_telemetry_no_provider.log"
+if ! TESTLOGS_DIR="$TELEMETRY_NOPROV_TESTLOGS" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CONTEXT_JSON="$TELEMETRY_NOPROV_CONTEXT_DIR/context.json" \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_API_KEY=mock \
+DD_SITE=datadoghq.com \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_TELEMETRY_NOPROV_LOG" 2>&1; then
+  echo "error: telemetry no-provider scenario failed"
+  cat "$UPLOADER_TELEMETRY_NOPROV_LOG" || true
+  exit 1
+fi
+
+TELEMETRY_NOPROV_LOG_START="$TELEMETRY_NOPROV_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("TELEMETRY_NOPROV_LOG_START", "0") or "0")
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+telemetry_records = [rec for rec in records if rec.get("path") == "/api/v2/apmtelemetry"]
+if len(telemetry_records) != 1:
+    print(f"error: no-provider scenario expected 1 telemetry upload, saw {len(telemetry_records)}")
+    sys.exit(1)
+
+payload = json.loads(base64.b64decode(telemetry_records[0]["body_b64"]).decode("utf-8"))
+series = payload["payload"][0]["payload"]["series"][0]
+tags = series.get("tags") or []
+if "provider:bazel" not in tags:
+    print(f"error: no-provider scenario should keep provider:bazel unchanged, saw {tags!r}")
+    sys.exit(1)
+if any(tag.startswith("provider:bazel/") for tag in tags):
+    print(f"error: no-provider scenario should not append a provider suffix, saw {tags!r}")
+    sys.exit(1)
+PY
+
 # Scenario: EVP mode should use evp_proxy endpoints + EVP subdomain headers.
 # This validates mode switching behavior: EVP must use evp_proxy routes and
 # EVP subdomain headers, and must not send DD-API-KEY.
@@ -3768,6 +4275,7 @@ run_manifest_uploader "$MANIFEST_SUFFIX_FOR_UPLOADER" "$UPLOADER_MANIFEST_SUFFIX
 
 UPLOADER_MANIFEST_EXACT_LOG="$UPLOADER_MANIFEST_EXACT_LOG" \
 UPLOADER_MANIFEST_SUFFIX_LOG="$UPLOADER_MANIFEST_SUFFIX_LOG" \
+CONTEXT_JSON_PATH="$CONTEXT_JSON_REAL_PATH" \
 "$PYTHON" - <<'PY'
 import base64
 import json
@@ -3775,6 +4283,13 @@ import os
 import sys
 
 log_path = os.environ["LOG_FILE"]
+context_path = os.environ["CONTEXT_JSON_PATH"]
+with open(context_path, "r", encoding="utf-8") as handle:
+    expected_context = json.load(handle)
+expected_tags = {
+    key: expected_context.get(key)
+    for key in ("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")
+}
 records = []
 with open(log_path, "r", encoding="utf-8") as handle:
     for line in handle:
@@ -3840,9 +4355,14 @@ def assert_manifest_resource(resource):
         print_manifest_logs()
         sys.exit(1)
     meta = ((target.get("content") or {}).get("meta") or {})
+    for key, value in expected_tags.items():
+        if meta.get(key) != value:
+            print(f"error: manifest fallback run missing context tag {key} for {resource}: {meta.get(key)!r} != {value!r}")
+            print_manifest_logs()
+            sys.exit(1)
     for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
-        if key not in meta:
-            print(f"error: manifest fallback run missing context tag {key} for {resource}")
+        if key in meta:
+            print(f"error: manifest fallback run still contains legacy context tag {key} for {resource}")
             print_manifest_logs()
             sys.exit(1)
     if owners_for(meta) != ["@org/owned"]:

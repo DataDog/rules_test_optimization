@@ -842,6 +842,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         """Validate bash runtime prefers explicit context override before data files."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
         self.assertIn('CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"', bash_text)
+        self.assertIn('TELEMETRY_FACTS_MANIFEST_PATH="__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"', bash_text)
         self.assertIn('context.json resolved via runtime override', bash_text)
         self.assertIn(
             'warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data',
@@ -852,6 +853,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             bash_text.index('CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")'),
         )
         self.assertIn('if [[ -z "$CONTEXT_JSON" ]]; then', bash_text)
+        self.assertIn('sibling="$(dirname "$CONTEXT_JSON")/telemetry_facts.json"', bash_text)
 
     def test_bash_runtime_guards_curl_command_substitutions(self) -> None:
         """Validate bash runtime captures curl failures without set -e aborts."""
@@ -884,6 +886,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("$ContextJsonOverride = $env:DD_TEST_OPTIMIZATION_CONTEXT_JSON", powershell_text)
+        self.assertIn('$TelemetryFactsManifestPath = "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"', powershell_text)
         self.assertIn("context.json resolved via runtime override", powershell_text)
         self.assertIn(
             "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data",
@@ -894,6 +897,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             powershell_text.index("$script:ContextJson = Resolve-ArtifactPath $ContextJsonPath"),
         )
         self.assertIn("if (-not $script:ContextJson) {", powershell_text)
+        self.assertIn('Join-Path (Split-Path -Parent $script:ContextJson) "telemetry_facts.json"', powershell_text)
 
 
 class MockDdServerTests(unittest.TestCase):

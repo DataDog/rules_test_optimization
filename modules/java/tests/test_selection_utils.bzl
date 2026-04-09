@@ -115,6 +115,7 @@ def _java_stub_includes_manifest_in_files_test(ctx):
     known_tests = ".testoptimization/cache/http/known_tests.json"
     test_management = ".testoptimization/cache/http/test_management.json"
     context = ".testoptimization/context.json"
+    telemetry_facts = ".testoptimization/telemetry_facts.json"
 
     content = render_stub_build_for_tests(
         settings,
@@ -122,6 +123,7 @@ def _java_stub_includes_manifest_in_files_test(ctx):
         known_tests,
         test_management,
         context,
+        telemetry_facts,
     )
     filegroup_start = content.find('name = "test_optimization_files"')
     context_group_start = content.find('name = "test_optimization_context"')

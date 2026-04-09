@@ -109,6 +109,8 @@ def _base_template_substitutions(
         gzip_payloads,
         context_json_rloc,
         context_json_path,
+        telemetry_facts_manifest_rloc,
+        telemetry_facts_manifest_path,
         schema_json_rloc,
         schema_json_path,
         schema_validator_rloc,
@@ -125,6 +127,8 @@ def _base_template_substitutions(
         "uploader_version": UPLOADER_VERSION,
         "context_json_rloc": context_json_rloc,
         "context_json_path": context_json_path,
+        "telemetry_facts_manifest_rloc": telemetry_facts_manifest_rloc,
+        "telemetry_facts_manifest_path": telemetry_facts_manifest_path,
         "schema_json_rloc": schema_json_rloc,
         "schema_json_path": schema_json_path,
         "schema_validator_rloc": schema_validator_rloc,
@@ -588,6 +592,7 @@ def _uploader_impl(ctx):
     # Find context.json in data files (supports any repo alias)
     context_json_rloc = ""
     context_json_path = ""
+    telemetry_facts_files = []
     for f in ctx.files.data:
         if f.basename == "context.json":
             # Keep first-match semantics deterministic: data deps are already
@@ -595,7 +600,18 @@ def _uploader_impl(ctx):
             # context files. If they do, first one wins for stability.
             context_json_rloc = f.short_path
             context_json_path = f.path
-            break
+        elif f.basename == "telemetry_facts.json":
+            telemetry_facts_files.append(f)
+    telemetry_facts_manifest = ctx.actions.declare_file(ctx.label.name + ".telemetry_facts_manifest")
+    telemetry_facts_manifest_lines = []
+    for f in telemetry_facts_files:
+        telemetry_facts_manifest_lines.append("%s\t%s" % (f.short_path, f.path))
+    ctx.actions.write(
+        output = telemetry_facts_manifest,
+        content = "\n".join(telemetry_facts_manifest_lines) + ("\n" if telemetry_facts_manifest_lines else ""),
+    )
+    telemetry_facts_manifest_rloc = telemetry_facts_manifest.short_path
+    telemetry_facts_manifest_path = telemetry_facts_manifest.path
     schema_json_rloc = ctx.file._schema.short_path if ctx.file._schema else ""
     schema_json_path = ctx.file._schema.path if ctx.file._schema else ""
     schema_validator_rloc = ctx.file._schema_validator.short_path if ctx.file._schema_validator else ""
@@ -651,6 +667,8 @@ def _uploader_impl(ctx):
         gzip_payloads,
         context_json_rloc,
         context_json_path,
+        telemetry_facts_manifest_rloc,
+        telemetry_facts_manifest_path,
         schema_json_rloc,
         schema_json_path,
         schema_validator_rloc,
@@ -684,6 +702,8 @@ def _uploader_impl(ctx):
                 gzip_payloads,
                 context_json_rloc,
                 context_json_path,
+                telemetry_facts_manifest_rloc,
+                telemetry_facts_manifest_path,
                 schema_json_rloc,
                 schema_json_path,
                 schema_validator_rloc,
@@ -717,7 +737,7 @@ def _uploader_impl(ctx):
         extra_files.append(ctx.file._schema)
     if ctx.file._schema_validator:
         extra_files.append(ctx.file._schema_validator)
-    runfiles = ctx.runfiles(files = [ps_file, bat_file] + ctx.files.data + extra_files)
+    runfiles = ctx.runfiles(files = [ps_file, bat_file, telemetry_facts_manifest] + ctx.files.data + extra_files)
     log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
     # Use target-platform constraints (ConstraintValueInfo) so executable

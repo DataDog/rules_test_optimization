@@ -136,6 +136,32 @@ function Invoke-UploaderScript {
   & $PowerShellPath @invokeArgs
 }
 
+# Run the uploader while collecting transcript output so assertions can inspect
+# the debug stream for invalid synthetic upload attempts.
+function Invoke-UploaderScriptWithTranscript {
+  param(
+    [string]$PowerShellPath,
+    [string]$ScriptPath,
+    [string[]]$ForwardedArgs,
+    [string]$TranscriptPath
+  )
+  if (Test-Path -LiteralPath $TranscriptPath) {
+    Remove-Item -LiteralPath $TranscriptPath -Force -ErrorAction SilentlyContinue
+  }
+  Start-Transcript -Path $TranscriptPath -Force | Out-Null
+  try {
+    $null = Invoke-UploaderScript -PowerShellPath $PowerShellPath -ScriptPath $ScriptPath -ForwardedArgs $ForwardedArgs
+    return (Get-NativeExitCode)
+  } finally {
+    try {
+      Stop-Transcript | Out-Null
+    } catch {
+      # Transcript teardown is best-effort so the caller still sees the real
+      # uploader exit code and any captured logs.
+    }
+  }
+}
+
 # Handle Get-FreePort behavior.
 function Get-FreePort {
   $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -177,7 +203,9 @@ function Wait-ForPort {
 function Render-UploaderTemplate {
   param(
     [string]$TemplatePath,
-    [string]$OutputPath
+    [string]$OutputPath,
+    [string]$ContextJsonPath = "",
+    [string]$TelemetryFactsManifestPath = ""
   )
   $content = Get-Content -LiteralPath $TemplatePath -Raw -Encoding UTF8
   $replacements = @{
@@ -190,7 +218,9 @@ function Render-UploaderTemplate {
     "__DDTPL_GZIP_PAYLOADS__" = "false"
     "__DDTPL_UPLOADER_VERSION__" = "integration-test"
     "__DDTPL_CONTEXT_JSON_RLOC__" = ""
-    "__DDTPL_CONTEXT_JSON_PATH__" = ""
+    "__DDTPL_CONTEXT_JSON_PATH__" = $ContextJsonPath
+    "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__" = ""
+    "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__" = $TelemetryFactsManifestPath
     "__DDTPL_SCHEMA_JSON_RLOC__" = ""
     "__DDTPL_SCHEMA_JSON_PATH__" = ""
     "__DDTPL_SCHEMA_VALIDATOR_RLOC__" = ""
@@ -214,6 +244,100 @@ function Read-JsonLog {
     $entries += ($line | ConvertFrom-Json)
   }
   return $entries
+}
+
+# Read one JSON document into a deterministic dictionary-oriented shape so the
+# assertions do not depend on platform-specific PSCustomObject behavior.
+function Read-JsonMap {
+  param([string]$JsonText)
+  return ($JsonText | ConvertFrom-Json -AsHashtable -NoEnumerate -ErrorAction Stop)
+}
+
+# Read one key from either a dictionary or a PSCustomObject produced by
+# ConvertFrom-Json.
+function Get-JsonValue {
+  param(
+    $Object,
+    [string]$Key
+  )
+  if ($null -eq $Object) { return $null }
+  if ($Object -is [System.Collections.IDictionary]) {
+    return $Object[$Key]
+  }
+  $property = $Object.PSObject.Properties[$Key]
+  if ($property) { return $property.Value }
+  return $null
+}
+
+# Collect metric names from a telemetry message-batch while accepting either
+# array-backed or singleton-object JSON materialization.
+function Get-TelemetryMetricNames {
+  param($Payload)
+
+  $metricNames = @()
+  foreach ($message in @(Get-JsonValue -Object $Payload -Key "payload")) {
+    $messagePayload = Get-JsonValue -Object $message -Key "payload"
+    foreach ($series in @(Get-JsonValue -Object $messagePayload -Key "series")) {
+      $metric = Get-JsonValue -Object $series -Key "metric"
+      if (($metric -is [string]) -and -not [string]::IsNullOrWhiteSpace($metric)) {
+        $metricNames += $metric
+      }
+    }
+  }
+  return $metricNames
+}
+
+# Read one metric tag array from a telemetry payload while accepting either
+# array-backed or singleton-object JSON materialization.
+function Get-TelemetryMetricTags {
+  param(
+    $Payload,
+    [string]$MetricName
+  )
+
+  foreach ($message in @(Get-JsonValue -Object $Payload -Key "payload")) {
+    $messagePayload = Get-JsonValue -Object $message -Key "payload"
+    foreach ($series in @(Get-JsonValue -Object $messagePayload -Key "series")) {
+      if ((Get-JsonValue -Object $series -Key "metric") -ne $MetricName) { continue }
+      $tags = Get-JsonValue -Object $series -Key "tags"
+      if ($null -eq $tags) {
+        return @()
+      }
+      if ($tags -is [System.Collections.IDictionary]) {
+        # Some Windows-hosted JSON shapes materialize an empty tag array as an
+        # empty dictionary. Treat that the same as "no tags" so the parity
+        # assertions reflect the uploaded telemetry rather than the host shape.
+        if ($tags.Count -eq 0) {
+          return @()
+        }
+      }
+      return @($tags | Where-Object { $null -ne $_ -and $_ -ne "" })
+    }
+  }
+  return @()
+}
+
+# Collect telemetry payloads from mock-server log entries for one request path.
+function Get-TelemetryPayloadsByPath {
+  param(
+    [object[]]$Entries,
+    [string]$Path
+  )
+
+  $payloads = @()
+  foreach ($entry in @($Entries | Where-Object { $_.path -eq $Path })) {
+    $body = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($entry.body_b64))
+    $payloads += ,(Read-JsonMap -JsonText $body)
+  }
+  return $payloads
+}
+
+# Read the current transcript and return true when it contains a forbidden
+# string that should never be emitted by the uploader.
+function Test-TranscriptContains([string]$TranscriptPath, [string]$ForbiddenText) {
+  if (-not (Test-Path -LiteralPath $TranscriptPath -PathType Leaf)) { return $false }
+  $content = Get-Content -LiteralPath $TranscriptPath -Raw -Encoding UTF8
+  return $content.Contains($ForbiddenText)
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -526,6 +650,73 @@ filegroup(
   $toptHttpDir = Split-Path -Parent $settingsPath
   $toptCacheDir = Split-Path -Parent $toptHttpDir
   $toptDir = Split-Path -Parent $toptCacheDir
+  $contextPath = Join-Path $toptDir "context.json"
+  $telemetryFactsPath = Join-Path $toptDir "telemetry_facts.json"
+  if (-not (Test-Path -LiteralPath $contextPath -PathType Leaf)) {
+    throw "missing context.json after sync preflight at $contextPath"
+  }
+  $contextMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $contextPath -Raw -Encoding UTF8)
+  $enforceBazelContextKeys = $contextPath -notlike "*+example_stub_repo_extension*"
+  if ($enforceBazelContextKeys -and [string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $contextMap -Key "bazel.rule_name"))) {
+    $contextCandidates = @()
+    $knownSettingsCandidates = @()
+    $settingsCandidatesVar = Get-Variable -Name settingsCandidates -ErrorAction SilentlyContinue
+    if ($settingsCandidatesVar) {
+      $knownSettingsCandidates = @($settingsCandidatesVar.Value | Sort-Object Score, Path)
+    }
+    foreach ($settingsCandidate in $knownSettingsCandidates) {
+      $candidateToptDir = Split-Path -Parent (Split-Path -Parent $settingsCandidate.Path)
+      $candidateContextPath = Join-Path $candidateToptDir "context.json"
+      if (-not (Test-Path -LiteralPath $candidateContextPath -PathType Leaf)) { continue }
+      $candidateMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $candidateContextPath -Raw -Encoding UTF8)
+      if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $candidateMap -Key "bazel.rule_name"))) { continue }
+      $contextCandidates += [pscustomobject]@{
+        Path = $candidateContextPath
+        Map = $candidateMap
+      }
+    }
+    foreach ($externalRoot in $externalRoots) {
+      if (-not (Test-Path -LiteralPath $externalRoot -PathType Container)) { continue }
+      $candidatePaths = Get-ChildItem -LiteralPath $externalRoot -Recurse -File -Filter "context.json" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*/.testoptimization/context.json" }
+      foreach ($candidate in $candidatePaths) {
+        $candidateMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $candidate.FullName -Raw -Encoding UTF8)
+        if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $candidateMap -Key "bazel.rule_name"))) { continue }
+        $contextCandidates += [pscustomobject]@{
+          Path = $candidate.FullName
+          Map = $candidateMap
+        }
+      }
+    }
+    if ($contextCandidates.Count -gt 0) {
+      $preferredContext = $contextCandidates | Sort-Object Path | Select-Object -First 1
+      $contextPath = $preferredContext.Path
+      $contextMap = $preferredContext.Map
+    }
+  }
+  if ($enforceBazelContextKeys) {
+    foreach ($key in @("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")) {
+      if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $contextMap -Key $key))) {
+        throw "context.json missing Bazel metadata key '$key' after sync preflight"
+      }
+    }
+    foreach ($key in @("test.bazel.rule_name", "test.bazel.rule_version")) {
+      if ($null -ne (Get-JsonValue -Object $contextMap -Key $key)) {
+        throw "context.json unexpectedly contains legacy Bazel metadata key '$key' after sync preflight"
+      }
+    }
+    if ((Get-JsonValue -Object $contextMap -Key "bazel.os") -ne (Get-JsonValue -Object $contextMap -Key "os.platform")) {
+      throw "context.json bazel.os must match os.platform after sync preflight"
+    }
+    if ((Get-JsonValue -Object $contextMap -Key "bazel.arch") -ne (Get-JsonValue -Object $contextMap -Key "os.architecture")) {
+      throw "context.json bazel.arch must match os.architecture after sync preflight"
+    }
+  }
+  if (-not (Test-Path -LiteralPath $telemetryFactsPath -PathType Leaf)) {
+    throw "missing telemetry_facts.json after sync preflight at $telemetryFactsPath"
+  }
+  $telemetryFactsManifest = Join-Path $tempRoot "telemetry_facts_manifest.txt"
+  [System.IO.File]::WriteAllText($telemetryFactsManifest, "`t$telemetryFactsPath`n", (New-Object System.Text.UTF8Encoding($false)))
   $exportPath = Join-Path (Split-Path -Parent $toptDir) "export.bzl"
   if (-not (Test-Path -LiteralPath $exportPath -PathType Leaf)) {
     throw "missing export.bzl after sync preflight at $exportPath"
@@ -537,100 +728,404 @@ filegroup(
     }
   }
 
-  $testOutputsRoot = Join-Path $tempRoot "bazel-testlogs/pkg/target/test.outputs"
-  $testsDir = Join-Path $testOutputsRoot "payloads/tests"
-  $coverageDir = Join-Path $testOutputsRoot "payloads/coverage"
-  $telemetryDir = Join-Path $testOutputsRoot "payloads/telemetry"
-  New-Item -ItemType Directory -Force -Path $testsDir, $coverageDir, $telemetryDir | Out-Null
-  Copy-Item -LiteralPath $snapshotFile -Destination (Join-Path $testsDir "span_events_windows.json") -Force
-  '{"mock_mode":"ok"}' | Set-Content -LiteralPath (Join-Path $coverageDir "coverage_windows.json") -Encoding UTF8
-  @'
-{
-  "api_version": "v2",
-  "request_type": "app-started",
-  "runtime_id": "windows-runtime-telemetry",
-  "application": {
-    "language_name": "dotnet",
-    "tracer_version": "3.40.0"
-  },
-  "payload": {
-    "marker": "windows-a"
-  }
-}
-'@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_A_010.json") -Encoding UTF8
-  @'
-{
-  "api_version": "v2",
-  "request_type": "app-closing",
-  "runtime_id": "windows-runtime-telemetry-b",
-  "application": {
-    "language_name": "dotnet",
-    "tracer_version": "3.40.0"
-  },
-  "payload": {
-    "marker": "windows-b"
-  }
-}
-'@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_a_002.json") -Encoding UTF8
-
-  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader
-
   $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
   $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS = "1"
+  $env:DD_TEST_OPTIMIZATION_DEBUG = "1"
   if ([string]::IsNullOrWhiteSpace($env:TEMP)) { $env:TEMP = $tempDir }
   if ([string]::IsNullOrWhiteSpace($env:TMP)) { $env:TMP = $tempDir }
 
-  # Agentless flow
-  # Build a deterministic mock key at runtime to avoid committing a secret-like literal.
+  function Initialize-WindowsTelemetryOutputs {
+    param(
+      [string]$Root,
+      [string]$ServiceName,
+      [string]$RuntimeName,
+      [string]$EnvValue,
+      [string]$RuntimeIdPrefix,
+      [bool]$HasMessageBatchAnchor,
+      [bool]$IncludeEmptyEnvField
+    )
+
+    $testsDir = Join-Path $Root "payloads/tests"
+    $coverageDir = Join-Path $Root "payloads/coverage"
+    $telemetryDir = Join-Path $Root "payloads/telemetry"
+    New-Item -ItemType Directory -Force -Path $testsDir, $coverageDir, $telemetryDir | Out-Null
+    Copy-Item -LiteralPath $snapshotFile -Destination (Join-Path $testsDir "span_events_windows.json") -Force
+    '{"mock_mode":"ok"}' | Set-Content -LiteralPath (Join-Path $coverageDir "coverage_windows.json") -Encoding UTF8
+
+    $envField = if ($IncludeEmptyEnvField) { '"env": "none",' } else { '' }
+    @"
+{
+  "api_version": "v2",
+  "request_type": "app-started",
+  "runtime_id": "${RuntimeIdPrefix}-aux-runtime",
+  "application": {
+    "service_name": "$ServiceName",
+    $envField
+    "language_name": "$RuntimeName",
+    "tracer_version": "3.40.0"
+  },
+  "payload": {
+    "marker": "$RuntimeIdPrefix-aux"
+  }
+}
+"@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_${RuntimeIdPrefix}_010.json") -Encoding UTF8
+
+    $anchorRequestType = if ($HasMessageBatchAnchor) { "message-batch" } else { "app-closing" }
+    $anchorPayload = if ($HasMessageBatchAnchor) {
+@"
+  "payload": [
+    {
+      "request_type": "generate-metrics",
+      "payload": {
+        "namespace": "civisibility",
+        "series": [
+          {
+            "metric": "existing.windows.metric",
+            "points": [[1710000000, 1]],
+            "type": "count",
+            "tags": ["marker:${RuntimeIdPrefix}-existing", "provider:bazel"],
+            "common": true,
+            "namespace": "civisibility"
+          }
+        ]
+      }
+    }
+  ]
+"@
+    } else {
+@"
+  "payload": {
+    "marker": "${RuntimeIdPrefix}-anchor"
+  }
+"@
+    }
+
+    @"
+{
+  "api_version": "v2",
+  "request_type": "$anchorRequestType",
+  "runtime_id": "${RuntimeIdPrefix}-anchor-runtime",
+  $(if ($HasMessageBatchAnchor) { '"seq_id": 11,' } else { '"seq_id": 9,' })
+  "tracer_time": 1710000000,
+  "application": {
+    "service_name": "$ServiceName",
+    $envField
+    "language_name": "$RuntimeName",
+    "tracer_version": "2.9.0-dev"
+  },
+$anchorPayload
+}
+"@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_${RuntimeIdPrefix}_020.json") -Encoding UTF8
+  }
+
+  function Read-NewLogEntries {
+    param([int]$StartIndex)
+    $allEntries = @(Read-JsonLog -Path $mockLog)
+    if ($StartIndex -ge $allEntries.Count) { return @() }
+    return @($allEntries | Select-Object -Skip $StartIndex)
+  }
+
+  function Assert-TopTelemetryBatch {
+    param(
+      [object[]]$Entries,
+      [string]$ExpectedService,
+      [string]$ExpectedEnv,
+      [string[]]$ExpectedMetrics,
+      [string]$ExpectedRuntimeId
+    )
+    $batch = @(
+      $Entries |
+        Where-Object { $_.path -like "*/apmtelemetry" } |
+        ForEach-Object {
+          $payload = Read-JsonMap -JsonText ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)))
+          if ((Get-JsonValue -Object $payload -Key "request_type") -ne "message-batch") { return }
+          $application = Get-JsonValue -Object $payload -Key "application"
+          if (-not $application) { return }
+          if ((Get-JsonValue -Object $application -Key "service_name") -ne $ExpectedService) { return }
+          [PSCustomObject]@{
+            Payload = $payload
+            RuntimeId = Get-JsonValue -Object $payload -Key "runtime_id"
+            SeqId = Get-JsonValue -Object $payload -Key "seq_id"
+            Env = Get-JsonValue -Object $application -Key "env"
+            MetricNames = @(Get-TelemetryMetricNames -Payload $payload)
+          }
+        } |
+        Where-Object { $_ }
+    )
+    if ($batch.Count -ne 1) {
+      throw "expected exactly one telemetry message-batch for service '$ExpectedService', saw $($batch.Count)"
+    }
+    if ($batch[0].RuntimeId -ne $ExpectedRuntimeId) {
+      throw "unexpected telemetry runtime_id for service '$ExpectedService': $($batch[0].RuntimeId)"
+    }
+    if ($batch[0].Env -ne $ExpectedEnv) {
+      throw "unexpected telemetry env for service '$ExpectedService': expected '$ExpectedEnv' but saw '$($batch[0].Env)'"
+    }
+    foreach ($metric in $ExpectedMetrics) {
+      if (-not ($batch[0].MetricNames -contains $metric)) {
+        throw "telemetry batch for service '$ExpectedService' missing expected metric '$metric' (saw: $($batch[0].MetricNames -join ','))"
+      }
+    }
+  }
+
+  # Scenario 1: env mismatch should still match and normalize outbound env.
+  $mismatchOutputs = Join-Path $tempRoot "bazel-testlogs/mismatch/pkg/target/test.outputs"
+  Initialize-WindowsTelemetryOutputs -Root $mismatchOutputs -ServiceName "mock-service" -RuntimeName "go" -EnvValue "CI" -RuntimeIdPrefix "mismatch" -HasMessageBatchAnchor $true -IncludeEmptyEnvField $true
+  $mismatchFactsPath = Join-Path $tempRoot "mismatch_telemetry_facts.json"
+  @'
+{
+  "schema_version": 1,
+  "service_name": "mock-service",
+  "runtime_name": "go",
+  "env": "CI",
+  "counts": [
+    {
+      "name": "git_requests.settings",
+      "value": 1,
+      "tags": []
+    },
+    {
+      "name": "known_tests.request",
+      "value": 1,
+      "tags": []
+    },
+    {
+      "name": "test_management_tests.request",
+      "value": 1,
+      "tags": []
+    }
+  ],
+  "distributions": [
+    {
+      "name": "known_tests.response_tests",
+      "value": 0,
+      "tags": []
+    }
+  ]
+}
+'@ | Set-Content -LiteralPath $mismatchFactsPath -Encoding UTF8
+
+  $mismatchContextPath = Join-Path $tempRoot "mismatch_context.json"
+  Copy-Item -LiteralPath $contextPath -Destination $mismatchContextPath -Force
+  $mismatchContext = Get-Content -LiteralPath $mismatchContextPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $mismatchContext | Add-Member -NotePropertyName "ci.provider.name" -NotePropertyValue "github" -Force
+  $mismatchContext | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $mismatchContextPath -Encoding UTF8
+  $mismatchManifest = Join-Path $tempRoot "mismatch_telemetry_facts_manifest.txt"
+  [System.IO.File]::WriteAllText($mismatchManifest, "`t$mismatchFactsPath`n", (New-Object System.Text.UTF8Encoding($false)))
+  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextJsonPath $mismatchContextPath -TelemetryFactsManifestPath $mismatchManifest
+
+  $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
   $env:DD_API_KEY = [string]::new("0", 32)
   $env:DD_SITE = "datadoghq.com"
   $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"
   Remove-Item Env:DD_TEST_OPTIMIZATION_AGENT_URL -ErrorAction SilentlyContinue
-  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
-  $agentlessExitCode = Get-NativeExitCode
-  if ($agentlessExitCode -ne 0) {
-    throw "agentless uploader execution failed with exit code $agentlessExitCode"
+  $mismatchTranscript = Join-Path $tempRoot "mismatch.transcript.txt"
+  $mismatchStart = @(Read-JsonLog -Path $mockLog).Count
+  $mismatchExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs -TranscriptPath $mismatchTranscript
+  if ($mismatchExitCode -ne 0) {
+    throw "agentless uploader execution failed with exit code $mismatchExitCode"
+  }
+  $mismatchEntries = Read-NewLogEntries -StartIndex $mismatchStart
+  $mismatchTelemetry = @(Get-TelemetryPayloadsByPath -Entries $mismatchEntries -Path "/api/v2/apmtelemetry")
+  if ($mismatchTelemetry.Count -ne 2) {
+    throw "expected 2 telemetry uploads for the env-mismatch scenario, saw $($mismatchTelemetry.Count)"
+  }
+  $mismatchEnvs = @(
+    $mismatchTelemetry |
+      ForEach-Object {
+        $application = Get-JsonValue -Object $_ -Key "application"
+        Get-JsonValue -Object $application -Key "env"
+      } |
+      Where-Object { $_ }
+  )
+  if (($mismatchEnvs -join ",") -ne "CI,CI") {
+    throw "unexpected env normalization for env-mismatch scenario: $($mismatchEnvs -join ',')"
+  }
+  Assert-TopTelemetryBatch -Entries $mismatchEntries -ExpectedService "mock-service" -ExpectedEnv "CI" -ExpectedMetrics @("existing.windows.metric", "git_requests.settings", "known_tests.response_tests", "test_management_tests.request") -ExpectedRuntimeId "mismatch-anchor-runtime"
+  $mismatchBatch = @(
+    Get-TelemetryPayloadsByPath -Entries $mismatchEntries -Path "/api/v2/apmtelemetry" |
+      Where-Object {
+        $application = Get-JsonValue -Object $_ -Key "application"
+        (Get-JsonValue -Object $_ -Key "request_type") -eq "message-batch" -and
+        (Get-JsonValue -Object $application -Key "service_name") -eq "mock-service"
+      }
+  )
+  $existingWindowsTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "existing.windows.metric")
+  if (-not ($existingWindowsTags -contains "provider:bazel/github")) {
+    throw "expected existing.windows.metric to rewrite provider:bazel with the detected provider, saw $($existingWindowsTags -join ',')"
+  }
+  if ($existingWindowsTags -contains "provider:bazel") {
+    throw "expected existing.windows.metric to stop sending the bare provider:bazel tag when a provider is detected"
+  }
+  $settingsTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "git_requests.settings")
+  if ($settingsTags.Count -ne 0) {
+    throw "expected git_requests.settings to remain tagless on the uncompressed sync path, saw $($settingsTags -join ',')"
+  }
+  $knownTestsResponseTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "known_tests.response_tests")
+  if ($knownTestsResponseTags.Count -ne 0) {
+    throw "expected known_tests.response_tests to remain tagless on the uncompressed sync path, saw $($knownTestsResponseTags -join ',')"
+  }
+  $testManagementRequestTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "test_management_tests.request")
+  if ($testManagementRequestTags.Count -ne 0) {
+    throw "expected test_management_tests.request to remain tagless on the uncompressed sync path, saw $($testManagementRequestTags -join ',')"
+  }
+  if (Test-TranscriptContains -TranscriptPath $mismatchTranscript -ForbiddenText "posting '' (body '')") {
+    throw "env-mismatch transcript unexpectedly contained an empty synthetic upload"
   }
 
-  # EVP flow
+  # Scenario 2: empty-env facts should still augment, and synthetic uploads must
+  # never queue an empty anchor/body path.
+  $emptyOutputs = Join-Path $tempRoot "bazel-testlogs/empty/pkg/target/test.outputs"
+  Initialize-WindowsTelemetryOutputs -Root $emptyOutputs -ServiceName "empty-env-service" -RuntimeName "go" -EnvValue "" -RuntimeIdPrefix "empty" -HasMessageBatchAnchor $false -IncludeEmptyEnvField $true
+  $emptyFactsPath = Join-Path $tempRoot "empty_telemetry_facts.json"
+  @'
+{
+  "schema_version": 1,
+  "service_name": "empty-env-service",
+  "runtime_name": "go",
+  "counts": [
+    {
+      "name": "git_requests.settings",
+      "value": 1,
+      "tags": []
+    },
+    {
+      "name": "test_management_tests.request",
+      "value": 1,
+      "tags": []
+    }
+  ],
+  "distributions": [
+    {
+      "name": "known_tests.response_tests",
+      "value": 0,
+      "tags": []
+    }
+  ]
+}
+'@ | Set-Content -LiteralPath $emptyFactsPath -Encoding UTF8
+  $emptyContextPath = Join-Path $tempRoot "empty_context.json"
+  Copy-Item -LiteralPath $contextPath -Destination $emptyContextPath -Force
+  $emptyManifest = Join-Path $tempRoot "empty_telemetry_facts_manifest.txt"
+  [System.IO.File]::WriteAllText($emptyManifest, "`t$emptyFactsPath`n", (New-Object System.Text.UTF8Encoding($false)))
+  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextJsonPath $emptyContextPath -TelemetryFactsManifestPath $emptyManifest
+
   Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
   Remove-Item Env:DD_TEST_OPTIMIZATION_AGENTLESS_URL -ErrorAction SilentlyContinue
   $env:DD_TEST_OPTIMIZATION_AGENT_URL = "http://127.0.0.1:$port"
-  Invoke-UploaderScript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs
-  $evpExitCode = Get-NativeExitCode
-  if ($evpExitCode -ne 0) {
-    throw "evp uploader execution failed with exit code $evpExitCode"
+  $emptyTranscript = Join-Path $tempRoot "empty.transcript.txt"
+  $emptyStart = @(Read-JsonLog -Path $mockLog).Count
+  $emptyExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs -TranscriptPath $emptyTranscript
+  if ($emptyExitCode -ne 0) {
+    throw "evp uploader execution failed with exit code $emptyExitCode"
   }
-
-  $entries = Read-JsonLog -Path $mockLog
-  $paths = @($entries | ForEach-Object { $_.path })
-  $requiredPaths = @(
-    "/api/v2/citestcycle",
-    "/api/v2/citestcov",
-    "/api/v2/apmtelemetry",
-    "/evp_proxy/v2/api/v2/citestcycle",
-    "/evp_proxy/v2/api/v2/citestcov",
-    "/telemetry/proxy/api/v2/apmtelemetry"
+  $emptyEntries = Read-NewLogEntries -StartIndex $emptyStart
+  $emptyTelemetry = @(
+    Get-TelemetryPayloadsByPath -Entries $emptyEntries -Path "/telemetry/proxy/api/v2/apmtelemetry" |
+      Where-Object {
+        $application = Get-JsonValue -Object $_ -Key "application"
+        (Get-JsonValue -Object $application -Key "service_name") -eq "empty-env-service"
+      }
   )
-  foreach ($requiredPath in $requiredPaths) {
-    if (-not ($paths -contains $requiredPath)) {
-      throw "missing expected uploader request path in mock log: $requiredPath"
-    }
+  if ($emptyTelemetry.Count -ne 3) {
+    throw "expected 3 telemetry uploads for the empty-env service scenario, saw $($emptyTelemetry.Count)"
   }
-
-  $agentlessTelemetry = @(
-    $entries |
-      Where-Object { $_.path -eq "/api/v2/apmtelemetry" } |
+  $emptyBatch = @(
+    $emptyTelemetry |
+      Where-Object { (Get-JsonValue -Object $_ -Key "request_type") -eq "message-batch" } |
       ForEach-Object {
-        $payload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.body_b64)) | ConvertFrom-Json -ErrorAction Stop
+        $application = Get-JsonValue -Object $_ -Key "application"
         [PSCustomObject]@{
-          Marker = $payload.payload.marker
+          Env = Get-JsonValue -Object $application -Key "env"
+          MetricNames = @(Get-TelemetryMetricNames -Payload $_)
         }
       }
   )
-  $agentlessMarkers = @($agentlessTelemetry | ForEach-Object { $_.Marker })
-  if (($agentlessMarkers -join ",") -ne "windows-a,windows-b") {
-    throw "unexpected Windows telemetry upload order: $($agentlessMarkers -join ',')"
+  if ($emptyBatch.Count -ne 1) {
+    throw "expected exactly one synthetic telemetry batch for the empty-env scenario, saw $($emptyBatch.Count)"
+  }
+  if ($emptyBatch[0].Env -ne "none") {
+    throw "unexpected synthetic env for the empty-env scenario: $($emptyBatch[0].Env)"
+  }
+  foreach ($metric in @("git_requests.settings", "test_management_tests.request", "known_tests.response_tests")) {
+    if (-not ($emptyBatch[0].MetricNames -contains $metric)) {
+      throw "synthetic telemetry batch missing expected metric '$metric' (saw: $($emptyBatch[0].MetricNames -join ','))"
+    }
+  }
+  if (Test-TranscriptContains -TranscriptPath $emptyTranscript -ForbiddenText "posting '' (body '')") {
+    throw "empty-env transcript unexpectedly contained an empty synthetic upload"
+  }
+
+  # Scenario 3: when no provider is present in the resolved context, telemetry
+  # uploads must leave provider:bazel unchanged.
+  $noProviderOutputs = Join-Path $tempRoot "bazel-testlogs/no-provider/pkg/target/test.outputs"
+  $noProviderTelemetryDir = Join-Path $noProviderOutputs "payloads/telemetry"
+  New-Item -ItemType Directory -Force -Path $noProviderTelemetryDir | Out-Null
+  @'
+{
+  "api_version": "v2",
+  "request_type": "message-batch",
+  "runtime_id": "no-provider-runtime",
+  "seq_id": 13,
+  "tracer_time": 1710000200,
+  "application": {
+    "service_name": "no-provider-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "payload": [
+    {
+      "request_type": "generate-metrics",
+      "payload": {
+        "namespace": "civisibility",
+        "series": [
+          {
+            "metric": "existing.no_provider.metric",
+            "points": [[1710000200, 1]],
+            "type": "count",
+            "tags": ["provider:bazel", "marker:no-provider"],
+            "common": true,
+            "namespace": "civisibility"
+          }
+        ]
+      }
+    }
+  ]
+}
+'@ | Set-Content -LiteralPath (Join-Path $noProviderTelemetryDir "telemetry_no_provider_001.json") -Encoding UTF8
+  $noProviderContextPath = Join-Path $tempRoot "no_provider_context.json"
+  '{}' | Set-Content -LiteralPath $noProviderContextPath -Encoding UTF8
+  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextJsonPath $noProviderContextPath -TelemetryFactsManifestPath ""
+
+  $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
+  $env:DD_API_KEY = [string]::new("0", 32)
+  $env:DD_SITE = "datadoghq.com"
+  $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TEST_OPTIMIZATION_AGENT_URL -ErrorAction SilentlyContinue
+  $noProviderTranscript = Join-Path $tempRoot "no-provider.transcript.txt"
+  $noProviderStart = @(Read-JsonLog -Path $mockLog).Count
+  $noProviderExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs -TranscriptPath $noProviderTranscript
+  if ($noProviderExitCode -ne 0) {
+    throw "no-provider uploader execution failed with exit code $noProviderExitCode"
+  }
+  $noProviderEntries = Read-NewLogEntries -StartIndex $noProviderStart
+  $noProviderTelemetry = @(
+    Get-TelemetryPayloadsByPath -Entries $noProviderEntries -Path "/api/v2/apmtelemetry" |
+      Where-Object {
+        $application = Get-JsonValue -Object $_ -Key "application"
+        (Get-JsonValue -Object $application -Key "service_name") -eq "no-provider-service"
+      }
+  )
+  if ($noProviderTelemetry.Count -ne 1) {
+    throw "expected 1 telemetry upload for the no-provider scenario, saw $($noProviderTelemetry.Count)"
+  }
+  $noProviderTags = @(Get-TelemetryMetricTags -Payload $noProviderTelemetry[0] -MetricName "existing.no_provider.metric")
+  if (-not ($noProviderTags -contains "provider:bazel")) {
+    throw "expected no-provider scenario to keep provider:bazel unchanged, saw $($noProviderTags -join ',')"
+  }
+  if (@($noProviderTags | Where-Object { $_ -like "provider:bazel/*" }).Count -gt 0) {
+    throw "expected no-provider scenario to avoid adding a provider suffix, saw $($noProviderTags -join ',')"
   }
 
   Write-Host "Windows integration harness passed (PowerShell-only uploader path)."

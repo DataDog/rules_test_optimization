@@ -816,6 +816,139 @@ def _decode_json_object_or_fail(content, context):
         fail_with_prefix("test_optimization_sync", "%s response must be a JSON object, got %s" % (context, type(obj)))
     return obj
 
+def _parse_curl_time_ms(value):
+    """Convert a curl-style seconds string into integer milliseconds."""
+    text = (value or "").strip()
+    if not text:
+        return 0
+    negative = text.startswith("-")
+    if negative:
+        text = text[1:]
+    if "." in text:
+        parts = text.split(".", 1)
+        seconds_text = parts[0]
+        frac_text = parts[1]
+    else:
+        seconds_text = text
+        frac_text = ""
+    seconds = int(seconds_text) if seconds_text else 0
+    digits = ""
+    for i in range(len(frac_text)):
+        ch = frac_text[i]
+        if ch < "0" or ch > "9":
+            break
+        digits += ch
+    for _unused in [0, 1, 2]:
+        if len(digits) >= 3:
+            break
+        digits += "0"
+    millis = seconds * 1000
+    if digits:
+        millis += int(digits[:3])
+    return -millis if negative else millis
+
+def _parse_positive_int_or_zero(value):
+    """Parse a positive integer string or return zero for blank input."""
+    text = (value or "").strip()
+    if not text:
+        return 0
+    return int(text)
+
+def _new_telemetry_facts(service_name, runtime_name = "", env = ""):
+    """Create the normalized sync telemetry facts document."""
+    facts = {
+        "schema_version": 1,
+        "service_name": service_name or "",
+        "counts": [],
+        "distributions": [],
+    }
+    if runtime_name:
+        facts["runtime_name"] = runtime_name
+    if env:
+        facts["env"] = env
+    return facts
+
+def _append_telemetry_count(doc, name, value = 1, tags = None):
+    """Append one normalized count metric fact."""
+    doc["counts"].append({
+        "name": name,
+        "value": value,
+        "tags": list(tags or []),
+    })
+
+def _append_telemetry_distribution(doc, name, value, tags = None):
+    """Append one normalized distribution metric fact."""
+    doc["distributions"].append({
+        "name": name,
+        "value": value,
+        "tags": list(tags or []),
+    })
+
+def _build_settings_response_tags(attrs_obj):
+    """Build the combined settings-response tags used by dd-trace-go."""
+    tags = []
+    if attrs_obj.get("code_coverage") == True:
+        tags.append("coverage_enabled")
+    if attrs_obj.get("tests_skipping") == True:
+        tags.append("itrskip_enabled")
+    early_flake = attrs_obj.get("early_flake_detection")
+    if _is_dict(early_flake) and early_flake.get("enabled") == True:
+        tags.append("early_flake_detection_enabled:true")
+    if attrs_obj.get("flaky_test_retries_enabled") == True:
+        tags.append("flaky_test_retries_enabled:true")
+    test_management = attrs_obj.get("test_management")
+    if _is_dict(test_management) and test_management.get("enabled") == True:
+        tags.append("test_management_enabled:true")
+    return tags
+
+def _count_known_tests_response_tests(known_tests_obj):
+    """Count the total tests returned by the known-tests response."""
+    data_obj = known_tests_obj.get("data")
+    if not _is_dict(data_obj):
+        return 0
+    attrs_obj = data_obj.get("attributes")
+    if not _is_dict(attrs_obj):
+        return 0
+    tests_obj = attrs_obj.get("tests")
+    if not _is_dict(tests_obj):
+        return 0
+    total = 0
+    for suites in tests_obj.values():
+        if not _is_dict(suites):
+            continue
+        for tests in suites.values():
+            if type(tests) != type([]):
+                continue
+            total += len(tests)
+    return total
+
+def _count_test_management_response_tests(test_management_obj):
+    """Count the total tests returned by the test-management response."""
+    data_obj = test_management_obj.get("data")
+    if not _is_dict(data_obj):
+        return 0
+    attrs_obj = data_obj.get("attributes")
+    if not _is_dict(attrs_obj):
+        return 0
+    modules_obj = attrs_obj.get("modules")
+    if not _is_dict(modules_obj):
+        return 0
+    total = 0
+    for module_obj in modules_obj.values():
+        if not _is_dict(module_obj):
+            continue
+        suites_obj = module_obj.get("suites")
+        if not _is_dict(suites_obj):
+            continue
+        for suite_obj in suites_obj.values():
+            if not _is_dict(suite_obj):
+                continue
+            tests_obj = suite_obj.get("tests")
+            if not _is_dict(tests_obj):
+                continue
+            total += len(tests_obj)
+    return total
+
 def _collect_known_tests_modules(ctx, known_tests_file):
     """Return sorted module names present in known_tests payload."""
 
@@ -1027,10 +1160,11 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     retry behavior. Any transport error is raised with actionable context.
     """
 
-    # _http_request: executes an HTTP call and writes the response to `out_file`.
+    # _http_request: executes an HTTP call and writes response metadata plus
+    # the response body to `out_file`.
     # - On Windows: uses PowerShell Invoke-WebRequest for portability.
     # - On Linux/macOS: uses curl with retries.
-    # - Returns tool exit code (0=success) and prints HTTP status code to stdout when possible.
+    # - Returns a metadata dict with HTTP status, duration, and byte count.
     #
     # Why this helper exists:
     # - repository_ctx has no native HTTP primitive with consistent behavior
@@ -1062,7 +1196,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     if is_win:
         # Build a small PowerShell script to perform the request with basic retries.
         # We prefer a script file to avoid complex quoting issues.
-        # Script writes the HTTP status code to stdout on success.
+        # Script writes response metadata to stdout on success.
         script_name = "_http_request_%s.ps1" % (out_file.replace("/", "_").replace("\\", "_") or "out")
         lines = []
         lines.append("$ErrorActionPreference = 'Stop'")
@@ -1070,6 +1204,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         lines.append("$Url = '%s'" % _powershell_single_quote_literal(url))
         lines.append("$OutFile = '%s'" % _powershell_single_quote_literal(out_file))
         lines.append("$Method = '%s'" % http_method)
+        lines.append("$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()")
 
         # Headers hashtable (PowerShell expects IDictionary-like; hashtable is safest)
         lines.append("$Headers = @{}")
@@ -1100,9 +1235,14 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             lines.append("    $resp = Invoke-WebRequest -Uri $Url -Headers $Headers -Method $Method -OutFile $OutFile -TimeoutSec %d" % policy["max_time_seconds"])
 
         # Emulate curl -f: treat HTTP >= 400 as failure
+        lines.append("    $stopwatch.Stop()")
         lines.append("    $code = if ($resp.StatusCode) { [int]$resp.StatusCode } else { 200 }")
         lines.append("    if ($code -ge 400) { Write-Error ('HTTP {0} returned') -f $code; exit 1 }")
-        lines.append("    Write-Output $code")
+        lines.append("    $fileInfo = Get-Item -LiteralPath $OutFile")
+        lines.append("    $size = if ($fileInfo) { [int64]$fileInfo.Length } else { 0 }")
+        lines.append("    Write-Output ('http_status={0}' -f $code)")
+        lines.append("    Write-Output ('duration_ms={0}' -f [int64]$stopwatch.ElapsedMilliseconds)")
+        lines.append("    Write-Output ('response_bytes={0}' -f $size)")
         lines.append("    exit 0")
         lines.append("  } catch { if ($attempt -lt $max) { Start-Sleep -Seconds %d; $attempt = $attempt + 1 } else { Write-Error $_; exit 1 } }" % policy["retry_delay_seconds"])
         lines.append("}")
@@ -1130,7 +1270,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             args.extend(["-H", "%s: %s" % (header_key, header_value)])
         if data_file:
             args.extend(["--data-binary", "@%s" % data_file])
-        args.extend([url, "-o", out_file, "-w", "%{http_code}"])
+        args.extend([url, "-o", out_file, "-w", "http_status=%{http_code}\nduration_ms=%{time_total}\nresponse_bytes=%{size_download}\n"])
         if split_headers.get("has_dd_api_key"):
             # Provide DD-API-KEY via stdin (`-H @-`) to avoid exposing the raw
             # secret in process arguments.
@@ -1148,8 +1288,25 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
         else:
             result = ctx.execute(args, timeout = policy["execute_timeout_seconds"])
 
-    # Parse HTTP status code captured by tool stdout. On network errors it may be empty.
-    http_status = (result.stdout or "").strip() or "000"
+    # Parse response metadata captured by tool stdout. On network errors it may be empty.
+    meta_lines = []
+    for line in (result.stdout or "").splitlines():
+        stripped = line.strip()
+        if stripped:
+            meta_lines.append(stripped)
+    http_status = "000"
+    duration_ms = 0
+    response_bytes = 0
+    for line in meta_lines:
+        if line.startswith("http_status="):
+            http_status = line[len("http_status="):]
+        elif line.startswith("duration_ms="):
+            duration_ms = _parse_curl_time_ms(line[len("duration_ms="):])
+        elif line.startswith("response_bytes="):
+            response_bytes = _parse_positive_int_or_zero(line[len("response_bytes="):])
+
+    if not meta_lines and result.return_code == 0:
+        http_status = "200"
 
     # Branch: network error or tool failure
     if result.return_code != 0:
@@ -1176,29 +1333,11 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
             ),
         )
     else:
-        # Branch: success path; try to emit a concise size summary
-        if _is_windows(ctx):
-            size_cmd = [
-                "powershell.exe",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "$fi = Get-Item -LiteralPath '%s'; if ($fi) { Write-Output $fi.Length }" % _powershell_single_quote_literal(out_file),
-            ]
-            size_result = ctx.execute(size_cmd)
-            if size_result.return_code == 0 and size_result.stdout:
-                bytes_str = size_result.stdout.strip()
-                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, redacted_url))
-            else:
-                log_info("Downloaded %s from %s" % (out_file, redacted_url))
+        # Branch: success path; emit a concise size summary using captured metadata.
+        if response_bytes > 0:
+            log_info("Downloaded %s (%s bytes) from %s" % (out_file, response_bytes, redacted_url))
         else:
-            size_result = ctx.execute(["wc", "-c", out_file])
-            if size_result.return_code == 0 and size_result.stdout:
-                parts = [p for p in size_result.stdout.strip().split(" ") if p]
-                bytes_str = parts[0] if parts else "unknown"
-                log_info("Downloaded %s (%s bytes) from %s" % (out_file, bytes_str, redacted_url))
-            else:
-                log_info("Downloaded %s from %s" % (out_file, redacted_url))
+            log_info("Downloaded %s from %s" % (out_file, redacted_url))
 
         # Emit full response body when debug is enabled, similar to request logging
         if debug:
@@ -1210,7 +1349,12 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
                     "HTTP response body (%s %s): %s" % (http_method, redacted_url, try_body),
                 )
 
-    return result.return_code
+    return {
+        "return_code": result.return_code,
+        "http_status": http_status,
+        "duration_ms": duration_ms,
+        "response_bytes": response_bytes,
+    }
 
 def _http_post_json(ctx, url, headers, json_body_str, tmp_body_file, out_file, debug, http_policy = None):
     """POST JSON payload by delegating to `_http_request`."""
@@ -1268,6 +1412,13 @@ collect_test_management_modules_for_tests = _collect_test_management_modules
 partition_unix_headers_for_tests = _partition_unix_headers
 record_sync_extension_repo_owner_or_fail_for_tests = _record_sync_extension_repo_owner_or_fail
 render_module_runfiles_bzl_for_tests = _render_module_runfiles_bzl
+parse_curl_time_ms_for_tests = _parse_curl_time_ms
+new_telemetry_facts_for_tests = _new_telemetry_facts
+append_telemetry_count_for_tests = _append_telemetry_count
+append_telemetry_distribution_for_tests = _append_telemetry_distribution
+build_settings_response_tags_for_tests = _build_settings_response_tags
+count_known_tests_response_tests_for_tests = _count_known_tests_response_tests
+count_test_management_response_tests_for_tests = _count_test_management_response_tests
 
 # ##########################################################################
 # CI environment detection
@@ -1356,9 +1507,11 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     if ctx.attr.runtime_arch:
         tags["runtime.architecture"] = ctx.attr.runtime_arch
 
-    # Bazel rules identity tags (stable constants for this ruleset).
-    tags["test.bazel.rule_name"] = TEST_BAZEL_RULE_NAME
-    tags["test.bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
+    # Bazel metadata tags describe the ruleset identity and Bazel host.
+    tags["bazel.rule_name"] = TEST_BAZEL_RULE_NAME
+    tags["bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
+    tags["bazel.os"] = osinfo.get("platform") or "unknown"
+    tags["bazel.arch"] = osinfo.get("arch") or "unknown"
 
     # Git tags
     if env_data.get("repository_url"):
@@ -1454,6 +1607,8 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
     log_debug(debug, "context", "context.json tags: %s" % json.encode(tags))
     return tags
 
+build_context_tags_for_tests = _build_context_tags
+
 # ##########################################################################
 # Request builders
 # ##########################################################################
@@ -1463,7 +1618,7 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, h
 
     # _perform_dd_settings_request: build and send the CI Visibility Settings request.
     # - Writes the JSON response body to `settings_file`.
-    # - Returns curl's exit code (0 on success, otherwise fail() already raised inside helper).
+    # - Returns structured response metadata for telemetry reconstruction.
     # Datadog CI Visibility settings endpoint
     # Path: api/v2/libraries/tests/services/setting
     # Type: ci_app_test_service_libraries_settings
@@ -1514,7 +1669,7 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, h
         "DD-API-KEY": api_key,
     }
 
-    return_code = _http_post_json(
+    return _http_post_json(
         ctx,
         url,
         headers,
@@ -1524,14 +1679,13 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, h
         debug,
         http_policy = http_policy,
     )
-    return return_code
 
 def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, debug, osinfo = None, http_policy = None):
     """Build and execute CI Visibility known-tests request."""
 
     # _perform_dd_known_tests_request: build and send the Known Tests request.
     # - Writes the JSON response body to `known_tests_file`.
-    # - Returns curl's exit code (0 on success, otherwise fail() already raised inside helper).
+    # - Returns structured response metadata for telemetry reconstruction.
     # Datadog Known Tests endpoint
     # Path: api/v2/ci/libraries/tests
     # Type: ci_app_libraries_tests_request
@@ -1586,6 +1740,7 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_manag
 
     # _perform_dd_test_management_tests_request: build and send the Test Management Tests request.
     # - Writes the JSON response body to `test_management_file`.
+    # - Returns structured response metadata for telemetry reconstruction.
     # Datadog Test Management Tests endpoint
     # Path: api/v2/test/libraries/test-management/tests
     # Type: ci_app_libraries_tests_request
@@ -1687,11 +1842,13 @@ def _impl(ctx):
     test_management_file = "%s/%s" % (out_dir, "cache/http/test_management.json")
     manifest_file = "%s/%s" % (out_dir, "manifest.txt")
     context_file = "%s/%s" % (out_dir, "context.json")
+    telemetry_facts_file = "%s/%s" % (out_dir, "telemetry_facts.json")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, known_tests_file, debug)
     _ensure_parent_directory(ctx, test_management_file, debug)
     _ensure_parent_directory(ctx, manifest_file, debug)
     _ensure_parent_directory(ctx, context_file, debug)
+    _ensure_parent_directory(ctx, telemetry_facts_file, debug)
 
     log_info("Settings file: %s" % settings_file)
     ctx.report_progress("test_optimization_sync: downloading")
@@ -1704,10 +1861,17 @@ def _impl(ctx):
 
     log_debug(debug, "validation", "Env data collected and validated")
 
+    runtime_name = validate_runtime_name(ctx.attr.runtime_name, debug) or ""
+    telemetry_facts = _new_telemetry_facts(
+        validated_service,
+        runtime_name = runtime_name,
+        env = env_data.get("environment") or "",
+    )
+
     # Cache per-run expensive helpers and pass them through request/tag builders.
     http_policy = _resolve_http_policy(ctx)
     osinfo = _detect_os_info(ctx, debug)
-    _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, http_policy = http_policy)
+    settings_result = _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, http_policy = http_policy)
     ctx.report_progress("test_optimization_sync: download complete")
 
     # ------------------------------------------------------------------
@@ -1790,6 +1954,23 @@ def _impl(ctx):
     # overridden disablement is reflected to later phases.
     ctx.file(settings_file, json.encode(settings_obj) + "\n")
 
+    # Sync telemetry facts are only materialized for requests that completed
+    # successfully enough for repository generation to continue. A hard fetch
+    # failure still aborts repo resolution before the uploader can replay any
+    # stored facts, so request-error restoration remains a follow-up concern.
+    #
+    # Keep the successful request metrics aligned with dd-trace-go:
+    # - request/request_ms/response_tests are tagless on the uncompressed path
+    # - response_bytes only gains tags when the response is compressed
+    # - settings_response carries the feature-state tags returned by settings
+    _append_telemetry_count(telemetry_facts, "git_requests.settings")
+    _append_telemetry_distribution(telemetry_facts, "git_requests.settings_ms", settings_result.get("duration_ms", 0))
+    _append_telemetry_count(
+        telemetry_facts,
+        "git_requests.settings_response",
+        tags = _build_settings_response_tags(attrs_obj),
+    )
+
     # ------------------------------------------------------------------
     # Phase 3: Materialize primary payload files (real fetches or stubs).
     # ------------------------------------------------------------------
@@ -1802,7 +1983,7 @@ def _impl(ctx):
     module_specs_tm = []
     if known_tests_enabled:
         ctx.report_progress("test_optimization_sync: downloading known tests")
-        _perform_dd_known_tests_request(
+        known_tests_result = _perform_dd_known_tests_request(
             ctx,
             api_key,
             env_data,
@@ -1812,6 +1993,11 @@ def _impl(ctx):
             http_policy = http_policy,
         )
         ctx.report_progress("test_optimization_sync: known tests complete")
+        known_tests_obj = _decode_json_object_or_fail(ctx.read(ctx.path(known_tests_file)), known_tests_file)
+        _append_telemetry_count(telemetry_facts, "known_tests.request")
+        _append_telemetry_distribution(telemetry_facts, "known_tests.request_ms", known_tests_result.get("duration_ms", 0))
+        _append_telemetry_distribution(telemetry_facts, "known_tests.response_bytes", known_tests_result.get("response_bytes", 0))
+        _append_telemetry_distribution(telemetry_facts, "known_tests.response_tests", _count_known_tests_response_tests(known_tests_obj))
     else:
         log_debug(debug, "known_tests", "known_tests_enabled is false; writing empty known tests file")
 
@@ -1824,7 +2010,7 @@ def _impl(ctx):
 
     if test_management_enabled:
         ctx.report_progress("test_optimization_sync: downloading test management tests")
-        _perform_dd_test_management_tests_request(
+        test_management_result = _perform_dd_test_management_tests_request(
             ctx,
             api_key,
             env_data,
@@ -1833,6 +2019,15 @@ def _impl(ctx):
             http_policy = http_policy,
         )
         ctx.report_progress("test_optimization_sync: test management tests complete")
+        test_management_obj = _decode_json_object_or_fail(ctx.read(ctx.path(test_management_file)), test_management_file)
+        _append_telemetry_count(telemetry_facts, "test_management_tests.request")
+        _append_telemetry_distribution(telemetry_facts, "test_management_tests.request_ms", test_management_result.get("duration_ms", 0))
+        _append_telemetry_distribution(telemetry_facts, "test_management_tests.response_bytes", test_management_result.get("response_bytes", 0))
+        _append_telemetry_distribution(
+            telemetry_facts,
+            "test_management_tests.response_tests",
+            _count_test_management_response_tests(test_management_obj),
+        )
     else:
         log_debug(debug, "test_management", "test_management.enabled is false; writing empty test management tests file")
 
@@ -1859,6 +2054,7 @@ def _impl(ctx):
     # so all manifest-relative payload files share a single root.
     context_tags = _build_context_tags(ctx, env_data, api_key, debug, osinfo = osinfo)
     ctx.file(context_file, json.encode(context_tags) + "\n")
+    ctx.file(telemetry_facts_file, json.encode(telemetry_facts) + "\n")
 
     # Emit helper runtime metadata for downstream macros.
     go_module_path = _detect_go_module_path(ctx, debug)
@@ -1965,7 +2161,7 @@ def _impl(ctx):
         ")\n\n" +
         "filegroup(\n" +
         '    name = "test_optimization_context",\n' +
-        ("    srcs = %s,\n" % repr([context_file])) +
+        ("    srcs = %s,\n" % repr([context_file, telemetry_facts_file])) +
         '    visibility = ["//visibility:public"],\n' +
         ")\n" +
         ('\nexports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest_file))

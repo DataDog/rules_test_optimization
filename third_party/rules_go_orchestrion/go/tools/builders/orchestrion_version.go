@@ -13,7 +13,7 @@ import (
 
 const (
 	rulesGoOrchestrionVersionFileEnvVar = "RULES_GO_ORCHESTRION_VERSION_FILE"
-	defaultDDTraceGoVersion             = "v2.6.0"
+	defaultDDTraceGoVersion             = "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
 )
 
 var ddTraceGoModules = []string{

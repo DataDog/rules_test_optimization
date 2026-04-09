@@ -44,6 +44,7 @@ load(
     "//tools/tests/core:test_sync_utils.bzl",
     "apply_dd_git_overrides_test",
     "apply_github_event_payload_defensive_test",
+    "build_context_tags_test",
     "clone_payload_with_detached_attributes_test",
     "clone_payload_with_nested_structure_test",
     "collect_env_ctx_wrapper_test",
@@ -91,6 +92,7 @@ load(
     "normalize_out_dir_windows_drive_target_rule",
     "normalize_ref_edge_cases_test",
     "normalize_ref_test",
+    "parse_curl_time_ms_test",
     "parse_go_module_path_test",
     "partition_unix_headers_test",
     "partition_unix_headers_without_api_key_test",
@@ -107,7 +109,11 @@ load(
     "runtime_module_path_from_environ_test",
     "sanitize_repository_url_test",
     "set_context_tag_from_env_test",
+    "settings_response_tags_test",
+    "sync_success_metric_tags_parity_test",
     "sync_environment_keys_allowlist_test",
+    "telemetry_facts_document_test",
+    "telemetry_response_counts_test",
 )
 load(
     "//tools/tests/core:test_topt_macro_utils.bzl",
@@ -571,6 +577,42 @@ record_multi_repo_owner_duplicate_failure_test(
 
 http_execute_timeout_seconds_test(
     name = "http_execute_timeout_seconds_test",
+    size = "small",
+    timeout = "short",
+)
+
+parse_curl_time_ms_test(
+    name = "parse_curl_time_ms_test",
+    size = "small",
+    timeout = "short",
+)
+
+telemetry_facts_document_test(
+    name = "telemetry_facts_document_test",
+    size = "small",
+    timeout = "short",
+)
+
+build_context_tags_test(
+    name = "build_context_tags_test",
+    size = "small",
+    timeout = "short",
+)
+
+settings_response_tags_test(
+    name = "settings_response_tags_test",
+    size = "small",
+    timeout = "short",
+)
+
+sync_success_metric_tags_parity_test(
+    name = "sync_success_metric_tags_parity_test",
+    size = "small",
+    timeout = "short",
+)
+
+telemetry_response_counts_test(
+    name = "telemetry_response_counts_test",
     size = "small",
     timeout = "short",
 )
