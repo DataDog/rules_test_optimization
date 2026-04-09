@@ -19,7 +19,7 @@ const (
 	defaultRulesGoCommit         = "16712cc851915317659b932471dcb68af48dd5bb"
 	defaultRulesGoStripPrefix    = "third_party/rules_go_orchestrion"
 	defaultOrchestrionVersion    = "v1.5.0"
-	defaultDDTraceGoVersion      = "v2.9.0-dev.0.20260408173856-00e7bd515e27"
+	defaultDDTraceGoVersion      = "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
 	defaultSyncRepoName          = "test_optimization_data"
 	defaultUploaderTargetName    = "dd_upload_payloads"
 	managedBlockStart            = "# BEGIN Datadog Go Orchestrion bootstrap"

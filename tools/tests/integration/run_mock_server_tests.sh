@@ -1590,9 +1590,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
@@ -1600,15 +1600,15 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   case "${3:-}" in
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260408173856-00e7bd515e27" ]; then
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260409102143-ddd4e03ab47d" ]; then
   exit 0
 fi
 
@@ -1621,7 +1621,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0-dev.0.20260408173856-00e7bd515e27\n'
+      printf 'v2.9.0-dev.0.20260409102143-ddd4e03ab47d\n'
       exit 0
       ;;
   esac
@@ -1629,10 +1629,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27)
-      printf '{"Version":"v2.9.0-dev.0.20260408173856-00e7bd515e27"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
@@ -1643,7 +1643,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0-dev.0.20260408173856-00e7bd515e27"}\n'
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
@@ -1807,9 +1807,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
@@ -1817,15 +1817,15 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   case "${3:-}" in
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
       exit 0
       ;;
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260408173856-00e7bd515e27" ]; then
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260409102143-ddd4e03ab47d" ]; then
   exit 0
 fi
 
@@ -1838,7 +1838,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0-dev.0.20260408173856-00e7bd515e27\n'
+      printf 'v2.9.0-dev.0.20260409102143-ddd4e03ab47d\n'
       exit 0
       ;;
   esac
@@ -1846,10 +1846,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260408173856-00e7bd515e27)
-      printf '{"Version":"v2.9.0-dev.0.20260408173856-00e7bd515e27"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
@@ -1860,7 +1860,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0-dev.0.20260408173856-00e7bd515e27"}\n'
+      printf '{"Version":"v2.9.0-dev.0.20260409102143-ddd4e03ab47d"}\n'
       exit 0
       ;;
   esac
