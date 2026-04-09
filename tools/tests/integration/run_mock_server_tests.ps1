@@ -287,6 +287,24 @@ function Get-TelemetryMetricNames {
   return $metricNames
 }
 
+# Read one metric tag array from a telemetry payload while accepting either
+# array-backed or singleton-object JSON materialization.
+function Get-TelemetryMetricTags {
+  param(
+    $Payload,
+    [string]$MetricName
+  )
+
+  foreach ($message in @(Get-JsonValue -Object $Payload -Key "payload")) {
+    $messagePayload = Get-JsonValue -Object $message -Key "payload"
+    foreach ($series in @(Get-JsonValue -Object $messagePayload -Key "series")) {
+      if ((Get-JsonValue -Object $series -Key "metric") -ne $MetricName) { continue }
+      return @((Get-JsonValue -Object $series -Key "tags"))
+    }
+  }
+  return @()
+}
+
 # Collect telemetry payloads from mock-server log entries for one request path.
 function Get-TelemetryPayloadsByPath {
   param(
@@ -696,7 +714,7 @@ filegroup(
             "metric": "existing.windows.metric",
             "points": [[1710000000, 1]],
             "type": "count",
-            "tags": ["marker:${RuntimeIdPrefix}-existing"],
+            "tags": ["marker:${RuntimeIdPrefix}-existing", "provider:bazel"],
             "common": true,
             "namespace": "civisibility"
           }
@@ -820,6 +838,9 @@ $anchorPayload
 
   $mismatchContextPath = Join-Path $tempRoot "mismatch_context.json"
   Copy-Item -LiteralPath $contextPath -Destination $mismatchContextPath -Force
+  $mismatchContext = Get-Content -LiteralPath $mismatchContextPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $mismatchContext | Add-Member -NotePropertyName "ci.provider.name" -NotePropertyValue "github" -Force
+  $mismatchContext | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $mismatchContextPath -Encoding UTF8
   $mismatchManifest = Join-Path $tempRoot "mismatch_telemetry_facts_manifest.txt"
   [System.IO.File]::WriteAllText($mismatchManifest, "`t$mismatchFactsPath`n", (New-Object System.Text.UTF8Encoding($false)))
   Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextJsonPath $mismatchContextPath -TelemetryFactsManifestPath $mismatchManifest
@@ -852,6 +873,21 @@ $anchorPayload
     throw "unexpected env normalization for env-mismatch scenario: $($mismatchEnvs -join ',')"
   }
   Assert-TopTelemetryBatch -Entries $mismatchEntries -ExpectedService "mock-service" -ExpectedEnv "CI" -ExpectedMetrics @("existing.windows.metric", "git_requests.settings", "known_tests.response_tests", "test_management_tests.request") -ExpectedRuntimeId "mismatch-anchor-runtime"
+  $mismatchBatch = @(
+    Get-TelemetryPayloadsByPath -Entries $mismatchEntries -Path "/api/v2/apmtelemetry" |
+      Where-Object {
+        $application = Get-JsonValue -Object $_ -Key "application"
+        (Get-JsonValue -Object $_ -Key "request_type") -eq "message-batch" -and
+        (Get-JsonValue -Object $application -Key "service_name") -eq "mock-service"
+      }
+  )
+  $existingWindowsTags = @(Get-TelemetryMetricTags -Payload $mismatchBatch[0] -MetricName "existing.windows.metric")
+  if (-not ($existingWindowsTags -contains "provider:bazel/github")) {
+    throw "expected existing.windows.metric to rewrite provider:bazel with the detected provider, saw $($existingWindowsTags -join ',')"
+  }
+  if ($existingWindowsTags -contains "provider:bazel") {
+    throw "expected existing.windows.metric to stop sending the bare provider:bazel tag when a provider is detected"
+  }
   if (Test-TranscriptContains -TranscriptPath $mismatchTranscript -ForbiddenText "posting '' (body '')") {
     throw "env-mismatch transcript unexpectedly contained an empty synthetic upload"
   }
@@ -937,6 +973,78 @@ $anchorPayload
   }
   if (Test-TranscriptContains -TranscriptPath $emptyTranscript -ForbiddenText "posting '' (body '')") {
     throw "empty-env transcript unexpectedly contained an empty synthetic upload"
+  }
+
+  # Scenario 3: when no provider is present in the resolved context, telemetry
+  # uploads must leave provider:bazel unchanged.
+  $noProviderOutputs = Join-Path $tempRoot "bazel-testlogs/no-provider/pkg/target/test.outputs"
+  $noProviderTelemetryDir = Join-Path $noProviderOutputs "payloads/telemetry"
+  New-Item -ItemType Directory -Force -Path $noProviderTelemetryDir | Out-Null
+  @'
+{
+  "api_version": "v2",
+  "request_type": "message-batch",
+  "runtime_id": "no-provider-runtime",
+  "seq_id": 13,
+  "tracer_time": 1710000200,
+  "application": {
+    "service_name": "no-provider-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "payload": [
+    {
+      "request_type": "generate-metrics",
+      "payload": {
+        "namespace": "civisibility",
+        "series": [
+          {
+            "metric": "existing.no_provider.metric",
+            "points": [[1710000200, 1]],
+            "type": "count",
+            "tags": ["provider:bazel", "marker:no-provider"],
+            "common": true,
+            "namespace": "civisibility"
+          }
+        ]
+      }
+    }
+  ]
+}
+'@ | Set-Content -LiteralPath (Join-Path $noProviderTelemetryDir "telemetry_no_provider_001.json") -Encoding UTF8
+  $noProviderContextPath = Join-Path $tempRoot "no_provider_context.json"
+  '{}' | Set-Content -LiteralPath $noProviderContextPath -Encoding UTF8
+  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextJsonPath $noProviderContextPath -TelemetryFactsManifestPath ""
+
+  $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
+  $env:DD_API_KEY = [string]::new("0", 32)
+  $env:DD_SITE = "datadoghq.com"
+  $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TEST_OPTIMIZATION_AGENT_URL -ErrorAction SilentlyContinue
+  $noProviderTranscript = Join-Path $tempRoot "no-provider.transcript.txt"
+  $noProviderStart = @(Read-JsonLog -Path $mockLog).Count
+  $noProviderExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs -TranscriptPath $noProviderTranscript
+  if ($noProviderExitCode -ne 0) {
+    throw "no-provider uploader execution failed with exit code $noProviderExitCode"
+  }
+  $noProviderEntries = Read-NewLogEntries -StartIndex $noProviderStart
+  $noProviderTelemetry = @(
+    Get-TelemetryPayloadsByPath -Entries $noProviderEntries -Path "/api/v2/apmtelemetry" |
+      Where-Object {
+        $application = Get-JsonValue -Object $_ -Key "application"
+        (Get-JsonValue -Object $application -Key "service_name") -eq "no-provider-service"
+      }
+  )
+  if ($noProviderTelemetry.Count -ne 1) {
+    throw "expected 1 telemetry upload for the no-provider scenario, saw $($noProviderTelemetry.Count)"
+  }
+  $noProviderTags = @(Get-TelemetryMetricTags -Payload $noProviderTelemetry[0] -MetricName "existing.no_provider.metric")
+  if (-not ($noProviderTags -contains "provider:bazel")) {
+    throw "expected no-provider scenario to keep provider:bazel unchanged, saw $($noProviderTags -join ',')"
+  }
+  if (@($noProviderTags | Where-Object { $_ -like "provider:bazel/*" }).Count -gt 0) {
+    throw "expected no-provider scenario to avoid adding a provider suffix, saw $($noProviderTags -join ',')"
   }
 
   Write-Host "Windows integration harness passed (PowerShell-only uploader path)."

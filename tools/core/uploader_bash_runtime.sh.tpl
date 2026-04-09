@@ -2076,6 +2076,108 @@ cleanup_telemetry_augmentation_plan() {
     rm -f "$plan_file" 2>/dev/null || true
 }
 
+# Cache the CI provider detected during sync so telemetry uploads can refine
+# tracer-emitted provider:bazel tags without mutating payloads on disk.
+TELEMETRY_PROVIDER_SUFFIX=""
+TELEMETRY_PROVIDER_SUFFIX_LOADED=0
+
+load_telemetry_provider_suffix() {
+    if (( TELEMETRY_PROVIDER_SUFFIX_LOADED == 1 )); then
+        return 0
+    fi
+    TELEMETRY_PROVIDER_SUFFIX_LOADED=1
+    [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" ]] || return 0
+    if ! command -v python3 >/dev/null 2>&1; then
+        dbg "telemetry provider rewrite skipped: python3 not available"
+        return 0
+    fi
+    TELEMETRY_PROVIDER_SUFFIX="$(
+        python3 - "$CONTEXT_JSON" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "rb") as handle:
+        payload = json.loads(handle.read().decode("utf-8-sig"))
+except Exception:
+    raise SystemExit(0)
+
+if not isinstance(payload, dict):
+    raise SystemExit(0)
+
+provider = payload.get("ci.provider.name")
+if not isinstance(provider, str) or not provider:
+    provider = payload.get("ci_provider_name")
+if isinstance(provider, str) and provider.strip():
+    print(provider.strip())
+PY
+    )"
+    if [[ -n "$TELEMETRY_PROVIDER_SUFFIX" ]]; then
+        dbg "telemetry provider rewrite enabled: provider:bazel/$TELEMETRY_PROVIDER_SUFFIX"
+    fi
+}
+
+# Rewrite outbound telemetry metric tags so Bazel-owned telemetry series can
+# keep the Bazel provider prefix while still exposing the detected CI provider.
+rewrite_telemetry_provider_tags() {
+    local infile="$1"
+    local outfile="$2"
+    load_telemetry_provider_suffix
+    if [[ -z "$TELEMETRY_PROVIDER_SUFFIX" ]]; then
+        cp "$infile" "$outfile"
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        cp "$infile" "$outfile"
+        return 0
+    fi
+    if ! python3 - "$infile" "$outfile" "$TELEMETRY_PROVIDER_SUFFIX" <<'PY'
+import json
+import sys
+
+infile, outfile, provider = sys.argv[1:4]
+replacement = f"provider:bazel/{provider}"
+
+with open(infile, "rb") as handle:
+    payload = json.loads(handle.read().decode("utf-8-sig"))
+
+def rewrite_series_tags(series_items):
+    if not isinstance(series_items, list):
+        return
+    for series in series_items:
+        if not isinstance(series, dict):
+            continue
+        tags = series.get("tags")
+        if not isinstance(tags, list):
+            continue
+        for idx, tag in enumerate(tags):
+            if tag == "provider:bazel":
+                tags[idx] = replacement
+
+def rewrite_message(message):
+    if not isinstance(message, dict):
+        return
+    request_type = message.get("request_type")
+    payload = message.get("payload")
+    if request_type in ("generate-metrics", "distributions"):
+        if isinstance(payload, dict):
+            rewrite_series_tags(payload.get("series"))
+    elif request_type == "message-batch" and isinstance(payload, list):
+        for child in payload:
+            rewrite_message(child)
+
+rewrite_message(payload)
+
+with open(outfile, "w", encoding = "utf-8", newline = "\n") as handle:
+    json.dump(payload, handle, separators = (",", ":"), ensure_ascii = False)
+    handle.write("\n")
+PY
+    then
+        log "warning: failed to rewrite telemetry provider tags for $infile"
+        cp "$infile" "$outfile"
+    fi
+}
+
 # Build a best-effort plan describing which tracer telemetry files should be
 # augmented in-flight, which tracer streams should have their outbound env
 # normalized, and which synthetic message-batch uploads should be sent after
@@ -2635,20 +2737,32 @@ upload_single_coverage() {
 upload_single_telemetry() {
     local display_file="$1"
     local file="${2:-$display_file}"
-    local meta_file resp http rc
+    local meta_file provider_body="" upload_body resp http rc
     meta_file="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_meta.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$meta_file" ]]; then
         dbg "upload_single_telemetry: failed to create metadata temp file"
         return 1
     fi
-    if ! build_telemetry_headers "$file" "$meta_file"; then
+    upload_body="$file"
+    load_telemetry_provider_suffix
+    if [[ -n "$TELEMETRY_PROVIDER_SUFFIX" ]]; then
+        provider_body="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_provider.XXXXXX" 2>/dev/null || true)"
+        if [[ -z "$provider_body" ]]; then
+            log "warning: failed to create telemetry provider rewrite temp file"
+        else
+            rewrite_telemetry_provider_tags "$file" "$provider_body"
+            upload_body="$provider_body"
+        fi
+    fi
+    if ! build_telemetry_headers "$upload_body" "$meta_file"; then
+        rm -f "$provider_body" 2>/dev/null || true
         rm -f "$meta_file" 2>/dev/null || true
         return 1
     fi
-    dbg "upload_single_telemetry: posting '$display_file' (body '$file')"
+    dbg "upload_single_telemetry: posting '$display_file' (body '$upload_body')"
     if [[ "$DEBUG" == "1" ]]; then
         echo "[dd-uploader][dbg] telemetry content for '$display_file':" >&2
-        cat "$file" >&2
+        cat "$upload_body" >&2
         echo "" >&2
         dbg "request: POST $TELEMETRY_URL"
         dbg_headers "telemetry" "${TELEMETRY_HDRS[@]}"
@@ -2662,14 +2776,14 @@ upload_single_telemetry() {
     fi
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
-        -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
+        -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${upload_body}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?
       fi
     else
       if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
-        -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
+        -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${upload_body}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?
@@ -2682,7 +2796,7 @@ upload_single_telemetry() {
             dbg "upload_single_telemetry response: $(head -c 2000 "$resp")"
         fi
     fi
-    rm -f "$resp" "$meta_file" 2>/dev/null || true
+    rm -f "$resp" "$meta_file" "$provider_body" 2>/dev/null || true
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
         return 1
     fi

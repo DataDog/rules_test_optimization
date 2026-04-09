@@ -3367,7 +3367,7 @@ cat > "$TELEMETRY_AUG_FILE" <<'JSON_EOF'
             "metric": "existing.metric",
             "points": [[1710000000, 1]],
             "type": "count",
-            "tags": ["marker:existing"],
+            "tags": ["marker:existing", "provider:bazel"],
             "common": true,
             "namespace": "civisibility"
           }
@@ -3399,11 +3399,28 @@ cat > "$TELEMETRY_AUG_PEER" <<'JSON_EOF'
   }
 }
 JSON_EOF
+TELEMETRY_AUG_CONTEXT_DIR="$TMP_WS/telemetry_aug_context"
+mkdir -p "$TELEMETRY_AUG_CONTEXT_DIR"
+cp "$TOPT_DIR/context.json" "$TELEMETRY_AUG_CONTEXT_DIR/context.json"
+TELEMETRY_AUG_CONTEXT_JSON="$TELEMETRY_AUG_CONTEXT_DIR/context.json"
+TELEMETRY_AUG_CONTEXT_JSON="$TELEMETRY_AUG_CONTEXT_JSON" "$PYTHON" - <<'PY'
+import json
+import os
+
+path = os.environ["TELEMETRY_AUG_CONTEXT_JSON"]
+with open(path, "r", encoding = "utf-8-sig") as handle:
+    payload = json.load(handle)
+payload["ci.provider.name"] = "github"
+with open(path, "w", encoding = "utf-8", newline = "\n") as handle:
+    json.dump(payload, handle, separators = (",", ":"), ensure_ascii = False)
+    handle.write("\n")
+PY
 
 TELEMETRY_AUG_LOG_START="$(log_line_count)"
 UPLOADER_TELEMETRY_AUG_LOG="$TMP_WS/uploader_telemetry_aug.log"
 if ! TESTLOGS_DIR="$TELEMETRY_AUG_TESTLOGS" \
 BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CONTEXT_JSON="$TELEMETRY_AUG_CONTEXT_JSON" \
 DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
 DD_API_KEY=mock \
 DD_SITE=datadoghq.com \
@@ -3488,6 +3505,13 @@ for message in payload.get("payload", []):
 
 if not existing_seen:
     print("error: augmented telemetry should keep original tracer metric messages")
+    sys.exit(1)
+existing_tags = count_metrics["existing.metric"].get("tags") or []
+if "provider:bazel/github" not in existing_tags:
+    print(f"error: augmented telemetry should rewrite provider:bazel using detected provider, saw {existing_tags!r}")
+    sys.exit(1)
+if "provider:bazel" in existing_tags:
+    print(f"error: augmented telemetry should not keep the bare provider:bazel tag when a provider is detected: {existing_tags!r}")
     sys.exit(1)
 
 expected_counts = {
@@ -3670,6 +3694,101 @@ if '"request_type": "message-batch"' in raw_anchor or "git_requests.settings" in
     sys.exit(1)
 if '"env": "none"' not in raw_anchor:
     print("error: raw non-batch telemetry file should keep its original env on disk")
+    sys.exit(1)
+PY
+
+# Scenario: when no provider is present in the resolved context, telemetry tag
+# rewriting must leave provider:bazel unchanged.
+TELEMETRY_NOPROV_TESTLOGS="$TMP_WS/telemetry_no_provider_testlogs"
+TELEMETRY_NOPROV_DIR="$TELEMETRY_NOPROV_TESTLOGS/manual_telemetry_no_provider/test.outputs/payloads/telemetry"
+mkdir -p "$TELEMETRY_NOPROV_DIR"
+cat > "$TELEMETRY_NOPROV_DIR/telemetry_no_provider_001.json" <<'JSON_EOF'
+{
+  "api_version": "v2",
+  "request_type": "message-batch",
+  "runtime_id": "no-provider-runtime",
+  "seq_id": 13,
+  "tracer_time": 1710000200,
+  "application": {
+    "service_name": "no-provider-service",
+    "env": "none",
+    "language_name": "go",
+    "tracer_version": "2.9.0-dev"
+  },
+  "payload": [
+    {
+      "request_type": "generate-metrics",
+      "payload": {
+        "namespace": "civisibility",
+        "series": [
+          {
+            "metric": "existing.no_provider.metric",
+            "points": [[1710000200, 1]],
+            "type": "count",
+            "tags": ["provider:bazel", "marker:no-provider"],
+            "common": true,
+            "namespace": "civisibility"
+          }
+        ]
+      }
+    }
+  ]
+}
+JSON_EOF
+TELEMETRY_NOPROV_CONTEXT_DIR="$TMP_WS/telemetry_no_provider_context"
+mkdir -p "$TELEMETRY_NOPROV_CONTEXT_DIR"
+printf '{}\n' > "$TELEMETRY_NOPROV_CONTEXT_DIR/context.json"
+TELEMETRY_NOPROV_LOG_START="$(log_line_count)"
+UPLOADER_TELEMETRY_NOPROV_LOG="$TMP_WS/uploader_telemetry_no_provider.log"
+if ! TESTLOGS_DIR="$TELEMETRY_NOPROV_TESTLOGS" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CONTEXT_JSON="$TELEMETRY_NOPROV_CONTEXT_DIR/context.json" \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_API_KEY=mock \
+DD_SITE=datadoghq.com \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_TELEMETRY_NOPROV_LOG" 2>&1; then
+  echo "error: telemetry no-provider scenario failed"
+  cat "$UPLOADER_TELEMETRY_NOPROV_LOG" || true
+  exit 1
+fi
+
+TELEMETRY_NOPROV_LOG_START="$TELEMETRY_NOPROV_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("TELEMETRY_NOPROV_LOG_START", "0") or "0")
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+telemetry_records = [rec for rec in records if rec.get("path") == "/api/v2/apmtelemetry"]
+if len(telemetry_records) != 1:
+    print(f"error: no-provider scenario expected 1 telemetry upload, saw {len(telemetry_records)}")
+    sys.exit(1)
+
+payload = json.loads(base64.b64decode(telemetry_records[0]["body_b64"]).decode("utf-8"))
+series = payload["payload"][0]["payload"]["series"][0]
+tags = series.get("tags") or []
+if "provider:bazel" not in tags:
+    print(f"error: no-provider scenario should keep provider:bazel unchanged, saw {tags!r}")
+    sys.exit(1)
+if any(tag.startswith("provider:bazel/") for tag in tags):
+    print(f"error: no-provider scenario should not append a provider suffix, saw {tags!r}")
     sys.exit(1)
 PY
 

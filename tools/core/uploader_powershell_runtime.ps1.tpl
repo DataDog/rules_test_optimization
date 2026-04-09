@@ -396,11 +396,15 @@ if ($script:SchemaValidator) {
 
 # Parse context.json once (best effort)
 $script:ContextObj = $null
+$script:ContextJsonText = $null
+$script:TelemetryProviderName = ""
 if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {
     try {
-        $script:ContextObj = Get-Content -LiteralPath $script:ContextJson -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $script:ContextJsonText = Get-Content -LiteralPath $script:ContextJson -Raw -Encoding UTF8
+        $script:ContextObj = $script:ContextJsonText | ConvertFrom-Json -ErrorAction Stop
     } catch {
         $script:ContextObj = $null
+        $script:ContextJsonText = $null
     }
 }
 
@@ -908,6 +912,17 @@ function Ensure-Hashtable($Value) {
   return [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
 }
 
+function Get-MutableDictionary($Value) {
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [System.Collections.IDictionary]) {
+    return $Value
+  }
+  if ($Value -is [PSCustomObject]) {
+    return Convert-ToMutableObject $Value
+  }
+  return $null
+}
+
 function Get-MapValue($MapObj, [string]$Key) {
   if ($null -eq $MapObj -or [string]::IsNullOrEmpty($Key)) { return $null }
   if ($MapObj -is [System.Collections.IDictionary]) {
@@ -917,6 +932,67 @@ function Get-MapValue($MapObj, [string]$Key) {
   $prop = $MapObj.PSObject.Properties[$Key]
   if ($prop) { return $prop.Value }
   return $null
+}
+
+function Get-StringPropertyValue($Object, [string]$Key) {
+  $value = Get-MapValue $Object $Key
+  if (($value -is [string]) -and -not [string]::IsNullOrWhiteSpace($value)) {
+    return $value.Trim()
+  }
+  return ""
+}
+
+function Get-ContextProviderFromObject($ContextValue) {
+  if ($null -eq $ContextValue) { return "" }
+
+  $providerName = Get-StringPropertyValue $ContextValue 'ci.provider.name'
+  if (-not [string]::IsNullOrWhiteSpace($providerName)) { return $providerName }
+
+  $providerName = Get-StringPropertyValue $ContextValue 'ci_provider_name'
+  if (-not [string]::IsNullOrWhiteSpace($providerName)) { return $providerName }
+
+  $ciValue = Get-MapValue $ContextValue 'ci'
+  if ($ciValue) {
+    $providerName = Get-StringPropertyValue $ciValue 'provider.name'
+    if (-not [string]::IsNullOrWhiteSpace($providerName)) { return $providerName }
+
+    $providerName = Get-StringPropertyValue $ciValue 'provider_name'
+    if (-not [string]::IsNullOrWhiteSpace($providerName)) { return $providerName }
+
+    $providerValue = Get-MapValue $ciValue 'provider'
+    if ($providerValue) {
+      $providerName = Get-StringPropertyValue $providerValue 'name'
+      if (-not [string]::IsNullOrWhiteSpace($providerName)) { return $providerName }
+    }
+  }
+
+  return ""
+}
+
+function Get-ContextProviderFromJsonText([string]$JsonText) {
+  if ([string]::IsNullOrWhiteSpace($JsonText)) { return "" }
+
+  foreach ($pattern in @(
+    '"ci\.provider\.name"\s*:\s*"(?<provider>(?:[^"\\]|\\.)*)"',
+    '"ci_provider_name"\s*:\s*"(?<provider>(?:[^"\\]|\\.)*)"'
+  )) {
+    $match = [regex]::Match($JsonText, $pattern)
+    if (-not $match.Success) { continue }
+    $rawProvider = $match.Groups['provider'].Value
+    if ([string]::IsNullOrWhiteSpace($rawProvider)) { continue }
+    try {
+      $decoded = ConvertFrom-Json -InputObject ('"' + $rawProvider.Replace('\', '\\') + '"') -ErrorAction Stop
+      if (($decoded -is [string]) -and -not [string]::IsNullOrWhiteSpace($decoded)) {
+        return $decoded.Trim()
+      }
+    } catch {
+      if (-not [string]::IsNullOrWhiteSpace($rawProvider)) {
+        return $rawProvider.Trim()
+      }
+    }
+  }
+
+  return ""
 }
 
 function Convert-ToObjectArray($Value) {
@@ -1842,6 +1918,68 @@ function Copy-MutableObject($Value) {
   return Convert-ToMutableObject $Value
 }
 
+# Read the rule-detected CI provider from context so telemetry uploads can
+# refine Bazel-owned provider tags without depending on tracer-side detection.
+function Get-ContextCiProviderName {
+    return $script:TelemetryProviderName
+}
+
+$script:TelemetryProviderName = Get-ContextProviderFromObject $script:ContextObj
+if ([string]::IsNullOrWhiteSpace($script:TelemetryProviderName)) {
+    $script:TelemetryProviderName = Get-ContextProviderFromJsonText $script:ContextJsonText
+}
+if (-not [string]::IsNullOrWhiteSpace($script:TelemetryProviderName)) {
+    Dbg "telemetry provider rewrite enabled: provider:bazel/$($script:TelemetryProviderName)"
+}
+
+# Rewrite one metric-series tag array in place when it still carries the bare
+# provider:bazel tag and the rule already knows the concrete CI provider.
+function Update-TelemetrySeriesProviderTags($SeriesItems, [string]$ProviderName) {
+    if ([string]::IsNullOrWhiteSpace($ProviderName)) { return }
+    foreach ($seriesObj in @(Convert-ToObjectArray $SeriesItems)) {
+        $series = Get-MutableDictionary $seriesObj
+        if (($null -eq $series) -or ($series.Count -eq 0)) { continue }
+        $tagsValue = Get-MapValue $series 'tags'
+        if (($null -eq $tagsValue) -or ($tagsValue -is [string])) { continue }
+
+        $updatedTags = @()
+        foreach ($tag in @(Convert-ToObjectArray $tagsValue)) {
+            $tagText = [string]$tag
+            if ($tagText -eq "provider:bazel") {
+                $updatedTags += ,"provider:bazel/$ProviderName"
+            } else {
+                $updatedTags += ,$tagText
+            }
+        }
+        $series['tags'] = $updatedTags
+    }
+}
+
+# Walk a telemetry payload recursively so both top-level metric messages and
+# nested message-batch payloads receive the same provider-tag normalization.
+function Update-TelemetryProviderTags($PayloadObject, [string]$ProviderName) {
+    if ([string]::IsNullOrWhiteSpace($ProviderName)) { return }
+
+    $payload = Get-MutableDictionary $PayloadObject
+    if (($null -eq $payload) -or ($payload.Count -eq 0)) { return }
+
+    $requestType = Get-MapValue $payload 'request_type'
+    $payloadValue = Get-MapValue $payload 'payload'
+
+    if ($requestType -eq "generate-metrics" -or $requestType -eq "distributions") {
+        $payloadMap = Get-MutableDictionary $payloadValue
+        if (($null -eq $payloadMap) -or ($payloadMap.Count -eq 0)) { return }
+        Update-TelemetrySeriesProviderTags (Get-MapValue $payloadMap 'series') $ProviderName
+        return
+    }
+
+    if ($requestType -eq "message-batch") {
+        foreach ($message in @(Convert-ToObjectArray $payloadValue)) {
+            Update-TelemetryProviderTags $message $ProviderName
+        }
+    }
+}
+
 function New-TelemetryOutboundBody([object]$PayloadObject, [string]$EnvOverride) {
     $outbound = Copy-MutableObject $PayloadObject
     if (-not [string]::IsNullOrWhiteSpace($EnvOverride)) {
@@ -2407,24 +2545,48 @@ function Upload-SingleTelemetry([string]$DisplayPath, [string]$BodyPath = $null)
         Log "warning: skipped telemetry upload for '$DisplayPath' because the body path does not exist: $BodyPath"
         return [bool]$false
     }
-    $hdrs = Get-TelemetryHeaders $BodyPath
-    if (-not $hdrs) {
-        return [bool]$false
+    $uploadBodyPath = $BodyPath
+    $providerTempBody = $null
+    try {
+        $providerName = Get-ContextCiProviderName
+        if (-not [string]::IsNullOrWhiteSpace($providerName)) {
+            # Keep tracer payloads on disk immutable; only rewrite the outbound
+            # body used for this upload attempt.
+            $payload = Read-JsonObjectFile $BodyPath ""
+            if ($payload) {
+                Update-TelemetryProviderTags $payload $providerName
+                $providerTempBody = Write-TelemetryTempBody $payload
+                if (-not [string]::IsNullOrWhiteSpace($providerTempBody) -and (Test-Path -LiteralPath $providerTempBody -PathType Leaf)) {
+                    $uploadBodyPath = $providerTempBody
+                } else {
+                    Log "warning: failed to create telemetry provider rewrite body for '$DisplayPath'"
+                }
+            }
+        }
+
+        $hdrs = Get-TelemetryHeaders $uploadBodyPath
+        if (-not $hdrs) {
+            return [bool]$false
+        }
+        Dbg "Upload-SingleTelemetry: posting '$DisplayPath' (body '$uploadBodyPath')"
+        if ($script:DebugMode) {
+            Write-Host "[dd-uploader][dbg] telemetry content for '$DisplayPath':"
+            Write-Host (Get-Content -LiteralPath $uploadBodyPath -Raw -Encoding UTF8)
+            Dbg "request: POST $TelemetryUrl"
+            Dbg-Headers "telemetry" $hdrs
+            Dbg "headers: Content-Type=application/json"
+        }
+        $resultStream = @(Send-PostRawJson $TelemetryUrl $hdrs $uploadBodyPath)
+        $result = $false
+        if ($resultStream.Count -gt 0) {
+            $result = [bool]$resultStream[-1]
+        }
+        return [bool]$result
+    } finally {
+        if (-not [string]::IsNullOrWhiteSpace($providerTempBody)) {
+            Remove-Item -LiteralPath $providerTempBody -Force -ErrorAction SilentlyContinue
+        }
     }
-    Dbg "Upload-SingleTelemetry: posting '$DisplayPath' (body '$BodyPath')"
-    if ($script:DebugMode) {
-        Write-Host "[dd-uploader][dbg] telemetry content for '$DisplayPath':"
-        Write-Host (Get-Content -LiteralPath $BodyPath -Raw -Encoding UTF8)
-        Dbg "request: POST $TelemetryUrl"
-        Dbg-Headers "telemetry" $hdrs
-        Dbg "headers: Content-Type=application/json"
-    }
-    $resultStream = @(Send-PostRawJson $TelemetryUrl $hdrs $BodyPath)
-    $result = $false
-    if ($resultStream.Count -gt 0) {
-        $result = [bool]$resultStream[-1]
-    }
-    return [bool]$result
 }
 
 function Upload-AllTests {
