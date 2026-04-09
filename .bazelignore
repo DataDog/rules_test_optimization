@@ -3,6 +3,7 @@
 bazel-bin
 bazel-out
 bazel-testlogs
+third_party/rules_go_orchestrion
 modules/go/bazel-bin
 modules/go/bazel-out
 modules/go/bazel-testlogs

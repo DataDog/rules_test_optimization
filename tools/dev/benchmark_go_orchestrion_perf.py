@@ -104,7 +104,7 @@ def parse_consumer_module_config(module_text: str) -> dict[str, str]:
 def reduced_module_bazel(config: dict[str, str], root: Path) -> str:
     return f"""module(name = "dd-go-benchmark-fixture")
 
-bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 

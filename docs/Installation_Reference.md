@@ -28,7 +28,7 @@ git_override(
 )
 
 # Only needed when using dd_topt_go_test
-bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 
 # Optional companion module (only needed if you use dd_topt_py_test)
 bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.0.0")
@@ -527,7 +527,7 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "io_bazel_rules_go",
     urls = [
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.60.0/rules_go-v0.60.0.zip",
     ],
     sha256 = "<rules_go_sha256>",
 )

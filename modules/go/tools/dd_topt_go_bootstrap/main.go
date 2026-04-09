@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultRulesGoVersion        = "0.59.0"
+	defaultRulesGoVersion        = "0.60.0"
 	defaultRulesGoRemote         = "https://github.com/DataDog/rules_test_optimization.git"
 	defaultRulesGoCommit         = "16712cc851915317659b932471dcb68af48dd5bb"
 	defaultRulesGoStripPrefix    = "third_party/rules_go_orchestrion"

@@ -2,8 +2,8 @@
   "fork_path": "third_party/rules_go_orchestrion",
   "upstream": {
     "repository": "https://github.com/bazel-contrib/rules_go.git",
-    "commit": "b3e12d797150cdc36f27e72f52f6a5c752762641",
-    "tag": "v0.59.0"
+    "commit": "fbbafef6e737fe18d3cdedfff4f8f060ac71d5f3",
+    "tag": "v0.60.0"
   },
   "generated_report": "third_party/rules_go_orchestrion.CHANGED_FILES.md",
   "generator": "python3 tools/dev/diff_rules_go_fork.py --write-report",

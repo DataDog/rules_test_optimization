@@ -136,7 +136,7 @@ git_override(
     commit = "<commit-sha>",
     strip_prefix = "modules/go",
 )
-bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 ```
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
@@ -613,7 +613,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | Component | Recommended baseline | Notes |
 |-----------|----------------------|-------|
 | Bazel | `8.5.1` | Repository baseline (`.bazelversion`) and primary CI lanes |
-| rules_go (Go users) | `0.59.0` | README examples use this version; importpath inference requires `0.51.0+` |
+| rules_go (Go users) | `0.60.0` | README examples use this version; importpath inference requires `0.51.0+` |
 | Go toolchain (example) | `1.24.0` | Consumer repositories may use another supported version |
 | Module versions | `1.0.0` metadata | BCR publication is pending; use commit pin/override install paths |
 
@@ -803,7 +803,7 @@ Before using it directly, configure the Go companion extension in `MODULE.bazel`
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
-bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 
 go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
