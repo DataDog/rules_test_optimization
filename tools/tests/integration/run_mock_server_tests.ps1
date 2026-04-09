@@ -303,6 +303,14 @@ function Get-TelemetryMetricTags {
       if ($null -eq $tags) {
         return @()
       }
+      if ($tags -is [System.Collections.IDictionary]) {
+        # Some Windows-hosted JSON shapes materialize an empty tag array as an
+        # empty dictionary. Treat that the same as "no tags" so the parity
+        # assertions reflect the uploaded telemetry rather than the host shape.
+        if ($tags.Count -eq 0) {
+          return @()
+        }
+      }
       return @($tags | Where-Object { $null -ne $_ -and $_ -ne "" })
     }
   }
