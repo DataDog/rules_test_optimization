@@ -45,15 +45,20 @@ def _relative_runfile_path(package_name, file_obj):
         return file_obj.short_path[len(prefix):]
     return file_obj.short_path
 
-def _unix_wrapper_content(actual_rel_path):
+def _unix_wrapper_content(actual_rel_path, actual_exec_path):
     """Render the Unix launcher used by the Orchestrion wrapper target."""
     return """#!/usr/bin/env bash
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 actual="$script_dir/%s"
+actual_execroot="%s"
 metadata_basename="${DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME:-}"
 undeclared_dir="${TEST_UNDECLARED_OUTPUTS_DIR:-}"
+
+if [[ ! -x "$actual" && -x "$actual_execroot" ]]; then
+  actual="$actual_execroot"
+fi
 
 if [[ ! -x "$actual" ]]; then
   echo "orch_go_test: wrapped test executable not found: $actual" >&2
@@ -68,16 +73,19 @@ if [[ -n "$metadata_basename" && -n "$undeclared_dir" ]]; then
 fi
 
 exec "$actual" "$@"
-""" % (actual_rel_path, _BAZEL_TARGET_METADATA_OUTPUT)
+""" % (actual_rel_path, actual_exec_path, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_rel_path):
+def _windows_wrapper_content(actual_rel_path, actual_exec_path):
     """Render the Windows launcher used by the Orchestrion wrapper target."""
     return """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
 set "ACTUAL=%%SCRIPT_DIR%%%s"
+set "ACTUAL_EXECROOT=%s"
 set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
 set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
+
+if not exist "%%ACTUAL%%" if exist "%%ACTUAL_EXECROOT%%" set "ACTUAL=%%ACTUAL_EXECROOT%%"
 
 if not exist "%%ACTUAL%%" (
   echo orch_go_test: wrapped test executable not found: %%ACTUAL%% 1>&2
@@ -92,7 +100,11 @@ if not "%%META_BASENAME%%"=="" if not "%%UNDECLARED_DIR%%"=="" (
 "%%ACTUAL%%" %%*
 set "EXITCODE=%%ERRORLEVEL%%"
 exit /b %%EXITCODE%%
-""" % (actual_rel_path.replace("/", "\\"), _BAZEL_TARGET_METADATA_OUTPUT)
+""" % (
+        actual_rel_path.replace("/", "\\"),
+        actual_exec_path.replace("/", "\\"),
+        _BAZEL_TARGET_METADATA_OUTPUT,
+    )
 
 def _orch_go_test_impl(ctx):
     dep_exe, dep_runfiles = _dep_exec_and_runfiles(ctx.attr.actual)
@@ -102,7 +114,7 @@ def _orch_go_test_impl(ctx):
     actual_rel_path = _relative_runfile_path(ctx.label.package, dep_exe)
     ctx.actions.write(
         output = out,
-        content = _windows_wrapper_content(actual_rel_path) if is_windows else _unix_wrapper_content(actual_rel_path),
+        content = _windows_wrapper_content(actual_rel_path, dep_exe.path) if is_windows else _unix_wrapper_content(actual_rel_path, dep_exe.path),
         is_executable = True,
     )
     providers = [DefaultInfo(
