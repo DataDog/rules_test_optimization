@@ -1530,13 +1530,22 @@ function Get-EventSourcePath($EventObj) {
 
 $script:BazelTargetMetadataOutput = 'bazel_target_metadata.json'
 
+function Get-DirectoryNameSafe([string]$PathValue) {
+  if ([string]::IsNullOrEmpty($PathValue)) { return $null }
+  try {
+    return [System.IO.Path]::GetDirectoryName($PathValue)
+  } catch {
+    return $null
+  }
+}
+
 function Get-BazelTargetMetadataPath([string]$PayloadFile) {
   if ([string]::IsNullOrEmpty($PayloadFile)) { return $null }
-  $leafDir = Split-Path -LiteralPath $PayloadFile -Parent
+  $leafDir = Get-DirectoryNameSafe $PayloadFile
   if ([string]::IsNullOrEmpty($leafDir)) { return $null }
-  $payloadDir = Split-Path -LiteralPath $leafDir -Parent
+  $payloadDir = Get-DirectoryNameSafe $leafDir
   if ([string]::IsNullOrEmpty($payloadDir)) { return $null }
-  $outputsRoot = Split-Path -LiteralPath $payloadDir -Parent
+  $outputsRoot = Get-DirectoryNameSafe $payloadDir
   if ([string]::IsNullOrEmpty($outputsRoot)) { return $null }
   $candidate = Join-Path $outputsRoot $script:BazelTargetMetadataOutput
   if (Test-Path -LiteralPath $candidate) { return $candidate }
