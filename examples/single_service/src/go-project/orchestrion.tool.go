@@ -17,7 +17,8 @@ package tools
 import (
 	// Ensures `orchestrion` is present in `go.mod` so that builds are repeatable.
 	// Do not remove.
-	_ "github.com/DataDog/orchestrion" // integration
-
-	_ "github.com/DataDog/dd-trace-go/orchestrion/all/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"      // integration
+	_ "github.com/DataDog/orchestrion"                     // integration
 )

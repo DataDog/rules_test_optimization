@@ -31,9 +31,11 @@ ARCHIVE_PATH="$TMP_ROOT/${ARCHIVE_NAME}.tar.gz"
 PYTHON="${PYTHON:-python3}"
 GO_BIN="${GO_BIN:-go}"
 BAZEL="${BAZEL:-$REPO_ROOT/bazelw}"
-GO_VERSION="${GO_VERSION:-1.24.0}"
+GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.6.0}"
+# Keep this aligned with the bootstrap helper's published default tracer pin so
+# the WORKSPACE harness validates the same public Go path the docs describe.
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev.0.20260409102143-ddd4e03ab47d}"
 SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
@@ -307,6 +309,7 @@ import (
 	_ "github.com/DataDog/orchestrion" // integration
 	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
 	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"      // integration
 )
 EOF
 
@@ -459,12 +462,12 @@ go_orchestrion_tool_repo(
 )
 EOF
   elif [[ "$scenario" == "conflicting_versions" ]]; then
-    cat >> "$ws_dir/WORKSPACE" <<'EOF'
+    cat >> "$ws_dir/WORKSPACE" <<EOF
 go_orchestrion_tool_repo(
-    version = "v1.6.0",
-    dd_trace_go_version = "v2.6.0",
+    version = "${ORCHESTRION_VERSION}",
+    dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
     dd_trace_go_versions = {
-        "github.com/DataDog/dd-trace-go/v2": "v2.6.0",
+        "github.com/DataDog/dd-trace-go/v2": "${DD_TRACE_GO_VERSION}",
     },
 )
 EOF

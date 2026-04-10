@@ -51,7 +51,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
 | `out_dir` | string | `.testoptimization` | Base output directory. Must be a non-empty relative path; absolute paths and `..` traversal are rejected |
 | `service` | string | `"unnamed-service"` or `DD_SERVICE` | Service name precedence: `service` attr > `DD_SERVICE` env > fallback |
 | `runtime_name` | string | empty | Optional runtime name (examples: `go`, `python`, `java`, `nodejs`, `dotnet`, `ruby`) |
-| `runtime_version` | string | empty | Optional runtime version (example: `1.24.0`) |
+| `runtime_version` | string | empty | Optional runtime version (example: `1.25.0`) |
 | `runtime_arch` | string | auto-detected | Optional runtime arch; defaults to detected `os.architecture` |
 | `http_connect_timeout_seconds` | int | `-1` attr / `10` effective | Optional connect-timeout override for sync HTTP requests (`-1` keeps env/default behavior) |
 | `http_max_time_seconds` | int | `-1` attr / `60` effective | Optional per-request max-time override for sync HTTP requests (`-1` keeps env/default behavior) |

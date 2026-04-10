@@ -70,7 +70,7 @@ Bootstrap once:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0 \
+  --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
 ```
 
@@ -146,7 +146,7 @@ go_topt = use_extension(
 go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service-a", "go-service-b"],
-    runtime_version = "1.24.0",
+    runtime_version = "1.25.0",
 )
 
 use_repo(

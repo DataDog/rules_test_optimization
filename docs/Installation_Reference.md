@@ -155,7 +155,7 @@ Guided bootstrap command:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0 \
+  --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
 ```
 
@@ -165,7 +165,7 @@ If the Go module lives below the workspace root:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0 \
+  --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d \
   --go-module-dir path/to/go-module
 ```
@@ -391,7 +391,7 @@ test_optimization_sync(
     service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
     # Optional:
     # runtime_name = "go",
-    # runtime_version = "1.24.0",
+    # runtime_version = "1.25.0",
     # known_tests = True,
     # test_management = True,
 )
@@ -593,7 +593,7 @@ load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
 load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
 
 go_rules_dependencies()
-go_register_toolchains(version = "1.24.0")
+go_register_toolchains(version = "1.25.0")
 gazelle_dependencies()
 
 go_orchestrion_tool_repo(
