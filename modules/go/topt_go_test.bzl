@@ -54,7 +54,7 @@ load(
     _is_dict = "is_dict",
 )
 load("@rules_go//go:def.bzl", "go_test")
-load("//:topt_go_infer.bzl", "topt_go_payloads_selector")
+load("//:topt_go_infer.bzl", "topt_go_bazel_metadata", "topt_go_payloads_selector")
 load("//:topt_go_orchestrion.bzl", "orch_go_test")
 
 _service_mapping_entries = service_mapping_entries
@@ -102,6 +102,10 @@ _ORCHESTRION_PIN_FILES = [
     "orchestrion.tool.go",
     "orchestrion.yml",
 ]
+
+def _attr_or_default(value, default):
+    """Return a Starlark attr value or a default without forcing truthiness."""
+    return default if value == None else value
 
 def _extract_wrapper_kwargs(kwargs):
     """Split macro kwargs between raw go_test and public wrapper."""
@@ -275,6 +279,7 @@ def dd_topt_go_test(
             fallback_importpath = pkg_path
 
     selector_name = name + "_topt_payloads"
+    metadata_name = name + "_topt_bazel_metadata"
 
     # Selector encapsulates importpath inference + module fallback in analysis
     # phase, keeping runtime logic and user callsites simple.
@@ -289,17 +294,46 @@ def dd_topt_go_test(
         module_label_override = module_label_override,
     )
 
+    # Emit a small Bazel-owned metadata file next to the built test artifacts.
+    # The Orchestrion wrapper copies this into TEST_UNDECLARED_OUTPUTS_DIR so
+    # the uploader can merge target-specific Bazel tags into emitted events.
+    # Only report Orchestrion as enabled when the macro is using the default
+    # rules_go-backed test rule that the public wrapper actually instruments.
+    topt_go_bazel_metadata(
+        name = metadata_name,
+        embeds = embed_labels,
+        explicit_importpath = explicit_importpath or "",
+        fallback_importpath = fallback_importpath or "",
+        module_groups = module_labels,
+        include_per_module = include_per_module_files,
+        module_label_override = module_label_override or "",
+        bazel_package = "//%s" % pkg_path if pkg_path else "//",
+        bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
+        orchestrion_enabled = go_test_rule == go_test,
+        cgo = _attr_or_default(kwargs.get("cgo"), False),
+        pure = _attr_or_default(kwargs.get("pure"), "auto"),
+        race = _attr_or_default(kwargs.get("race"), "auto"),
+        msan = _attr_or_default(kwargs.get("msan"), "auto"),
+        linkmode = _attr_or_default(kwargs.get("linkmode"), "auto"),
+        goos = _attr_or_default(kwargs.get("goos"), ""),
+        goarch = _attr_or_default(kwargs.get("goarch"), ""),
+    )
+
     # ------------------------------------------------------------------
     # Phase 5: Wire selector + manifest into go_test runfiles and environment.
     # ------------------------------------------------------------------
     # Data/env for the go test: depend only on the selector and use its runfiles.
     # This keeps go_test callsites simple while centralizing selection logic.
-    data = _append_data_dependencies(data, [":" + selector_name])
+    data = _append_data_dependencies(data, [
+        ":" + selector_name,
+        ":" + metadata_name,
+    ])
 
-    # Stage local Orchestrion pin files as hidden data inputs. They remain
-    # runtime-inert for the test itself, but the vendored rules_go builder uses
-    # them to materialize the temporary module that Orchestrion expects during
-    # compile-time instrumentation.
+    # Stage package-local Orchestrion pin files as hidden data inputs when the
+    # caller keeps them next to the BUILD file that defines the test target.
+    # They remain runtime-inert for the test itself, but the vendored rules_go
+    # builder uses them to materialize the temporary module that Orchestrion
+    # expects during compile-time instrumentation.
     orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
     if orchestrion_pin_files:
         data = _append_data_dependencies(data, orchestrion_pin_files)
@@ -322,6 +356,9 @@ def dd_topt_go_test(
             # Signal to the library that payloads should be written to files
             # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+            # The Orchestrion wrapper copies this file into test.outputs so the
+            # uploader can enrich payloads with target-specific Bazel metadata.
+            "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
         },
         macro_name = "dd_topt_go_test",
     )

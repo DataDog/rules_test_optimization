@@ -212,6 +212,7 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     captured = target[ToptGoMacroCaptureInfo]
 
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_single_service_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_single_service_target_topt_bazel_metadata"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
@@ -221,6 +222,11 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, "rlocationpath" in manifest_env)
     asserts.true(env, "test_optimization_data" in manifest_env)
     asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
+    asserts.equals(
+        env,
+        "go_macro_single_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
@@ -234,9 +240,15 @@ def _go_macro_multi_service_wiring_test_impl(ctx):
     captured = target[ToptGoMacroCaptureInfo]
 
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_multi_service_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_multi_service_target_topt_bazel_metadata"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(
+        env,
+        "go_macro_multi_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "example.com/override/pkg", captured.importpath)
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
@@ -257,6 +269,11 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "go_macro_env_none_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -268,10 +285,16 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_select_inputs_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_select_inputs_target_topt_bazel_metadata"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "go_macro_select_inputs_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -284,6 +307,11 @@ def _go_macro_explicit_service_wiring_test_impl(ctx):
     captured = target[ToptGoMacroCaptureInfo]
     asserts.equals(env, "caller-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "go_macro_explicit_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     return analysistest.end(env)
 
 def _go_macro_public_wrapper_test_impl(ctx):
@@ -297,6 +325,11 @@ def _go_macro_public_wrapper_test_impl(ctx):
     manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    asserts.equals(
+        env,
+        "go_macro_single_service_target_topt_bazel_metadata.json",
+        run_env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
@@ -353,10 +386,10 @@ def _wrapper_output_name_non_windows_test_impl(ctx):
     return analysistest.end(env)
 
 def _wrapper_output_name_windows_test_impl(ctx):
-    """Assert Windows wrapper names preserve the .exe suffix."""
+    """Assert Windows wrapper names use the batch launcher suffix."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
-    asserts.equals(env, "hello_test.exe", target[WrapperOutputNameInfo].output_name)
+    asserts.equals(env, "hello_test.bat", target[WrapperOutputNameInfo].output_name)
     return analysistest.end(env)
 
 go_macro_single_service_wiring_test = analysistest.make(

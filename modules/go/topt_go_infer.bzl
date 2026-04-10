@@ -42,6 +42,65 @@ _select_module_group_name = select_module_group_name
 # Public alias for unit tests.
 select_module_group_name_for_tests = _select_module_group_name
 
+def _resolved_importpath(explicit_importpath, embeds, fallback_importpath):
+    """Resolve the effective importpath and record which source supplied it."""
+    if explicit_importpath:
+        return explicit_importpath, "explicit"
+
+    for dep in embeds:
+        if ToptGoImportpathInfo in dep:
+            ip = dep[ToptGoImportpathInfo].importpath or ""
+            if ip:
+                return ip, "inferred"
+
+    if fallback_importpath:
+        return fallback_importpath, "fallback"
+
+    return "", "empty"
+
+def _resolve_payload_selection(ctx):
+    """Resolve importpath and module-selection details for payload wiring."""
+    ip, importpath_source = _resolved_importpath(
+        ctx.attr.explicit_importpath or "",
+        ctx.attr.embeds,
+        ctx.attr.fallback_importpath or "",
+    )
+
+    module_group_names = [m.label.name for m in ctx.attr.module_groups]
+    strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
+        bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
+    )
+    selected_name = _select_module_group_name(
+        ip,
+        module_group_names,
+        ctx.attr.include_per_module,
+        ctx.attr.module_label_override,
+        fail_on_miss = strict_selection,
+        failure_context = "topt_go_payloads_selector",
+    )
+
+    chosen = None
+    if selected_name:
+        for module_group in ctx.attr.module_groups:
+            if module_group.label.name == selected_name:
+                chosen = module_group
+                break
+
+    if chosen != None:
+        selection = "module_override" if ctx.attr.module_label_override else "module"
+    elif ctx.attr.include_per_module and len(module_group_names) > 0:
+        selection = "full_bundle_no_match"
+    else:
+        selection = "full_bundle_disabled"
+
+    return struct(
+        importpath = ip,
+        importpath_source = importpath_source,
+        selected_name = selected_name or "",
+        chosen = chosen,
+        selection = selection,
+    )
+
 # Provider carrying the inferred importpath string
 ToptGoImportpathInfo = provider(
     doc = "Provider carrying the inferred Go package importpath from rules_go.",
@@ -111,44 +170,11 @@ def _topt_go_payloads_selector_impl(ctx):
     # Decide which payload files to expose as runfiles based on the inferred importpath.
     # This rule deliberately returns a plain DefaultInfo so downstream macros
     # can treat it like a normal data dependency.
-    ip = ctx.attr.explicit_importpath or ""
-    if not ip:
-        # Prefer provider-derived importpath when available from embedded deps.
-        for dep in ctx.attr.embeds:
-            if ToptGoImportpathInfo in dep:
-                ip = dep[ToptGoImportpathInfo].importpath or ""
-                if ip:
-                    break
-    if not ip:
-        # Final fallback comes from macro-computed module/package synthesis.
-        ip = ctx.attr.fallback_importpath or ""
-
-    module_group_names = [m.label.name for m in ctx.attr.module_groups]
-
-    # Compute target name first, then resolve to actual label object below.
-    strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
-        bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
-    )
-    selected_name = _select_module_group_name(
-        ip,
-        module_group_names,
-        ctx.attr.include_per_module,
-        ctx.attr.module_label_override,
-        fail_on_miss = strict_selection,
-        failure_context = "topt_go_payloads_selector",
-    )
-    chosen = None
-    if selected_name:
-        # Resolve selected name back to its label to preserve runfiles/files
-        # providers exactly as exported by upstream generated targets.
-        for m in ctx.attr.module_groups:
-            if m.label.name == selected_name:
-                chosen = m
-                break
+    selection = _resolve_payload_selection(ctx)
 
     # Fallback to the full bundle when no per-module group matches.
     # This avoids surprising build/test failures when module mapping drifts.
-    source = chosen if chosen != None else ctx.attr.full_files
+    source = selection.chosen if selection.chosen != None else ctx.attr.full_files
 
     # Expose selected files via runfiles.
     # Using a single selector target keeps consuming macros simple.
@@ -158,6 +184,35 @@ def _topt_go_payloads_selector_impl(ctx):
     runfiles = src_default.default_runfiles
     files = src_default.files
     return [DefaultInfo(files = files, runfiles = runfiles)]
+
+def _topt_go_bazel_metadata_impl(ctx):
+    """Emit a single JSON file with Bazel-owned Go target metadata."""
+    selection = _resolve_payload_selection(ctx)
+    out = ctx.actions.declare_file(ctx.label.name + ".json")
+
+    metadata = {
+        "bazel.package": ctx.attr.bazel_package,
+        "bazel.target": ctx.attr.bazel_target,
+        "bazel.go.importpath": selection.importpath,
+        "bazel.go.importpath_source": selection.importpath_source,
+        "bazel.go.payload_selection": selection.selection,
+        "bazel.go.orchestrion.enabled": ctx.attr.orchestrion_enabled,
+        "bazel.go.attr.cgo": ctx.attr.cgo,
+        "bazel.go.attr.pure": ctx.attr.pure,
+        "bazel.go.attr.race": ctx.attr.race,
+        "bazel.go.attr.msan": ctx.attr.msan,
+        "bazel.go.attr.linkmode": ctx.attr.linkmode,
+    }
+    if ctx.attr.goos:
+        metadata["bazel.go.attr.goos"] = ctx.attr.goos
+    if ctx.attr.goarch:
+        metadata["bazel.go.attr.goarch"] = ctx.attr.goarch
+
+    ctx.actions.write(
+        output = out,
+        content = json.encode(metadata) + "\n",
+    )
+    return [DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out]))]
 
 topt_go_payloads_selector = rule(
     implementation = _topt_go_payloads_selector_impl,
@@ -182,5 +237,27 @@ topt_go_payloads_selector = rule(
 
         # Optional override for the sanitized module label suffix
         "module_label_override": attr.string(),
+    },
+)
+
+topt_go_bazel_metadata = rule(
+    implementation = _topt_go_bazel_metadata_impl,
+    attrs = {
+        "embeds": attr.label_list(aspects = [_importpath_aspect]),
+        "explicit_importpath": attr.string(),
+        "fallback_importpath": attr.string(),
+        "module_groups": attr.label_list(),
+        "include_per_module": attr.bool(default = True),
+        "module_label_override": attr.string(),
+        "bazel_package": attr.string(mandatory = True),
+        "bazel_target": attr.string(mandatory = True),
+        "orchestrion_enabled": attr.bool(default = True),
+        "cgo": attr.bool(default = False),
+        "pure": attr.string(default = "auto"),
+        "race": attr.string(default = "auto"),
+        "msan": attr.string(default = "auto"),
+        "linkmode": attr.string(default = "auto"),
+        "goos": attr.string(),
+        "goarch": attr.string(),
     },
 )

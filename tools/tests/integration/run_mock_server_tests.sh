@@ -2009,6 +2009,46 @@ fi
   "$BAZEL" "${BAZEL_FLAGS[@]}" test //src/go-project:hello_test "${REPO_ENVS[@]}"
 )
 
+GUIDED_TESTLOGS_DIR="$(
+  cd "$GUIDED_BOOT_WS"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs "${REPO_ENVS[@]}"
+)"
+GUIDED_BAZEL_METADATA_PATH="$GUIDED_TESTLOGS_DIR/src/go-project/hello_test/test.outputs/bazel_target_metadata.json"
+if [[ ! -f "$GUIDED_BAZEL_METADATA_PATH" ]]; then
+  echo "error: guided bootstrap go test did not emit bazel_target_metadata.json"
+  find "$GUIDED_TESTLOGS_DIR/src/go-project/hello_test" -maxdepth 3 -type f 2>/dev/null | sort || true
+  exit 1
+fi
+
+GUIDED_BAZEL_METADATA_PATH="$GUIDED_BAZEL_METADATA_PATH" "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+
+path = os.environ["GUIDED_BAZEL_METADATA_PATH"]
+with open(path, "r", encoding = "utf-8") as handle:
+    payload = json.load(handle)
+
+required_keys = [
+    "bazel.package",
+    "bazel.target",
+    "bazel.go.importpath",
+    "bazel.go.importpath_source",
+    "bazel.go.payload_selection",
+    "bazel.go.orchestrion.enabled",
+    "bazel.go.attr.cgo",
+    "bazel.go.attr.pure",
+    "bazel.go.attr.race",
+    "bazel.go.attr.msan",
+    "bazel.go.attr.linkmode",
+]
+
+missing = [key for key in required_keys if key not in payload]
+if missing:
+    print("error: guided bootstrap go test metadata is missing keys: %s" % ", ".join(missing))
+    sys.exit(1)
+PY
+
 (
   cd "$GUIDED_BOOT_WS"
   DD_API_KEY=mock \
@@ -2280,6 +2320,115 @@ for key in ("test.bazel.rule_name", "test.bazel.rule_version"):
         print(f"error: runtime-context uploader run still contains legacy context tag: {key}")
         sys.exit(1)
 PY
+
+# Scenario: per-target Bazel metadata sidecars are merged into uploaded events.
+# The guided bootstrap scenario above verifies the real wrapper emits this file.
+# This focused scenario keeps the uploader merge contract isolated from the test
+# execution path by writing the same sidecar into test.outputs directly.
+BAZEL_TARGET_METADATA_PATH="$CONTEXT_SCENARIO_TESTLOGS_DIR/write_payloads_test/test.outputs/bazel_target_metadata.json"
+chmod -R u+w "$CONTEXT_SCENARIO_TESTLOGS_DIR/write_payloads_test/test.outputs" 2>/dev/null || true
+cat > "$BAZEL_TARGET_METADATA_PATH" <<'JSON_EOF'
+{
+  "bazel.package": "//src/go-project",
+  "bazel.target": "//src/go-project:hello_test",
+  "bazel.go.importpath": "example.com/sidecar/pkg",
+  "bazel.go.importpath_source": "inferred",
+  "bazel.go.payload_selection": "module",
+  "bazel.go.orchestrion.enabled": true,
+  "bazel.go.attr.cgo": false,
+  "bazel.go.attr.pure": "auto",
+  "bazel.go.attr.race": "auto",
+  "bazel.go.attr.msan": "auto",
+  "bazel.go.attr.linkmode": "auto",
+  "bazel.go.attr.goos": "linux",
+  "bazel.go.attr.goarch": "amd64"
+}
+JSON_EOF
+
+LOG_LINES_BEFORE_BAZEL_SIDECAR="$(log_line_count)"
+UPLOADER_BAZEL_SIDECAR_LOG="$TMP_WS/uploader_bazel_sidecar.log"
+if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_BAZEL_SIDECAR_LOG" 2>&1; then
+  echo "error: uploader command with Bazel sidecar metadata failed"
+  cat "$UPLOADER_BAZEL_SIDECAR_LOG" || true
+  exit 1
+fi
+
+LOG_LINES_BEFORE_BAZEL_SIDECAR="$LOG_LINES_BEFORE_BAZEL_SIDECAR" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("LOG_LINES_BEFORE_BAZEL_SIDECAR", "0") or "0")
+expected_tags = {
+    "bazel.package": "//src/go-project",
+    "bazel.target": "//src/go-project:hello_test",
+    "bazel.go.importpath": "example.com/sidecar/pkg",
+    "bazel.go.importpath_source": "inferred",
+    "bazel.go.payload_selection": "module",
+    "bazel.go.orchestrion.enabled": "true",
+    "bazel.go.attr.cgo": "false",
+    "bazel.go.attr.pure": "auto",
+    "bazel.go.attr.race": "auto",
+    "bazel.go.attr.msan": "auto",
+    "bazel.go.attr.linkmode": "auto",
+    "bazel.go.attr.goos": "linux",
+    "bazel.go.attr.goarch": "amd64",
+}
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+target_resource = "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"
+target_evt = None
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
+        continue
+    try:
+        cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    for evt in cycle_payload.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        content = evt.get("content") or {}
+        if content.get("resource") != target_resource:
+            continue
+        target_evt = evt
+        break
+    if target_evt is not None:
+        break
+
+if target_evt is None:
+    print("error: missing test event after Bazel sidecar uploader run")
+    sys.exit(1)
+
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: Bazel sidecar tag mismatch for {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+PY
+
+rm -f "$BAZEL_TARGET_METADATA_PATH"
 
 # Scenario: an unreadable runtime override must fall back to bundled context
 # data instead of disabling enrichment entirely.

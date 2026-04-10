@@ -1528,6 +1528,47 @@ function Get-EventSourcePath($EventObj) {
   return $null
 }
 
+$script:BazelTargetMetadataOutput = 'bazel_target_metadata.json'
+
+function Get-BazelTargetMetadataPath([string]$PayloadFile) {
+  if ([string]::IsNullOrEmpty($PayloadFile)) { return $null }
+  $leafDir = Split-Path -LiteralPath $PayloadFile -Parent
+  if ([string]::IsNullOrEmpty($leafDir)) { return $null }
+  $payloadDir = Split-Path -LiteralPath $leafDir -Parent
+  if ([string]::IsNullOrEmpty($payloadDir)) { return $null }
+  $outputsRoot = Split-Path -LiteralPath $payloadDir -Parent
+  if ([string]::IsNullOrEmpty($outputsRoot)) { return $null }
+  $candidate = Join-Path $outputsRoot $script:BazelTargetMetadataOutput
+  if (Test-Path -LiteralPath $candidate) { return $candidate }
+  return $null
+}
+
+function Merge-FlatMetadataIntoEvent($EventObj, $MetadataObj, [string[]]$SkippedKeys = @()) {
+  if (-not $MetadataObj) { return }
+  if (-not (Get-MapValue $EventObj 'content')) { $EventObj | Add-Member -NotePropertyName content -NotePropertyValue @{} -Force }
+  $EventObj.content = Ensure-Hashtable $EventObj.content
+  $EventObj.content.meta = Ensure-Hashtable $EventObj.content.meta
+  $EventObj.content.metrics = Ensure-Hashtable $EventObj.content.metrics
+
+  foreach ($prop in $MetadataObj.PSObject.Properties) {
+    if ($SkippedKeys -contains $prop.Name) { continue }
+    $val = $prop.Value
+    if ($val -is [string]) {
+      $EventObj.content.meta[$prop.Name] = $val
+    } elseif ($val -is [bool]) {
+      $EventObj.content.meta[$prop.Name] = $val.ToString().ToLowerInvariant()
+    } elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {
+      $EventObj.content.metrics[$prop.Name] = [double]$val
+    } else {
+      try {
+        $EventObj.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 100)
+      } catch {
+        $EventObj.content.meta[$prop.Name] = $val.ToString()
+      }
+    }
+  }
+}
+
 function Merge-With-Context([string]$infile, [string]$outfile) {
   try {
     $payload = Get-Content -LiteralPath $infile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
@@ -1582,6 +1623,17 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
   }
   $payload.metadata = $newMeta
 
+  $bazelMetadataObj = $null
+  $bazelMetadataPath = Get-BazelTargetMetadataPath $infile
+  if (-not [string]::IsNullOrEmpty($bazelMetadataPath)) {
+    try {
+      $bazelMetadataObj = Get-Content -LiteralPath $bazelMetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      Log "warning: failed to parse Bazel target metadata for payload: $infile"
+      $bazelMetadataObj = $null
+    }
+  }
+
   # Copy context tags into event meta/metrics, then inject CODEOWNERS.
   # Span events are intentionally excluded from enrichment.
   if ($payload.events) {
@@ -1594,23 +1646,11 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
       $evt.content.metrics = Ensure-Hashtable $evt.content.metrics
 
       if ($script:ContextObj) {
-        foreach ($prop in $script:ContextObj.PSObject.Properties) {
-          # Keep API key fingerprint out of uploaded event content.
-          if ($prop.Name -eq 'topt.api_key_fingerprint') { continue }
-          $val = $prop.Value
-          if ($val -is [string]) {
-            $evt.content.meta[$prop.Name] = $val
-          } elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {
-            # Preserve numeric tags as metrics for Datadog queryability.
-            $evt.content.metrics[$prop.Name] = [double]$val
-          } else {
-            try {
-              $evt.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 100)
-            } catch {
-              $evt.content.meta[$prop.Name] = $val.ToString()
-            }
-          }
-        }
+        # Keep API key fingerprint out of uploaded event content.
+        Merge-FlatMetadataIntoEvent $evt $script:ContextObj @('topt.api_key_fingerprint')
+      }
+      if ($bazelMetadataObj) {
+        Merge-FlatMetadataIntoEvent $evt $bazelMetadataObj
       }
 
       $script:CodeOwnersStats.scanned++
