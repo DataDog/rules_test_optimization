@@ -1,0 +1,547 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Integration harness: WORKSPACE Go companion verification
+# -----------------------------------------------------------------------------
+#
+# This script creates temporary WORKSPACE-mode consumers and validates the
+# supported Go product path:
+# - core repo + Go companion repo as separate external repositories
+# - repo_mapping from @rules_go to an Orchestrion-enabled @io_bazel_rules_go
+# - public WORKSPACE helper for rules_go_orchestrion_tool
+# - real dd_topt_go_test execution against a nested Go package
+# - module-root Orchestrion pin files passed through orchestrion_pin_files
+# - module-selected payload wiring and custom sync out_dir handling
+# - mirror/archive packaging for the core repo, companion, and rules_go fork
+# - invalid public helper inputs fail early with direct guidance
+#
+# Debugging tips:
+# - Set KEEP_TMP=1 to inspect the generated workspaces after a failure.
+# - Override BAZEL=<path> to run with a different Bazel launcher locally.
+# - Override GO_BIN=<path> to use a specific Go binary locally.
+#
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_workspace_go.XXXXXX")"
+WORKSPACE_ROOT="$TMP_ROOT/workspaces"
+ARCHIVE_ROOT="$TMP_ROOT/archive_root"
+ARCHIVE_NAME="rules_test_optimization-fixture"
+ARCHIVE_PATH="$TMP_ROOT/${ARCHIVE_NAME}.tar.gz"
+PYTHON="${PYTHON:-python3}"
+GO_BIN="${GO_BIN:-go}"
+BAZEL="${BAZEL:-$REPO_ROOT/bazelw}"
+GO_VERSION="${GO_VERSION:-1.24.0}"
+ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.6.0}"
+SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
+MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
+MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
+OUT_DIR="${OUT_DIR:-custom_topt}"
+ARCHIVE_SHA256=""
+ARCHIVE_URL=""
+
+cleanup() {
+  if [[ "${KEEP_TMP:-0}" == "1" ]]; then
+    echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
+    return
+  fi
+  rm -rf "$TMP_ROOT"
+}
+trap cleanup EXIT INT TERM HUP
+
+require_command() {
+  local name="$1"
+  local message="$2"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    echo "error: $message" >&2
+    exit 1
+  fi
+}
+
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  if command -v python >/dev/null 2>&1; then
+    PYTHON=python
+  else
+    echo "error: python interpreter not found (tried '$PYTHON' and 'python')" >&2
+    exit 1
+  fi
+fi
+
+require_command "$GO_BIN" "go binary not found (tried '$GO_BIN')"
+require_command tar "tar is required for the WORKSPACE archive fixture"
+
+bzl_quote() {
+  "$PYTHON" - <<'PY' "$1"
+import json
+import sys
+
+print(json.dumps(sys.argv[1]))
+PY
+}
+
+sha256_file() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+    return
+  fi
+  echo "error: neither sha256sum nor shasum is available" >&2
+  exit 1
+}
+
+create_fixture_archive() {
+  local root_dir="$ARCHIVE_ROOT/$ARCHIVE_NAME"
+
+  rm -rf "$ARCHIVE_ROOT"
+  mkdir -p "$root_dir/modules" "$root_dir/third_party"
+  cp -R "$REPO_ROOT/tools" "$root_dir/tools"
+  cp -R "$REPO_ROOT/modules/go" "$root_dir/modules/go"
+  cp -R "$REPO_ROOT/third_party/rules_go_orchestrion" "$root_dir/third_party/rules_go_orchestrion"
+  (
+    cd "$ARCHIVE_ROOT"
+    tar -czf "$ARCHIVE_PATH" "$ARCHIVE_NAME"
+  )
+  ARCHIVE_SHA256="$(sha256_file "$ARCHIVE_PATH")"
+  ARCHIVE_URL="file://$ARCHIVE_PATH"
+}
+
+write_shared_fixture_sources() {
+  local ws_dir="$1"
+
+  mkdir -p "$ws_dir/app"
+
+  cat > "$ws_dir/BUILD.bazel" <<'EOF'
+exports_files([
+    "go.mod",
+    "go.sum",
+    "orchestrion.tool.go",
+    "orchestrion.yml",
+])
+EOF
+
+  cat > "$ws_dir/app/BUILD.bazel" <<EOF
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+go_library(
+    name = "hello_lib",
+    srcs = ["hello.go"],
+    importpath = "${MODULE_IMPORTPATH}",
+)
+
+dd_topt_go_test(
+    name = "hello_test",
+    srcs = ["hello_test.go"],
+    embed = [":hello_lib"],
+    orchestrion_pin_files = [
+        "//:go.mod",
+        "//:go.sum",
+        "//:orchestrion.tool.go",
+        "//:orchestrion.yml",
+    ],
+    topt_data = topt_data,
+)
+EOF
+
+  cat > "$ws_dir/app/hello.go" <<'EOF'
+package main
+
+func greeting() string {
+	return "Hello, Workspace!"
+}
+EOF
+
+  cat > "$ws_dir/app/hello_test.go" <<EOF
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const (
+	wantServiceName = "${SERVICE_NAME}"
+	wantModuleLabel = "${MODULE_LABEL}"
+	wantOutDir = "${OUT_DIR}"
+	wantOrchestrionEnabled = true
+)
+
+func resolveRlocation(p string) (string, bool) {
+	if _, err := os.Stat(p); err == nil {
+		return p, true
+	}
+	if d := os.Getenv("RUNFILES_DIR"); d != "" {
+		cand := filepath.Join(d, p)
+		if _, err := os.Stat(cand); err == nil {
+			return cand, true
+		}
+	}
+	if mf := os.Getenv("RUNFILES_MANIFEST_FILE"); mf != "" {
+		if f, err := os.Open(mf); err == nil {
+			defer f.Close()
+			sc := bufio.NewScanner(f)
+			for sc.Scan() {
+				line := sc.Text()
+				i := strings.IndexByte(line, ' ')
+				if i > 0 && line[:i] == p {
+					return line[i+1:], true
+				}
+			}
+		}
+	}
+	if s := os.Getenv("TEST_SRCDIR"); s != "" {
+		cand := filepath.Join(s, p)
+		if _, err := os.Stat(cand); err == nil {
+			return cand, true
+		}
+	}
+	return p, false
+}
+
+func TestGreeting(t *testing.T) {
+	if greeting() != "Hello, Workspace!" {
+		t.Fatalf("unexpected greeting %q", greeting())
+	}
+}
+
+func TestWorkspaceGoEnvWiring(t *testing.T) {
+	if got := os.Getenv("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"); got != "true" {
+		t.Fatalf("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = %q, want true", got)
+	}
+	if got := os.Getenv("DD_SERVICE"); got != wantServiceName {
+		t.Fatalf("DD_SERVICE = %q, want %s", got, wantServiceName)
+	}
+
+	manifestRloc := os.Getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+	if manifestRloc == "" {
+		t.Fatal("DD_TEST_OPTIMIZATION_MANIFEST_FILE not set")
+	}
+	manifestPath, ok := resolveRlocation(manifestRloc)
+	if !ok {
+		t.Fatalf("failed to resolve manifest runfile %q", manifestRloc)
+	}
+	if !strings.HasSuffix(manifestRloc, wantOutDir+"/manifest.txt") {
+		t.Fatalf("manifest runfile %q did not use custom out_dir %q", manifestRloc, wantOutDir)
+	}
+	manifestDir := filepath.Dir(manifestPath)
+
+	settingsPath := filepath.Join(manifestDir, "cache", "http", "settings.json")
+	settingsContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	if len(settingsContent) == 0 {
+		t.Fatal("expected non-empty settings.json")
+	}
+
+	knownTestsPath := filepath.Join(manifestDir, "cache", "http", "known_tests.json")
+	knownTestsContent, err := os.ReadFile(knownTestsPath)
+	if err != nil {
+		t.Fatalf("read known_tests.json: %v", err)
+	}
+	if !strings.Contains(string(knownTestsContent), "module:"+wantModuleLabel) {
+		t.Fatalf("known_tests.json did not contain module marker %q: %s", "module:"+wantModuleLabel, string(knownTestsContent))
+	}
+
+	testManagementPath := filepath.Join(manifestDir, "cache", "http", "test_management.json")
+	testManagementContent, err := os.ReadFile(testManagementPath)
+	if err != nil {
+		t.Fatalf("read test_management.json: %v", err)
+	}
+	if !strings.Contains(string(testManagementContent), "\""+wantModuleLabel+"\"") {
+		t.Fatalf("test_management.json did not contain module label %q: %s", wantModuleLabel, string(testManagementContent))
+	}
+
+	undeclaredDir := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
+	if undeclaredDir == "" {
+		t.Fatal("TEST_UNDECLARED_OUTPUTS_DIR not set")
+	}
+	metadataPath := filepath.Join(undeclaredDir, "bazel_target_metadata.json")
+	metadataContent, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatalf("read bazel_target_metadata.json: %v", err)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(metadataContent, &metadata); err != nil {
+		t.Fatalf("decode bazel_target_metadata.json: %v", err)
+	}
+	if got, _ := metadata["bazel.go.payload_selection"].(string); got != "module" {
+		t.Fatalf("bazel.go.payload_selection = %v, want module", metadata["bazel.go.payload_selection"])
+	}
+	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
+		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
+	}
+}
+EOF
+
+  cat > "$ws_dir/go.mod" <<EOF
+module ${MODULE_IMPORTPATH}
+
+go ${GO_VERSION}
+
+require (
+	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 ${DD_TRACE_GO_VERSION}
+	github.com/DataDog/dd-trace-go/contrib/net/http/v2 ${DD_TRACE_GO_VERSION}
+	github.com/DataDog/dd-trace-go/v2 ${DD_TRACE_GO_VERSION}
+	github.com/DataDog/orchestrion ${ORCHESTRION_VERSION}
+)
+EOF
+
+  cat > "$ws_dir/orchestrion.tool.go" <<'EOF'
+//go:build tools
+
+package tools
+
+import (
+	_ "github.com/DataDog/orchestrion" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+)
+EOF
+
+  cat > "$ws_dir/orchestrion.yml" <<'EOF'
+# yaml-language-server: $schema=https://datadoghq.dev/orchestrion/schema.json
+meta:
+  name: workspace-go-integration
+  description: Minimal WORKSPACE-mode Orchestrion fixture.
+
+aspects: []
+EOF
+}
+
+write_positive_workspace() {
+  local ws_dir="$1"
+  local repo_mode="$2"
+  local repo_root_bzl
+  local rules_go_fork_bzl
+  local companion_root_bzl
+  local archive_url_bzl
+
+  repo_root_bzl="$(bzl_quote "$REPO_ROOT")"
+  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
+  companion_root_bzl="$(bzl_quote "$REPO_ROOT/modules/go")"
+  archive_url_bzl="$(bzl_quote "$ARCHIVE_URL")"
+
+  cat > "$ws_dir/WORKSPACE" <<EOF
+workspace(name = "workspace_go_integration_${repo_mode}")
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+EOF
+
+  if [[ "$repo_mode" == "local" ]]; then
+    cat >> "$ws_dir/WORKSPACE" <<EOF
+
+local_repository(
+    name = "datadog-rules-test-optimization",
+    path = ${repo_root_bzl},
+)
+
+local_repository(
+    name = "io_bazel_rules_go",
+    path = ${rules_go_fork_bzl},
+)
+
+local_repository(
+    name = "datadog-rules-test-optimization-go",
+    path = ${companion_root_bzl},
+    repo_mapping = {
+        "@rules_go": "@io_bazel_rules_go",
+    },
+)
+EOF
+  else
+    cat >> "$ws_dir/WORKSPACE" <<EOF
+
+http_archive(
+    name = "datadog-rules-test-optimization",
+    urls = [${archive_url_bzl}],
+    sha256 = "${ARCHIVE_SHA256}",
+    strip_prefix = "${ARCHIVE_NAME}",
+)
+
+http_archive(
+    name = "io_bazel_rules_go",
+    urls = [${archive_url_bzl}],
+    sha256 = "${ARCHIVE_SHA256}",
+    strip_prefix = "${ARCHIVE_NAME}/third_party/rules_go_orchestrion",
+)
+
+http_archive(
+    name = "datadog-rules-test-optimization-go",
+    urls = [${archive_url_bzl}],
+    sha256 = "${ARCHIVE_SHA256}",
+    strip_prefix = "${ARCHIVE_NAME}/modules/go",
+    repo_mapping = {
+        "@rules_go": "@io_bazel_rules_go",
+    },
+)
+EOF
+  fi
+
+  cat >> "$ws_dir/WORKSPACE" <<EOF
+
+http_archive(
+    name = "bazel_gazelle",
+    sha256 = "b760f7fe75173886007f7c2e616a21241208f3d90e8657dc65d36a771e916b6a",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.1/bazel-gazelle-v0.39.1.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.1/bazel-gazelle-v0.39.1.tar.gz",
+    ],
+)
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
+load("@datadog-rules-test-optimization//tools/tests:example_stub_repo.bzl", "example_stub_repo")
+
+go_rules_dependencies()
+go_register_toolchains(version = "${GO_VERSION}")
+gazelle_dependencies()
+EOF
+
+  cat >> "$ws_dir/WORKSPACE" <<EOF
+
+go_orchestrion_tool_repo(
+    version = "${ORCHESTRION_VERSION}",
+    dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
+)
+
+example_stub_repo(
+    name = "test_optimization_data",
+    out_dir = "${OUT_DIR}",
+    service_name = "${SERVICE_NAME}",
+    service_keys = ["go_service"],
+    labels = ["${MODULE_LABEL}"],
+    go_module_path = "${MODULE_IMPORTPATH}",
+    go_sanitized_module_path = "${MODULE_LABEL}",
+    go_module_included = True,
+)
+EOF
+}
+
+write_invalid_workspace() {
+  local ws_dir="$1"
+  local scenario="$2"
+  local rules_go_fork_bzl
+
+  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
+
+  cat > "$ws_dir/WORKSPACE" <<EOF
+workspace(name = "workspace_go_invalid_${scenario}")
+
+load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+
+local_repository(
+    name = "io_bazel_rules_go",
+    path = ${rules_go_fork_bzl},
+)
+
+load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
+EOF
+
+  if [[ "$scenario" == "custom_name" ]]; then
+    cat >> "$ws_dir/WORKSPACE" <<'EOF'
+go_orchestrion_tool_repo(
+    name = "custom_tool_repo",
+    version = "v1.6.0",
+)
+EOF
+  elif [[ "$scenario" == "conflicting_versions" ]]; then
+    cat >> "$ws_dir/WORKSPACE" <<'EOF'
+go_orchestrion_tool_repo(
+    version = "v1.6.0",
+    dd_trace_go_version = "v2.6.0",
+    dd_trace_go_versions = {
+        "github.com/DataDog/dd-trace-go/v2": "v2.6.0",
+    },
+)
+EOF
+  else
+    cat >> "$ws_dir/WORKSPACE" <<'EOF'
+go_orchestrion_tool_repo()
+EOF
+  fi
+
+  cat > "$ws_dir/BUILD.bazel" <<'EOF'
+filegroup(
+    name = "probe",
+    srcs = [],
+)
+EOF
+}
+
+run_positive_fixture() {
+  local repo_mode="$1"
+  local ws_dir="$WORKSPACE_ROOT/${repo_mode}"
+
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  write_positive_workspace "$ws_dir" "$repo_mode"
+  write_shared_fixture_sources "$ws_dir"
+
+  (
+    cd "$ws_dir"
+    GOWORK=off "$GO_BIN" mod download \
+      github.com/DataDog/orchestrion \
+      github.com/DataDog/dd-trace-go/v2 \
+      github.com/DataDog/dd-trace-go/contrib/net/http/v2 \
+      github.com/DataDog/dd-trace-go/contrib/log/slog/v2
+  )
+
+  (
+    cd "$ws_dir"
+    "$BAZEL" test --noenable_bzlmod --enable_workspace //app:hello_test
+  )
+}
+
+run_expected_failure() {
+  local scenario="$1"
+  local expected_fragment="$2"
+  local ws_dir="$WORKSPACE_ROOT/$scenario"
+  local output_path="$ws_dir/${scenario}.log"
+
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  write_invalid_workspace "$ws_dir" "$scenario"
+
+  set +e
+  (
+    cd "$ws_dir"
+    "$BAZEL" query --noenable_bzlmod --enable_workspace //:probe
+  ) >"$output_path" 2>&1
+  local rc=$?
+  set -e
+
+  if [[ $rc -eq 0 ]]; then
+    echo "error: expected scenario '$scenario' to fail" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+
+  if ! grep -F "$expected_fragment" "$output_path" >/dev/null 2>&1; then
+    echo "error: scenario '$scenario' did not fail with expected text: $expected_fragment" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+}
+
+mkdir -p "$WORKSPACE_ROOT"
+create_fixture_archive
+
+run_positive_fixture "local"
+run_positive_fixture "archive"
+run_expected_failure "custom_name" "name must be rules_go_orchestrion_tool"
+run_expected_failure "missing_version" "version is required in WORKSPACE mode"
+run_expected_failure "conflicting_versions" "dd_trace_go_version and dd_trace_go_versions cannot both be set"

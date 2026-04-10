@@ -974,6 +974,12 @@ _orchestrion_empty = repository_rule(
     implementation = _orchestrion_empty_impl,
 )
 
+# Public aliases for WORKSPACE-facing helper macros. Keep the repository-rule
+# implementations in one file so Bzlmod and WORKSPACE setup reuse the same
+# bootstrap logic and output contract.
+orchestrion_build_repository = _orchestrion_build
+orchestrion_empty_repository = _orchestrion_empty
+
 def _orchestrion_ext_impl(module_ctx):
     # Look for orchestrion.from_source() calls from any module
     version = ""

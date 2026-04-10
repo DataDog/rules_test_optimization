@@ -12,15 +12,16 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `36`
-- Modified files: `23`
-- Added files: `13`
+- Total changed paths: `38`
+- Modified files: `24`
+- Added files: `14`
 - Removed files: `0`
 
 ## Modified files
 
 - `MODULE.bazel`
 - `MODULE.bazel.lock`
+- `docs/doc_helpers.bzl`
 - `go/extensions.bzl`
 - `go/private/actions/archive.bzl`
 - `go/private/actions/compilepkg.bzl`
@@ -45,6 +46,7 @@ This file is generated. Do not edit by hand.
 
 ## Added files
 
+- `go/orchestrion_workspace.bzl`
 - `go/private/orchestrion/BUILD`
 - `go/private/orchestrion/extensions.bzl`
 - `go/tools/builders/compilepkg_test.go`

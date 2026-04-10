@@ -11,6 +11,7 @@ permissions:
   contents: read
 
 env:
+  GO_VERSION: "1.24.0"
   PYTHON_VERSION: "3.11"
   BUILDIFIER_VERSION: "8.2.1"
   BUILDIFIER_SHA256_LINUX_AMD64: "6ceb7b0ab7cf66fceccc56a027d21d9cc557a7f34af37d2101edb56b92fcfa1a"
@@ -188,45 +189,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Validate WORKSPACE mode loading
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Bazelisk
         shell: bash
         run: |
-          tmp_ws="$(mktemp -d)"
-          trap 'rm -rf "$tmp_ws"' EXIT
+          GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-          cat >"$tmp_ws/WORKSPACE" <<EOF
-          load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
-
-          local_repository(
-              name = "datadog-rules-test-optimization",
-              path = "${GITHUB_WORKSPACE}",
-          )
-
-          local_repository(
-              name = "datadog-rules-test-optimization-go",
-              path = "${GITHUB_WORKSPACE}/modules/go",
-          )
-
-          load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
-          EOF
-
-          cat >"$tmp_ws/BUILD.bazel" <<'EOF'
-          load("@datadog-rules-test-optimization-go//tests:example_stub_repo.bzl", "render_stub_build_for_tests")
-          load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
-
-          filegroup(
-              name = "workspace_smoke",
-              srcs = [],
-          )
-          EOF
-
-          (
-            cd "$tmp_ws"
-            # WORKSPACE mode validation is pinned to Bazel 8 because Bazel 9
-            # deprecates/disables this path during the migration window.
-            USE_BAZEL_VERSION=8.4.1 \
-              "${GITHUB_WORKSPACE}/bazelw" query --noenable_bzlmod --enable_workspace //:workspace_smoke
-          )
+      - name: Validate WORKSPACE Go companion path
+        shell: bash
+        run: |
+          # WORKSPACE mode validation is pinned to Bazel 8 because Bazel 9
+          # deprecates/disables this path during the migration window.
+          USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_workspace_go_integration.sh
 
   coverage-tools:
     timeout-minutes: 15

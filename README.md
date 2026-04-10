@@ -581,6 +581,20 @@ test_optimization_sync(
 )
 ```
 
+For Go in WORKSPACE mode, keep the core and Go companion as separate external
+repositories and load `dd_topt_go_test` from
+`@datadog-rules-test-optimization-go//:topt_go_test.bzl`. The repository bound
+to `@io_bazel_rules_go` must be an Orchestrion-enabled `rules_go` fork or
+consumer-owned merge that preserves the Orchestrion workspace helper and the
+`//go/private/orchestrion:*` targets used by the companion transition. Add
+`repo_mapping = {"@rules_go": "@io_bazel_rules_go"}` on the Go companion
+repository declaration so the companion resolves that fork consistently.
+The public WORKSPACE helper also expects the default tool-repo name
+`rules_go_orchestrion_tool`, so consumers should not rename that repository.
+When Go tests live below the module root, pass the module-root pin files through
+`orchestrion_pin_files` (for example `["//:go.mod", "//:orchestrion.tool.go"]`)
+or inject them from a repo-local wrapper.
+
 Use [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for mirrored `http_archive`, Go toolchain
 setup, uploader wiring, and full WORKSPACE details.
 

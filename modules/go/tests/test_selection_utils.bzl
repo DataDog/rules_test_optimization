@@ -3,6 +3,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_infer.bzl",
+    "orchestrion_metadata_enabled_for_tests",
     "select_module_group_name_for_tests",
 )
 load(
@@ -144,6 +145,14 @@ def _go_stub_includes_manifest_in_files_test(ctx):
     asserts.true(env, test_management in filegroup_block)
     return unittest.end(env)
 
+def _orchestrion_metadata_enabled_test(ctx):
+    """Validate metadata reports false when the tool repo is effectively empty."""
+    env = unittest.begin(ctx)
+    asserts.true(env, orchestrion_metadata_enabled_for_tests(True, [struct(path = "tool")]))
+    asserts.equals(env, False, orchestrion_metadata_enabled_for_tests(True, []))
+    asserts.equals(env, False, orchestrion_metadata_enabled_for_tests(False, [struct(path = "tool")]))
+    return unittest.end(env)
+
 def _build_module_labels_invalid_shape_target_impl(_ctx):
     build_module_labels_for_tests("repo_name", "mod_a")
     return []
@@ -220,6 +229,7 @@ select_module_group_name_test = unittest.make(_select_module_group_name_test)
 normalize_user_data_handles_none_test = unittest.make(_normalize_user_data_handles_none_test)
 build_module_labels_valid_test = unittest.make(_build_module_labels_valid_test)
 go_stub_includes_manifest_in_files_test = unittest.make(_go_stub_includes_manifest_in_files_test)
+orchestrion_metadata_enabled_test = unittest.make(_orchestrion_metadata_enabled_test)
 build_module_labels_invalid_shape_failure_test = analysistest.make(
     _build_module_labels_invalid_shape_failure_test_impl,
     expect_failure = True,

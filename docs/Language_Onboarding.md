@@ -102,6 +102,17 @@ dd_go_test(
 
 If the workspace already has custom sync wiring, skip guided bootstrap and use
 the manual `dd_topt_go_test(..., topt_data = ...)` path from `README.md`.
+In WORKSPACE mode, that manual path still uses the Go companion as its own
+repository and loads the macro from
+`@datadog-rules-test-optimization-go//:topt_go_test.bzl`. The companion must
+resolve an Orchestrion-enabled `rules_go` fork, so the WORKSPACE wiring for
+that fork needs `repo_mapping = {"@rules_go": "@io_bazel_rules_go"}` or the
+equivalent mapping used by the consumer's repository layout. That fork also
+needs to expose the public `go_orchestrion_tool_repo(...)` helper, preserve the
+`//go/private/orchestrion:*` targets that the companion transition uses, and
+keep the default tool-repo name `rules_go_orchestrion_tool`. When Go tests live
+below the module root, pass the module-root pin files through
+`orchestrion_pin_files` or inject them from a repo-local wrapper.
 
 ### Multi-service
 

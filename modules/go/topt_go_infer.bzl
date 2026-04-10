@@ -160,6 +160,47 @@ _importpath_aspect = aspect(
     attr_aspects = ["embed", "deps"],
 )
 
+def _canonical_payload_symlinks(files):
+    """Return canonical cache/http symlinks for selected payload files.
+
+    Module-specific payload groups are produced in the generated sync
+    repository, but their raw runfiles paths can pick up workspace-prefixed
+    roots when consumed from another repository. The Go companion normalizes
+    those runfiles here so code that starts from `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
+    can always find `cache/http/*` next to the exported manifest path.
+    """
+    settings_file = None
+    known_tests_file = None
+    test_management_file = None
+
+    for file in files:
+        if file.basename == "settings.json":
+            settings_file = file
+        elif file.basename == "known_tests.json":
+            known_tests_file = file
+        elif file.basename == "test_management.json":
+            test_management_file = file
+
+    if settings_file == None:
+        return {}
+
+    cache_http_dir = "/".join(settings_file.short_path.split("/")[:-1])
+    if not cache_http_dir:
+        return {}
+
+    symlinks = {}
+
+    def maybe_add(filename, file):
+        if file == None:
+            return
+        canonical_path = cache_http_dir + "/" + filename
+        if file.short_path != canonical_path:
+            symlinks[canonical_path] = file
+
+    maybe_add("known_tests.json", known_tests_file)
+    maybe_add("test_management.json", test_management_file)
+    return symlinks
+
 def _topt_go_payloads_selector_impl(ctx):
     """Rule implementation that exposes selected payload files as runfiles.
 
@@ -176,19 +217,24 @@ def _topt_go_payloads_selector_impl(ctx):
     # This avoids surprising build/test failures when module mapping drifts.
     source = selection.chosen if selection.chosen != None else ctx.attr.full_files
 
-    # Expose selected files via runfiles.
-    # Using a single selector target keeps consuming macros simple.
-    # `default_runfiles` preserves any symlink mapping behavior from the chosen
-    # upstream filegroup/rule instead of rebuilding runfiles manually here.
+    # Rebuild runfiles here so the main workspace controls the canonical
+    # manifest-adjacent paths that downstream test code reads at runtime.
     src_default = source[DefaultInfo]
-    runfiles = src_default.default_runfiles
-    files = src_default.files
-    return [DefaultInfo(files = files, runfiles = runfiles)]
+    files = src_default.files.to_list()
+    symlinks = _canonical_payload_symlinks(files)
+    return [DefaultInfo(
+        files = depset(files),
+        runfiles = ctx.runfiles(files = files, symlinks = symlinks),
+    )]
 
 def _topt_go_bazel_metadata_impl(ctx):
     """Emit a single JSON file with Bazel-owned Go target metadata."""
     selection = _resolve_payload_selection(ctx)
     out = ctx.actions.declare_file(ctx.label.name + ".json")
+    orchestrion_configured = _orchestrion_metadata_enabled(
+        ctx.attr.orchestrion_requested,
+        ctx.files._orchestrion_tool,
+    )
 
     metadata = {
         "bazel.package": ctx.attr.bazel_package,
@@ -196,7 +242,7 @@ def _topt_go_bazel_metadata_impl(ctx):
         "bazel.go.importpath": selection.importpath,
         "bazel.go.importpath_source": selection.importpath_source,
         "bazel.go.payload_selection": selection.selection,
-        "bazel.go.orchestrion.enabled": ctx.attr.orchestrion_enabled,
+        "bazel.go.orchestrion.enabled": orchestrion_configured,
         "bazel.go.attr.cgo": ctx.attr.cgo,
         "bazel.go.attr.pure": ctx.attr.pure,
         "bazel.go.attr.race": ctx.attr.race,
@@ -213,6 +259,12 @@ def _topt_go_bazel_metadata_impl(ctx):
         content = json.encode(metadata) + "\n",
     )
     return [DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out]))]
+
+def _orchestrion_metadata_enabled(orchestrion_requested, orchestrion_tool_files):
+    """Return True when metadata should report Orchestrion as actually enabled."""
+    return orchestrion_requested and len(orchestrion_tool_files) > 0
+
+orchestrion_metadata_enabled_for_tests = _orchestrion_metadata_enabled
 
 topt_go_payloads_selector = rule(
     implementation = _topt_go_payloads_selector_impl,
@@ -251,7 +303,7 @@ topt_go_bazel_metadata = rule(
         "module_label_override": attr.string(),
         "bazel_package": attr.string(mandatory = True),
         "bazel_target": attr.string(mandatory = True),
-        "orchestrion_enabled": attr.bool(default = True),
+        "orchestrion_requested": attr.bool(default = True),
         "cgo": attr.bool(default = False),
         "pure": attr.string(default = "auto"),
         "race": attr.string(default = "auto"),
@@ -259,5 +311,9 @@ topt_go_bazel_metadata = rule(
         "linkmode": attr.string(default = "auto"),
         "goos": attr.string(),
         "goarch": attr.string(),
+        "_orchestrion_tool": attr.label(
+            allow_files = True,
+            default = "@rules_go//go/private/orchestrion:tool_binary",
+        ),
     },
 )

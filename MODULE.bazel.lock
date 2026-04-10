@@ -335,7 +335,7 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "0Qa7Ud/u30dtfW9FXeWlQZ99CTI7OjgIpNY3XxODrfY=",
+        "bzlTransitiveDigest": "W7a/pWF5QymKN7X/ugYSwXnvqm9fUZtDwvmZTAS02gs=",
         "usagesDigest": "hbyg0fRneQMmF97jXWRY+GFcq8y/n1fJA31mNooQGng=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -344,7 +344,12 @@
           "test_optimization_data": {
             "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
-              "repo_alias": "test_optimization_data",
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [],
+              "out_dir": ".testoptimization",
+              "service_name": "stub-service",
               "service_keys": [
                 "go_service",
                 "go_service_a",
@@ -620,7 +625,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "AhibdPJOZ/b6p+pIP/FPk56s9VaJ0bhbLR1s16U2yGY=",
+        "bzlTransitiveDigest": "kMocMlLYNIQT+dUhegkMsqrQJmJkuD3LZf9gc6r+orw=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
