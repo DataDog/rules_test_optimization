@@ -15,6 +15,7 @@ forwards at analysis time without compiling Go code.
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
+    "orch_go_test",
     "select_wrapper_output_name_for_tests",
 )
 load(
@@ -71,6 +72,12 @@ def _has_label_suffix(items, suffix):
             return True
     return False
 
+def _has_file_basename(items, basename):
+    for item in items:
+        if item.basename == basename:
+            return True
+    return False
+
 _go_test_capture_rule = rule(
     implementation = _go_test_capture_impl,
     attrs = {
@@ -79,6 +86,26 @@ _go_test_capture_rule = rule(
         "env": attr.string_dict(),
         "importpath": attr.string(),
         "rundir": attr.string(),
+    },
+    executable = True,
+)
+
+def _fake_executable_impl(ctx):
+    """Create a lightweight executable target for wrapper analysis tests."""
+    out = ctx.actions.declare_file(ctx.attr.executable_name)
+    content = "@echo off\r\nexit /b 0\r\n" if ctx.attr.is_windows else "#!/bin/sh\nexit 0\n"
+    ctx.actions.write(out, content, is_executable = True)
+    return [DefaultInfo(
+        files = depset([out]),
+        runfiles = ctx.runfiles(files = [out]),
+        executable = out,
+    )]
+
+fake_executable_rule = rule(
+    implementation = _fake_executable_impl,
+    attrs = {
+        "executable_name": attr.string(mandatory = True),
+        "is_windows": attr.bool(default = False),
     },
     executable = True,
 )
@@ -205,6 +232,33 @@ def go_macro_select_inputs_target(name, tags = None):
         tags = tags,
     )
 
+def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
+    """Target under test for non-Windows sibling executable materialization."""
+    fake_executable_rule(
+        name = name + "_actual",
+        executable_name = "hello_test__raw_go_test",
+        tags = ["manual"],
+    )
+    orch_go_test(
+        name = name,
+        actual = ":" + name + "_actual",
+        tags = tags,
+    )
+
+def orch_wrapper_materialized_actual_windows_target(name, tags = None):
+    """Target under test for Windows sibling executable materialization."""
+    fake_executable_rule(
+        name = name + "_actual",
+        executable_name = "hello_test__raw_go_test.exe",
+        is_windows = True,
+        tags = ["manual"],
+    )
+    orch_go_test(
+        name = name,
+        actual = ":" + name + "_actual",
+        tags = tags,
+    )
+
 def _go_macro_single_service_wiring_test_impl(ctx):
     """Assert env/data/rundir contract for single-service macro usage."""
     env = analysistest.begin(ctx)
@@ -212,6 +266,7 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     captured = target[ToptGoMacroCaptureInfo]
 
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_single_service_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_single_service_target_topt_bazel_metadata"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
@@ -221,6 +276,11 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, "rlocationpath" in manifest_env)
     asserts.true(env, "test_optimization_data" in manifest_env)
     asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
+    asserts.equals(
+        env,
+        "go_macro_single_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
@@ -234,9 +294,15 @@ def _go_macro_multi_service_wiring_test_impl(ctx):
     captured = target[ToptGoMacroCaptureInfo]
 
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_multi_service_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_multi_service_target_topt_bazel_metadata"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(
+        env,
+        "go_macro_multi_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "example.com/override/pkg", captured.importpath)
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
@@ -257,6 +323,11 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "go_macro_env_none_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -268,10 +339,16 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_select_inputs_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_select_inputs_target_topt_bazel_metadata"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "go_macro_select_inputs_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -284,6 +361,11 @@ def _go_macro_explicit_service_wiring_test_impl(ctx):
     captured = target[ToptGoMacroCaptureInfo]
     asserts.equals(env, "caller-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "go_macro_explicit_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     return analysistest.end(env)
 
 def _go_macro_public_wrapper_test_impl(ctx):
@@ -291,12 +373,18 @@ def _go_macro_public_wrapper_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
-    asserts.equals(env, 1, len(files))
-    asserts.equals(env, "go_macro_single_service_target", files[0].basename)
+    asserts.equals(env, 2, len(files))
+    asserts.true(env, _has_file_basename(files, "go_macro_single_service_target"))
+    asserts.true(env, _has_file_basename(files, "go_macro_single_service_target__wrapped_go_macro_single_service_target__raw_go_test.sh"))
     run_env = target[RunEnvironmentInfo].environment
     manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    asserts.equals(
+        env,
+        "go_macro_single_service_target_topt_bazel_metadata.json",
+        run_env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
@@ -353,10 +441,32 @@ def _wrapper_output_name_non_windows_test_impl(ctx):
     return analysistest.end(env)
 
 def _wrapper_output_name_windows_test_impl(ctx):
-    """Assert Windows wrapper names preserve the .exe suffix."""
+    """Assert Windows wrapper names use the batch launcher suffix."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
-    asserts.equals(env, "hello_test.exe", target[WrapperOutputNameInfo].output_name)
+    asserts.equals(env, "hello_test.bat", target[WrapperOutputNameInfo].output_name)
+    return analysistest.end(env)
+
+def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
+    """Assert the wrapper target ships the sibling raw executable."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    runfiles = target[DefaultInfo].default_runfiles.files.to_list()
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target"))
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    return analysistest.end(env)
+
+def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
+    """Assert the Windows wrapper target carries the sibling raw executable."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    runfiles = target[DefaultInfo].default_runfiles.files.to_list()
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target.bat"))
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
     return analysistest.end(env)
 
 go_macro_single_service_wiring_test = analysistest.make(
@@ -393,4 +503,13 @@ wrapper_output_name_non_windows_test = analysistest.make(
 )
 wrapper_output_name_windows_test = analysistest.make(
     _wrapper_output_name_windows_test_impl,
+)
+orch_wrapper_materialized_actual_non_windows_test = analysistest.make(
+    _orch_wrapper_materialized_actual_non_windows_test_impl,
+)
+orch_wrapper_materialized_actual_windows_test = analysistest.make(
+    _orch_wrapper_materialized_actual_windows_test_impl,
+    config_settings = {
+        "//command_line_option:platforms": str(Label("@rules_go//go/toolchain:windows_amd64")),
+    },
 )

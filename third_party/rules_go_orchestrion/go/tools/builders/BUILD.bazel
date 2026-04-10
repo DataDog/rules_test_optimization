@@ -23,11 +23,8 @@ go_test(
     name = "cover_test",
     size = "small",
     srcs = [
-        "cover.go",
         "cover_test.go",
-        "edit.go",
-        "env.go",
-        "flags.go",
+        ":builder_srcs",
     ],
 )
 
@@ -48,11 +45,8 @@ go_test(
     name = "stdliblist_test",
     size = "small",
     srcs = [
-        "env.go",
-        "flags.go",
-        "replicate.go",
-        "stdliblist.go",
         "stdliblist_test.go",
+        ":builder_srcs",
     ],
     data = ["@go_sdk//:files"],
     rundir = ".",
@@ -74,9 +68,8 @@ go_test(
     name = "env_test",
     size = "small",
     srcs = [
-        "env.go",
         "env_test.go",
-        "flags.go",
+        ":builder_srcs",
     ],
 )
 
@@ -187,6 +180,8 @@ go_source(
         "nogo_typeparams_go117.go",
         "nogo_typeparams_go118.go",
         "nolint.go",
+        "orchestrion.go",
+        "probe.go",
     ],
     # //go/tools/builders:nogo_srcs is considered a different target by
     # Bazel's visibility check than
@@ -208,6 +203,8 @@ go_binary(
         "env.go",
         "flags.go",
         "go_path.go",
+        "orchestrion.go",
+        "probe.go",
     ],
     visibility = ["//visibility:public"],
 )

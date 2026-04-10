@@ -708,7 +708,6 @@ def _go_context_data_impl(ctx):
     if "msan" in ctx.features:
         print("WARNING: --features=msan is no longer supported. Use --@io_bazel_rules_go//go/config:msan instead.")
 
-    # Get orchestrion binary if enabled
     orchestrion_enabled = ctx.attr._orchestrion_enabled[BuildSettingInfo].value
     orchestrion = None
     orchestrion_version_file = None

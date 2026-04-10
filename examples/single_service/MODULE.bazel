@@ -1,7 +1,7 @@
 module(name = "example-single-service")
 
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
-bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
 bazel_dep(name = "rules_ruby", version = "0.21.1")

@@ -1437,13 +1437,102 @@ def _load_github_event_payload(ctx):
         return None
     return content
 
+def _git_output_from_workspace(ctx, workspace_path, git_args):
+    """Run one git command against the checked-out workspace and return stdout.
+
+    Repository rules execute outside the source checkout, so git metadata
+    lookups must be anchored explicitly to the CI workspace path instead of the
+    repository rule's own working directory. Empty output means the lookup was
+    unavailable and callers should keep existing metadata unchanged.
+    """
+    if not workspace_path or not hasattr(ctx, "execute"):
+        return ""
+    result = ctx.execute(
+        ["git", "-C", workspace_path] + git_args,
+        timeout = 10,
+    )
+    if result.return_code != 0:
+        return ""
+    return (result.stdout or "").strip()
+
+def _populate_git_revision_metadata(ctx, env_data, workspace_path, revision, key_prefix):
+    """Fill missing message/author/committer fields for one git revision."""
+    if not revision or not workspace_path:
+        return
+
+    # Reuse already-known commit metadata when head and merge revisions match.
+    if key_prefix == "head_" and revision == (env_data.get("sha") or ""):
+        for suffix in [
+            "message",
+            "author_name",
+            "author_email",
+            "author_date",
+            "committer_name",
+            "committer_email",
+            "committer_date",
+        ]:
+            source_key = "commit_" + suffix
+            target_key = key_prefix + suffix
+            if not env_data.get(target_key) and env_data.get(source_key):
+                env_data[target_key] = env_data.get(source_key)
+
+    field_formats = {
+        "message": "%s",
+        "author_name": "%an",
+        "author_email": "%ae",
+        "author_date": "%aI",
+        "committer_name": "%cn",
+        "committer_email": "%ce",
+        "committer_date": "%cI",
+    }
+    for suffix, pretty_format in field_formats.items():
+        field_name = key_prefix + suffix
+        if env_data.get(field_name):
+            continue
+        value = _git_output_from_workspace(
+            ctx,
+            workspace_path,
+            ["log", "-1", "--date=iso-strict", "--pretty=%s" % pretty_format, revision],
+        )
+        if value:
+            env_data[field_name] = value
+
+def _populate_missing_git_metadata(ctx, env_data):
+    """Backfill missing git metadata from the checked-out workspace when needed.
+
+    GitHub Actions always exposes the checked-out repository path, but wrapper-
+    supplied `DD_GIT_*` values can still be absent on some shells. When that
+    happens, derive the revision metadata directly from the workspace checkout
+    so generated `context.json` stays consistent across platforms.
+    """
+    workspace_path = env_data.get("ci_workspace_path") or ""
+    if not workspace_path:
+        return
+
+    _populate_git_revision_metadata(
+        ctx,
+        env_data,
+        workspace_path,
+        env_data.get("sha") or "",
+        "commit_",
+    )
+    _populate_git_revision_metadata(
+        ctx,
+        env_data,
+        workspace_path,
+        env_data.get("head_sha") or "",
+        "head_",
+    )
+
 def _collect_env(ctx):
     """Collect CI/git/service context into a normalized metadata dict."""
-    return _collect_env_from_environ(
+    env_data = _collect_env_from_environ(
         ctx.os.environ,
         getattr(ctx.attr, "service", None),
         _load_github_event_payload(ctx),
     )
+    _populate_missing_git_metadata(ctx, env_data)
+    return env_data
 
 # Public aliases for tests (helpers defined after the first alias section).
 collect_env_for_tests = _collect_env

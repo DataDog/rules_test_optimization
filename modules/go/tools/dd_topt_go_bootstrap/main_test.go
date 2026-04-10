@@ -10,11 +10,11 @@ import (
 
 func TestInsertAfterModuleDecl(t *testing.T) {
 	input := "module(name = \"example\")\n"
-	got, err := insertAfterModuleDecl(input, "bazel_dep(name = \"rules_go\", version = \"0.59.0\")\n")
+	got, err := insertAfterModuleDecl(input, "bazel_dep(name = \"rules_go\", version = \"0.60.0\")\n")
 	if err != nil {
 		t.Fatalf("insertAfterModuleDecl error: %v", err)
 	}
-	if !strings.Contains(got, "bazel_dep(name = \"rules_go\", version = \"0.59.0\")") {
+	if !strings.Contains(got, "bazel_dep(name = \"rules_go\", version = \"0.60.0\")") {
 		t.Fatalf("expected rules_go bazel_dep in output:\n%s", got)
 	}
 }

@@ -1,5 +1,7 @@
 """Internal Orchestrion wrapper rule for Go tests."""
 
+_BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
+
 def _orch_transition_impl(_settings, _attr):
     return {
         "@rules_go//go/private/orchestrion:enabled": True,
@@ -32,19 +34,84 @@ def _dep_run_environment_info(dep):
     return None
 
 def _select_wrapper_output_name(label_name, executable_basename, is_windows):
-    if is_windows and executable_basename.endswith(".exe"):
-        return label_name + ".exe"
+    if is_windows:
+        return label_name + ".bat"
     return label_name
+
+def _wrapped_actual_output_name(label_name, executable_basename):
+    """Return the wrapper-owned sibling executable name used at test runtime."""
+    return label_name + "__wrapped_" + executable_basename
+
+def _unix_wrapper_content(actual_filename):
+    """Render the Unix launcher used by the Orchestrion wrapper target."""
+    return """#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+actual="$script_dir/%s"
+metadata_basename="${DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME:-}"
+undeclared_dir="${TEST_UNDECLARED_OUTPUTS_DIR:-}"
+
+if [[ ! -x "$actual" ]]; then
+  echo "orch_go_test: wrapped test executable not found: $actual" >&2
+  exit 1
+fi
+
+if [[ -n "$metadata_basename" && -n "$undeclared_dir" ]]; then
+  metadata_source="$script_dir/$metadata_basename"
+  if [[ -f "$metadata_source" ]]; then
+    cp "$metadata_source" "$undeclared_dir/%s"
+  fi
+fi
+
+exec "$actual" "$@"
+""" % (actual_filename, _BAZEL_TARGET_METADATA_OUTPUT)
+
+def _windows_wrapper_content(actual_filename):
+    """Render the Windows launcher used by the Orchestrion wrapper target."""
+    return """@echo off
+setlocal
+set "SCRIPT_DIR=%%~dp0"
+set "ACTUAL=%%SCRIPT_DIR%%%s"
+set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
+set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
+
+if not exist "%%ACTUAL%%" (
+  echo orch_go_test: wrapped test executable not found: %%ACTUAL%% 1>&2
+  exit /b 1
+)
+
+if not "%%META_BASENAME%%"=="" if not "%%UNDECLARED_DIR%%"=="" (
+  set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
+  if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
+)
+
+"%%ACTUAL%%" %%*
+set "EXITCODE=%%ERRORLEVEL%%"
+exit /b %%EXITCODE%%
+""" % (
+        actual_filename.replace("/", "\\"),
+        _BAZEL_TARGET_METADATA_OUTPUT,
+    )
 
 def _orch_go_test_impl(ctx):
     dep_exe, dep_runfiles = _dep_exec_and_runfiles(ctx.attr.actual)
     dep_run_environment = _dep_run_environment_info(ctx.attr.actual)
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
-    ctx.actions.symlink(output = out, target_file = dep_exe)
+    actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
+
+    # Materialize the raw test binary next to the wrapper so the launcher does
+    # not have to guess which configuration-specific execroot path Bazel chose.
+    ctx.actions.symlink(output = actual_out, target_file = dep_exe)
+    ctx.actions.write(
+        output = out,
+        content = _windows_wrapper_content(actual_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename),
+        is_executable = True,
+    )
     providers = [DefaultInfo(
-        files = depset([out]),
-        runfiles = dep_runfiles,
+        files = depset([out, actual_out]),
+        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out])),
         executable = out,
     )]
     if dep_run_environment:

@@ -8,6 +8,6 @@ exports_files([
 
 go_binary(
     name = "dd_topt_go_bootstrap",
-    embed = ["//tools/dd_topt_go_bootstrap:bootstrap_lib"],
+    embed = ["@datadog-rules-test-optimization-go//tools/dd_topt_go_bootstrap:bootstrap_lib"],
     visibility = ["//visibility:public"],
 )

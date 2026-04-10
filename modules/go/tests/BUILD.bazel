@@ -13,6 +13,10 @@ load(
     "go_macro_select_inputs_wiring_test",
     "go_macro_single_service_target",
     "go_macro_single_service_wiring_test",
+    "orch_wrapper_materialized_actual_non_windows_target",
+    "orch_wrapper_materialized_actual_non_windows_test",
+    "orch_wrapper_materialized_actual_windows_target",
+    "orch_wrapper_materialized_actual_windows_test",
     "resolve_topt_service_key_missing_failure_test",
     "resolve_topt_service_key_missing_target_rule",
     "resolve_topt_service_key_unknown_failure_test",
@@ -368,6 +372,26 @@ wrapper_output_name_non_windows_test(
     target_under_test = ":wrapper_output_name_non_windows_target",
 )
 
+orch_wrapper_materialized_actual_non_windows_target(
+    name = "orch_wrapper_materialized_actual_non_windows_target",
+    tags = ["manual"],
+)
+
+orch_wrapper_materialized_actual_non_windows_test(
+    name = "orch_wrapper_materialized_actual_non_windows_test",
+    target_under_test = ":orch_wrapper_materialized_actual_non_windows_target",
+)
+
+orch_wrapper_materialized_actual_windows_target(
+    name = "orch_wrapper_materialized_actual_windows_target",
+    tags = ["manual"],
+)
+
+orch_wrapper_materialized_actual_windows_test(
+    name = "orch_wrapper_materialized_actual_windows_test",
+    target_under_test = ":orch_wrapper_materialized_actual_windows_target",
+)
+
 test_suite(
     name = "tests",
     tests = [
@@ -386,6 +410,8 @@ test_suite(
         ":go_stub_includes_manifest_in_files_test",
         ":normalize_user_data_handles_none_test",
         ":normalize_user_data_invalid_type_failure_test",
+        ":orch_wrapper_materialized_actual_non_windows_test",
+        ":orch_wrapper_materialized_actual_windows_test",
         ":resolve_topt_service_key_missing_failure_test",
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":resolve_topt_service_key_unknown_failure_test",

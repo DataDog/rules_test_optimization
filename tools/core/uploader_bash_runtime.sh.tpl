@@ -1712,6 +1712,54 @@ elif [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" && "$JQ_AVAILABLE" != "1" ]]; t
   dbg "api key fingerprint check skipped: jq not available"
 fi
 
+BAZEL_TARGET_METADATA_OUTPUT="bazel_target_metadata.json"
+
+find_bazel_target_metadata() {
+  local payload_file="$1"
+  local outputs_root
+  outputs_root="$(dirname "$(dirname "$(dirname "$payload_file")")")"
+  local candidate="$outputs_root/$BAZEL_TARGET_METADATA_OUTPUT"
+  if [[ -f "$candidate" ]]; then
+    echo "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+merge_flat_metadata_file() {
+  local infile="$1"
+  local outfile="$2"
+  local metadata_file="$3"
+  if ! jq --slurpfile extra "$metadata_file" '
+    def extra_obj: ($extra[0] | if type=="object" then . else {} end);
+    (if .events then
+        .events |= map(
+          if (.type? == "span") then .
+          else
+            (
+              .content = (.content // {})
+              | .content.meta = (if (.content.meta|type) == "object" then .content.meta else {} end)
+              | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
+              | reduce (extra_obj | to_entries[]) as $e (.;
+                  if ($e.value|type) == "number" then
+                    .content.metrics[$e.key] = $e.value
+                  elif ($e.value|type) == "string" then
+                    .content.meta[$e.key] = $e.value
+                  else
+                    .content.meta[$e.key] = ($e.value|tostring)
+                  end
+                )
+            )
+          end
+        )
+      else .
+      end)
+  ' "$infile" > "$outfile"; then
+    cp "$infile" "$outfile"
+    return 1
+  fi
+}
+
 # Handle enrich with context behavior.
 enrich_with_context() {
   local infile="$1"; local tmpfile="$2"
@@ -1785,6 +1833,17 @@ enrich_with_context() {
     log "warning: context enrichment failed for payload: $infile"
     cp "$infile" "$tmpfile"
   fi
+
+  local bazel_metadata_file=""
+  bazel_metadata_file="$(find_bazel_target_metadata "$infile" 2>/dev/null || true)"
+  if [[ -n "$bazel_metadata_file" && -f "$bazel_metadata_file" ]]; then
+    local sidecar_tmp="$tmpfile.bazel"
+    if ! merge_flat_metadata_file "$tmpfile" "$sidecar_tmp" "$bazel_metadata_file"; then
+      log "warning: bazel target metadata enrichment failed for payload: $infile"
+    fi
+    mv "$sidecar_tmp" "$tmpfile"
+  fi
+
   # CODEOWNERS enrichment is applied after metadata/context merge so source-path
   # detection can leverage normalized event structure.
   inject_codeowners_tags "$tmpfile"

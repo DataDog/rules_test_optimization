@@ -45,7 +45,7 @@ bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.0.0")
 
-bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
+bazel_dep(name = "rules_go", version = "0.60.0")  # or your repo-selected version
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
@@ -302,7 +302,7 @@ MODULE.bazel:
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
-bazel_dep(name = "rules_go", version = "0.59.0")  # or your repo-selected version
+bazel_dep(name = "rules_go", version = "0.60.0")  # or your repo-selected version
 
 git_override(
     module_name = "datadog-rules-test-optimization",

@@ -61,7 +61,7 @@ git_override(
     strip_prefix = "modules/go",
 )
 
-bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 ```
 
 Bootstrap once:
@@ -125,7 +125,7 @@ git_override(
     strip_prefix = "modules/go",
 )
 
-bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 
 go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
