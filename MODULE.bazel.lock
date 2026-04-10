@@ -335,7 +335,7 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "W7a/pWF5QymKN7X/ugYSwXnvqm9fUZtDwvmZTAS02gs=",
+        "bzlTransitiveDigest": "LuCLZrqpS5OwgKqV4f+yOHyrSU+7s2KkQ9fkBjB3mJw=",
         "usagesDigest": "hbyg0fRneQMmF97jXWRY+GFcq8y/n1fJA31mNooQGng=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -349,6 +349,7 @@
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
               "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data",
               "service_name": "stub-service",
               "service_keys": [
                 "go_service",

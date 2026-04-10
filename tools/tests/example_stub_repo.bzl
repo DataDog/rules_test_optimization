@@ -174,6 +174,7 @@ render_stub_export_for_tests = _render_stub_export
 def _example_stub_repo_impl(ctx):
     """Implement example stub repo impl behavior."""
     out_dir = ctx.attr.out_dir or ".testoptimization"
+    exported_repo_name = ctx.attr.repo_alias or ctx.name
     manifest = "%s/manifest.txt" % out_dir
     settings = "%s/cache/http/settings.json" % out_dir
     known_tests = "%s/cache/http/known_tests.json" % out_dir
@@ -203,10 +204,11 @@ def _example_stub_repo_impl(ctx):
         )
 
     export = _render_stub_export(
-        # Keep the exported repo_name tied to the actual repository alias so
-        # fixture consumers exercise the same identity contract as the real
-        # sync repository.
-        repo_name = ctx.name,
+        # Module-extension repository rules receive canonical internal names
+        # like `+extension+repo` at execution time. Export the user-visible
+        # alias instead so consuming macros keep resolving `@test_optimization_data`
+        # style labels the same way the real sync repository does.
+        repo_name = exported_repo_name,
         service_name = ctx.attr.service_name,
         service_keys = service_keys,
         labels = module_labels,
@@ -239,6 +241,7 @@ example_stub_repo = repository_rule(
         "go_sanitized_module_path": attr.string(default = "example_com_stub"),
         "labels": attr.string_list(),
         "out_dir": attr.string(default = ".testoptimization"),
+        "repo_alias": attr.string(),
         "service_name": attr.string(default = "stub-service"),
         "service_keys": attr.string_list(),
     },
@@ -255,6 +258,7 @@ def _example_stub_repo_extension_impl(module_ctx):
                 go_sanitized_module_path = call.go_sanitized_module_path,
                 labels = list(call.labels or []),
                 out_dir = call.out_dir,
+                repo_alias = call.name,
                 service_name = call.service_name,
                 service_keys = list(call.service_keys or []),
             )
