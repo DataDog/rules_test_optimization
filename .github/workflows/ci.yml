@@ -25,7 +25,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keep the workflow itself running on every PR update so required checks still
+  # report a concrete result. Heavy jobs can then opt out cleanly on docs-only
+  # changes instead of leaving branch protection checks stuck in a pending state.
+  changes:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      run_full_ci: ${{ steps.classify.outputs.run_full_ci }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          case "${EVENT_NAME}" in
+            pull_request)
+              base_sha="${PR_BASE_SHA}"
+              head_sha="${PR_HEAD_SHA}"
+              ;;
+            push)
+              base_sha="${PUSH_BEFORE_SHA}"
+              head_sha="${PUSH_AFTER_SHA}"
+              ;;
+            *)
+              base_sha=""
+              head_sha=""
+              ;;
+          esac
+
+          while IFS= read -r line; do
+            echo "${line}" >> "${GITHUB_OUTPUT}"
+          done < <(./tools/dev/classify_ci_changes.sh "${base_sha}" "${head_sha}")
+
   bazel-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -185,6 +233,8 @@ jobs:
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
   workspace-compat:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -215,6 +265,8 @@ jobs:
           USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_workspace_go_integration.sh
 
   coverage-tools:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -323,8 +375,10 @@ jobs:
           PY
 
   shared-validation:
+    needs: changes
     uses: ./.github/workflows/shared-validation.yml
     with:
+      docs_only: ${{ needs.changes.outputs.docs_only == 'true' }}
       python_version: "3.11"
       run_buildifier: true
       verify_bazelrc_sync: true
@@ -338,6 +392,8 @@ jobs:
   # Rationale: sandbox/network-blocking semantics are most reliable on Linux;
   # macOS/Windows are still covered by the standard test+integration matrix.
   bazel-tests-hermetic:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:

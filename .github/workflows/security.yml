@@ -17,8 +17,63 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Mirror the CI workflow's docs-only gate so markdown-only PR updates do not
+  # rerun repository security scans while still producing completed checks.
+  changes:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      run_full_ci: ${{ steps.classify.outputs.run_full_ci }}
+    steps:
+      - name: Checkout
+        if: ${{ github.event_name != 'schedule' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "schedule" ]]; then
+            {
+              echo "docs_only=false"
+              echo "run_full_ci=true"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          case "${EVENT_NAME}" in
+            pull_request)
+              base_sha="${PR_BASE_SHA}"
+              head_sha="${PR_HEAD_SHA}"
+              ;;
+            push)
+              base_sha="${PUSH_BEFORE_SHA}"
+              head_sha="${PUSH_AFTER_SHA}"
+              ;;
+            *)
+              base_sha=""
+              head_sha=""
+              ;;
+          esac
+
+          while IFS= read -r line; do
+            echo "${line}" >> "${GITHUB_OUTPUT}"
+          done < <(./tools/dev/classify_ci_changes.sh "${base_sha}" "${head_sha}")
+
   dependency-review:
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.run_full_ci == 'true'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
@@ -34,6 +89,8 @@ jobs:
           fail-on-severity: high
 
   codeql:
+    needs: changes
+    if: ${{ github.event_name == 'schedule' || needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 30
     runs-on: ubuntu-latest
     permissions:
