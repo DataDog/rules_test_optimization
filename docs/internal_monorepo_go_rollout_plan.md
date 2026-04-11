@@ -6,8 +6,9 @@ Move from the current public-rule state to one real, working internal monorepo
 pilot for Go test optimization in the CI App area, with the internal repository
 policy wrapper preserved.
 
-This document starts from the current state on the `feat/workspace-go-internal-support`
-branch and describes only the work that is still missing.
+This document starts from the current state on the
+`feat/workspace-go-internal-support` branch and describes only the work that is
+still missing.
 
 ## Current State
 
@@ -24,8 +25,15 @@ The public rule is already in a usable state for WORKSPACE-mode Go consumers:
   `go_test_rule`.
 - The repository has a real WORKSPACE Go integration harness under
   `tools/tests/integration/run_workspace_go_integration.sh`.
-- The sibling consumer-style validation repository now has a standalone
-  WORKSPACE Go sample and CI job that passed, proving the public consumer shape.
+- The public Go onboarding surface, example modules, and WORKSPACE harness are
+  aligned on Go `1.25.0` and the current default tracer pin.
+- The repository CI lane `workspace-compat` now validates that same WORKSPACE
+  Go path with Go `1.25.0`.
+- The sibling consumer-style validation repository has a standalone WORKSPACE
+  Go sample, is repinned to the latest public SHA for this branch, and its
+  `workspace-go` job passed on that pin.
+- The public repo-side work needed for an internal Go pilot is complete in this
+  branch.
 
 What is not proven yet:
 
@@ -35,9 +43,8 @@ What is not proven yet:
 - Internal monorepo-specific behaviors such as Docker-tagged Go tests, flaky
   test parity, and uploader continuity have not been validated in the real
   repository.
-- The public Go onboarding surface is now aligned on Go `1.25.0` and the
-  current default tracer pin, but that validated public shape has not been
-  proven in the internal monorepo yet.
+- The validated public Go `1.25.0` shape has not been proven in the internal
+  monorepo yet.
 
 ## Desired State
 
@@ -340,21 +347,19 @@ Validation:
 
 Execute the remaining work in this order:
 
-1. Close the public Go/tracer compatibility mismatch.
-2. Prepare the internal Orchestrion-enabled `rules_go` fork.
-3. Wire the internal WORKSPACE consumer shape.
-4. Build the internal adapter macro.
-5. Select pilot targets.
-6. Align the pilot service's local Go module pins.
-7. Run and verify the pilot.
-8. Classify any issues as public or internal.
-9. Expand to two more internal services.
+1. Prepare the internal Orchestrion-enabled `rules_go` fork.
+2. Wire the internal WORKSPACE consumer shape.
+3. Build the internal adapter macro.
+4. Select pilot targets.
+5. Align the pilot service's local Go module pins.
+6. Run and verify the pilot.
+7. Classify any issues as public or internal.
+8. Expand to two more internal services.
 
 ## Final Acceptance Gate
 
 Treat the rollout as genuinely ready only when:
 
-- the public docs and public fixtures are internally consistent
 - the internal pilot service is green in normal and hermetic modes
 - uploader continuity is proven
 - internal wrapper policy parity is proven
