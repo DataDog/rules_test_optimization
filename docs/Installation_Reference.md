@@ -155,7 +155,7 @@ Guided bootstrap command:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0 \
+  --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
 ```
 
@@ -165,7 +165,7 @@ If the Go module lives below the workspace root:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0 \
+  --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d \
   --go-module-dir path/to/go-module
 ```
@@ -349,8 +349,14 @@ git_repository(
 ```
 
 Pin an immutable commit SHA (or internal mirrored archive) for reproducibility.
-For WORKSPACE Go macro usage, ensure the selected commit includes
-`modules/go/topt_go_test.bzl`.
+
+For WORKSPACE Go usage, pin both repositories at the same revision:
+
+- `datadog-rules-test-optimization` for sync and uploader rules
+- `datadog-rules-test-optimization-go` for `dd_topt_go_test`
+
+Load the Go macro from `@datadog-rules-test-optimization-go//:topt_go_test.bzl`,
+not from the root repository.
 
 ### Archive mirror installation
 
@@ -385,7 +391,7 @@ test_optimization_sync(
     service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
     # Optional:
     # runtime_name = "go",
-    # runtime_version = "1.24.0",
+    # runtime_version = "1.25.0",
     # known_tests = True,
     # test_management = True,
 )
@@ -511,15 +517,56 @@ Repository policy note: this repository intentionally has no root `.bazelrc`.
 Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags
 from `README.md` and `docs/Maintainers.md`.
 
-### 6) Configure Go support in WORKSPACE (for `dd_topt_go_test`)
+### 6) Configure Go support in WORKSPACE with the Go companion repository
 
 This is the lower-level/manual setup path. For Bzlmod single-service Go
 workspaces, prefer guided bootstrap instead.
 
-If your repository already configures `rules_go`, keep your existing setup and
-skip to the BUILD snippet below.
+If your repository already configures an Orchestrion-enabled `rules_go` fork or
+consumer-owned merge, keep that setup and skip to the companion-repo and BUILD
+snippets below.
 
-In `WORKSPACE`:
+First, add the Go companion repository. For a local checkout:
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+
+local_repository(
+    name = "datadog-rules-test-optimization-go",
+    path = "/absolute/path/to/rules_test_optimization/modules/go",
+    repo_mapping = {
+        "@rules_go": "@io_bazel_rules_go",
+    },
+)
+```
+
+For mirrored archives, publish the `modules/go` subtree as the repository root:
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "datadog-rules-test-optimization-go",
+    urls = [
+        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
+    ],
+    strip_prefix = "rules_test_optimization-<commit-sha>/modules/go",
+    sha256 = "<go_companion_sha256>",
+    repo_mapping = {
+        "@rules_go": "@io_bazel_rules_go",
+    },
+)
+```
+
+Then configure an Orchestrion-enabled `rules_go` fork and the public WORKSPACE
+Orchestrion helper. The repository bound to `@io_bazel_rules_go` must be the
+forked, Orchestrion-enabled copy, not an upstream release archive. If you are
+mirroring this repository directly, publish the
+`third_party/rules_go_orchestrion` subtree as the `@io_bazel_rules_go`
+repository root. If you maintain your own merged fork, keep the same public
+files and labels, including `go/orchestrion_workspace.bzl` and the
+`//go/private/orchestrion:*` targets, including the `:enabled` build setting
+that `dd_topt_go_test` flips through its wrapper transition.
 
 ```bzl
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -527,32 +574,48 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "io_bazel_rules_go",
     urls = [
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.60.0/rules_go-v0.60.0.zip",
+        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
     ],
+    strip_prefix = "rules_test_optimization-<commit-sha>/third_party/rules_go_orchestrion",
     sha256 = "<rules_go_sha256>",
 )
 
 http_archive(
     name = "bazel_gazelle",
     urls = [
-        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.0/bazel-gazelle-v0.39.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.1/bazel-gazelle-v0.39.1.tar.gz",
     ],
     sha256 = "<bazel_gazelle_sha256>",
 )
 
 load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
-go_rules_dependencies()
-go_register_toolchains(version = "1.24.0")
-
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
+
+go_rules_dependencies()
+go_register_toolchains(version = "1.25.0")
 gazelle_dependencies()
+
+go_orchestrion_tool_repo(
+    version = "<orchestrion_version>",
+    # Optional. When omitted, the helper uses the fork's current default
+    # shared dd-trace-go version.
+    dd_trace_go_version = "<resolved_dd_trace_go_version>",
+)
 ```
+
+Notes for the helper:
+
+- `version` is required in WORKSPACE mode.
+- `dd_trace_go_version` and `dd_trace_go_versions` are mutually exclusive.
+- Keep the default tool-repo name `rules_go_orchestrion_tool`; the current fork
+  resolves that name internally.
 
 Then in your Go package `BUILD.bazel`:
 
 ```bzl
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-load("@datadog-rules-test-optimization//modules/go:topt_go_test.bzl", "dd_topt_go_test")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
 go_library(
@@ -568,5 +631,34 @@ dd_topt_go_test(
 )
 ```
 
-Note: in WORKSPACE mode for this repository, use the canonical repository name
-`datadog-rules-test-optimization` so companion Go loads resolve consistently.
+Note: in WORKSPACE mode, Go support uses two repositories:
+
+- `datadog-rules-test-optimization` for the core rules
+- `datadog-rules-test-optimization-go` for the Go companion
+
+The repository bound to `@io_bazel_rules_go` must be an Orchestrion-enabled
+`rules_go` fork or a consumer-owned merge that includes the Orchestrion
+workspace helper. Add `repo_mapping = {"@rules_go": "@io_bazel_rules_go"}` on
+the `datadog-rules-test-optimization-go` repository declaration so the Go
+companion resolves that fork consistently.
+
+Also note that Orchestrion-backed Go tests expect the local Go module files to
+be pinned consistently for instrumentation. `dd_topt_go_test` auto-stages
+package-local pin files when they live next to the BUILD file, but nested test
+packages should pass the module-root labels explicitly through
+`orchestrion_pin_files`, for example:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    orchestrion_pin_files = [
+        "//:go.mod",
+        "//:go.sum",
+        "//:orchestrion.tool.go",
+        "//:orchestrion.yml",
+    ],
+    topt_data = topt_data,
+)
+```

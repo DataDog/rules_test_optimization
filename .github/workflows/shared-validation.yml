@@ -3,6 +3,13 @@ name: Shared Validation
 on:
   workflow_call:
     inputs:
+      # The caller sets this when a change only touches markdown or docs/
+      # content, allowing each validation job to skip itself while still
+      # surfacing a completed check in GitHub.
+      docs_only:
+        required: false
+        type: boolean
+        default: false
       python_version:
         required: false
         type: string
@@ -45,6 +52,7 @@ env:
 
 jobs:
   shell-lint:
+    if: ${{ !inputs.docs_only }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -108,7 +116,7 @@ jobs:
           cmp --silent examples/single_service/.bazelrc examples/multi_service/.bazelrc
 
   gofmt-check:
-    if: ${{ inputs.run_gofmt }}
+    if: ${{ !inputs.docs_only && inputs.run_gofmt }}
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -132,7 +140,7 @@ jobs:
           fi
 
   schema-validation:
-    if: ${{ inputs.run_schema_validation }}
+    if: ${{ !inputs.docs_only && inputs.run_schema_validation }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -181,7 +189,7 @@ jobs:
         run: python3 tools/core/schemas/check_schema_parser_parity.py
 
   powershell-lint:
-    if: ${{ inputs.run_powershell_lint }}
+    if: ${{ !inputs.docs_only && inputs.run_powershell_lint }}
     timeout-minutes: 20
     runs-on: windows-latest
     steps:

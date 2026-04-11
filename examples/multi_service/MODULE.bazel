@@ -24,20 +24,21 @@ bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 # )
 
 go_topt = use_extension(
-  "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
-  "test_optimization_go_extension",
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
 )
-
 go_topt.test_optimization_go(
-  name = "test_optimization_data",
-  services = ["go-service-a", "go-service-b"],
-  runtime_version = "1.24.0",
-  debug = True,
+    name = "test_optimization_data",
+    debug = True,
+    runtime_version = "1.25.0",
+    services = [
+        "go-service-a",
+        "go-service-b",
+    ],
 )
-
 use_repo(
-  go_topt,
-  "test_optimization_data",
-  "test_optimization_data_go_service_a",
-  "test_optimization_data_go_service_b",
+    go_topt,
+    "test_optimization_data",
+    "test_optimization_data_go_service_a",
+    "test_optimization_data_go_service_b",
 )

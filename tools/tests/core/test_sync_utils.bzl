@@ -51,6 +51,8 @@ load(
     "//tools/tests:example_stub_repo.bzl",
     "bzl_string_literal_for_tests",
     "render_stub_build_for_tests",
+    "render_stub_export_for_tests",
+    "render_stub_telemetry_facts_for_tests",
 )
 
 def _contains_stripped_line(lines, expected):
@@ -1202,11 +1204,79 @@ def _example_stub_service_keys_targets_test(ctx):
     asserts.true(env, 'name = "test_optimization_context_ruby_service"' in content)
     return unittest.end(env)
 
+def _example_stub_module_targets_test(ctx):
+    """Validate module_<label> targets are emitted for module-aware fixtures."""
+    env = unittest.begin(ctx)
+    content = render_stub_build_for_tests(
+        ".testoptimization/cache/http/settings.json",
+        ".testoptimization/manifest.txt",
+        ".testoptimization/cache/http/known_tests.json",
+        ".testoptimization/cache/http/test_management.json",
+        ".testoptimization/context.json",
+        ".testoptimization/telemetry_facts.json",
+        module_labels = ["example_com_workspace_go_integration"],
+    )
+    asserts.true(env, 'load(":module_runfiles.bzl", "topt_module_files")' in content)
+    asserts.true(env, 'name = "module_example_com_workspace_go_integration"' in content)
+    asserts.true(
+        env,
+        'known_tests = ".testoptimization/module_example_com_workspace_go_integration/known_tests.json"' in content,
+    )
+    asserts.true(
+        env,
+        'test_management = ".testoptimization/module_example_com_workspace_go_integration/test_management.json"' in content,
+    )
+    return unittest.end(env)
+
+def _example_stub_custom_out_dir_test(ctx):
+    """Validate the stub repo can emit custom manifest/output roots."""
+    env = unittest.begin(ctx)
+    content = render_stub_build_for_tests(
+        "custom_topt/cache/http/settings.json",
+        "custom_topt/manifest.txt",
+        "custom_topt/cache/http/known_tests.json",
+        "custom_topt/cache/http/test_management.json",
+        "custom_topt/context.json",
+        "custom_topt/telemetry_facts.json",
+        module_labels = ["example_com_workspace_go_integration"],
+        manifest_root = "custom_topt",
+    )
+    asserts.true(env, 'known_tests = "custom_topt/module_example_com_workspace_go_integration/known_tests.json"' in content)
+    asserts.true(env, 'test_management = "custom_topt/module_example_com_workspace_go_integration/test_management.json"' in content)
+    asserts.true(env, "exports_files(" in content)
+    asserts.true(env, "custom_topt/manifest.txt" in content)
+    return unittest.end(env)
+
 def _example_stub_export_string_escaping_test(ctx):
     """Validate stub export string literal escaping for unsafe characters."""
     env = unittest.begin(ctx)
     escaped = bzl_string_literal_for_tests('repo"\\name\nline')
     asserts.equals(env, "\"repo\\\"\\\\name\\nline\"", escaped)
+    return unittest.end(env)
+
+def _example_stub_export_manifest_path_test(ctx):
+    """Validate stub exports keep repo identity and manifest path aligned."""
+    env = unittest.begin(ctx)
+    content = render_stub_export_for_tests(
+        repo_name = "test_optimization_data",
+        service_name = "workspace-go-service",
+        service_keys = ["go_service"],
+        labels = ["example_com_workspace_go_integration"],
+        manifest_path = "custom_topt/manifest.txt",
+        go_module_path = "example.com/workspace-go-integration",
+        go_sanitized_module_path = "example_com_workspace_go_integration",
+        go_module_included = True,
+    )
+    asserts.true(env, '"repo_name": "test_optimization_data"' in content)
+    asserts.true(env, '"manifest_path": "custom_topt/manifest.txt"' in content)
+    asserts.true(env, '"service_name": "workspace-go-service"' in content)
+    return unittest.end(env)
+
+def _example_stub_telemetry_facts_service_name_test(ctx):
+    """Validate the stub telemetry facts mirror the configured service name."""
+    env = unittest.begin(ctx)
+    content = render_stub_telemetry_facts_for_tests('svc-"quoted"')
+    asserts.true(env, '"service_name": "svc-\\"quoted\\""' in content)
     return unittest.end(env)
 
 def _http_execute_timeout_seconds_test(ctx):
@@ -1389,28 +1459,24 @@ def _telemetry_response_counts_test(ctx):
     return unittest.end(env)
 
 def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
-    """Validate module runfile symlink roots follow manifest root/out_dir."""
+    """Validate module runfiles helper returns raw payload files for the selector."""
     env = unittest.begin(ctx)
-    default_content = render_module_runfiles_bzl_for_tests(".testoptimization")
-    asserts.true(env, 'syms[".testoptimization/cache/http/settings.json"] = ctx.file.settings' in default_content)
-    asserts.true(env, 'syms[".testoptimization/manifest.txt"] = ctx.file.manifest' in default_content)
-    asserts.true(env, 'syms[".testoptimization/cache/http/known_tests.json"] = kt' in default_content)
-    asserts.true(env, 'syms[".testoptimization/cache/http/test_management.json"] = tm' in default_content)
+    default_content = render_module_runfiles_bzl_for_tests("test_optimization_data", ".testoptimization")
+    asserts.true(env, "files = [ctx.file.settings, ctx.file.manifest]" in default_content)
+    asserts.true(env, "files.append(kt)" in default_content)
+    asserts.true(env, "files.append(tm)" in default_content)
+    asserts.true(env, "DefaultInfo(files = depset(files), runfiles = ctx.runfiles(files = files))" in default_content)
 
-    custom_content = render_module_runfiles_bzl_for_tests("custom_topt")
-    asserts.true(env, 'syms["custom_topt/cache/http/settings.json"] = ctx.file.settings' in custom_content)
-    asserts.true(env, 'syms["custom_topt/manifest.txt"] = ctx.file.manifest' in custom_content)
-    asserts.true(env, 'syms["custom_topt/cache/http/known_tests.json"] = kt' in custom_content)
-    asserts.true(env, 'syms["custom_topt/cache/http/test_management.json"] = tm' in custom_content)
+    custom_content = render_module_runfiles_bzl_for_tests("custom_repo", "custom_topt")
+    asserts.equals(env, default_content, custom_content)
     return unittest.end(env)
 
 def _render_module_runfiles_bzl_escaping_test(ctx):
-    """Validate generated runfiles helper escapes special characters safely."""
+    """Validate helper output is independent of repo-name and manifest-root escaping."""
     env = unittest.begin(ctx)
-    escaped_content = render_module_runfiles_bzl_for_tests('custom"root\\path')
-    asserts.true(env, 'syms["custom\\"root\\\\path/cache/http/settings.json"] = ctx.file.settings' in escaped_content)
-    asserts.true(env, 'syms["custom\\"root\\\\path/manifest.txt"] = ctx.file.manifest' in escaped_content)
-    asserts.false(env, 'syms["custom"root\\path/cache/http/settings.json"] = ctx.file.settings' in escaped_content)
+    escaped_content = render_module_runfiles_bzl_for_tests("quoted_repo", 'custom"root\\path')
+    default_content = render_module_runfiles_bzl_for_tests("test_optimization_data", ".testoptimization")
+    asserts.equals(env, default_content, escaped_content)
     return unittest.end(env)
 
 def _partition_unix_headers_test(ctx):
@@ -1686,7 +1752,11 @@ clone_payload_with_detached_attributes_test = unittest.make(_clone_payload_with_
 clone_payload_with_nested_structure_test = unittest.make(_clone_payload_with_nested_structure_test)
 example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_includes_manifest_in_files_test)
 example_stub_service_keys_targets_test = unittest.make(_example_stub_service_keys_targets_test)
+example_stub_module_targets_test = unittest.make(_example_stub_module_targets_test)
+example_stub_custom_out_dir_test = unittest.make(_example_stub_custom_out_dir_test)
 example_stub_export_string_escaping_test = unittest.make(_example_stub_export_string_escaping_test)
+example_stub_export_manifest_path_test = unittest.make(_example_stub_export_manifest_path_test)
+example_stub_telemetry_facts_service_name_test = unittest.make(_example_stub_telemetry_facts_service_name_test)
 http_execute_timeout_seconds_test = unittest.make(_http_execute_timeout_seconds_test)
 parse_curl_time_ms_test = unittest.make(_parse_curl_time_ms_test)
 telemetry_facts_document_test = unittest.make(_telemetry_facts_document_test)

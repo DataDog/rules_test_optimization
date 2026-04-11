@@ -122,7 +122,7 @@ The sync rule creates `@test_optimization_data//` containing:
   - When validating changes under `third_party/rules_go_orchestrion/` or related Go bootstrap/orchestrion wiring, add a matching temporary `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion")` in the fixture repo before running its tests.
 - Local vs CI troubleshooting for `../rules_test_optimization_tests`:
   - If local fixture results differ from CI, compare the local environment to CI before assuming the fork is broken.
-  - Match the host Go version used in CI when reproducing Go or Orchestrion issues. For the current fixture setup, use Go `1.24.0`.
+  - Match the host Go version used in CI when reproducing Go or Orchestrion issues. For the current fixture setup, use Go `1.25.0`.
   - Reset long-lived local state early when debugging: run `./bazelw shutdown`, then clear the stable Orchestrion cache under `~/Library/Caches/datadog-orchestrion-go-cache`.
   - Global Git configuration can change `go mod` and Orchestrion behavior. In particular, HTTPS-to-SSH rewrites or interactive Git prompts can make local runs diverge from CI.
   - When results still look suspicious, retry from a fresh checkout or worktree so Bazel analysis state and external repo state are not inherited from earlier experiments.

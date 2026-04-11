@@ -232,6 +232,19 @@ def go_macro_select_inputs_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_orchestrion_pin_files_target(name, tags = None):
+    """Target under test for explicit module-root Orchestrion pin-file labels."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        orchestrion_pin_files = [
+            ":test_macro.bzl",
+            ":test_selection_utils.bzl",
+        ],
+        tags = tags,
+    )
+
 def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
     """Target under test for non-Windows sibling executable materialization."""
     fake_executable_rule(
@@ -352,6 +365,17 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _go_macro_orchestrion_pin_files_wiring_test_impl(ctx):
+    """Assert explicit Orchestrion pin-file labels are forwarded to data."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
     return analysistest.end(env)
 
 def _go_macro_explicit_service_wiring_test_impl(ctx):
@@ -483,6 +507,9 @@ go_macro_env_none_wiring_test = analysistest.make(
 )
 go_macro_select_inputs_wiring_test = analysistest.make(
     _go_macro_select_inputs_wiring_test_impl,
+)
+go_macro_orchestrion_pin_files_wiring_test = analysistest.make(
+    _go_macro_orchestrion_pin_files_wiring_test_impl,
 )
 go_macro_explicit_service_wiring_test = analysistest.make(
     _go_macro_explicit_service_wiring_test_impl,

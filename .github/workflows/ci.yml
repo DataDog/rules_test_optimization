@@ -11,6 +11,9 @@ permissions:
   contents: read
 
 env:
+  # Keep the host Go toolchain aligned with the public WORKSPACE Go fixture and
+  # the current default tracer pin exercised by that fixture.
+  GO_VERSION: "1.25.0"
   PYTHON_VERSION: "3.11"
   BUILDIFIER_VERSION: "8.2.1"
   BUILDIFIER_SHA256_LINUX_AMD64: "6ceb7b0ab7cf66fceccc56a027d21d9cc557a7f34af37d2101edb56b92fcfa1a"
@@ -22,7 +25,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keep the workflow itself running on every PR update so required checks still
+  # report a concrete result. Heavy jobs can then opt out cleanly on docs-only
+  # changes instead of leaving branch protection checks stuck in a pending state.
+  changes:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      run_full_ci: ${{ steps.classify.outputs.run_full_ci }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          case "${EVENT_NAME}" in
+            pull_request)
+              base_sha="${PR_BASE_SHA}"
+              head_sha="${PR_HEAD_SHA}"
+              ;;
+            push)
+              base_sha="${PUSH_BEFORE_SHA}"
+              head_sha="${PUSH_AFTER_SHA}"
+              ;;
+            *)
+              base_sha=""
+              head_sha=""
+              ;;
+          esac
+
+          while IFS= read -r line; do
+            echo "${line}" >> "${GITHUB_OUTPUT}"
+          done < <(./tools/dev/classify_ci_changes.sh "${base_sha}" "${head_sha}")
+
   bazel-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -182,53 +233,40 @@ jobs:
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
   workspace-compat:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Validate WORKSPACE mode loading
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Bazelisk
         shell: bash
         run: |
-          tmp_ws="$(mktemp -d)"
-          trap 'rm -rf "$tmp_ws"' EXIT
+          GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-          cat >"$tmp_ws/WORKSPACE" <<EOF
-          load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
-
-          local_repository(
-              name = "datadog-rules-test-optimization",
-              path = "${GITHUB_WORKSPACE}",
-          )
-
-          local_repository(
-              name = "datadog-rules-test-optimization-go",
-              path = "${GITHUB_WORKSPACE}/modules/go",
-          )
-
-          load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
-          EOF
-
-          cat >"$tmp_ws/BUILD.bazel" <<'EOF'
-          load("@datadog-rules-test-optimization-go//tests:example_stub_repo.bzl", "render_stub_build_for_tests")
-          load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
-
-          filegroup(
-              name = "workspace_smoke",
-              srcs = [],
-          )
-          EOF
-
-          (
-            cd "$tmp_ws"
-            # WORKSPACE mode validation is pinned to Bazel 8 because Bazel 9
-            # deprecates/disables this path during the migration window.
-            USE_BAZEL_VERSION=8.4.1 \
-              "${GITHUB_WORKSPACE}/bazelw" query --noenable_bzlmod --enable_workspace //:workspace_smoke
-          )
+      - name: Validate WORKSPACE Go companion path
+        shell: bash
+        run: |
+          # WORKSPACE mode validation is pinned to Bazel 8 because Bazel 9
+          # deprecates/disables this path during the migration window.
+          USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_workspace_go_integration.sh
 
   coverage-tools:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -337,8 +375,10 @@ jobs:
           PY
 
   shared-validation:
+    needs: changes
     uses: ./.github/workflows/shared-validation.yml
     with:
+      docs_only: ${{ needs.changes.outputs.docs_only == 'true' }}
       python_version: "3.11"
       run_buildifier: true
       verify_bazelrc_sync: true
@@ -352,6 +392,8 @@ jobs:
   # Rationale: sandbox/network-blocking semantics are most reliable on Linux;
   # macOS/Windows are still covered by the standard test+integration matrix.
   bazel-tests-hermetic:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
     timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:

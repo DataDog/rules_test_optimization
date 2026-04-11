@@ -658,7 +658,7 @@ func TestShouldAddGuidedBlockExactSingleServiceMatch(t *testing.T) {
 	cfg := config{
 		syncRepoName:   "test_optimization_data",
 		service:        "go-service",
-		runtimeVersion: "1.24.0",
+		runtimeVersion: "1.25.0",
 	}
 	input := `module(name = "example")
 go_topt = use_extension(
@@ -669,7 +669,7 @@ go_topt = use_extension(
 go_topt.test_optimization_go(
     name = "test_optimization_data",
     service = "go-service",
-    runtime_version = "1.24.0",
+    runtime_version = "1.25.0",
 )
 
 use_repo(go_topt, "test_optimization_data")
@@ -687,7 +687,7 @@ func TestShouldAddGuidedBlockRejectsCoreSyncSetup(t *testing.T) {
 	cfg := config{
 		syncRepoName:   "test_optimization_data",
 		service:        "go-service",
-		runtimeVersion: "1.24.0",
+		runtimeVersion: "1.25.0",
 	}
 	input := `module(name = "example")
 test_optimization_sync = use_extension(
@@ -704,7 +704,7 @@ func TestShouldAddGuidedBlockUpdatesManagedBlockWhenPresent(t *testing.T) {
 	cfg := config{
 		syncRepoName:   "test_optimization_data",
 		service:        "go-service",
-		runtimeVersion: "1.24.0",
+		runtimeVersion: "1.25.0",
 	}
 	input := `module(name = "example")
 # BEGIN Datadog Go Guided Setup
@@ -733,7 +733,7 @@ func TestShouldAddGuidedBlockRejectsConflictingSetupOutsideManagedBlock(t *testi
 	cfg := config{
 		syncRepoName:   "test_optimization_data",
 		service:        "go-service",
-		runtimeVersion: "1.24.0",
+		runtimeVersion: "1.25.0",
 	}
 	input := `module(name = "example")
 # BEGIN Datadog Go Guided Setup
@@ -744,7 +744,7 @@ datadog_go_topt = use_extension(
 datadog_go_topt.test_optimization_go(
     name = "test_optimization_data",
     service = "go-service",
-    runtime_version = "1.24.0",
+    runtime_version = "1.25.0",
 )
 use_repo(datadog_go_topt, "test_optimization_data")
 # END Datadog Go Guided Setup

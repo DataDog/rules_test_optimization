@@ -29,7 +29,14 @@ Maintenance notes:
 - This file belongs to the Go companion module and should be the only macro
   surface depending on rules_go behavior.
 - Default to rules_go's `go_test`; keep `go_test_rule` only as an optional
-  override for tests and advanced callers.
+  override for tests and low-level experiments.
+- Keep organization-local policy wrappers outside this macro. Wrappers that
+  need public-target parity for tags, flaky companions, scheduling policy, or
+  similar repository-specific behavior must wrap `dd_topt_go_test` externally
+  instead of passing a custom wrapper via `go_test_rule`.
+- Keep nested-package Orchestrion pinning explicit. Package-local pin files are
+  auto-staged when they live next to the BUILD file, while module-root pin
+  files for nested packages should be passed through `orchestrion_pin_files`.
 - Avoid hardcoding labels outside values exported by `@<repo>//:export.bzl`.
 - Preserve compatibility with both single-service (`topt_data`) and
   multi-service (`topt_data_by_service`) exports.
@@ -128,13 +135,15 @@ def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
         topt_data,
-        # Optional override for tests or advanced callers. Defaults to rules_go's go_test.
+        # Optional override for tests or low-level experiments. Defaults to rules_go's go_test.
         go_test_rule = go_test,
         # Optional: when using the multi-service aggregator, select the service
         # (raw or sanitized). Ignored when a single-service dict is passed.
         topt_service = None,
         # Auto-select per-module known_tests/test_management group based on Go package import path
         module_label_override = None,
+        # Optional module-root Orchestrion pin file labels for nested packages.
+        orchestrion_pin_files = None,
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
@@ -152,12 +161,17 @@ def dd_topt_go_test(
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
         Used to derive the repo alias, go_module_path, and whether to include per-module files.
       go_test_rule: Optional override for the underlying rules_go go_test rule.
-        Defaults to `go_test` from `@rules_go//go:def.bzl`.
+        Defaults to `go_test` from `@rules_go//go:def.bzl`. This hook is for
+        tests and low-level experiments; repository policy wrappers should stay
+        outside `dd_topt_go_test`.
       topt_service: Optional when passing the aggregator mapping; selects which service to use.
         Accepts raw or sanitized service key (e.g., "go-service" or "go_service").
         If sanitization collisions exist, pass the deduped key (for example "go_service_2").
       module_label_override: Optional override for the sanitized module label suffix when the
         automatic detection doesn't match the expected module name.
+      orchestrion_pin_files: Optional labels for module-root Orchestrion pin
+        files such as `//:go.mod` and `//:orchestrion.tool.go`. Use this when
+        the BUILD file lives in a nested package below the Go module root.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
@@ -297,8 +311,9 @@ def dd_topt_go_test(
     # Emit a small Bazel-owned metadata file next to the built test artifacts.
     # The Orchestrion wrapper copies this into TEST_UNDECLARED_OUTPUTS_DIR so
     # the uploader can merge target-specific Bazel tags into emitted events.
-    # Only report Orchestrion as enabled when the macro is using the default
-    # rules_go-backed test rule that the public wrapper actually instruments.
+    # The metadata rule cross-checks this request against the actual
+    # `rules_go_orchestrion_tool` repository contents so omitted bootstrap
+    # configuration does not produce a false positive.
     topt_go_bazel_metadata(
         name = metadata_name,
         embeds = embed_labels,
@@ -309,7 +324,7 @@ def dd_topt_go_test(
         module_label_override = module_label_override or "",
         bazel_package = "//%s" % pkg_path if pkg_path else "//",
         bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
-        orchestrion_enabled = go_test_rule == go_test,
+        orchestrion_requested = True,
         cgo = _attr_or_default(kwargs.get("cgo"), False),
         pure = _attr_or_default(kwargs.get("pure"), "auto"),
         race = _attr_or_default(kwargs.get("race"), "auto"),
@@ -334,9 +349,18 @@ def dd_topt_go_test(
     # They remain runtime-inert for the test itself, but the vendored rules_go
     # builder uses them to materialize the temporary module that Orchestrion
     # expects during compile-time instrumentation.
-    orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
-    if orchestrion_pin_files:
-        data = _append_data_dependencies(data, orchestrion_pin_files)
+    package_local_orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
+    if package_local_orchestrion_pin_files:
+        data = _append_data_dependencies(data, package_local_orchestrion_pin_files)
+
+    # Nested Go packages often keep the authoritative Orchestrion pin files at
+    # the module root. Callers can pass those labels explicitly so the builder's
+    # upward directory scan can still find the pinned module/config state.
+    explicit_orchestrion_pin_files = _normalize_user_data(orchestrion_pin_files)
+    if type(explicit_orchestrion_pin_files) == "select":
+        fail_with_prefix("dd_topt_go_test", "orchestrion_pin_files does not support select(...) values")
+    if explicit_orchestrion_pin_files:
+        data = _append_data_dependencies(data, explicit_orchestrion_pin_files)
 
     # Add manifest file reference for deriving the working directory.
     # Keep this dynamic via export metadata so custom out_dir values continue

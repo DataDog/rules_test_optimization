@@ -147,7 +147,7 @@ Go module. `--dd-trace-go-version` is optional; if you omit it, the default is
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0 \
+  --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
 ```
 
@@ -157,7 +157,7 @@ If the Go module lives below the workspace root:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
-  --runtime-version 1.24.0 \
+  --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d \
   --go-module-dir path/to/go-module
 ```
@@ -509,7 +509,7 @@ go_topt = use_extension(
 go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service-a", "go-service-b"],
-    runtime_version = "1.24.0",
+    runtime_version = "1.25.0",
 )
 
 use_repo(
@@ -537,7 +537,7 @@ topt_go.test_optimization_sync(
     name = "test_optimization_data_go",
     service = "go-service",
     runtime_name = "go",
-    runtime_version = "1.24.0",
+    runtime_version = "1.25.0",
 )
 
 topt_ruby = use_extension(
@@ -581,6 +581,20 @@ test_optimization_sync(
 )
 ```
 
+For Go in WORKSPACE mode, keep the core and Go companion as separate external
+repositories and load `dd_topt_go_test` from
+`@datadog-rules-test-optimization-go//:topt_go_test.bzl`. The repository bound
+to `@io_bazel_rules_go` must be an Orchestrion-enabled `rules_go` fork or
+consumer-owned merge that preserves the Orchestrion workspace helper and the
+`//go/private/orchestrion:*` targets used by the companion transition. Add
+`repo_mapping = {"@rules_go": "@io_bazel_rules_go"}` on the Go companion
+repository declaration so the companion resolves that fork consistently.
+The public WORKSPACE helper also expects the default tool-repo name
+`rules_go_orchestrion_tool`, so consumers should not rename that repository.
+When Go tests live below the module root, pass the module-root pin files through
+`orchestrion_pin_files` (for example `["//:go.mod", "//:orchestrion.tool.go"]`)
+or inject them from a repo-local wrapper.
+
 Use [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for mirrored `http_archive`, Go toolchain
 setup, uploader wiring, and full WORKSPACE details.
 
@@ -614,7 +628,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 |-----------|----------------------|-------|
 | Bazel | `8.5.1` | Repository baseline (`.bazelversion`) and primary CI lanes |
 | rules_go (Go users) | `0.60.0` | README examples use this version; importpath inference requires `0.51.0+` |
-| Go toolchain (example) | `1.24.0` | Consumer repositories may use another supported version |
+| Go toolchain (example) | `1.25.0` | Consumer repositories may use another supported version |
 | Module versions | `1.0.0` metadata | BCR publication is pending; use commit pin/override install paths |
 
 - **Bazel 8.5.1 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
@@ -813,7 +827,7 @@ go_topt = use_extension(
 go_topt.test_optimization_go(
     name = "test_optimization_data",
     service = "go-service",
-    runtime_version = "1.24.0",
+    runtime_version = "1.25.0",
 )
 
 use_repo(go_topt, "test_optimization_data")

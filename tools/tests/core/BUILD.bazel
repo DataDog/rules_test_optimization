@@ -68,9 +68,13 @@ load(
     "decode_json_object_non_json_target_rule",
     "decode_json_object_valid_test",
     "dirname_test",
+    "example_stub_custom_out_dir_test",
+    "example_stub_export_manifest_path_test",
     "example_stub_export_string_escaping_test",
     "example_stub_includes_manifest_in_files_test",
+    "example_stub_module_targets_test",
     "example_stub_service_keys_targets_test",
+    "example_stub_telemetry_facts_service_name_test",
     "export_bzl_escaping_test",
     "export_bzl_manifest_path_test",
     "first_env_ctx_test",
@@ -111,8 +115,8 @@ load(
     "sanitize_repository_url_test",
     "set_context_tag_from_env_test",
     "settings_response_tags_test",
-    "sync_success_metric_tags_parity_test",
     "sync_environment_keys_allowlist_test",
+    "sync_success_metric_tags_parity_test",
     "telemetry_facts_document_test",
     "telemetry_response_counts_test",
 )
@@ -398,8 +402,32 @@ example_stub_service_keys_targets_test(
     timeout = "short",
 )
 
+example_stub_module_targets_test(
+    name = "example_stub_module_targets_test",
+    size = "small",
+    timeout = "short",
+)
+
+example_stub_custom_out_dir_test(
+    name = "example_stub_custom_out_dir_test",
+    size = "small",
+    timeout = "short",
+)
+
 example_stub_export_string_escaping_test(
     name = "example_stub_export_string_escaping_test",
+    size = "small",
+    timeout = "short",
+)
+
+example_stub_export_manifest_path_test(
+    name = "example_stub_export_manifest_path_test",
+    size = "small",
+    timeout = "short",
+)
+
+example_stub_telemetry_facts_service_name_test(
+    name = "example_stub_telemetry_facts_service_name_test",
     size = "small",
     timeout = "short",
 )
@@ -927,9 +955,13 @@ test_suite(
         ":decode_json_object_valid_test",
         ":dedup_keys_test",
         ":dirname_test",
+        ":example_stub_custom_out_dir_test",
+        ":example_stub_export_manifest_path_test",
         ":example_stub_export_string_escaping_test",
         ":example_stub_includes_manifest_in_files_test",
+        ":example_stub_module_targets_test",
         ":example_stub_service_keys_targets_test",
+        ":example_stub_telemetry_facts_service_name_test",
         ":export_bzl_escaping_test",
         ":export_bzl_manifest_path_test",
         ":first_env_ctx_test",

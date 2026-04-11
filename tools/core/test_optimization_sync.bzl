@@ -1085,32 +1085,28 @@ def _render_export_bzl(
         "}\n"
     )
 
-def _render_module_runfiles_bzl(manifest_root):
+def _render_module_runfiles_bzl(repo_name, manifest_root):
     """Render helper rule exposing module payloads under manifest-rooted runfiles.
 
-    Maintainers: keep runfile keys rooted under `manifest_root` so custom
-    `out_dir` layouts remain consistent with `manifest_path`.
+    Maintainers: return the raw source files here and let the companion-side
+    selector rebuild canonical runfiles in the consuming repository. External
+    repository rules cannot reliably predict the final runfiles root seen by
+    the main workspace target.
+
+    The `repo_name` and `manifest_root` parameters remain part of the helper's
+    stable rendering signature so existing tests and callsites do not need a
+    parallel API just for this raw-file mode.
     """
-    settings_rloc = "%s/cache/http/settings.json" % manifest_root
-    manifest_rloc = "%s/manifest.txt" % manifest_root
-    known_tests_rloc = "%s/cache/http/known_tests.json" % manifest_root
-    test_management_rloc = "%s/cache/http/test_management.json" % manifest_root
-    settings_rloc_lit = _bzl_string_literal(settings_rloc)
-    manifest_rloc_lit = _bzl_string_literal(manifest_rloc)
-    known_tests_rloc_lit = _bzl_string_literal(known_tests_rloc)
-    test_management_rloc_lit = _bzl_string_literal(test_management_rloc)
     return (
         "def _topt_module_files_impl(ctx):\n" +
-        "    syms = {}\n" +
-        ("    syms[%s] = ctx.file.settings\n" % settings_rloc_lit) +
-        ("    syms[%s] = ctx.file.manifest\n" % manifest_rloc_lit) +
+        "    files = [ctx.file.settings, ctx.file.manifest]\n" +
         "    kt = getattr(ctx.file, \"known_tests\", None)\n" +
         "    if kt:\n" +
-        ("        syms[%s] = kt\n" % known_tests_rloc_lit) +
+        "        files.append(kt)\n" +
         "    tm = getattr(ctx.file, \"test_management\", None)\n" +
         "    if tm:\n" +
-        ("        syms[%s] = tm\n" % test_management_rloc_lit) +
-        "    return DefaultInfo(runfiles = ctx.runfiles(symlinks = syms))\n" +
+        "        files.append(tm)\n" +
+        "    return DefaultInfo(files = depset(files), runfiles = ctx.runfiles(files = files))\n" +
         "\n" +
         "topt_module_files = rule(\n" +
         "    implementation = _topt_module_files_impl,\n" +
@@ -2234,7 +2230,7 @@ def _impl(ctx):
     # Rule to present per-module files with canonical runfile names via symlinks
     # We generate this helper rule as source text to keep repository-rule output
     # self-contained and avoid hard-coding additional checked-in helper files.
-    module_runfiles_bzl = _render_module_runfiles_bzl(_dirname(manifest_file))
+    module_runfiles_bzl = _render_module_runfiles_bzl(ctx.name, _dirname(manifest_file))
     ctx.file("module_runfiles.bzl", module_runfiles_bzl)
 
     # 6. Create a BUILD file with two public filegroup targets.
