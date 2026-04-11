@@ -81,12 +81,23 @@ func TestSubtests(t *testing.T) {
 // test execution time attributes will vary per testrun, so we must parse the
 // xml to inspect a subset of testresults
 type xmlTestSuite struct {
-	XMLName  xml.Name `xml:"testsuite"`
-	Errors   int      `xml:"errors,attr"`
-	Failures int      `xml:"failures,attr"`
-	Skipped  int      `xml:"skipped,attr"`
-	Tests    int      `xml:"tests,attr"`
-	Name     string   `xml:"name,attr"`
+	XMLName   xml.Name      `xml:"testsuite"`
+	Errors    int           `xml:"errors,attr"`
+	Failures  int           `xml:"failures,attr"`
+	Skipped   int           `xml:"skipped,attr"`
+	Tests     int           `xml:"tests,attr"`
+	Name      string        `xml:"name,attr"`
+	TestCases []xmlTestCase `xml:"testcase"`
+}
+
+type xmlTestCase struct {
+	XMLName   xml.Name      `xml:"testcase"`
+	Name      string        `xml:"name,attr"`
+	SystemOut *xmlSystemOut `xml:"system-out,omitempty"`
+}
+
+type xmlSystemOut struct {
+	Contents string `xml:",chardata"`
 }
 type xmlTestSuites struct {
 	XMLName xml.Name       `xml:"testsuites"`
@@ -192,9 +203,60 @@ func Test(t *testing.T) {
 				t.Fatalf("could not unmarshall generated xml: %s", err)
 			}
 
-			if !reflect.DeepEqual(suites, tt.expected) {
-				t.Fatalf("expected %#v, got: %#v", tt.expected, suites)
+			if got := trimSuiteTestCases(suites); !reflect.DeepEqual(got, tt.expected) {
+				t.Fatalf("expected %#v, got: %#v", tt.expected, got)
 			}
+
+			assertSystemOut(t, suites, tt.name)
 		})
+	}
+}
+
+func trimSuiteTestCases(suites xmlTestSuites) xmlTestSuites {
+	trimmed := suites
+	trimmed.Suites = make([]xmlTestSuite, 0, len(suites.Suites))
+	for _, suite := range suites.Suites {
+		suite.TestCases = nil
+		trimmed.Suites = append(trimmed.Suites, suite)
+	}
+	return trimmed
+}
+
+func assertSystemOut(t *testing.T, suites xmlTestSuites, runName string) {
+	t.Helper()
+
+	casesByName := map[string]xmlTestCase{}
+	for _, suite := range suites.Suites {
+		for _, testCase := range suite.TestCases {
+			casesByName[testCase.Name] = testCase
+		}
+	}
+
+	switch runName {
+	case "default":
+		if _, ok := casesByName["TestPassLog"]; ok {
+			t.Fatalf("default run unexpectedly emitted a testcase entry for TestPassLog")
+		}
+	case "verbose":
+		passCase, ok := casesByName["TestPass"]
+		if !ok {
+			t.Fatalf("missing testcase for TestPass")
+		}
+		if passCase.SystemOut != nil {
+			t.Fatalf("TestPass unexpectedly emitted system-out: %#v", passCase.SystemOut)
+		}
+
+		passLogCase, ok := casesByName["TestPassLog"]
+		if !ok {
+			t.Fatalf("missing testcase for TestPassLog")
+		}
+		if passLogCase.SystemOut == nil {
+			t.Fatal("TestPassLog did not emit system-out")
+		}
+		if !strings.Contains(passLogCase.SystemOut.Contents, "pass") {
+			t.Fatalf("TestPassLog system-out did not include the test log: %#v", passLogCase.SystemOut.Contents)
+		}
+	default:
+		t.Fatalf("unexpected test case %q", runName)
 	}
 }
