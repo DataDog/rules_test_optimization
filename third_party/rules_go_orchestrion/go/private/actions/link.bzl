@@ -42,6 +42,41 @@ _ORCHESTRION_PROBE_ENV_VARS = (
 def _format_archive(d):
     return "{}={}={}".format(d.label, d.importmap, d.file.path)
 
+def _parse_lld_thread_count(extldflags):
+    """Extracts the lld --threads value from extldflags."""
+    for flag in extldflags:
+        for part in flag.split(","):
+            if part.startswith("--threads="):
+                count = part.removeprefix("--threads=")
+                if count.isdigit():
+                    return int(count)
+    return 1
+
+def _golink_resource_set_1(_os, _inputs):
+    return {"cpu": 1, "memory": 512}
+
+def _golink_resource_set_2(_os, _inputs):
+    return {"cpu": 2, "memory": 512}
+
+def _golink_resource_set_4(_os, _inputs):
+    return {"cpu": 4, "memory": 512}
+
+_GOLINK_RESOURCE_SETS = {
+    1: _golink_resource_set_1,
+    2: _golink_resource_set_2,
+    4: _golink_resource_set_4,
+}
+
+def _golink_resource_set_for(extldflags):
+    """Returns a resource_set callback matching lld's configured thread count."""
+    threads = _parse_lld_thread_count(extldflags)
+    return _GOLINK_RESOURCE_SETS.get(threads, _golink_resource_set_1)
+
+# Public test aliases let the Starlark unit tests exercise the helper behavior
+# without making the production helper names part of the public API surface.
+parse_lld_thread_count_for_test = _parse_lld_thread_count
+golink_resource_set_for_test = _golink_resource_set_for
+
 def _orchestrion_action_env(go, base_env, version_file = None):
     env = dict(base_env)
     shell_env = go._ctx.configuration.default_shell_env
@@ -97,6 +132,7 @@ def emit_link(
             output = version_map_file,
             content = "\n".join(version_lines) + "\n" if version_lines else "",
         )
+
         # Build buildinfo content
         content_lines = []
 
@@ -277,6 +313,7 @@ def emit_link(
         arguments = [builder_args, "--", tool_args],
         env = _orchestrion_action_env(go, go.env, version_file),
         toolchain = GO_TOOLCHAIN_LABEL,
+        resource_set = _golink_resource_set_for(extldflags),
     )
 
 def _extract_extldflags(gc_linkopts, extldflags):
