@@ -154,11 +154,21 @@ def _match_option(option, pattern):
         return option == pattern
 
 def _filter_options(options, denylist):
+    # The denylist is a dict. Split into exact-match and prefix-match patterns.
+    # Exact matches use O(1) dict lookup; only the rare prefix patterns (ending
+    # in "=", e.g. "-fmax-errors=") need a linear scan.  This avoids the
+    # previous O(options x denylist) _match_option loop.
+    prefix_patterns = [p for p in denylist if p.endswith("=")]
     return [
         option
         for option in options
-        if not any([_match_option(option, pattern) for pattern in denylist])
+        if option not in denylist and
+           not any([option.startswith(p) for p in prefix_patterns])
     ]
+
+# Public test alias lets the Starlark unit tests cover the filtering behavior
+# without making the private helper name importable across files.
+filter_options_for_test = _filter_options
 
 def _child_name(go, path, ext, name):
     if not name:
