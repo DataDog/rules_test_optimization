@@ -60,13 +60,61 @@ def emit_link(
         executable = None,
         gc_linkopts = [],
         version_file = None,
-        info_file = None):
+        info_file = None,
+        buildinfo_metadata = None,
+        target_label = None):
     """See go/toolchains.rst#link for full documentation."""
 
     if archive == None:
         fail("archive is a required parameter")
     if executable == None:
         fail("executable is a required parameter")
+
+    # Generate buildinfo dependency file for Go 1.18+ buildInfo support
+    buildinfo_file = None
+    version_map_file = None
+    if buildinfo_metadata:
+        buildinfo_file = go.declare_file(go, path = executable.basename + ".buildinfo.txt")
+
+        # Materialize depsets at link time
+        importpaths = sorted(buildinfo_metadata.importpaths.to_list())
+        version_infos = buildinfo_metadata.version_infos.to_list()
+
+        # Build version map from VersionInfo structs
+        # Data was already extracted from PackageInfo providers at aspect time
+        # Deduplicate modules by keeping first version found (depset order is deterministic)
+        version_map = {}
+        for info in version_infos:
+            module = info.module
+            version = info.version
+            if module and module not in version_map:
+                version_map[module] = version
+
+        # Write version map to file for Go builder
+        version_map_file = go.declare_file(go, path = executable.basename + ".versions.txt")
+        version_lines = ["{}\t{}".format(module, ver) for module, ver in sorted(version_map.items())]
+        go.actions.write(
+            output = version_map_file,
+            content = "\n".join(version_lines) + "\n" if version_lines else "",
+        )
+        # Build buildinfo content
+        content_lines = []
+
+        # Add main package path
+        if archive.data.importpath:
+            content_lines.append("path\t{}".format(archive.data.importpath))
+
+        # Persist raw dependency import paths so the builder can keep internal
+        # packages as "(devel)" while collapsing external packages to the
+        # module path/version from package metadata.
+        for importpath in importpaths:
+            if importpath and importpath != archive.data.importpath:
+                content_lines.append("dep\t{}".format(importpath))
+
+        go.actions.write(
+            output = buildinfo_file,
+            content = "\n".join(content_lines) + "\n" if content_lines else "",
+        )
 
     # Exclude -lstdc++ from link options. We don't want to link against it
     # unless we actually have some C++ code. _cgo_codegen will include it
@@ -163,6 +211,12 @@ def emit_link(
     builder_args.add("-o", executable)
     builder_args.add("-main", archive.data.file)
     builder_args.add("-p", archive.data.importmap)
+    if buildinfo_file:
+        builder_args.add("-buildinfo", buildinfo_file)
+    if version_map_file:
+        builder_args.add("-versionmap", version_map_file)
+    if target_label:
+        builder_args.add("-bazeltarget", target_label)
     builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     tool_args.add_all(gc_linkopts)
     tool_args.add_all(go.toolchain.flags.link)
@@ -174,6 +228,10 @@ def emit_link(
     tool_args.add_joined("-extldflags", extldflags, join_with = " ")
 
     inputs_direct = stamp_inputs + [go.sdk.package_list]
+    if buildinfo_file:
+        inputs_direct.append(buildinfo_file)
+    if version_map_file:
+        inputs_direct.append(version_map_file)
     synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
     if synthetic_testmain_manifest:
         inputs_direct.append(synthetic_testmain_manifest)
