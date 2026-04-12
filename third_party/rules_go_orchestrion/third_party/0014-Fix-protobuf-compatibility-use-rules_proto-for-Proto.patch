@@ -1,0 +1,68 @@
+Switch the forked proto helpers to rules_proto providers.
+
+The internal patch moves ProtoInfo, proto_common, and ProtoLangToolchainInfo loads away from com_google_protobuf and onto rules_proto so the Go proto rules keep working with the newer protobuf layout.
+
+This port keeps the public rules_go proto surface unchanged and only updates the provider load sites inside the vendored fork.
+
+diff --git a/proto/compiler.bzl b/proto/compiler.bzl
+index f77ab5a..2e8289e 100644
+--- a/proto/compiler.bzl
++++ b/proto/compiler.bzl
+@@ -16,11 +16,7 @@ load(
+     "@bazel_skylib//lib:paths.bzl",
+     "paths",
+ )
+-load("@com_google_protobuf//bazel/common:proto_common.bzl", "proto_common")
+-load(
+-    "@com_google_protobuf//bazel/common:proto_lang_toolchain_info.bzl",
+-    "ProtoLangToolchainInfo",
+-)
++load("@rules_proto//proto:proto_common.bzl", "proto_common")
+ load(
+     "//go:def.bzl",
+     "GoInfo",
+@@ -40,6 +36,8 @@ load(
+     "go_reset_target",
+ )
+ 
++ProtoLangToolchainInfo = proto_common.ProtoLangToolchainInfo
++
+ # This is actually a misuse of Proto toolchains: The proper way to use `protoc` would be to go
+ # through a Go-specific `proto_lang_toolchain` and use the methods on `proto_common` to interact
+ # with `protoc`. Since rules_go has a very bespoke setup with customizable compilers and the need
+diff --git a/proto/def.bzl b/proto/def.bzl
+index 9a5ec11..bfb1ad8 100644
+--- a/proto/def.bzl
++++ b/proto/def.bzl
+@@ -17,7 +17,7 @@ load(
+     "types",
+ )
+ load(
+-    "@com_google_protobuf//bazel/common:proto_info.bzl",
++    "@rules_proto//proto:defs.bzl",
+     "ProtoInfo",
+ )
+ load(
+diff --git a/proto/private/toolchain.bzl b/proto/private/toolchain.bzl
+index d6ce8b0..36c1943 100644
+--- a/proto/private/toolchain.bzl
++++ b/proto/private/toolchain.bzl
+@@ -16,14 +16,16 @@
+ # compatibility with --noincompatible_enable_proto_toolchain_resolution.
+ 
+ load(
+-    "@com_google_protobuf//bazel/common:proto_lang_toolchain_info.bzl",
+-    "ProtoLangToolchainInfo",
++    "@rules_proto//proto:proto_common.bzl",
++    "proto_common",
+ )
+ load(
+     "//go/private/rules:transition.bzl",
+     "non_go_tool_transition",
+ )
+ 
++ProtoLangToolchainInfo = proto_common.ProtoLangToolchainInfo
++
+ def _legacy_proto_toolchain_impl(ctx):
+     return [
+         ProtoLangToolchainInfo(

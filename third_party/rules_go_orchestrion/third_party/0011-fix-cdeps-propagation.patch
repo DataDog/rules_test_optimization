@@ -1,0 +1,196 @@
+Fix cgo-related attributes not propagating through embed chains.
+
+The internal patch restores propagation of cdeps and related native toolchain options when an intermediate embedded library does not set cgo=True itself. This fork needs the same behavior, but it must preserve every contributor in the chain instead of keeping only the first non-empty list.
+
+This port accumulates cdeps, cppopts, copts, cxxopts, and clinkopts across the embed chain and adds an embed-chain regression target that requires native deps from multiple pure-Go hops to survive to the final link action.
+
+diff --git a/go/private/context.bzl b/go/private/context.bzl
+index 6bccac4..2d86b3d 100644
+--- a/go/private/context.bzl
++++ b/go/private/context.bzl
+@@ -225,11 +225,17 @@ def _merge_embed(source, embed):
+         if source["cgo"]:
+             fail("multiple libraries with cgo enabled")
+         source["cgo"] = s.cgo
+-        source["cdeps"] = s.cdeps
+-        source["cppopts"] = s.cppopts
+-        source["copts"] = s.copts
+-        source["cxxopts"] = s.cxxopts
+-        source["clinkopts"] = s.clinkopts
++
++    # Merge cgo-related attributes even when the embedded library does not set
++    # cgo=True itself. Libraries can add link-only native dependencies on top of
++    # an embedded cgo library, and every contributor in that embed chain must
++    # survive to the final link action.
++    if s.cdeps or s.cppopts or s.copts or s.cxxopts or s.clinkopts:
++        source["cdeps"] = source["cdeps"] + s.cdeps
++        source["cppopts"] = source["cppopts"] + s.cppopts
++        source["copts"] = source["copts"] + s.copts
++        source["cxxopts"] = source["cxxopts"] + s.cxxopts
++        source["clinkopts"] = source["clinkopts"] + s.clinkopts
+ 
+ def _dedup_archives(archives):
+     """Returns a list of archives without duplicate import paths.
+diff --git a/tests/core/cgo/BUILD.bazel b/tests/core/cgo/BUILD.bazel
+index bbc5c2b..dba8cc8 100644
+--- a/tests/core/cgo/BUILD.bazel
++++ b/tests/core/cgo/BUILD.bazel
+@@ -510,6 +510,58 @@ cc_library(
+     linkstatic = True,
+ )
+ 
++cc_library(
++    name = "embed_chain_leaf_dep",
++    srcs = ["embed_chain_leaf_dep.cc"],
++    linkstatic = True,
++)
++
++cc_library(
++    name = "embed_chain_mid_dep",
++    srcs = ["embed_chain_mid.cc"],
++    linkstatic = True,
++)
++
++cc_library(
++    name = "embed_chain_top_dep",
++    srcs = ["embed_chain_top.cc"],
++    linkstatic = True,
++)
++
++go_library(
++    name = "embed_chain_leaf",
++    srcs = [
++        "embed_chain_leaf.c",
++        "embed_chain_leaf.go",
++        "embed_chain_leaf.h",
++    ],
++    cdeps = [":embed_chain_leaf_dep"],
++    cgo = True,
++    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/embed_chain",
++)
++
++go_library(
++    name = "embed_chain_mid",
++    srcs = ["embed_chain_mid.go"],
++    cdeps = [":embed_chain_mid_dep"],
++    embed = [":embed_chain_leaf"],
++    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/embed_chain",
++)
++
++go_library(
++    name = "embed_chain_top",
++    srcs = ["embed_chain_top_lib.go"],
++    cdeps = [":embed_chain_top_dep"],
++    embed = [":embed_chain_mid"],
++    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/embed_chain",
++)
++
++go_binary(
++    name = "embed_chain_bin",
++    srcs = ["embed_chain_main.go"],
++    deps = [":embed_chain_top"],
++)
++
+ go_library(
+     name = "transitive_dep",
+     srcs = ["transitive_dep.go"],
+diff --git a/tests/core/cgo/embed_chain_leaf.c b/tests/core/cgo/embed_chain_leaf.c
+new file mode 100644
+index 0000000..d5b8900
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_leaf.c
+@@ -0,0 +1,7 @@
++#include "tests/core/cgo/embed_chain_leaf.h"
++
++void embedChainLeaf(void) {
++    embedChainLeafDep();
++    embedChainMid();
++    embedChainTop();
++}
+diff --git a/tests/core/cgo/embed_chain_leaf.go b/tests/core/cgo/embed_chain_leaf.go
+new file mode 100644
+index 0000000..dd462c7
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_leaf.go
+@@ -0,0 +1,12 @@
++package embedchain
++
++/*
++void embedChainLeaf(void);
++*/
++import "C"
++
++// CallLeafSymbol exercises the leaf cgo archive so the final binary must keep
++// every native dependency contributed through the embed chain.
++func CallLeafSymbol() {
++	C.embedChainLeaf()
++}
+diff --git a/tests/core/cgo/embed_chain_leaf.h b/tests/core/cgo/embed_chain_leaf.h
+new file mode 100644
+index 0000000..482c97b
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_leaf.h
+@@ -0,0 +1,3 @@
++void embedChainLeafDep(void);
++void embedChainMid(void);
++void embedChainTop(void);
+diff --git a/tests/core/cgo/embed_chain_leaf_dep.cc b/tests/core/cgo/embed_chain_leaf_dep.cc
+new file mode 100644
+index 0000000..9e50295
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_leaf_dep.cc
+@@ -0,0 +1 @@
++extern "C" void embedChainLeafDep(void) {}
+diff --git a/tests/core/cgo/embed_chain_main.go b/tests/core/cgo/embed_chain_main.go
+new file mode 100644
+index 0000000..dfc5064
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_main.go
+@@ -0,0 +1,7 @@
++package main
++
++import "github.com/bazelbuild/rules_go/tests/core/cgo/embed_chain"
++
++func main() {
++	embedchain.CallEmbeddedChain()
++}
+diff --git a/tests/core/cgo/embed_chain_mid.cc b/tests/core/cgo/embed_chain_mid.cc
+new file mode 100644
+index 0000000..ad26555
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_mid.cc
+@@ -0,0 +1 @@
++extern "C" void embedChainMid(void) {}
+diff --git a/tests/core/cgo/embed_chain_mid.go b/tests/core/cgo/embed_chain_mid.go
+new file mode 100644
+index 0000000..9193971
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_mid.go
+@@ -0,0 +1,7 @@
++package embedchain
++
++// CallEmbeddedLeaf preserves a pure-Go embed hop between the cgo leaf and the
++// final binary so native deps must propagate through the chain.
++func CallEmbeddedLeaf() {
++	CallLeafSymbol()
++}
+diff --git a/tests/core/cgo/embed_chain_top.cc b/tests/core/cgo/embed_chain_top.cc
+new file mode 100644
+index 0000000..5b8994d
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_top.cc
+@@ -0,0 +1 @@
++extern "C" void embedChainTop(void) {}
+diff --git a/tests/core/cgo/embed_chain_top_lib.go b/tests/core/cgo/embed_chain_top_lib.go
+new file mode 100644
+index 0000000..1af44ac
+--- /dev/null
++++ b/tests/core/cgo/embed_chain_top_lib.go
+@@ -0,0 +1,7 @@
++package embedchain
++
++// CallEmbeddedChain keeps the final cdeps contributor in a pure-Go embed hop
++// so link-only native deps must survive all the way to the binary.
++func CallEmbeddedChain() {
++	CallEmbeddedLeaf()
++}

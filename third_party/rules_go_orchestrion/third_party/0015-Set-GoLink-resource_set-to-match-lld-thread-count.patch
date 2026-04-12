@@ -1,0 +1,126 @@
+Set the GoLink resource_set to match the configured lld thread count.
+
+The internal patch parses --threads=N from the external linker flags so Bazel's scheduler reserves the right number of CPUs for Go link actions. Without that, remote and local execution can oversubscribe workers when the C toolchain asks lld to use multiple threads.
+
+This port adds the resource-set helpers to link.bzl and covers them with Starlark unit tests without changing the rest of the Orchestrion-aware link action.
+
+diff --git a/go/private/actions/link.bzl b/go/private/actions/link.bzl
+index b36b623..e06f98b 100644
+--- a/go/private/actions/link.bzl
++++ b/go/private/actions/link.bzl
+@@ -42,6 +42,41 @@ _ORCHESTRION_PROBE_ENV_VARS = (
+ def _format_archive(d):
+     return "{}={}={}".format(d.label, d.importmap, d.file.path)
+ 
++def _parse_lld_thread_count(extldflags):
++    """Extracts the lld --threads value from extldflags."""
++    for flag in extldflags:
++        for part in flag.split(","):
++            if part.startswith("--threads="):
++                count = part.removeprefix("--threads=")
++                if count.isdigit():
++                    return int(count)
++    return 1
++
++def _golink_resource_set_1(_os, _inputs):
++    return {"cpu": 1, "memory": 512}
++
++def _golink_resource_set_2(_os, _inputs):
++    return {"cpu": 2, "memory": 512}
++
++def _golink_resource_set_4(_os, _inputs):
++    return {"cpu": 4, "memory": 512}
++
++_GOLINK_RESOURCE_SETS = {
++    1: _golink_resource_set_1,
++    2: _golink_resource_set_2,
++    4: _golink_resource_set_4,
++}
++
++def _golink_resource_set_for(extldflags):
++    """Returns a resource_set callback matching lld's configured thread count."""
++    threads = _parse_lld_thread_count(extldflags)
++    return _GOLINK_RESOURCE_SETS.get(threads, _golink_resource_set_1)
++
++# Public test aliases let the Starlark unit tests exercise the helper behavior
++# without making the production helper names part of the public API surface.
++parse_lld_thread_count_for_test = _parse_lld_thread_count
++golink_resource_set_for_test = _golink_resource_set_for
++
+ def _orchestrion_action_env(go, base_env, version_file = None):
+     env = dict(base_env)
+     shell_env = go._ctx.configuration.default_shell_env
+@@ -97,6 +132,7 @@ def emit_link(
+             output = version_map_file,
+             content = "\n".join(version_lines) + "\n" if version_lines else "",
+         )
++
+         # Build buildinfo content
+         content_lines = []
+ 
+@@ -277,6 +313,7 @@ def emit_link(
+         arguments = [builder_args, "--", tool_args],
+         env = _orchestrion_action_env(go, go.env, version_file),
+         toolchain = GO_TOOLCHAIN_LABEL,
++        resource_set = _golink_resource_set_for(extldflags),
+     )
+ 
+ def _extract_extldflags(gc_linkopts, extldflags):
+diff --git a/tests/core/starlark/BUILD.bazel b/tests/core/starlark/BUILD.bazel
+index b5ff57d..60fc533 100644
+--- a/tests/core/starlark/BUILD.bazel
++++ b/tests/core/starlark/BUILD.bazel
+@@ -1,5 +1,6 @@
+ load(":common_tests.bzl", "common_test_suite")
+ load(":context_tests.bzl", "context_test_suite")
++load(":link_tests.bzl", "link_test_suite")
+ load(":orchestrion_extension_tests.bzl", "orchestrion_extension_test_suite")
+ load(":provider_tests.bzl", "provider_test_suite")
+ load(":sdk_tests.bzl", "sdk_test_suite")
+@@ -8,6 +9,8 @@ common_test_suite()
+ 
+ context_test_suite()
+ 
++link_test_suite()
++
+ orchestrion_extension_test_suite()
+ 
+ provider_test_suite()
+diff --git a/tests/core/starlark/link_tests.bzl b/tests/core/starlark/link_tests.bzl
+new file mode 100644
+index 0000000..17523e7
+--- /dev/null
++++ b/tests/core/starlark/link_tests.bzl
+@@ -0,0 +1,32 @@
++load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
++load(
++    "//go/private/actions:link.bzl",
++    "golink_resource_set_for_test",
++    "parse_lld_thread_count_for_test",
++)
++
++def _parse_lld_thread_count_test(ctx):
++    env = unittest.begin(ctx)
++    asserts.equals(env, 1, parse_lld_thread_count_for_test([]))
++    asserts.equals(env, 2, parse_lld_thread_count_for_test(["-Wl,--threads=2"]))
++    asserts.equals(env, 4, parse_lld_thread_count_for_test(["-Wl,--threads=4"]))
++    asserts.equals(env, 1, parse_lld_thread_count_for_test(["-Wl,--threads=bogus"]))
++    return unittest.end(env)
++
++def _golink_resource_set_callback_test(ctx):
++    env = unittest.begin(ctx)
++    asserts.equals(env, {"cpu": 1, "memory": 512}, golink_resource_set_for_test([])("macos", []))
++    asserts.equals(env, {"cpu": 2, "memory": 512}, golink_resource_set_for_test(["-Wl,--threads=2"])("macos", []))
++    asserts.equals(env, {"cpu": 4, "memory": 512}, golink_resource_set_for_test(["-Wl,--threads=4"])("macos", []))
++    asserts.equals(env, {"cpu": 1, "memory": 512}, golink_resource_set_for_test(["-Wl,--threads=9"])("macos", []))
++    return unittest.end(env)
++
++parse_lld_thread_count_test = unittest.make(_parse_lld_thread_count_test)
++golink_resource_set_callback_test = unittest.make(_golink_resource_set_callback_test)
++
++def link_test_suite():
++    unittest.suite(
++        "link_tests",
++        parse_lld_thread_count_test,
++        golink_resource_set_callback_test,
++    )
