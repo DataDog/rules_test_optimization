@@ -95,6 +95,24 @@ def append_data_dependencies(user_data, extra_labels):
     out.extend(labels)
     return out
 
+def append_list_attribute(user_value, extra_items):
+    """Append extra items to a caller-provided list attribute, preserving `select(...)` configurability.
+
+    Args:
+      user_value: Value from a macro list attribute (None/string/list/tuple/select).
+      extra_items: Items to append.
+
+    Returns:
+      Merged list (or select + list) containing both caller and extra items.
+    """
+    normalized = normalize_user_data(user_value)
+    items = list(extra_items or [])
+    if is_select(normalized):
+        return normalized + items
+    out = list(normalized)
+    out.extend(items)
+    return out
+
 def split_test_wrapper_kwargs(kwargs):
     """Split macro kwargs between a hidden raw test and its public wrapper.
 

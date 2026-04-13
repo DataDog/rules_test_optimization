@@ -11,6 +11,7 @@ load(
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "append_data_dependencies",
+    "append_list_attribute",
     "build_module_labels",
     "merge_optional_env_defaults",
     "merge_user_env",
@@ -31,6 +32,7 @@ load("//:topt_java_infer.bzl", "topt_java_payloads_selector")
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
+_append_list_attribute = append_list_attribute
 _merge_optional_env_defaults = merge_optional_env_defaults
 _merge_user_env = merge_user_env
 
@@ -79,8 +81,17 @@ def dd_topt_java_test(
         topt_service = None,
         module_label_override = None,
         module_identifier = None,
+        agent_jar = None,
         **kwargs):
-    """Define a Java test with Datadog Test Optimization support."""
+    """Define a Java test with Datadog Test Optimization support.
+
+    Args:
+      agent_jar: Optional label pointing to the dd-java-agent JAR. When
+        provided, the macro injects ``-javaagent:$(location <label>)`` into
+        ``jvm_flags`` and adds the JAR to ``data`` so it is available at
+        runtime. The customer is responsible for making this label available
+        (e.g. via ``http_file``, ``maven_install``, or a local filegroup).
+    """
     _validate_java_test_rule_or_fail(java_test_rule)
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
@@ -183,11 +194,23 @@ def dd_topt_java_test(
         macro_name = "dd_topt_java_test",
     )
 
+    # Inject -javaagent flag when an agent JAR label is provided.
+    user_jvm_flags = kwargs.pop("jvm_flags", None)
+    if agent_jar:
+        agent_flag = "-javaagent:$(location %s)" % agent_jar
+        jvm_flags = _append_list_attribute(user_jvm_flags, [agent_flag])
+        data = _append_data_dependencies(data, [agent_jar])
+    else:
+        jvm_flags = user_jvm_flags
+
     raw_name = name + "__raw_java_test"
     kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
     kwargs["visibility"] = ["//visibility:private"]
     for key, value in raw_passthrough.items():
         kwargs[key] = value
+
+    if jvm_flags != None:
+        kwargs["jvm_flags"] = jvm_flags
 
     java_test_rule(
         name = raw_name,
