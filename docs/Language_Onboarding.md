@@ -417,6 +417,8 @@ dd_topt_java_test(
     test_class = "com.example.pkg.HelloTest",
     java_test_rule = java_test,
     topt_data = topt_data,
+    # Optional: inject dd-java-agent for CI Visibility tracing.
+    # agent_jar = "@dd_java_agent//file",
 )
 ```
 
@@ -471,6 +473,8 @@ dd_topt_java_test(
     java_test_rule = java_test,
     topt_data = topt_data_by_service,
     topt_service = "java_service_a",
+    # Optional: inject dd-java-agent for CI Visibility tracing.
+    # agent_jar = "@dd_java_agent//file",
 )
 ```
 

@@ -274,6 +274,8 @@ dd_topt_java_test(
     test_class = "com.example.pkg.SampleTest",
     topt_data = topt_data,
     java_test_rule = java_test,
+    # Optional: inject dd-java-agent for CI Visibility tracing.
+    # agent_jar = "@dd_java_agent//file",
 )
 ```
 
@@ -465,6 +467,8 @@ def dd_java_test(name, **kwargs):
         name = name,
         topt_data = topt_data,
         java_test_rule = native.java_test,
+        # Optional: inject dd-java-agent for CI Visibility tracing.
+        # agent_jar = "@dd_java_agent//file",
         **kwargs
     )
 ```
