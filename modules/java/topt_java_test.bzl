@@ -87,7 +87,7 @@ def dd_topt_java_test(
 
     Args:
       agent_jar: Optional label pointing to the dd-java-agent JAR. When
-        provided, the macro injects ``-javaagent:$(location <label>)`` into
+        provided, the macro injects ``-javaagent:$(rootpath <label>)`` into
         ``jvm_flags`` and adds the JAR to ``data`` so it is available at
         runtime. The customer is responsible for making this label available
         (e.g. via ``http_file``, ``maven_install``, or a local filegroup).
@@ -197,7 +197,7 @@ def dd_topt_java_test(
     # Inject -javaagent flag when an agent JAR label is provided.
     user_jvm_flags = kwargs.pop("jvm_flags", None)
     if agent_jar:
-        agent_flag = "-javaagent:$(location %s)" % agent_jar
+        agent_flag = "-javaagent:$(rootpath %s)" % agent_jar
         jvm_flags = _append_list_attribute(user_jvm_flags, [agent_flag])
         data = _append_data_dependencies(data, [agent_jar])
     else:
