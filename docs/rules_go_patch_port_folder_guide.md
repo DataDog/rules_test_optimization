@@ -23,7 +23,7 @@ There are three kinds of changes in this branch:
 
 ## Original Versus Local-Only Files
 
-- The checked-in patch files under `third_party/rules_go_orchestrion/third_party/`
+- The checked-in patch files under `third_party/rules_go_orchestrion/patches/`
   are the local 1:1 replacement series.
 - Many production-code changes under `go/private`, `go/tools`, and `proto`
   correspond directly to the internal patch intent.
@@ -35,12 +35,18 @@ There are three kinds of changes in this branch:
 
 ## Folder-By-Folder Explanation
 
-### `third_party/rules_go_orchestrion/third_party/`
+### `third_party/rules_go_orchestrion/patches/`
 
 Why it changed:
 - This directory now holds the 9 replacement patch files.
 - The requirement for this work was to keep the same patch filenames, ordering,
   and logical boundaries as the internal series.
+
+Why it uses `patches/` instead of `third_party/`:
+- The vendored fork already has its own upstream-facing `third_party/` package
+  for dependency patching and helper tooling.
+- Keeping the replacement series in `patches/` avoids mixing those two concerns
+  together and removes the double-`third_party` path.
 
 What lives here:
 - `0002` through `0016` replacement patch files.

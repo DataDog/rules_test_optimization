@@ -1,6 +1,6 @@
 {
   "subtree_path": "third_party/rules_go_orchestrion",
-  "patch_dir": "third_party/rules_go_orchestrion/third_party",
+  "patch_dir": "third_party/rules_go_orchestrion/patches",
   "base_commit": "57ee1139ef85b8c4531907f9ee655ef01f5cc4b5",
   "series_tip_commit": "faaab0fbd06980b891a022bd8422f5f254d78f6f",
   "patches": [

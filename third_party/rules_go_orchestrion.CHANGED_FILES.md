@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `92`
+- Total changed paths: `93`
 - Modified files: `39`
-- Added files: `53`
+- Added files: `54`
 - Removed files: `0`
 
 ## Modified files
@@ -80,6 +80,16 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/orchestrion_version_test.go`
 - `go/tools/builders/probe.go`
 - `go/tools/builders/probe_test.go`
+- `patches/0002-Include-logs-for-test-reports-regardless-of-failure-.patch`
+- `patches/0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch`
+- `patches/0009-Use-LLVM-for-all-linking.patch`
+- `patches/0011-fix-cdeps-propagation.patch`
+- `patches/0013-Add-buildInfo-metadata-support.patch`
+- `patches/0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch`
+- `patches/0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch`
+- `patches/0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch`
+- `patches/0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch`
+- `patches/BUILD.bazel`
 - `tests/core/buildinfo/BUILD.bazel`
 - `tests/core/buildinfo/README.md`
 - `tests/core/buildinfo/external_deps_bin_unix.go`
@@ -105,15 +115,6 @@ This file is generated. Do not edit by hand.
 - `tests/core/cgo/embed_chain_top_lib.go`
 - `tests/core/starlark/link_tests.bzl`
 - `tests/core/starlark/orchestrion_extension_tests.bzl`
-- `third_party/0002-Include-logs-for-test-reports-regardless-of-failure-.patch`
-- `third_party/0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch`
-- `third_party/0009-Use-LLVM-for-all-linking.patch`
-- `third_party/0011-fix-cdeps-propagation.patch`
-- `third_party/0013-Add-buildInfo-metadata-support.patch`
-- `third_party/0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch`
-- `third_party/0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch`
-- `third_party/0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch`
-- `third_party/0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch`
 
 ## Removed files
 
