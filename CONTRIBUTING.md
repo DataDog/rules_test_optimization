@@ -54,6 +54,10 @@
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
   - Windows primary entrypoint: `tools/tests/integration/run_mock_server_tests.ps1`
   - Windows convenience wrapper: `tools/tests/integration/run_mock_server_tests.cmd`
+- Vendored rules_go patch smoke:
+  - `tools/dev/run_rules_go_patch_smoke.sh`
+- Vendored rules_go extended patch coverage:
+  - `tools/dev/run_rules_go_patch_extended.sh`
 - Hermetic smoke (mirror CI flags):
   - run the same test commands with sandbox/network-blocking flags from `.github/workflows/ci.yml`
 
@@ -79,6 +83,11 @@
   - core tests with hermetic flags
   - go companion tests with hermetic flags
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
+- `rules-go-patch-smoke`:
+  - vendored `rules_go` patch-series verification and fast fork regression coverage
+  - Linux-only by design so the PR gate stays fast and stable
+- `rules-go-patch-extended`:
+  - nightly/manual vendored `rules_go` patch coverage for slower XML, proto, cross, and cgo regression suites
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)

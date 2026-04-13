@@ -170,6 +170,22 @@ def _filter_options(options, denylist):
 # without making the private helper name importable across files.
 filter_options_for_test = _filter_options
 
+def _select_cgo_context_source(has_go_context_data, has_cc_toolchain, has_private_cgo_context_data, has_public_cgo_context_data):
+    """Returns which CgoContextInfo source should win for the current target."""
+    if has_go_context_data:
+        return "go_context_data"
+    if has_cc_toolchain:
+        return "_cc_toolchain"
+    if has_private_cgo_context_data:
+        return "_cgo_context_data"
+    if has_public_cgo_context_data:
+        return "cgo_context_data"
+    return None
+
+# Public test alias lets the Starlark unit tests cover the precedence rules
+# without forcing the production helper to evaluate every branch eagerly.
+select_cgo_context_source_for_test = _select_cgo_context_source
+
 def _child_name(go, path, ext, name):
     if not name:
         name = go.label.name
@@ -553,18 +569,25 @@ def go_context(
                 if version_files:
                     orchestrion_version_file = version_files[0]
 
-    if go_context_data and CgoContextInfo in go_context_data:
+    cgo_context_source = _select_cgo_context_source(
+        go_context_data != None and CgoContextInfo in go_context_data,
+        getattr(attr, "_cc_toolchain", None) != None and CPP_TOOLCHAIN_TYPE in ctx.toolchains,
+        getattr(attr, "_cgo_context_data", None) != None and CgoContextInfo in attr._cgo_context_data,
+        getattr(attr, "cgo_context_data", None) != None and CgoContextInfo in attr.cgo_context_data,
+    )
+
+    if cgo_context_source == "go_context_data":
         # Prefer the pre-computed CgoContextInfo from go_context_data: it is
         # evaluated once by the cgo_context_data rule (via non_request_nogo_transition)
         # and shared across all go_library targets in the same configuration.
         # Checking this before the _cc_toolchain path avoids re-running the
         # expensive cgo_context_data_impl for every go_library target.
         cgo_context_info = go_context_data[CgoContextInfo]
-    elif getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
+    elif cgo_context_source == "_cc_toolchain":
         cgo_context_info = cgo_context_data_impl(ctx)
-    elif getattr(attr, "_cgo_context_data", None) and CgoContextInfo in attr._cgo_context_data:
+    elif cgo_context_source == "_cgo_context_data":
         cgo_context_info = attr._cgo_context_data[CgoContextInfo]
-    elif getattr(attr, "cgo_context_data", None) and CgoContextInfo in attr.cgo_context_data:
+    elif cgo_context_source == "cgo_context_data":
         cgo_context_info = attr.cgo_context_data[CgoContextInfo]
 
     if goos == "auto" and goarch == "auto" and cgo_context_info and (go_config_info == None or not go_config_info.pure):

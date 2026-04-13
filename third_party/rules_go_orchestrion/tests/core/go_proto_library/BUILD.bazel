@@ -350,3 +350,14 @@ go_test(
         "@org_golang_google_protobuf//types/pluginpb:go_default_library",
     ],
 )
+
+test_suite(
+    name = "proto_compat_smoke",
+    tests = [
+        ":embed_test",
+        ":proto_package_test",
+        ":proxy_test",
+        ":transitive_test",
+        ":wkt_wrapper_test",
+    ],
+)
