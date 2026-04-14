@@ -1816,11 +1816,11 @@ enrich_with_context() {
               | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
               | reduce (ctx_filtered | to_entries[]) as $e (.;
                   if ($e.value|type) == "number" then
-                    .content.metrics[$e.key] = $e.value
+                    if .content.metrics[$e.key] == null then .content.metrics[$e.key] = $e.value else . end
                   elif ($e.value|type) == "string" then
-                    .content.meta[$e.key] = $e.value
+                    if .content.meta[$e.key] == null then .content.meta[$e.key] = $e.value else . end
                   else
-                    .content.meta[$e.key] = ($e.value|tostring)
+                    if .content.meta[$e.key] == null then .content.meta[$e.key] = ($e.value|tostring) else . end
                   end
                 )
             )

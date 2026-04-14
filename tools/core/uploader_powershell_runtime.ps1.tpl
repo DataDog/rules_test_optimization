@@ -1563,16 +1563,18 @@ function Merge-FlatMetadataIntoEvent($EventObj, $MetadataObj, [string[]]$Skipped
     if ($SkippedKeys -contains $prop.Name) { continue }
     $val = $prop.Value
     if ($val -is [string]) {
-      $EventObj.content.meta[$prop.Name] = $val
+      if (-not $EventObj.content.meta.ContainsKey($prop.Name)) { $EventObj.content.meta[$prop.Name] = $val }
     } elseif ($val -is [bool]) {
-      $EventObj.content.meta[$prop.Name] = $val.ToString().ToLowerInvariant()
+      if (-not $EventObj.content.meta.ContainsKey($prop.Name)) { $EventObj.content.meta[$prop.Name] = $val.ToString().ToLowerInvariant() }
     } elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {
-      $EventObj.content.metrics[$prop.Name] = [double]$val
+      if (-not $EventObj.content.metrics.ContainsKey($prop.Name)) { $EventObj.content.metrics[$prop.Name] = [double]$val }
     } else {
-      try {
-        $EventObj.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 100)
-      } catch {
-        $EventObj.content.meta[$prop.Name] = $val.ToString()
+      if (-not $EventObj.content.meta.ContainsKey($prop.Name)) {
+        try {
+          $EventObj.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 100)
+        } catch {
+          $EventObj.content.meta[$prop.Name] = $val.ToString()
+        }
       }
     }
   }
