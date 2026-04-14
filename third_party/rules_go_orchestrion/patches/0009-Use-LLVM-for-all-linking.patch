@@ -1,0 +1,61 @@
+Use the CC toolchain linker for Go linking whenever an external linker is available.
+
+The internal rules_go patch standardizes linking on the LLVM-based toolchain path instead of relying on the Go internal linker for some modes and the external linker for others. That keeps the linker behavior aligned with the hermetic C and C++ toolchain already configured for the repository.
+
+This port preserves the existing Orchestrion-specific link inputs and environment wiring while applying the linker selection change in the same places as the internal patch.
+
+diff --git a/go/private/actions/link.bzl b/go/private/actions/link.bzl
+index fbaa21c..a62c14b 100644
+--- a/go/private/actions/link.bzl
++++ b/go/private/actions/link.bzl
+@@ -90,30 +90,10 @@ def emit_link(
+     if go.mode.msan:
+         tool_args.add("-msan")
+ 
+-    if go.mode.pure:
+-        tool_args.add("-linkmode", "internal")
+-    else:
+-        extld = extld_from_cc_toolchain(go)
+-        tool_args.add_all(extld)
+-        if extld and (go.mode.static or
+-                      go.mode.race or
+-                      go.mode.linkmode != LINKMODE_NORMAL or
+-                      go.mode.goos == "windows" and go.mode.msan):
+-            # Force external linking for the following conditions:
+-            # * Mode is static but not pure: -static must be passed to the C
+-            #   linker if the binary contains cgo code. See #2168, #2216.
+-            # * Non-normal build mode: may not be strictly necessary, especially
+-            #   for modes like "pie".
+-            # * Race or msan build for Windows: Go linker has pairwise
+-            #   incompatibilities with mingw, and we get link errors in race mode.
+-            #   Using the C linker avoids that. Race and msan always require a
+-            #   a C toolchain. See #2614.
+-            # * Linux race builds: we get linker errors during build with Go's
+-            #   internal linker. For example, when using zig cc v0.10
+-            #   (clang-15.0.3):
+-            #
+-            #       runtime/cgo(.text): relocation target memset not defined
+-            tool_args.add("-linkmode", "external")
++    extld = extld_from_cc_toolchain(go)
++    tool_args.add_all(extld)
++    if extld:
++        tool_args.add("-linkmode", "external")
+ 
+     if go.mode.static:
+         extldflags.append("-static")
+diff --git a/go/private/rules/transition.bzl b/go/private/rules/transition.bzl
+index 5e9bb70..40351c4 100644
+--- a/go/private/rules/transition.bzl
++++ b/go/private/rules/transition.bzl
+@@ -88,6 +88,11 @@ def _go_transition_impl(settings, attr):
+     if pure == "on":
+         settings["//go/config:race"] = False
+         settings["//go/config:msan"] = False
++
++    # Keep pure cross builds on the non-cgo platform. The external-linking
++    # port changes link action behavior, but pure cross binaries still need the
++    # original transition behavior so targets like js/wasm and wasip1/wasm do
++    # not resolve against a cgo-only toolchain.
+     cgo = pure == "off"
+ 
+     goos = getattr(attr, "goos", "auto")

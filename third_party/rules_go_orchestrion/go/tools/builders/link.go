@@ -22,7 +22,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,6 +29,244 @@ import (
 	"strconv"
 	"strings"
 )
+
+// parseXdef parses a linker -X flag into package, variable, and value fields.
+// When the package matches the main package path, the linker expects "main".
+func parseXdef(xdef string, mainPackagePath string) (pkg, name, value string, err error) {
+	eq := strings.IndexByte(xdef, '=')
+	if eq < 0 {
+		return "", "", "", fmt.Errorf("-X flag does not contain '=': %s", xdef)
+	}
+	dot := strings.LastIndexByte(xdef[:eq], '.')
+	if dot < 0 {
+		return "", "", "", fmt.Errorf("-X flag does not contain '.': %s", xdef)
+	}
+	pkg, name, value = xdef[:dot], xdef[dot+1:eq], xdef[eq+1:]
+	if pkg == mainPackagePath {
+		pkg = "main"
+	}
+	return pkg, name, value, nil
+}
+
+// buildInfoInputs stores the raw buildinfo inputs emitted by link.bzl before
+// the builder resolves package import paths to their final module versions.
+type buildInfoInputs struct {
+	Path       string
+	ImportDeps []string
+}
+
+// readBuildInfoInputs parses the generated buildinfo input file produced by
+// link.bzl into the main-package path and raw dependency import paths.
+func readBuildInfoInputs(filename string) (buildInfoInputs, error) {
+	if filename == "" {
+		return buildInfoInputs{}, nil
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return buildInfoInputs{}, fmt.Errorf("reading buildinfo file %s: %w", filename, err)
+	}
+	inputs := buildInfoInputs{}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		switch parts[0] {
+		case "path":
+			if len(parts) >= 2 {
+				inputs.Path = strings.TrimSpace(parts[1])
+			}
+		case "dep":
+			if len(parts) >= 2 {
+				inputs.ImportDeps = append(inputs.ImportDeps, strings.TrimSpace(parts[1]))
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return buildInfoInputs{}, fmt.Errorf("scanning buildinfo file %s: %w", filename, err)
+	}
+	return inputs, nil
+}
+
+// readVersionMap parses the generated module-version map emitted by link.bzl.
+func readVersionMap(filename string) (map[string]string, error) {
+	if filename == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("reading version map file %s: %w", filename, err)
+	}
+	versionMap := map[string]string{}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			continue
+		}
+		versionMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanning version map file %s: %w", filename, err)
+	}
+	return versionMap, nil
+}
+
+// findBestModuleMatch returns the longest module path that matches an import
+// path exactly or as a path-segment prefix.
+func findBestModuleMatch(importPath string, versionMap map[string]string) (string, string, bool) {
+	bestModule := ""
+	bestVersion := ""
+	for module, version := range versionMap {
+		if importPath != module && !strings.HasPrefix(importPath, module+"/") {
+			continue
+		}
+		if len(module) > len(bestModule) {
+			bestModule = module
+			bestVersion = version
+		}
+	}
+	if bestModule == "" {
+		return "", "", false
+	}
+	return bestModule, bestVersion, true
+}
+
+// resolveBuildInfoDeps maps raw dependency import paths to the entries that
+// runtime/debug.ReadBuildInfo should expose at runtime.
+func resolveBuildInfoDeps(importDeps []string, versionMap map[string]string) []*Module {
+	if len(importDeps) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	deps := make([]*Module, 0, len(importDeps))
+	for _, importDep := range importDeps {
+		if importDep == "" {
+			continue
+		}
+		path := importDep
+		version := "(devel)"
+		if module, moduleVersion, ok := findBestModuleMatch(importDep, versionMap); ok {
+			path = module
+			version = moduleVersion
+		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		deps = append(deps, &Module{Path: path, Version: version})
+	}
+	return deps
+}
+
+// parseModulePath reads the module path from a go.mod file.
+func parseModulePath(goModPath string) (string, error) {
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return "", fmt.Errorf("reading go.mod %s: %w", goModPath, err)
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("scanning go.mod %s: %w", goModPath, err)
+	}
+	return "", nil
+}
+
+// findGoMod walks upward from startDir until it finds a go.mod file.
+func findGoMod(startDir string) (string, error) {
+	dir := startDir
+	for {
+		candidate := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat %s: %w", candidate, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
+}
+
+// deriveMainPackagePath prefers the repository module path plus Bazel package
+// when that information is available, then falls back to inferring the module
+// prefix from dependency import paths before using the raw package path.
+func deriveMainPackagePath(rawPath, bazelTarget string, importDeps []string) string {
+	path := rawPath
+	label := bazelTarget
+	if idx := strings.Index(label, "//"); idx >= 0 {
+		label = label[idx+2:]
+	}
+	if label == "" {
+		return path
+	}
+	pkg := label
+	name := ""
+	if colon := strings.IndexByte(label, ':'); colon >= 0 {
+		pkg = label[:colon]
+		name = label[colon+1:]
+	}
+	if name != "" && strings.HasSuffix(path, "/"+name) {
+		path = strings.TrimSuffix(path, "/"+name)
+	}
+	if goModPath, err := findGoMod("."); err == nil && goModPath != "" {
+		if modulePath, err := parseModulePath(goModPath); err == nil && modulePath != "" {
+			if pkg == "" {
+				return modulePath
+			}
+			return modulePath + "/" + pkg
+		}
+	}
+	if path != "" {
+		pattern := "/" + path + "/"
+		for _, importDep := range importDeps {
+			if idx := strings.Index(importDep, pattern); idx >= 0 {
+				return importDep[:idx+1] + path
+			}
+		}
+	}
+	if pkg != "" {
+		return pkg
+	}
+	return path
+}
+
+func getArchFeature(goarch string) (key, value string) {
+	switch goarch {
+	case "amd64":
+		return "GOAMD64", os.Getenv("GOAMD64")
+	case "arm":
+		return "GOARM", os.Getenv("GOARM")
+	case "386":
+		return "GO386", os.Getenv("GO386")
+	case "mips", "mipsle":
+		return "GOMIPS", os.Getenv("GOMIPS")
+	case "mips64", "mips64le":
+		return "GOMIPS64", os.Getenv("GOMIPS64")
+	case "ppc64", "ppc64le":
+		return "GOPPC64", os.Getenv("GOPPC64")
+	case "riscv64":
+		return "GORISCV64", os.Getenv("GORISCV64")
+	case "wasm":
+		return "GOWASM", os.Getenv("GOWASM")
+	default:
+		return "", ""
+	}
+}
 
 var orchestrionLinkClosurePackages = []string{
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
@@ -145,6 +382,9 @@ func link(args []string) (err error) {
 	buildmode := flags.String("buildmode", "", "Build mode used.")
 	flags.Var(&xdefs, "X", "A string variable to replace in the linked binary (repeated).")
 	flags.Var(&stamps, "stamp", "The name of a file with stamping values.")
+	buildinfoFile := flags.String("buildinfo", "", "Path to buildinfo dependency file for Go 1.18+ buildInfo.")
+	versionMapFile := flags.String("versionmap", "", "Path to version map file with real dependency versions from package_info.")
+	bazelTarget := flags.String("bazeltarget", "", "Bazel target label for buildInfo metadata.")
 	if err := flags.Parse(builderArgs); err != nil {
 		return err
 	}
@@ -164,9 +404,9 @@ func link(args []string) (err error) {
 	// If we were given any stamp value files, read and parse them
 	stampMap := map[string]string{}
 	for _, stampfile := range stamps {
-		stampbuf, err := ioutil.ReadFile(stampfile)
+		stampbuf, err := os.ReadFile(stampfile)
 		if err != nil {
-			return fmt.Errorf("Failed reading stamp file %s: %v", stampfile, err)
+			return fmt.Errorf("reading stamp file %s: %w", stampfile, err)
 		}
 		scanner := bufio.NewScanner(bytes.NewReader(stampbuf))
 		for scanner.Scan() {
@@ -202,23 +442,8 @@ func link(args []string) (err error) {
 	// generate any additional link options we need
 	goargs := goenv.goToolWithOrchestion(linkOrchestrion, "link")
 
-	parseXdef := func(xdef string) (pkg, name, value string, err error) {
-		eq := strings.IndexByte(xdef, '=')
-		if eq < 0 {
-			return "", "", "", fmt.Errorf("-X flag does not contain '=': %s", xdef)
-		}
-		dot := strings.LastIndexByte(xdef[:eq], '.')
-		if dot < 0 {
-			return "", "", "", fmt.Errorf("-X flag does not contain '.': %s", xdef)
-		}
-		pkg, name, value = xdef[:dot], xdef[dot+1:eq], xdef[eq+1:]
-		if pkg == *packagePath {
-			pkg = "main"
-		}
-		return pkg, name, value, nil
-	}
 	for _, xdef := range xdefs {
-		pkg, name, value, err := parseXdef(xdef)
+		pkg, name, value, err := parseXdef(xdef, *packagePath)
 		if err != nil {
 			return err
 		}
@@ -239,6 +464,39 @@ func link(args []string) (err error) {
 		goargs = append(goargs, "-buildmode", *buildmode)
 	}
 	goargs = append(goargs, "-o", *outFile)
+
+	buildInfoInputs, err := readBuildInfoInputs(*buildinfoFile)
+	if err != nil {
+		return err
+	}
+	versionMap, err := readVersionMap(*versionMapFile)
+	if err != nil {
+		return err
+	}
+	goarchFeatureKey, goarchFeatureValue := getArchFeature(os.Getenv("GOARCH"))
+	path := *packagePath
+	if buildInfoInputs.Path != "" {
+		path = deriveMainPackagePath(buildInfoInputs.Path, *bazelTarget, buildInfoInputs.ImportDeps)
+	}
+	cfg := linkConfig{
+		path:               path,
+		buildMode:          "exe",
+		compiler:           "gc",
+		cgoEnabled:         os.Getenv("CGO_ENABLED") == "1",
+		goarch:             os.Getenv("GOARCH"),
+		goos:               os.Getenv("GOOS"),
+		buildinfoFile:      *buildinfoFile,
+		deps:               resolveBuildInfoDeps(buildInfoInputs.ImportDeps, versionMap),
+		goarchFeatureKey:   goarchFeatureKey,
+		goarchFeatureValue: goarchFeatureValue,
+		cgoCflags:          os.Getenv("CGO_CFLAGS"),
+		cgoCxxflags:        os.Getenv("CGO_CXXFLAGS"),
+		cgoLdflags:         os.Getenv("CGO_LDFLAGS"),
+		bazelTarget:        *bazelTarget,
+	}
+	if *buildmode != "" {
+		cfg.buildMode = *buildmode
+	}
 
 	// substitute `builder cc` for the linker with a symlink to builder called `builder-cc`.
 	// unfortunately we can't just set an environment variable to `builder cc` because
@@ -311,7 +569,7 @@ func link(args []string) (err error) {
 			orchImportPath += ".test"
 		}
 		importcfgSpan := beginProbe("link.build_importcfg")
-		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
+		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile), cfg)
 		importcfgSpan.End(err)
 		if err != nil {
 			return err
@@ -416,7 +674,7 @@ func link(args []string) (err error) {
 				defer cleanupGoMod()
 			}
 		}
-		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile))
+		importcfgName, err := buildImportcfgFileForLink(archives, *packageList, goenv.installSuffix, filepath.Dir(*outFile), cfg)
 		if err != nil {
 			return err
 		}
@@ -455,7 +713,7 @@ func link(args []string) (err error) {
 
 	if *buildmode == "c-archive" {
 		if err := stripArMetadata(*outFile); err != nil {
-			return fmt.Errorf("error stripping archive metadata: %v", err)
+			return fmt.Errorf("error stripping archive metadata: %w", err)
 		}
 	}
 

@@ -1,0 +1,74 @@
+Optimize _filter_options by splitting exact and prefix matches.
+
+The internal patch avoids the old nested match loop by treating exact denylist entries as constant-time lookups and scanning only the small subset of prefix patterns. That keeps cgo option filtering cheap even when the denylist grows.
+
+This port preserves the existing denylist semantics and adds direct Starlark unit coverage for both exact-match and prefix-match filtering.
+
+diff --git a/go/private/context.bzl b/go/private/context.bzl
+index 2d86b3d..4c81622 100644
+--- a/go/private/context.bzl
++++ b/go/private/context.bzl
+@@ -154,12 +154,22 @@ def _match_option(option, pattern):
+         return option == pattern
+ 
+ def _filter_options(options, denylist):
++    # The denylist is a dict. Split into exact-match and prefix-match patterns.
++    # Exact matches use O(1) dict lookup; only the rare prefix patterns (ending
++    # in "=", e.g. "-fmax-errors=") need a linear scan.  This avoids the
++    # previous O(options x denylist) _match_option loop.
++    prefix_patterns = [p for p in denylist if p.endswith("=")]
+     return [
+         option
+         for option in options
+-        if not any([_match_option(option, pattern) for pattern in denylist])
++        if option not in denylist and
++           not any([option.startswith(p) for p in prefix_patterns])
+     ]
+ 
++# Public test alias lets the Starlark unit tests cover the filtering behavior
++# without making the private helper name importable across files.
++filter_options_for_test = _filter_options
++
+ def _child_name(go, path, ext, name):
+     if not name:
+         name = go.label.name
+diff --git a/tests/core/starlark/context_tests.bzl b/tests/core/starlark/context_tests.bzl
+index a1cd2ea..457bc76 100644
+--- a/tests/core/starlark/context_tests.bzl
++++ b/tests/core/starlark/context_tests.bzl
+@@ -1,5 +1,5 @@
+ load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+-load("//go/private:context.bzl", "matches_scope")
++load("//go/private:context.bzl", "filter_options_for_test", "matches_scope")
+ 
+ def _matches_scope_test(ctx):
+     env = unittest.begin(ctx)
+@@ -40,9 +40,28 @@ def _matches_scope_test(ctx):
+ 
+ matches_scope_test = unittest.make(_matches_scope_test)
+ 
++def _filter_options_test(ctx):
++    env = unittest.begin(ctx)
++
++    asserts.equals(
++        env,
++        ["-O2", "-Wall"],
++        filter_options_for_test(["-O2", "-Werror", "-Wall"], {"-Werror": True}),
++    )
++    asserts.equals(
++        env,
++        ["-O2"],
++        filter_options_for_test(["-O2", "-fmax-errors=10"], {"-fmax-errors=": True}),
++    )
++
++    return unittest.end(env)
++
++filter_options_test = unittest.make(_filter_options_test)
++
+ def context_test_suite():
+     """Creates the test targets and test suite for context.bzl tests."""
+     unittest.suite(
+         "context_tests",
+         matches_scope_test,
++        filter_options_test,
+     )

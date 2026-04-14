@@ -88,6 +88,11 @@ def _go_transition_impl(settings, attr):
     if pure == "on":
         settings["//go/config:race"] = False
         settings["//go/config:msan"] = False
+
+    # Keep pure cross builds on the non-cgo platform. The external-linking
+    # port changes link action behavior, but pure cross binaries still need the
+    # original transition behavior so targets like js/wasm and wasip1/wasm do
+    # not resolve against a cgo-only toolchain.
     cgo = pure == "off"
 
     goos = getattr(attr, "goos", "auto")

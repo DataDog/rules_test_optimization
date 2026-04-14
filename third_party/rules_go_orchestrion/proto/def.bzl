@@ -17,7 +17,7 @@ load(
     "types",
 )
 load(
-    "@com_google_protobuf//bazel/common:proto_info.bzl",
+    "@rules_proto//proto:defs.bzl",
     "ProtoInfo",
 )
 load(

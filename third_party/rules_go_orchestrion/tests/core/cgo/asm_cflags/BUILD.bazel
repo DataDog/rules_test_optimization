@@ -1,0 +1,27 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "asm_cflags",
+    srcs = [
+        "asm_cflags.go",
+        "asm_cflags_linux_amd64.S",
+    ],
+    cgo = True,
+    copts = ["-DASM_CFLAGS_EXPECTED=1"],
+    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/asm_cflags",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+go_test(
+    name = "asm_cflags_test",
+    srcs = ["asm_cflags_test.go"],
+    embed = [":asm_cflags"],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)

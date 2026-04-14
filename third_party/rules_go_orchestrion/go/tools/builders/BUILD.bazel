@@ -123,6 +123,18 @@ go_test(
 )
 
 go_test(
+    name = "buildinfo_test",
+    size = "small",
+    srcs = [
+        "buildinfo_test.go",
+        ":builder_srcs",
+    ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
+)
+
+go_test(
     name = "probe_test",
     size = "small",
     srcs = [
@@ -137,6 +149,7 @@ filegroup(
         "ar.go",
         "asm.go",
         "builder.go",
+        "buildinfo.go",
         "cc.go",
         "cgo2.go",
         "compilepkg.go",
@@ -152,6 +165,7 @@ filegroup(
         "generate_test_main.go",
         "importcfg.go",
         "link.go",
+        "modinfo.go",
         "nogo.go",
         "nogo_validation.go",
         "orchestrion.go",

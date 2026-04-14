@@ -154,11 +154,37 @@ def _match_option(option, pattern):
         return option == pattern
 
 def _filter_options(options, denylist):
+    # The denylist is a dict. Split into exact-match and prefix-match patterns.
+    # Exact matches use O(1) dict lookup; only the rare prefix patterns (ending
+    # in "=", e.g. "-fmax-errors=") need a linear scan.  This avoids the
+    # previous O(options x denylist) _match_option loop.
+    prefix_patterns = [p for p in denylist if p.endswith("=")]
     return [
         option
         for option in options
-        if not any([_match_option(option, pattern) for pattern in denylist])
+        if option not in denylist and
+           not any([option.startswith(p) for p in prefix_patterns])
     ]
+
+# Public test alias lets the Starlark unit tests cover the filtering behavior
+# without making the private helper name importable across files.
+filter_options_for_test = _filter_options
+
+def _select_cgo_context_source(has_go_context_data, has_cc_toolchain, has_private_cgo_context_data, has_public_cgo_context_data):
+    """Returns which CgoContextInfo source should win for the current target."""
+    if has_go_context_data:
+        return "go_context_data"
+    if has_cc_toolchain:
+        return "_cc_toolchain"
+    if has_private_cgo_context_data:
+        return "_cgo_context_data"
+    if has_public_cgo_context_data:
+        return "cgo_context_data"
+    return None
+
+# Public test alias lets the Starlark unit tests cover the precedence rules
+# without forcing the production helper to evaluate every branch eagerly.
+select_cgo_context_source_for_test = _select_cgo_context_source
 
 def _child_name(go, path, ext, name):
     if not name:
@@ -225,11 +251,17 @@ def _merge_embed(source, embed):
         if source["cgo"]:
             fail("multiple libraries with cgo enabled")
         source["cgo"] = s.cgo
-        source["cdeps"] = s.cdeps
-        source["cppopts"] = s.cppopts
-        source["copts"] = s.copts
-        source["cxxopts"] = s.cxxopts
-        source["clinkopts"] = s.clinkopts
+
+    # Merge cgo-related attributes even when the embedded library does not set
+    # cgo=True itself. Libraries can add link-only native dependencies on top of
+    # an embedded cgo library, and every contributor in that embed chain must
+    # survive to the final link action.
+    if s.cdeps or s.cppopts or s.copts or s.cxxopts or s.clinkopts:
+        source["cdeps"] = source["cdeps"] + s.cdeps
+        source["cppopts"] = source["cppopts"] + s.cppopts
+        source["copts"] = source["copts"] + s.copts
+        source["cxxopts"] = source["cxxopts"] + s.cxxopts
+        source["clinkopts"] = source["clinkopts"] + s.clinkopts
 
 def _dedup_archives(archives):
     """Returns a list of archives without duplicate import paths.
@@ -537,13 +569,25 @@ def go_context(
                 if version_files:
                     orchestrion_version_file = version_files[0]
 
-    if getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
-        cgo_context_info = cgo_context_data_impl(ctx)
-    elif go_context_data and CgoContextInfo in go_context_data:
+    cgo_context_source = _select_cgo_context_source(
+        go_context_data != None and CgoContextInfo in go_context_data,
+        getattr(attr, "_cc_toolchain", None) != None and CPP_TOOLCHAIN_TYPE in ctx.toolchains,
+        getattr(attr, "_cgo_context_data", None) != None and CgoContextInfo in attr._cgo_context_data,
+        getattr(attr, "cgo_context_data", None) != None and CgoContextInfo in attr.cgo_context_data,
+    )
+
+    if cgo_context_source == "go_context_data":
+        # Prefer the pre-computed CgoContextInfo from go_context_data: it is
+        # evaluated once by the cgo_context_data rule (via non_request_nogo_transition)
+        # and shared across all go_library targets in the same configuration.
+        # Checking this before the _cc_toolchain path avoids re-running the
+        # expensive cgo_context_data_impl for every go_library target.
         cgo_context_info = go_context_data[CgoContextInfo]
-    elif getattr(attr, "_cgo_context_data", None) and CgoContextInfo in attr._cgo_context_data:
+    elif cgo_context_source == "_cc_toolchain":
+        cgo_context_info = cgo_context_data_impl(ctx)
+    elif cgo_context_source == "_cgo_context_data":
         cgo_context_info = attr._cgo_context_data[CgoContextInfo]
-    elif getattr(attr, "cgo_context_data", None) and CgoContextInfo in attr.cgo_context_data:
+    elif cgo_context_source == "cgo_context_data":
         cgo_context_info = attr.cgo_context_data[CgoContextInfo]
 
     if goos == "auto" and goarch == "auto" and cgo_context_info and (go_config_info == None or not go_config_info.pure):
