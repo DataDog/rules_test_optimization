@@ -1552,7 +1552,7 @@ function Get-BazelTargetMetadataPath([string]$PayloadFile) {
   return $null
 }
 
-function Merge-FlatMetadataIntoEvent($EventObj, $MetadataObj, [string[]]$SkippedKeys = @()) {
+function Merge-FlatMetadataIntoEvent($EventObj, $MetadataObj, [string[]]$SkippedKeys = @(), $PayloadMetaStar = $null) {
   if (-not $MetadataObj) { return }
   if (-not (Get-MapValue $EventObj 'content')) { $EventObj | Add-Member -NotePropertyName content -NotePropertyValue @{} -Force }
   $EventObj.content = Ensure-Hashtable $EventObj.content
@@ -1562,14 +1562,20 @@ function Merge-FlatMetadataIntoEvent($EventObj, $MetadataObj, [string[]]$Skipped
   foreach ($prop in $MetadataObj.PSObject.Properties) {
     if ($SkippedKeys -contains $prop.Name) { continue }
     $val = $prop.Value
+    # Skip if the key was already present in the original payload metadata["*"]
+    # (e.g. runtime.name, runtime.version, service.name set by the tracer).
+    $inPayloadMeta = $PayloadMetaStar -and (
+      ($PayloadMetaStar -is [hashtable] -and $PayloadMetaStar.ContainsKey($prop.Name)) -or
+      ($PayloadMetaStar -isnot [hashtable] -and $null -ne (Get-MapValue $PayloadMetaStar $prop.Name))
+    )
     if ($val -is [string]) {
-      if (-not $EventObj.content.meta.ContainsKey($prop.Name)) { $EventObj.content.meta[$prop.Name] = $val }
+      if (-not $EventObj.content.meta.ContainsKey($prop.Name) -and -not $inPayloadMeta) { $EventObj.content.meta[$prop.Name] = $val }
     } elseif ($val -is [bool]) {
-      if (-not $EventObj.content.meta.ContainsKey($prop.Name)) { $EventObj.content.meta[$prop.Name] = $val.ToString().ToLowerInvariant() }
+      if (-not $EventObj.content.meta.ContainsKey($prop.Name) -and -not $inPayloadMeta) { $EventObj.content.meta[$prop.Name] = $val.ToString().ToLowerInvariant() }
     } elseif ($val -is [int] -or $val -is [long] -or $val -is [double] -or $val -is [decimal]) {
       if (-not $EventObj.content.metrics.ContainsKey($prop.Name)) { $EventObj.content.metrics[$prop.Name] = [double]$val }
     } else {
-      if (-not $EventObj.content.meta.ContainsKey($prop.Name)) {
+      if (-not $EventObj.content.meta.ContainsKey($prop.Name) -and -not $inPayloadMeta) {
         try {
           $EventObj.content.meta[$prop.Name] = ($val | ConvertTo-Json -Compress -Depth 100)
         } catch {
@@ -1658,10 +1664,11 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
 
       if ($script:ContextObj) {
         # Keep API key fingerprint out of uploaded event content.
-        Merge-FlatMetadataIntoEvent $evt $script:ContextObj @('topt.api_key_fingerprint')
+        # Pass $star so context tags don't overwrite values the tracer already set in metadata["*"].
+        Merge-FlatMetadataIntoEvent $evt $script:ContextObj @('topt.api_key_fingerprint') $star
       }
       if ($bazelMetadataObj) {
-        Merge-FlatMetadataIntoEvent $evt $bazelMetadataObj
+        Merge-FlatMetadataIntoEvent $evt $bazelMetadataObj @() $star
       }
 
       $script:CodeOwnersStats.scanned++

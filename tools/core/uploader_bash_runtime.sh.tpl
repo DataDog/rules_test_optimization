@@ -1795,6 +1795,7 @@ enrich_with_context() {
     def library_version: (meta_star["library_version"] // $rules_version);
     def env: (meta_star["env"] // ctx_env);
     .metadata = (.metadata // {})
+    | (meta_star) as $payload_meta_star
     | .metadata["*"] = (
         { "runtime-id": runtime_id, "language": language, "library_version": library_version }
         + (if (env|type) == "string" then { "env": env } else {} end)
@@ -1818,9 +1819,9 @@ enrich_with_context() {
                   if ($e.value|type) == "number" then
                     if .content.metrics[$e.key] == null then .content.metrics[$e.key] = $e.value else . end
                   elif ($e.value|type) == "string" then
-                    if .content.meta[$e.key] == null then .content.meta[$e.key] = $e.value else . end
+                    if (.content.meta[$e.key] == null) and ($payload_meta_star[$e.key] == null) then .content.meta[$e.key] = $e.value else . end
                   else
-                    if .content.meta[$e.key] == null then .content.meta[$e.key] = ($e.value|tostring) else . end
+                    if (.content.meta[$e.key] == null) and ($payload_meta_star[$e.key] == null) then .content.meta[$e.key] = ($e.value|tostring) else . end
                   end
                 )
             )
