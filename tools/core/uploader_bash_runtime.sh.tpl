@@ -1797,7 +1797,8 @@ enrich_with_context() {
     .metadata = (.metadata // {})
     | (meta_star) as $payload_meta_star
     | .metadata["*"] = (
-        { "runtime-id": runtime_id, "language": language, "library_version": library_version }
+        $payload_meta_star
+        + { "runtime-id": runtime_id, "language": language, "library_version": library_version }
         + (if (env|type) == "string" then { "env": env } else {} end)
       )
     | .metadata = (

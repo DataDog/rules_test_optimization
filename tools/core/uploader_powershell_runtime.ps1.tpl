@@ -1627,7 +1627,13 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
   $envVal = Get-MapValue $star 'env'
   if ([string]::IsNullOrEmpty($envVal) -and $script:ContextObj) { $envVal = $script:ContextObj.env }
 
-  $newStar = @{ 'runtime-id' = $runtimeId; 'language' = $language; 'library_version' = $libraryVersion }
+  # Start from the original tracer-set metadata["*"] so values like runtime.name,
+  # runtime.version, service.name are preserved, then overlay the uploader-computed fields.
+  $newStar = @{}
+  foreach ($k in $star.Keys) { $newStar[$k] = $star[$k] }
+  $newStar['runtime-id'] = $runtimeId
+  $newStar['language'] = $language
+  $newStar['library_version'] = $libraryVersion
   if (-not [string]::IsNullOrEmpty($envVal)) { $newStar['env'] = $envVal }
 
   # Prune top-level metadata keys
