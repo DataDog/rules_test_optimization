@@ -7,6 +7,7 @@ exports_files([
     "test_optimization_sync.bzl",
     "test_optimization_multi_sync.bzl",
     "test_optimization_uploader.bzl",
+    "topt_test_wrapper.bzl",
     "topt_macro_utils.bzl",
     "topt_selection_utils.bzl",
     "uploader_bash_runtime.sh.tpl",

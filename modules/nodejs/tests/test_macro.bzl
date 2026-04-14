@@ -20,12 +20,22 @@ ToptNodejsMacroCaptureInfo = provider(
 )
 
 def _nodejs_test_capture_impl(ctx):
-    return [ToptNodejsMacroCaptureInfo(
-        data_labels = [str(dep.label) for dep in ctx.attr.data],
-        env = dict(ctx.attr.env),
-        package_name = ctx.attr.package_name,
-        entry_point = ctx.attr.entry_point,
-    )]
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
+    return [
+        DefaultInfo(
+            files = depset([out]),
+            runfiles = ctx.runfiles(files = [out]),
+            executable = out,
+        ),
+        RunEnvironmentInfo(environment = dict(ctx.attr.env)),
+        ToptNodejsMacroCaptureInfo(
+            data_labels = [str(dep.label) for dep in ctx.attr.data],
+            env = dict(ctx.attr.env),
+            package_name = ctx.attr.package_name,
+            entry_point = ctx.attr.entry_point,
+        ),
+    ]
 
 _nodejs_test_capture_rule = rule(
     implementation = _nodejs_test_capture_impl,
@@ -38,6 +48,7 @@ _nodejs_test_capture_rule = rule(
         "npm_package": attr.string(),
         "entry_point": attr.string(),
     },
+    executable = True,
 )
 
 def _has_fragment(items, fragment):
@@ -49,6 +60,12 @@ def _has_fragment(items, fragment):
 def _has_label_suffix(items, suffix):
     for item in items:
         if item.endswith(suffix):
+            return True
+    return False
+
+def _has_file_basename(items, basename):
+    for item in items:
+        if item.basename == basename:
             return True
     return False
 
@@ -185,6 +202,11 @@ def _nodejs_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, "rlocationpath" in manifest_env)
     asserts.true(env, "test_optimization_data" in manifest_env)
     asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
+    asserts.equals(
+        env,
+        "nodejs_macro_single_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "nodejs-service", captured.env.get("DD_SERVICE"))
@@ -200,6 +222,11 @@ def _nodejs_macro_multi_service_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":nodejs_macro_multi_service_target_topt_payloads"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(
+        env,
+        "nodejs_macro_multi_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "nodejs-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "packages/nodejs/multi", captured.package_name)
     asserts.equals(env, "src/multi.test.js", captured.entry_point)
@@ -212,6 +239,11 @@ def _nodejs_macro_env_none_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "nodejs-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "nodejs_macro_env_none_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -226,6 +258,11 @@ def _nodejs_macro_select_inputs_wiring_test_impl(ctx):
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "nodejs_macro_select_inputs_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
     asserts.equals(env, "packages/nodejs/select/pkg", captured.package_name)
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -238,6 +275,37 @@ def _nodejs_macro_explicit_service_wiring_test_impl(ctx):
     captured = target[ToptNodejsMacroCaptureInfo]
     asserts.equals(env, "caller-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "nodejs_macro_explicit_service_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
+    return analysistest.end(env)
+
+def _nodejs_macro_public_wrapper_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    asserts.equals(env, 2, len(files))
+    asserts.true(env, _has_file_basename(files, "nodejs_macro_single_service_target"))
+    asserts.true(
+        env,
+        _has_file_basename(
+            files,
+            "nodejs_macro_single_service_target__wrapped_nodejs_macro_single_service_target__raw_nodejs_test.sh",
+        ),
+    )
+    run_env = target[RunEnvironmentInfo].environment
+    manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    asserts.equals(
+        env,
+        "nodejs_macro_single_service_target_topt_bazel_metadata.json",
+        run_env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
+    asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
 def _resolve_topt_service_key_missing_target_impl(_ctx):
@@ -333,6 +401,9 @@ nodejs_macro_select_inputs_wiring_test = analysistest.make(
 )
 nodejs_macro_explicit_service_wiring_test = analysistest.make(
     _nodejs_macro_explicit_service_wiring_test_impl,
+)
+nodejs_macro_public_wrapper_test = analysistest.make(
+    _nodejs_macro_public_wrapper_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

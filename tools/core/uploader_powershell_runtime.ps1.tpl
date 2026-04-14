@@ -175,6 +175,7 @@ if ($env:DD_TEST_OPTIMIZATION_DEBUG) {
     }
 }
 function Log([string]$msg) { Write-Output "[dd-uploader] $msg" }
+function Log-Stderr([string]$msg) { [Console]::Error.WriteLine("[dd-uploader] $msg") }
 function Dbg([string]$msg) { if ($script:DebugMode) { Write-Host "[dd-uploader][dbg] $msg" } }
 function Write-Utf8NoBomFile([string]$Path, [string]$Content) {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -303,40 +304,117 @@ function Log-StartTimeStats([string]$FilePath) {
 # Resolve context.json path (used by upload functions for payload enrichment).
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without reintroducing sync repo dependencies at uploader run time.
+$ContextManifestRloc = "__DDTPL_CONTEXT_MANIFEST_RLOC__"
+$ContextManifestPath = "__DDTPL_CONTEXT_MANIFEST_PATH__"
 $ContextJsonRloc = "__DDTPL_CONTEXT_JSON_RLOC__"
 $ContextJsonPath = "__DDTPL_CONTEXT_JSON_PATH__"
 $TelemetryFactsManifestRloc = "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__"
 $TelemetryFactsManifestPath = "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"
 $ContextJsonOverride = $env:DD_TEST_OPTIMIZATION_CONTEXT_JSON
-Dbg "context.json resolution inputs: override='$ContextJsonOverride' path='$ContextJsonPath' rloc='$ContextJsonRloc'"
+Dbg "context.json resolution inputs: override='$ContextJsonOverride' path='$ContextJsonPath' rloc='$ContextJsonRloc' manifest_path='$ContextManifestPath' manifest_rloc='$ContextManifestRloc'"
 $script:ContextJson = $null
+$script:PrimaryContextJson = $null
+$script:ContextManifest = $null
+$script:BundledContextEntries = [ordered]@{}
 $contextJsonFromOverride = $false
+
+function Resolve-ContextEntryPath {
+    param(
+        [string]$EntryPath,
+        [string]$EntryRloc
+    )
+
+    $resolved = Resolve-ArtifactPath $EntryPath
+    if ($resolved) { return $resolved }
+    if ($EntryRloc) {
+        $resolved = Resolve-Runfile $EntryRloc
+        if ($resolved) { return $resolved }
+    }
+    return $null
+}
+
+function Normalize-ContextRepoKey {
+    param([string]$RepoKey)
+
+    if ([string]::IsNullOrEmpty($RepoKey)) { return $RepoKey }
+    $lastPlus = $RepoKey.LastIndexOf('+')
+    if ($lastPlus -ge 0 -and $lastPlus + 1 -lt $RepoKey.Length) {
+        return $RepoKey.Substring($lastPlus + 1)
+    }
+    return $RepoKey
+}
+
+function Load-ContextManifestEntries {
+    param([string]$ManifestPath)
+
+    $script:BundledContextEntries = [ordered]@{}
+    if ([string]::IsNullOrEmpty($ManifestPath) -or -not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+        return
+    }
+
+    foreach ($line in (Get-Content -LiteralPath $ManifestPath -Encoding UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $parts = $line -split "`t", 3
+        if ($parts.Count -lt 1) { continue }
+        $repoKey = Normalize-ContextRepoKey $parts[0]
+        if ([string]::IsNullOrWhiteSpace($repoKey)) { continue }
+        $entryPath = if ($parts.Count -ge 2) { $parts[1] } else { "" }
+        $entryRloc = if ($parts.Count -ge 3) { $parts[2] } else { "" }
+        $resolved = Resolve-ContextEntryPath -EntryPath $entryPath -EntryRloc $entryRloc
+        if (-not $resolved) {
+            Dbg "context manifest entry unresolved for repo '$repoKey'"
+            continue
+        }
+        $script:BundledContextEntries[$repoKey] = $resolved
+    }
+}
 if ($ContextJsonOverride) {
-    $script:ContextJson = Resolve-ArtifactPath $ContextJsonOverride
-    if ($script:ContextJson) {
+    $script:PrimaryContextJson = Resolve-ArtifactPath $ContextJsonOverride
+    if ($script:PrimaryContextJson) {
         $contextJsonFromOverride = $true
-        Dbg "context.json resolved via runtime override: '$script:ContextJson'"
+        Dbg "context.json resolved via runtime override: '$script:PrimaryContextJson'"
     } else {
         Log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     }
 }
-if (-not $script:ContextJson) {
-    $script:ContextJson = Resolve-ArtifactPath $ContextJsonPath
-    if ($script:ContextJson) {
+if (-not $script:PrimaryContextJson) {
+    $script:ContextManifest = Resolve-ArtifactPath $ContextManifestPath
+    if ($script:ContextManifest) {
+        Dbg "context manifest resolved via direct path: '$script:ContextManifest'"
+    } elseif ($ContextManifestRloc) {
+        $script:ContextManifest = Resolve-Runfile $ContextManifestRloc
+        if ($script:ContextManifest) {
+            Dbg "context manifest resolved via runfiles: '$script:ContextManifest'"
+        }
+    }
+    Load-ContextManifestEntries -ManifestPath $script:ContextManifest
+    if ($script:BundledContextEntries.Count -gt 0) {
+        $script:PrimaryContextJson = @($script:BundledContextEntries.Values)[0]
+        if ($script:BundledContextEntries.Count -eq 1) {
+            Dbg "context.json resolved from single bundled context: '$script:PrimaryContextJson'"
+        } else {
+            Dbg "primary context.json resolved from bundled manifest: '$script:PrimaryContextJson' (repos=$([string]::Join(', ', @($script:BundledContextEntries.Keys))))"
+        }
+    }
+}
+if (-not $script:PrimaryContextJson) {
+    $script:PrimaryContextJson = Resolve-ArtifactPath $ContextJsonPath
+    if ($script:PrimaryContextJson) {
         # Direct artifact path is preferred when launcher preserves it.
-        Dbg "context.json resolved via direct path: '$script:ContextJson'"
+        Dbg "context.json resolved via direct path: '$script:PrimaryContextJson'"
     } elseif ($ContextJsonRloc) {
         # Runfiles fallback supports manifest-only and bzlmod path variants.
-        $script:ContextJson = Resolve-Runfile $ContextJsonRloc
-        if (-not $script:ContextJson) {
+        $script:PrimaryContextJson = Resolve-Runfile $ContextJsonRloc
+        if (-not $script:PrimaryContextJson) {
             Log "warning: context.json not found in runfiles; payloads will not be enriched"
         } else {
-            Dbg "context.json resolved via runfiles: '$script:ContextJson'"
+            Dbg "context.json resolved via runfiles: '$script:PrimaryContextJson'"
         }
     } else {
         Dbg "context.json not configured in data files; enrichment disabled"
     }
 }
+$script:ContextJson = $script:PrimaryContextJson
 $script:ContextJsonFromOverride = $contextJsonFromOverride
 
 Dbg "telemetry facts manifest resolution inputs: path='$TelemetryFactsManifestPath' rloc='$TelemetryFactsManifestRloc'"
@@ -398,9 +476,9 @@ if ($script:SchemaValidator) {
 $script:ContextObj = $null
 $script:ContextJsonText = $null
 $script:TelemetryProviderName = ""
-if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {
+if ($script:PrimaryContextJson -and (Test-Path -LiteralPath $script:PrimaryContextJson)) {
     try {
-        $script:ContextJsonText = Get-Content -LiteralPath $script:ContextJson -Raw -Encoding UTF8
+        $script:ContextJsonText = Get-Content -LiteralPath $script:PrimaryContextJson -Raw -Encoding UTF8
         $script:ContextObj = $script:ContextJsonText | ConvertFrom-Json -ErrorAction Stop
     } catch {
         $script:ContextObj = $null
@@ -806,13 +884,13 @@ if ($Agentless) {
 }
 Dbg "headers prepared (agentless=$Agentless; test headers can be derived from metadata)"
 
-Dbg "context.json: $(if ([string]::IsNullOrEmpty($script:ContextJson)) { '<none>' } else { $script:ContextJson })"
+Dbg "primary context.json: $(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { '<none>' } else { $script:PrimaryContextJson })"
 
 # Optional check: verify fetch-time API key fingerprint matches uploader API key.
 $ContextFingerprint = $null
-if ($script:ContextJson -and (Test-Path -LiteralPath $script:ContextJson)) {
+if ($script:PrimaryContextJson -and (Test-Path -LiteralPath $script:PrimaryContextJson)) {
   try {
-    $ctxForCheck = Get-Content -LiteralPath $script:ContextJson -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    $ctxForCheck = Get-Content -LiteralPath $script:PrimaryContextJson -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
     $ContextFingerprint = $ctxForCheck.'topt.api_key_fingerprint'
   } catch {
     $ContextFingerprint = $null
@@ -1552,6 +1630,72 @@ function Get-BazelTargetMetadataPath([string]$PayloadFile) {
   return $null
 }
 
+$script:ContextInfoCache = @{}
+
+function Get-ContextInfo([string]$ContextPath) {
+  if ([string]::IsNullOrEmpty($ContextPath)) { return $null }
+  if ($script:ContextInfoCache.ContainsKey($ContextPath)) {
+    return $script:ContextInfoCache[$ContextPath]
+  }
+
+  $info = @{
+    Path = $ContextPath
+    JsonText = $null
+    Object = $null
+  }
+
+  if (Test-Path -LiteralPath $ContextPath -PathType Leaf) {
+    try {
+      $info.JsonText = Get-Content -LiteralPath $ContextPath -Raw -Encoding UTF8
+      $info.Object = $info.JsonText | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      Log "warning: failed to parse context.json for payload enrichment: $ContextPath"
+    }
+  }
+
+  $script:ContextInfoCache[$ContextPath] = $info
+  return $info
+}
+
+function Resolve-ContextJsonForPayload([string]$PayloadFile) {
+  if ($script:ContextJsonFromOverride) {
+    return $script:PrimaryContextJson
+  }
+
+  if ($script:BundledContextEntries.Count -le 1) {
+    return $script:PrimaryContextJson
+  }
+
+  $bazelMetadataPath = Get-BazelTargetMetadataPath $PayloadFile
+  if ([string]::IsNullOrEmpty($bazelMetadataPath)) {
+    Log-Stderr "warning: skipping context enrichment for '$PayloadFile' because multiple bundled contexts are present and bazel_target_metadata.json is missing"
+    return $null
+  }
+
+  $bazelMetadataObj = $null
+  try {
+    $bazelMetadataObj = Get-Content -LiteralPath $bazelMetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    Log "warning: failed to parse Bazel target metadata for payload: $PayloadFile"
+    return $null
+  }
+
+  $repoKey = Get-MapValue $bazelMetadataObj 'bazel.test_optimization.repo_name'
+  if (($repoKey -isnot [string]) -or [string]::IsNullOrWhiteSpace($repoKey)) {
+    Log-Stderr "warning: skipping context enrichment for '$PayloadFile' because bazel.test_optimization.repo_name is missing from '$bazelMetadataPath'"
+    return $null
+  }
+
+  if (-not $script:BundledContextEntries.Contains($repoKey)) {
+    Log-Stderr "warning: skipping context enrichment for '$PayloadFile' because no bundled context matched repo '$repoKey'"
+    return $null
+  }
+
+  $matchedContext = [string]$script:BundledContextEntries[$repoKey]
+  Dbg "selected bundled context '$matchedContext' for payload '$PayloadFile' via repo '$repoKey'"
+  return $matchedContext
+}
+
 function Merge-FlatMetadataIntoEvent($EventObj, $MetadataObj, [string[]]$SkippedKeys = @()) {
   if (-not $MetadataObj) { return }
   if (-not (Get-MapValue $EventObj 'content')) { $EventObj | Add-Member -NotePropertyName content -NotePropertyValue @{} -Force }
@@ -1588,6 +1732,11 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
     return
   }
 
+  $selectedContextPath = Resolve-ContextJsonForPayload $infile
+  $selectedContextInfo = Get-ContextInfo $selectedContextPath
+  $selectedContextObj = if ($selectedContextInfo) { $selectedContextInfo.Object } else { $null }
+  Dbg "Merge-With-Context: infile='$infile' selected_ctx='$(if ([string]::IsNullOrEmpty($selectedContextPath)) { '<none>' } else { $selectedContextPath })' primary='$(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { '<none>' } else { $script:PrimaryContextJson })'"
+
   if (-not $payload.metadata) { $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{} -Force }
   $meta = Ensure-Hashtable $payload.metadata
   $star = Ensure-Hashtable (Get-MapValue $meta '*')
@@ -1595,20 +1744,20 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
   # Compute runtime-id, language, library_version, env (fill missing only)
   $runtimeId = Get-MapValue $star 'runtime-id'
   if ([string]::IsNullOrEmpty($runtimeId)) {
-    if ($script:ContextObj) {
-      $runtimeId = $script:ContextObj.'runtime-id'
-      if ([string]::IsNullOrEmpty($runtimeId)) { $runtimeId = $script:ContextObj.'runtime.id' }
-      if ([string]::IsNullOrEmpty($runtimeId)) { $runtimeId = $script:ContextObj.'runtime_id' }
+    if ($selectedContextObj) {
+      $runtimeId = Get-MapValue $selectedContextObj 'runtime-id'
+      if ([string]::IsNullOrEmpty($runtimeId)) { $runtimeId = Get-MapValue $selectedContextObj 'runtime.id' }
+      if ([string]::IsNullOrEmpty($runtimeId)) { $runtimeId = Get-MapValue $selectedContextObj 'runtime_id' }
     }
     if ([string]::IsNullOrEmpty($runtimeId)) { $runtimeId = $script:RuntimeId }
   }
 
   $language = Get-MapValue $star 'language'
   if ([string]::IsNullOrEmpty($language)) {
-    if ($script:ContextObj) {
-      $language = $script:ContextObj.language
-      if ([string]::IsNullOrEmpty($language)) { $language = $script:ContextObj.'runtime.name' }
-      if ([string]::IsNullOrEmpty($language)) { $language = $script:ContextObj.'runtime_name' }
+    if ($selectedContextObj) {
+      $language = Get-MapValue $selectedContextObj 'language'
+      if ([string]::IsNullOrEmpty($language)) { $language = Get-MapValue $selectedContextObj 'runtime.name' }
+      if ([string]::IsNullOrEmpty($language)) { $language = Get-MapValue $selectedContextObj 'runtime_name' }
     }
     if ([string]::IsNullOrEmpty($language)) { $language = 'bazel' }
   }
@@ -1617,7 +1766,7 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
   if ([string]::IsNullOrEmpty($libraryVersion)) { $libraryVersion = $script:RulesVersion }
 
   $envVal = Get-MapValue $star 'env'
-  if ([string]::IsNullOrEmpty($envVal) -and $script:ContextObj) { $envVal = $script:ContextObj.env }
+  if ([string]::IsNullOrEmpty($envVal) -and $selectedContextObj) { $envVal = Get-MapValue $selectedContextObj 'env' }
 
   $newStar = @{ 'runtime-id' = $runtimeId; 'language' = $language; 'library_version' = $libraryVersion }
   if (-not [string]::IsNullOrEmpty($envVal)) { $newStar['env'] = $envVal }
@@ -1654,9 +1803,9 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
       $evt.content.meta = Ensure-Hashtable $evt.content.meta
       $evt.content.metrics = Ensure-Hashtable $evt.content.metrics
 
-      if ($script:ContextObj) {
+      if ($selectedContextObj) {
         # Keep API key fingerprint out of uploaded event content.
-        Merge-FlatMetadataIntoEvent $evt $script:ContextObj @('topt.api_key_fingerprint')
+        Merge-FlatMetadataIntoEvent $evt $selectedContextObj @('topt.api_key_fingerprint')
       }
       if ($bazelMetadataObj) {
         Merge-FlatMetadataIntoEvent $evt $bazelMetadataObj
@@ -1940,8 +2089,8 @@ function Resolve-TelemetryFactsSources {
         }
     }
 
-    if ($script:ContextJsonFromOverride -and $script:ContextJson) {
-        $sibling = Join-Path (Split-Path -Parent $script:ContextJson) "telemetry_facts.json"
+    if ($script:ContextJsonFromOverride -and $script:PrimaryContextJson) {
+        $sibling = Join-Path (Split-Path -Parent $script:PrimaryContextJson) "telemetry_facts.json"
         $canonical = Resolve-CanonicalExistingFile $sibling
         if ($canonical -and $seen.Add($canonical)) {
             $sources += ,$canonical

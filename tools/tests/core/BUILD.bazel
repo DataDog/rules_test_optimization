@@ -131,6 +131,7 @@ load(
 load(
     "//tools/tests/core:test_uploader_utils.bzl",
     "bash_curl_retry_flags_test",
+    "context_manifest_content_test",
     "codeowners_compile_regex_edge_cases_test",
     "codeowners_compile_regex_test",
     "codeowners_derived_candidate_filter_test",
@@ -900,6 +901,12 @@ runfile_manifest_not_found_parity_test(
     timeout = "short",
 )
 
+context_manifest_content_test(
+    name = "context_manifest_content_test",
+    size = "small",
+    timeout = "short",
+)
+
 manifest_trim_and_bom_helpers_test(
     name = "manifest_trim_and_bom_helpers_test",
     size = "small",
@@ -971,6 +978,7 @@ test_suite(
         ":load_github_event_payload_ctx_test",
         ":log_helpers_and_is_dict_test",
         ":manifest_trim_and_bom_helpers_test",
+        ":context_manifest_content_test",
         ":merge_optional_env_defaults_ignores_empty_defaults_test",
         ":merge_optional_env_defaults_injects_missing_key_test",
         ":merge_optional_env_defaults_none_env_test",

@@ -91,6 +91,19 @@ dd_payload_uploader(
 )
 ```
 
+Mixed-runtime variant (include one context target per runtime or runtime/service repo):
+
+```bzl
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = [
+        "@test_optimization_data_go//:test_optimization_context",
+        "@test_optimization_data_python//:test_optimization_context",
+        "@test_optimization_data_java//:test_optimization_context",
+    ],
+)
+```
+
 ## Upload modes
 
 - **Agentless mode (default):** Requires `DD_API_KEY` and `DD_SITE`; uploads
@@ -148,7 +161,7 @@ bazel run //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
-| `DD_TEST_OPTIMIZATION_CONTEXT_JSON` | unset | Advanced: explicit `context.json` path for enrichment, resolved before any `data`-provided context file |
+| `DD_TEST_OPTIMIZATION_CONTEXT_JSON` | unset | Legacy explicit override for one readable `context.json` path. It still wins when set, but mixed-runtime workspaces should prefer bundling all context targets in uploader `data`. |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
 
 ### `DD_TEST_OPTIMIZATION_FILTER_PREFIX` behavior
@@ -202,17 +215,22 @@ payload discovery/quiescence before proceeding.
 
 - The uploader resolves `context.json` in this order:
   1. `DD_TEST_OPTIMIZATION_CONTEXT_JSON` when it points to a readable file
-  2. a direct artifact path bundled via `data`
-  3. a runfiles path bundled via `data`
-  4. no enrichment
+  2. if exactly one bundled context exists, use that context for every payload
+  3. if multiple bundled contexts exist, read sibling `bazel_target_metadata.json`, take `bazel.test_optimization.repo_name`, and use the matching bundled context for that payload
+  4. if multiple bundled contexts exist and no match is found, skip only the `context.json` merge for that payload and continue uploading
+  5. if no bundled context resolves, upload without context enrichment
 - When a `context.json` file is available, the uploader enriches each test
   payload by merging all non-null keys from `context.json` into `metadata.*`.
+- Bazel sidecar metadata from `bazel_target_metadata.json` is merged separately.
+  If a multi-context payload has no repo match, those Bazel sidecar tags remain
+  and only the `context.json` merge is skipped.
 - If `context.json` is not present (or `jq` is unavailable on Unix), test
   payloads are uploaded as-is.
 - `context.json` contains non-secret CI/Git/OS/runtime tags suitable for reuse
   at test time.
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` is a runtime uploader override only. Do
-  not pass it via `--repo_env`, and do not treat it as sync-time configuration.
+  not pass it via `--repo_env`, do not treat it as sync-time configuration, and
+  do not use it as the normal mixed-runtime wiring path.
 - Bazel metadata is included as stable tags:
   `bazel.rule_name`, `bazel.rule_version`, `bazel.os`, and `bazel.arch`.
 - When enrichment is active, those Bazel keys are merged into test payload
@@ -245,6 +263,10 @@ DD_SITE="$DD_SITE" \
 DD_TEST_OPTIMIZATION_CONTEXT_JSON="/abs/path/to/context.json" \
 bazel run //:dd_upload_payloads
 ```
+
+This override is global for that uploader invocation. In mixed-runtime
+workspaces, prefer bundling all relevant context targets and let the uploader
+match them per payload instead of forcing one override path onto the entire run.
 
 ## Payload schema validation (best effort)
 

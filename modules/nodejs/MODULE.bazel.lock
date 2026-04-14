@@ -140,7 +140,7 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "G3C+3WlnMjUNIHa4cp7CeelnRqKPPrOgxJylaU2YD3Y=",
+        "bzlTransitiveDigest": "fCalAZ2/Qu3lFMQHKkbcg1/y+sAePD33kEeWZNVqQZs=",
         "usagesDigest": "irePOqLrnrDswqq6uNfKWfqwmNWA2wVLir9YmhV+HBw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -149,7 +149,13 @@
           "test_optimization_data": {
             "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [],
+              "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data",
+              "service_name": "stub-service",
               "service_keys": [
                 "nodejs_service",
                 "ruby_service"

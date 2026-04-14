@@ -4,6 +4,7 @@ load(
     "//tools/core:test_optimization_uploader.bzl",
     "bash_curl_retry_flags_for_tests",
     "build_codeowners_lookup_order_for_tests",
+    "context_manifest_content_for_tests",
     "compile_codeowners_regex_for_tests",
     "first_ascii_whitespace_index_for_tests",
     "glob_to_regex_for_tests",
@@ -394,6 +395,20 @@ def _runfile_manifest_not_found_parity_test(ctx):
     asserts.equals(env, bash_path, ps_path)
     return unittest.end(env)
 
+def _context_manifest_content_test(ctx):
+    """Validate bundled context manifests sort repo keys deterministically."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "repo_a\ta.short\t/a/path.json\nrepo_b\tb.short\t/b/path.json\n",
+        context_manifest_content_for_tests({
+            "repo_b": ("b.short", "/b/path.json"),
+            "repo_a": ("a.short", "/a/path.json"),
+        }),
+    )
+    asserts.equals(env, "", context_manifest_content_for_tests({}))
+    return unittest.end(env)
+
 def _manifest_trim_and_bom_helpers_test(ctx):
     """Validate manifest parser helper behavior for whitespace/BOM handling."""
     env = unittest.begin(ctx)
@@ -480,6 +495,7 @@ runfile_manifest_bash_resolution_test = unittest.make(_runfile_manifest_bash_res
 runfile_manifest_powershell_resolution_test = unittest.make(_runfile_manifest_powershell_resolution_test)
 runfile_manifest_parser_parity_test = unittest.make(_runfile_manifest_parser_parity_test)
 runfile_manifest_not_found_parity_test = unittest.make(_runfile_manifest_not_found_parity_test)
+context_manifest_content_test = unittest.make(_context_manifest_content_test)
 manifest_trim_and_bom_helpers_test = unittest.make(_manifest_trim_and_bom_helpers_test)
 codeowners_lookup_order_test = unittest.make(_codeowners_lookup_order_test)
 codeowners_lookup_order_empty_script_dir_test = unittest.make(_codeowners_lookup_order_empty_script_dir_test)

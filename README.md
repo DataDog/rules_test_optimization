@@ -525,8 +525,9 @@ For macro consumers, load `topt_data_by_service` from
 
 ### Bzlmod + mixed-language monorepo
 
-For mixed-runtime repos, keep the sync repos separate and use the runtime
-appropriate companion on top of each exported dataset.
+For mixed-runtime repos, keep one sync repo per runtime or runtime/service
+slice and use the matching companion on top of each exported dataset. Do not
+reuse one shared sync repo across different runtimes.
 
 ```bzl
 topt_go = use_extension(
@@ -558,6 +559,21 @@ use_repo(topt_ruby, "test_optimization_data_ruby")
 Then load the matching export in each runtime-specific wrapper or BUILD file:
 - Go targets use `@test_optimization_data_go//:export.bzl`
 - Ruby targets use `@test_optimization_data_ruby//:export.bzl`
+
+Root uploader wiring in a mixed-runtime workspace must bundle every matching
+context target so the uploader can pick the correct `context.json` per payload:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = [
+        "@test_optimization_data_go//:test_optimization_context",
+        "@test_optimization_data_ruby//:test_optimization_context",
+    ],
+)
+```
 
 ### WORKSPACE mode
 
@@ -786,9 +802,11 @@ exit $testStatus
 2. Use a single uploader target per workspace (do not run concurrent uploaders).
 3. Tests must run locally, or use `--remote_download_outputs=all`.
 4. Run uploader on the same machine/workspace where tests executed.
-5. Optional advanced optimization: set `DD_TEST_OPTIMIZATION_CONTEXT_JSON` to a
-   previously generated `context.json` path if you want uploader enrichment
-   without re-resolving context through external repo labels.
+5. `DD_TEST_OPTIMIZATION_CONTEXT_JSON` is a legacy explicit override for
+   advanced workflows that already resolved one specific `context.json` path.
+   Do not use it as the normal mixed-runtime wiring path; mixed-runtime
+   workspaces should pass every relevant `:test_optimization_context` target in
+   uploader `data` and let the uploader select per payload.
 
 ### Full uploader reference
 

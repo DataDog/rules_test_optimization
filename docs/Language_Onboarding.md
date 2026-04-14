@@ -13,7 +13,8 @@ Rule of thumb:
 
 - Use one sync repo for single-service setups
 - Use one multi-sync aggregator per runtime for multi-service setups
-- In mixed-runtime monorepos, keep one sync repo or one multi-sync aggregator per runtime
+- In mixed-runtime monorepos, keep one sync repo per runtime/service slice
+- Use multi-sync aggregators only for multiple services of the same runtime
 
 Shared runtime contract for every language:
 
@@ -21,6 +22,11 @@ Shared runtime contract for every language:
 - Tests set `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
 - Tests write payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
 - The uploader runs later through `bazel run //:dd_upload_payloads`
+- Mixed-runtime uploader wiring must bundle every relevant
+  `:test_optimization_context` target and let the uploader choose the matching
+  `context.json` per payload
+- `DD_TEST_OPTIMIZATION_CONTEXT_JSON` remains a legacy explicit override, not
+  the recommended mixed-runtime wiring path
 
 Shared `.bazelrc` forwarding:
 

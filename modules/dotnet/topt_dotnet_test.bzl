@@ -18,7 +18,13 @@ load(
     "resolve_topt_service_key",
     "select_service_entry_or_fail",
     "service_mapping_entries",
+    "split_test_wrapper_kwargs",
     _is_dict = "is_dict",
+)
+load(
+    "@datadog-rules-test-optimization//tools/core:topt_test_wrapper.bzl",
+    "topt_bazel_metadata",
+    "topt_test_wrapper",
 )
 load("//:topt_dotnet_infer.bzl", "topt_dotnet_payloads_selector")
 
@@ -78,6 +84,8 @@ def dd_topt_dotnet_test(
     _validate_dotnet_test_rule_or_fail(dotnet_test_rule)
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
+    wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
+
     user_data = kwargs.pop("data", None)
     data = _append_data_dependencies(user_data, [])
 
@@ -122,6 +130,7 @@ def dd_topt_dotnet_test(
     fallback_identifier = _build_dotnet_fallback_identifier(native.package_name(), _dotnet)
 
     selector_name = name + "_topt_payloads"
+    metadata_name = name + "_topt_bazel_metadata"
     topt_dotnet_payloads_selector(
         name = selector_name,
         deps = deps_labels,
@@ -133,6 +142,16 @@ def dd_topt_dotnet_test(
         include_per_module = include_per_module_files,
         module_label_override = module_label_override,
         **selector_attrs
+    )
+
+    pkg_path = native.package_name()
+    topt_bazel_metadata(
+        name = metadata_name,
+        bazel_package = "//%s" % pkg_path if pkg_path else "//",
+        bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
+        repo_name = sync_repo_name,
+        service_name = _svc.get("service_name") or "",
+        runtime_name = "dotnet",
     )
 
     user_env = kwargs.pop("env", None)
@@ -154,13 +173,27 @@ def dd_topt_dotnet_test(
         {
             "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+            "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
         },
         macro_name = "dd_topt_dotnet_test",
     )
 
+    raw_name = name + "__raw_dotnet_test"
+    kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
+    kwargs["visibility"] = ["//visibility:private"]
+    for key, value in raw_passthrough.items():
+        kwargs[key] = value
+
     dotnet_test_rule(
-        name = name,
+        name = raw_name,
         data = data,
         env = env,
         **kwargs
+    )
+
+    topt_test_wrapper(
+        name = name,
+        actual = ":" + raw_name,
+        metadata = ":" + metadata_name,
+        **wrapper_kwargs
     )

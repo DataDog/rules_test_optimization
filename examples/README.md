@@ -250,6 +250,10 @@ dd_payload_uploader(
 )
 ```
 
+Use the single-context form above only for single-runtime workspaces. Mixed-
+runtime workspaces must add one `:test_optimization_context` label per
+runtime/service repo so uploader enrichment stays aligned with each payload.
+
 Running tests and uploading payloads:
 
 ```bash
@@ -465,3 +469,9 @@ dd_payload_uploader(
   ],
 )
 ```
+
+Mixed-runtime example rule:
+- keep one sync repo per runtime/service
+- keep one uploader at the workspace root
+- add every matching context target to uploader `data`
+- do not use `DD_TEST_OPTIMIZATION_CONTEXT_JSON` as the normal mixed-runtime path

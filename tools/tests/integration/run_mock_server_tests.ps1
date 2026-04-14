@@ -136,8 +136,8 @@ function Invoke-UploaderScript {
   & $PowerShellPath @invokeArgs
 }
 
-# Run the uploader while collecting transcript output so assertions can inspect
-# the debug stream for invalid synthetic upload attempts.
+# Run the uploader while capturing its combined stdout/stderr so assertions can
+# inspect the real child-process debug stream.
 function Invoke-UploaderScriptWithTranscript {
   param(
     [string]$PowerShellPath,
@@ -148,18 +148,12 @@ function Invoke-UploaderScriptWithTranscript {
   if (Test-Path -LiteralPath $TranscriptPath) {
     Remove-Item -LiteralPath $TranscriptPath -Force -ErrorAction SilentlyContinue
   }
-  Start-Transcript -Path $TranscriptPath -Force | Out-Null
-  try {
-    $null = Invoke-UploaderScript -PowerShellPath $PowerShellPath -ScriptPath $ScriptPath -ForwardedArgs $ForwardedArgs
-    return (Get-NativeExitCode)
-  } finally {
-    try {
-      Stop-Transcript | Out-Null
-    } catch {
-      # Transcript teardown is best-effort so the caller still sees the real
-      # uploader exit code and any captured logs.
-    }
-  }
+  $capturedOutput = @(& $PowerShellPath @(@("-NoProfile", "-NonInteractive") + $(if ((Split-Path -Leaf $PowerShellPath).ToLowerInvariant() -eq "powershell.exe") { @("-ExecutionPolicy", "Bypass") } else { @() }) + @("-File", $ScriptPath) + @($ForwardedArgs)) 2>&1 | ForEach-Object { $_.ToString() })
+  $exitCode = Get-NativeExitCode
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  $content = if ($capturedOutput.Count -gt 0) { ($capturedOutput -join [Environment]::NewLine) + [Environment]::NewLine } else { "" }
+  [System.IO.File]::WriteAllText($TranscriptPath, $content, $utf8NoBom)
+  return $exitCode
 }
 
 # Handle Get-FreePort behavior.
@@ -204,6 +198,7 @@ function Render-UploaderTemplate {
   param(
     [string]$TemplatePath,
     [string]$OutputPath,
+    [string]$ContextManifestPath = "",
     [string]$ContextJsonPath = "",
     [string]$TelemetryFactsManifestPath = ""
   )
@@ -217,6 +212,8 @@ function Render-UploaderTemplate {
     "__DDTPL_FILTER_PREFIX__" = "false"
     "__DDTPL_GZIP_PAYLOADS__" = "false"
     "__DDTPL_UPLOADER_VERSION__" = "integration-test"
+    "__DDTPL_CONTEXT_MANIFEST_RLOC__" = ""
+    "__DDTPL_CONTEXT_MANIFEST_PATH__" = $ContextManifestPath
     "__DDTPL_CONTEXT_JSON_RLOC__" = ""
     "__DDTPL_CONTEXT_JSON_PATH__" = $ContextJsonPath
     "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__" = ""
@@ -244,6 +241,17 @@ function Read-JsonLog {
     $entries += ($line | ConvertFrom-Json)
   }
   return $entries
+}
+
+# Read only the newly appended mock-server log entries for one scenario.
+function Read-NewLogEntries {
+  param(
+    [int]$StartIndex,
+    [string]$Path = $mockLog
+  )
+  $allEntries = @(Read-JsonLog -Path $Path)
+  if ($StartIndex -ge $allEntries.Count) { return @() }
+  return @($allEntries | Select-Object -Skip $StartIndex)
 }
 
 # Read one JSON document into a deterministic dictionary-oriented shape so the
@@ -330,6 +338,34 @@ function Get-TelemetryPayloadsByPath {
     $payloads += ,(Read-JsonMap -JsonText $body)
   }
   return $payloads
+}
+
+# Read the latest test-event metadata for one CI Visibility test resource from
+# mock-server request logs.
+function Get-CiTestEventMeta {
+  param(
+    [object[]]$Entries,
+    [string]$Resource,
+    [string]$ExpectedBazelPackage = ""
+  )
+
+  for ($entryIndex = $Entries.Count - 1; $entryIndex -ge 0; $entryIndex--) {
+    $entry = $Entries[$entryIndex]
+    if ((Get-JsonValue -Object $entry -Key "path") -ne "/api/v2/citestcycle") { continue }
+    $body = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Get-JsonValue -Object $entry -Key "body_b64")))
+    $payload = Read-JsonMap -JsonText $body
+    foreach ($event in @(Get-JsonValue -Object $payload -Key "events")) {
+      if ((Get-JsonValue -Object $event -Key "type") -ne "test") { continue }
+      $content = Get-JsonValue -Object $event -Key "content"
+      if ((Get-JsonValue -Object $content -Key "resource") -ne $Resource) { continue }
+      $meta = Get-JsonValue -Object $content -Key "meta"
+      if (-not [string]::IsNullOrEmpty($ExpectedBazelPackage)) {
+        if ((Get-JsonValue -Object $meta -Key "bazel.package") -ne $ExpectedBazelPackage) { continue }
+      }
+      return $meta
+    }
+  }
+  return $null
 }
 
 # Read the current transcript and return true when it contains a forbidden
@@ -561,20 +597,20 @@ filegroup(
     if ($settingsPath) { break }
   }
   $externalRoots = @()
-  if (-not $settingsPath) {
-    foreach ($outputBaseRoot in $outputBaseRoots) {
-      $externalRoots += (Join-Path $outputBaseRoot "external")
-      $externalRoots += (Join-Path $outputBaseRoot "execroot/_main/external")
-    }
-    if (-not [string]::IsNullOrWhiteSpace($executionRoot)) {
-      $externalRoots += (Join-Path $executionRoot "external")
-    }
-    $externalRoots = @(
-      $externalRoots |
-      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-      Select-Object -Unique
-    )
+  foreach ($outputBaseRoot in $outputBaseRoots) {
+    $externalRoots += (Join-Path $outputBaseRoot "external")
+    $externalRoots += (Join-Path $outputBaseRoot "execroot/_main/external")
+  }
+  if (-not [string]::IsNullOrWhiteSpace($executionRoot)) {
+    $externalRoots += (Join-Path $executionRoot "external")
+  }
+  $externalRoots = @(
+    $externalRoots |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+  )
 
+  if (-not $settingsPath) {
     $settingsCandidates = @()
     foreach ($externalRoot in $externalRoots) {
       if (-not (Test-Path -LiteralPath $externalRoot -PathType Container)) { continue }
@@ -728,11 +764,166 @@ filegroup(
     }
   }
 
+  $nodejsContextPath = $null
+  $nodejsContextCandidates = @()
+  $nodejsSearchRoots = @()
+  $settingsRepoDir = Split-Path -Parent $toptDir
+  if (-not [string]::IsNullOrWhiteSpace($settingsRepoDir)) {
+    $nodejsSearchRoots += (Split-Path -Parent $settingsRepoDir)
+  }
+  $nodejsSearchRoots += $externalRoots
+  $nodejsSearchRoots = @(
+    $nodejsSearchRoots |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+  )
+  foreach ($externalRoot in $nodejsSearchRoots) {
+    if ([string]::IsNullOrWhiteSpace($externalRoot)) { continue }
+    if (-not (Test-Path -LiteralPath $externalRoot -PathType Container)) { continue }
+    $repoDirs = Get-ChildItem -LiteralPath $externalRoot -Directory -Force -ErrorAction SilentlyContinue
+    foreach ($repoDir in $repoDirs) {
+      $normalized = $repoDir.FullName -replace '\\', '/'
+      if ($normalized -notlike "*test_optimization_data_nodejs*") { continue }
+      $candidatePath = Join-Path $repoDir.FullName ".testoptimization/context.json"
+      if (-not (Test-Path -LiteralPath $candidatePath -PathType Leaf)) { continue }
+      $nodejsContextCandidates += (Resolve-Path -LiteralPath $candidatePath).Path
+    }
+  }
+  $nodejsContextPath = ($nodejsContextCandidates | Sort-Object -Unique | Select-Object -First 1)
+  if ([string]::IsNullOrWhiteSpace($nodejsContextPath)) {
+    $nodejsRootsSample = ($nodejsSearchRoots | Select-Object -First 8) -join ","
+    throw "failed to resolve nodejs context.json path from sync preflight output (search_roots=$nodejsRootsSample)"
+  }
+
   $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"
   $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS = "1"
   $env:DD_TEST_OPTIMIZATION_DEBUG = "1"
   if ([string]::IsNullOrWhiteSpace($env:TEMP)) { $env:TEMP = $tempDir }
   if ([string]::IsNullOrWhiteSpace($env:TMP)) { $env:TMP = $tempDir }
+  $sharedTestlogsDir = $env:TESTLOGS_DIR
+
+  function Initialize-WindowsCiTestOutputs {
+    param(
+      [string]$Root
+    )
+
+    $testsDir = Join-Path $Root "payloads/tests"
+    $coverageDir = Join-Path $Root "payloads/coverage"
+    New-Item -ItemType Directory -Force -Path $testsDir, $coverageDir | Out-Null
+    Copy-Item -LiteralPath $snapshotFile -Destination (Join-Path $testsDir "span_events_windows.json") -Force
+    '{"mock_mode":"ok"}' | Set-Content -LiteralPath (Join-Path $coverageDir "coverage_windows.json") -Encoding UTF8
+  }
+
+  $multiContextManifest = Join-Path $tempRoot "multi_context_manifest.txt"
+  [System.IO.File]::WriteAllText(
+    $multiContextManifest,
+    "test_optimization_data`t$contextPath`t`n" + "test_optimization_data_nodejs`t$nodejsContextPath`t`n",
+    (New-Object System.Text.UTF8Encoding($false))
+  )
+
+  # Scenario: when multiple bundled contexts are present, the uploader must
+  # select the context that matches the payload-side repo selector.
+  $multiContextTestlogsDir = Join-Path $tempRoot "bazel-testlogs-multi-context"
+  $multiContextOutputs = Join-Path $multiContextTestlogsDir "multi_context/pkg/target/test.outputs"
+  Initialize-WindowsCiTestOutputs -Root $multiContextOutputs
+  @'
+{
+  "bazel.package": "//src/nodejs-project",
+  "bazel.target": "//src/nodejs-project:hello_test",
+  "bazel.test_optimization.repo_name": "test_optimization_data_nodejs",
+  "bazel.test_optimization.service_name": "mock-service-nodejs",
+  "bazel.test_optimization.runtime_name": "nodejs"
+}
+'@ | Set-Content -LiteralPath (Join-Path $multiContextOutputs "bazel_target_metadata.json") -Encoding UTF8
+
+  Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextManifestPath $multiContextManifest -ContextJsonPath $contextPath -TelemetryFactsManifestPath $telemetryFactsManifest
+
+  $multiContextTranscript = Join-Path $tempRoot "multi_context.transcript.txt"
+  $multiContextStart = @(Read-JsonLog -Path $mockLog).Count
+  $env:TESTLOGS_DIR = $multiContextTestlogsDir
+  $env:DD_API_KEY = [string]::new("0", 32)
+  $env:DD_SITE = "datadoghq.com"
+  $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TEST_OPTIMIZATION_AGENT_URL -ErrorAction SilentlyContinue
+  $multiContextExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs -TranscriptPath $multiContextTranscript
+  if ($multiContextExitCode -ne 0) {
+    throw "multi-context uploader execution failed with exit code $multiContextExitCode"
+  }
+
+  $multiContextEntries = Read-NewLogEntries -Path $mockLog -StartIndex $multiContextStart
+  $multiContextMeta = Get-CiTestEventMeta -Entries $multiContextEntries -Resource "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest" -ExpectedBazelPackage "//src/nodejs-project"
+  if ($null -eq $multiContextMeta) {
+    throw "missing CI test event after multi-context uploader execution"
+  }
+  foreach ($entry in @(
+    @{ Key = "bazel.package"; Value = "//src/nodejs-project" },
+    @{ Key = "bazel.target"; Value = "//src/nodejs-project:hello_test" },
+    @{ Key = "bazel.test_optimization.repo_name"; Value = "test_optimization_data_nodejs" },
+    @{ Key = "bazel.test_optimization.service_name"; Value = "mock-service-nodejs" },
+    @{ Key = "bazel.test_optimization.runtime_name"; Value = "nodejs" },
+    @{ Key = "runtime.name"; Value = "nodejs" },
+    @{ Key = "runtime.version"; Value = "1.2.3" },
+    @{ Key = "service.name"; Value = "mock-service-nodejs" }
+  )) {
+    if ((Get-JsonValue -Object $multiContextMeta -Key $entry.Key) -ne $entry.Value) {
+      throw "multi-context uploader tag mismatch for $($entry.Key): expected '$($entry.Value)' but saw '$((Get-JsonValue -Object $multiContextMeta -Key $entry.Key))'"
+    }
+  }
+  if ((Get-JsonValue -Object $multiContextMeta -Key "runtime.name") -eq "go") {
+    throw "multi-context uploader reused the go runtime tag for a nodejs payload"
+  }
+  if ((Get-JsonValue -Object $multiContextMeta -Key "service.name") -eq "mock-service") {
+    throw "multi-context uploader reused the go service tag for a nodejs payload"
+  }
+
+  # Scenario: when no bundled context matches the payload selector, uploader
+  # must preserve Bazel sidecar tags and skip context-tag enrichment.
+  $multiContextMissTestlogsDir = Join-Path $tempRoot "bazel-testlogs-multi-context-missing"
+  $multiContextMissOutputs = Join-Path $multiContextMissTestlogsDir "multi_context_missing/pkg/target/test.outputs"
+  Initialize-WindowsCiTestOutputs -Root $multiContextMissOutputs
+  @'
+{
+  "bazel.package": "//src/python-project",
+  "bazel.target": "//src/python-project:hello_test",
+  "bazel.test_optimization.repo_name": "missing_runtime_repo"
+}
+'@ | Set-Content -LiteralPath (Join-Path $multiContextMissOutputs "bazel_target_metadata.json") -Encoding UTF8
+
+  $multiContextMissTranscript = Join-Path $tempRoot "multi_context_missing.transcript.txt"
+  $multiContextMissStart = @(Read-JsonLog -Path $mockLog).Count
+  $env:TESTLOGS_DIR = $multiContextMissTestlogsDir
+  $multiContextMissExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $ForwardArgs -TranscriptPath $multiContextMissTranscript
+  if ($multiContextMissExitCode -ne 0) {
+    throw "multi-context uploader with missing repo selector failed with exit code $multiContextMissExitCode"
+  }
+  if (-not (Test-TranscriptContains -TranscriptPath $multiContextMissTranscript -ForbiddenText "no bundled context matched repo 'missing_runtime_repo'")) {
+    throw "missing expected warning for unmatched multi-context payload"
+  }
+
+  $multiContextMissEntries = Read-NewLogEntries -Path $mockLog -StartIndex $multiContextMissStart
+  $multiContextMissMeta = Get-CiTestEventMeta -Entries $multiContextMissEntries -Resource "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest" -ExpectedBazelPackage "//src/python-project"
+  if ($null -eq $multiContextMissMeta) {
+    throw "missing CI test event after unmatched multi-context uploader execution"
+  }
+  foreach ($entry in @(
+    @{ Key = "bazel.package"; Value = "//src/python-project" },
+    @{ Key = "bazel.target"; Value = "//src/python-project:hello_test" },
+    @{ Key = "bazel.test_optimization.repo_name"; Value = "missing_runtime_repo" }
+  )) {
+    if ((Get-JsonValue -Object $multiContextMissMeta -Key $entry.Key) -ne $entry.Value) {
+      throw "unmatched multi-context Bazel tag mismatch for $($entry.Key): expected '$($entry.Value)' but saw '$((Get-JsonValue -Object $multiContextMissMeta -Key $entry.Key))'"
+    }
+  }
+  if ((Get-JsonValue -Object $multiContextMissMeta -Key "runtime.name") -eq "nodejs") {
+    throw "unmatched multi-context run unexpectedly injected the nodejs runtime.name tag"
+  }
+  if ((Get-JsonValue -Object $multiContextMissMeta -Key "runtime.version") -eq "1.2.3") {
+    throw "unmatched multi-context run unexpectedly injected the nodejs runtime.version tag"
+  }
+  if ((Get-JsonValue -Object $multiContextMissMeta -Key "service.name") -eq "mock-service-nodejs") {
+    throw "unmatched multi-context run unexpectedly injected the nodejs service.name tag"
+  }
+  $env:TESTLOGS_DIR = $sharedTestlogsDir
 
   function Initialize-WindowsTelemetryOutputs {
     param(
@@ -816,13 +1007,6 @@ filegroup(
 $anchorPayload
 }
 "@ | Set-Content -LiteralPath (Join-Path $telemetryDir "telemetry_${RuntimeIdPrefix}_020.json") -Encoding UTF8
-  }
-
-  function Read-NewLogEntries {
-    param([int]$StartIndex)
-    $allEntries = @(Read-JsonLog -Path $mockLog)
-    if ($StartIndex -ge $allEntries.Count) { return @() }
-    return @($allEntries | Select-Object -Skip $StartIndex)
   }
 
   function Assert-TopTelemetryBatch {
@@ -925,7 +1109,7 @@ $anchorPayload
   if ($mismatchExitCode -ne 0) {
     throw "agentless uploader execution failed with exit code $mismatchExitCode"
   }
-  $mismatchEntries = Read-NewLogEntries -StartIndex $mismatchStart
+  $mismatchEntries = Read-NewLogEntries -Path $mockLog -StartIndex $mismatchStart
   $mismatchTelemetry = @(Get-TelemetryPayloadsByPath -Entries $mismatchEntries -Path "/api/v2/apmtelemetry")
   if ($mismatchTelemetry.Count -ne 2) {
     throw "expected 2 telemetry uploads for the env-mismatch scenario, saw $($mismatchTelemetry.Count)"
@@ -1019,7 +1203,7 @@ $anchorPayload
   if ($emptyExitCode -ne 0) {
     throw "evp uploader execution failed with exit code $emptyExitCode"
   }
-  $emptyEntries = Read-NewLogEntries -StartIndex $emptyStart
+  $emptyEntries = Read-NewLogEntries -Path $mockLog -StartIndex $emptyStart
   $emptyTelemetry = @(
     Get-TelemetryPayloadsByPath -Entries $emptyEntries -Path "/telemetry/proxy/api/v2/apmtelemetry" |
       Where-Object {
@@ -1109,7 +1293,7 @@ $anchorPayload
   if ($noProviderExitCode -ne 0) {
     throw "no-provider uploader execution failed with exit code $noProviderExitCode"
   }
-  $noProviderEntries = Read-NewLogEntries -StartIndex $noProviderStart
+  $noProviderEntries = Read-NewLogEntries -Path $mockLog -StartIndex $noProviderStart
   $noProviderTelemetry = @(
     Get-TelemetryPayloadsByPath -Entries $noProviderEntries -Path "/api/v2/apmtelemetry" |
       Where-Object {

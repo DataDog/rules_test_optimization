@@ -20,6 +20,24 @@ is_dict = _is_dict
 is_list = _is_list
 is_string = _is_string
 
+_WRAPPER_ONLY_ATTRS = [
+    "flaky",
+    "local",
+    "shard_count",
+    "size",
+    "tags",
+    "timeout",
+    "visibility",
+]
+
+_SHARED_TEST_ATTRS = [
+    "compatible_with",
+    "exec_compatible_with",
+    "restricted_to",
+    "target_compatible_with",
+    "testonly",
+]
+
 def is_select(value):
     """Return True when value is a configurable `select(...)` expression."""
     return type(value) == "select"
@@ -75,6 +93,28 @@ def append_data_dependencies(user_data, extra_labels):
     out = list(normalized)
     out.extend(labels)
     return out
+
+def split_test_wrapper_kwargs(kwargs):
+    """Split macro kwargs between a hidden raw test and its public wrapper.
+
+    The raw target keeps language-rule attrs plus Datadog env/data wiring. The
+    wrapper receives only Bazel test attrs that belong on the public label, and
+    the shared compatibility/testonly attrs that must stay visible on both.
+    """
+    wrapper_kwargs = {}
+    raw_passthrough = {}
+
+    for key in _WRAPPER_ONLY_ATTRS:
+        if key in kwargs:
+            wrapper_kwargs[key] = kwargs.pop(key)
+
+    for key in _SHARED_TEST_ATTRS:
+        if key in kwargs:
+            value = kwargs.pop(key)
+            wrapper_kwargs[key] = value
+            raw_passthrough[key] = value
+
+    return wrapper_kwargs, raw_passthrough
 
 def merge_user_env(user_env, required_env, macro_name = "dd_topt_macro"):
     """Merge caller env with required env keys, supporting `select(...)` values."""
