@@ -26,9 +26,9 @@ load(
     "topt_bazel_metadata",
     "topt_test_wrapper",
 )
-load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 load("@datadog_ddtrace//:requirements.bzl", _ddtrace_requirement = "requirement")
 load("@rules_python//python:py_test.bzl", _default_py_test = "py_test")
+load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
