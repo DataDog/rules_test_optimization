@@ -4,8 +4,19 @@ module(
 )
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "rules_python", version = "0.40.0")
+bazel_dep(name = "rules_python", version = "1.7.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+# Managed ddtrace dependency — customers get ddtrace automatically when using
+# dd_topt_py_test without adding it to their own requirements files.
+# Supports Python 3.12; extend by adding more pip.parse calls for other versions.
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    hub_name = "datadog_ddtrace",
+    python_version = "3.12",
+    requirements_lock = "//:ddtrace_requirements_lock.txt",
+)
+use_repo(pip, "datadog_ddtrace")
 
 # Dev-only stub repository so companion-module tests can resolve
 # @test_optimization_data labels without network access.

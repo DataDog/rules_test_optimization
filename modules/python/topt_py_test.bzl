@@ -27,6 +27,7 @@ load(
     "topt_test_wrapper",
 )
 load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
+load("@datadog_ddtrace//:requirements.bzl", _ddtrace_requirement = "requirement")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -98,9 +99,8 @@ def dd_topt_py_test(
     if not _is_dict(_python):
         _python = {}
 
-    deps_labels = kwargs.get("deps")
-    if deps_labels == None:
-        deps_labels = []
+    user_deps = kwargs.pop("deps", None)
+    deps_labels = user_deps if user_deps != None else []
     imports_candidates = kwargs.get("imports")
     if imports_candidates == None:
         imports_candidates = []
@@ -189,10 +189,15 @@ def dd_topt_py_test(
     for key, value in raw_passthrough.items():
         kwargs[key] = value
 
+    # Inject the companion-managed ddtrace so customers don't have to add it
+    # to their own requirements files.
+    test_deps = _append_data_dependencies(user_deps, [_ddtrace_requirement("ddtrace")])
+
     py_test_rule(
         name = raw_name,
         data = data,
         env = env,
+        deps = test_deps,
         **kwargs
     )
 
