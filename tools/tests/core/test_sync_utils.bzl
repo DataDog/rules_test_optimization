@@ -16,9 +16,11 @@ load(
     "clone_payload_with_detached_attributes_for_tests",
     "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
+    "collect_flaky_tests_modules_for_tests",
     "collect_known_tests_modules_for_tests",
     "collect_test_management_modules_for_tests",
     "compute_dd_api_base_for_tests",
+    "count_flaky_tests_response_tests_for_tests",
     "count_known_tests_response_tests_for_tests",
     "count_test_management_response_tests_for_tests",
     "decode_json_object_or_fail_for_tests",
@@ -46,6 +48,7 @@ load(
     "runtime_module_path_from_environ_for_tests",
     "sanitize_repository_url_for_tests",
     "set_context_tag_from_env_for_tests",
+    "transform_flaky_tests_response_for_tests",
 )
 load(
     "//tools/tests:example_stub_repo.bzl",
@@ -1458,6 +1461,135 @@ def _telemetry_response_counts_test(ctx):
     asserts.equals(env, 2, count_test_management_response_tests_for_tests(test_management))
     return unittest.end(env)
 
+def _count_flaky_tests_response_tests_test(ctx):
+    """Validate response test counter for flaky-tests array-based payload."""
+    env = unittest.begin(ctx)
+
+    # Normal array-based response
+    flaky = {
+        "data": [
+            {"attributes": {"name": "t1", "suite": "s1", "configurations": {"test": {"bundle": "mod"}}}},
+            {"attributes": {"name": "t2", "suite": "s1", "configurations": {"test": {"bundle": "mod"}}}},
+            {"attributes": {"name": "t3", "suite": "s2", "configurations": {"test": {"bundle": "mod2"}}}},
+        ],
+    }
+    asserts.equals(env, 3, count_flaky_tests_response_tests_for_tests(flaky))
+
+    # Empty array
+    asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({"data": []}))
+
+    # data is not an array (e.g. after transform)
+    asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({"data": {"attributes": {}}}))
+
+    # Missing data key
+    asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({}))
+    return unittest.end(env)
+
+def _transform_flaky_tests_response_test(ctx):
+    """Validate transformation of array-based flaky response to module-indexed structure."""
+    env = unittest.begin(ctx)
+
+    # Normal transformation
+    raw = {
+        "data": [
+            {"attributes": {"name": "test_a", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
+            {"attributes": {"name": "test_b", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
+            {"attributes": {"name": "test_c", "suite": "suite_two", "configurations": {"test": {"bundle": "module_b"}}}},
+        ],
+    }
+    result = transform_flaky_tests_response_for_tests(raw)
+    tests = result["data"]["attributes"]["tests"]
+    asserts.equals(env, 2, len(tests))
+    asserts.equals(env, ["test_a", "test_b"], tests["module_a"]["suite_one"])
+    asserts.equals(env, ["test_c"], tests["module_b"]["suite_two"])
+
+    # Empty array
+    result_empty = transform_flaky_tests_response_for_tests({"data": []})
+    asserts.equals(env, {}, result_empty["data"]["attributes"]["tests"])
+
+    # data is not an array
+    result_bad = transform_flaky_tests_response_for_tests({"data": "not-an-array"})
+    asserts.equals(env, {}, result_bad["data"]["attributes"]["tests"])
+
+    # Entry missing configurations
+    raw_missing = {
+        "data": [
+            {"attributes": {"name": "t1", "suite": "s1"}},
+        ],
+    }
+    result_missing = transform_flaky_tests_response_for_tests(raw_missing)
+    asserts.equals(env, {}, result_missing["data"]["attributes"]["tests"])
+
+    # Entry with empty bundle
+    raw_empty_bundle = {
+        "data": [
+            {"attributes": {"name": "t1", "suite": "s1", "configurations": {"test": {"bundle": ""}}}},
+        ],
+    }
+    result_empty_bundle = transform_flaky_tests_response_for_tests(raw_empty_bundle)
+    asserts.equals(env, {}, result_empty_bundle["data"]["attributes"]["tests"])
+    return unittest.end(env)
+
+def _collect_flaky_tests_modules_defensive_shape_test(ctx):
+    """Validate flaky-tests module collection tolerates malformed nested shapes."""
+    env = unittest.begin(ctx)
+    fake_ctx = _fake_read_ctx({
+        "flaky_tests.json": json.encode({
+            "data": {
+                "attributes": {
+                    "tests": {
+                        "module_a": {"suite": ["test"]},
+                        "module_b": "not-a-map",
+                    },
+                },
+            },
+        }),
+        "flaky_tests_bad_data.json": json.encode({
+            "data": [],
+        }),
+        "flaky_tests_bad_attrs.json": json.encode({
+            "data": {
+                "attributes": "not-a-map",
+            },
+        }),
+    })
+    asserts.equals(
+        env,
+        ["module_a"],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_bad_data.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_bad_attrs.json"),
+    )
+    return unittest.end(env)
+
+def _module_label_map_flaky_modules_test(ctx):
+    """Validate _build_module_label_map includes flaky_modules in the union."""
+    env = unittest.begin(ctx)
+
+    # flaky_modules adds new modules to the map
+    label_map = build_module_label_map_for_tests(["mod_a"], ["mod_b"], ["mod_c"])
+    asserts.equals(env, 3, len(label_map))
+    asserts.true(env, label_map.get("mod_a") != None)
+    asserts.true(env, label_map.get("mod_b") != None)
+    asserts.true(env, label_map.get("mod_c") != None)
+
+    # Duplicate modules across all three lists are deduplicated
+    label_map2 = build_module_label_map_for_tests(["mod_a"], ["mod_a"], ["mod_a"])
+    asserts.equals(env, 1, len(label_map2))
+
+    # flaky_modules=None preserves backward compat
+    label_map3 = build_module_label_map_for_tests(["mod_a"], ["mod_b"])
+    asserts.equals(env, 2, len(label_map3))
+    return unittest.end(env)
+
 def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
     """Validate module runfiles helper returns raw payload files for the selector."""
     env = unittest.begin(ctx)
@@ -1465,6 +1597,7 @@ def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
     asserts.true(env, "files = [ctx.file.settings, ctx.file.manifest]" in default_content)
     asserts.true(env, "files.append(kt)" in default_content)
     asserts.true(env, "files.append(tm)" in default_content)
+    asserts.true(env, "files.append(ft)" in default_content)
     asserts.true(env, "DefaultInfo(files = depset(files), runfiles = ctx.runfiles(files = files))" in default_content)
 
     custom_content = render_module_runfiles_bzl_for_tests("custom_repo", "custom_topt")
@@ -1745,6 +1878,7 @@ dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
 collect_known_tests_modules_defensive_shape_test = unittest.make(_collect_known_tests_modules_defensive_shape_test)
 collect_test_management_modules_defensive_shape_test = unittest.make(_collect_test_management_modules_defensive_shape_test)
+collect_flaky_tests_modules_defensive_shape_test = unittest.make(_collect_flaky_tests_modules_defensive_shape_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 export_bzl_escaping_test = unittest.make(_export_bzl_escaping_test)
 fnv1a_symbol_distinguishes_common_symbols_test = unittest.make(_fnv1a_symbol_distinguishes_common_symbols_test)
@@ -1764,6 +1898,9 @@ build_context_tags_test = unittest.make(_build_context_tags_test)
 settings_response_tags_test = unittest.make(_settings_response_tags_test)
 sync_success_metric_tags_parity_test = unittest.make(_sync_success_metric_tags_parity_test)
 telemetry_response_counts_test = unittest.make(_telemetry_response_counts_test)
+count_flaky_tests_response_tests_test = unittest.make(_count_flaky_tests_response_tests_test)
+transform_flaky_tests_response_test = unittest.make(_transform_flaky_tests_response_test)
+module_label_map_flaky_modules_test = unittest.make(_module_label_map_flaky_modules_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 render_module_runfiles_bzl_escaping_test = unittest.make(_render_module_runfiles_bzl_escaping_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)

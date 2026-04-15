@@ -51,8 +51,10 @@ load(
     "collect_env_ctx_wrapper_test",
     "collect_env_from_environ_empty_test",
     "collect_env_from_environ_provider_mapping_test",
+    "collect_flaky_tests_modules_defensive_shape_test",
     "collect_known_tests_modules_defensive_shape_test",
     "collect_test_management_modules_defensive_shape_test",
+    "count_flaky_tests_response_tests_test",
     "dd_site_invalid_failure_test",
     "dd_site_invalid_target_rule",
     "dd_site_normalization_test",
@@ -84,6 +86,7 @@ load(
     "load_github_event_payload_ctx_test",
     "module_label_map_collision_test",
     "module_label_map_empty_inputs_test",
+    "module_label_map_flaky_modules_test",
     "normalize_out_dir_absolute_failure_test",
     "normalize_out_dir_absolute_target_rule",
     "normalize_out_dir_control_chars_failure_test",
@@ -119,6 +122,7 @@ load(
     "sync_success_metric_tags_parity_test",
     "telemetry_facts_document_test",
     "telemetry_response_counts_test",
+    "transform_flaky_tests_response_test",
 )
 load(
     "//tools/tests/core:test_topt_macro_utils.bzl",
@@ -233,6 +237,12 @@ module_label_map_collision_test(
 
 module_label_map_empty_inputs_test(
     name = "module_label_map_empty_inputs_test",
+    size = "small",
+    timeout = "short",
+)
+
+module_label_map_flaky_modules_test(
+    name = "module_label_map_flaky_modules_test",
     size = "small",
     timeout = "short",
 )
@@ -405,6 +415,12 @@ collect_known_tests_modules_defensive_shape_test(
 
 collect_test_management_modules_defensive_shape_test(
     name = "collect_test_management_modules_defensive_shape_test",
+    size = "small",
+    timeout = "short",
+)
+
+collect_flaky_tests_modules_defensive_shape_test(
+    name = "collect_flaky_tests_modules_defensive_shape_test",
     size = "small",
     timeout = "short",
 )
@@ -697,6 +713,18 @@ sync_success_metric_tags_parity_test(
 
 telemetry_response_counts_test(
     name = "telemetry_response_counts_test",
+    size = "small",
+    timeout = "short",
+)
+
+count_flaky_tests_response_tests_test(
+    name = "count_flaky_tests_response_tests_test",
+    size = "small",
+    timeout = "short",
+)
+
+transform_flaky_tests_response_test(
+    name = "transform_flaky_tests_response_test",
     size = "small",
     timeout = "short",
 )
@@ -1001,9 +1029,12 @@ test_suite(
         ":collect_env_ctx_wrapper_test",
         ":collect_env_from_environ_empty_test",
         ":collect_env_from_environ_provider_mapping_test",
+        ":collect_flaky_tests_modules_defensive_shape_test",
         ":collect_known_tests_modules_defensive_shape_test",
         ":collect_test_management_modules_defensive_shape_test",
         ":compute_repo_names_test",
+        ":count_flaky_tests_response_tests_test",
+        ":transform_flaky_tests_response_test",
         ":compute_service_keys_dedups_collisions_test",
         ":compute_service_keys_edge_cases_test",
         ":contains_parent_segment_test",
@@ -1041,6 +1072,7 @@ test_suite(
         ":merge_optional_env_defaults_select_passthrough_test",
         ":module_label_map_collision_test",
         ":module_label_map_empty_inputs_test",
+        ":module_label_map_flaky_modules_test",
         ":normalize_out_dir_absolute_failure_test",
         ":normalize_out_dir_control_chars_failure_test",
         ":normalize_out_dir_empty_failure_test",
