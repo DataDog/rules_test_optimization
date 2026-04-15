@@ -262,6 +262,15 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Fetch main history for patch verifier
+        shell: bash
+        run: |
+          # actions/checkout with the PR ref does not guarantee that commits
+          # reachable only from main are present in the local object store.
+          # The patch-series verifier archives the recorded base commit
+          # directly, so fetch main explicitly before running it.
+          git fetch --no-tags origin main
+
       - name: Run vendored rules_go patch smoke coverage
         shell: bash
         run: ./tools/dev/run_rules_go_patch_smoke.sh
