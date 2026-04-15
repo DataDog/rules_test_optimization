@@ -28,6 +28,7 @@ load(
 )
 load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 load("@datadog_ddtrace//:requirements.bzl", _ddtrace_requirement = "requirement")
+load("@rules_python//python:py_test.bzl", _default_py_test = "py_test")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -38,10 +39,6 @@ _merge_user_env = merge_user_env
 def _resolve_topt_service_key(service_entries, topt_service):
     return resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_py_test")
 
-def _validate_py_test_rule_or_fail(py_test_rule):
-    if py_test_rule == None:
-        fail_with_prefix("dd_topt_py_test", "you must pass py_test_rule = py_test from native or rules_python")
-
 def _select_service_entry_or_fail(topt_data, topt_service):
     return select_service_entry_or_fail(topt_data, topt_service, macro_name = "dd_topt_py_test")
 
@@ -49,7 +46,6 @@ def _select_service_entry_or_fail(topt_data, topt_service):
 service_mapping_entries_for_tests = _service_mapping_entries
 resolve_topt_service_key_for_tests = _resolve_topt_service_key
 normalize_user_data_for_tests = _normalize_user_data
-validate_py_test_rule_for_tests = _validate_py_test_rule_or_fail
 select_service_entry_for_tests = _select_service_entry_or_fail
 
 def _build_module_labels(sync_repo_name, labels):
@@ -76,14 +72,15 @@ def _has_non_empty_value(value):
 def dd_topt_py_test(
         name,
         topt_data,
-        py_test_rule,
+        py_test_rule = None,
         topt_service = None,
         module_label_override = None,
         module_identifier = None,
         inject_ddtrace = True,
         **kwargs):
     """Define a Python test with Datadog Test Optimization support."""
-    _validate_py_test_rule_or_fail(py_test_rule)
+    if py_test_rule == None:
+        py_test_rule = _default_py_test
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)

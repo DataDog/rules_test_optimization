@@ -6,7 +6,6 @@ load(
     "dd_topt_py_test",
     "resolve_topt_service_key_for_tests",
     "select_service_entry_for_tests",
-    "validate_py_test_rule_for_tests",
 )
 
 ToptPyMacroCaptureInfo = provider(
@@ -350,10 +349,6 @@ def _resolve_topt_service_key_unknown_target_impl(_ctx):
     )
     return []
 
-def _validate_py_test_rule_missing_target_impl(_ctx):
-    validate_py_test_rule_for_tests(None)
-    return []
-
 def _select_service_entry_malformed_topt_data_target_impl(_ctx):
     select_service_entry_for_tests("bad-shape", None)
     return []
@@ -368,10 +363,6 @@ resolve_topt_service_key_missing_target_rule = rule(
 
 resolve_topt_service_key_unknown_target_rule = rule(
     implementation = _resolve_topt_service_key_unknown_target_impl,
-)
-
-validate_py_test_rule_missing_target_rule = rule(
-    implementation = _validate_py_test_rule_missing_target_impl,
 )
 
 select_service_entry_malformed_topt_data_target_rule = rule(
@@ -392,11 +383,6 @@ def _resolve_topt_service_key_unknown_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "topt_service 'java-service' not found")
     asserts.expect_failure(env, "py_service, ruby_service")
-    return analysistest.end(env)
-
-def _validate_py_test_rule_missing_failure_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "you must pass py_test_rule")
     return analysistest.end(env)
 
 def _select_service_entry_malformed_topt_data_failure_test_impl(ctx):
@@ -433,10 +419,6 @@ resolve_topt_service_key_missing_failure_test = analysistest.make(
 )
 resolve_topt_service_key_unknown_failure_test = analysistest.make(
     _resolve_topt_service_key_unknown_failure_test_impl,
-    expect_failure = True,
-)
-validate_py_test_rule_missing_failure_test = analysistest.make(
-    _validate_py_test_rule_missing_failure_test_impl,
     expect_failure = True,
 )
 select_service_entry_malformed_topt_data_failure_test = analysistest.make(
