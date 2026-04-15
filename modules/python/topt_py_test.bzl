@@ -80,6 +80,7 @@ def dd_topt_py_test(
         topt_service = None,
         module_label_override = None,
         module_identifier = None,
+        inject_ddtrace = True,
         **kwargs):
     """Define a Python test with Datadog Test Optimization support."""
     _validate_py_test_rule_or_fail(py_test_rule)
@@ -189,9 +190,12 @@ def dd_topt_py_test(
     for key, value in raw_passthrough.items():
         kwargs[key] = value
 
-    # Inject the companion-managed ddtrace so customers don't have to add it
-    # to their own requirements files.
-    test_deps = _append_data_dependencies(user_deps, [_ddtrace_requirement("ddtrace")])
+    # Inject the companion-managed ddtrace unless the caller opts out (e.g.
+    # because they manage ddtrace themselves or use a different Python version).
+    if inject_ddtrace:
+        test_deps = _append_data_dependencies(user_deps, [_ddtrace_requirement("ddtrace")])
+    else:
+        test_deps = user_deps
 
     py_test_rule(
         name = raw_name,

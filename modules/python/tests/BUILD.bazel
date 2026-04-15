@@ -4,8 +4,12 @@ load(
     "py_macro_env_none_wiring_test",
     "py_macro_explicit_service_target",
     "py_macro_explicit_service_wiring_test",
+    "py_macro_inject_ddtrace_target",
+    "py_macro_inject_ddtrace_wiring_test",
     "py_macro_multi_service_target",
     "py_macro_multi_service_wiring_test",
+    "py_macro_no_inject_ddtrace_target",
+    "py_macro_no_inject_ddtrace_wiring_test",
     "py_macro_public_wrapper_test",
     "py_macro_select_inputs_target",
     "py_macro_select_inputs_wiring_test",
@@ -221,6 +225,26 @@ selector_override_miss_failure_test(
     target_under_test = ":selector_override_miss_failure_target",
 )
 
+py_macro_inject_ddtrace_target(
+    name = "py_macro_inject_ddtrace_target",
+    tags = ["manual"],
+)
+
+py_macro_inject_ddtrace_wiring_test(
+    name = "py_macro_inject_ddtrace_wiring_test",
+    target_under_test = ":py_macro_inject_ddtrace_target__raw_python_test",
+)
+
+py_macro_no_inject_ddtrace_target(
+    name = "py_macro_no_inject_ddtrace_target",
+    tags = ["manual"],
+)
+
+py_macro_no_inject_ddtrace_wiring_test(
+    name = "py_macro_no_inject_ddtrace_wiring_test",
+    target_under_test = ":py_macro_no_inject_ddtrace_target__raw_python_test",
+)
+
 py_macro_single_service_target(
     name = "py_macro_single_service_target",
     tags = ["manual"],
@@ -379,7 +403,9 @@ test_suite(
         ":normalize_user_data_invalid_type_failure_test",
         ":py_macro_env_none_wiring_test",
         ":py_macro_explicit_service_wiring_test",
+        ":py_macro_inject_ddtrace_wiring_test",
         ":py_macro_multi_service_wiring_test",
+        ":py_macro_no_inject_ddtrace_wiring_test",
         ":py_macro_select_inputs_wiring_test",
         ":py_macro_single_service_wiring_test",
         ":py_stub_includes_manifest_in_files_test",
