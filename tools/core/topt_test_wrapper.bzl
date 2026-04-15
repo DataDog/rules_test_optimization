@@ -84,7 +84,18 @@ if not "%%META_BASENAME%%"=="" if not "%%UNDECLARED_DIR%%"=="" (
   if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
 )
 
+rem rules_dotnet uses batch launchers on Windows, which must be invoked via
+rem CALL so control returns here and Bazel sees the real exit code.
+for %%%%I in ("%%ACTUAL%%") do set "ACTUAL_EXT=%%%%~xI"
+if /I "%%ACTUAL_EXT%%"==".bat" goto :run_batch
+if /I "%%ACTUAL_EXT%%"==".cmd" goto :run_batch
+
 "%%ACTUAL%%" %%*
+set "EXITCODE=%%ERRORLEVEL%%"
+exit /b %%EXITCODE%%
+
+:run_batch
+call "%%ACTUAL%%" %%*
 set "EXITCODE=%%ERRORLEVEL%%"
 exit /b %%EXITCODE%%
 """ % (
