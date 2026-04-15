@@ -36,10 +36,6 @@ def _select_wrapper_output_name(label_name, executable_basename, is_windows):
         return label_name + ".bat"
     return label_name
 
-def _wrapped_actual_output_name(label_name, executable_basename):
-    """Return the sibling executable name materialized next to the wrapper."""
-    return label_name + "__wrapped_" + executable_basename
-
 def _unix_wrapper_content(actual_filename):
     """Render the Unix launcher used by wrapped non-Go test targets."""
     return """#!/usr/bin/env bash
@@ -98,20 +94,19 @@ def _topt_test_wrapper_impl(ctx):
     dep_run_environment = _dep_run_environment_info(ctx.attr.actual)
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
-    actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
-
-    # Materialize the raw executable next to the wrapper so the launcher does
-    # not depend on configuration-specific execroot lookup at runtime.
-    ctx.actions.symlink(output = actual_out, target_file = dep_exe)
     ctx.actions.write(
         output = out,
-        content = _windows_wrapper_content(actual_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename),
+        # The wrapped target already emits its executable beside the public
+        # wrapper output. Reusing that basename keeps platform-specific sibling
+        # launch assets, such as rules_python zip files on Windows, aligned
+        # with the executable name they expect.
+        content = _windows_wrapper_content(dep_exe.basename) if is_windows else _unix_wrapper_content(dep_exe.basename),
         is_executable = True,
     )
 
     providers = [DefaultInfo(
-        files = depset([out, actual_out]),
-        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, ctx.file.metadata])),
+        files = depset([out]),
+        runfiles = dep_runfiles.merge(ctx.runfiles(files = [ctx.file.metadata])),
         executable = out,
     )]
     if dep_run_environment:

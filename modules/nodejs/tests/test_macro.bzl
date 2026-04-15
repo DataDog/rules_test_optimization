@@ -286,15 +286,8 @@ def _nodejs_macro_public_wrapper_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
-    asserts.equals(env, 2, len(files))
+    asserts.equals(env, 1, len(files))
     asserts.true(env, _has_file_basename(files, "nodejs_macro_single_service_target"))
-    asserts.true(
-        env,
-        _has_file_basename(
-            files,
-            "nodejs_macro_single_service_target__wrapped_nodejs_macro_single_service_target__raw_nodejs_test.sh",
-        ),
-    )
     run_env = target[RunEnvironmentInfo].environment
     manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
