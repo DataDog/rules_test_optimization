@@ -1,5 +1,5 @@
 # Unit tests for uploader template rendering (placeholder and brace handling).
-load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_uploader.bzl",
     "apparent_repo_key_from_label_text_or_fail_for_tests",
@@ -12,6 +12,7 @@ load(
     "is_gitlab_section_header_line_for_tests",
     "is_gitlab_section_header_pattern_for_tests",
     "is_gitlab_section_header_pattern_powershell_for_tests",
+    "legacy_single_context_entry_or_fail_for_tests",
     "render_template_for_tests",
     "resolve_runfile_manifest_bash_for_tests",
     "resolve_runfile_manifest_powershell_for_tests",
@@ -20,6 +21,26 @@ load(
     "strip_workspace_prefix_bash_for_tests",
     "strip_workspace_prefix_powershell_for_tests",
     "trim_ascii_whitespace_for_tests",
+)
+
+LegacyContextCaptureInfo = provider(
+    doc = "Captured legacy single-context fallback entries.",
+    fields = {
+        "entries": "Context entries returned by the uploader helper.",
+    },
+)
+
+def _legacy_context_capture_impl(ctx):
+    """Capture legacy single-context fallback entries from raw data files."""
+    return [LegacyContextCaptureInfo(
+        entries = legacy_single_context_entry_or_fail_for_tests(ctx.files.data),
+    )]
+
+legacy_context_capture_rule = rule(
+    implementation = _legacy_context_capture_impl,
+    attrs = {
+        "data": attr.label_list(allow_files = True),
+    },
 )
 
 def _apparent_repo_key_parsing_test(ctx):
@@ -44,6 +65,38 @@ def _apparent_repo_key_parsing_test(ctx):
     return unittest.end(env)
 
 apparent_repo_key_parsing_test = unittest.make(_apparent_repo_key_parsing_test)
+
+def _legacy_context_direct_file_fallback_test_impl(ctx):
+    """Validate a direct context.json file still enables single-context upload."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    entries = target[LegacyContextCaptureInfo].entries
+    asserts.equals(env, 1, len(entries))
+    asserts.true(env, "__single_context_fallback__" in entries)
+    entry = entries["__single_context_fallback__"]
+    asserts.true(env, entry[0].endswith("context.json"))
+    asserts.true(env, entry[1].endswith("context.json"))
+    return analysistest.end(env)
+
+def _legacy_context_filegroup_fallback_test_impl(ctx):
+    """Validate wrapped single-context inputs still enable upload fallback."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    entries = target[LegacyContextCaptureInfo].entries
+    asserts.equals(env, 1, len(entries))
+    asserts.true(env, "__single_context_fallback__" in entries)
+    entry = entries["__single_context_fallback__"]
+    asserts.true(env, entry[0].endswith("context.json"))
+    asserts.true(env, entry[1].endswith("context.json"))
+    return analysistest.end(env)
+
+legacy_context_direct_file_fallback_test = analysistest.make(
+    _legacy_context_direct_file_fallback_test_impl,
+)
+
+legacy_context_filegroup_fallback_test = analysistest.make(
+    _legacy_context_filegroup_fallback_test_impl,
+)
 
 def _bash_curl_retry_flags_test(ctx):
     """Validate baseline uploader curl retry flags."""

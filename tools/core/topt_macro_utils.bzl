@@ -21,6 +21,7 @@ is_list = _is_list
 is_string = _is_string
 
 _WRAPPER_ONLY_ATTRS = [
+    "args",
     "flaky",
     "local",
     "shard_count",
@@ -115,6 +116,8 @@ def split_test_wrapper_kwargs(kwargs):
             raw_passthrough[key] = value
 
     return wrapper_kwargs, raw_passthrough
+
+split_test_wrapper_kwargs_for_tests = split_test_wrapper_kwargs
 
 def merge_user_env(user_env, required_env, macro_name = "dd_topt_macro"):
     """Merge caller env with required env keys, supporting `select(...)` values."""

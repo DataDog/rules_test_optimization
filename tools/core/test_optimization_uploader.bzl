@@ -196,14 +196,46 @@ def _apparent_repo_key_or_fail(label):
 
 apparent_repo_key_from_label_text_or_fail_for_tests = _apparent_repo_key_from_label_text_or_fail
 
-def _context_manifest_entries_or_fail(data_targets):
+def _legacy_single_context_entry_or_fail(data_files):
+    """Return a single fallback entry for legacy direct context.json inputs.
+
+    Older single-service workspaces may pass `context.json` directly, or
+    wrap it in a local alias/filegroup, instead of depending on a
+    `:test_optimization_context` target. That shape cannot support multi-context
+    repo matching, but it should continue to work when exactly one bundled
+    `context.json` exists.
+    """
+    raw_context_files = {}
+    for f in data_files:
+        if f.basename == "context.json":
+            raw_context_files[f.path] = f
+
+    if not raw_context_files:
+        return {}
+
+    if len(raw_context_files) > 1:
+        fail_with_prefix(
+            "test_optimization_uploader",
+            "bundled multiple context.json files without explicit :test_optimization_context targets; pass those targets directly in dd_payload_uploader(data = [...]) for multi-context selection",
+        )
+
+    context_file = raw_context_files.values()[0]
+    return {
+        "__single_context_fallback__": (context_file.short_path, context_file.path),
+    }
+
+def _context_manifest_entries_or_fail(data_targets, data_files):
     """Collect bundled context.json files keyed by the source sync repo name.
 
     Under bzlmod, Bazel exposes canonical repo names in analysis, while payload
     metadata stores the apparent sync-repo name exported by companion macros
     (for example `test_optimization_data_python`). The generated runtime
-    templates normalize canonical keys back to that apparent suffix before
-    matching payload-side repo selectors.
+    templates match those apparent repo names directly.
+
+    Legacy single-context call sites may still pass `context.json` directly in
+    `data` instead of a `:test_optimization_context` target. Keep that shape
+    working when there is exactly one bundled `context.json`, but require
+    explicit context targets for multi-context uploaders.
     """
     entries = {}
     for dep in data_targets:
@@ -220,7 +252,13 @@ def _context_manifest_entries_or_fail(data_targets):
         if repo_key in entries:
             fail_with_prefix("test_optimization_uploader", "duplicate bundled context repo name '%s'" % repo_key)
         entries[repo_key] = (context_file.short_path, context_file.path)
-    return entries
+
+    if entries:
+        return entries
+
+    return _legacy_single_context_entry_or_fail(data_files)
+
+legacy_single_context_entry_or_fail_for_tests = _legacy_single_context_entry_or_fail
 
 def _codeowners_glob_to_regex_for_tests(pattern):
     """Translate CODEOWNERS glob expression to regex fragment."""
@@ -651,7 +689,7 @@ def _uploader_impl(ctx):
 
     # Find bundled context.json files keyed by their apparent external repo
     # name so runtime selection can match payload-side metadata deterministically.
-    context_entries = _context_manifest_entries_or_fail(ctx.attr.data)
+    context_entries = _context_manifest_entries_or_fail(ctx.attr.data, ctx.files.data)
     context_manifest = ctx.actions.declare_file(ctx.label.name + ".context_manifest")
     ctx.actions.write(
         output = context_manifest,
@@ -705,6 +743,8 @@ def _uploader_impl(ctx):
     )
     if context_entries:
         log_debug(debug, "inputs", "bundled context repos: %s" % ", ".join(sorted(context_entries.keys())))
+        if primary_repo_key == "__single_context_fallback__":
+            log_debug(debug, "inputs", "using legacy single-context fallback for bundled context.json")
         log_debug(debug, "inputs", "primary context.json found at: %s" % context_json_rloc)
         log_debug(debug, "inputs", "primary context.json artifact path: %s" % context_json_path)
     else:
