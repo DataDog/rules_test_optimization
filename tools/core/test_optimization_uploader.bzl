@@ -177,6 +177,25 @@ def _context_manifest_content_for_tests(entries):
 
 context_manifest_content_for_tests = _context_manifest_content_for_tests
 
+def _apparent_repo_key_from_label_text_or_fail(label_text, owner):
+    """Return the apparent external repo name from external label text."""
+    if not label_text.startswith("@") or "//" not in label_text:
+        fail_with_prefix("test_optimization_uploader", "context.json owner for %s must come from an external repo" % owner)
+    repo_key = label_text.split("//", 1)[0]
+    if repo_key.startswith("@@"):
+        repo_key = repo_key[2:]
+    elif repo_key.startswith("@"):
+        repo_key = repo_key[1:]
+    if not repo_key:
+        fail_with_prefix("test_optimization_uploader", "context.json owner for %s must have a non-empty repo name" % owner)
+    return repo_key
+
+def _apparent_repo_key_or_fail(label):
+    """Return the apparent external repo name from the attribute label text."""
+    return _apparent_repo_key_from_label_text_or_fail(str(label), label)
+
+apparent_repo_key_from_label_text_or_fail_for_tests = _apparent_repo_key_from_label_text_or_fail
+
 def _context_manifest_entries_or_fail(data_targets):
     """Collect bundled context.json files keyed by the source sync repo name.
 
@@ -197,9 +216,7 @@ def _context_manifest_entries_or_fail(data_targets):
         if len(context_files) != 1:
             fail_with_prefix("test_optimization_uploader", "expected exactly one context.json from %s, found %d" % (dep.label, len(context_files)))
         context_file = context_files[0]
-        repo_key = dep.label.repo_name
-        if not repo_key:
-            fail_with_prefix("test_optimization_uploader", "context.json owner for %s must come from an external repo" % dep.label)
+        repo_key = _apparent_repo_key_or_fail(dep.label)
         if repo_key in entries:
             fail_with_prefix("test_optimization_uploader", "duplicate bundled context repo name '%s'" % repo_key)
         entries[repo_key] = (context_file.short_path, context_file.path)

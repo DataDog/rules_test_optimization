@@ -2,6 +2,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_uploader.bzl",
+    "apparent_repo_key_from_label_text_or_fail_for_tests",
     "bash_curl_retry_flags_for_tests",
     "build_codeowners_lookup_order_for_tests",
     "compile_codeowners_regex_for_tests",
@@ -20,6 +21,29 @@ load(
     "strip_workspace_prefix_powershell_for_tests",
     "trim_ascii_whitespace_for_tests",
 )
+
+def _apparent_repo_key_parsing_test(ctx):
+    """Validate uploader context keys use the apparent repo label text."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "test_optimization_data_dotnet",
+        apparent_repo_key_from_label_text_or_fail_for_tests(
+            "@test_optimization_data_dotnet//:test_optimization_context",
+            "@test_optimization_data_dotnet//:test_optimization_context",
+        ),
+    )
+    asserts.equals(
+        env,
+        "canonical+suffix",
+        apparent_repo_key_from_label_text_or_fail_for_tests(
+            "@@canonical+suffix//pkg:test_optimization_context",
+            "@@canonical+suffix//pkg:test_optimization_context",
+        ),
+    )
+    return unittest.end(env)
+
+apparent_repo_key_parsing_test = unittest.make(_apparent_repo_key_parsing_test)
 
 def _bash_curl_retry_flags_test(ctx):
     """Validate baseline uploader curl retry flags."""

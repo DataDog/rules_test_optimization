@@ -134,6 +134,7 @@ load(
 )
 load(
     "//tools/tests/core:test_uploader_utils.bzl",
+    "apparent_repo_key_parsing_test",
     "bash_curl_retry_flags_test",
     "codeowners_compile_regex_edge_cases_test",
     "codeowners_compile_regex_test",
@@ -177,6 +178,12 @@ dd_site_invalid_failure_test(
 # Validate DD_TEST_OPTIMIZATION_AGENTLESS_URL override behavior.
 resolve_dd_api_base_test(
     name = "resolve_dd_api_base_test",
+    size = "small",
+    timeout = "short",
+)
+
+apparent_repo_key_parsing_test(
+    name = "apparent_repo_key_parsing_test",
     size = "small",
     timeout = "short",
 )
@@ -940,6 +947,7 @@ windows_wrapper_uses_runfiles_resolution_test(
 test_suite(
     name = "tests",
     tests = [
+        ":apparent_repo_key_parsing_test",
         ":apply_dd_git_overrides_test",
         ":bash_curl_retry_flags_test",
         ":clone_payload_with_detached_attributes_test",
