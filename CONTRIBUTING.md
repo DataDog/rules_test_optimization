@@ -54,12 +54,21 @@
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
   - Windows primary entrypoint: `tools/tests/integration/run_mock_server_tests.ps1`
   - Windows convenience wrapper: `tools/tests/integration/run_mock_server_tests.cmd`
+  - Mixed-runtime uploader changes are not done until both harnesses still pass:
+    they cover single-context, explicit override, multi-context repo selection,
+    and no-match fallback behavior.
 - Vendored rules_go patch smoke:
   - `tools/dev/run_rules_go_patch_smoke.sh`
 - Vendored rules_go extended patch coverage:
   - `tools/dev/run_rules_go_patch_extended.sh`
 - Hermetic smoke (mirror CI flags):
   - run the same test commands with sandbox/network-blocking flags from `.github/workflows/ci.yml`
+- Cross-repo fixture validation for mixed-runtime changes:
+  - In `../rules_test_optimization_tests/MODULE.bazel`, temporarily enable the
+    documented `local_path_override(...)` entries for core and each affected
+    companion module so the fixture repo resolves this checkout.
+  - Run the relevant fixture entrypoints there before calling the work done.
+  - Restore the fixture repo to `git_override(...)` pins before pushing its PR.
 
 ## Schema Source Of Truth
 

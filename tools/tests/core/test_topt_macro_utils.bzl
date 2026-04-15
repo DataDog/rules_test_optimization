@@ -4,6 +4,7 @@ load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load(
     "//tools/core:topt_macro_utils.bzl",
     "merge_optional_env_defaults",
+    "split_test_wrapper_kwargs_for_tests",
 )
 
 def _merge_optional_env_defaults_none_env_test(ctx):
@@ -66,8 +67,27 @@ def _merge_optional_env_defaults_ignores_empty_defaults_test(ctx):
     asserts.equals(env, {"CUSTOM_ENV": "1"}, merged)
     return unittest.end(env)
 
+def _split_test_wrapper_kwargs_routes_args_to_wrapper_test(ctx):
+    """Validate runtime test args stay on the public wrapper target."""
+    env = unittest.begin(ctx)
+    kwargs = {
+        "args": ["--flag", "value"],
+        "timeout": "short",
+        "compatible_with": ["//platforms:demo"],
+        "deps": ["//demo:dep"],
+    }
+    wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs_for_tests(kwargs)
+    asserts.equals(env, ["--flag", "value"], wrapper_kwargs.get("args"))
+    asserts.equals(env, "short", wrapper_kwargs.get("timeout"))
+    asserts.equals(env, ["//platforms:demo"], wrapper_kwargs.get("compatible_with"))
+    asserts.equals(env, {"compatible_with": ["//platforms:demo"]}, raw_passthrough)
+    asserts.equals(env, ["//demo:dep"], kwargs.get("deps"))
+    asserts.equals(env, None, kwargs.get("args"))
+    return unittest.end(env)
+
 merge_optional_env_defaults_none_env_test = unittest.make(_merge_optional_env_defaults_none_env_test)
 merge_optional_env_defaults_injects_missing_key_test = unittest.make(_merge_optional_env_defaults_injects_missing_key_test)
 merge_optional_env_defaults_preserves_explicit_value_test = unittest.make(_merge_optional_env_defaults_preserves_explicit_value_test)
 merge_optional_env_defaults_select_passthrough_test = unittest.make(_merge_optional_env_defaults_select_passthrough_test)
 merge_optional_env_defaults_ignores_empty_defaults_test = unittest.make(_merge_optional_env_defaults_ignores_empty_defaults_test)
+split_test_wrapper_kwargs_routes_args_to_wrapper_test = unittest.make(_split_test_wrapper_kwargs_routes_args_to_wrapper_test)

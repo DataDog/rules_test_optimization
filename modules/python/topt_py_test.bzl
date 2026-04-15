@@ -18,7 +18,13 @@ load(
     "resolve_topt_service_key",
     "select_service_entry_or_fail",
     "service_mapping_entries",
+    "split_test_wrapper_kwargs",
     _is_dict = "is_dict",
+)
+load(
+    "@datadog-rules-test-optimization//tools/core:topt_test_wrapper.bzl",
+    "topt_bazel_metadata",
+    "topt_test_wrapper",
 )
 load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 
@@ -78,6 +84,8 @@ def dd_topt_py_test(
     _validate_py_test_rule_or_fail(py_test_rule)
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
+    wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
+
     user_data = kwargs.pop("data", None)
     data = _append_data_dependencies(user_data, [])
 
@@ -125,6 +133,7 @@ def dd_topt_py_test(
     fallback_identifier = _build_python_fallback_identifier(native.package_name(), _python)
 
     selector_name = name + "_topt_payloads"
+    metadata_name = name + "_topt_bazel_metadata"
     topt_py_payloads_selector(
         name = selector_name,
         deps = deps_labels,
@@ -138,6 +147,16 @@ def dd_topt_py_test(
         module_label_override = module_label_override,
         importpath = importpath_candidate if importpath_candidate != None else "",
         module_path = module_path_candidate if module_path_candidate != None else "",
+    )
+
+    pkg_path = native.package_name()
+    topt_bazel_metadata(
+        name = metadata_name,
+        bazel_package = "//%s" % pkg_path if pkg_path else "//",
+        bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
+        repo_name = sync_repo_name,
+        service_name = _svc.get("service_name") or "",
+        runtime_name = "python",
     )
 
     user_env = kwargs.pop("env", None)
@@ -159,13 +178,27 @@ def dd_topt_py_test(
         {
             "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+            "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
         },
         macro_name = "dd_topt_py_test",
     )
 
+    raw_name = name + "__raw_python_test"
+    kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
+    kwargs["visibility"] = ["//visibility:private"]
+    for key, value in raw_passthrough.items():
+        kwargs[key] = value
+
     py_test_rule(
-        name = name,
+        name = raw_name,
         data = data,
         env = env,
         **kwargs
+    )
+
+    topt_test_wrapper(
+        name = name,
+        actual = ":" + raw_name,
+        metadata = ":" + metadata_name,
+        **wrapper_kwargs
     )

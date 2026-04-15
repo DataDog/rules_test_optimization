@@ -127,9 +127,15 @@ load(
     "merge_optional_env_defaults_none_env_test",
     "merge_optional_env_defaults_preserves_explicit_value_test",
     "merge_optional_env_defaults_select_passthrough_test",
+    "split_test_wrapper_kwargs_routes_args_to_wrapper_test",
+)
+load(
+    "//tools/tests/core:test_topt_test_wrapper_utils.bzl",
+    "windows_wrapper_uses_runfiles_resolution_test",
 )
 load(
     "//tools/tests/core:test_uploader_utils.bzl",
+    "apparent_repo_key_parsing_test",
     "bash_curl_retry_flags_test",
     "codeowners_compile_regex_edge_cases_test",
     "codeowners_compile_regex_test",
@@ -140,6 +146,10 @@ load(
     "codeowners_lookup_order_test",
     "codeowners_section_header_classification_test",
     "codeowners_section_header_powershell_parity_test",
+    "context_manifest_content_test",
+    "legacy_context_capture_rule",
+    "legacy_context_direct_file_fallback_test",
+    "legacy_context_filegroup_fallback_test",
     "manifest_trim_and_bom_helpers_test",
     "render_template_missing_placeholder_test",
     "render_template_no_recursive_substitution_test",
@@ -150,6 +160,23 @@ load(
     "runfile_manifest_parser_parity_test",
     "runfile_manifest_powershell_resolution_test",
     "strip_workspace_prefix_powershell_windows_test",
+)
+
+filegroup(
+    name = "legacy_context_wrapper",
+    srcs = ["//tools/tests/core/testdata:context.json"],
+)
+
+legacy_context_capture_rule(
+    name = "legacy_context_direct_file_target",
+    data = ["//tools/tests/core/testdata:context.json"],
+    tags = ["manual"],
+)
+
+legacy_context_capture_rule(
+    name = "legacy_context_filegroup_target",
+    data = [":legacy_context_wrapper"],
+    tags = ["manual"],
 )
 
 # Starlark unit tests for core helpers (sync, uploader, common utils).
@@ -174,6 +201,22 @@ resolve_dd_api_base_test(
     name = "resolve_dd_api_base_test",
     size = "small",
     timeout = "short",
+)
+
+apparent_repo_key_parsing_test(
+    name = "apparent_repo_key_parsing_test",
+    size = "small",
+    timeout = "short",
+)
+
+legacy_context_direct_file_fallback_test(
+    name = "legacy_context_direct_file_fallback_test",
+    target_under_test = ":legacy_context_direct_file_target",
+)
+
+legacy_context_filegroup_fallback_test(
+    name = "legacy_context_filegroup_fallback_test",
+    target_under_test = ":legacy_context_filegroup_target",
 )
 
 redact_url_userinfo_test(
@@ -202,6 +245,12 @@ normalize_ref_test(
 
 normalize_ref_edge_cases_test(
     name = "normalize_ref_edge_cases_test",
+    size = "small",
+    timeout = "short",
+)
+
+split_test_wrapper_kwargs_routes_args_to_wrapper_test(
+    name = "split_test_wrapper_kwargs_routes_args_to_wrapper_test",
     size = "small",
     timeout = "short",
 )
@@ -900,6 +949,12 @@ runfile_manifest_not_found_parity_test(
     timeout = "short",
 )
 
+context_manifest_content_test(
+    name = "context_manifest_content_test",
+    size = "small",
+    timeout = "short",
+)
+
 manifest_trim_and_bom_helpers_test(
     name = "manifest_trim_and_bom_helpers_test",
     size = "small",
@@ -918,11 +973,18 @@ codeowners_lookup_order_empty_script_dir_test(
     timeout = "short",
 )
 
+windows_wrapper_uses_runfiles_resolution_test(
+    name = "windows_wrapper_uses_runfiles_resolution_test",
+    size = "small",
+    timeout = "short",
+)
+
 # Core-only suite. Language suites now live in companion modules, for example:
 # `@datadog-rules-test-optimization-go//tests:tests`.
 test_suite(
     name = "tests",
     tests = [
+        ":apparent_repo_key_parsing_test",
         ":apply_dd_git_overrides_test",
         ":bash_curl_retry_flags_test",
         ":clone_payload_with_detached_attributes_test",
@@ -945,6 +1007,7 @@ test_suite(
         ":compute_service_keys_dedups_collisions_test",
         ":compute_service_keys_edge_cases_test",
         ":contains_parent_segment_test",
+        ":context_manifest_content_test",
         ":dd_site_invalid_failure_test",
         ":dd_site_normalization_test",
         ":decode_json_object_array_failure_test",
@@ -1025,5 +1088,6 @@ test_suite(
         ":validate_service_name_test",
         ":validate_service_name_too_long_failure_test",
         ":validate_service_name_whitespace_failure_test",
+        ":windows_wrapper_uses_runfiles_resolution_test",
     ],
 )

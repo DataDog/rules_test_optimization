@@ -1,15 +1,18 @@
 # Unit tests for uploader template rendering (placeholder and brace handling).
-load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_uploader.bzl",
+    "apparent_repo_key_from_label_text_or_fail_for_tests",
     "bash_curl_retry_flags_for_tests",
     "build_codeowners_lookup_order_for_tests",
     "compile_codeowners_regex_for_tests",
+    "context_manifest_content_for_tests",
     "first_ascii_whitespace_index_for_tests",
     "glob_to_regex_for_tests",
     "is_gitlab_section_header_line_for_tests",
     "is_gitlab_section_header_pattern_for_tests",
     "is_gitlab_section_header_pattern_powershell_for_tests",
+    "legacy_single_context_entry_or_fail_for_tests",
     "render_template_for_tests",
     "resolve_runfile_manifest_bash_for_tests",
     "resolve_runfile_manifest_powershell_for_tests",
@@ -18,6 +21,81 @@ load(
     "strip_workspace_prefix_bash_for_tests",
     "strip_workspace_prefix_powershell_for_tests",
     "trim_ascii_whitespace_for_tests",
+)
+
+LegacyContextCaptureInfo = provider(
+    doc = "Captured legacy single-context fallback entries.",
+    fields = {
+        "entries": "Context entries returned by the uploader helper.",
+    },
+)
+
+def _legacy_context_capture_impl(ctx):
+    """Capture legacy single-context fallback entries from raw data files."""
+    return [LegacyContextCaptureInfo(
+        entries = legacy_single_context_entry_or_fail_for_tests(ctx.files.data),
+    )]
+
+legacy_context_capture_rule = rule(
+    implementation = _legacy_context_capture_impl,
+    attrs = {
+        "data": attr.label_list(allow_files = True),
+    },
+)
+
+def _apparent_repo_key_parsing_test(ctx):
+    """Validate uploader context keys use the apparent repo label text."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "test_optimization_data_dotnet",
+        apparent_repo_key_from_label_text_or_fail_for_tests(
+            "@test_optimization_data_dotnet//:test_optimization_context",
+            "@test_optimization_data_dotnet//:test_optimization_context",
+        ),
+    )
+    asserts.equals(
+        env,
+        "canonical+suffix",
+        apparent_repo_key_from_label_text_or_fail_for_tests(
+            "@@canonical+suffix//pkg:test_optimization_context",
+            "@@canonical+suffix//pkg:test_optimization_context",
+        ),
+    )
+    return unittest.end(env)
+
+apparent_repo_key_parsing_test = unittest.make(_apparent_repo_key_parsing_test)
+
+def _legacy_context_direct_file_fallback_test_impl(ctx):
+    """Validate a direct context.json file still enables single-context upload."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    entries = target[LegacyContextCaptureInfo].entries
+    asserts.equals(env, 1, len(entries))
+    asserts.true(env, "__single_context_fallback__" in entries)
+    entry = entries["__single_context_fallback__"]
+    asserts.true(env, entry[0].endswith("context.json"))
+    asserts.true(env, entry[1].endswith("context.json"))
+    return analysistest.end(env)
+
+def _legacy_context_filegroup_fallback_test_impl(ctx):
+    """Validate wrapped single-context inputs still enable upload fallback."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    entries = target[LegacyContextCaptureInfo].entries
+    asserts.equals(env, 1, len(entries))
+    asserts.true(env, "__single_context_fallback__" in entries)
+    entry = entries["__single_context_fallback__"]
+    asserts.true(env, entry[0].endswith("context.json"))
+    asserts.true(env, entry[1].endswith("context.json"))
+    return analysistest.end(env)
+
+legacy_context_direct_file_fallback_test = analysistest.make(
+    _legacy_context_direct_file_fallback_test_impl,
+)
+
+legacy_context_filegroup_fallback_test = analysistest.make(
+    _legacy_context_filegroup_fallback_test_impl,
 )
 
 def _bash_curl_retry_flags_test(ctx):
@@ -394,6 +472,20 @@ def _runfile_manifest_not_found_parity_test(ctx):
     asserts.equals(env, bash_path, ps_path)
     return unittest.end(env)
 
+def _context_manifest_content_test(ctx):
+    """Validate bundled context manifests sort repo keys deterministically."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "repo_a\ta.short\t/a/path.json\nrepo_b\tb.short\t/b/path.json\n",
+        context_manifest_content_for_tests({
+            "repo_b": ("b.short", "/b/path.json"),
+            "repo_a": ("a.short", "/a/path.json"),
+        }),
+    )
+    asserts.equals(env, "", context_manifest_content_for_tests({}))
+    return unittest.end(env)
+
 def _manifest_trim_and_bom_helpers_test(ctx):
     """Validate manifest parser helper behavior for whitespace/BOM handling."""
     env = unittest.begin(ctx)
@@ -480,6 +572,7 @@ runfile_manifest_bash_resolution_test = unittest.make(_runfile_manifest_bash_res
 runfile_manifest_powershell_resolution_test = unittest.make(_runfile_manifest_powershell_resolution_test)
 runfile_manifest_parser_parity_test = unittest.make(_runfile_manifest_parser_parity_test)
 runfile_manifest_not_found_parity_test = unittest.make(_runfile_manifest_not_found_parity_test)
+context_manifest_content_test = unittest.make(_context_manifest_content_test)
 manifest_trim_and_bom_helpers_test = unittest.make(_manifest_trim_and_bom_helpers_test)
 codeowners_lookup_order_test = unittest.make(_codeowners_lookup_order_test)
 codeowners_lookup_order_empty_script_dir_test = unittest.make(_codeowners_lookup_order_empty_script_dir_test)

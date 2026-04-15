@@ -27,6 +27,10 @@ The steps are:
 
 3. **Payload reporting**:
    A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`).
+   In mixed-runtime workspaces, the uploader can bundle multiple `context.json`
+   files and select the matching one per payload using sibling
+   `bazel_target_metadata.json` repo metadata instead of reusing one global
+   context for the entire workspace.
    Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
 
 4. **Language macros (optional)**:
@@ -155,6 +159,8 @@ Tests remain hermetic with network blocked. They write payloads to Bazel's built
 - Discovers all `test.outputs/` directories in `bazel-testlogs/`,
 - Waits for filesystem quiescence,
 - Enriches test payloads with `context.json` when present,
+- When multiple bundled contexts are present, matches them per payload using
+  `bazel.test_optimization.repo_name` from sibling `bazel_target_metadata.json`,
 - Uploads to Datadog using either `DD_API_KEY`/`DD_SITE` (agentless) or `DD_TEST_OPTIMIZATION_AGENT_URL` (EVP proxy),
 - Deletes successfully uploaded payloads.
 

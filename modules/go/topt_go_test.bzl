@@ -58,6 +58,7 @@ load(
     "normalize_user_data",
     "resolve_topt_service_key",
     "service_mapping_entries",
+    "split_test_wrapper_kwargs",
     _is_dict = "is_dict",
 )
 load("@rules_go//go:def.bzl", "go_test")
@@ -85,24 +86,6 @@ def _build_module_labels(sync_repo_name, labels):
 
 build_module_labels_for_tests = _build_module_labels
 
-_WRAPPER_ONLY_ATTRS = [
-    "flaky",
-    "local",
-    "shard_count",
-    "size",
-    "tags",
-    "timeout",
-    "visibility",
-]
-
-_SHARED_TEST_ATTRS = [
-    "compatible_with",
-    "exec_compatible_with",
-    "restricted_to",
-    "target_compatible_with",
-    "testonly",
-]
-
 _ORCHESTRION_PIN_FILES = [
     "go.mod",
     "go.sum",
@@ -113,23 +96,6 @@ _ORCHESTRION_PIN_FILES = [
 def _attr_or_default(value, default):
     """Return a Starlark attr value or a default without forcing truthiness."""
     return default if value == None else value
-
-def _extract_wrapper_kwargs(kwargs):
-    """Split macro kwargs between raw go_test and public wrapper."""
-    wrapper_kwargs = {}
-    raw_passthrough = {}
-
-    for key in _WRAPPER_ONLY_ATTRS:
-        if key in kwargs:
-            wrapper_kwargs[key] = kwargs.pop(key)
-
-    for key in _SHARED_TEST_ATTRS:
-        if key in kwargs:
-            value = kwargs.pop(key)
-            wrapper_kwargs[key] = value
-            raw_passthrough[key] = value
-
-    return wrapper_kwargs, raw_passthrough
 
 def dd_topt_go_test(
         name,
@@ -200,7 +166,7 @@ def dd_topt_go_test(
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
         _svc = service_entries[selected_key]
 
-    wrapper_kwargs, raw_passthrough = _extract_wrapper_kwargs(kwargs)
+    wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
 
     # ------------------------------------------------------------------
     # Phase 2: Collect caller-provided inputs that we augment downstream.
@@ -324,6 +290,8 @@ def dd_topt_go_test(
         module_label_override = module_label_override or "",
         bazel_package = "//%s" % pkg_path if pkg_path else "//",
         bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
+        repo_name = sync_repo_name,
+        service_name = _svc.get("service_name") or "",
         orchestrion_requested = True,
         cgo = _attr_or_default(kwargs.get("cgo"), False),
         pure = _attr_or_default(kwargs.get("pure"), "auto"),

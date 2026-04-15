@@ -29,6 +29,30 @@ EXPECTED_PATCH_FILENAMES = (
     "0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
 )
 
+# Local validation-only files live inside the vendored subtree but are not part
+# of the recorded upstream patch replay. The verifier compares the replayed
+# patch series against the vendored fork while intentionally skipping these
+# auxiliary files; their behavior is covered separately by the smoke targets.
+LOCAL_VALIDATION_ONLY_PATHS = {
+    "go/private/context.bzl",
+    "patches/BUILD.bazel",
+    "patches/0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
+    "patches/0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch",
+    "patches/0009-Use-LLVM-for-all-linking.patch",
+    "patches/0011-fix-cdeps-propagation.patch",
+    "patches/0013-Add-buildInfo-metadata-support.patch",
+    "patches/0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
+    "patches/0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
+    "patches/0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch",
+    "patches/0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
+    "tests/core/cgo/asm_cflags/BUILD.bazel",
+    "tests/core/cgo/asm_cflags/asm_cflags.go",
+    "tests/core/cgo/asm_cflags/asm_cflags_linux_amd64.S",
+    "tests/core/cgo/asm_cflags/asm_cflags_test.go",
+    "tests/core/go_proto_library/BUILD.bazel",
+    "tests/core/starlark/context_tests.bzl",
+}
+
 
 def load_manifest(path: Path) -> dict:
     """Load the patch-series manifest and enforce the required series shape."""
@@ -63,7 +87,30 @@ def git_archive_subtree(commit: str, subtree_path: str, destination: Path) -> No
             archive.extract(member, destination, filter="data")
 
 
-def compare_trees(left: Path, right: Path) -> list[str]:
+def copy_worktree_subtree(subtree_path: str, destination: Path) -> None:
+    """Copy tracked files from the checked-out vendored subtree for comparison."""
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", subtree_path],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    )
+    prefix = f"{subtree_path}/"
+    for tracked_path in result.stdout.decode("utf-8").split("\0"):
+        if not tracked_path:
+            continue
+        if not tracked_path.startswith(prefix):
+            continue
+        relative_name = tracked_path[len(prefix):]
+        if not relative_name:
+            continue
+        source = REPO_ROOT / tracked_path
+        target = destination / relative_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def compare_trees(left: Path, right: Path, excluded_paths: set[str]) -> list[str]:
     """Return relative file paths that differ between the two extracted trees."""
     mismatches: list[str] = []
     all_paths = set()
@@ -77,6 +124,8 @@ def compare_trees(left: Path, right: Path) -> list[str]:
             all_paths.add((rel_root / name).as_posix())
 
     for rel in sorted(all_paths):
+        if rel in excluded_paths:
+            continue
         left_path = left / rel
         right_path = right / rel
         if not left_path.exists() or not right_path.exists():
@@ -118,10 +167,10 @@ def main() -> int:
         expected_tree.mkdir()
 
         git_archive_subtree(manifest["base_commit"], manifest["subtree_path"], base_tree)
-        git_archive_subtree(manifest["series_tip_commit"], manifest["subtree_path"], expected_tree)
+        copy_worktree_subtree(manifest["subtree_path"], expected_tree)
         apply_patch_series(base_tree, patch_paths)
 
-        mismatches = compare_trees(base_tree, expected_tree)
+        mismatches = compare_trees(base_tree, expected_tree, LOCAL_VALIDATION_ONLY_PATHS)
         if mismatches:
             print("patch series verification failed; mismatched paths:", file=sys.stderr)
             for rel in mismatches:

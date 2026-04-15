@@ -8,6 +8,9 @@ set -euo pipefail
 # Logging functions (defined first so other functions can use them)
 # DEBUG is set later, so we use a function that checks the variable at runtime
 log() { echo "[dd-uploader] $1"; }
+# Selector helpers sometimes run under command substitution, so warnings that
+# must stay visible need an explicit stderr path instead of stdout.
+log_stderr() { echo "[dd-uploader] $1" >&2; }
 DEBUG_BOOTSTRAP=$(echo "${DD_TEST_OPTIMIZATION_DEBUG:-0}" | tr '[:upper:]' '[:lower:]')
 # Handle dbg behavior.
 dbg() {
@@ -234,17 +237,71 @@ resolve_artifact_path() {
     echo ""
 }
 
-# Resolve context.json path (used by upload functions for payload enrichment).
+# Resolve bundled context inputs used for payload enrichment.
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without making `bazel run //:dd_upload_payloads` depend on sync labels.
+CONTEXT_MANIFEST_RLOC="__DDTPL_CONTEXT_MANIFEST_RLOC__"
+CONTEXT_MANIFEST_PATH="__DDTPL_CONTEXT_MANIFEST_PATH__"
 CONTEXT_JSON_RLOC="__DDTPL_CONTEXT_JSON_RLOC__"
 CONTEXT_JSON_PATH="__DDTPL_CONTEXT_JSON_PATH__"
 TELEMETRY_FACTS_MANIFEST_RLOC="__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__"
 TELEMETRY_FACTS_MANIFEST_PATH="__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"
 CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"
-dbg "context.json resolution inputs: override='$CONTEXT_JSON_OVERRIDE' path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC'"
+dbg "context.json resolution inputs: override='$CONTEXT_JSON_OVERRIDE' path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC' manifest_path='$CONTEXT_MANIFEST_PATH' manifest_rloc='$CONTEXT_MANIFEST_RLOC'"
 CONTEXT_JSON=""
 CONTEXT_JSON_FROM_OVERRIDE=0
+CONTEXT_MANIFEST=""
+CONTEXT_REPO_KEYS=()
+CONTEXT_REPO_FILES=()
+CONTEXT_REPO_COUNT=0
+PRIMARY_CONTEXT_JSON=""
+
+normalize_context_repo_key() {
+    local repo_key="$1"
+    if [[ "$repo_key" == *"+"* ]]; then
+        printf '%s\n' "${repo_key##*+}"
+        return 0
+    fi
+    printf '%s\n' "$repo_key"
+}
+
+resolve_context_entry_path() {
+    local entry_path="$1"
+    local entry_rloc="$2"
+    local resolved=""
+    resolved="$(resolve_artifact_path "$entry_path")"
+    if [[ -n "$resolved" ]]; then
+        echo "$resolved"
+        return 0
+    fi
+    if [[ -n "$entry_rloc" ]]; then
+        resolved="$(resolve_runfile "$entry_rloc")"
+        if [[ -n "$resolved" ]]; then
+            echo "$resolved"
+            return 0
+        fi
+    fi
+    echo ""
+}
+
+load_context_manifest_entries() {
+    local manifest="$1"
+    [[ -n "$manifest" && -f "$manifest" ]] || return 0
+    local repo_key normalized_repo_key entry_path entry_rloc resolved
+    while IFS=$'\t' read -r repo_key entry_path entry_rloc; do
+        [[ -z "$repo_key" ]] && continue
+        normalized_repo_key="$(normalize_context_repo_key "$repo_key")"
+        resolved="$(resolve_context_entry_path "$entry_path" "$entry_rloc")"
+        if [[ -z "$resolved" ]]; then
+            dbg "context manifest entry unresolved for repo '$repo_key'"
+            continue
+        fi
+        CONTEXT_REPO_KEYS+=("$normalized_repo_key")
+        CONTEXT_REPO_FILES+=("$resolved")
+    done < "$manifest"
+    CONTEXT_REPO_COUNT=${#CONTEXT_REPO_KEYS[@]}
+}
+
 if [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
     CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_OVERRIDE")
     if [[ -n "$CONTEXT_JSON" ]]; then
@@ -252,6 +309,26 @@ if [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
         dbg "context.json resolved via runtime override: '$CONTEXT_JSON'"
     else
         log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
+    fi
+fi
+if (( CONTEXT_JSON_FROM_OVERRIDE == 0 )); then
+    CONTEXT_MANIFEST="$(resolve_artifact_path "$CONTEXT_MANIFEST_PATH")"
+    if [[ -n "$CONTEXT_MANIFEST" ]]; then
+        dbg "context manifest resolved via direct path: '$CONTEXT_MANIFEST'"
+    elif [[ -n "$CONTEXT_MANIFEST_RLOC" ]]; then
+        CONTEXT_MANIFEST="$(resolve_runfile "$CONTEXT_MANIFEST_RLOC")"
+        if [[ -n "$CONTEXT_MANIFEST" ]]; then
+            dbg "context manifest resolved via runfiles: '$CONTEXT_MANIFEST'"
+        fi
+    fi
+    load_context_manifest_entries "$CONTEXT_MANIFEST"
+    if (( CONTEXT_REPO_COUNT > 0 )); then
+        CONTEXT_JSON="${CONTEXT_REPO_FILES[0]}"
+        if (( CONTEXT_REPO_COUNT == 1 )); then
+            dbg "context.json resolved from single bundled context: '$CONTEXT_JSON'"
+        else
+            dbg "primary context.json resolved from bundled manifest: '$CONTEXT_JSON' (repos=${CONTEXT_REPO_KEYS[*]})"
+        fi
     fi
 fi
 if [[ -z "$CONTEXT_JSON" ]]; then
@@ -271,6 +348,8 @@ if [[ -z "$CONTEXT_JSON" ]]; then
         dbg "context.json not configured in data files; enrichment disabled"
     fi
 fi
+PRIMARY_CONTEXT_JSON="$CONTEXT_JSON"
+dbg "primary context.json: ${PRIMARY_CONTEXT_JSON:-<none>} (bundled_contexts=$CONTEXT_REPO_COUNT)"
 
 dbg "telemetry facts manifest resolution inputs: path='$TELEMETRY_FACTS_MANIFEST_PATH' rloc='$TELEMETRY_FACTS_MANIFEST_RLOC'"
 TELEMETRY_FACTS_MANIFEST=$(resolve_artifact_path "$TELEMETRY_FACTS_MANIFEST_PATH")
@@ -877,7 +956,7 @@ dbg_headers() {
 JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 dbg "jq available: $JQ_AVAILABLE"
-dbg "context.json: ${CONTEXT_JSON:-<none>}"
+dbg "primary context.json: ${PRIMARY_CONTEXT_JSON:-<none>}"
 
 # CODEOWNERS state (initialized lazily on first enrichment attempt).
 CODEOWNERS_INITIALIZED=0
@@ -1411,8 +1490,8 @@ init_codeowners() {
   fi
   [[ -z "$CODEOWNERS_WORKSPACE_ROOT" ]] && CODEOWNERS_WORKSPACE_ROOT="$(pwd)"
   CODEOWNERS_CONTEXT_WORKSPACE=""
-  if (( JQ_AVAILABLE == 1 )) && [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" ]]; then
-    CODEOWNERS_CONTEXT_WORKSPACE=$(jq -r '."ci.workspace_path" // empty' "$CONTEXT_JSON" 2>/dev/null || true)
+  if (( JQ_AVAILABLE == 1 )) && [[ -n "$PRIMARY_CONTEXT_JSON" && -f "$PRIMARY_CONTEXT_JSON" ]]; then
+    CODEOWNERS_CONTEXT_WORKSPACE=$(jq -r '."ci.workspace_path" // empty' "$PRIMARY_CONTEXT_JSON" 2>/dev/null || true)
   fi
 
   local explicit_codeowners="${DD_TEST_OPTIMIZATION_CODEOWNERS_FILE:-}"
@@ -1692,8 +1771,8 @@ curl_agentless() {
 
 # Optional check: verify fetch-time API key fingerprint matches uploader API key.
 API_KEY_FINGERPRINT=""
-if (( JQ_AVAILABLE == 1 )) && [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" ]]; then
-  API_KEY_FINGERPRINT=$(jq -r '."topt.api_key_fingerprint" // empty' "$CONTEXT_JSON" 2>/dev/null || true)
+if (( JQ_AVAILABLE == 1 )) && [[ -n "$PRIMARY_CONTEXT_JSON" && -f "$PRIMARY_CONTEXT_JSON" ]]; then
+  API_KEY_FINGERPRINT=$(jq -r '."topt.api_key_fingerprint" // empty' "$PRIMARY_CONTEXT_JSON" 2>/dev/null || true)
 fi
 if [[ -n "$API_KEY_FINGERPRINT" ]]; then
   if (( AGENTLESS == 1 )); then
@@ -1708,7 +1787,7 @@ if [[ -n "$API_KEY_FINGERPRINT" ]]; then
     # EVP mode does not require DD_API_KEY for upload requests.
     log "warning: DD_API_KEY fingerprint present but uploader running in EVP mode; check skipped"
   fi
-elif [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" && "$JQ_AVAILABLE" != "1" ]]; then
+elif [[ -n "$PRIMARY_CONTEXT_JSON" && -f "$PRIMARY_CONTEXT_JSON" && "$JQ_AVAILABLE" != "1" ]]; then
   dbg "api key fingerprint check skipped: jq not available"
 fi
 
@@ -1724,6 +1803,67 @@ find_bazel_target_metadata() {
     return 0
   fi
   return 1
+}
+
+payload_repo_name_from_metadata() {
+  local metadata_file="$1"
+  [[ -n "$metadata_file" && -f "$metadata_file" ]] || return 0
+  if (( JQ_AVAILABLE == 0 )); then
+    echo ""
+    return 0
+  fi
+  jq -r '."bazel.test_optimization.repo_name" // empty' "$metadata_file" 2>/dev/null || true
+}
+
+bundled_context_path_for_repo() {
+  local repo_key="$1"
+  local idx
+  for ((idx = 0; idx < CONTEXT_REPO_COUNT; idx++)); do
+    if [[ "${CONTEXT_REPO_KEYS[$idx]}" == "$repo_key" ]]; then
+      echo "${CONTEXT_REPO_FILES[$idx]}"
+      return 0
+    fi
+  done
+  echo ""
+}
+
+select_context_json_for_payload() {
+  local payload_file="$1"
+  local metadata_file repo_key matched_context
+
+  if (( CONTEXT_JSON_FROM_OVERRIDE == 1 )); then
+    echo "$PRIMARY_CONTEXT_JSON"
+    return 0
+  fi
+
+  if (( CONTEXT_REPO_COUNT <= 1 )); then
+    echo "$PRIMARY_CONTEXT_JSON"
+    return 0
+  fi
+
+  metadata_file="$(find_bazel_target_metadata "$payload_file" 2>/dev/null || true)"
+  if [[ -z "$metadata_file" || ! -f "$metadata_file" ]]; then
+    log_stderr "warning: skipping context enrichment for '$payload_file' because multiple bundled contexts are present and bazel_target_metadata.json is missing"
+    echo ""
+    return 0
+  fi
+
+  repo_key="$(payload_repo_name_from_metadata "$metadata_file")"
+  if [[ -z "$repo_key" ]]; then
+    log_stderr "warning: skipping context enrichment for '$payload_file' because bazel.test_optimization.repo_name is missing from '$metadata_file'"
+    echo ""
+    return 0
+  fi
+
+  matched_context="$(bundled_context_path_for_repo "$repo_key")"
+  if [[ -z "$matched_context" ]]; then
+    log_stderr "warning: skipping context enrichment for '$payload_file' because no bundled context matched repo '$repo_key'"
+    echo ""
+    return 0
+  fi
+
+  dbg "selected bundled context '$matched_context' for payload '$payload_file' via repo '$repo_key'"
+  echo "$matched_context"
 }
 
 merge_flat_metadata_file() {
@@ -1763,13 +1903,15 @@ merge_flat_metadata_file() {
 # Handle enrich with context behavior.
 enrich_with_context() {
   local infile="$1"; local tmpfile="$2"
-  dbg "enrich_with_context: infile='$infile' outfile='$tmpfile' ctx='${CONTEXT_JSON:-<none>}' jq=$JQ_AVAILABLE"
+  local selected_ctx_file=""
+  selected_ctx_file="$(select_context_json_for_payload "$infile")"
+  dbg "enrich_with_context: infile='$infile' outfile='$tmpfile' ctx='${selected_ctx_file:-<none>}' primary='${PRIMARY_CONTEXT_JSON:-<none>}' jq=$JQ_AVAILABLE"
   if (( JQ_AVAILABLE == 0 )); then
     # No jq means no structural merge; forward original payload unchanged.
     cp "$infile" "$tmpfile"
     return 0
   fi
-  local ctx_file="$CONTEXT_JSON"
+  local ctx_file="$selected_ctx_file"
   local cleanup_ctx=""
   if [[ -z "$ctx_file" || ! -f "$ctx_file" ]]; then
     # Missing context is non-fatal: use empty object so enrichment still
@@ -2083,8 +2225,8 @@ resolve_telemetry_facts_sources() {
         done <"$TELEMETRY_FACTS_MANIFEST"
     fi
 
-    if (( CONTEXT_JSON_FROM_OVERRIDE == 1 )) && [[ -n "$CONTEXT_JSON" ]]; then
-        sibling="$(dirname "$CONTEXT_JSON")/telemetry_facts.json"
+    if (( CONTEXT_JSON_FROM_OVERRIDE == 1 )) && [[ -n "$PRIMARY_CONTEXT_JSON" ]]; then
+        sibling="$(dirname "$PRIMARY_CONTEXT_JSON")/telemetry_facts.json"
         canonical=$(canonicalize_existing_file "$sibling")
         if [[ -n "$canonical" ]]; then
             printf '%s\n' "$canonical" >>"$tmp_sources"
@@ -2145,13 +2287,13 @@ load_telemetry_provider_suffix() {
         return 0
     fi
     TELEMETRY_PROVIDER_SUFFIX_LOADED=1
-    [[ -n "$CONTEXT_JSON" && -f "$CONTEXT_JSON" ]] || return 0
+    [[ -n "$PRIMARY_CONTEXT_JSON" && -f "$PRIMARY_CONTEXT_JSON" ]] || return 0
     if ! command -v python3 >/dev/null 2>&1; then
         dbg "telemetry provider rewrite skipped: python3 not available"
         return 0
     fi
     TELEMETRY_PROVIDER_SUFFIX="$(
-        python3 - "$CONTEXT_JSON" <<'PY' 2>/dev/null || true
+        python3 - "$PRIMARY_CONTEXT_JSON" <<'PY' 2>/dev/null || true
 import json
 import sys
 

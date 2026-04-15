@@ -239,6 +239,9 @@ def _topt_go_bazel_metadata_impl(ctx):
     metadata = {
         "bazel.package": ctx.attr.bazel_package,
         "bazel.target": ctx.attr.bazel_target,
+        "bazel.test_optimization.repo_name": ctx.attr.repo_name,
+        "bazel.test_optimization.service_name": ctx.attr.service_name,
+        "bazel.test_optimization.runtime_name": "go",
         "bazel.go.importpath": selection.importpath,
         "bazel.go.importpath_source": selection.importpath_source,
         "bazel.go.payload_selection": selection.selection,
@@ -303,6 +306,8 @@ topt_go_bazel_metadata = rule(
         "module_label_override": attr.string(),
         "bazel_package": attr.string(mandatory = True),
         "bazel_target": attr.string(mandatory = True),
+        "repo_name": attr.string(mandatory = True),
+        "service_name": attr.string(mandatory = True),
         "orchestrion_requested": attr.bool(default = True),
         "cgo": attr.bool(default = False),
         "pure": attr.string(default = "auto"),

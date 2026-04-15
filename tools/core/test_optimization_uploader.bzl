@@ -107,6 +107,8 @@ def _base_template_substitutions(
         keep_payloads,
         filter_prefix_enabled,
         gzip_payloads,
+        context_manifest_rloc,
+        context_manifest_path,
         context_json_rloc,
         context_json_path,
         telemetry_facts_manifest_rloc,
@@ -125,6 +127,8 @@ def _base_template_substitutions(
         "filter_prefix": _bool_to_str(filter_prefix_enabled),
         "gzip_payloads": _bool_to_str(gzip_payloads),
         "uploader_version": UPLOADER_VERSION,
+        "context_manifest_rloc": context_manifest_rloc,
+        "context_manifest_path": context_manifest_path,
         "context_json_rloc": context_json_rloc,
         "context_json_path": context_json_path,
         "telemetry_facts_manifest_rloc": telemetry_facts_manifest_rloc,
@@ -161,6 +165,100 @@ def _bash_curl_retry_flags_for_tests():
 # Public alias for tests (avoid importing private symbols)
 render_template_for_tests = _render_template
 bash_curl_retry_flags_for_tests = _bash_curl_retry_flags_for_tests
+
+def _context_manifest_content_for_tests(entries):
+    """Render deterministic context-manifest content from repo/path entries."""
+    lines = []
+    repo_keys = sorted(entries.keys())
+    for repo_key in repo_keys:
+        entry = entries[repo_key]
+        lines.append("%s\t%s\t%s" % (repo_key, entry[0], entry[1]))
+    return "\n".join(lines) + ("\n" if lines else "")
+
+context_manifest_content_for_tests = _context_manifest_content_for_tests
+
+def _apparent_repo_key_from_label_text_or_fail(label_text, owner):
+    """Return the apparent external repo name from external label text."""
+    if not label_text.startswith("@") or "//" not in label_text:
+        fail_with_prefix("test_optimization_uploader", "context.json owner for %s must come from an external repo" % owner)
+    repo_key = label_text.split("//", 1)[0]
+    if repo_key.startswith("@@"):
+        repo_key = repo_key[2:]
+    elif repo_key.startswith("@"):
+        repo_key = repo_key[1:]
+    if not repo_key:
+        fail_with_prefix("test_optimization_uploader", "context.json owner for %s must have a non-empty repo name" % owner)
+    return repo_key
+
+def _apparent_repo_key_or_fail(label):
+    """Return the apparent external repo name from the attribute label text."""
+    return _apparent_repo_key_from_label_text_or_fail(str(label), label)
+
+apparent_repo_key_from_label_text_or_fail_for_tests = _apparent_repo_key_from_label_text_or_fail
+
+def _legacy_single_context_entry_or_fail(data_files):
+    """Return a single fallback entry for legacy direct context.json inputs.
+
+    Older single-service workspaces may pass `context.json` directly, or
+    wrap it in a local alias/filegroup, instead of depending on a
+    `:test_optimization_context` target. That shape cannot support multi-context
+    repo matching, but it should continue to work when exactly one bundled
+    `context.json` exists.
+    """
+    raw_context_files = {}
+    for f in data_files:
+        if f.basename == "context.json":
+            raw_context_files[f.path] = f
+
+    if not raw_context_files:
+        return {}
+
+    if len(raw_context_files) > 1:
+        fail_with_prefix(
+            "test_optimization_uploader",
+            "bundled multiple context.json files without explicit :test_optimization_context targets; pass those targets directly in dd_payload_uploader(data = [...]) for multi-context selection",
+        )
+
+    context_file = raw_context_files.values()[0]
+    return {
+        "__single_context_fallback__": (context_file.short_path, context_file.path),
+    }
+
+def _context_manifest_entries_or_fail(data_targets, data_files):
+    """Collect bundled context.json files keyed by the source sync repo name.
+
+    Under bzlmod, Bazel exposes canonical repo names in analysis, while payload
+    metadata stores the apparent sync-repo name exported by companion macros
+    (for example `test_optimization_data_python`). The generated runtime
+    templates match those apparent repo names directly.
+
+    Legacy single-context call sites may still pass `context.json` directly in
+    `data` instead of a `:test_optimization_context` target. Keep that shape
+    working when there is exactly one bundled `context.json`, but require
+    explicit context targets for multi-context uploaders.
+    """
+    entries = {}
+    for dep in data_targets:
+        if dep.label.name != "test_optimization_context":
+            continue
+        context_files = []
+        for f in dep[DefaultInfo].files.to_list():
+            if f.basename == "context.json":
+                context_files.append(f)
+        if len(context_files) != 1:
+            fail_with_prefix("test_optimization_uploader", "expected exactly one context.json from %s, found %d" % (dep.label, len(context_files)))
+        context_file = context_files[0]
+        repo_key = _apparent_repo_key_or_fail(dep.label)
+        if repo_key in entries:
+            fail_with_prefix("test_optimization_uploader", "duplicate bundled context repo name '%s'" % repo_key)
+        entries[repo_key] = (context_file.short_path, context_file.path)
+
+    if entries:
+        return entries
+
+    return _legacy_single_context_entry_or_fail(data_files)
+
+legacy_single_context_entry_or_fail_for_tests = _legacy_single_context_entry_or_fail
 
 def _codeowners_glob_to_regex_for_tests(pattern):
     """Translate CODEOWNERS glob expression to regex fragment."""
@@ -589,18 +687,28 @@ def _uploader_impl(ctx):
     filter_prefix_enabled = ctx.attr.filter_prefix
     gzip_payloads = ctx.attr.gzip_payloads
 
-    # Find context.json in data files (supports any repo alias)
+    # Find bundled context.json files keyed by their apparent external repo
+    # name so runtime selection can match payload-side metadata deterministically.
+    context_entries = _context_manifest_entries_or_fail(ctx.attr.data, ctx.files.data)
+    context_manifest = ctx.actions.declare_file(ctx.label.name + ".context_manifest")
+    ctx.actions.write(
+        output = context_manifest,
+        content = _context_manifest_content_for_tests(context_entries),
+    )
+    context_manifest_rloc = context_manifest.short_path
+    context_manifest_path = context_manifest.path
+
     context_json_rloc = ""
     context_json_path = ""
+    if context_entries:
+        primary_repo_key = sorted(context_entries.keys())[0]
+        primary_entry = context_entries[primary_repo_key]
+        context_json_rloc = primary_entry[0]
+        context_json_path = primary_entry[1]
+
     telemetry_facts_files = []
     for f in ctx.files.data:
-        if f.basename == "context.json":
-            # Keep first-match semantics deterministic: data deps are already
-            # explicit in BUILD definitions and should not contain conflicting
-            # context files. If they do, first one wins for stability.
-            context_json_rloc = f.short_path
-            context_json_path = f.path
-        elif f.basename == "telemetry_facts.json":
+        if f.basename == "telemetry_facts.json":
             telemetry_facts_files.append(f)
     telemetry_facts_manifest = ctx.actions.declare_file(ctx.label.name + ".telemetry_facts_manifest")
     telemetry_facts_manifest_lines = []
@@ -633,9 +741,12 @@ def _uploader_impl(ctx):
             gzip_payloads,
         ),
     )
-    if context_json_rloc:
-        log_debug(debug, "inputs", "context.json found at: %s" % context_json_rloc)
-        log_debug(debug, "inputs", "context.json artifact path: %s" % context_json_path)
+    if context_entries:
+        log_debug(debug, "inputs", "bundled context repos: %s" % ", ".join(sorted(context_entries.keys())))
+        if primary_repo_key == "__single_context_fallback__":
+            log_debug(debug, "inputs", "using legacy single-context fallback for bundled context.json")
+        log_debug(debug, "inputs", "primary context.json found at: %s" % context_json_rloc)
+        log_debug(debug, "inputs", "primary context.json artifact path: %s" % context_json_path)
     else:
         # Runtime script treats missing context as best-effort disablement.
         log_debug(debug, "inputs", "context.json not found in data files; enrichment disabled")
@@ -665,6 +776,8 @@ def _uploader_impl(ctx):
         keep_payloads,
         filter_prefix_enabled,
         gzip_payloads,
+        context_manifest_rloc,
+        context_manifest_path,
         context_json_rloc,
         context_json_path,
         telemetry_facts_manifest_rloc,
@@ -700,6 +813,8 @@ def _uploader_impl(ctx):
                 keep_payloads,
                 filter_prefix_enabled,
                 gzip_payloads,
+                context_manifest_rloc,
+                context_manifest_path,
                 context_json_rloc,
                 context_json_path,
                 telemetry_facts_manifest_rloc,
@@ -737,7 +852,7 @@ def _uploader_impl(ctx):
         extra_files.append(ctx.file._schema)
     if ctx.file._schema_validator:
         extra_files.append(ctx.file._schema_validator)
-    runfiles = ctx.runfiles(files = [ps_file, bat_file, telemetry_facts_manifest] + ctx.files.data + extra_files)
+    runfiles = ctx.runfiles(files = [ps_file, bat_file, context_manifest, telemetry_facts_manifest] + ctx.files.data + extra_files)
     log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
     # Use target-platform constraints (ConstraintValueInfo) so executable

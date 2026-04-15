@@ -45,6 +45,12 @@ export REPO_ROOT
 export LOG_FILE
 export SNAPSHOT_DIR
 
+REAL_GO_BIN_HOST="${REAL_GO_BIN_HOST:-$(command -v go || true)}"
+if [[ -z "$REAL_GO_BIN_HOST" ]]; then
+  echo "error: go binary not found for bootstrap integration harness"
+  exit 1
+fi
+
 RULES_GO_OVERRIDE_REMOTE="$("$PYTHON" - <<'PY' "$REPO_ROOT"
 from pathlib import Path
 import sys
@@ -248,6 +254,14 @@ dd_payload_uploader(
 dd_payload_uploader(
     name = "dd_upload_payloads_with_context",
     data = ["@test_optimization_data//:test_optimization_context"],
+)
+
+dd_payload_uploader(
+    name = "dd_upload_payloads_multi_context",
+    data = [
+        "@test_optimization_data//:test_optimization_context",
+        "@test_optimization_data_nodejs//:test_optimization_context",
+    ],
 )
 BUILD_EOF
 
@@ -1567,6 +1581,17 @@ cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
 #!/bin/sh
 set -eu
 
+# The plain bootstrap scenario only validates file edits, so the fake Go tool
+# can stay fully stubbed here.
+ensure_require() {
+  module_path="$1"
+  version="$2"
+  require_line="require ${module_path} ${version}"
+  if ! grep -Fqx "$require_line" go.mod; then
+    printf '%s\n' "$require_line" >> go.mod
+  fi
+}
+
 if [ "${1:-}" = "-C" ] && [ "$#" -ge 3 ]; then
   cd "$2"
   shift 2
@@ -1603,16 +1628,22 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
     -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
     -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
     -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
+      module_and_version="${3#-require=}"
+      module_path="${module_and_version%@*}"
+      version="${module_and_version##*@}"
+      ensure_require "$module_path" "$version"
       exit 0
       ;;
   esac
 fi
 
 if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260409102143-ddd4e03ab47d" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
   exit 0
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
+  : > go.sum
   exit 0
 fi
 
@@ -1709,7 +1740,7 @@ chmod +x "$BOOT_WS/bin/go"
 
 (
   cd "$BOOT_WS"
-  PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  REAL_GO_BIN="$REAL_GO_BIN_HOST" PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
     --workspace "$BOOT_WS" \
     --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
     --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT"
@@ -1742,7 +1773,7 @@ fi
 printf 'custom: true\n' > "$BOOT_WS/orchestrion.yml"
 (
   cd "$BOOT_WS"
-  PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  REAL_GO_BIN="$REAL_GO_BIN_HOST" PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
     --workspace "$BOOT_WS" \
     --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
     --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT"
@@ -1784,6 +1815,57 @@ cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
 #!/bin/sh
 set -eu
 
+# The guided bootstrap scenario later builds a real Go test, so the fake Go
+# tool must warm the same stable Orchestrion cache that the sandboxed builder
+# will use.
+ensure_require() {
+  module_path="$1"
+  version="$2"
+  require_line="require ${module_path} ${version}"
+  if ! grep -Fqx "$require_line" go.mod; then
+    printf '%s\n' "$require_line" >> go.mod
+  fi
+}
+
+orchestrion_cache_root() {
+  if [ -n "${XDG_CACHE_HOME:-}" ]; then
+    printf '%s/%s\n' "$XDG_CACHE_HOME" "datadog-orchestrion-go-cache"
+    return
+  fi
+  if [ -n "${HOME:-}" ] && [ -d "${HOME}/Library/Caches" ]; then
+    printf '%s/%s\n' "${HOME}/Library/Caches" "datadog-orchestrion-go-cache"
+    return
+  fi
+  if [ -n "${HOME:-}" ]; then
+    printf '%s/%s\n' "${HOME}/.cache" "datadog-orchestrion-go-cache"
+    return
+  fi
+  printf '%s/%s\n' "${TMPDIR:-/tmp}" "datadog-orchestrion-go-cache"
+}
+
+run_real_go() {
+  if [ -z "${REAL_GO_BIN:-}" ] || [ ! -x "${REAL_GO_BIN}" ]; then
+    echo "missing REAL_GO_BIN for bootstrap integration harness" >&2
+    exit 1
+  fi
+  cache_root="$(orchestrion_cache_root)"
+  go_path="${cache_root}/gopath"
+  go_mod_cache="${go_path}/pkg/mod"
+  go_build_cache="${go_path}/cache"
+  mkdir -p "$go_mod_cache" "$go_build_cache"
+  # The bootstrap helper itself injects a temp GOPATH, but the later sandboxed
+  # stdlib builder consults Orchestrion's stable shared cache under
+  # ~/Library/Caches or XDG_CACHE_HOME. Warm that stable cache here.
+  GO111MODULE=on \
+  GOWORK=off \
+  GOPATH="$go_path" \
+  GOMODCACHE="$go_mod_cache" \
+  GOCACHE="$go_build_cache" \
+  GOPROXY=https://proxy.golang.org,direct \
+  GOSUMDB=sum.golang.org \
+  "$REAL_GO_BIN" "$@"
+}
+
 if [ "${1:-}" = "-C" ] && [ "$#" -ge 3 ]; then
   cd "$2"
   shift 2
@@ -1802,6 +1884,7 @@ PIN_TOOL_EOF
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com/DataDog/dd-trace-go/v2" ]; then
+  run_real_go "$@"
   exit 0
 fi
 
@@ -1810,6 +1893,7 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
     github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
+      run_real_go "$@"
       exit 0
       ;;
   esac
@@ -1820,16 +1904,22 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
     -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
     -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d|\
     -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260409102143-ddd4e03ab47d)
+      module_and_version="${3#-require=}"
+      module_path="${module_and_version%@*}"
+      version="${module_and_version##*@}"
+      ensure_require "$module_path" "$version"
       exit 0
       ;;
   esac
 fi
 
 if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260409102143-ddd4e03ab47d" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
   exit 0
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
+  : > go.sum
   exit 0
 fi
 
@@ -1907,16 +1997,22 @@ ORCH_STUB_EOF
 fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
-  case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2/orchestrion|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
-    github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
-    github.com/DataDog/dd-trace-go/v2/profiler|\
-    github.com/DataDog/dd-trace-go/v2/instrumentation/env)
-      exit 0
-      ;;
-  esac
+  # The guided bootstrap path passes extra flags such as -tags=tools before the
+  # package arguments. Scan the full argv instead of assuming the first package
+  # is always the third argument.
+  for arg in "$@"; do
+    case "$arg" in
+      github.com/DataDog/dd-trace-go/v2/orchestrion|\
+      github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+      github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
+      github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
+      github.com/DataDog/dd-trace-go/v2/profiler|\
+      github.com/DataDog/dd-trace-go/v2/instrumentation/env)
+        run_real_go "$@"
+        exit 0
+        ;;
+    esac
+  done
 fi
 
 echo "unexpected go invocation: $*" >&2
@@ -1962,7 +2058,7 @@ BUILD_GUIDED_EOF
 
 (
   cd "$GUIDED_BOOT_WS"
-  PATH="$GUIDED_BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  REAL_GO_BIN="$REAL_GO_BIN_HOST" PATH="$GUIDED_BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
     --workspace "$GUIDED_BOOT_WS" \
     --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
     --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT" \
@@ -2331,6 +2427,7 @@ cat > "$BAZEL_TARGET_METADATA_PATH" <<'JSON_EOF'
 {
   "bazel.package": "//src/go-project",
   "bazel.target": "//src/go-project:hello_test",
+  "bazel.test_optimization.repo_name": "test_optimization_data",
   "bazel.go.importpath": "example.com/sidecar/pkg",
   "bazel.go.importpath_source": "inferred",
   "bazel.go.payload_selection": "module",
@@ -2374,6 +2471,7 @@ start_line = int(os.environ.get("LOG_LINES_BEFORE_BAZEL_SIDECAR", "0") or "0")
 expected_tags = {
     "bazel.package": "//src/go-project",
     "bazel.target": "//src/go-project:hello_test",
+    "bazel.test_optimization.repo_name": "test_optimization_data",
     "bazel.go.importpath": "example.com/sidecar/pkg",
     "bazel.go.importpath_source": "inferred",
     "bazel.go.payload_selection": "module",
@@ -2425,6 +2523,212 @@ meta = ((target_evt.get("content") or {}).get("meta") or {})
 for key, value in expected_tags.items():
     if meta.get(key) != value:
         print(f"error: Bazel sidecar tag mismatch for {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+PY
+
+rm -f "$BAZEL_TARGET_METADATA_PATH"
+
+# Scenario: when multiple bundled contexts are present, the uploader must
+# select the context that matches the payload-side repo selector.
+cat > "$BAZEL_TARGET_METADATA_PATH" <<'JSON_EOF'
+{
+  "bazel.package": "//src/nodejs-project",
+  "bazel.target": "//src/nodejs-project:hello_test",
+  "bazel.test_optimization.repo_name": "test_optimization_data_nodejs",
+  "bazel.test_optimization.service_name": "mock-service-nodejs",
+  "bazel.test_optimization.runtime_name": "nodejs"
+}
+JSON_EOF
+
+LOG_LINES_BEFORE_MULTI_CONTEXT="$(log_line_count)"
+UPLOADER_MULTI_CONTEXT_LOG="$TMP_WS/uploader_multi_context.log"
+if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_multi_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_MULTI_CONTEXT_LOG" 2>&1; then
+  echo "error: uploader command with multiple bundled contexts failed"
+  cat "$UPLOADER_MULTI_CONTEXT_LOG" || true
+  exit 1
+fi
+
+LOG_LINES_BEFORE_MULTI_CONTEXT="$LOG_LINES_BEFORE_MULTI_CONTEXT" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("LOG_LINES_BEFORE_MULTI_CONTEXT", "0") or "0")
+target_package = "//src/nodejs-project"
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+target_resource = "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"
+target_evt = None
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
+        continue
+    try:
+        cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    for evt in cycle_payload.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        content = evt.get("content") or {}
+        if content.get("resource") != target_resource:
+            continue
+        meta = content.get("meta") or {}
+        if meta.get("bazel.package") != target_package:
+            continue
+        target_evt = evt
+        break
+    if target_evt is not None:
+        break
+
+if target_evt is None:
+    print("error: missing test event after multi-context uploader run")
+    sys.exit(1)
+
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+expected_tags = {
+    "bazel.package": "//src/nodejs-project",
+    "bazel.target": "//src/nodejs-project:hello_test",
+    "bazel.test_optimization.repo_name": "test_optimization_data_nodejs",
+    "bazel.test_optimization.service_name": "mock-service-nodejs",
+    "bazel.test_optimization.runtime_name": "nodejs",
+    "runtime.name": "nodejs",
+    "runtime.version": "1.2.3",
+    "service.name": "mock-service-nodejs",
+}
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: multi-context uploader tag mismatch for {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+
+for key, expected in {
+    "runtime.name": "go",
+    "service.name": "mock-service",
+}.items():
+    if meta.get(key) == expected:
+        print(f"error: multi-context uploader reused the wrong context tag {key}: {meta.get(key)!r}")
+        sys.exit(1)
+PY
+
+# Scenario: when no bundled context matches the payload selector, uploader
+# continues with Bazel sidecar tags only and skips bundled-context enrichment.
+cat > "$BAZEL_TARGET_METADATA_PATH" <<'JSON_EOF'
+{
+  "bazel.package": "//src/python-project",
+  "bazel.target": "//src/python-project:hello_test",
+  "bazel.test_optimization.repo_name": "missing_runtime_repo"
+}
+JSON_EOF
+
+LOG_LINES_BEFORE_MULTI_CONTEXT_MISS="$(log_line_count)"
+UPLOADER_MULTI_CONTEXT_MISS_LOG="$TMP_WS/uploader_multi_context_missing_repo.log"
+if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_multi_context \
+  "${REPO_ENVS[@]}" >"$UPLOADER_MULTI_CONTEXT_MISS_LOG" 2>&1; then
+  echo "error: uploader command with missing multi-context match failed"
+  cat "$UPLOADER_MULTI_CONTEXT_MISS_LOG" || true
+  exit 1
+fi
+
+if ! grep -q "no bundled context matched repo 'missing_runtime_repo'" "$UPLOADER_MULTI_CONTEXT_MISS_LOG"; then
+  echo "error: missing expected warning for unmatched multi-context payload"
+  cat "$UPLOADER_MULTI_CONTEXT_MISS_LOG" || true
+  exit 1
+fi
+
+LOG_LINES_BEFORE_MULTI_CONTEXT_MISS="$LOG_LINES_BEFORE_MULTI_CONTEXT_MISS" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("LOG_LINES_BEFORE_MULTI_CONTEXT_MISS", "0") or "0")
+
+records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+target_resource = "Samples.XUnitTests.TestSuite.SimpleErrorParameterizedTest"
+target_package = "//src/python-project"
+target_evt = None
+for rec in reversed(records):
+    if rec.get("path") != "/api/v2/citestcycle":
+        continue
+    try:
+        cycle_payload = json.loads(base64.b64decode(rec.get("body_b64", "")).decode("utf-8"))
+    except (base64.binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    for evt in cycle_payload.get("events", []):
+        if evt.get("type") != "test":
+            continue
+        content = evt.get("content") or {}
+        if content.get("resource") != target_resource:
+            continue
+        meta = content.get("meta") or {}
+        if meta.get("bazel.package") != target_package:
+            continue
+        target_evt = evt
+        break
+    if target_evt is not None:
+        break
+
+if target_evt is None:
+    print("error: missing test event after unmatched multi-context uploader run")
+    sys.exit(1)
+
+meta = ((target_evt.get("content") or {}).get("meta") or {})
+expected_tags = {
+    "bazel.package": "//src/python-project",
+    "bazel.target": "//src/python-project:hello_test",
+    "bazel.test_optimization.repo_name": "missing_runtime_repo",
+}
+for key, value in expected_tags.items():
+    if meta.get(key) != value:
+        print(f"error: unmatched multi-context Bazel tag mismatch for {key}: {meta.get(key)!r} != {value!r}")
+        sys.exit(1)
+
+for key, forbidden in {
+    "runtime.name": {"go", "nodejs"},
+    "runtime.version": {"1.2.3"},
+    "service.name": {"mock-service", "mock-service-nodejs"},
+}.items():
+    if meta.get(key) in forbidden:
+        print(f"error: unmatched multi-context run unexpectedly injected bundled context tag {key}: {meta.get(key)!r}")
         sys.exit(1)
 PY
 
