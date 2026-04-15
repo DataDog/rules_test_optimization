@@ -36,6 +36,10 @@ def _select_wrapper_output_name(label_name, executable_basename, is_windows):
         return label_name + ".bat"
     return label_name
 
+def _wrapped_actual_output_name(label_name, executable_basename):
+    """Return the wrapper-owned sibling executable name used on Unix."""
+    return label_name + "__wrapped_" + executable_basename
+
 def _unix_wrapper_content(actual_filename):
     """Render the Unix launcher used by wrapped non-Go test targets."""
     return """#!/usr/bin/env bash
@@ -94,19 +98,33 @@ def _topt_test_wrapper_impl(ctx):
     dep_run_environment = _dep_run_environment_info(ctx.attr.actual)
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
+    actual_files = []
+    wrapper_runfiles = ctx.runfiles(files = [ctx.file.metadata])
+
+    if is_windows:
+        actual_filename = dep_exe.basename
+    else:
+        actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
+
+        # Materialize the raw executable inside the wrapper runfiles tree so
+        # Unix launchers can execute a stable sibling path from TEST_SRCDIR.
+        ctx.actions.symlink(output = actual_out, target_file = dep_exe)
+        actual_filename = actual_out.basename
+        actual_files.append(actual_out)
+        wrapper_runfiles = wrapper_runfiles.merge(ctx.runfiles(files = [actual_out]))
+
     ctx.actions.write(
         output = out,
-        # The wrapped target already emits its executable beside the public
-        # wrapper output. Reusing that basename keeps platform-specific sibling
-        # launch assets, such as rules_python zip files on Windows, aligned
-        # with the executable name they expect.
-        content = _windows_wrapper_content(dep_exe.basename) if is_windows else _unix_wrapper_content(dep_exe.basename),
+        # Windows Python launchers require the executable basename to stay
+        # aligned with their sibling zip file, while Unix launchers need a
+        # wrapper-owned runfiles sibling to avoid execroot path guessing.
+        content = _windows_wrapper_content(actual_filename) if is_windows else _unix_wrapper_content(actual_filename),
         is_executable = True,
     )
 
     providers = [DefaultInfo(
-        files = depset([out]),
-        runfiles = dep_runfiles.merge(ctx.runfiles(files = [ctx.file.metadata])),
+        files = depset([out] + actual_files),
+        runfiles = dep_runfiles.merge(wrapper_runfiles),
         executable = out,
     )]
     if dep_run_environment:
