@@ -65,17 +65,18 @@ fi
 exec "$actual" "$@"
 """ % (actual_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_filename):
+def _windows_wrapper_content(actual_runfile):
     """Render the Windows launcher used by wrapped non-Go test targets."""
     return """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
-set "ACTUAL=%%SCRIPT_DIR%%%s"
+set "ACTUAL_RLOC=%s"
 set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
 set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
 
-if not exist "%%ACTUAL%%" (
-  echo topt_test_wrapper: wrapped test executable not found: %%ACTUAL%% 1>&2
+call :resolve_runfile "%%ACTUAL_RLOC%%"
+if not defined ACTUAL (
+  echo topt_test_wrapper: wrapped test executable not found: %%ACTUAL_RLOC%% 1>&2
   exit /b 1
 )
 
@@ -98,8 +99,54 @@ exit /b %%EXITCODE%%
 call "%%ACTUAL%%" %%*
 set "EXITCODE=%%ERRORLEVEL%%"
 exit /b %%EXITCODE%%
+
+:resolve_runfile
+set "ACTUAL="
+set "INPUT=%%~1"
+if "%%INPUT%%"=="" goto :eof
+call :try_runfile "%%INPUT%%"
+if defined ACTUAL goto :eof
+
+if /I "%%INPUT:~0,9%%"=="external/" (
+  set "ALT=%%INPUT:~9%%"
+  call :try_runfile "%%ALT%%"
+  if defined ACTUAL goto :eof
+) else (
+  call :try_runfile "external/%%INPUT%%"
+  if defined ACTUAL goto :eof
+)
+
+if /I not "%%INPUT:~0,6%%"=="_main/" (
+  call :try_runfile "_main/%%INPUT%%"
+)
+goto :eof
+
+:try_runfile
+set "CAND=%%~1"
+if "%%CAND%%"=="" goto :eof
+set "CAND_PATH=%%CAND:/=\\%%"
+
+if not "%%RUNFILES_DIR%%"=="" if exist "%%RUNFILES_DIR%%\\%%CAND_PATH%%" (
+  set "ACTUAL=%%RUNFILES_DIR%%\\%%CAND_PATH%%"
+  goto :eof
+)
+
+if exist "%%~f0.runfiles\\%%CAND_PATH%%" (
+  set "ACTUAL=%%~f0.runfiles\\%%CAND_PATH%%"
+  goto :eof
+)
+
+if not "%%RUNFILES_MANIFEST_FILE%%"=="" if exist "%%RUNFILES_MANIFEST_FILE%%" (
+  for /f "usebackq tokens=1,* delims= " %%%%A in ("%%RUNFILES_MANIFEST_FILE%%") do (
+    if "%%%%A"=="%%CAND%%" (
+      set "ACTUAL=%%%%B"
+      goto :eof
+    )
+  )
+)
+goto :eof
 """ % (
-        actual_filename.replace("/", "\\"),
+        actual_runfile.replace("\\", "/"),
         _BAZEL_TARGET_METADATA_OUTPUT,
     )
 
@@ -113,7 +160,7 @@ def _topt_test_wrapper_impl(ctx):
     wrapper_runfiles = ctx.runfiles(files = [ctx.file.metadata])
 
     if is_windows:
-        actual_filename = dep_exe.basename
+        actual_filename = dep_exe.short_path
     else:
         actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
 
@@ -198,3 +245,4 @@ topt_bazel_metadata = rule(
 )
 
 select_test_wrapper_output_name_for_tests = _select_wrapper_output_name
+render_windows_wrapper_content_for_tests = _windows_wrapper_content

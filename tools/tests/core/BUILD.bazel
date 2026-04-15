@@ -129,9 +129,12 @@ load(
     "merge_optional_env_defaults_select_passthrough_test",
 )
 load(
+    "//tools/tests/core:test_topt_test_wrapper_utils.bzl",
+    "windows_wrapper_uses_runfiles_resolution_test",
+)
+load(
     "//tools/tests/core:test_uploader_utils.bzl",
     "bash_curl_retry_flags_test",
-    "context_manifest_content_test",
     "codeowners_compile_regex_edge_cases_test",
     "codeowners_compile_regex_test",
     "codeowners_derived_candidate_filter_test",
@@ -141,6 +144,7 @@ load(
     "codeowners_lookup_order_test",
     "codeowners_section_header_classification_test",
     "codeowners_section_header_powershell_parity_test",
+    "context_manifest_content_test",
     "manifest_trim_and_bom_helpers_test",
     "render_template_missing_placeholder_test",
     "render_template_no_recursive_substitution_test",
@@ -925,6 +929,12 @@ codeowners_lookup_order_empty_script_dir_test(
     timeout = "short",
 )
 
+windows_wrapper_uses_runfiles_resolution_test(
+    name = "windows_wrapper_uses_runfiles_resolution_test",
+    size = "small",
+    timeout = "short",
+)
+
 # Core-only suite. Language suites now live in companion modules, for example:
 # `@datadog-rules-test-optimization-go//tests:tests`.
 test_suite(
@@ -952,6 +962,7 @@ test_suite(
         ":compute_service_keys_dedups_collisions_test",
         ":compute_service_keys_edge_cases_test",
         ":contains_parent_segment_test",
+        ":context_manifest_content_test",
         ":dd_site_invalid_failure_test",
         ":dd_site_normalization_test",
         ":decode_json_object_array_failure_test",
@@ -978,7 +989,6 @@ test_suite(
         ":load_github_event_payload_ctx_test",
         ":log_helpers_and_is_dict_test",
         ":manifest_trim_and_bom_helpers_test",
-        ":context_manifest_content_test",
         ":merge_optional_env_defaults_ignores_empty_defaults_test",
         ":merge_optional_env_defaults_injects_missing_key_test",
         ":merge_optional_env_defaults_none_env_test",
@@ -1033,5 +1043,6 @@ test_suite(
         ":validate_service_name_test",
         ":validate_service_name_too_long_failure_test",
         ":validate_service_name_whitespace_failure_test",
+        ":windows_wrapper_uses_runfiles_resolution_test",
     ],
 )
