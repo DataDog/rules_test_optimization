@@ -156,9 +156,9 @@ pip = use_extension(
     dev_dependency = True,
 )
 pip.parse(
+    experimental_index_url = "https://pypi.org/simple",
     hub_name = "example_pip",
     python_version = "3.12",
-    experimental_index_url = "https://pypi.org/simple",
     requirements_lock = "//examples/single_service/src/python-project:requirements_lock.txt",
 )
 use_repo(pip, "example_pip")
