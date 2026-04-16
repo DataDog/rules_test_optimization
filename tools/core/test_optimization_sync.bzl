@@ -14,7 +14,7 @@ This file defines:
   can always depend on the declared outputs.
 - An optional request to the Flaky Tests API when the settings say
   `flaky_test_retries_enabled = true`, writing `flaky_tests_file`. The raw
-  array response is transformed into a module-indexed structure before writing.
+  backend response is persisted as-is; per-module files are derived afterward.
 
 Repository-rule execution model:
 - This code runs during Bazel repository/module resolution, not test runtime.
@@ -650,15 +650,95 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
     )
 
 def _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = None):
-    """Split aggregate flaky-tests payload into one file per module."""
-    return _split_json_payload_by_module(
-        ctx,
-        flaky_tests_file,
-        debug,
-        module_key = "tests",
-        output_filename = "flaky_tests.json",
-        label_map = label_map,
-    )
+    """Split raw flaky-tests payload into one file per module.
+
+    Unlike known_tests/test_management which use `_split_json_payload_by_module`
+    for their `data.attributes.<key>` object payloads, the flaky-tests endpoint
+    returns `data` as a flat array. This splitter:
+    - decodes the original raw response from flaky_tests.json
+    - groups entries by `entry.attributes.configurations.test.bundle`
+    - ignores malformed entries
+    - clones the full response envelope (preserving all top-level keys)
+    - replaces only `new_obj["data"]` with each module's filtered entries
+    - preserves original entry order within each module's data array
+    - writes per-module files to `module_<label>/flaky_tests.json`
+    """
+    specs = []
+    src_path = ctx.path(flaky_tests_file)
+    content = ctx.read(src_path)
+    if not content or not content.strip():
+        return specs
+
+    obj = _decode_json_object_or_fail(content, flaky_tests_file)
+    data_arr = obj.get("data")
+    if type(data_arr) != type([]):
+        return specs
+
+    # Group entries by module, preserving original order within each group
+    module_entries = {}
+    module_order = []
+    for entry in data_arr:
+        if not _is_dict(entry):
+            continue
+        attrs = entry.get("attributes")
+        if not _is_dict(attrs):
+            continue
+        configs = attrs.get("configurations")
+        if not _is_dict(configs):
+            continue
+        test_config = configs.get("test")
+        if not _is_dict(test_config):
+            continue
+        bundle = test_config.get("bundle") or ""
+        if not bundle:
+            continue
+        if bundle not in module_entries:
+            module_entries[bundle] = []
+            module_order.append(bundle)
+        module_entries[bundle].append(entry)
+
+    if not module_entries:
+        return specs
+
+    base_dir = _dirname(flaky_tests_file)
+
+    # Deterministic module ordering
+    module_names = sorted(module_order)
+
+    # Compute sanitized labels (use provided mapping or generate fresh)
+    if label_map:
+        deduped_labels = [label_map.get(m) or sanitize_label_fragment(m) for m in module_names]
+    else:
+        raw_labels = [sanitize_label_fragment(m) for m in module_names]
+        deduped_labels = dedup_keys(raw_labels)
+
+    for i in range(len(module_names)):
+        module_name = module_names[i]
+        label = deduped_labels[i]
+        entries = module_entries[module_name]
+
+        per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
+        out_file = per_module_dir + "/flaky_tests.json"
+
+        # Clone full response envelope and replace only `data` with filtered entries
+        new_obj = _clone_json_like(obj)
+        new_obj["data"] = entries
+
+        _ensure_parent_directory(ctx, out_file, debug)
+        ctx.file(out_file, json.encode(new_obj) + "\n")
+        log_debug(
+            debug,
+            "module",
+            "Wrote per-module flaky_tests.json file '%s' for module '%s'" % (out_file, module_name),
+        )
+
+        specs.append({
+            "module": module_name,
+            "label": label,
+            "file": out_file,
+        })
+
+    return specs
 
 def _detect_os_info(ctx, debug):
     """Detect host OS platform/version/arch for request configuration tags."""
@@ -974,77 +1054,42 @@ def _count_flaky_tests_response_tests(flaky_tests_obj):
         return len(data_arr)
     return 0
 
-def _transform_flaky_tests_response(flaky_tests_obj):
-    """Transform the array-based flaky tests response into a module-indexed structure.
+def _collect_flaky_tests_modules(ctx, flaky_tests_file):
+    """Return sorted unique module names present in the raw flaky_tests payload.
 
-    The raw flaky tests endpoint returns:
-        {"data": [{"attributes": {"suite": "...", "name": "...", "configurations": {"test": {"bundle": "module"}}}}]}
-
-    This function transforms it into the known_tests-compatible format:
-        {"data": {"attributes": {"tests": {"module": {"suite": ["test1", "test2"]}}}}}
-
-    This enables reuse of _split_json_payload_by_module with module_key="tests".
+    The raw flaky-tests endpoint returns `data` as an array of entries.
+    Each entry's module is at `entry.attributes.configurations.test.bundle`.
+    Malformed entries (missing attributes, configurations, test, or bundle)
+    are silently ignored.
     """
-    data_arr = flaky_tests_obj.get("data")
+    ft_path = ctx.path(flaky_tests_file)
+    content = ctx.read(ft_path)
+    if not content or not content.strip():
+        return []
+    obj = _decode_json_object_or_fail(content, flaky_tests_file)
+    data_arr = obj.get("data")
     if type(data_arr) != type([]):
-        return {"data": {"attributes": {"tests": {}}}}
-
-    # Group by module -> suite -> list of test names
-    modules = {}
+        return []
+    seen = {}
+    modules = []
     for entry in data_arr:
         if not _is_dict(entry):
             continue
         attrs = entry.get("attributes")
         if not _is_dict(attrs):
             continue
-        name = attrs.get("name") or ""
-        suite = attrs.get("suite") or ""
         configs = attrs.get("configurations")
         if not _is_dict(configs):
             continue
         test_config = configs.get("test")
         if not _is_dict(test_config):
             continue
-        module = test_config.get("bundle") or ""
-        if not module:
+        bundle = test_config.get("bundle") or ""
+        if not bundle:
             continue
-
-        if module not in modules:
-            modules[module] = {}
-        if suite not in modules[module]:
-            modules[module][suite] = []
-        modules[module][suite].append(name)
-
-    return {"data": {"attributes": {"tests": modules}}}
-
-def _collect_flaky_tests_modules(ctx, flaky_tests_file):
-    """Return sorted module names present in flaky_tests payload.
-
-    Expects the transformed (module-indexed) format written after
-    _transform_flaky_tests_response has been applied.
-    """
-
-    # _collect_flaky_tests_modules: list module names from flaky_tests.json
-    ft_path = ctx.path(flaky_tests_file)
-    content = ctx.read(ft_path)
-    if not content or not content.strip():
-        return []
-    obj = _decode_json_object_or_fail(content, flaky_tests_file)
-    data_obj = obj.get("data")
-    if not _is_dict(data_obj):
-        data_obj = {}
-    attrs_obj = data_obj.get("attributes")
-    if not _is_dict(attrs_obj):
-        attrs_obj = {}
-    tests_obj = attrs_obj.get("tests")
-    if not _is_dict(tests_obj):
-        tests_obj = {}
-    if not _is_dict(tests_obj):
-        return []
-    modules = []
-    for k in tests_obj.keys():
-        if _is_dict(tests_obj.get(k)):
-            modules.append(k)
+        if not seen.get(bundle):
+            seen[bundle] = True
+            modules.append(bundle)
     return sorted(modules)
 
 def _collect_known_tests_modules(ctx, known_tests_file):
@@ -1523,7 +1568,7 @@ count_known_tests_response_tests_for_tests = _count_known_tests_response_tests
 count_test_management_response_tests_for_tests = _count_test_management_response_tests
 count_flaky_tests_response_tests_for_tests = _count_flaky_tests_response_tests
 collect_flaky_tests_modules_for_tests = _collect_flaky_tests_modules
-transform_flaky_tests_response_for_tests = _transform_flaky_tests_response
+split_flaky_tests_by_module_for_tests = _split_flaky_tests_by_module
 
 # ##########################################################################
 # CI environment detection
@@ -2327,16 +2372,11 @@ def _impl(ctx):
         _append_telemetry_distribution(telemetry_facts, "flaky_tests.response_bytes", flaky_tests_result.get("response_bytes", 0))
         _append_telemetry_distribution(telemetry_facts, "flaky_tests.response_tests", _count_flaky_tests_response_tests(flaky_tests_raw))
 
-        # Transform array-based response into module-indexed structure
-        # so _split_json_payload_by_module can process it uniformly.
-        flaky_tests_transformed = _transform_flaky_tests_response(flaky_tests_raw)
-        ctx.file(flaky_tests_file, json.encode(flaky_tests_transformed) + "\n")
     else:
         log_debug(debug, "flaky_tests", "flaky_test_retries_enabled is false; writing empty flaky tests file")
 
-        # Minimal valid JSON structure
-        # Keep canonical envelope shape so downstream code can parse uniformly.
-        ctx.file(flaky_tests_file, '{"data": {"attributes": {"tests": {}}}}\n')
+        # Minimal valid JSON stub in the raw endpoint shape (data is an array).
+        ctx.file(flaky_tests_file, '{"data": []}\n')
 
     # Always add flaky_tests.json to exports (either real data or stub)
     exports.append(flaky_tests_file)
@@ -2528,7 +2568,7 @@ def _impl(ctx):
                 per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
                 ffile = per_dir + "/flaky_tests.json"
                 _ensure_parent_directory(ctx, ffile, debug)
-                ctx.file(ffile, '{"data": {"attributes": {"tests": {}}}}\n')
+                ctx.file(ffile, '{"data": []}\n')
                 flaky_by_label[lab] = ffile
 
         for lab in labels_for_modules:

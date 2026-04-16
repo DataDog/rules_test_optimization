@@ -137,9 +137,10 @@ Datadog’s TIA works at the file level, similar to Bazel’s caching model. Baz
 
 ### Flaky Test Management
 
-This feature depends on a JSON list of flaky tests and their statuses (e.g. disabled, quarantined).
+This feature depends on a raw JSON list of flaky tests and their statuses fetched from `api/v2/ci/libraries/tests/flaky`. The raw backend response (with `data` as an array of test entries) is persisted as-is under `cache/http/flaky_tests.json`, then split into per-module files by grouping entries on `entry.attributes.configurations.test.bundle`.
 
-* Any status update invalidates the cache for affected test rules.  
+* Gated by `flaky_test_retries_enabled` in the Settings response.
+* Any status update invalidates the cache for affected test rules.
 * Per‑module files again help narrow invalidations. Unlike TIA, Test Management provides clear value even with occasional cache churn.
 
 ## Multi‑service aggregation

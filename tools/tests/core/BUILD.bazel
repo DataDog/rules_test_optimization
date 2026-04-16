@@ -122,7 +122,7 @@ load(
     "sync_success_metric_tags_parity_test",
     "telemetry_facts_document_test",
     "telemetry_response_counts_test",
-    "transform_flaky_tests_response_test",
+    "split_flaky_tests_by_module_test",
 )
 load(
     "//tools/tests/core:test_topt_macro_utils.bzl",
@@ -723,8 +723,8 @@ count_flaky_tests_response_tests_test(
     timeout = "short",
 )
 
-transform_flaky_tests_response_test(
-    name = "transform_flaky_tests_response_test",
+split_flaky_tests_by_module_test(
+    name = "split_flaky_tests_by_module_test",
     size = "small",
     timeout = "short",
 )
@@ -1034,7 +1034,7 @@ test_suite(
         ":collect_test_management_modules_defensive_shape_test",
         ":compute_repo_names_test",
         ":count_flaky_tests_response_tests_test",
-        ":transform_flaky_tests_response_test",
+        ":split_flaky_tests_by_module_test",
         ":compute_service_keys_dedups_collisions_test",
         ":compute_service_keys_edge_cases_test",
         ":contains_parent_segment_test",

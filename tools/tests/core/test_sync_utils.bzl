@@ -48,7 +48,7 @@ load(
     "runtime_module_path_from_environ_for_tests",
     "sanitize_repository_url_for_tests",
     "set_context_tag_from_env_for_tests",
-    "transform_flaky_tests_response_for_tests",
+    "split_flaky_tests_by_module_for_tests",
 )
 load(
     "//tools/tests:example_stub_repo.bzl",
@@ -1402,6 +1402,10 @@ def _sync_success_metric_tags_parity_test(ctx):
     append_telemetry_distribution_for_tests(facts, "test_management_tests.request_ms", 20)
     append_telemetry_distribution_for_tests(facts, "test_management_tests.response_bytes", 96)
     append_telemetry_distribution_for_tests(facts, "test_management_tests.response_tests", 2)
+    append_telemetry_count_for_tests(facts, "flaky_tests.request")
+    append_telemetry_distribution_for_tests(facts, "flaky_tests.request_ms", 18)
+    append_telemetry_distribution_for_tests(facts, "flaky_tests.response_bytes", 64)
+    append_telemetry_distribution_for_tests(facts, "flaky_tests.response_tests", 5)
 
     count_tags = {}
     for metric in facts.get("counts"):
@@ -1414,6 +1418,7 @@ def _sync_success_metric_tags_parity_test(ctx):
     asserts.equals(env, ["test_management_enabled:true"], count_tags.get("git_requests.settings_response"))
     asserts.equals(env, [], count_tags.get("known_tests.request"))
     asserts.equals(env, [], count_tags.get("test_management_tests.request"))
+    asserts.equals(env, [], count_tags.get("flaky_tests.request"))
 
     asserts.equals(env, [], distribution_tags.get("git_requests.settings_ms"))
     asserts.equals(env, [], distribution_tags.get("known_tests.request_ms"))
@@ -1422,6 +1427,9 @@ def _sync_success_metric_tags_parity_test(ctx):
     asserts.equals(env, [], distribution_tags.get("test_management_tests.request_ms"))
     asserts.equals(env, [], distribution_tags.get("test_management_tests.response_bytes"))
     asserts.equals(env, [], distribution_tags.get("test_management_tests.response_tests"))
+    asserts.equals(env, [], distribution_tags.get("flaky_tests.request_ms"))
+    asserts.equals(env, [], distribution_tags.get("flaky_tests.response_bytes"))
+    asserts.equals(env, [], distribution_tags.get("flaky_tests.response_tests"))
     return unittest.end(env)
 
 def _telemetry_response_counts_test(ctx):
@@ -1478,85 +1486,126 @@ def _count_flaky_tests_response_tests_test(ctx):
     # Empty array
     asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({"data": []}))
 
-    # data is not an array (e.g. after transform)
+    # data is not an array (unexpected shape)
     asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({"data": {"attributes": {}}}))
 
     # Missing data key
     asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({}))
     return unittest.end(env)
 
-def _transform_flaky_tests_response_test(ctx):
-    """Validate transformation of array-based flaky response to module-indexed structure."""
+def _split_flaky_tests_by_module_test(ctx):
+    """Validate raw per-module flaky split preserves envelope and filters data."""
     env = unittest.begin(ctx)
 
-    # Normal transformation
+    # Build a fake ctx that supports path/read/file for the raw splitter
+    written = {}
+
+    def _fake_path(p):
+        return p
+
+    def _fake_read(p):
+        return written.get(p, "")
+
+    def _fake_file(p, content):
+        written[p] = content
+
+    def _noop_execute(_args, **_kwargs):
+        return struct(return_code = 0, stdout = "", stderr = "")
+
+    fake_ctx = struct(
+        path = _fake_path,
+        read = _fake_read,
+        file = _fake_file,
+        execute = _noop_execute,
+        os = struct(name = "linux", environ = {}),
+    )
+
+    # Seed the source file with a raw response containing extra top-level keys
     raw = {
         "data": [
-            {"attributes": {"name": "test_a", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
-            {"attributes": {"name": "test_b", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
-            {"attributes": {"name": "test_c", "suite": "suite_two", "configurations": {"test": {"bundle": "module_b"}}}},
+            {"id": "1", "type": "flaky_test", "attributes": {"name": "test_a", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
+            {"id": "2", "type": "flaky_test", "attributes": {"name": "test_b", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
+            {"id": "3", "type": "flaky_test", "attributes": {"name": "test_c", "suite": "suite_two", "configurations": {"test": {"bundle": "module_b"}}}},
+            {"not_an_entry": True},
+            {"id": "4", "type": "flaky_test", "attributes": {"name": "test_d", "suite": "suite_three"}},
         ],
+        "meta": {"request_id": "abc123"},
     }
-    result = transform_flaky_tests_response_for_tests(raw)
-    tests = result["data"]["attributes"]["tests"]
-    asserts.equals(env, 2, len(tests))
-    asserts.equals(env, ["test_a", "test_b"], tests["module_a"]["suite_one"])
-    asserts.equals(env, ["test_c"], tests["module_b"]["suite_two"])
+    written["flaky_tests.json"] = json.encode(raw)
 
-    # Empty array
-    result_empty = transform_flaky_tests_response_for_tests({"data": []})
-    asserts.equals(env, {}, result_empty["data"]["attributes"]["tests"])
+    specs = split_flaky_tests_by_module_for_tests(fake_ctx, "flaky_tests.json", False)
 
-    # data is not an array
-    result_bad = transform_flaky_tests_response_for_tests({"data": "not-an-array"})
-    asserts.equals(env, {}, result_bad["data"]["attributes"]["tests"])
+    # Two modules should be produced
+    asserts.equals(env, 2, len(specs))
+    asserts.equals(env, "module_a", specs[0]["module"])
+    asserts.equals(env, "module_b", specs[1]["module"])
 
-    # Entry missing configurations
-    raw_missing = {
-        "data": [
-            {"attributes": {"name": "t1", "suite": "s1"}},
-        ],
-    }
-    result_missing = transform_flaky_tests_response_for_tests(raw_missing)
-    asserts.equals(env, {}, result_missing["data"]["attributes"]["tests"])
+    # Verify per-module file for module_a preserves envelope and filters data
+    mod_a_content = written.get(specs[0]["file"], "")
+    mod_a_obj = json.decode(mod_a_content.strip())
+    asserts.equals(env, "abc123", mod_a_obj["meta"]["request_id"])
+    asserts.equals(env, 2, len(mod_a_obj["data"]))
+    asserts.equals(env, "1", mod_a_obj["data"][0]["id"])
+    asserts.equals(env, "2", mod_a_obj["data"][1]["id"])
 
-    # Entry with empty bundle
-    raw_empty_bundle = {
-        "data": [
-            {"attributes": {"name": "t1", "suite": "s1", "configurations": {"test": {"bundle": ""}}}},
-        ],
-    }
-    result_empty_bundle = transform_flaky_tests_response_for_tests(raw_empty_bundle)
-    asserts.equals(env, {}, result_empty_bundle["data"]["attributes"]["tests"])
+    # Verify per-module file for module_b
+    mod_b_content = written.get(specs[1]["file"], "")
+    mod_b_obj = json.decode(mod_b_content.strip())
+    asserts.equals(env, "abc123", mod_b_obj["meta"]["request_id"])
+    asserts.equals(env, 1, len(mod_b_obj["data"]))
+    asserts.equals(env, "3", mod_b_obj["data"][0]["id"])
+
+    # Empty data array -> no specs
+    written["empty.json"] = json.encode({"data": []})
+    empty_specs = split_flaky_tests_by_module_for_tests(fake_ctx, "empty.json", False)
+    asserts.equals(env, 0, len(empty_specs))
+
+    # data is not an array -> no specs
+    written["bad.json"] = json.encode({"data": "not-an-array"})
+    bad_specs = split_flaky_tests_by_module_for_tests(fake_ctx, "bad.json", False)
+    asserts.equals(env, 0, len(bad_specs))
+
     return unittest.end(env)
 
 def _collect_flaky_tests_modules_defensive_shape_test(ctx):
-    """Validate flaky-tests module collection tolerates malformed nested shapes."""
+    """Validate flaky-tests module collection from raw array response."""
     env = unittest.begin(ctx)
     fake_ctx = _fake_read_ctx({
+        # Normal raw response with valid entries
         "flaky_tests.json": json.encode({
-            "data": {
-                "attributes": {
-                    "tests": {
-                        "module_a": {"suite": ["test"]},
-                        "module_b": "not-a-map",
-                    },
-                },
-            },
+            "data": [
+                {"attributes": {"name": "t1", "suite": "s1", "configurations": {"test": {"bundle": "module_a"}}}},
+                {"attributes": {"name": "t2", "suite": "s1", "configurations": {"test": {"bundle": "module_b"}}}},
+                # Malformed entry (no attributes) - should be ignored
+                {"not_valid": True},
+                # Entry with missing configurations - should be ignored
+                {"attributes": {"name": "t3", "suite": "s2"}},
+                # Entry with empty bundle - should be ignored
+                {"attributes": {"name": "t4", "suite": "s3", "configurations": {"test": {"bundle": ""}}}},
+            ],
         }),
-        "flaky_tests_bad_data.json": json.encode({
+        # Empty data array
+        "flaky_tests_empty.json": json.encode({
             "data": [],
         }),
-        "flaky_tests_bad_attrs.json": json.encode({
-            "data": {
-                "attributes": "not-a-map",
-            },
+        # data is not an array (object shape)
+        "flaky_tests_bad_data.json": json.encode({
+            "data": {"attributes": {}},
+        }),
+        # Missing data key entirely
+        "flaky_tests_no_data.json": json.encode({
+            "meta": {"request_id": "abc"},
         }),
     })
     asserts.equals(
         env,
-        ["module_a"],
+        ["module_a", "module_b"],
         collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_empty.json"),
     )
     asserts.equals(
         env,
@@ -1566,7 +1615,7 @@ def _collect_flaky_tests_modules_defensive_shape_test(ctx):
     asserts.equals(
         env,
         [],
-        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_bad_attrs.json"),
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_no_data.json"),
     )
     return unittest.end(env)
 
@@ -1899,7 +1948,7 @@ settings_response_tags_test = unittest.make(_settings_response_tags_test)
 sync_success_metric_tags_parity_test = unittest.make(_sync_success_metric_tags_parity_test)
 telemetry_response_counts_test = unittest.make(_telemetry_response_counts_test)
 count_flaky_tests_response_tests_test = unittest.make(_count_flaky_tests_response_tests_test)
-transform_flaky_tests_response_test = unittest.make(_transform_flaky_tests_response_test)
+split_flaky_tests_by_module_test = unittest.make(_split_flaky_tests_by_module_test)
 module_label_map_flaky_modules_test = unittest.make(_module_label_map_flaky_modules_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 render_module_runfiles_bzl_escaping_test = unittest.make(_render_module_runfiles_bzl_escaping_test)
