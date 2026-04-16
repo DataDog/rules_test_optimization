@@ -164,6 +164,22 @@ def dd_topt_py_test(
         macro_name = "dd_topt_py_test",
     )
 
+    # Activate the ddtrace pytest plugin via PYTEST_ADDOPTS:
+    # - Not set → inject "--ddtrace" as a default.
+    # - Set to a plain string without "--no-ddtrace" → append " --ddtrace".
+    # - Set to a plain string containing "--no-ddtrace" → leave unchanged.
+    # - Set to a select() value → leave unchanged (caller is responsible).
+    _existing_pytest_addopts = user_env.get("PYTEST_ADDOPTS") if _is_dict(user_env) else None
+    if _existing_pytest_addopts == None:
+        user_env = _merge_optional_env_defaults(
+            user_env,
+            {"PYTEST_ADDOPTS": "--ddtrace"},
+            macro_name = "dd_topt_py_test",
+        )
+    elif type(_existing_pytest_addopts) == type("") and "--no-ddtrace" not in _existing_pytest_addopts.split():
+        user_env = dict(user_env)
+        user_env["PYTEST_ADDOPTS"] = _existing_pytest_addopts + " --ddtrace"
+
     data = _append_data_dependencies(data, [":" + selector_name])
 
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
