@@ -29,6 +29,8 @@ load(
 load("@rules_python//python:py_test.bzl", _default_py_test = "py_test")
 load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 
+_RUN_PYTEST = Label("//:run_pytest.py")
+
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
@@ -97,7 +99,14 @@ def dd_topt_py_test(
 
     user_deps = kwargs.pop("deps", None)
     deps_labels = user_deps if user_deps != None else []
-    imports_candidates = kwargs.get("imports")
+
+    user_srcs = kwargs.pop("srcs", None)
+    user_main = kwargs.pop("main", None)
+
+    # args is a wrapper-only attr; split_test_wrapper_kwargs already moved it to wrapper_kwargs.
+    user_args = wrapper_kwargs.pop("args", None)
+
+    imports_candidates = kwargs.pop("imports", None)
     if imports_candidates == None:
         imports_candidates = []
     importpath_candidate = kwargs.get("importpath") if "importpath" in kwargs else None
@@ -195,6 +204,29 @@ def dd_topt_py_test(
         macro_name = "dd_topt_py_test",
     )
 
+    # Compute srcs: user list + bundled run_pytest.py entry point.
+    srcs = _append_data_dependencies(user_srcs, [_RUN_PYTEST])
+
+    # Default main to the bundled run_pytest.py if not provided.
+    main = user_main if user_main != None else _RUN_PYTEST
+
+    # Default args to the package path (pytest test file discovery).
+    # args goes on the wrapper (which forwards them to the raw test via "$@").
+    if user_args != None:
+        wrapper_kwargs["args"] = user_args
+    elif pkg_path:
+        wrapper_kwargs["args"] = [pkg_path]
+    else:
+        wrapper_kwargs["args"] = []
+
+    # Default imports to the package path for correct module resolution.
+    if imports_candidates:
+        imports_for_test = imports_candidates
+    elif pkg_path:
+        imports_for_test = [pkg_path]
+    else:
+        imports_for_test = []
+
     raw_name = name + "__raw_python_test"
     kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
     kwargs["visibility"] = ["//visibility:private"]
@@ -203,6 +235,9 @@ def dd_topt_py_test(
 
     py_test_rule(
         name = raw_name,
+        srcs = srcs,
+        main = main,
+        imports = imports_for_test,
         data = data,
         env = env,
         deps = user_deps,

@@ -44,7 +44,9 @@ _py_test_capture_rule = rule(
         "env": attr.string_dict(),
         "imports": attr.string_list(),
         "importpath": attr.string(),
+        "main": attr.label(allow_single_file = True),
         "module_path": attr.string(),
+        "srcs": attr.label_list(allow_files = True),
     },
     executable = True,
 )
