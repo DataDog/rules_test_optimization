@@ -154,6 +154,22 @@ dd_go_test(
 )
 ```
 
+Enable runtime source staging only when the tracer needs to open the source
+file for AST-derived metadata:
+
+```bzl
+dd_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    stage_sources = True,
+)
+```
+
+The wrapper forwards `**kwargs`, so `stage_sources` works the same way as on
+`dd_topt_go_test`. It stages only direct `srcs` and direct `embedsrcs`, and it
+changes the default `rundir` to `.` only when you did not already set one.
+
 BUILD.bazel (Python companion):
 
 ```bzl

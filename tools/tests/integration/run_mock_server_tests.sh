@@ -2031,11 +2031,38 @@ GO_MAIN_GUIDED_EOF
 cat > "$GUIDED_BOOT_WS/src/go-project/main_test.go" <<'GO_TEST_GUIDED_EOF'
 package main
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"testing"
+)
 
 func TestGreeting(t *testing.T) {
 	if Greeting() != "Hello World from Go" {
 		t.Fatalf("unexpected greeting")
+	}
+}
+
+func TestStageSourcesEnablesRepoRelativeAstLookup(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "src/go-project/main_test.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse repo-relative source file: %v", err)
+	}
+
+	endLine := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		fn, ok := node.(*ast.FuncDecl)
+		if !ok || fn.Name == nil || fn.Name.Name != "TestGreeting" {
+			return true
+		}
+		endLine = fset.Position(fn.End()).Line
+		return false
+	})
+
+	if endLine <= 0 {
+		t.Fatalf("failed to resolve TestGreeting end line from AST")
 	}
 }
 GO_TEST_GUIDED_EOF
@@ -2053,6 +2080,7 @@ dd_go_test(
     name = "hello_test",
     srcs = ["main_test.go"],
     embed = [":hello_lib"],
+    stage_sources = True,
 )
 BUILD_GUIDED_EOF
 
@@ -2144,16 +2172,6 @@ if missing:
     print("error: guided bootstrap go test metadata is missing keys: %s" % ", ".join(missing))
     sys.exit(1)
 PY
-
-(
-  cd "$GUIDED_BOOT_WS"
-  DD_API_KEY=mock \
-  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
-  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
-  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
-    "${REPO_ENVS[@]}"
-)
 
 MULTI_LOG_START="$MULTI_LOG_START" "$PYTHON" - <<'PY'
 import base64

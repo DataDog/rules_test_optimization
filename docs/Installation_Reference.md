@@ -631,6 +631,23 @@ dd_topt_go_test(
 )
 ```
 
+If the tracer needs runtime-visible source files for AST-derived metadata such
+as `test.source.end`, enable source staging explicitly:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    stage_sources = True,
+    topt_data = topt_data,
+)
+```
+
+`stage_sources` stages only the target's direct `srcs` and direct
+`embedsrcs`. When enabled, it changes the default `rundir` to `.` only if the
+caller did not already set `rundir`.
+
 Note: in WORKSPACE mode, Go support uses two repositories:
 
 - `datadog-rules-test-optimization` for the core rules
