@@ -39,7 +39,10 @@ dd_topt_py_test(
     topt_data = topt_data,
     deps = [
         ":hello_lib",
-        requirement("ddtrace"),
         requirement("pytest"),
-    ],
+    ] + select({
+        # ddtrace wheels are Linux/macOS-only until official PyPI wheels land.
+        "@platforms//os:windows": [],
+        "//conditions:default": [requirement("ddtrace")],
+    }),
 )
