@@ -28,9 +28,14 @@ dd_topt_py_test(
 
 # Pytest-based target: exercises the streamlined path where dd_topt_py_test
 # injects the bundled run_pytest.py runner, PYTEST_ADDOPTS, and default args.
+# Windows is excluded until official PyPI wheels are available for ddtrace.
 dd_topt_py_test(
     name = "hello_pytest_test",
     srcs = ["pytest_test.py"],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     topt_data = topt_data,
     deps = [
         ":hello_lib",
