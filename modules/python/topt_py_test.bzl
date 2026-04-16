@@ -26,7 +26,6 @@ load(
     "topt_bazel_metadata",
     "topt_test_wrapper",
 )
-load("@datadog_ddtrace//:requirements.bzl", _ddtrace_requirement = "requirement")
 load("@rules_python//python:py_test.bzl", _default_py_test = "py_test")
 load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 
@@ -76,7 +75,6 @@ def dd_topt_py_test(
         topt_service = None,
         module_label_override = None,
         module_identifier = None,
-        inject_ddtrace = True,
         **kwargs):
     """Define a Python test with Datadog Test Optimization support."""
     if py_test_rule == None:
@@ -187,18 +185,11 @@ def dd_topt_py_test(
     for key, value in raw_passthrough.items():
         kwargs[key] = value
 
-    # Inject the companion-managed ddtrace unless the caller opts out (e.g.
-    # because they manage ddtrace themselves or use a different Python version).
-    if inject_ddtrace:
-        test_deps = _append_data_dependencies(user_deps, [_ddtrace_requirement("ddtrace")])
-    else:
-        test_deps = user_deps
-
     py_test_rule(
         name = raw_name,
         data = data,
         env = env,
-        deps = test_deps,
+        deps = user_deps,
         **kwargs
     )
 

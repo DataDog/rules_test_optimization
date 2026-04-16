@@ -12,7 +12,6 @@ ToptPyMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_py_test to py_test_rule.",
     fields = {
         "data_labels": "Forwarded data dependency labels.",
-        "dep_labels": "Forwarded deps labels.",
         "env": "Forwarded environment map.",
         "imports": "Forwarded imports attribute.",
         "importpath": "Forwarded importpath attribute.",
@@ -31,7 +30,6 @@ def _py_test_capture_impl(ctx):
         RunEnvironmentInfo(environment = dict(ctx.attr.env)),
         ToptPyMacroCaptureInfo(
             data_labels = [str(dep.label) for dep in ctx.attr.data],
-            dep_labels = [str(dep.label) for dep in ctx.attr.deps],
             env = dict(ctx.attr.env),
             imports = list(ctx.attr.imports),
             importpath = ctx.attr.importpath,
@@ -169,46 +167,6 @@ def py_macro_select_inputs_target(name, tags = None):
         }),
         tags = tags,
     )
-
-def py_macro_inject_ddtrace_target(name, tags = None):
-    dd_topt_py_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        py_test_rule = _py_test_capture_rule,
-        tags = tags,
-    )
-
-def py_macro_no_inject_ddtrace_target(name, tags = None):
-    dd_topt_py_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        py_test_rule = _py_test_capture_rule,
-        inject_ddtrace = False,
-        tags = tags,
-    )
-
-def _py_macro_inject_ddtrace_wiring_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    captured = target[ToptPyMacroCaptureInfo]
-    asserts.true(env, _has_fragment(captured.dep_labels, "ddtrace"))
-    return analysistest.end(env)
-
-def _py_macro_no_inject_ddtrace_wiring_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    captured = target[ToptPyMacroCaptureInfo]
-    for label in captured.dep_labels:
-        if "ddtrace" in label:
-            asserts.true(env, False, "expected no ddtrace dep but found: " + label)
-    return analysistest.end(env)
-
-py_macro_inject_ddtrace_wiring_test = analysistest.make(
-    _py_macro_inject_ddtrace_wiring_test_impl,
-)
-py_macro_no_inject_ddtrace_wiring_test = analysistest.make(
-    _py_macro_no_inject_ddtrace_wiring_test_impl,
-)
 
 def _py_macro_single_service_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)
