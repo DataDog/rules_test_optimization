@@ -106,6 +106,22 @@ dd_go_test(
 )
 ```
 
+Because the generated `dd_go_test` wrapper forwards `**kwargs`, it also
+supports `stage_sources = True` directly:
+
+```bzl
+dd_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    stage_sources = True,
+)
+```
+
+`stage_sources` stages only the target's direct `srcs` and direct
+`embedsrcs`. When enabled, the wrapper defaults `rundir` to `.` only if you
+did not already set `rundir` yourself.
+
 If the workspace already has custom sync wiring, skip guided bootstrap and use
 the manual `dd_topt_go_test(..., topt_data = ...)` path from `README.md`.
 In WORKSPACE mode, that manual path still uses the Go companion as its own

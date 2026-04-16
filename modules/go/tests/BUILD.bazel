@@ -15,6 +15,12 @@ load(
     "go_macro_select_inputs_wiring_test",
     "go_macro_single_service_target",
     "go_macro_single_service_wiring_test",
+    "go_macro_stage_sources_rundir_target",
+    "go_macro_stage_sources_rundir_wiring_test",
+    "go_macro_stage_sources_select_target",
+    "go_macro_stage_sources_select_wiring_test",
+    "go_macro_stage_sources_target",
+    "go_macro_stage_sources_wiring_test",
     "orch_wrapper_materialized_actual_non_windows_target",
     "orch_wrapper_materialized_actual_non_windows_test",
     "orch_wrapper_materialized_actual_windows_target",
@@ -295,6 +301,36 @@ go_macro_select_inputs_wiring_test(
     target_under_test = ":go_macro_select_inputs_target__raw_go_test",
 )
 
+go_macro_stage_sources_target(
+    name = "go_macro_stage_sources_target",
+    tags = ["manual"],
+)
+
+go_macro_stage_sources_wiring_test(
+    name = "go_macro_stage_sources_wiring_test",
+    target_under_test = ":go_macro_stage_sources_target__raw_go_test",
+)
+
+go_macro_stage_sources_rundir_target(
+    name = "go_macro_stage_sources_rundir_target",
+    tags = ["manual"],
+)
+
+go_macro_stage_sources_rundir_wiring_test(
+    name = "go_macro_stage_sources_rundir_wiring_test",
+    target_under_test = ":go_macro_stage_sources_rundir_target__raw_go_test",
+)
+
+go_macro_stage_sources_select_target(
+    name = "go_macro_stage_sources_select_target",
+    tags = ["manual"],
+)
+
+go_macro_stage_sources_select_wiring_test(
+    name = "go_macro_stage_sources_select_wiring_test",
+    target_under_test = ":go_macro_stage_sources_select_target__raw_go_test",
+)
+
 go_macro_orchestrion_pin_files_target(
     name = "go_macro_orchestrion_pin_files_target",
     tags = ["manual"],
@@ -427,6 +463,9 @@ test_suite(
         ":go_macro_rundir_mismatch_wiring_test",
         ":go_macro_select_inputs_wiring_test",
         ":go_macro_single_service_wiring_test",
+        ":go_macro_stage_sources_rundir_wiring_test",
+        ":go_macro_stage_sources_select_wiring_test",
+        ":go_macro_stage_sources_wiring_test",
         ":go_stub_includes_manifest_in_files_test",
         ":normalize_user_data_handles_none_test",
         ":normalize_user_data_invalid_type_failure_test",

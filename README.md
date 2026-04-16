@@ -823,8 +823,9 @@ The `dd_topt_go_test` macro creates a `go_test` target with Datadog Test
 Optimization data/env wiring included, and always runs through an internal
 Orchestrion-enabled wrapper target.
 
-By default, it also sets `rundir` to the current Bazel package when not
-explicitly provided.
+By default, it sets `rundir` to the current Bazel package when not explicitly
+provided. If you enable `stage_sources = True`, it instead defaults `rundir`
+to `.` unless you already set `rundir` yourself.
 
 For a fresh single-service Go workspace, prefer the guided bootstrap flow above.
 It generates the local `dd_go_test` wrapper and the uploader target for you.
@@ -915,6 +916,23 @@ dd_topt_go_test(
 )
 ```
 
+If the tracer needs runtime-visible source files for AST-derived metadata such
+as `test.source.end`, enable source staging explicitly:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    stage_sources = True,
+    topt_data = topt_data,
+)
+```
+
+`stage_sources` stages only the target's direct `srcs` and direct
+`embedsrcs`. When enabled, it changes the default `rundir` to `.` only if you
+did not already set `rundir`. An explicit `rundir` still wins unchanged.
+
 Then run tests and upload:
 
 ```bash
@@ -946,6 +964,10 @@ dd_topt_go_test(
     topt_data = topt_data,
 )
 ```
+
+The bootstrap-generated `//tools/build:dd_go_test.bzl` wrapper forwards
+`**kwargs`, so it supports `stage_sources = True` the same way without wrapper
+changes.
 
 ### Import path inference
 

@@ -83,9 +83,11 @@ _go_test_capture_rule = rule(
     attrs = {
         "data": attr.label_list(allow_files = True),
         "embed": attr.label_list(),
+        "embedsrcs": attr.label_list(allow_files = True),
         "env": attr.string_dict(),
         "importpath": attr.string(),
         "rundir": attr.string(),
+        "srcs": attr.label_list(allow_files = True),
     },
     executable = True,
 )
@@ -232,6 +234,51 @@ def go_macro_select_inputs_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_stage_sources_target(name, tags = None):
+    """Target under test for source staging with the default repo-root rundir."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        stage_sources = True,
+        data = [":test_macro.bzl"],
+        srcs = [":test_selection_utils.bzl"],
+        embedsrcs = [":test_payloads_selector.bzl"],
+        tags = tags,
+    )
+
+def go_macro_stage_sources_rundir_target(name, tags = None):
+    """Target under test for source staging with an explicit custom rundir."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        stage_sources = True,
+        rundir = "custom/rundir",
+        srcs = [":test_macro.bzl"],
+        embedsrcs = [":test_selection_utils.bzl"],
+        tags = tags,
+    )
+
+def go_macro_stage_sources_select_target(name, tags = None):
+    """Target under test for configurable source staging inputs."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        stage_sources = True,
+        data = select({
+            "//conditions:default": [":test_macro.bzl"],
+        }),
+        srcs = select({
+            "//conditions:default": [":test_selection_utils.bzl"],
+        }),
+        embedsrcs = select({
+            "//conditions:default": [":test_payloads_selector.bzl"],
+        }),
+        tags = tags,
+    )
+
 def go_macro_orchestrion_pin_files_target(name, tags = None):
     """Target under test for explicit module-root Orchestrion pin-file labels."""
     dd_topt_go_test(
@@ -365,6 +412,47 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _go_macro_stage_sources_wiring_test_impl(ctx):
+    """Assert source staging adds direct sources and uses repo-root rundir."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_payloads_selector.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, ".", captured.rundir)
+    return analysistest.end(env)
+
+def _go_macro_stage_sources_rundir_wiring_test_impl(ctx):
+    """Assert explicit rundir still wins when source staging is enabled."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_rundir_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_rundir_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, "custom/rundir", captured.rundir)
+    return analysistest.end(env)
+
+def _go_macro_stage_sources_select_wiring_test_impl(ctx):
+    """Assert configurable source staging still preserves selected labels."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_payloads_selector.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_select_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_select_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, ".", captured.rundir)
     return analysistest.end(env)
 
 def _go_macro_orchestrion_pin_files_wiring_test_impl(ctx):
@@ -507,6 +595,15 @@ go_macro_env_none_wiring_test = analysistest.make(
 )
 go_macro_select_inputs_wiring_test = analysistest.make(
     _go_macro_select_inputs_wiring_test_impl,
+)
+go_macro_stage_sources_wiring_test = analysistest.make(
+    _go_macro_stage_sources_wiring_test_impl,
+)
+go_macro_stage_sources_rundir_wiring_test = analysistest.make(
+    _go_macro_stage_sources_rundir_wiring_test_impl,
+)
+go_macro_stage_sources_select_wiring_test = analysistest.make(
+    _go_macro_stage_sources_select_wiring_test_impl,
 )
 go_macro_orchestrion_pin_files_wiring_test = analysistest.make(
     _go_macro_orchestrion_pin_files_wiring_test_impl,
