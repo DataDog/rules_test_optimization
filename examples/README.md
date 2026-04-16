@@ -166,9 +166,13 @@ dd_topt_py_test(
     deps = [":pkg_lib"],
     imports = ["example/python/pkg"],
     topt_data = topt_data,
-    py_test_rule = py_test,
 )
 ```
+
+The macro defaults to `@rules_python//python:py_test`. If you omit `main`, it
+uses the bundled pytest entry point and adds `PYTEST_ADDOPTS=--ddtrace` unless
+you already set it or opt out with `--no-ddtrace`. Keep passing `main` only
+when you want a non-pytest runner.
 
 BUILD.bazel (Java companion):
 
