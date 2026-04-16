@@ -1,17 +1,40 @@
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@example_pip//:requirements.bzl", "requirement")
 load("@test_optimization_data//:export.bzl", "topt_data")
+
+exports_files(
+    [
+        "requirements.in",
+        "requirements_lock.txt",
+    ],
+)
 
 py_library(
     name = "hello_lib",
     srcs = ["main.py"],
 )
 
+# Unittest-based target: exercises dd_topt_py_test with a custom runner,
+# ensuring backwards compatibility for non-pytest workflows.
 dd_topt_py_test(
     name = "hello_test",
+    srcs = ["main_test.py"],
+    imports = ["example/python/project"],
+    main = "main_test.py",
     py_test_rule = py_test,
     topt_data = topt_data,
-    srcs = ["main_test.py"],
-    main = "main_test.py",
     deps = [":hello_lib"],
-    imports = ["example/python/project"],
+)
+
+# Pytest-based target: exercises the streamlined path where dd_topt_py_test
+# injects the bundled run_pytest.py runner, PYTEST_ADDOPTS, and default args.
+dd_topt_py_test(
+    name = "hello_pytest_test",
+    srcs = ["pytest_test.py"],
+    topt_data = topt_data,
+    deps = [
+        ":hello_lib",
+        requirement("ddtrace"),
+        requirement("pytest"),
+    ],
 )

@@ -1,0 +1,2 @@
+pytest
+ddtrace==4.8.0rc3
