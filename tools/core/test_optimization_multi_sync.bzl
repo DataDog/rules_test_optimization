@@ -250,6 +250,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                     http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
                     known_tests = call.known_tests,
                     test_management = call.test_management,
+                    flaky_tests = call.flaky_tests,
                     debug = call.debug,
                 )
 
@@ -283,6 +284,7 @@ test_optimization_multi_sync_extension = module_extension(
             # Kill-switches propagated to each per-service repo
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
+            "flaky_tests": attr.bool(default = True),
             "debug": attr.bool(default = False),
         }),
     },
