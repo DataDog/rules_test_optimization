@@ -204,20 +204,25 @@ def dd_topt_py_test(
         macro_name = "dd_topt_py_test",
     )
 
-    # Compute srcs: user list + bundled run_pytest.py entry point.
-    srcs = _append_data_dependencies(user_srcs, [_RUN_PYTEST])
+    if user_main == None:
+        # No custom runner: inject the bundled run_pytest.py into srcs and set it as main.
+        srcs = _append_data_dependencies(user_srcs, [_RUN_PYTEST])
+        main = _RUN_PYTEST
 
-    # Default main to the bundled run_pytest.py if not provided.
-    main = user_main if user_main != None else _RUN_PYTEST
-
-    # Default args to the package path (pytest test file discovery).
-    # args goes on the wrapper (which forwards them to the raw test via "$@").
-    if user_args != None:
-        wrapper_kwargs["args"] = user_args
-    elif pkg_path:
-        wrapper_kwargs["args"] = [pkg_path]
+        # Default args to the package path for pytest test-file discovery.
+        # args goes on the wrapper (which forwards them to the raw test via "$@").
+        if user_args != None:
+            wrapper_kwargs["args"] = user_args
+        elif pkg_path:
+            wrapper_kwargs["args"] = [pkg_path]
+        else:
+            wrapper_kwargs["args"] = []
     else:
-        wrapper_kwargs["args"] = []
+        # Caller supplied their own runner: leave srcs and args alone.
+        srcs = _append_data_dependencies(user_srcs, [])
+        main = user_main
+        if user_args != None:
+            wrapper_kwargs["args"] = user_args
 
     # Default imports to the package path for correct module resolution.
     if imports_candidates:
