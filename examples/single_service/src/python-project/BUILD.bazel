@@ -37,12 +37,13 @@ dd_topt_py_test(
         "//conditions:default": [],
     }),
     topt_data = topt_data,
-    deps = [
-        ":hello_lib",
-        requirement("pytest"),
-    ] + select({
-        # ddtrace wheels are Linux/macOS-only until official PyPI wheels land.
+    deps = [":hello_lib"] + select({
+        # All pip deps are Linux/macOS-only: the lock file has no Windows wheels.
+        # The target itself is already marked incompatible with Windows above.
         "@platforms//os:windows": [],
-        "//conditions:default": [requirement("ddtrace")],
+        "//conditions:default": [
+            requirement("ddtrace"),
+            requirement("pytest"),
+        ],
     }),
 )
