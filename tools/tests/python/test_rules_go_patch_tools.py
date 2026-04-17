@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -319,7 +320,8 @@ class RulesGoPatchToolTests(unittest.TestCase):
             self.assertIn("bin/tool.sh", loaded)
             self.assertNotIn("bin", loaded)
             self.assertEqual("file", loaded["bin/tool.sh"]["kind"])
-            self.assertTrue(loaded["bin/tool.sh"]["executable"])
+            expected_executable = bool(file_path.stat().st_mode & stat.S_IXUSR)
+            self.assertEqual(expected_executable, loaded["bin/tool.sh"]["executable"])
             if symlink_supported:
                 self.assertIn("bin/tool-link", loaded)
                 self.assertEqual("symlink", loaded["bin/tool-link"]["kind"])
