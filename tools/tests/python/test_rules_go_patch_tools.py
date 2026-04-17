@@ -18,6 +18,26 @@ import types
 import unittest
 
 
+def _manifest_key_variants(rel_path: str, test_workspace: str) -> list[str]:
+    """Return the exact manifest keys that should resolve a requested runfile."""
+    keys = [rel_path]
+    if test_workspace:
+        keys.insert(0, f"{test_workspace}/{rel_path}")
+    return keys
+
+
+def _manifest_key_matches(entry_key: str, requested_key: str) -> bool:
+    """Accept exact manifest keys plus manifest-prefix variants used on Windows."""
+    if entry_key == requested_key:
+        return True
+    if len(entry_key) <= len(requested_key):
+        return False
+    if not entry_key.endswith(requested_key):
+        return False
+    separator = entry_key[-len(requested_key) - 1]
+    return separator in ("/", "\\")
+
+
 def _runfile(rel_path: str) -> Path:
     """Resolve one runfile path for Bazel and non-Bazel execution."""
     test_srcdir = os.environ.get("TEST_SRCDIR", "")
@@ -45,16 +65,18 @@ def _runfile(rel_path: str) -> Path:
     if manifest_path:
         manifest = Path(manifest_path)
         if manifest.exists():
-            keys = [rel_path]
-            if test_workspace:
-                keys.insert(0, f"{test_workspace}/{rel_path}")
+            keys = _manifest_key_variants(rel_path, test_workspace)
             with manifest.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.rstrip("\n")
+                for idx, line in enumerate(handle):
+                    line = line.rstrip("\r\n")
                     if not line:
                         continue
                     key, sep, value = line.partition(" ")
-                    if sep and key in keys and value:
+                    if idx == 0:
+                        key = key.lstrip("\ufeff")
+                    if not sep or not value:
+                        continue
+                    if any(_manifest_key_matches(key, requested_key) for requested_key in keys):
                         return Path(value)
 
     raise FileNotFoundError(f"runfile not found: {rel_path}")
@@ -162,6 +184,14 @@ class RulesGoPatchToolTests(unittest.TestCase):
                 self.manifest,
                 patch_filenames=["not-a-real.patch"],
             )
+
+    def test_manifest_key_matching_accepts_windows_style_prefixes(self) -> None:
+        """Validate manifest lookup tolerates BOM-prefixed and path-prefixed keys."""
+        requested = "tools/dev/rules_go_patch_series_lib.py"
+        self.assertTrue(_manifest_key_matches(requested, requested))
+        self.assertTrue(_manifest_key_matches(f"_main/{requested}", requested))
+        self.assertTrue(_manifest_key_matches(f"_main\\{requested}", requested))
+        self.assertFalse(_manifest_key_matches(f"_main{requested}", requested))
 
     def test_manifest_rejects_missing_commits(self) -> None:
         """Validate manifest loading fails when a referenced git commit does not exist."""
