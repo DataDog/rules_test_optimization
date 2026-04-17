@@ -102,6 +102,16 @@ class RulesGoPatchToolTests(unittest.TestCase):
 
         cls.manifest = cls.lib.load_manifest(manifest_path, git_runner=fake_git_runner)
 
+    @contextlib.contextmanager
+    def _export_bundle_with_fake_manifest(self):
+        """Run export-bundle assertions without depending on checkout git history."""
+        original_load_manifest = self.export_bundle.load_manifest
+        self.export_bundle.load_manifest = lambda _path: self.manifest
+        try:
+            yield
+        finally:
+            self.export_bundle.load_manifest = original_load_manifest
+
     def test_manifest_exposes_expected_split_contract(self) -> None:
         """Validate the manifest points at the new base, patch, and overlay locations."""
         self.assertEqual("third_party/rules_go_orchestrion", self.manifest["subtree_path"])
@@ -186,7 +196,7 @@ class RulesGoPatchToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             destination = Path(tmp) / "third_party" / "rules_go_patches"
             stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
+            with self._export_bundle_with_fake_manifest(), contextlib.redirect_stdout(stdout):
                 rc = self.export_bundle.main(
                     [
                         "--patch",
@@ -226,7 +236,7 @@ class RulesGoPatchToolTests(unittest.TestCase):
             (destination / "leftover.txt").write_text("keep me", encoding="utf-8")
 
             stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr):
+            with self._export_bundle_with_fake_manifest(), contextlib.redirect_stderr(stderr):
                 rc = self.export_bundle.main(
                     [
                         "--patch",
