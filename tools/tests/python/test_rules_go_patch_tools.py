@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -104,13 +105,26 @@ class RulesGoPatchToolTests(unittest.TestCase):
 
     @contextlib.contextmanager
     def _export_bundle_with_fake_manifest(self):
-        """Run export-bundle assertions without depending on checkout git history."""
+        """Run export-bundle assertions without depending on checkout git history or runfiles layout."""
         original_load_manifest = self.export_bundle.load_manifest
-        self.export_bundle.load_manifest = lambda _path: self.manifest
-        try:
-            yield
-        finally:
-            self.export_bundle.load_manifest = original_load_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            patch_dir = Path(tmp) / "rules_go_patches"
+            patch_dir.mkdir(parents=True)
+            for filename in self.lib.EXPECTED_PATCH_FILENAMES:
+                shutil.copy2(
+                    _runfile(f"third_party/rules_go_patches/{filename}"),
+                    patch_dir / filename,
+                )
+
+            manifest = copy.deepcopy(self.manifest)
+            # Use an absolute source directory so bundle export behaves the same
+            # under Windows manifest-based runfiles and POSIX runfiles trees.
+            manifest["patch_dir"] = str(patch_dir)
+            self.export_bundle.load_manifest = lambda _path: manifest
+            try:
+                yield
+            finally:
+                self.export_bundle.load_manifest = original_load_manifest
 
     def test_manifest_exposes_expected_split_contract(self) -> None:
         """Validate the manifest points at the new base, patch, and overlay locations."""
