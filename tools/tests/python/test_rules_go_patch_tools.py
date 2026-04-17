@@ -263,7 +263,7 @@ class RulesGoPatchToolTests(unittest.TestCase):
             self.assertIn("destination already exists", stderr.getvalue())
 
     def test_tree_manifest_round_trip_tracks_files_and_symlinks(self) -> None:
-        """Validate tree manifests capture regular files and symlinks without directories."""
+        """Validate tree manifests capture regular files and, when available, symlinks without directories."""
         with tempfile.TemporaryDirectory() as tmp:
             tree_root = Path(tmp) / "tree"
             tree_root.mkdir()
@@ -271,7 +271,15 @@ class RulesGoPatchToolTests(unittest.TestCase):
             file_path.parent.mkdir(parents=True)
             file_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             file_path.chmod(0o755)
-            os.symlink("tool.sh", tree_root / "bin" / "tool-link")
+            symlink_path = tree_root / "bin" / "tool-link"
+            symlink_supported = True
+            try:
+                os.symlink("tool.sh", symlink_path)
+            except (NotImplementedError, OSError):
+                # Windows Bazel runners do not always allow non-admin symlink
+                # creation, so keep file-manifest coverage portable and only
+                # assert symlink serialization when the platform supports it.
+                symlink_supported = False
 
             entries = self.lib.tree_entries(tree_root)
             manifest_path = Path(tmp) / "tree_manifest.json"
@@ -279,12 +287,13 @@ class RulesGoPatchToolTests(unittest.TestCase):
             loaded = self.lib.load_tree_manifest(manifest_path)
 
             self.assertIn("bin/tool.sh", loaded)
-            self.assertIn("bin/tool-link", loaded)
             self.assertNotIn("bin", loaded)
             self.assertEqual("file", loaded["bin/tool.sh"]["kind"])
             self.assertTrue(loaded["bin/tool.sh"]["executable"])
-            self.assertEqual("symlink", loaded["bin/tool-link"]["kind"])
-            self.assertEqual("tool.sh", loaded["bin/tool-link"]["target"])
+            if symlink_supported:
+                self.assertIn("bin/tool-link", loaded)
+                self.assertEqual("symlink", loaded["bin/tool-link"]["kind"])
+                self.assertEqual("tool.sh", loaded["bin/tool-link"]["target"])
 
 
 if __name__ == "__main__":
