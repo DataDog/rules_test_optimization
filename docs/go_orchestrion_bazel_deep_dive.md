@@ -1,5 +1,11 @@
 # Go + Orchestrion + Bazel Deep Dive
 
+> Scope note: the consumer-visible optional `dd-source` patch layer now lives in
+> `third_party/rules_go_patches`, and maintainer-only local regression fixtures
+> live in `tools/tests/rules_go_patch_regressions`. References in this document
+> to `third_party/rules_go_orchestrion` describe the clean base fork unless a
+> section says otherwise.
+
 ## Purpose
 
 This document explains the Go instrumentation path as it exists today in this

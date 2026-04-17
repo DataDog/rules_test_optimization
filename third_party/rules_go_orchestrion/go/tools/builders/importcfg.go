@@ -22,10 +22,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,11 +77,11 @@ type moduleExportCacheManifest struct {
 // for standard library packages.
 func checkImports(files []fileInfo, archives []archive, stdPackageListPath string, importPath string, recompileInternalDeps []string) (map[string]*archive, error) {
 	// Read the standard package list.
-	packagesTxt, err := os.ReadFile(stdPackageListPath)
+	packagesTxt, err := ioutil.ReadFile(stdPackageListPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading standard package list: %w", err)
+		return nil, err
 	}
-	stdPkgs := make(map[string]struct{})
+	stdPkgs := make(map[string]bool)
 	for len(packagesTxt) > 0 {
 		n := bytes.IndexByte(packagesTxt, '\n')
 		var line string
@@ -96,7 +96,7 @@ func checkImports(files []fileInfo, archives []archive, stdPackageListPath strin
 		if line == "" {
 			continue
 		}
-		stdPkgs[line] = struct{}{}
+		stdPkgs[line] = true
 	}
 
 	// Index the archives.
@@ -128,7 +128,7 @@ func checkImports(files []fileInfo, archives []archive, stdPackageListPath strin
 			if _, ok := recompileInternalDepMap[path]; ok {
 				return nil, fmt.Errorf("dependency cycle detected between %q and %q in file %q", importPath, path, f.filename)
 			}
-			if _, ok := stdPkgs[path]; ok {
+			if stdPkgs[path] {
 				imports[path] = nil
 			} else if arc := importToArchive[path]; arc != nil {
 				imports[path] = arc
@@ -175,46 +175,24 @@ func buildImportcfgFileForCompile(imports map[string]*archive, installSuffix, di
 		}
 	}
 
-	f, err := os.CreateTemp(dir, "importcfg")
+	f, err := ioutil.TempFile(dir, "importcfg")
 	if err != nil {
-		return "", fmt.Errorf("creating importcfg temp file: %w", err)
+		return "", err
 	}
 	filename := f.Name()
 	if _, err := io.Copy(f, buf); err != nil {
 		f.Close()
 		os.Remove(filename)
-		return "", fmt.Errorf("writing importcfg: %w", err)
+		return "", err
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(filename)
-		return "", fmt.Errorf("closing importcfg: %w", err)
+		return "", err
 	}
 	return filename, nil
 }
 
-// linkConfig contains parameters for generating buildinfo
-type linkConfig struct {
-	path           string
-	buildMode      string
-	compiler       string
-	cgoEnabled     bool
-	goarch         string
-	goos           string
-	pgoProfilePath string
-	buildinfoFile  string
-	deps           []*Module
-	// Architecture feature level (e.g., key="GOAMD64", value="v3")
-	goarchFeatureKey   string
-	goarchFeatureValue string
-	// CGO flags
-	cgoCflags   string
-	cgoCxxflags string
-	cgoLdflags  string
-	// Bazel metadata
-	bazelTarget string
-}
-
-func buildImportcfgFileForLink(archives []archive, stdPackageListPath, installSuffix, dir string, cfg linkConfig) (string, error) {
+func buildImportcfgFileForLink(archives []archive, stdPackageListPath, installSuffix, dir string) (string, error) {
 	buf := &bytes.Buffer{}
 	goroot, ok := os.LookupEnv("GOROOT")
 	if !ok {
@@ -223,7 +201,7 @@ func buildImportcfgFileForLink(archives []archive, stdPackageListPath, installSu
 	prefix := abs(filepath.Join(goroot, "pkg", installSuffix))
 	stdPackageListFile, err := os.Open(stdPackageListPath)
 	if err != nil {
-		return "", fmt.Errorf("opening standard package list %s: %w", stdPackageListPath, err)
+		return "", err
 	}
 	defer stdPackageListFile.Close()
 	scanner := bufio.NewScanner(stdPackageListFile)
@@ -235,7 +213,7 @@ func buildImportcfgFileForLink(archives []archive, stdPackageListPath, installSu
 		fmt.Fprintf(buf, "packagefile %s=%s.a\n", line, filepath.Join(prefix, filepath.FromSlash(line)))
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("scanning standard package list %s: %w", stdPackageListPath, err)
+		return "", err
 	}
 	depsSeen := map[string]string{}
 	for _, arc := range archives {
@@ -256,63 +234,19 @@ package with this path is linked.`,
 		depsSeen[arc.packagePath] = arc.importPath
 		fmt.Fprintf(buf, "packagefile %s=%s\n", arc.packagePath, arc.file)
 	}
-
-	// Generate buildinfo if a buildinfo file was provided
-	// This ensures metadata is embedded even when there are no external dependencies
-	if cfg.buildinfoFile != "" {
-		buildInfo := BuildInfo{
-			GoVersion: runtime.Version(),
-			Path:      cfg.path,
-			Main:      Module{},
-			Deps:      cfg.deps,
-			Settings:  []BuildSetting{},
-		}
-
-		buildSettingAppend := func(key, value string) {
-			if value != "" {
-				buildInfo.Settings = append(buildInfo.Settings, BuildSetting{Key: key, Value: value})
-			}
-		}
-
-		buildSettingAppend("-compiler", cfg.compiler)
-		buildSettingAppend("-buildmode", cfg.buildMode)
-		if cfg.pgoProfilePath != "" {
-			buildSettingAppend("-pgo", cfg.pgoProfilePath)
-		}
-		if cfg.cgoEnabled {
-			buildSettingAppend("CGO_ENABLED", "1")
-			// Add CGO flags when CGO is enabled
-			buildSettingAppend("CGO_CFLAGS", cfg.cgoCflags)
-			buildSettingAppend("CGO_CXXFLAGS", cfg.cgoCxxflags)
-			buildSettingAppend("CGO_LDFLAGS", cfg.cgoLdflags)
-		} else {
-			buildSettingAppend("CGO_ENABLED", "0")
-		}
-		buildSettingAppend("GOOS", cfg.goos)
-		buildSettingAppend("GOARCH", cfg.goarch)
-		// Add architecture feature level if present
-		if cfg.goarchFeatureKey != "" && cfg.goarchFeatureValue != "" {
-			buildSettingAppend(cfg.goarchFeatureKey, cfg.goarchFeatureValue)
-		}
-		// Add Bazel metadata
-		buildSettingAppend("bazel.target", cfg.bazelTarget)
-
-		fmt.Fprintf(buf, "modinfo %q\n", ModInfoData(buildInfo.String()))
-	}
-
-	f, err := os.CreateTemp(dir, "importcfg")
+	f, err := ioutil.TempFile(dir, "importcfg")
 	if err != nil {
-		return "", fmt.Errorf("creating importcfg temp file: %w", err)
+		return "", err
 	}
 	filename := f.Name()
 	if _, err := io.Copy(f, buf); err != nil {
 		f.Close()
 		os.Remove(filename)
-		return "", fmt.Errorf("writing importcfg: %w", err)
+		return "", err
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(filename)
-		return "", fmt.Errorf("closing importcfg: %w", err)
+		return "", err
 	}
 	return filename, nil
 }

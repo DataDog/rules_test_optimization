@@ -16,7 +16,11 @@ load(
     "@bazel_skylib//lib:paths.bzl",
     "paths",
 )
-load("@rules_proto//proto:proto_common.bzl", "proto_common")
+load("@com_google_protobuf//bazel/common:proto_common.bzl", "proto_common")
+load(
+    "@com_google_protobuf//bazel/common:proto_lang_toolchain_info.bzl",
+    "ProtoLangToolchainInfo",
+)
 load(
     "//go:def.bzl",
     "GoInfo",
@@ -35,8 +39,6 @@ load(
     "//go/private/rules:transition.bzl",
     "go_reset_target",
 )
-
-ProtoLangToolchainInfo = proto_common.ProtoLangToolchainInfo
 
 # This is actually a misuse of Proto toolchains: The proper way to use `protoc` would be to go
 # through a Go-specific `proto_lang_toolchain` and use the methods on `proto_common` to interact

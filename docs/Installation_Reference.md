@@ -561,12 +561,15 @@ http_archive(
 Then configure an Orchestrion-enabled `rules_go` fork and the public WORKSPACE
 Orchestrion helper. The repository bound to `@io_bazel_rules_go` must be the
 forked, Orchestrion-enabled copy, not an upstream release archive. If you are
-mirroring this repository directly, publish the
+mirroring this repository directly, publish the clean
 `third_party/rules_go_orchestrion` subtree as the `@io_bazel_rules_go`
-repository root. If you maintain your own merged fork, keep the same public
-files and labels, including `go/orchestrion_workspace.bzl` and the
-`//go/private/orchestrion:*` targets, including the `:enabled` build setting
-that `dd_topt_go_test` flips through its wrapper transition.
+repository root. If you also need the optional Datadog patch bundle, export the
+checked-in patch series into a consumer-owned `third_party/rules_go_patches/`
+directory and apply those patches from the consumer workspace. If you maintain
+your own merged fork, keep the same public files and labels, including
+`go/orchestrion_workspace.bzl` and the `//go/private/orchestrion:*` targets,
+including the `:enabled` build setting that `dd_topt_go_test` flips through its
+wrapper transition.
 
 ```bzl
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -578,6 +581,13 @@ http_archive(
     ],
     strip_prefix = "rules_test_optimization-<commit-sha>/third_party/rules_go_orchestrion",
     sha256 = "<rules_go_sha256>",
+    # Optional. Use only when the consumer owns the exported patch bundle.
+    # patch_tool = "patch",
+    # patch_args = ["-p1"],
+    # patches = [
+    #     "//third_party/rules_go_patches:0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
+    #     "...",
+    # ],
 )
 
 http_archive(
@@ -610,6 +620,8 @@ Notes for the helper:
 - `dd_trace_go_version` and `dd_trace_go_versions` are mutually exclusive.
 - Keep the default tool-repo name `rules_go_orchestrion_tool`; the current fork
   resolves that name internally.
+- Keep patch files in the consumer workspace root module source tree. The
+  documented destination is `third_party/rules_go_patches/`.
 
 Then in your Go package `BUILD.bazel`:
 

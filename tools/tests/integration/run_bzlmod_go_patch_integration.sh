@@ -2,19 +2,16 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Integration harness: WORKSPACE Go companion verification
+# Integration harness: Bzlmod Go companion verification
 # -----------------------------------------------------------------------------
 #
-# This script creates temporary WORKSPACE-mode consumers and validates the
-# supported Go product path:
-# - core repo + Go companion repo as separate external repositories
-# - repo_mapping from @rules_go to an Orchestrion-enabled @io_bazel_rules_go
-# - public WORKSPACE helper for rules_go_orchestrion_tool
-# - real dd_topt_go_test execution against a nested Go package
-# - module-root Orchestrion pin files passed through orchestrion_pin_files
-# - module-selected payload wiring and custom sync out_dir handling
-# - mirror/archive packaging for the core repo, companion, and rules_go fork
-# - invalid public helper inputs fail early with direct guidance
+# This script creates a temporary Bzlmod consumer and validates the supported Go
+# product path against the current checkout:
+# - core repo and Go companion repo consumed via archive_override(...)
+# - rules_go consumed from the clean vendored base fork in this repository
+# - optional consumer-owned patch bundle applied to rules_go via archive_override
+# - Orchestrion extension wiring in the consumer root module
+# - module-selected payload wiring through the example stub extension
 #
 # Debugging tips:
 # - Set KEEP_TMP=1 to inspect the generated workspaces after a failure.
@@ -23,7 +20,7 @@ set -euo pipefail
 #
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_workspace_go.XXXXXX")"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_bzlmod_go.XXXXXX")"
 WORKSPACE_ROOT="$TMP_ROOT/workspaces"
 ARCHIVE_ROOT="$TMP_ROOT/archive_root"
 ARCHIVE_NAME="rules_test_optimization-fixture"
@@ -34,12 +31,10 @@ BAZEL="${BAZEL:-$REPO_ROOT/bazelw}"
 BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion")}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
-# Keep this aligned with the bootstrap helper's published default tracer pin so
-# the WORKSPACE harness validates the same public Go path the docs describe.
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev.0.20260409102143-ddd4e03ab47d}"
-SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
-MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
-MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
+SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
+MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
+MODULE_LABEL="${MODULE_LABEL:-example_com_bzlmod_go_integration}"
 OUT_DIR="${OUT_DIR:-custom_topt}"
 ARCHIVE_SHA256=""
 ARCHIVE_URL=""
@@ -74,7 +69,7 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
 fi
 
 require_command "$GO_BIN" "go binary not found (tried '$GO_BIN')"
-require_command tar "tar is required for the WORKSPACE archive fixture"
+require_command tar "tar is required for the Bzlmod archive fixture"
 
 bzl_quote() {
   "$PYTHON" - <<'PY' "$1"
@@ -158,7 +153,7 @@ exports_files([
 EOF
 
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -186,7 +181,7 @@ EOF
 package main
 
 func greeting() string {
-	return "Hello, Workspace!"
+	return "Hello, Bzlmod!"
 }
 EOF
 
@@ -242,12 +237,12 @@ func resolveRlocation(p string) (string, bool) {
 }
 
 func TestGreeting(t *testing.T) {
-	if greeting() != "Hello, Workspace!" {
+	if greeting() != "Hello, Bzlmod!" {
 		t.Fatalf("unexpected greeting %q", greeting())
 	}
 }
 
-func TestWorkspaceGoEnvWiring(t *testing.T) {
+func TestBzlmodGoEnvWiring(t *testing.T) {
 	if got := os.Getenv("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"); got != "true" {
 		t.Fatalf("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = %q, want true", got)
 	}
@@ -347,123 +342,62 @@ EOF
   cat > "$ws_dir/orchestrion.yml" <<'EOF'
 # yaml-language-server: $schema=https://datadoghq.dev/orchestrion/schema.json
 meta:
-  name: workspace-go-integration
-  description: Minimal WORKSPACE-mode Orchestrion fixture.
+  name: bzlmod-go-integration
+  description: Minimal Bzlmod-mode Orchestrion fixture.
 
 aspects: []
 EOF
 }
 
-write_positive_workspace() {
+write_module_file() {
   local ws_dir="$1"
-  local repo_mode="$2"
-  local repo_root_bzl
-  local rules_go_fork_bzl
-  local companion_root_bzl
   local archive_url_bzl
 
-  repo_root_bzl="$(bzl_quote "$REPO_ROOT")"
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
-  companion_root_bzl="$(bzl_quote "$REPO_ROOT/modules/go")"
   archive_url_bzl="$(bzl_quote "$ARCHIVE_URL")"
 
-  cat > "$ws_dir/WORKSPACE" <<EOF
-workspace(name = "workspace_go_integration_${repo_mode}")
+  cat > "$ws_dir/MODULE.bazel" <<EOF
+module(name = "bzlmod_go_patch_integration")
 
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
-EOF
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
 
-  if [[ "$repo_mode" == "local" ]]; then
-    cat >> "$ws_dir/WORKSPACE" <<EOF
-
-local_repository(
-    name = "datadog-rules-test-optimization",
-    path = ${repo_root_bzl},
-)
-
-local_repository(
-    name = "io_bazel_rules_go",
-    path = ${rules_go_fork_bzl},
-)
-
-local_repository(
-    name = "datadog-rules-test-optimization-go",
-    path = ${companion_root_bzl},
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
-)
-EOF
-  else
-    cat >> "$ws_dir/WORKSPACE" <<EOF
-
-http_archive(
-    name = "datadog-rules-test-optimization",
+archive_override(
+    module_name = "datadog-rules-test-optimization",
     urls = [${archive_url_bzl}],
     sha256 = "${ARCHIVE_SHA256}",
     strip_prefix = "${ARCHIVE_NAME}",
 )
 
-http_archive(
-    name = "io_bazel_rules_go",
+archive_override(
+    module_name = "datadog-rules-test-optimization-go",
+    urls = [${archive_url_bzl}],
+    sha256 = "${ARCHIVE_SHA256}",
+    strip_prefix = "${ARCHIVE_NAME}/modules/go",
+)
+
+archive_override(
+    module_name = "rules_go",
     urls = [${archive_url_bzl}],
     sha256 = "${ARCHIVE_SHA256}",
     strip_prefix = "${ARCHIVE_NAME}/third_party/rules_go_orchestrion",
 EOF
-    if [[ "$RULES_GO_PATCH_BUNDLE" != "none" ]]; then
-      cat >> "$ws_dir/WORKSPACE" <<EOF
-    patch_tool = "patch",
-    patch_args = ["-p1"],
+  if [[ "$RULES_GO_PATCH_BUNDLE" != "none" ]]; then
+    cat >> "$ws_dir/MODULE.bazel" <<EOF
     patches = [
 ${PATCH_LABELS_BZL}
     ],
-EOF
-    fi
-    cat >> "$ws_dir/WORKSPACE" <<EOF
-)
-
-http_archive(
-    name = "datadog-rules-test-optimization-go",
-    urls = [${archive_url_bzl}],
-    sha256 = "${ARCHIVE_SHA256}",
-    strip_prefix = "${ARCHIVE_NAME}/modules/go",
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
-)
+    patch_strip = 1,
 EOF
   fi
-
-  cat >> "$ws_dir/WORKSPACE" <<EOF
-
-http_archive(
-    name = "bazel_gazelle",
-    sha256 = "b760f7fe75173886007f7c2e616a21241208f3d90e8657dc65d36a771e916b6a",
-    urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.1/bazel-gazelle-v0.39.1.tar.gz",
-        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.39.1/bazel-gazelle-v0.39.1.tar.gz",
-    ],
+  cat >> "$ws_dir/MODULE.bazel" <<EOF
 )
 
-load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
-load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
-load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
-load("@datadog-rules-test-optimization//tools/tests:example_stub_repo.bzl", "example_stub_repo")
-
-go_rules_dependencies()
-go_register_toolchains(version = "${GO_VERSION}")
-gazelle_dependencies()
-EOF
-
-  cat >> "$ws_dir/WORKSPACE" <<EOF
-
-go_orchestrion_tool_repo(
-    version = "${ORCHESTRION_VERSION}",
-    dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
+example_stub_repo = use_extension(
+    "@datadog-rules-test-optimization//tools/tests:example_stub_repo.bzl",
+    "example_stub_repo_extension",
 )
-
-example_stub_repo(
+example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
     out_dir = "${OUT_DIR}",
     service_name = "${SERVICE_NAME}",
@@ -473,73 +407,24 @@ example_stub_repo(
     go_sanitized_module_path = "${MODULE_LABEL}",
     go_module_included = True,
 )
-EOF
-}
+use_repo(example_stub_repo, "test_optimization_data")
 
-write_invalid_workspace() {
-  local ws_dir="$1"
-  local scenario="$2"
-  local rules_go_fork_bzl
-
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
-
-  cat > "$ws_dir/WORKSPACE" <<EOF
-workspace(name = "workspace_go_invalid_${scenario}")
-
-load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
-
-local_repository(
-    name = "io_bazel_rules_go",
-    path = ${rules_go_fork_bzl},
-)
-
-load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
-EOF
-
-  if [[ "$scenario" == "custom_name" ]]; then
-    cat >> "$ws_dir/WORKSPACE" <<'EOF'
-go_orchestrion_tool_repo(
-    name = "custom_tool_repo",
-    version = "v1.6.0",
-)
-EOF
-  elif [[ "$scenario" == "conflicting_versions" ]]; then
-    cat >> "$ws_dir/WORKSPACE" <<EOF
-go_orchestrion_tool_repo(
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
     version = "${ORCHESTRION_VERSION}",
     dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
-    dd_trace_go_versions = {
-        "github.com/DataDog/dd-trace-go/v2": "${DD_TRACE_GO_VERSION}",
-    },
 )
-EOF
-  else
-    cat >> "$ws_dir/WORKSPACE" <<'EOF'
-go_orchestrion_tool_repo()
-EOF
-  fi
-
-  cat > "$ws_dir/BUILD.bazel" <<'EOF'
-filegroup(
-    name = "probe",
-    srcs = [],
-)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
 EOF
 }
 
-run_positive_fixture() {
-  local repo_mode="$1"
-  local ws_dir="$WORKSPACE_ROOT/${repo_mode}"
-
-  if [[ "$RULES_GO_PATCH_BUNDLE" != "none" && "$repo_mode" == "local" ]]; then
-    echo "Skipping local_repository positive lane for patched mode; patch application must run through http_archive()."
-    return
-  fi
+run_fixture() {
+  local ws_dir="$WORKSPACE_ROOT/main"
 
   rm -rf "$ws_dir"
   mkdir -p "$ws_dir"
   export_patch_bundle "$ws_dir"
-  write_positive_workspace "$ws_dir" "$repo_mode"
+  write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
 
   (
@@ -553,48 +438,10 @@ run_positive_fixture() {
 
   (
     cd "$ws_dir"
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test --noenable_bzlmod --enable_workspace //app:hello_test
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test --enable_bzlmod //app:hello_test
   )
-}
-
-run_expected_failure() {
-  local scenario="$1"
-  local expected_fragment="$2"
-  local ws_dir="$WORKSPACE_ROOT/$scenario"
-  local output_path="$ws_dir/${scenario}.log"
-
-  rm -rf "$ws_dir"
-  mkdir -p "$ws_dir"
-  write_invalid_workspace "$ws_dir" "$scenario"
-
-  set +e
-  (
-    cd "$ws_dir"
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" query --noenable_bzlmod --enable_workspace //:probe
-  ) >"$output_path" 2>&1
-  local rc=$?
-  set -e
-
-  if [[ $rc -eq 0 ]]; then
-    echo "error: expected scenario '$scenario' to fail" >&2
-    cat "$output_path" >&2
-    exit 1
-  fi
-
-  if ! grep -F "$expected_fragment" "$output_path" >/dev/null 2>&1; then
-    echo "error: scenario '$scenario' did not fail with expected text: $expected_fragment" >&2
-    cat "$output_path" >&2
-    exit 1
-  fi
 }
 
 mkdir -p "$WORKSPACE_ROOT"
 create_fixture_archive
-
-if [[ "$RULES_GO_PATCH_BUNDLE" == "none" ]]; then
-  run_positive_fixture "local"
-fi
-run_positive_fixture "archive"
-run_expected_failure "custom_name" "name must be rules_go_orchestrion_tool"
-run_expected_failure "missing_version" "version is required in WORKSPACE mode"
-run_expected_failure "conflicting_versions" "dd_trace_go_version and dd_trace_go_versions cannot both be set"
+run_fixture

@@ -8,7 +8,8 @@
   "generated_report": "third_party/rules_go_orchestrion.CHANGED_FILES.md",
   "generator": "python3 tools/dev/diff_rules_go_fork.py --write-report",
   "notes": [
-    "This repository keeps the active rules_go fork in-tree for debuggability and Bazel simplicity.",
+    "This repository keeps the clean Orchestrion-enabled rules_go base fork in-tree at third_party/rules_go_orchestrion.",
+    "The optional consumer patch bundle lives in third_party/rules_go_patches and the exact-tree proof lives in third_party/rules_go_patched_tree_manifest.json.",
     "Use the generator to compare the vendored tree against the pinned upstream base commit and regenerate the checked-in changed-files report."
   ]
 }

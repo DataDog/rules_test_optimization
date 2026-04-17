@@ -1,5 +1,10 @@
 # rules_go Orchestrion Probe Measurements
 
+> Historical scope note: the optional consumer patch layer now lives in
+> `third_party/rules_go_patches`, outside the vendored fork analyzed here.
+> Measurements in this document still describe the clean vendored base fork
+> internals and the local consumer runs used during that analysis window.
+
 ## Purpose
 
 This note captures the first real timing pass for the vendored

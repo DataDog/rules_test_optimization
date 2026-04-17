@@ -16,15 +16,13 @@
 # compatibility with --noincompatible_enable_proto_toolchain_resolution.
 
 load(
-    "@rules_proto//proto:proto_common.bzl",
-    "proto_common",
+    "@com_google_protobuf//bazel/common:proto_lang_toolchain_info.bzl",
+    "ProtoLangToolchainInfo",
 )
 load(
     "//go/private/rules:transition.bzl",
     "non_go_tool_transition",
 )
-
-ProtoLangToolchainInfo = proto_common.ProtoLangToolchainInfo
 
 def _legacy_proto_toolchain_impl(ctx):
     return [
