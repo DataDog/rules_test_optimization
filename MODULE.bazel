@@ -21,7 +21,7 @@ local_path_override(
 )
 
 # Dev-only dependency for in-repo Python companion/example builds.
-bazel_dep(name = "rules_python", version = "0.40.0", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "1.7.0", dev_dependency = True)
 
 # Dev-only dependencies for in-repo NodeJS/.NET/Ruby companion/example builds.
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5", dev_dependency = True)
@@ -141,6 +141,27 @@ register_toolchains(
     "@ruby_toolchains//:all",
     dev_dependency = True,
 )
+
+# Dev-only Python toolchain and pip dependencies for //examples/... pytest targets.
+python = use_extension(
+    "@rules_python//python/extensions:python.bzl",
+    "python",
+    dev_dependency = True,
+)
+python.toolchain(python_version = "3.12")
+
+pip = use_extension(
+    "@rules_python//python/extensions:pip.bzl",
+    "pip",
+    dev_dependency = True,
+)
+pip.parse(
+    experimental_index_url = "https://pypi.org/simple",
+    hub_name = "example_pip",
+    python_version = "3.12",
+    requirements_lock = "//examples/single_service/src/python-project:requirements_lock.txt",
+)
+use_repo(pip, "example_pip")
 
 # Dev-only stub repository so //examples/... can be analyzed from this root
 # workspace without fetching real Datadog data.

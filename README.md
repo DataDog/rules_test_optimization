@@ -214,7 +214,6 @@ git_override(
 ```
 
 ```bzl
-load("@rules_python//python:defs.bzl", "py_test")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -224,9 +223,16 @@ dd_topt_py_test(
     deps = [":pkg_lib"],
     imports = ["example/python/pkg"],
     topt_data = topt_data,
-    py_test_rule = py_test,
 )
 ```
+
+`dd_topt_py_test` now defaults to `@rules_python//python:py_test`, so you only
+need `py_test_rule` when you intentionally override the underlying test rule.
+When you omit `main`, the macro uses the bundled pytest entry point, defaults
+`args` to the Bazel package path, and adds `PYTEST_ADDOPTS=--ddtrace` unless
+you already set it or opt out with `--no-ddtrace`. If you use `unittest` or
+another custom runner, keep passing `main` and any custom `imports` or `args`
+you need.
 
 ### Bzlmod + Java companion (`dd_topt_java_test`)
 
@@ -415,7 +421,6 @@ You can apply the same pattern to all companion macros:
 
 ```bzl
 # tools/build/dd_py_test.bzl
-load("@rules_python//python:defs.bzl", "py_test")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -423,7 +428,6 @@ def dd_py_test(name, **kwargs):
     dd_topt_py_test(
         name = name,
         topt_data = topt_data,
-        py_test_rule = py_test,
         **kwargs
     )
 ```

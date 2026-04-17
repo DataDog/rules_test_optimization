@@ -424,6 +424,9 @@ REPO_ENVS=(
   --repo_env=DD_GIT_COMMIT_MESSAGE=Test_commit
   --repo_env=DD_GIT_HEAD_MESSAGE=Test_head
   --repo_env=DD_GIT_TAG=v1.0.0
+  # Keep the sync preflight bound to the explicit DD_GIT_* fixture metadata.
+  --repo_env=GITHUB_SHA=
+  --repo_env=GITHUB_EVENT_PATH=
 )
 
 # ---------------------------------------------------------------------------

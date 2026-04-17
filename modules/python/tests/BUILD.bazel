@@ -19,8 +19,6 @@ load(
     "select_service_entry_empty_mapping_target_rule",
     "select_service_entry_malformed_topt_data_failure_test",
     "select_service_entry_malformed_topt_data_target_rule",
-    "validate_py_test_rule_missing_failure_test",
-    "validate_py_test_rule_missing_target_rule",
 )
 load(
     ":test_payloads_selector.bzl",
@@ -336,16 +334,6 @@ resolve_topt_service_key_unknown_failure_test(
     target_under_test = ":resolve_topt_service_key_unknown_target",
 )
 
-validate_py_test_rule_missing_target_rule(
-    name = "validate_py_test_rule_missing_target",
-    tags = ["manual"],
-)
-
-validate_py_test_rule_missing_failure_test(
-    name = "validate_py_test_rule_missing_failure_test",
-    target_under_test = ":validate_py_test_rule_missing_target",
-)
-
 select_service_entry_malformed_topt_data_target_rule(
     name = "select_service_entry_malformed_topt_data_target",
     tags = ["manual"],
@@ -400,6 +388,5 @@ test_suite(
         ":selector_override_miss_failure_test",
         ":selector_override_test",
         ":service_mapping_entries_filters_non_service_test",
-        ":validate_py_test_rule_missing_failure_test",
     ],
 )

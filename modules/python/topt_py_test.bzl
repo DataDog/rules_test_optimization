@@ -26,7 +26,10 @@ load(
     "topt_bazel_metadata",
     "topt_test_wrapper",
 )
+load("@rules_python//python:py_test.bzl", _default_py_test = "py_test")
 load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
+
+_RUN_PYTEST = Label("//:run_pytest.py")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -37,10 +40,6 @@ _merge_user_env = merge_user_env
 def _resolve_topt_service_key(service_entries, topt_service):
     return resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_py_test")
 
-def _validate_py_test_rule_or_fail(py_test_rule):
-    if py_test_rule == None:
-        fail_with_prefix("dd_topt_py_test", "you must pass py_test_rule = py_test from native or rules_python")
-
 def _select_service_entry_or_fail(topt_data, topt_service):
     return select_service_entry_or_fail(topt_data, topt_service, macro_name = "dd_topt_py_test")
 
@@ -48,7 +47,6 @@ def _select_service_entry_or_fail(topt_data, topt_service):
 service_mapping_entries_for_tests = _service_mapping_entries
 resolve_topt_service_key_for_tests = _resolve_topt_service_key
 normalize_user_data_for_tests = _normalize_user_data
-validate_py_test_rule_for_tests = _validate_py_test_rule_or_fail
 select_service_entry_for_tests = _select_service_entry_or_fail
 
 def _build_module_labels(sync_repo_name, labels):
@@ -75,13 +73,14 @@ def _has_non_empty_value(value):
 def dd_topt_py_test(
         name,
         topt_data,
-        py_test_rule,
+        py_test_rule = None,
         topt_service = None,
         module_label_override = None,
         module_identifier = None,
         **kwargs):
     """Define a Python test with Datadog Test Optimization support."""
-    _validate_py_test_rule_or_fail(py_test_rule)
+    if py_test_rule == None:
+        py_test_rule = _default_py_test
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
@@ -98,10 +97,16 @@ def dd_topt_py_test(
     if not _is_dict(_python):
         _python = {}
 
-    deps_labels = kwargs.get("deps")
-    if deps_labels == None:
-        deps_labels = []
-    imports_candidates = kwargs.get("imports")
+    user_deps = kwargs.pop("deps", None)
+    deps_labels = user_deps if user_deps != None else []
+
+    user_srcs = kwargs.pop("srcs", None)
+    user_main = kwargs.pop("main", None)
+
+    # args is a wrapper-only attr; split_test_wrapper_kwargs already moved it to wrapper_kwargs.
+    user_args = wrapper_kwargs.pop("args", None)
+
+    imports_candidates = kwargs.pop("imports", None)
     if imports_candidates == None:
         imports_candidates = []
     importpath_candidate = kwargs.get("importpath") if "importpath" in kwargs else None
@@ -168,6 +173,22 @@ def dd_topt_py_test(
         macro_name = "dd_topt_py_test",
     )
 
+    # Activate the ddtrace pytest plugin via PYTEST_ADDOPTS:
+    # - Not set → inject "--ddtrace" as a default.
+    # - Set to a plain string without "--no-ddtrace" → append " --ddtrace".
+    # - Set to a plain string containing "--no-ddtrace" → leave unchanged.
+    # - Set to a select() value → leave unchanged (caller is responsible).
+    _existing_pytest_addopts = user_env.get("PYTEST_ADDOPTS") if _is_dict(user_env) else None
+    if _existing_pytest_addopts == None:
+        user_env = _merge_optional_env_defaults(
+            user_env,
+            {"PYTEST_ADDOPTS": "--ddtrace"},
+            macro_name = "dd_topt_py_test",
+        )
+    elif type(_existing_pytest_addopts) == type("") and "--no-ddtrace" not in _existing_pytest_addopts.split():
+        user_env = dict(user_env)
+        user_env["PYTEST_ADDOPTS"] = _existing_pytest_addopts + " --ddtrace"
+
     data = _append_data_dependencies(data, [":" + selector_name])
 
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
@@ -183,6 +204,34 @@ def dd_topt_py_test(
         macro_name = "dd_topt_py_test",
     )
 
+    if user_main == None:
+        # No custom runner: inject the bundled run_pytest.py into srcs and set it as main.
+        srcs = _append_data_dependencies(user_srcs, [_RUN_PYTEST])
+        main = _RUN_PYTEST
+
+        # Default args to the package path for pytest test-file discovery.
+        # args goes on the wrapper (which forwards them to the raw test via "$@").
+        if user_args != None:
+            wrapper_kwargs["args"] = user_args
+        elif pkg_path:
+            wrapper_kwargs["args"] = [pkg_path]
+        else:
+            wrapper_kwargs["args"] = []
+    else:
+        # Caller supplied their own runner: leave srcs and args alone.
+        srcs = _append_data_dependencies(user_srcs, [])
+        main = user_main
+        if user_args != None:
+            wrapper_kwargs["args"] = user_args
+
+    # Default imports to the package path for correct module resolution.
+    if imports_candidates:
+        imports_for_test = imports_candidates
+    elif pkg_path:
+        imports_for_test = [pkg_path]
+    else:
+        imports_for_test = []
+
     raw_name = name + "__raw_python_test"
     kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
     kwargs["visibility"] = ["//visibility:private"]
@@ -191,8 +240,12 @@ def dd_topt_py_test(
 
     py_test_rule(
         name = raw_name,
+        srcs = srcs,
+        main = main,
+        imports = imports_for_test,
         data = data,
         env = env,
+        deps = user_deps,
         **kwargs
     )
 

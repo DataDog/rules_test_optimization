@@ -260,7 +260,6 @@ dd_payload_uploader(
 
 ```bzl
 # package BUILD.bazel
-load("@rules_python//python:defs.bzl", "py_test")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -275,10 +274,15 @@ dd_topt_py_test(
     main = "main_test.py",
     deps = [":pkg_lib"],
     imports = ["example/python/pkg"],
-    py_test_rule = py_test,
     topt_data = topt_data,
 )
 ```
+
+The snippet above shows the custom-runner path. For pytest-based tests, you can
+omit `main`; `dd_topt_py_test` now defaults to
+`@rules_python//python:py_test`, runs the bundled pytest entry point, defaults
+`args` to the Bazel package path, and sets `PYTEST_ADDOPTS=--ddtrace` unless
+you already set it or opt out with `--no-ddtrace`.
 
 ### Multi-service
 
@@ -324,7 +328,6 @@ use_repo(
 
 ```bzl
 # package BUILD.bazel
-load("@rules_python//python:defs.bzl", "py_test")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
 load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
@@ -333,7 +336,6 @@ dd_topt_py_test(
     srcs = ["main_test.py"],
     main = "main_test.py",
     imports = ["example/python/pkg"],
-    py_test_rule = py_test,
     topt_data = topt_data_by_service,
     topt_service = "py_service_a",
 )
