@@ -85,7 +85,22 @@ class RulesGoPatchToolTests(unittest.TestCase):
             "export_rules_go_patch_bundle_mod",
             "tools/dev/export_rules_go_patch_bundle.py",
         )
-        cls.manifest = cls.lib.load_manifest()
+        manifest_path = _runfile("third_party/rules_go_patch_series.json")
+
+        def fake_git_runner(*args: str, capture_output: bool = True):
+            """Keep shared contract tests independent from checkout history depth."""
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+            if args[0] == "for-each-ref":
+                return subprocess.CompletedProcess(
+                    ["git", *args],
+                    0,
+                    stdout="refs/heads/feat/rules-go-optional-patch-bundles\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+        cls.manifest = cls.lib.load_manifest(manifest_path, git_runner=fake_git_runner)
 
     def test_manifest_exposes_expected_split_contract(self) -> None:
         """Validate the manifest points at the new base, patch, and overlay locations."""

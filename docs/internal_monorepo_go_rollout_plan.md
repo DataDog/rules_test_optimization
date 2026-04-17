@@ -66,7 +66,7 @@ The current Go companion code already provides the pieces this pilot needs:
   - repository-local wrappers must stay outside `dd_topt_go_test`
   - repository-local wrappers must not be passed through `go_test_rule`
 - A validated WORKSPACE Go path through
-  [tools/tests/integration/run_workspace_go_integration.sh](/Users/tony.redondo/repos/github/Datadog/rules_test_optimization/tools/tests/integration/run_workspace_go_integration.sh),
+  `tools/tests/integration/run_workspace_go_integration.sh`,
   including:
   - `repo_mapping = {"@rules_go": "@io_bazel_rules_go"}`
   - the public `go_orchestrion_tool_repo(...)` helper
@@ -97,21 +97,21 @@ The current `dd-source` repository has these relevant properties:
   - module: `github.com/DataDog/dd-source`
   - Go version: `1.25.9`
 - `dd-source` pins the Bazel Go toolchain version to `1.25.9` in
-  [rules/go/version.bzl](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/rules/go/version.bzl).
+  `rules/go/version.bzl`.
 - `dd-source` currently binds `@io_bazel_rules_go` in
-  [WORKSPACE](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/WORKSPACE)
+  `WORKSPACE`
   to `rules_go v0.60.0` plus the current `dd-source` patch stack.
 - `dd-source` already has a repository-local Go wrapper:
   - public alias:
-    [rules/go/dd_go_test.bzl](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/rules/go/dd_go_test.bzl)
+    `rules/go/dd_go_test.bzl`
   - implementation:
-    [rules/go/private/dd_go_test/dd_go_test.bzl](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/rules/go/private/dd_go_test/dd_go_test.bzl)
+    `rules/go/private/dd_go_test/dd_go_test.bzl`
 - `dd_go_test` currently adds repository policy around raw `go_test`:
   - Docker defaults when `dd-requires-docker` is present
   - `local` and `exclusive` enforcement for non-manual targets
   - flaky companion `<name>.build_test` generation
 - The repo root
-  [BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/BUILD.bazel)
+  `BUILD.bazel`
   maps Gazelle `go_test` generation to `dd_go_test`, so the pilot should keep
   `dd_go_test` as the public local macro surface.
 - `dd-source` does not currently contain:
@@ -121,7 +121,7 @@ The current `dd-source` repository has these relevant properties:
   - `orchestrion.tool.go`
   - `orchestrion.yml`
 - The root
-  [go.mod](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/go.mod)
+  `go.mod`
   already contains both `gopkg.in/DataDog/dd-trace-go.v1` and
   `github.com/DataDog/dd-trace-go/v2` dependencies. The Orchestrion bootstrap
   for this pilot must still be pinned explicitly against the v2 tracer module
@@ -132,7 +132,7 @@ The current `dd-source` repository has these relevant properties:
   - `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` is not present yet
     and must be added by the repo-root Orchestrion bootstrap flow.
 - CI config in
-  [tools/bazelrc/ci.bazelrc](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/tools/bazelrc/ci.bazelrc)
+  `tools/bazelrc/ci.bazelrc`
   filters out Docker-tagged tests. The first pilot must not rely on a
   Docker-only parity target.
 
@@ -143,7 +143,7 @@ Use `domains/ci-app/apps/apis/test-optimization-worker` as the pilot service.
 Why this service:
 
 - Its service metadata is
-  [service.datadog.yaml](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/service.datadog.yaml),
+  `service.datadog.yaml`,
   and the service name is exactly `test-optimization-worker`.
 - Its owner is `ci-app-backend`, so the pilot stays inside the CI App backend
   team boundary.
@@ -324,7 +324,7 @@ Implementation rule:
 
 Expected `dd-source` files to change:
 
-- [WORKSPACE](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/WORKSPACE)
+- `WORKSPACE`
 - any internal patch files or mirror metadata used to publish the merged
   `rules_go`
 
@@ -405,7 +405,7 @@ transpose the same selected values into that existing mechanism without changing
 the repository names above.
 
 Add a workspace-level uploader target to root
-[BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/BUILD.bazel):
+`BUILD.bazel`:
 
 ```bzl
 load(
@@ -424,17 +424,17 @@ dd_payload_uploader(
 
 Do not add the pilot's `--repo_env` lines directly to shared root `common`.
 The current
-[.bazelrc](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/.bazelrc)
+`.bazelrc`
 already warns that `--repo_env` on shared command scopes can churn caches
 across normal workflows.
 
 For the first pilot, add a dedicated imported Bazel RC fragment instead, for
 example:
 
-- [tools/bazelrc/test-optimization-worker-pilot.bazelrc](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/tools/bazelrc/test-optimization-worker-pilot.bazelrc)
+- `tools/bazelrc/test-optimization-worker-pilot.bazelrc`
 
 Import that file from the root
-[.bazelrc](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/.bazelrc)
+`.bazelrc`
 alongside the existing `tools/bazelrc/*.bazelrc` imports:
 
 - `import %workspace%/tools/bazelrc/test-optimization-worker-pilot.bazelrc`
@@ -472,10 +472,10 @@ bzl --config=test-optimization-worker-pilot sync --enable_workspace --only=test_
 
 Expected `dd-source` files to change:
 
-- [WORKSPACE](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/WORKSPACE)
-- [BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/BUILD.bazel)
-- [.bazelrc](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/.bazelrc)
-- [tools/bazelrc/test-optimization-worker-pilot.bazelrc](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/tools/bazelrc/test-optimization-worker-pilot.bazelrc)
+- `WORKSPACE`
+- `BUILD.bazel`
+- `.bazelrc`
+- `tools/bazelrc/test-optimization-worker-pilot.bazelrc`
 
 This step is done when:
 
@@ -497,11 +497,11 @@ Use this exact repo-root pin set:
 
 `go.mod` and `go.sum` already exist. Add these new repo-root files:
 
-- [orchestrion.tool.go](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/orchestrion.tool.go)
-- [orchestrion.yml](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/orchestrion.yml)
+- `orchestrion.tool.go`
+- `orchestrion.yml`
 
 Expose the full repo-root pin set from
-[BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/BUILD.bazel)
+`BUILD.bazel`
 so nested packages can reference:
 
 - `//:go.mod`
@@ -676,11 +676,11 @@ GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod github.com/DataDog/dd-trac
 
 Expected `dd-source` files to change:
 
-- [BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/BUILD.bazel)
-- [go.mod](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/go.mod)
-- [go.sum](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/go.sum)
-- [orchestrion.tool.go](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/orchestrion.tool.go)
-- [orchestrion.yml](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/orchestrion.yml)
+- `BUILD.bazel`
+- `go.mod`
+- `go.sum`
+- `orchestrion.tool.go`
+- `orchestrion.yml`
 
 This step is done when:
 
@@ -701,7 +701,7 @@ already routes Go tests through `dd_go_test`, and that is the cleanest place to
 keep repository policy.
 
 Recommended shape for
-[rules/go/private/dd_go_test/dd_go_test.bzl](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/rules/go/private/dd_go_test/dd_go_test.bzl):
+`rules/go/private/dd_go_test/dd_go_test.bzl`:
 
 - keep the current behavior exactly as-is when Test Optimization is not
   requested
@@ -802,8 +802,8 @@ def dd_go_test(
 
 Expected `dd-source` files to change:
 
-- [rules/go/private/dd_go_test/dd_go_test.bzl](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/rules/go/private/dd_go_test/dd_go_test.bzl)
-- [rules/go/dd_go_test.bzl](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/rules/go/dd_go_test.bzl)
+- `rules/go/private/dd_go_test/dd_go_test.bzl`
+- `rules/go/dd_go_test.bzl`
   if its module-level comments need updating to match the expanded wrapper
   contract
 
@@ -822,9 +822,9 @@ Do not batch-convert unrelated Go packages.
 
 Change only these BUILD files:
 
-- [domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel)
-- [domains/ci-app/apps/apis/test-optimization-worker/worker/notifications/BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/notifications/BUILD.bazel)
-- [domains/ci-app/apps/apis/test-optimization-worker/worker/store/BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/store/BUILD.bazel)
+- `domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel`
+- `domains/ci-app/apps/apis/test-optimization-worker/worker/notifications/BUILD.bazel`
+- `domains/ci-app/apps/apis/test-optimization-worker/worker/store/BUILD.bazel`
 
 Convert them in the same order listed in **Pilot Targets** and run validation
 after each conversion before moving to the next file.
@@ -833,7 +833,7 @@ Keep this BUILD file unchanged and use it as the plain local control target
 that proves the non-pilot `dd_go_test` path still works without Test
 Optimization:
 
-- [domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization/BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization/BUILD.bazel)
+- `domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization/BUILD.bazel`
 
 For each existing pilot target:
 
@@ -847,7 +847,7 @@ For each existing pilot target:
   values exactly
 
 For the pilot-only flaky parity target in
-[domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel):
+`domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel`:
 
 - add a second `dd_go_test`
 - reuse the current `worker` test sources and deps
@@ -936,7 +936,7 @@ bzl --config=test-optimization-worker-pilot test //domains/ci-app/apps/apis/test
 
 Keep this target as a plain-path local control only. The current repo already
 lists it in
-[etc/ci/test-all/failing_test_targets_rbe.txt](/Users/tony.redondo/go/src/github.com/DataDog/dd-source/etc/ci/test-all/failing_test_targets_rbe.txt),
+`etc/ci/test-all/failing_test_targets_rbe.txt`,
 so it is a poor required gate for the pilot's CI-shaped matrix even though it
 is still useful to prove that the unchanged non-pilot `dd_go_test` path keeps
 working locally.
