@@ -271,10 +271,11 @@ jobs:
         shell: bash
         run: |
           # actions/checkout with the PR ref does not guarantee that commits
-          # reachable only from main are present in the local object store.
-          # The patch-series verifier archives the recorded base commit
-          # directly, so fetch main explicitly before running it.
-          git fetch --no-tags origin main
+          # reachable only from maintainer support branches are present in the
+          # local object store. The patch-series verifier archives the
+          # recorded base commit and validates per-patch commit reachability,
+          # so fetch all remote branch heads before running it.
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
 
       - name: Run vendored rules_go patch smoke coverage
         shell: bash

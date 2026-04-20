@@ -43,23 +43,18 @@ type xmlTestSuite struct {
 }
 
 type xmlTestCase struct {
-	XMLName   xml.Name      `xml:"testcase"`
-	Classname string        `xml:"classname,attr"`
-	Name      string        `xml:"name,attr"`
-	Time      string        `xml:"time,attr"`
-	Failure   *xmlMessage   `xml:"failure,omitempty"`
-	Error     *xmlMessage   `xml:"error,omitempty"`
-	Skipped   *xmlMessage   `xml:"skipped,omitempty"`
-	SystemOut *xmlSystemOut `xml:"system-out,omitempty"`
+	XMLName   xml.Name    `xml:"testcase"`
+	Classname string      `xml:"classname,attr"`
+	Name      string      `xml:"name,attr"`
+	Time      string      `xml:"time,attr"`
+	Failure   *xmlMessage `xml:"failure,omitempty"`
+	Error     *xmlMessage `xml:"error,omitempty"`
+	Skipped   *xmlMessage `xml:"skipped,omitempty"`
 }
 
 type xmlMessage struct {
 	Message  string `xml:"message,attr"`
 	Type     string `xml:"type,attr"`
-	Contents string `xml:",chardata"`
-}
-
-type xmlSystemOut struct {
 	Contents string `xml:",chardata"`
 }
 
@@ -238,14 +233,7 @@ func toXML(pkgName string, testcases map[string]*testCase) *xmlTestSuites {
 				Contents: c.output.String(),
 			}
 		case "pass":
-			output := c.output.String()
-			if len(output) == 0 {
-				break
-			}
-
-			newCase.SystemOut = &xmlSystemOut{
-				Contents: output,
-			}
+			break
 		default:
 			suite.Errors++
 			newCase.Error = &xmlMessage{

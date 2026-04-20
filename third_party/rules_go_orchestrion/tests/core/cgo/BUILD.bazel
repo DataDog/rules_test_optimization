@@ -510,58 +510,6 @@ cc_library(
     linkstatic = True,
 )
 
-cc_library(
-    name = "embed_chain_leaf_dep",
-    srcs = ["embed_chain_leaf_dep.cc"],
-    linkstatic = True,
-)
-
-cc_library(
-    name = "embed_chain_mid_dep",
-    srcs = ["embed_chain_mid.cc"],
-    linkstatic = True,
-)
-
-cc_library(
-    name = "embed_chain_top_dep",
-    srcs = ["embed_chain_top.cc"],
-    linkstatic = True,
-)
-
-go_library(
-    name = "embed_chain_leaf",
-    srcs = [
-        "embed_chain_leaf.c",
-        "embed_chain_leaf.go",
-        "embed_chain_leaf.h",
-    ],
-    cdeps = [":embed_chain_leaf_dep"],
-    cgo = True,
-    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/embed_chain",
-)
-
-go_library(
-    name = "embed_chain_mid",
-    srcs = ["embed_chain_mid.go"],
-    cdeps = [":embed_chain_mid_dep"],
-    embed = [":embed_chain_leaf"],
-    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/embed_chain",
-)
-
-go_library(
-    name = "embed_chain_top",
-    srcs = ["embed_chain_top_lib.go"],
-    cdeps = [":embed_chain_top_dep"],
-    embed = [":embed_chain_mid"],
-    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/embed_chain",
-)
-
-go_binary(
-    name = "embed_chain_bin",
-    srcs = ["embed_chain_main.go"],
-    deps = [":embed_chain_top"],
-)
-
 go_library(
     name = "transitive_dep",
     srcs = ["transitive_dep.go"],

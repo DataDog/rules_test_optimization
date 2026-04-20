@@ -4,6 +4,7 @@ bazel-bin
 bazel-out
 bazel-testlogs
 third_party/rules_go_orchestrion
+tools/tests/rules_go_patch_regressions
 modules/go/bazel-bin
 modules/go/bazel-out
 modules/go/bazel-testlogs

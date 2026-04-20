@@ -1,184 +1,144 @@
 #!/usr/bin/env python3
-"""Verify that the checked-in rules_go patch series reproduces the vendored fork."""
+"""Verify the clean-base rules_go split and the canonical optional patch bundle."""
 
 from __future__ import annotations
 
-import filecmp
-import io
-import json
-import os
-import shutil
-import subprocess
-import sys
-import tarfile
-import tempfile
+import argparse
 from pathlib import Path
+import sys
+import tempfile
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANIFEST = REPO_ROOT / "third_party" / "rules_go_orchestrion.PATCH_SERIES.json"
-EXPECTED_PATCH_FILENAMES = (
-    "0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
-    "0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch",
-    "0009-Use-LLVM-for-all-linking.patch",
-    "0011-fix-cdeps-propagation.patch",
-    "0013-Add-buildInfo-metadata-support.patch",
-    "0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
-    "0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
-    "0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch",
-    "0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
+from rules_go_patch_series_lib import (
+    DEFAULT_MANIFEST_PATH,
+    PatchSeriesError,
+    REPO_ROOT,
+    compare_entry_maps,
+    copy_worktree_subtree,
+    git_archive_subtree,
+    load_manifest,
+    load_tree_manifest,
+    manifest_path,
+    materialize_bundle_tree,
+    remove_normalized_paths,
+    resolve_patch_selection,
+    tree_entries,
+    write_tree_manifest,
 )
 
-# Local validation-only files live inside the vendored subtree but are not part
-# of the recorded upstream patch replay. The verifier compares the replayed
-# patch series against the vendored fork while intentionally skipping these
-# auxiliary files; their behavior is covered separately by the smoke targets.
-LOCAL_VALIDATION_ONLY_PATHS = {
-    "go/private/context.bzl",
-    "patches/BUILD.bazel",
-    "patches/0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
-    "patches/0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch",
-    "patches/0009-Use-LLVM-for-all-linking.patch",
-    "patches/0011-fix-cdeps-propagation.patch",
-    "patches/0013-Add-buildInfo-metadata-support.patch",
-    "patches/0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
-    "patches/0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
-    "patches/0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch",
-    "patches/0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
-    "tests/core/cgo/asm_cflags/BUILD.bazel",
-    "tests/core/cgo/asm_cflags/asm_cflags.go",
-    "tests/core/cgo/asm_cflags/asm_cflags_linux_amd64.S",
-    "tests/core/cgo/asm_cflags/asm_cflags_test.go",
-    "tests/core/go_proto_library/BUILD.bazel",
-    "tests/core/starlark/context_tests.bzl",
-}
 
-
-def load_manifest(path: Path) -> dict:
-    """Load the patch-series manifest and enforce the required series shape."""
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    patch_filenames = tuple(patch["filename"] for patch in manifest["patches"])
-    if patch_filenames != EXPECTED_PATCH_FILENAMES:
-        raise ValueError(
-            "manifest patch filenames do not match the required 1:1 patch series:\n"
-            f"expected: {EXPECTED_PATCH_FILENAMES}\n"
-            f"actual:   {patch_filenames}"
-        )
-    return manifest
-
-
-def git_archive_subtree(commit: str, subtree_path: str, destination: Path) -> None:
-    """Extract one committed subtree into a standalone directory for comparison."""
-    result = subprocess.run(
-        ["git", "archive", "--format=tar", commit, subtree_path],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse verifier CLI arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST_PATH)
+    parser.add_argument("--bundle", help="named bundle to verify")
+    parser.add_argument(
+        "--patch",
+        action="append",
+        default=[],
+        help="explicit patch filename to verify; may be repeated",
     )
-    prefix = f"{subtree_path}/"
-    with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
-        for member in archive.getmembers():
-            if not member.name.startswith(prefix):
-                continue
-            relative_name = member.name[len(prefix):]
-            if not relative_name:
-                continue
-            member.name = relative_name
-            archive.extract(member, destination, filter="data")
-
-
-def copy_worktree_subtree(subtree_path: str, destination: Path) -> None:
-    """Copy tracked files from the checked-out vendored subtree for comparison."""
-    result = subprocess.run(
-        ["git", "ls-files", "-z", "--", subtree_path],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
+    parser.add_argument(
+        "--write-full-tree-manifest",
+        action="store_true",
+        help="rewrite the exact-tree manifest from the current canonical full bundle",
     )
-    prefix = f"{subtree_path}/"
-    for tracked_path in result.stdout.decode("utf-8").split("\0"):
-        if not tracked_path:
-            continue
-        if not tracked_path.startswith(prefix):
-            continue
-        relative_name = tracked_path[len(prefix):]
-        if not relative_name:
-            continue
-        source = REPO_ROOT / tracked_path
-        target = destination / relative_name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+    return parser.parse_args(argv)
 
 
-def compare_trees(left: Path, right: Path, excluded_paths: set[str]) -> list[str]:
-    """Return relative file paths that differ between the two extracted trees."""
-    mismatches: list[str] = []
-    all_paths = set()
-    for root, _, files in os.walk(left):
-        rel_root = Path(root).relative_to(left)
-        for name in files:
-            all_paths.add((rel_root / name).as_posix())
-    for root, _, files in os.walk(right):
-        rel_root = Path(root).relative_to(right)
-        for name in files:
-            all_paths.add((rel_root / name).as_posix())
-
-    for rel in sorted(all_paths):
-        if rel in excluded_paths:
-            continue
-        left_path = left / rel
-        right_path = right / rel
-        if not left_path.exists() or not right_path.exists():
-            mismatches.append(rel)
-            continue
-        if not filecmp.cmp(left_path, right_path, shallow=False):
-            mismatches.append(rel)
-    return mismatches
-
-
-def apply_patch_series(tree_root: Path, patch_paths: list[Path]) -> None:
-    """Apply the checked-in patch series with the same tool the consumer would use."""
-    for patch_path in patch_paths:
-        subprocess.run(
-            ["patch", "-p1", "-i", str(patch_path)],
-            cwd=tree_root,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-
-def main() -> int:
-    """Verify that the checked-in patch files exactly reproduce the vendored subtree."""
-    manifest = load_manifest(DEFAULT_MANIFEST)
-    patch_paths = [REPO_ROOT / manifest["patch_dir"] / patch["filename"] for patch in manifest["patches"]]
-    missing_patches = [path for path in patch_paths if not path.exists()]
-    if missing_patches:
-        for path in missing_patches:
-            print(f"missing patch file: {path.relative_to(REPO_ROOT)}", file=sys.stderr)
-        return 1
-
-    with tempfile.TemporaryDirectory(prefix="rules_go_patch_verify_") as tempdir:
+def verify_clean_base(manifest: dict) -> int:
+    """Compare the checked-in clean base subtree to the recorded base commit."""
+    with tempfile.TemporaryDirectory(prefix="rules_go_patch_verify_base_") as tempdir:
         temp_root = Path(tempdir)
-        base_tree = temp_root / "base"
         expected_tree = temp_root / "expected"
-        base_tree.mkdir()
+        actual_tree = temp_root / "actual"
         expected_tree.mkdir()
+        actual_tree.mkdir()
 
-        git_archive_subtree(manifest["base_commit"], manifest["subtree_path"], base_tree)
-        copy_worktree_subtree(manifest["subtree_path"], expected_tree)
-        apply_patch_series(base_tree, patch_paths)
-
-        mismatches = compare_trees(base_tree, expected_tree, LOCAL_VALIDATION_ONLY_PATHS)
+        git_archive_subtree(manifest["base_commit"], manifest["subtree_path"], expected_tree)
+        copy_worktree_subtree(manifest["subtree_path"], actual_tree)
+        expected_entries = {entry["path"]: entry for entry in tree_entries(expected_tree)}
+        actual_entries = {entry["path"]: entry for entry in tree_entries(actual_tree)}
+        mismatches = compare_entry_maps(expected_entries, actual_entries)
         if mismatches:
-            print("patch series verification failed; mismatched paths:", file=sys.stderr)
-            for rel in mismatches:
-                print(rel, file=sys.stderr)
+            print("clean-base verification failed; mismatched paths:", file=sys.stderr)
+            for path in mismatches:
+                print(path, file=sys.stderr)
             return 1
-
-    print("patch series verified")
+    print("clean base verified")
     return 0
+
+
+def canonical_full_bundle_entries(manifest: dict) -> dict[str, dict]:
+    """Materialize the canonical full bundle and return its normalized tree entries."""
+    with tempfile.TemporaryDirectory(prefix="rules_go_patch_verify_full_") as tempdir:
+        materialized_tree = Path(tempdir) / "tree"
+        selection = resolve_patch_selection(manifest, bundle_name="dd_source_full")
+        materialize_bundle_tree(manifest, selection=selection, destination=materialized_tree, force=True)
+        remove_normalized_paths(materialized_tree, manifest["proof_overlay_paths"])
+        return {entry["path"]: entry for entry in tree_entries(materialized_tree)}
+
+
+def verify_bundle(manifest: dict, bundle_name: str) -> int:
+    """Verify one named bundle against its expected proof surface."""
+    if bundle_name == "none":
+        return verify_clean_base(manifest)
+    if bundle_name != "dd_source_full":
+        raise PatchSeriesError(
+            f"bundle verification is only supported for 'none' or 'dd_source_full', got {bundle_name!r}"
+        )
+
+    expected_entries = load_tree_manifest(manifest_path(manifest["full_tree_manifest"]))
+    actual_entries = canonical_full_bundle_entries(manifest)
+    mismatches = compare_entry_maps(expected_entries, actual_entries)
+    if mismatches:
+        print("canonical full-bundle verification failed; mismatched paths:", file=sys.stderr)
+        for path in mismatches:
+            print(path, file=sys.stderr)
+        return 1
+    print("canonical full bundle verified")
+    return 0
+
+
+def write_full_tree_manifest(manifest: dict) -> int:
+    """Regenerate the exact-tree manifest for the canonical full patch bundle."""
+    entries = list(canonical_full_bundle_entries(manifest).values())
+    entries.sort(key=lambda entry: entry["path"])
+    output_path = manifest_path(manifest["full_tree_manifest"])
+    write_tree_manifest(output_path, entries)
+    print(output_path.relative_to(REPO_ROOT))
+    return 0
+
+
+def verify_subset(manifest: dict, patch_filenames: list[str]) -> int:
+    """Validate patch ordering, prerequisites, and clean application for a subset."""
+    with tempfile.TemporaryDirectory(prefix="rules_go_patch_verify_subset_") as tempdir:
+        materialized_tree = Path(tempdir) / "tree"
+        selection = resolve_patch_selection(manifest, patch_filenames=patch_filenames)
+        materialize_bundle_tree(manifest, selection=selection, destination=materialized_tree, force=True)
+    ordered = ", ".join(patch["filename"] for patch in selection)
+    print(f"subset verified: {ordered}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Dispatch patch-series verification modes."""
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        manifest = load_manifest(args.manifest)
+        if args.write_full_tree_manifest:
+            if args.bundle or args.patch:
+                raise PatchSeriesError("--write-full-tree-manifest cannot be combined with --bundle or --patch")
+            return write_full_tree_manifest(manifest)
+        if args.bundle:
+            if args.patch:
+                raise PatchSeriesError("choose either --bundle or --patch, not both")
+            return verify_bundle(manifest, args.bundle)
+        if args.patch:
+            return verify_subset(manifest, args.patch)
+        raise PatchSeriesError("select one of --bundle, --patch, or --write-full-tree-manifest")
+    except PatchSeriesError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

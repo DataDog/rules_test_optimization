@@ -39,6 +39,9 @@
   - `python3 tools/dev/check_module_versions.py`
 - Python tooling tests:
   - `./bazelw test //tools/tests/python:python_tools_test`
+- rules_go clean-base and patch-bundle verification:
+  - `python3 tools/dev/verify_rules_go_patch_series.py --bundle none`
+  - `python3 tools/dev/verify_rules_go_patch_series.py --bundle dd_source_full`
 - Optional Python tooling dependencies (for local script execution):
   - `python3 -m pip install --require-hashes -r tools/requirements.txt`
 - Local lint prerequisites (match CI tooling):
@@ -57,16 +60,33 @@
   - Mixed-runtime uploader changes are not done until both harnesses still pass:
     they cover single-context, explicit override, multi-context repo selection,
     and no-match fallback behavior.
+- Go consumer integration harnesses:
+  - WORKSPACE base-only:
+    `tools/tests/integration/run_workspace_go_integration.sh`
+  - WORKSPACE with the canonical full patch bundle:
+    `RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_workspace_go_integration.sh`
+  - Bzlmod base-only:
+    `tools/tests/integration/run_bzlmod_go_patch_integration.sh`
+  - Bzlmod with the canonical full patch bundle:
+    `RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_bzlmod_go_patch_integration.sh`
 - Vendored rules_go patch smoke:
   - `tools/dev/run_rules_go_patch_smoke.sh`
+  - materializes `base + dd_source_full`, applies the maintainer-only proof
+    overlay, and runs the fast vendored-fork regression set from that temp tree
 - Vendored rules_go extended patch coverage:
   - `tools/dev/run_rules_go_patch_extended.sh`
+  - materializes the same temp tree shape and runs the slower extended
+    regression set there
 - Hermetic smoke (mirror CI flags):
   - run the same test commands with sandbox/network-blocking flags from `.github/workflows/ci.yml`
 - Cross-repo fixture validation for mixed-runtime changes:
   - In `../rules_test_optimization_tests/MODULE.bazel`, temporarily enable the
     documented `local_path_override(...)` entries for core and each affected
     companion module so the fixture repo resolves this checkout.
+  - If the change touches `third_party/rules_go_orchestrion` or related Go
+    bootstrap/orchestrion wiring, also add a temporary
+    `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion")`
+    there so the sibling repo resolves the local clean base fork.
   - Run the relevant fixture entrypoints there before calling the work done.
   - Restore the fixture repo to `git_override(...)` pins before pushing its PR.
 

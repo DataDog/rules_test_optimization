@@ -1,5 +1,10 @@
 # rules_go Orchestrion Fork Performance Analysis
 
+> Historical scope note: the optional consumer patch layer now lives outside the
+> vendored fork in `third_party/rules_go_patches`. This document analyzes the
+> clean vendored base fork internals under `third_party/rules_go_orchestrion`
+> and remains useful as historical maintainer context.
+
 ## Purpose
 
 This document captures a code-reading analysis of the vendored

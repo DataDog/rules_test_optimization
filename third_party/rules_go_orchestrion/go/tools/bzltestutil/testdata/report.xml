@@ -5,14 +5,10 @@
 		</testcase>
 	</testsuite>
 	<testsuite errors="0" failures="0" skipped="0" tests="1" time="0.000" name="pkg/testing.TestPass">
-		<testcase classname="testing" name="TestPass" time="0.000">
-			<system-out>=== RUN   TestPass&#xA;=== PAUSE TestPass&#xA;=== CONT  TestPass&#xA;--- PASS: TestPass (0.00s)&#xA;</system-out>
-		</testcase>
+		<testcase classname="testing" name="TestPass" time="0.000"></testcase>
 	</testsuite>
 	<testsuite errors="0" failures="0" skipped="0" tests="1" time="0.000" name="pkg/testing.TestPassLog">
-		<testcase classname="testing" name="TestPassLog" time="0.000">
-			<system-out>=== RUN   TestPassLog&#xA;=== PAUSE TestPassLog&#xA;=== CONT  TestPassLog&#xA;--- PASS: TestPassLog (0.00s)&#xA;    test_test.go:19: pass&#xA;</system-out>
-		</testcase>
+		<testcase classname="testing" name="TestPassLog" time="0.000"></testcase>
 	</testsuite>
 	<testsuite errors="0" failures="2" skipped="1" tests="4" time="0.020" name="pkg/testing.TestSubtests">
 		<testcase classname="testing" name="TestSubtests" time="0.020">
@@ -24,8 +20,6 @@
 		<testcase classname="testing" name="TestSubtests/subtest_a" time="0.000">
 			<skipped message="Skipped" type="">=== RUN   TestSubtests/subtest_a&#xA;    --- SKIP: TestSubtests/subtest_a (0.00s)&#xA;        test_test.go:29: from subtest subtest a&#xA;        test_test.go:31: from subtest subtest a&#xA;        test_test.go:33: skipping this test&#xA;</skipped>
 		</testcase>
-		<testcase classname="testing" name="TestSubtests/testB" time="0.010">
-			<system-out>=== RUN   TestSubtests/testB&#xA;    --- PASS: TestSubtests/testB (0.01s)&#xA;        test_test.go:29: from subtest testB&#xA;        test_test.go:31: from subtest testB&#xA;</system-out>
-		</testcase>
+		<testcase classname="testing" name="TestSubtests/testB" time="0.010"></testcase>
 	</testsuite>
 </testsuites>
