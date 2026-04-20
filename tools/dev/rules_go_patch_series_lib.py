@@ -79,8 +79,18 @@ def _validate_manifest_commit_reachability(manifest: dict, git_runner=run_git) -
             )
 
 
-def load_manifest(path: Path = DEFAULT_MANIFEST_PATH, *, git_runner=run_git) -> dict:
-    """Load and validate the canonical patch-series manifest."""
+def load_manifest(
+    path: Path = DEFAULT_MANIFEST_PATH,
+    *,
+    git_runner=run_git,
+    validate_commit_reachability: bool = True,
+) -> dict:
+    """Load and validate the canonical patch-series manifest.
+
+    Set ``validate_commit_reachability`` to ``False`` only for workflows that
+    consume the checked-in patch files directly and do not need local git
+    history, such as exporting a bundle from a shallow clone or source snapshot.
+    """
     manifest = json.loads(path.read_text(encoding="utf-8"))
     patch_filenames = tuple(patch["filename"] for patch in manifest["patches"])
     if patch_filenames != EXPECTED_PATCH_FILENAMES:
@@ -110,7 +120,8 @@ def load_manifest(path: Path = DEFAULT_MANIFEST_PATH, *, git_runner=run_git) -> 
                     f"patch {patch['filename']!r} requires unknown patch {required!r}"
                 )
 
-    _validate_manifest_commit_reachability(manifest, git_runner=git_runner)
+    if validate_commit_reachability:
+        _validate_manifest_commit_reachability(manifest, git_runner=git_runner)
     return manifest
 
 

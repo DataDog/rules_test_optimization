@@ -127,11 +127,20 @@ export_patch_bundle() {
   fi
 
   mkdir -p "$(dirname "$bundle_dir")"
-  mapfile -t patch_labels < <(
+  local patch_output
+  if ! patch_output="$(
     "$PYTHON" "$REPO_ROOT/tools/dev/export_rules_go_patch_bundle.py" \
       --bundle "$RULES_GO_PATCH_BUNDLE" \
       --destination "$bundle_dir"
-  )
+  )"; then
+    echo "error: failed to export patch bundle $RULES_GO_PATCH_BUNDLE" >&2
+    exit 1
+  fi
+  if [[ -z "$patch_output" ]]; then
+    echo "error: patch bundle $RULES_GO_PATCH_BUNDLE exported no patch labels" >&2
+    exit 1
+  fi
+  mapfile -t patch_labels <<<"$patch_output"
   PATCH_LABELS_BZL=""
   for patch_label in "${patch_labels[@]}"; do
     PATCH_LABELS_BZL+=$(printf '        "%s",\n' "$patch_label")

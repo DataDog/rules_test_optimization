@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     """Export a canonical bundle or subset into a consumer patch directory."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        manifest = load_manifest(args.manifest)
+        manifest = load_manifest(args.manifest, validate_commit_reachability=False)
         selection = resolve_patch_selection(
             manifest,
             bundle_name=args.bundle,

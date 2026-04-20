@@ -143,7 +143,9 @@ class RulesGoPatchToolTests(unittest.TestCase):
             # Use an absolute source directory so bundle export behaves the same
             # under Windows manifest-based runfiles and POSIX runfiles trees.
             manifest["patch_dir"] = str(patch_dir)
-            self.export_bundle.load_manifest = lambda _path: manifest
+            self.export_bundle.load_manifest = (
+                lambda _path, *, validate_commit_reachability=True: manifest
+            )
             try:
                 yield
             finally:
@@ -236,6 +238,36 @@ class RulesGoPatchToolTests(unittest.TestCase):
             with self.assertRaisesRegex(self.lib.PatchSeriesError, "not reachable"):
                 self.lib.load_manifest(manifest_path, git_runner=fake_git_runner)
 
+    def test_manifest_can_skip_commit_reachability_for_copy_only_flows(self) -> None:
+        """Validate copy-only tools can load the manifest without local git history."""
+        broken_manifest = copy.deepcopy(self.manifest)
+        broken_manifest["patches"][0]["commit"] = "1111111111111111111111111111111111111111"
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "rules_go_patch_series.json"
+            manifest_path.write_text(
+                json.dumps(broken_manifest, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            def fake_git_runner(*args: str, capture_output: bool = True):
+                if args[:2] == ("cat-file", "-e"):
+                    return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+                if args[:2] == ("merge-base", "--is-ancestor"):
+                    raise subprocess.CalledProcessError(1, ["git", *args])
+                if args[0] == "for-each-ref":
+                    return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+                return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+            loaded = self.lib.load_manifest(
+                manifest_path,
+                git_runner=fake_git_runner,
+                validate_commit_reachability=False,
+            )
+            self.assertEqual(
+                "1111111111111111111111111111111111111111",
+                loaded["patches"][0]["commit"],
+            )
+
     def test_export_bundle_writes_explicit_build_file_and_labels(self) -> None:
         """Validate bundle export writes the expected BUILD file and label list."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -271,6 +303,42 @@ class RulesGoPatchToolTests(unittest.TestCase):
                     "//third_party/rules_go_patches:0009-Use-LLVM-for-all-linking.patch",
                 ],
                 stdout.getvalue().strip().splitlines(),
+            )
+
+    def test_export_bundle_skips_commit_reachability_validation(self) -> None:
+        """Validate bundle export still works when local git history is unavailable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "third_party" / "rules_go_patches"
+            manifest_calls: list[bool] = []
+            original_load_manifest = self.export_bundle.load_manifest
+
+            def fake_load_manifest(_path, *, validate_commit_reachability=True):
+                manifest_calls.append(validate_commit_reachability)
+                manifest = copy.deepcopy(self.manifest)
+                manifest["patch_dir"] = str(_runfile("third_party/rules_go_patches"))
+                return manifest
+
+            stdout = io.StringIO()
+            self.export_bundle.load_manifest = fake_load_manifest
+            try:
+                with contextlib.redirect_stdout(stdout):
+                    rc = self.export_bundle.main(
+                        [
+                            "--bundle",
+                            "dd_source_full",
+                            "--destination",
+                            str(destination),
+                        ]
+                    )
+            finally:
+                self.export_bundle.load_manifest = original_load_manifest
+
+            self.assertEqual([False], manifest_calls)
+            self.assertEqual(0, rc)
+            self.assertTrue((destination / "BUILD.bazel").exists())
+            self.assertEqual(
+                len(self.lib.EXPECTED_PATCH_FILENAMES),
+                len(stdout.getvalue().strip().splitlines()),
             )
 
     def test_export_bundle_rejects_unmanaged_destination_without_force(self) -> None:
