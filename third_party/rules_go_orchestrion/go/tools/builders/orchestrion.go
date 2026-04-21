@@ -444,6 +444,10 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) (err erro
 		}
 		if err != nil {
 			probe.End(err)
+			trimmedOutput := strings.TrimSpace(string(out))
+			if trimmedOutput != "" {
+				return fmt.Errorf("%s failed: %w: %s", label, err, trimmedOutput)
+			}
 			return fmt.Errorf("%s failed: %w", label, err)
 		}
 		probe.End(nil)
@@ -461,9 +465,12 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) (err erro
 	if err := run("load orchestrion tool imports", "list", "-mod=mod", "-tags=tools", "github.com/DataDog/dd-trace-go/v2/orchestrion"); err != nil {
 		return err
 	}
-	if err := run("tidy synthetic module", "mod", "tidy"); err != nil {
-		return err
-	}
+
+	// Do not run `go mod tidy` for synthetic action-time modules. The offline
+	// proxy intentionally contains the runtime build graph Orchestrion needs, but
+	// `tidy` expands into unrelated test-only/module-helper dependencies such as
+	// rules_go's bzltestutil package. Those are outside the hermetic proxy
+	// contract and are not required for compile/link execution.
 	return nil
 }
 

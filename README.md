@@ -184,7 +184,7 @@ The bootstrap helper:
 - adds the Datadog-managed single-service Go sync block (`test_optimization_go_extension`)
 - creates a root `dd_upload_payloads` target when missing
 - creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
-- runs `orchestrion pin`
+- writes a deterministic `orchestrion.tool.go` that matches the Bazel-side Orchestrion wiring
 - repins `dd-trace-go` and the Orchestrion-managed Go helper packages to the resolved tracer versions
 - writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing

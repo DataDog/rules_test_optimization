@@ -32,6 +32,10 @@ LOG_FILE="$TMP_WS/mock.log"
 SERVER_OUT="$TMP_WS/server.out"
 SNAPSHOT_DIR="$REPO_ROOT/tools/tests/integration/snapshots"
 PYTHON="${PYTHON:-python3}"
+# Keep the mock-server harness aligned with the supported Orchestrion version
+# under test instead of relying on the old hardcoded bootstrap tag.
+ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+export ORCHESTRION_VERSION
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
   if command -v python >/dev/null 2>&1; then
     PYTHON=python
@@ -1367,7 +1371,7 @@ local_path_override(
 )
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
-orchestrion.from_source(version = "v1.5.0")
+orchestrion.from_source(version = "${ORCHESTRION_VERSION}")
 
 go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
@@ -1584,8 +1588,12 @@ cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
 #!/bin/sh
 set -eu
 
-# The plain bootstrap scenario only validates file edits, so the fake Go tool
-# can stay stubbed as long as it accepts the bootstrap-era module commands.
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+
+# The plain bootstrap scenario still validates file edits, but deterministic
+# proxy generation now resolves real modules during repository bootstrap. Keep
+# the orchestration paths stubbed while delegating the module-resolution work to
+# the host Go binary through scenario-local caches.
 ensure_require() {
   module_path="$1"
   version="$2"
@@ -1593,6 +1601,36 @@ ensure_require() {
   if ! grep -Fqx "$require_line" go.mod; then
     printf '%s\n' "$require_line" >> go.mod
   fi
+}
+
+runtime_root() {
+  printf '%s/%s\n' "$PWD" ".fake_go_runtime"
+}
+
+run_real_go() {
+  if [ -z "${REAL_GO_BIN:-}" ] || [ ! -x "${REAL_GO_BIN}" ]; then
+    echo "missing REAL_GO_BIN for bootstrap integration harness" >&2
+    exit 1
+  fi
+  runtime_dir="$(runtime_root)"
+  go_path="${GOPATH:-${runtime_dir}/gopath}"
+  go_mod_cache="${GOMODCACHE:-${go_path}/pkg/mod}"
+  go_build_cache="${GOCACHE:-${go_path}/cache}"
+  home_dir="${runtime_dir}/home"
+  xdg_cache_home="${runtime_dir}/xdg-cache"
+  go_proxy="${GOPROXY:-https://proxy.golang.org,direct}"
+  go_sumdb="${GOSUMDB:-sum.golang.org}"
+  mkdir -p "$go_mod_cache" "$go_build_cache" "$home_dir" "$xdg_cache_home"
+  GO111MODULE=on \
+  GOWORK=off \
+  GOPATH="$go_path" \
+  GOMODCACHE="$go_mod_cache" \
+  GOCACHE="$go_build_cache" \
+  HOME="$home_dir" \
+  XDG_CACHE_HOME="$xdg_cache_home" \
+  GOPROXY="$go_proxy" \
+  GOSUMDB="$go_sumdb" \
+  "$REAL_GO_BIN" "$@"
 }
 
 if [ "${1:-}" = "-C" ] && [ "$#" -ge 3 ]; then
@@ -1622,10 +1660,12 @@ PIN_TOOL_EOF
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "all" ]; then
+  run_real_go "$@"
   exit 0
 fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com/DataDog/dd-trace-go/v2" ]; then
+  run_real_go "$@"
   exit 0
 fi
 
@@ -1634,6 +1674,7 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
     github.com/DataDog/dd-trace-go/v2@v2.7.3|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.7.3|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.7.3)
+      run_real_go "$@"
       exit 0
       ;;
   esac
@@ -1649,6 +1690,10 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   case "${3:-}" in
+    -require=github.com/DataDog/orchestrion@${ORCH_VERSION})
+      ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
+      exit 0
+      ;;
     -require=github.com/DataDog/dd-trace-go/v2@v2.7.3|\
     -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.7.3|\
     -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.7.3)
@@ -1695,6 +1740,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ]; then
   case "${5:-}" in
+    github.com/DataDog/orchestrion)
+      printf '{"Version":"%s"}\n' "$ORCH_VERSION"
+      exit 0
+      ;;
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
@@ -1761,17 +1810,25 @@ ORCH_STUB_EOF
   fi
 fi
 
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ] && [ "${5:-}" = "all" ]; then
+  run_real_go "$@"
+  exit 0
+fi
+
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
-  case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2/orchestrion|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
-    github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
-    github.com/DataDog/dd-trace-go/v2/profiler|\
-    github.com/DataDog/dd-trace-go/v2/instrumentation/env)
-      exit 0
-      ;;
-  esac
+  for arg in "$@"; do
+    case "$arg" in
+      github.com/DataDog/dd-trace-go/v2/orchestrion|\
+      github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
+      github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
+      github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
+      github.com/DataDog/dd-trace-go/v2/profiler|\
+      github.com/DataDog/dd-trace-go/v2/instrumentation/env)
+        run_real_go "$@"
+        exit 0
+        ;;
+    esac
+  done
 fi
 
 echo "unexpected go invocation: $*" >&2
@@ -1856,6 +1913,8 @@ cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
 #!/bin/sh
 set -eu
 
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+
 # The guided bootstrap scenario later builds a real Go test, so the fake Go
 # tool delegates the download-heavy paths to the host Go binary using temporary
 # scenario-local caches instead of any persistent host cache.
@@ -1878,11 +1937,13 @@ run_real_go() {
     exit 1
   fi
   runtime_dir="$(runtime_root)"
-  go_path="${runtime_dir}/gopath"
-  go_mod_cache="${go_path}/pkg/mod"
-  go_build_cache="${go_path}/cache"
+  go_path="${GOPATH:-${runtime_dir}/gopath}"
+  go_mod_cache="${GOMODCACHE:-${go_path}/pkg/mod}"
+  go_build_cache="${GOCACHE:-${go_path}/cache}"
   home_dir="${runtime_dir}/home"
   xdg_cache_home="${runtime_dir}/xdg-cache"
+  go_proxy="${GOPROXY:-https://proxy.golang.org,direct}"
+  go_sumdb="${GOSUMDB:-sum.golang.org}"
   mkdir -p "$go_mod_cache" "$go_build_cache" "$home_dir" "$xdg_cache_home"
   GO111MODULE=on \
   GOWORK=off \
@@ -1891,8 +1952,8 @@ run_real_go() {
   GOCACHE="$go_build_cache" \
   HOME="$home_dir" \
   XDG_CACHE_HOME="$xdg_cache_home" \
-  GOPROXY=https://proxy.golang.org,direct \
-  GOSUMDB=sum.golang.org \
+  GOPROXY="$go_proxy" \
+  GOSUMDB="$go_sumdb" \
   "$REAL_GO_BIN" "$@"
 }
 
@@ -1945,6 +2006,10 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   case "${3:-}" in
+    -require=github.com/DataDog/orchestrion@${ORCH_VERSION})
+      ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
+      exit 0
+      ;;
     -require=github.com/DataDog/dd-trace-go/v2@v2.7.3|\
     -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.7.3|\
     -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.7.3)
@@ -1991,6 +2056,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ]; then
   case "${5:-}" in
+    github.com/DataDog/orchestrion)
+      printf '{"Version":"%s"}\n' "$ORCH_VERSION"
+      exit 0
+      ;;
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
@@ -2055,6 +2124,11 @@ ORCH_STUB_EOF
     chmod +x "$out"
     exit 0
   fi
+fi
+
+if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ] && [ "${5:-}" = "all" ]; then
+  run_real_go "$@"
+  exit 0
 fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then

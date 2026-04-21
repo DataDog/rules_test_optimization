@@ -32,7 +32,7 @@ func TestReplaceManagedSectionAppendsWhenMissing(t *testing.T) {
 
 func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.5.0",
+		orchestrionVersion: "v1.6.0",
 		ddTraceGoVersion:   "v2.5.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
@@ -50,7 +50,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `orchestrion.from_source(`) {
 		t.Fatalf("expected orchestrion extension call in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `version = "v1.5.0"`) {
+	if !strings.Contains(got, `version = "v1.6.0"`) {
 		t.Fatalf("expected orchestrion version in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `dd_trace_go_version = "v2.5.0"`) {
@@ -63,7 +63,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 
 func TestManagedModuleBlockIncludesPerModuleVersions(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.5.0",
+		orchestrionVersion: "v1.6.0",
 		ddTraceGoVersions: map[string]string{
 			"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
 			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -132,6 +132,52 @@ func TestWriteStarterOrchestrionYML(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "aspects: []") {
 		t.Fatalf("unexpected orchestrion.yml content:\n%s", string(content))
+	}
+}
+
+func TestWriteOrchestrionToolFileWritesManagedImports(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{goModuleDir: dir}
+	if err := writeOrchestrionToolFile(cfg); err != nil {
+		t.Fatalf("writeOrchestrionToolFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "orchestrion.tool.go"))
+	if err != nil {
+		t.Fatalf("read orchestrion.tool.go: %v", err)
+	}
+	text := string(content)
+	requiredImports := []string{
+		`_ "github.com/DataDog/orchestrion" // integration`,
+		`_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration`,
+		`_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration`,
+		`_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`,
+	}
+	for _, importLine := range requiredImports {
+		if !strings.Contains(text, importLine) {
+			t.Fatalf("managed orchestrion.tool.go missing %q:\n%s", importLine, text)
+		}
+	}
+	if strings.Contains(text, `github.com/DataDog/dd-trace-go/orchestrion/all/v2`) {
+		t.Fatalf("managed orchestrion.tool.go should not contain orchestrion/all/v2:\n%s", text)
+	}
+}
+
+func TestBootstrapSyncCommandsPinConfiguredOrchestrionVersion(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.6.0",
+		ddTraceGoVersion:   "v2.7.3",
+	}
+
+	got := bootstrapSyncCommands(cfg)
+	if len(got) < 2 {
+		t.Fatalf("bootstrapSyncCommands returned too few commands: %#v", got)
+	}
+	if strings.Join(got[0], " ") != "mod edit -require=github.com/DataDog/orchestrion@v1.6.0" {
+		t.Fatalf("first bootstrap sync command=%q, want orchestrion version pin", strings.Join(got[0], " "))
+	}
+	if strings.Join(got[len(got)-1], " ") != "mod tidy" {
+		t.Fatalf("last bootstrap sync command=%q, want mod tidy", strings.Join(got[len(got)-1], " "))
 	}
 }
 
@@ -578,7 +624,7 @@ func TestEnsureBootstrapCanManageTracerConfigRejectsManualTracerConfig(t *testin
 	content := `module(name = "example")
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.5.0",
+    version = "v1.6.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -603,7 +649,7 @@ git_override(
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.5.0",
+    version = "v1.6.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
