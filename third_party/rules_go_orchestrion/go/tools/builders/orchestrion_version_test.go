@@ -41,12 +41,8 @@ func TestConfiguredDDTraceGoVersionsFromLegacyTextFile(t *testing.T) {
 }
 
 func TestConfiguredDDTraceGoVersionsFromJSONFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "dd_trace_go_versions.json")
 	content := `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.0-rc.4","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.8.0-dev.0.20260316165907-0cdd3b7576b7","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.8.0-dev.0.20260316165907-0cdd3b7576b7"}}`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write version file: %v", err)
-	}
+	path := writeDDTraceGoVersionsFile(t, content)
 	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, path)
 	got, err := configuredDDTraceGoVersions()
 	if err != nil {
@@ -60,13 +56,58 @@ func TestConfiguredDDTraceGoVersionsFromJSONFile(t *testing.T) {
 	}
 }
 
+func TestConfiguredDDTraceGoVersionsRequiredRejectsMissingEnv(t *testing.T) {
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, "")
+	if _, err := configuredDDTraceGoVersionsRequired(); err == nil {
+		t.Fatal("configuredDDTraceGoVersionsRequired unexpectedly succeeded without version file")
+	}
+}
+
+func TestConfiguredDDTraceGoVersionsRequiredFromJSONFile(t *testing.T) {
+	content := `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.0-rc.4","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.8.0-dev.0.20260316165907-0cdd3b7576b7","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.8.0-dev.0.20260316165907-0cdd3b7576b7"}}`
+	path := writeDDTraceGoVersionsFile(t, content)
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, path)
+	got, err := configuredDDTraceGoVersionsRequired()
+	if err != nil {
+		t.Fatalf("configuredDDTraceGoVersionsRequired error: %v", err)
+	}
+	if got["github.com/DataDog/dd-trace-go/v2"] != "v2.7.0-rc.4" {
+		t.Fatalf("configuredDDTraceGoVersionsRequired root=%q", got["github.com/DataDog/dd-trace-go/v2"])
+	}
+}
+
+func TestConfiguredOrchestrionToolVersionFromFile(t *testing.T) {
+	path := writeOrchestrionToolVersionFile(t, "v1.6.0")
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, path)
+	got, err := configuredOrchestrionToolVersion()
+	if err != nil {
+		t.Fatalf("configuredOrchestrionToolVersion error: %v", err)
+	}
+	if got != "v1.6.0" {
+		t.Fatalf("configuredOrchestrionToolVersion=%q, want %q", got, "v1.6.0")
+	}
+}
+
+func TestOrchestrionToolVersionIdentityFallback(t *testing.T) {
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, "")
+	if got := orchestrionToolVersionIdentity(); got != "unknown-orchestrion-version" {
+		t.Fatalf("orchestrionToolVersionIdentity=%q, want unknown-orchestrion-version", got)
+	}
+}
+
 func TestSyntheticOrchestrionGoModUsesConfiguredVersions(t *testing.T) {
 	versions := map[string]string{
 		"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
 		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
 		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
 	}
-	got := syntheticOrchestrionGoMod(versions)
+	got := syntheticOrchestrionGoMod("v1.6.0", versions)
+	if !strings.Contains(got, "github.com/DataDog/orchestrion v1.6.0") {
+		t.Fatalf("syntheticOrchestrionGoMod missing orchestrion tool version:\n%s", got)
+	}
+	if strings.Contains(got, "github.com/DataDog/orchestrion v1.5.0") {
+		t.Fatalf("syntheticOrchestrionGoMod still contains hardcoded v1.5.0:\n%s", got)
+	}
 	for modulePath, version := range versions {
 		want := modulePath + " " + version
 		if !strings.Contains(got, want) {
@@ -175,11 +216,9 @@ func TestValidateResolvedDDTraceGoVersionUsesCache(t *testing.T) {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	versionFile := filepath.Join(t.TempDir(), "dd_trace_go_versions.txt")
-	if err := os.WriteFile(versionFile, []byte("v2.5.0\n"), 0o644); err != nil {
-		t.Fatalf("write version file: %v", err)
-	}
+	versionFile := writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.5.0","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.5.0","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.5.0"}}`)
 	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, versionFile)
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
 	counterPath := filepath.Join(t.TempDir(), "go-counter")
 	goPath := filepath.Join(t.TempDir(), "go")
 	script := "#!/bin/sh\ncounter_file=\"$GO_COUNTER_FILE\"\ncount=0\nif [ -f \"$counter_file\" ]; then count=$(cat \"$counter_file\"); fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$counter_file\"\ncat <<'EOF'\n{\"Path\":\"github.com/DataDog/dd-trace-go/v2\",\"Version\":\"v2.5.0\"}\n{\"Path\":\"github.com/DataDog/dd-trace-go/contrib/net/http/v2\",\"Version\":\"v2.5.0\"}\n{\"Path\":\"github.com/DataDog/dd-trace-go/contrib/log/slog/v2\",\"Version\":\"v2.5.0\"}\nEOF\n"
@@ -213,11 +252,9 @@ func TestValidateResolvedDDTraceGoVersionInvalidatesWhenGoModChanges(t *testing.
 	if err := os.WriteFile(filepath.Join(moduleDir, "orchestrion.tool.go"), []byte("package tools\n"), 0o644); err != nil {
 		t.Fatalf("write orchestrion.tool.go: %v", err)
 	}
-	versionFile := filepath.Join(t.TempDir(), "dd_trace_go_versions.txt")
-	if err := os.WriteFile(versionFile, []byte("v2.5.0\n"), 0o644); err != nil {
-		t.Fatalf("write version file: %v", err)
-	}
+	versionFile := writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.5.0","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.5.0","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.5.0"}}`)
 	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, versionFile)
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
 	counterPath := filepath.Join(t.TempDir(), "go-counter")
 	goPath := filepath.Join(t.TempDir(), "go")
 	script := "#!/bin/sh\ncounter_file=\"$GO_COUNTER_FILE\"\ncount=0\nif [ -f \"$counter_file\" ]; then count=$(cat \"$counter_file\"); fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$counter_file\"\ncat <<'EOF'\n{\"Path\":\"github.com/DataDog/dd-trace-go/v2\",\"Version\":\"v2.5.0\"}\n{\"Path\":\"github.com/DataDog/dd-trace-go/contrib/net/http/v2\",\"Version\":\"v2.5.0\"}\n{\"Path\":\"github.com/DataDog/dd-trace-go/contrib/log/slog/v2\",\"Version\":\"v2.5.0\"}\nEOF\n"

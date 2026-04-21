@@ -76,6 +76,8 @@ func TestCollectSyntheticTestmainExternalPackagesIsStable(t *testing.T) {
 }
 
 func TestSyntheticTestmainHelperDecisionCacheKeyIgnoresSdkExecrootPath(t *testing.T) {
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.7.3"}}`))
 	makeSDK := func(root string) string {
 		sdk := filepath.Join(root, "external", "rules_go++go_sdk+go_default_sdk")
 		if err := os.MkdirAll(filepath.Join(sdk, "src", "internal", "buildcfg"), 0o755); err != nil {

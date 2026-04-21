@@ -192,8 +192,9 @@ func appendProbeFile(line string) {
 	}
 }
 
-// defaultProbeFilePath keeps probe collection under the same shared cache root
-// the Orchestrion builders already use for their persistent state.
+// defaultProbeFilePath keeps probe collection under shared host-persistent
+// cache space. Probe logs intentionally survive across local runs even though
+// action-time builder caches now default to sandbox-local roots.
 func defaultProbeFilePath() string {
 	return filepath.Join(orchestrionProbeDir(), orchestrionProbeDefaultFileName)
 }
@@ -254,8 +255,10 @@ func probePathWithinBase(targetPath, baseDir string) bool {
 	return relPath == "." || (relPath != ".." && !strings.HasPrefix(relPath, ".."+string(os.PathSeparator)))
 }
 
-// orchestrionProbeCacheRoot mirrors the builder cache root selection so probe
-// files land in a location that survives across local Bazel output bases.
+// orchestrionProbeCacheRoot returns the shared host-persistent cache used for
+// best-effort probe logs. This path is intentionally outside the hermetic
+// offline contract and is not part of the remote-execution compatibility
+// guarantee for action-time builder behavior.
 func orchestrionProbeCacheRoot() string {
 	if cacheRoot := strings.TrimSpace(os.Getenv("GOPATH")); cacheRoot != "" {
 		return probeAbs(cacheRoot)

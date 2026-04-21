@@ -910,7 +910,11 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 }
 
 func prepareSyntheticTestmainModuleDir(workDir string) (string, error) {
-	versions, err := configuredDDTraceGoVersions()
+	versions, err := configuredDDTraceGoVersionsRequired()
+	if err != nil {
+		return "", err
+	}
+	orchestrionVersion, err := configuredOrchestrionToolVersion()
 	if err != nil {
 		return "", err
 	}
@@ -919,7 +923,7 @@ func prepareSyntheticTestmainModuleDir(workDir string) (string, error) {
 		return "", fmt.Errorf("prepare synthetic testmain module dir: %w", err)
 	}
 	goModPath := filepath.Join(moduleDir, "go.mod")
-	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(versions)), 0o644); err != nil {
+	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(orchestrionVersion, versions)), 0o644); err != nil {
 		return "", fmt.Errorf("write synthetic testmain go.mod: %w", err)
 	}
 	return moduleDir, nil
@@ -972,34 +976,15 @@ func modulePackageCommandEnv(goenv *env, exportRoot string) ([]string, error) {
 
 	goBin := filepath.Join(abs(goenv.sdk), "bin")
 	env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
-
-	gopath := getEnv(env, "GOPATH")
-	if gopath == "" {
-		gopath = filepath.Join(os.TempDir(), "datadog-orchestrion-go-cache")
+	env, err := normalizeGoActionCacheEnv(env)
+	if err != nil {
+		return nil, fmt.Errorf("prepare module action cache env: %w", err)
 	}
-	gopath = abs(gopath)
-	if err := os.MkdirAll(gopath, 0o755); err != nil {
-		return nil, fmt.Errorf("prepare module gopath: %w", err)
-	}
-	env = setEnv(env, "GOPATH", gopath)
-
-	gomodcache := getEnv(env, "GOMODCACHE")
-	if gomodcache == "" {
-		gomodcache = filepath.Join(gopath, "pkg", "mod")
-	}
-	gomodcache = abs(gomodcache)
-	if err := os.MkdirAll(gomodcache, 0o755); err != nil {
-		return nil, fmt.Errorf("prepare module gomodcache: %w", err)
-	}
-	env = setEnv(env, "GOMODCACHE", gomodcache)
 	env = setEnv(env, "GOCACHE", abs(exportRoot))
 	env = setEnv(env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
-
-	if getEnv(env, "GOPROXY") == "" {
-		env = setEnv(env, "GOPROXY", "https://proxy.golang.org,direct")
-	}
-	if getEnv(env, "GOSUMDB") == "" {
-		env = setEnv(env, "GOSUMDB", "sum.golang.org")
+	env, err = normalizeGoModuleResolutionEnv(env)
+	if err != nil {
+		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 	}
 	if getEnv(env, "GOFLAGS") == "" {
 		env = setEnv(env, "GOFLAGS", "-mod=mod")
@@ -1103,7 +1088,7 @@ func syntheticTestmainHelperCachePaths(goenv *env) (cachePaths, []string, error)
 	if err != nil {
 		return cachePaths{}, nil, err
 	}
-	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	cacheRoot, err := orchestrionActionCacheRoot(os.Environ())
 	if err != nil {
 		return cachePaths{}, nil, err
 	}
@@ -1113,7 +1098,7 @@ func syntheticTestmainHelperCachePaths(goenv *env) (cachePaths, []string, error)
 // syntheticTestmainHelperCacheKeyParts returns the exact inputs that define the
 // compiled helper bundle cache identity.
 func syntheticTestmainHelperCacheKeyParts(goenv *env) ([]string, error) {
-	configuredVersions, err := configuredDDTraceGoVersions()
+	configuredVersions, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return nil, err
 	}
@@ -1131,7 +1116,7 @@ func syntheticTestmainHelperCacheKeyParts(goenv *env) ([]string, error) {
 		"target=" + goTargetIdentity(os.Environ()),
 		"installsuffix=" + goenv.installSuffix,
 		"stdlib=" + stdlibKey,
-		"orchestrion=" + orchestrionVersionIdentity,
+		"orchestrion=" + orchestrionToolVersionIdentity(),
 		"source_set=" + helperSourceSetVersion,
 		"helper_archive_cache=" + helperArchiveCacheABIVersion,
 	}, nil
@@ -1145,7 +1130,7 @@ func syntheticTestmainHelperDecisionCachePaths(goenv *env) (cachePaths, []string
 	if err != nil {
 		return cachePaths{}, nil, err
 	}
-	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	cacheRoot, err := orchestrionActionCacheRoot(os.Environ())
 	if err != nil {
 		return cachePaths{}, nil, err
 	}
@@ -1155,7 +1140,7 @@ func syntheticTestmainHelperDecisionCachePaths(goenv *env) (cachePaths, []string
 // syntheticTestmainHelperDecisionCacheKeyParts returns the exact inputs that
 // define the helper package decision graph.
 func syntheticTestmainHelperDecisionCacheKeyParts(goenv *env) ([]string, error) {
-	configuredVersions, err := configuredDDTraceGoVersions()
+	configuredVersions, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return nil, err
 	}
@@ -1167,7 +1152,7 @@ func syntheticTestmainHelperDecisionCacheKeyParts(goenv *env) ([]string, error) 
 		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
 		"sdk=" + sdkIdentity,
 		"target=" + goTargetIdentity(os.Environ()),
-		"orchestrion=" + orchestrionVersionIdentity,
+		"orchestrion=" + orchestrionToolVersionIdentity(),
 		"source_set=" + helperSourceSetVersion,
 		"helper_decision_cache=" + helperDecisionCacheABIVersion,
 	}, nil

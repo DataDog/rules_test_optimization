@@ -22,3 +22,21 @@ alias(
     actual = "@rules_go_orchestrion_tool//:dd_trace_go_version_file",
     visibility = ["//visibility:public"],
 )
+
+alias(
+    name = "dd_trace_go_module_proxy_files",
+    actual = "@rules_go_orchestrion_tool//:dd_trace_go_module_proxy_files",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "dd_trace_go_module_proxy_root_marker",
+    actual = "@rules_go_orchestrion_tool//:dd_trace_go_module_proxy_root_marker",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "orchestrion_tool_version_file",
+    actual = "@rules_go_orchestrion_tool//:orchestrion_tool_version_file",
+    visibility = ["//visibility:public"],
+)

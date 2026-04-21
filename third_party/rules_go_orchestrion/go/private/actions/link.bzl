@@ -42,15 +42,23 @@ _ORCHESTRION_PROBE_ENV_VARS = (
 def _format_archive(d):
     return "{}={}={}".format(d.label, d.importmap, d.file.path)
 
-def _orchestrion_action_env(go, base_env, version_file = None):
+def _orchestrion_action_env(
+        go,
+        base_env,
+        orchestrion_trace_version_file = None,
+        orchestrion_proxy_root_marker = None,
+        orchestrion_tool_version_file = None):
     env = dict(base_env)
     shell_env = go._ctx.configuration.default_shell_env
     for name in _ORCHESTRION_PROBE_ENV_VARS:
         if name in shell_env:
             env[name] = shell_env[name]
-    if not version_file:
-        return env
-    env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
+    if orchestrion_trace_version_file:
+        env["RULES_GO_ORCHESTRION_VERSION_FILE"] = orchestrion_trace_version_file.path
+    if orchestrion_proxy_root_marker:
+        env["RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT"] = orchestrion_proxy_root_marker.dirname
+    if orchestrion_tool_version_file:
+        env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
 
 def emit_link(
@@ -199,7 +207,9 @@ def emit_link(
         inputs_direct.append(synthetic_testmain_manifest)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
-    version_file = getattr(go, "orchestrion_version_file", None) if synthetic_testmain_manifest else None
+    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
+    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if go.orchestrion else None
+    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if go.orchestrion else None
 
     inputs_transitive = [
         archive.libs,
@@ -214,8 +224,12 @@ def emit_link(
     if go.orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
-        if version_file:
-            inputs_direct.append(version_file)
+        if orchestrion_trace_version_file:
+            inputs_direct.append(orchestrion_trace_version_file)
+        if orchestrion_proxy_root_marker:
+            inputs_direct.append(orchestrion_proxy_root_marker)
+        if orchestrion_tool_version_file:
+            inputs_direct.append(orchestrion_tool_version_file)
 
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(go.sdk.go)
@@ -223,6 +237,8 @@ def emit_link(
         # The toolexec path may resolve woven dependencies during linking too,
         # so keep the SDK source tree available in sandboxed executions.
         inputs_transitive.append(go.sdk.srcs)
+        if getattr(go, "orchestrion_module_proxy_files", None):
+            inputs_transitive.append(go.orchestrion_module_proxy_files)
 
         # Stage rule data files for the link builder too so it can reuse the
         # same pinned module files seen during compile (for example go.mod,
@@ -237,7 +253,13 @@ def emit_link(
         mnemonic = "GoLink",
         executable = go.toolchain._builder,
         arguments = [builder_args, "--", tool_args],
-        env = _orchestrion_action_env(go, go.env, version_file),
+        env = _orchestrion_action_env(
+            go,
+            go.env,
+            orchestrion_trace_version_file = orchestrion_trace_version_file,
+            orchestrion_proxy_root_marker = orchestrion_proxy_root_marker,
+            orchestrion_tool_version_file = orchestrion_tool_version_file,
+        ),
         toolchain = GO_TOOLCHAIN_LABEL,
     )
 

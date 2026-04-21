@@ -63,6 +63,21 @@ stdlib = rule(
             allow_files = True,
             cfg = "exec",
         ),
+        "_orchestrion_module_proxy_files": attr.label(
+            default = "//go/private/orchestrion:dd_trace_go_module_proxy_files",
+            allow_files = True,
+            cfg = "exec",
+        ),
+        "_orchestrion_module_proxy_root_marker": attr.label(
+            default = "//go/private/orchestrion:dd_trace_go_module_proxy_root_marker",
+            allow_files = True,
+            cfg = "exec",
+        ),
+        "_orchestrion_tool_version_file": attr.label(
+            default = "//go/private/orchestrion:orchestrion_tool_version_file",
+            allow_files = True,
+            cfg = "exec",
+        ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),

@@ -71,7 +71,7 @@ Use this checklist before your first CI rollout:
 3. Create exactly one uploader target at workspace root:
    - `//:dd_upload_payloads` via `dd_payload_uploader(...)`
 4. Run tests, then uploader, while preserving test exit code.
-5. If using remote execution, add `--remote_download_outputs=all` on test runs.
+5. If using remote execution, add `--remote_download_outputs=all` on test runs so the uploader can discover payload files locally after the test completes.
 
 ## Quickstart by scenario
 
@@ -152,14 +152,14 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
 Go module. `--dd-trace-go-version` is optional; if you omit it, the default is
-`v2.9.0-dev.0.20260409102143-ddd4e03ab47d`.
+`v2.7.3`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
+  --dd-trace-go-version v2.7.3
 ```
 
 If the Go module lives below the workspace root:
@@ -169,7 +169,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d \
+  --dd-trace-go-version v2.7.3 \
   --go-module-dir path/to/go-module
 ```
 
@@ -791,7 +791,7 @@ exit $test_status
 # Or as a one-liner:
 bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 
-# REMOTE EXECUTION (RBE) - add flag to download outputs:
+# REMOTE EXECUTION (RBE) - add flag so the uploader can discover outputs locally:
 bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
 ```
 
@@ -806,7 +806,7 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run //:dd_upload_payloads
 exit $testStatus
 
-# REMOTE EXECUTION (RBE) - add flag to download outputs:
+# REMOTE EXECUTION (RBE) - add flag so the uploader can discover outputs locally:
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
@@ -873,8 +873,11 @@ use_repo(go_topt, "test_optimization_data")
 ```
 
 Then run the Datadog bootstrap helper once so Orchestrion is pinned into the
-workspace Go module. Pass `--dd-trace-go-version <query>` if you want a
-non-default tracer version; otherwise the default is `v2.9.0-dev.0.20260409102143-ddd4e03ab47d`.
+workspace Go module. Repository/bootstrap resolution may use network access.
+After that, Orchestrion build actions consume a declared offline Go module
+proxy staged in `@rules_go_orchestrion_tool`; they do not depend on a warmed
+host Go module cache. Pass `--dd-trace-go-version <query>` if you want a
+non-default tracer version; otherwise the default is `v2.7.3`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
@@ -888,7 +891,7 @@ Shared-version form:
 ```bzl
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.5.0",
+    version = "v1.6.0",
     dd_trace_go_version = "v2.7.0-rc.4",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
@@ -899,7 +902,7 @@ Per-module form:
 ```bzl
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.5.0",
+    version = "v1.6.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -909,7 +912,11 @@ orchestrion.from_source(
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
 
-If both settings are omitted, the default is still `v2.9.0-dev.0.20260409102143-ddd4e03ab47d`. Manual setups
+The maintained repository integration scripts validate the hermetic Go path
+with explicit Bazel flags in the script itself. There is no special repo-root
+`--config=hermetic` shortcut for this flow.
+
+If both settings are omitted, the default is still `v2.7.3`. Manual setups
 must keep the local Go module pins on the same effective versions, or the build
 will stop with a mismatch error. Do not set both `dd_trace_go_version` and
 `dd_trace_go_versions` in the same `orchestrion.from_source(...)` call.

@@ -16,8 +16,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -68,67 +66,28 @@ var orchestrionWovenPackagePatterns = []string{
 // GOMODCACHE, but orchestrion shells out to `go list` while loading injector
 // configuration from orchestrion.tool.go.
 func ensureGoModuleCacheEnv(env []string, verbose bool) ([]string, error) {
-	goBuildCache := strings.TrimSpace(getEnv(env, orchestrionStdlibCacheEnvVar))
-	explicitBuildCache := goBuildCache != ""
-	if goBuildCache == "" {
-		goBuildCache = getEnv(env, "GOCACHE")
-		explicitBuildCache = goBuildCache != ""
+	var err error
+	env, err = normalizeGoActionCacheEnv(env)
+	if err != nil {
+		return nil, err
 	}
-	cacheRoot := strings.TrimSpace(getEnv(env, "GOPATH"))
-	if cacheRoot == "" {
-		// Keep the compiled object cache in Bazel's declared output tree when it
-		// is provided, but anchor GOPATH/GOMODCACHE in a stable user cache root so
-		// local reruns are not coupled to a fresh TMPDIR or output_base.
-		cacheRoot = filepath.Join(orchestrionDefaultCacheRoot(env), "gopath")
+	env, err = normalizeGoModuleResolutionEnv(env)
+	if err != nil {
+		return nil, err
 	}
-	if goBuildCache == "" {
-		goBuildCache = filepath.Join(cacheRoot, "cache")
-	}
-	if !explicitBuildCache {
-		if goroot := strings.TrimSpace(getEnv(env, "GOROOT")); goroot != "" {
-			sum := sha256.Sum256([]byte(stableCacheKeyPath(goroot)))
-			goBuildCache = filepath.Join(cacheRoot, "cache", hex.EncodeToString(sum[:8]))
-		}
-	}
-
-	goModCache := strings.TrimSpace(getEnv(env, "GOMODCACHE"))
-	if goModCache == "" {
-		goModCache = filepath.Join(cacheRoot, "pkg", "mod")
-	}
-
-	for _, dir := range []string{goModCache, goBuildCache} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("creating orchestrion go cache dir %s: %w", dir, err)
-		}
-	}
-
-	env = setEnv(env, "GOPATH", cacheRoot)
-	env = setEnv(env, "GOMODCACHE", goModCache)
-	env = setEnv(env, "GOCACHE", goBuildCache)
-	env = setEnv(env, "GOPROXY", "https://proxy.golang.org,direct")
-	env = setEnv(env, "GOSUMDB", "sum.golang.org")
 
 	if verbose {
-		fmt.Fprintf(os.Stderr, "orchestrion: using GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOPROXY=%s\n", cacheRoot, goModCache, goBuildCache, getEnv(env, "GOPROXY"))
+		fmt.Fprintf(
+			os.Stderr,
+			"orchestrion: using GOPATH=%s GOMODCACHE=%s GOCACHE=%s GOPROXY=%s\n",
+			getEnv(env, "GOPATH"),
+			getEnv(env, "GOMODCACHE"),
+			getEnv(env, "GOCACHE"),
+			getEnv(env, "GOPROXY"),
+		)
 	}
 
 	return env, nil
-}
-
-func stableCacheKeyPath(path string) string {
-	path = abs(path)
-	path = filepath.ToSlash(path)
-	for _, marker := range []string{
-		"/execroot/_main/",
-		"/execroot/__main__/",
-		"/bazel-out/",
-		"/external/",
-	} {
-		if idx := strings.Index(path, marker); idx >= 0 {
-			return path[idx+1:]
-		}
-	}
-	return path
 }
 
 func ensureWovenPackagesAvailable(env []string, goSdkPath string, verbose bool) (err error) {
@@ -282,7 +241,11 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 
 	var filesToCleanup []string
 	var copiedGoMod bool
-	configuredVersions, err := configuredDDTraceGoVersions()
+	configuredVersions, err := configuredDDTraceGoVersionsRequired()
+	if err != nil {
+		return nil, err
+	}
+	orchestrionVersion, err := configuredOrchestrionToolVersion()
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +292,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool) (cleanu
 		}
 
 		if !copiedGoMod {
-			content := []byte(syntheticOrchestrionGoMod(configuredVersions))
+			content := []byte(syntheticOrchestrionGoMod(orchestrionVersion, configuredVersions))
 			if err := os.WriteFile(goModFile, content, 0644); err != nil {
 				return nil, fmt.Errorf("creating temporary go.mod: %w", err)
 			}
@@ -469,39 +432,7 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, verbose bool) (err erro
 			return fmt.Errorf("prepare synthetic module cache env: %w", envErr)
 		}
 		env = normalizedEnv
-		var replaced bool
-		for i, entry := range env {
-			if strings.HasPrefix(entry, "GO111MODULE=") {
-				env[i] = "GO111MODULE=on"
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			env = append(env, "GO111MODULE=on")
-		}
-		var foundProxy bool
-		var foundSumDB bool
-		for i, entry := range env {
-			switch {
-			case strings.HasPrefix(entry, "GOPROXY="):
-				foundProxy = true
-				if strings.TrimPrefix(entry, "GOPROXY=") == "" {
-					env[i] = "GOPROXY=https://proxy.golang.org,direct"
-				}
-			case strings.HasPrefix(entry, "GOSUMDB="):
-				foundSumDB = true
-				if strings.TrimPrefix(entry, "GOSUMDB=") == "" {
-					env[i] = "GOSUMDB=sum.golang.org"
-				}
-			}
-		}
-		if !foundProxy {
-			env = append(env, "GOPROXY=https://proxy.golang.org,direct")
-		}
-		if !foundSumDB {
-			env = append(env, "GOSUMDB=sum.golang.org")
-		}
+		env = setEnv(env, "GO111MODULE", "on")
 		cmd.Env = env
 		cmd.Dir = mustGetwd()
 		out, err := cmd.CombinedOutput()
@@ -625,7 +556,7 @@ func preparedSyntheticModuleCachePaths(goSdkPath string, configuredVersions map[
 	if err != nil {
 		return "", cachePaths{}, err
 	}
-	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	cacheRoot, err := orchestrionActionCacheRoot(os.Environ())
 	if err != nil {
 		return "", cachePaths{}, err
 	}
@@ -647,7 +578,7 @@ func preparedSyntheticModuleCacheKey(goSdkPath string, configuredVersions map[st
 		"tool_go="+toolDigest,
 		"configured_versions="+ddTraceVersionsDigest(configuredVersions),
 		"go_sdk="+abs(goSdkPath),
-		"orchestrion="+orchestrionVersionIdentity,
+		"orchestrion="+orchestrionToolVersionIdentity(),
 		"target="+goTargetIdentity(os.Environ()),
 		"synthetic_module_cache="+syntheticModuleCacheABIVersion,
 	), nil

@@ -5,12 +5,12 @@ The internal patch fixes go_context so it reuses the precomputed CgoContextInfo 
 This port keeps the existing provider lookup order intact after the cached provider check and documents why the reordered branch matters for analysis cost.
 
 diff --git a/go/private/context.bzl b/go/private/context.bzl
-index 4c81622..393b4e4 100644
+index 9e76639..8faa04b 100644
 --- a/go/private/context.bzl
 +++ b/go/private/context.bzl
-@@ -553,10 +553,15 @@ def go_context(
-                 if version_files:
-                     orchestrion_version_file = version_files[0]
+@@ -569,10 +569,15 @@ def go_context(
+                 if tool_version_files:
+                     orchestrion_tool_version_file = tool_version_files[0]
  
 -    if getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
 -        cgo_context_info = cgo_context_data_impl(ctx)

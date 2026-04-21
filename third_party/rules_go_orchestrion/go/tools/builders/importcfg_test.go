@@ -59,6 +59,8 @@ func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 }
 
 func TestModuleExportRequestKeyIgnoresSyntheticTempDir(t *testing.T) {
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.7.3"}}`))
 	moduleDirs := []string{
 		filepath.Join(t.TempDir(), "one"),
 		filepath.Join(t.TempDir(), "two"),
@@ -68,7 +70,7 @@ func TestModuleExportRequestKeyIgnoresSyntheticTempDir(t *testing.T) {
 			t.Fatalf("mkdir module dir: %v", err)
 		}
 		for name, content := range map[string]string{
-			"go.mod":              syntheticOrchestrionGoMod(defaultDDTraceGoVersions()),
+			"go.mod":              syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions()),
 			"orchestrion.tool.go": syntheticOrchestrionToolGo,
 			"orchestrion.yml":     "injectors: []\n",
 		} {
@@ -92,6 +94,8 @@ func TestModuleExportRequestKeyIgnoresSyntheticTempDir(t *testing.T) {
 }
 
 func TestModuleExportRequestKeyIgnoresSyntheticGoModGoSumDrift(t *testing.T) {
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.7.3"}}`))
 	moduleDirs := []string{
 		filepath.Join(t.TempDir(), "one"),
 		filepath.Join(t.TempDir(), "two"),
@@ -100,7 +104,7 @@ func TestModuleExportRequestKeyIgnoresSyntheticGoModGoSumDrift(t *testing.T) {
 		if err := os.MkdirAll(moduleDir, 0o755); err != nil {
 			t.Fatalf("mkdir module dir: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(syntheticOrchestrionGoMod(defaultDDTraceGoVersions())+"\n// temp drift\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions())+"\n// temp drift\n"), 0o644); err != nil {
 			t.Fatalf("write go.mod: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(moduleDir, "orchestrion.tool.go"), []byte(syntheticOrchestrionToolGo), 0o644); err != nil {

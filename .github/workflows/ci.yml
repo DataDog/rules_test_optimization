@@ -284,7 +284,7 @@ jobs:
   workspace-compat:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
-    timeout-minutes: 15
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -306,12 +306,27 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Validate WORKSPACE Go companion path
+      - name: Validate WORKSPACE Go companion path (base-only)
         shell: bash
         run: |
-          # WORKSPACE mode validation is pinned to Bazel 8 because Bazel 9
-          # deprecates/disables this path during the migration window.
           USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_workspace_go_integration.sh
+
+      - name: Validate WORKSPACE Go companion path (dd_source_full)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full \
+            ./tools/tests/integration/run_workspace_go_integration.sh
+
+      - name: Validate Bzlmod Go companion path (base-only)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_bzlmod_go_patch_integration.sh
+
+      - name: Validate Bzlmod Go companion path (dd_source_full)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full \
+            ./tools/tests/integration/run_bzlmod_go_patch_integration.sh
 
   coverage-tools:
     needs: changes

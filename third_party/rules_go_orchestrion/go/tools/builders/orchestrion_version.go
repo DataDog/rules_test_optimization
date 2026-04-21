@@ -13,7 +13,8 @@ import (
 
 const (
 	rulesGoOrchestrionVersionFileEnvVar = "RULES_GO_ORCHESTRION_VERSION_FILE"
-	defaultDDTraceGoVersion             = "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
+	defaultDDTraceGoVersion             = "v2.7.3"
+	orchestrionSyntheticGoModVersion    = "1.21"
 )
 
 var ddTraceGoModules = []string{
@@ -65,20 +66,44 @@ func copyDDTraceGoVersions(src map[string]string) map[string]string {
 	return dst
 }
 
+// configuredDDTraceGoVersions returns the configured tracer module versions,
+// defaulting to the repository-rule fallback when no version file is wired.
 func configuredDDTraceGoVersions() (map[string]string, error) {
 	versionFile := strings.TrimSpace(os.Getenv(rulesGoOrchestrionVersionFileEnvVar))
 	if versionFile == "" {
 		return defaultDDTraceGoVersions(), nil
 	}
+	return parseConfiguredDDTraceGoVersionsFile(versionFile, true)
+}
+
+// configuredDDTraceGoVersionsRequired returns the configured tracer module
+// versions and fails if the generated JSON file is absent or malformed.
+func configuredDDTraceGoVersionsRequired() (map[string]string, error) {
+	versionFile := strings.TrimSpace(os.Getenv(rulesGoOrchestrionVersionFileEnvVar))
+	if versionFile == "" {
+		return nil, fmt.Errorf("%s is not set", rulesGoOrchestrionVersionFileEnvVar)
+	}
+	return parseConfiguredDDTraceGoVersionsFile(versionFile, false)
+}
+
+// parseConfiguredDDTraceGoVersionsFile parses the generated tracer-version file.
+// The legacy text format is accepted only for compatibility call sites.
+func parseConfiguredDDTraceGoVersionsFile(versionFile string, allowLegacyText bool) (map[string]string, error) {
 	content, err := os.ReadFile(versionFile)
 	if err != nil {
 		return nil, fmt.Errorf("read configured dd-trace-go version file %s: %w", versionFile, err)
 	}
 	trimmed := strings.TrimSpace(string(content))
 	if trimmed == "" {
-		return defaultDDTraceGoVersions(), nil
+		if allowLegacyText {
+			return defaultDDTraceGoVersions(), nil
+		}
+		return nil, fmt.Errorf("configured dd-trace-go version file %s is empty", versionFile)
 	}
 	if !strings.HasPrefix(trimmed, "{") {
+		if !allowLegacyText {
+			return nil, fmt.Errorf("configured dd-trace-go version file %s must contain JSON object data", versionFile)
+		}
 		versions := defaultDDTraceGoVersions()
 		for _, modulePath := range ddTraceGoModules {
 			versions[modulePath] = trimmed
@@ -155,11 +180,10 @@ func resolveModuleVersionsFromModule(goExe, moduleDir string, env []string, modu
 	cmd.Dir = moduleDir
 	cmdEnv := setEnv(env, "GO111MODULE", "on")
 	cmdEnv = setEnv(cmdEnv, "GOWORK", "off")
-	if strings.TrimSpace(getEnv(cmdEnv, "GOPROXY")) == "" {
-		cmdEnv = setEnv(cmdEnv, "GOPROXY", "https://proxy.golang.org,direct")
-	}
-	if strings.TrimSpace(getEnv(cmdEnv, "GOSUMDB")) == "" {
-		cmdEnv = setEnv(cmdEnv, "GOSUMDB", "sum.golang.org")
+	var err error
+	cmdEnv, err = normalizeGoModuleResolutionEnv(cmdEnv)
+	if err != nil {
+		return nil, err
 	}
 	cmd.Env = cmdEnv
 	output, err := cmd.CombinedOutput()
@@ -204,7 +228,7 @@ func resolveModuleVersionsFromModule(goExe, moduleDir string, env []string, modu
 }
 
 func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, verbose bool) error {
-	configured, err := configuredDDTraceGoVersions()
+	configured, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return err
 	}
@@ -213,7 +237,7 @@ func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, ver
 	if err != nil {
 		return err
 	}
-	cacheRoot, err := orchestrionPersistentCacheRoot(env)
+	cacheRoot, err := orchestrionActionCacheRoot(env)
 	if err != nil {
 		return err
 	}
@@ -255,7 +279,7 @@ func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, ver
 		ModuleRoot:      moduleDir,
 		Target:          goTargetIdentity(env),
 		GoTool:          abs(goExe),
-		Orchestrion:     orchestrionVersionIdentity,
+		Orchestrion:     orchestrionToolVersionIdentity(),
 		Configured:      copyDDTraceGoVersions(configured),
 		Resolved:        resolved,
 		ValidationCache: validationCacheABIVersion,
@@ -277,7 +301,7 @@ func validationCacheKey(goExe, moduleDir string, env []string, configured map[st
 		"module_root=" + abs(moduleDir),
 		"configured_versions=" + ddTraceVersionsDigest(configured),
 		"go_tool=" + abs(goExe),
-		"orchestrion=" + orchestrionVersionIdentity,
+		"orchestrion=" + orchestrionToolVersionIdentity(),
 		"target=" + goTargetIdentity(env),
 		"validation_cache=" + validationCacheABIVersion,
 	}
@@ -291,18 +315,20 @@ func validationCacheKey(goExe, moduleDir string, env []string, configured map[st
 	return stableDigestParts(fileParts...), nil
 }
 
-func syntheticOrchestrionGoMod(versions map[string]string) string {
+// syntheticOrchestrionGoMod renders the synthetic module used by the builders
+// when they need a temporary module root for Orchestrion-managed operations.
+func syntheticOrchestrionGoMod(orchestrionVersion string, versions map[string]string) string {
 	return fmt.Sprintf(`module bazel_orchestrion_temp
 
-go 1.21
+go %s
 
 require (
-	github.com/DataDog/orchestrion v1.5.0
+	github.com/DataDog/orchestrion %s
 	github.com/DataDog/dd-trace-go/v2 %s
 	github.com/DataDog/dd-trace-go/contrib/net/http/v2 %s
 	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 %s
 )
-`, versions["github.com/DataDog/dd-trace-go/v2"], versions["github.com/DataDog/dd-trace-go/contrib/net/http/v2"], versions["github.com/DataDog/dd-trace-go/contrib/log/slog/v2"])
+`, orchestrionSyntheticGoModVersion, orchestrionVersion, versions["github.com/DataDog/dd-trace-go/v2"], versions["github.com/DataDog/dd-trace-go/contrib/net/http/v2"], versions["github.com/DataDog/dd-trace-go/contrib/log/slog/v2"])
 }
 
 func containsString(values []string, target string) bool {
