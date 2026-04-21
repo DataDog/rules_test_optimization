@@ -215,7 +215,11 @@ jobs:
       # Exercises the uploader end-to-end against a local mock server.
       - name: Run mock server integration tests (Linux)
         if: runner.os == 'Linux'
-        timeout-minutes: 15
+        # The guided Orchestrion bootstrap coverage in this harness now performs
+        # a full cold-start bootstrap before the mocked runtime assertions. Keep
+        # this lane bounded, but give it enough headroom to finish on slower
+        # GitHub-hosted Linux runners.
+        timeout-minutes: 30
         shell: bash
         run: ./tools/tests/integration/run_mock_server_tests.sh
 
