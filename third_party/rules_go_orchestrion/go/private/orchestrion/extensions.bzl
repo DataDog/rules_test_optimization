@@ -783,7 +783,7 @@ def _host_path_is_writable(ctx, path):
                 probe_dir,
             ],
             timeout = 30,
-    )
+        )
     return result.return_code == 0
 
 def _write_orchestrion_module_proxy(ctx, go_path, version, version_map):
@@ -793,6 +793,7 @@ def _write_orchestrion_module_proxy(ctx, go_path, version, version_map):
     seed_env = _go_env(ctx)
     seed_env["GOMODCACHE"] = _path_join(ctx, seed_cache_root_path, "pkg", "mod")
     seed_env["GOCACHE"] = _path_join(ctx, seed_cache_root_path, "cache")
+
     # Resolve the offline proxy seed through the public module proxy rather than
     # inheriting private-module bypass rules from the host bootstrap environment.
     # The seed graph is intentionally limited to public modules and must be
@@ -848,6 +849,7 @@ def _write_orchestrion_module_proxy(ctx, go_path, version, version_map):
         "module_proxy",
         "Failed to stage Orchestrion module proxy",
     )
+
     # The action-time offline contract uses GOSUMDB=off and GOTOOLCHAIN=local,
     # so the checksum database mirror and downloaded toolchain module are not
     # required inputs for Orchestrion module resolution.
