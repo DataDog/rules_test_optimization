@@ -111,10 +111,10 @@ sha256_file() {
   exit 1
 }
 
-monotonic_time_ns() {
+wall_time_ns() {
   "$PYTHON" - <<'PY'
 import time
-print(time.monotonic_ns())
+print(time.time_ns())
 PY
 }
 
@@ -124,12 +124,13 @@ module_proxy_size_bytes() {
 from pathlib import Path
 import sys
 
-module_proxy = Path(sys.argv[1]) / "external" / "rules_go_orchestrion_tool" / "module_proxy"
-if not module_proxy.exists():
+external_root = Path(sys.argv[1]) / "external"
+candidates = sorted(external_root.glob("*rules_go_orchestrion_tool*/module_proxy"))
+if not candidates:
     print(0)
     raise SystemExit(0)
 total = 0
-for path in module_proxy.rglob("*"):
+for path in candidates[0].rglob("*"):
     if path.is_file():
         total += path.stat().st_size
 print(total)
@@ -576,7 +577,7 @@ run_fixture_subscenario() {
       cd "$ws_dir"
       output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" info "${bzlmod_flags[@]}" output_base)"
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" shutdown
-      start_ns="$(monotonic_time_ns)"
+      start_ns="$(wall_time_ns)"
       HOME="$hermetic_home" \
       XDG_CACHE_HOME="$hermetic_xdg" \
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test \
@@ -584,7 +585,7 @@ run_fixture_subscenario() {
         "${HERMETIC_BUILD_FLAGS[@]}" \
         "${HERMETIC_TEST_FLAGS[@]}" \
         "$HELLO_TEST_TARGET"
-      end_ns="$(monotonic_time_ns)"
+      end_ns="$(wall_time_ns)"
       elapsed_seconds="$("$PYTHON" - <<'PY' "$start_ns" "$end_ns"
 import sys
 start_ns = int(sys.argv[1])

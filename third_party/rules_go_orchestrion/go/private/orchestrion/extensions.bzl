@@ -20,7 +20,7 @@ ORCHESTRION_SEED_GO_MOD_VERSION = "1.21"
 
 # Bump this identifier whenever the in-repo Orchestrion patch block changes in
 # a way that should invalidate previously cached bootstrap binaries.
-ORCHESTRION_PATCHSET_ID = "20260420-module-proxy-v1"
+ORCHESTRION_PATCHSET_ID = "20260421-module-proxy-v2"
 _DD_TRACE_GO_MODULES = [
     "github.com/DataDog/dd-trace-go/v2",
     "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
@@ -692,6 +692,37 @@ def _host_copy_tree(ctx, src, dst, error_prefix):
     if not copied:
         fail("%s: %s\n%s" % (error_prefix, stdout, stderr))
 
+def _host_remove_path_if_exists(ctx, path, error_prefix):
+    removed, stdout, stderr = _host_remove_path_if_exists_result(ctx, path)
+    if not removed:
+        fail("%s: %s\n%s" % (error_prefix, stdout, stderr))
+
+def _host_remove_path_if_exists_result(ctx, path):
+    target_path = str(ctx.path(path))
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            return (False, "", "could not find PowerShell")
+        command = "$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath %s) { Remove-Item -LiteralPath %s -Recurse -Force }" % (
+            _powershell_single_quoted_literal(target_path),
+            _powershell_single_quoted_literal(target_path),
+        )
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            timeout = 120,
+        )
+    else:
+        shell = ctx.which("sh") or "/bin/sh"
+        result = _ctx_execute_checked(
+            ctx,
+            [str(shell), "-c", "rm -rf \"$1\"", "bootstrap-remove-path", target_path],
+            timeout = 120,
+        )
+    if result.return_code != 0:
+        return (False, result.stdout, result.stderr)
+    return (True, result.stdout, result.stderr)
+
 def _host_copy_tree_result(ctx, src, dst):
     src_path = str(ctx.path(src))
     dst_path = str(ctx.path(dst))
@@ -817,6 +848,11 @@ def _write_orchestrion_module_proxy(ctx, go_path, version, version_map):
         "module_proxy",
         "Failed to stage Orchestrion module proxy",
     )
+    # The action-time offline contract uses GOSUMDB=off and GOTOOLCHAIN=local,
+    # so the checksum database mirror and downloaded toolchain module are not
+    # required inputs for Orchestrion module resolution.
+    _host_remove_path_if_exists(ctx, "module_proxy/sumdb", "Failed to prune Orchestrion module proxy sumdb cache")
+    _host_remove_path_if_exists(ctx, "module_proxy/golang.org/toolchain", "Failed to prune Orchestrion module proxy toolchain module")
     ctx.file("module_proxy/root.marker", "offline module proxy root\n")
 
 def _powershell_single_quoted_literal(value):
