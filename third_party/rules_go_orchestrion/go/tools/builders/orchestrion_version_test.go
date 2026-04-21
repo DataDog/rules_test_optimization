@@ -23,11 +23,7 @@ func TestConfiguredDDTraceGoVersionsDefaults(t *testing.T) {
 }
 
 func TestConfiguredDDTraceGoVersionsFromLegacyTextFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "dd_trace_go_versions.txt")
-	if err := os.WriteFile(path, []byte("v2.5.0\n"), 0o644); err != nil {
-		t.Fatalf("write version file: %v", err)
-	}
+	path := writeDDTraceGoVersionsFile(t, "v2.5.0\n")
 	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, path)
 	got, err := configuredDDTraceGoVersions()
 	if err != nil {
@@ -88,10 +84,29 @@ func TestConfiguredOrchestrionToolVersionFromFile(t *testing.T) {
 	}
 }
 
+func TestConfiguredOrchestrionToolVersionRejectsUnexpectedMetadataPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "not_orchestrion_version.txt")
+	if err := os.WriteFile(path, []byte("v1.6.0\n"), 0o644); err != nil {
+		t.Fatalf("write unexpected version file: %v", err)
+	}
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, path)
+	if _, err := configuredOrchestrionToolVersion(); err == nil {
+		t.Fatal("configuredOrchestrionToolVersion unexpectedly accepted an unexpected metadata path")
+	}
+}
+
 func TestOrchestrionToolVersionIdentityFallback(t *testing.T) {
 	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, "")
 	if got := orchestrionToolVersionIdentity(); got != "unknown-orchestrion-version" {
 		t.Fatalf("orchestrionToolVersionIdentity=%q, want unknown-orchestrion-version", got)
+	}
+}
+
+func TestConfiguredDDTraceGoVersionsRequiredRejectsTraversalPath(t *testing.T) {
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, filepath.Join("..", ddTraceGoVersionsFileName))
+	if _, err := configuredDDTraceGoVersionsRequired(); err == nil {
+		t.Fatal("configuredDDTraceGoVersionsRequired unexpectedly accepted a traversal-like metadata path")
 	}
 }
 

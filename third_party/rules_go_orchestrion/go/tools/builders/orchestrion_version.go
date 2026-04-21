@@ -73,25 +73,21 @@ func configuredDDTraceGoVersions() (map[string]string, error) {
 	if versionFile == "" {
 		return defaultDDTraceGoVersions(), nil
 	}
-	return parseConfiguredDDTraceGoVersionsFile(versionFile, true)
+	return parseConfiguredDDTraceGoVersionsFile(rulesGoOrchestrionVersionFileEnvVar, ddTraceGoVersionsFileName, true)
 }
 
 // configuredDDTraceGoVersionsRequired returns the configured tracer module
 // versions and fails if the generated JSON file is absent or malformed.
 func configuredDDTraceGoVersionsRequired() (map[string]string, error) {
-	versionFile := strings.TrimSpace(os.Getenv(rulesGoOrchestrionVersionFileEnvVar))
-	if versionFile == "" {
-		return nil, fmt.Errorf("%s is not set", rulesGoOrchestrionVersionFileEnvVar)
-	}
-	return parseConfiguredDDTraceGoVersionsFile(versionFile, false)
+	return parseConfiguredDDTraceGoVersionsFile(rulesGoOrchestrionVersionFileEnvVar, ddTraceGoVersionsFileName, false)
 }
 
 // parseConfiguredDDTraceGoVersionsFile parses the generated tracer-version file.
 // The legacy text format is accepted only for compatibility call sites.
-func parseConfiguredDDTraceGoVersionsFile(versionFile string, allowLegacyText bool) (map[string]string, error) {
-	content, err := os.ReadFile(versionFile)
+func parseConfiguredDDTraceGoVersionsFile(envVar, expectedBaseName string, allowLegacyText bool) (map[string]string, error) {
+	content, versionFile, err := readGeneratedMetadataFile(envVar, expectedBaseName)
 	if err != nil {
-		return nil, fmt.Errorf("read configured dd-trace-go version file %s: %w", versionFile, err)
+		return nil, err
 	}
 	trimmed := strings.TrimSpace(string(content))
 	if trimmed == "" {
