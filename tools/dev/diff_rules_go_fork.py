@@ -35,12 +35,32 @@ def download_upstream_tree(repository: str, commit: str, tempdir: Path) -> Path:
     urllib.request.urlretrieve(tarball_url, tarball_path)
 
     with tarfile.open(tarball_path, "r:gz") as archive:
-        archive.extractall(tempdir, filter = "data")
+        extract_archive_safely(archive, tempdir)
 
     extracted = tempdir / ("rules_go-%s" % commit)
     if not extracted.is_dir():
         raise FileNotFoundError("expected extracted upstream tree at %s" % extracted)
     return extracted
+
+
+def extract_archive_safely(archive: tarfile.TarFile, destination: Path) -> None:
+    """Extract one tar archive with path-traversal checks across Python versions.
+
+    Python 3.12 added the ``filter=`` argument used by the safer tarfile APIs.
+    Repository maintainer workflows still run on older Python releases, so keep
+    equivalent safety checks in a compatible fallback.
+    """
+    destination_root = destination.resolve()
+    for member in archive.getmembers():
+        target_path = (destination / member.name).resolve()
+        if os.path.commonpath([str(destination_root), str(target_path)]) != str(destination_root):
+            raise ValueError("refusing to extract archive member outside destination: %s" % member.name)
+
+    if hasattr(tarfile, "data_filter"):
+        archive.extractall(destination, filter="data")
+        return
+
+    archive.extractall(destination)
 
 
 def compare_trees(upstream_root: Path, fork_root: Path) -> dict[str, list[str]]:

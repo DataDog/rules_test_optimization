@@ -12,13 +12,12 @@ import (
 )
 
 const (
-	validationCacheABIVersion      = "v1"
-	syntheticModuleCacheABIVersion = "v1"
-	helperDecisionCacheABIVersion  = "v1"
-	helperExportCacheABIVersion    = "v2"
-	helperArchiveCacheABIVersion   = "v2"
+	validationCacheABIVersion      = "v2"
+	syntheticModuleCacheABIVersion = "v2"
+	helperDecisionCacheABIVersion  = "v2"
+	helperExportCacheABIVersion    = "v3"
+	helperArchiveCacheABIVersion   = "v3"
 	helperSourceSetVersion         = "v1"
-	orchestrionVersionIdentity     = "v1.5.0"
 
 	orchestrionPersistentCacheDirName = "rules-go-orchestrion"
 
@@ -35,37 +34,6 @@ type cachePaths struct {
 	manifestPath string
 	readyPath    string
 	lockDir      string
-}
-
-func orchestrionPersistentCacheRoot(env []string) (string, error) {
-	root := filepath.Join(orchestrionDefaultCacheRoot(env), "cache", orchestrionPersistentCacheDirName)
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", fmt.Errorf("prepare orchestrion persistent cache root %s: %w", root, err)
-	}
-	return root, nil
-}
-
-// orchestrionDefaultCacheRoot returns a stable writable cache root that is not
-// tied to Bazel's ephemeral output bases. This keeps Orchestrion's module cache
-// reusable across local reruns while avoiding accidental dependence on whatever
-// GOPATH the user happens to have configured for unrelated work.
-func orchestrionDefaultCacheRoot(env []string) string {
-	if cacheRoot := strings.TrimSpace(getEnv(env, "GOPATH")); cacheRoot != "" {
-		return abs(cacheRoot)
-	}
-	if cacheDir := strings.TrimSpace(getEnv(env, "XDG_CACHE_HOME")); cacheDir != "" {
-		return filepath.Join(abs(cacheDir), orchestrionSharedCacheDirName)
-	}
-	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
-		return filepath.Join(abs(cacheDir), orchestrionSharedCacheDirName)
-	}
-	if home := strings.TrimSpace(getEnv(env, "HOME")); home != "" {
-		return filepath.Join(abs(home), ".cache", orchestrionSharedCacheDirName)
-	}
-	if homeDir, err := os.UserHomeDir(); err == nil && strings.TrimSpace(homeDir) != "" {
-		return filepath.Join(abs(homeDir), ".cache", orchestrionSharedCacheDirName)
-	}
-	return filepath.Join(os.TempDir(), orchestrionSharedCacheDirName)
 }
 
 func orchestrionCachePaths(root, namespace, key string) cachePaths {

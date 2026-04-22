@@ -71,12 +71,16 @@ go_test(
         "env_test.go",
         ":builder_srcs",
     ],
+    x_defs = {
+        "rulesGoStdlibPrefix": RULES_GO_STDLIB_PREFIX,
+    },
 )
 
 go_test(
     name = "orchestrion_version_test",
     size = "small",
     srcs = [
+        "orchestrion_test_helpers_test.go",
         "orchestrion_version_test.go",
         ":builder_srcs",
     ],
@@ -90,6 +94,7 @@ go_test(
     size = "small",
     srcs = [
         "compilepkg_test.go",
+        "orchestrion_test_helpers_test.go",
         ":builder_srcs",
     ],
     x_defs = {
@@ -102,6 +107,7 @@ go_test(
     size = "small",
     srcs = [
         "importcfg_test.go",
+        "orchestrion_test_helpers_test.go",
         ":builder_srcs",
     ],
     x_defs = {
@@ -114,7 +120,9 @@ go_test(
     size = "small",
     srcs = [
         "orchestrion_cache_test.go",
+        "orchestrion_test_helpers_test.go",
         "orchestrion_test.go",
+        "stdlib_test.go",
         ":builder_srcs",
     ],
     x_defs = {
@@ -152,6 +160,7 @@ filegroup(
         "generate_test_main.go",
         "importcfg.go",
         "link.go",
+        "module_proxy.go",
         "nogo.go",
         "nogo_validation.go",
         "orchestrion.go",
@@ -162,6 +171,7 @@ filegroup(
         "replicate.go",
         "stdlib.go",
         "stdliblist.go",
+        "tool_version.go",
     ] + select({
         "@bazel_tools//src/conditions:windows": ["path_windows.go"],
         "//conditions:default": ["path.go"],

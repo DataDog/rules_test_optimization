@@ -54,15 +54,23 @@ def _embedlookupdir_arg(src):
         root_relative = root_relative[1:]
     return root_relative
 
-def _orchestrion_action_env(go, base_env, version_file = None):
+def _orchestrion_action_env(
+        go,
+        base_env,
+        orchestrion_trace_version_file = None,
+        orchestrion_proxy_root_marker = None,
+        orchestrion_tool_version_file = None):
     env = dict(base_env)
     shell_env = go._ctx.configuration.default_shell_env
     for name in _ORCHESTRION_PROBE_ENV_VARS:
         if name in shell_env:
             env[name] = shell_env[name]
-    if not version_file:
-        return env
-    env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
+    if orchestrion_trace_version_file:
+        env["RULES_GO_ORCHESTRION_VERSION_FILE"] = orchestrion_trace_version_file.path
+    if orchestrion_proxy_root_marker:
+        env["RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT"] = orchestrion_proxy_root_marker.dirname
+    if orchestrion_tool_version_file:
+        env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
 
 def emit_compilepkg(
@@ -187,13 +195,27 @@ def emit_compilepkg(
 
     # cgo and the linker action don't support path mapping yet
     # TODO: Remove the second condition after https://github.com/bazelbuild/bazel/pull/21921.
-    version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
+    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
+    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if go.orchestrion else None
+    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if go.orchestrion else None
     if cgo or "local" in go._ctx.attr.tags:
         # cgo doesn't support path mapping yet
-        env = _orchestrion_action_env(go, go.env, version_file)
+        env = _orchestrion_action_env(
+            go,
+            go.env,
+            orchestrion_trace_version_file = orchestrion_trace_version_file,
+            orchestrion_proxy_root_marker = orchestrion_proxy_root_marker,
+            orchestrion_tool_version_file = orchestrion_tool_version_file,
+        )
         execution_requirements = {}
     else:
-        env = _orchestrion_action_env(go, go.env_for_path_mapping, version_file)
+        env = _orchestrion_action_env(
+            go,
+            go.env_for_path_mapping,
+            orchestrion_trace_version_file = orchestrion_trace_version_file,
+            orchestrion_proxy_root_marker = orchestrion_proxy_root_marker,
+            orchestrion_tool_version_file = orchestrion_tool_version_file,
+        )
         execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT
     cgo_go_srcs = None
     if cgo:
@@ -225,8 +247,12 @@ def emit_compilepkg(
     if go.orchestrion:
         compile_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
-        if version_file:
-            inputs_direct.append(version_file)
+        if orchestrion_trace_version_file:
+            inputs_direct.append(orchestrion_trace_version_file)
+        if orchestrion_proxy_root_marker:
+            inputs_direct.append(orchestrion_proxy_root_marker)
+        if orchestrion_tool_version_file:
+            inputs_direct.append(orchestrion_tool_version_file)
 
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(sdk.go)
@@ -235,6 +261,8 @@ def emit_compilepkg(
         # may need the SDK source tree to resolve standard library packages
         # (for example "log") inside Bazel's sandbox.
         inputs_transitive.append(sdk.srcs)
+        if getattr(go, "orchestrion_module_proxy_files", None):
+            inputs_transitive.append(go.orchestrion_module_proxy_files)
 
         # Stage rule data files for the builder so it can copy module pin files
         # (for example go.mod, go.sum, orchestrion.tool.go, orchestrion.yml)

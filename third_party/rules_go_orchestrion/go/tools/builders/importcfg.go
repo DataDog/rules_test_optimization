@@ -620,24 +620,10 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	}
 	goBin := filepath.Join(abs(goenv.sdk), "bin")
 	cmd.Env = setEnv(cmd.Env, "PATH", goBin+string(os.PathListSeparator)+getEnv(cmd.Env, "PATH"))
-	gopath := getEnv(cmd.Env, "GOPATH")
-	if gopath == "" {
-		gopath = filepath.Join(os.TempDir(), "datadog-orchestrion-go-cache")
+	cmd.Env, err = normalizeGoActionCacheEnv(cmd.Env)
+	if err != nil {
+		return nil, fmt.Errorf("prepare module action cache env: %w", err)
 	}
-	gopath = abs(gopath)
-	if err := os.MkdirAll(gopath, 0o755); err != nil {
-		return nil, fmt.Errorf("prepare module gopath: %w", err)
-	}
-	cmd.Env = setEnv(cmd.Env, "GOPATH", gopath)
-	gomodcache := getEnv(cmd.Env, "GOMODCACHE")
-	if gomodcache == "" {
-		gomodcache = filepath.Join(gopath, "pkg", "mod")
-	}
-	gomodcache = abs(gomodcache)
-	if err := os.MkdirAll(gomodcache, 0o755); err != nil {
-		return nil, fmt.Errorf("prepare module gomodcache: %w", err)
-	}
-	cmd.Env = setEnv(cmd.Env, "GOMODCACHE", gomodcache)
 	var (
 		gocache             string
 		sharedCachePaths    cachePaths
@@ -704,11 +690,9 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	}
 	cmd.Env = setEnv(cmd.Env, "GOCACHE", gocache)
 	cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
-	if getEnv(cmd.Env, "GOPROXY") == "" {
-		cmd.Env = setEnv(cmd.Env, "GOPROXY", "https://proxy.golang.org,direct")
-	}
-	if getEnv(cmd.Env, "GOSUMDB") == "" {
-		cmd.Env = setEnv(cmd.Env, "GOSUMDB", "sum.golang.org")
+	cmd.Env, err = normalizeGoModuleResolutionEnv(cmd.Env)
+	if err != nil {
+		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 	}
 	if getEnv(cmd.Env, "GOFLAGS") == "" {
 		cmd.Env = setEnv(cmd.Env, "GOFLAGS", "-mod=mod")
@@ -805,13 +789,11 @@ func moduleExportCachePaths(moduleDir string, goenv *env, packages []string) (ca
 	if err != nil {
 		return cachePaths{}, nil, err
 	}
-	env := append([]string{}, os.Environ()...)
-	gopath := getEnv(env, "GOPATH")
-	if gopath == "" {
-		gopath = filepath.Join(os.TempDir(), "datadog-orchestrion-go-cache")
+	cacheRoot, err := orchestrionActionCacheRoot(os.Environ())
+	if err != nil {
+		return cachePaths{}, nil, err
 	}
-	gopath = abs(gopath)
-	return orchestrionCachePaths(filepath.Join(gopath, "cache", "module-exports"), "", requestKey), keyParts, nil
+	return orchestrionCachePaths(cacheRoot, "module-exports", requestKey), keyParts, nil
 }
 
 // loadModuleExportCache reloads a persisted export manifest and validates that
@@ -874,7 +856,7 @@ func moduleExportRequestKey(moduleDir string, goenv *env, packages []string) (st
 	}
 	parts := []string{
 		"helper_export_cache=" + helperExportCacheABIVersion,
-		"orchestrion=" + orchestrionVersionIdentity,
+		"orchestrion=" + orchestrionToolVersionIdentity(),
 		"sdk=" + sdkIdentity,
 		"installsuffix=" + goenv.installSuffix,
 	}
@@ -884,13 +866,17 @@ func moduleExportRequestKey(moduleDir string, goenv *env, packages []string) (st
 	}
 	if syntheticModule {
 		parts = append(parts, "module_root=synthetic")
-		configuredVersions, err := configuredDDTraceGoVersions()
+		configuredVersions, err := configuredDDTraceGoVersionsRequired()
+		if err != nil {
+			return "", nil, err
+		}
+		orchestrionVersion, err := configuredOrchestrionToolVersion()
 		if err != nil {
 			return "", nil, err
 		}
 		parts = append(parts,
 			"configured_versions="+ddTraceVersionsDigest(configuredVersions),
-			"go.mod="+shortDigest([]byte(syntheticOrchestrionGoMod(configuredVersions))),
+			"go.mod="+shortDigest([]byte(syntheticOrchestrionGoMod(orchestrionVersion, configuredVersions))),
 			"go.sum=synthetic",
 			"orchestrion.tool.go="+shortDigest([]byte(syntheticOrchestrionToolGo)),
 			"orchestrion.yml=missing",
@@ -1647,30 +1633,16 @@ func resolveStdlibExportsForPackage(goenv *env, pkg string) (map[string]string, 
 		return nil, fmt.Errorf("prepare stdlib closure cache: %w", err)
 	}
 	cmd.Env = setEnv(cmd.Env, "GOCACHE", cachePath)
-	goPath := getEnv(cmd.Env, "GOPATH")
-	if goPath == "" {
-		goPath = filepath.Join(os.TempDir(), "datadog-orchestrion-go-cache")
+	normalizedEnv, err := normalizeGoActionCacheEnv(cmd.Env)
+	if err != nil {
+		return nil, fmt.Errorf("prepare stdlib closure action cache env: %w", err)
 	}
-	goPath = abs(goPath)
-	if err := os.MkdirAll(goPath, 0o755); err != nil {
-		return nil, fmt.Errorf("prepare stdlib closure gopath: %w", err)
+	normalizedEnv = setEnv(normalizedEnv, "GOCACHE", cachePath)
+	normalizedEnv, err = normalizeGoModuleResolutionEnv(normalizedEnv)
+	if err != nil {
+		return nil, fmt.Errorf("prepare stdlib closure module resolution env: %w", err)
 	}
-	cmd.Env = setEnv(cmd.Env, "GOPATH", goPath)
-	modCache := getEnv(cmd.Env, "GOMODCACHE")
-	if modCache == "" {
-		modCache = filepath.Join(goPath, "pkg", "mod")
-	}
-	modCache = abs(modCache)
-	if err := os.MkdirAll(modCache, 0o755); err != nil {
-		return nil, fmt.Errorf("prepare stdlib closure gomodcache: %w", err)
-	}
-	cmd.Env = setEnv(cmd.Env, "GOMODCACHE", modCache)
-	if getEnv(cmd.Env, "GOPROXY") == "" {
-		cmd.Env = setEnv(cmd.Env, "GOPROXY", "https://proxy.golang.org,direct")
-	}
-	if getEnv(cmd.Env, "GOSUMDB") == "" {
-		cmd.Env = setEnv(cmd.Env, "GOSUMDB", "sum.golang.org")
-	}
+	cmd.Env = normalizedEnv
 	if getEnv(cmd.Env, "HOME") == "" {
 		homePath := filepath.Join(goenv.goroot, ".home")
 		if err := os.MkdirAll(homePath, 0o755); err != nil {

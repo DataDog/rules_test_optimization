@@ -20,14 +20,71 @@ def _bootstrap_cache_key_stability_test(ctx):
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
     }
 
-    ordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.5.0", ordered_versions, go_identity)
-    reordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.5.0", reordered_versions, go_identity)
+    ordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", ordered_versions, go_identity)
+    reordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", reordered_versions, go_identity)
 
     asserts.equals(env, ordered_key, reordered_key)
 
     return unittest.end(env)
 
 bootstrap_cache_key_stability_test = unittest.make(_bootstrap_cache_key_stability_test)
+
+def _bootstrap_cache_paths_contract_test(ctx):
+    env = unittest.begin(ctx)
+
+    fake_ctx = struct(os = struct(name = "linux"))
+    paths = orchestrion_extension_test_helpers.bootstrap_cache_paths(fake_ctx, "/tmp/cache-root", "cache-key", "orchestrion_bin")
+    asserts.equals(env, "/tmp/cache-root", paths.cache_root)
+    asserts.equals(env, "/tmp/cache-root/bootstrap/cache-key/orchestrion_bin", paths.binary_path)
+    asserts.equals(env, "/tmp/cache-root/bootstrap/cache-key/orchestrion_version.txt", paths.tool_version_file_path)
+    asserts.equals(env, "/tmp/cache-root/bootstrap/cache-key/module_proxy/root.marker", paths.module_proxy_root_marker)
+
+    required = orchestrion_extension_test_helpers.bootstrap_cache_required_entries(paths)
+    asserts.true(env, paths.resolved_modules_file_path in required.files, "resolved module manifest must be required")
+    asserts.true(env, paths.seed_go_sum_file_path in required.files, "seed go.sum must be required")
+    asserts.true(env, paths.module_proxy_root_marker in required.files, "module proxy marker must be required")
+
+    return unittest.end(env)
+
+bootstrap_cache_paths_contract_test = unittest.make(_bootstrap_cache_paths_contract_test)
+
+def _module_proxy_seed_go_mod_test(ctx):
+    env = unittest.begin(ctx)
+
+    go_mod = orchestrion_extension_test_helpers.module_proxy_seed_go_mod(
+        "v1.6.0",
+        {
+            "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+            "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+            "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
+        },
+    )
+
+    asserts.true(env, "go 1.21" in go_mod, "seed go.mod must keep the compatibility Go version")
+    asserts.true(env, "github.com/DataDog/orchestrion v1.6.0" in go_mod, "seed go.mod must use the configured orchestrion version")
+    asserts.false(env, "github.com/DataDog/orchestrion v1.5.0" in go_mod, "seed go.mod must not use the old hardcoded orchestrion version")
+
+    return unittest.end(env)
+
+module_proxy_seed_go_mod_test = unittest.make(_module_proxy_seed_go_mod_test)
+
+def _module_proxy_resolved_modules_json_test(ctx):
+    env = unittest.begin(ctx)
+
+    manifest = orchestrion_extension_test_helpers.module_proxy_resolved_modules_json({
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+        "github.com/DataDog/orchestrion": "v1.6.0",
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+    })
+    http_index = manifest.find('"github.com/DataDog/dd-trace-go/contrib/net/http/v2"')
+    root_index = manifest.find('"github.com/DataDog/dd-trace-go/v2"')
+    orchestrion_index = manifest.find('"github.com/DataDog/orchestrion"')
+
+    asserts.true(env, http_index < root_index and root_index < orchestrion_index, "resolved module manifest must be sorted by module path")
+
+    return unittest.end(env)
+
+module_proxy_resolved_modules_json_test = unittest.make(_module_proxy_resolved_modules_json_test)
 
 def _parse_certutil_sha256_test(ctx):
     env = unittest.begin(ctx)
@@ -94,8 +151,11 @@ def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
         bootstrap_cache_key_stability_test,
+        bootstrap_cache_paths_contract_test,
         fallback_go_tool_identity_test,
         host_platform_normalization_test,
+        module_proxy_resolved_modules_json_test,
+        module_proxy_seed_go_mod_test,
         parse_certutil_sha256_test,
         powershell_single_quoted_literal_test,
     )

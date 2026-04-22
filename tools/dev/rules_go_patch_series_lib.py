@@ -229,7 +229,26 @@ def git_archive_subtree(commit: str, subtree_path: str, destination: Path) -> No
             if not relative_name:
                 continue
             member.name = relative_name
-            archive.extract(member, destination, filter="data")
+            _extract_archive_member(archive, member, destination)
+
+
+def _extract_archive_member(archive: tarfile.TarFile, member: tarfile.TarInfo, destination: Path) -> None:
+    """Extract one git-archive member into the destination with path-traversal checks.
+
+    Python 3.12 added the ``filter=`` argument used by the safer tarfile APIs.
+    Local developer environments in this repository still run older Python
+    releases, so keep the same safety checks in a version-compatible fallback.
+    """
+    target_path = (destination / member.name).resolve()
+    destination_root = destination.resolve()
+    if os.path.commonpath([str(destination_root), str(target_path)]) != str(destination_root):
+        raise PatchSeriesError(f"refusing to extract archive member outside destination: {member.name!r}")
+
+    if hasattr(tarfile, "data_filter"):
+        archive.extract(member, destination, filter="data")
+        return
+
+    archive.extract(member, destination)
 
 
 def copy_worktree_subtree(subtree_path: str, destination: Path) -> None:

@@ -257,15 +257,14 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 					downloadSpan.End(nil)
 				}
 			}
-			tidyArgs := []string{"mod", "tidy"}
-			tidySpan := beginProbe("stdlib.synthetic_module_tidy")
-			if err := goenv.runCommand(goenv.goCmd(tidyArgs[0], tidyArgs[1:]...)); err != nil {
-				tidySpan.End(err)
-				return fmt.Errorf("stdlib: synthetic orchestrion tidy failed: %w", err)
-			}
-			tidySpan.End(nil)
+			// Do not run `go mod tidy` for the stdlib synthetic action-time module.
+			// Like the other synthetic Orchestrion module flows, stdlib only needs
+			// the runtime build graph staged in the offline proxy. `tidy` expands
+			// into unrelated helper/test dependencies that are outside that
+			// contract and has proven to fail on Windows consumer builds even when
+			// the actual stdlib weaving path is otherwise valid.
 			if goenv.verbose {
-				fmt.Fprintf(os.Stderr, "stdlib: synthetic orchestrion tidy completed using dd-trace-go/v2/orchestrion tools-tagged integration imports\n")
+				fmt.Fprintf(os.Stderr, "stdlib: skipping synthetic orchestrion tidy; using synthesized module/tool files and offline proxy downloads instead\n")
 			}
 			if goenv.verbose {
 				fmt.Fprintf(os.Stderr, "stdlib: skipping synthetic orchestrion pin; using synthesized module/tool files instead\n")

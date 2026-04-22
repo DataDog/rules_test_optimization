@@ -41,15 +41,23 @@ _ORCHESTRION_PROBE_ENV_VARS = (
     "RULES_GO_ORCHESTRION_PROBE_FILE",
 )
 
-def _orchestrion_action_env(go, base_env, version_file = None):
+def _orchestrion_action_env(
+        go,
+        base_env,
+        orchestrion_trace_version_file = None,
+        orchestrion_proxy_root_marker = None,
+        orchestrion_tool_version_file = None):
     env = dict(base_env)
     shell_env = go._ctx.configuration.default_shell_env
     for name in _ORCHESTRION_PROBE_ENV_VARS:
         if name in shell_env:
             env[name] = shell_env[name]
-    if not version_file:
-        return env
-    env["RULES_GO_ORCHESTRION_VERSION_FILE"] = version_file.path
+    if orchestrion_trace_version_file:
+        env["RULES_GO_ORCHESTRION_VERSION_FILE"] = orchestrion_trace_version_file.path
+    if orchestrion_proxy_root_marker:
+        env["RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT"] = orchestrion_proxy_root_marker.dirname
+    if orchestrion_tool_version_file:
+        env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
 
 def emit_stdlib(go):
@@ -103,15 +111,14 @@ def _build_stdlib_list_json(go):
         mnemonic = "GoStdlibList",
         executable = go.toolchain._builder,
         arguments = [args],
-        env = _build_env(go),
+        env = _stdlib_list_env(go),
         toolchain = GO_TOOLCHAIN_LABEL,
         execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT,
     )
     return out, cache_dir
 
-def _build_env(go):
+def _stdlib_list_env(go):
     env = go.env
-    env = _orchestrion_action_env(go, env, getattr(go, "orchestrion_version_file", None))
 
     if go.mode.pure:
         env.update({"CGO_ENABLED": "0"})
@@ -135,6 +142,15 @@ def _build_env(go):
     })
 
     return env
+
+def _stdlib_action_env(go, orchestrion_trace_version_file, orchestrion_proxy_root_marker, orchestrion_tool_version_file):
+    return _orchestrion_action_env(
+        go,
+        _stdlib_list_env(go),
+        orchestrion_trace_version_file = orchestrion_trace_version_file,
+        orchestrion_proxy_root_marker = orchestrion_proxy_root_marker,
+        orchestrion_tool_version_file = orchestrion_tool_version_file,
+    )
 
 def _sdk_stdlib(go):
     list_json, cache_dir = _build_stdlib_list_json(go)
@@ -190,8 +206,14 @@ def _build_stdlib(go):
         inputs_direct.append(go.orchestrion)
         if getattr(go, "orchestrion_version_file", None):
             inputs_direct.append(go.orchestrion_version_file)
+        if getattr(go, "orchestrion_module_proxy_root_marker", None):
+            inputs_direct.append(go.orchestrion_module_proxy_root_marker)
+        if getattr(go, "orchestrion_tool_version_file", None):
+            inputs_direct.append(go.orchestrion_tool_version_file)
         inputs_direct.append(sdk.go)
         inputs_transitive.append(sdk.srcs)
+        if getattr(go, "orchestrion_module_proxy_files", None):
+            inputs_transitive.append(go.orchestrion_module_proxy_files)
         if hasattr(go._ctx.files, "data"):
             args.add_all(
                 go._ctx.files.data,
@@ -209,7 +231,12 @@ def _build_stdlib(go):
         mnemonic = "GoStdlib",
         executable = go.toolchain._builder,
         arguments = [args],
-        env = _build_env(go),
+        env = _stdlib_action_env(
+            go,
+            getattr(go, "orchestrion_version_file", None),
+            getattr(go, "orchestrion_module_proxy_root_marker", None),
+            getattr(go, "orchestrion_tool_version_file", None),
+        ),
         toolchain = GO_TOOLCHAIN_LABEL,
         execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT,
     )

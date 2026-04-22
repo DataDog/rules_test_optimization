@@ -18,8 +18,8 @@ const (
 	defaultRulesGoRemote         = "https://github.com/DataDog/rules_test_optimization.git"
 	defaultRulesGoCommit         = "16712cc851915317659b932471dcb68af48dd5bb"
 	defaultRulesGoStripPrefix    = "third_party/rules_go_orchestrion"
-	defaultOrchestrionVersion    = "v1.5.0"
-	defaultDDTraceGoVersion      = "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
+	defaultOrchestrionVersion    = "v1.6.0"
+	defaultDDTraceGoVersion      = "v2.7.3"
 	defaultSyncRepoName          = "test_optimization_data"
 	defaultUploaderTargetName    = "dd_upload_payloads"
 	managedBlockStart            = "# BEGIN Datadog Go Orchestrion bootstrap"
@@ -188,7 +188,7 @@ func run(cfg config) error {
 			return err
 		}
 	}
-	if err := runOrchestrionPin(cfg); err != nil {
+	if err := writeOrchestrionToolFile(cfg); err != nil {
 		return err
 	}
 	if err := ensureCIVisibilityOrchestrionImport(cfg); err != nil {
@@ -200,7 +200,7 @@ func run(cfg config) error {
 	if err := warmOrchestrionModuleCache(cfg); err != nil {
 		return err
 	}
-	if err := verifyResolvedDDTraceGoVersion(cfg); err != nil {
+	if err := verifyResolvedBootstrapModuleVersions(cfg); err != nil {
 		return fmt.Errorf("%w\nbootstrap may have already updated these files: MODULE.bazel, go.mod, go.sum, orchestrion.tool.go%s", err, maybeChangedStarterYML(cfg.goModuleDir))
 	}
 	if err := writeStarterOrchestrionYML(cfg); err != nil {
@@ -965,30 +965,37 @@ func extractBlockName(block string) string {
 	return match[1]
 }
 
-func runOrchestrionPin(cfg config) error {
-	cmd := exec.Command("go", "run", "github.com/DataDog/orchestrion@"+cfg.orchestrionVersion, "pin")
-	cmd.Dir = cfg.goModuleDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = orchestrionBootstrapEnv()
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run orchestrion pin in %s: %w", cfg.goModuleDir, err)
+// writeOrchestrionToolFile writes the managed tools-tagged Orchestrion entrypoint
+// that the bootstrap flow keeps aligned with the Bazel-side Orchestrion wiring.
+// The helper writes this file directly instead of depending on `orchestrion pin`
+// so bootstrap stays deterministic even when upstream pin behavior changes.
+func writeOrchestrionToolFile(cfg config) error {
+	path := filepath.Join(cfg.goModuleDir, "orchestrion.tool.go")
+	if err := os.WriteFile(path, []byte(managedOrchestrionToolFileSource()), 0o644); err != nil {
+		return fmt.Errorf("write orchestrion.tool.go: %w", err)
 	}
 	return nil
 }
 
-func syncDDTraceGoVersion(cfg config) error {
-	commands := make([][]string, 0, len(ddTraceGoModules)+2)
-	versions := cfg.effectiveDDTraceGoVersions()
-	for _, modulePath := range ddTraceGoModules {
-		commands = append(commands, []string{"mod", "edit", "-require=" + modulePath + "@" + versions[modulePath]})
-	}
-	commands = append(commands,
-		[]string{"get", "github.com/DataDog/dd-trace-go/v2/orchestrion@" + versions["github.com/DataDog/dd-trace-go/v2"]},
-		[]string{"mod", "tidy"},
-	)
+// managedOrchestrionToolFileSource returns the canonical bootstrap-owned
+// Orchestrion tools file. The import set matches the Orchestrion module-proxy
+// seed so bootstrap and Bazel action-time module resolution stay aligned.
+func managedOrchestrionToolFileSource() string {
+	return `//go:build tools
 
-	for _, args := range commands {
+package tools
+
+import (
+	_ "github.com/DataDog/orchestrion" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
+)
+`
+}
+
+func syncDDTraceGoVersion(cfg config) error {
+	for _, args := range bootstrapSyncCommands(cfg) {
 		cmd := exec.Command("go", args...)
 		cmd.Dir = cfg.goModuleDir
 		cmd.Stdout = os.Stdout
@@ -999,6 +1006,24 @@ func syncDDTraceGoVersion(cfg config) error {
 		}
 	}
 	return nil
+}
+
+// bootstrapSyncCommands returns the exact go command sequence bootstrap uses to
+// pin the workspace module graph. The Orchestrion module itself is pinned here
+// so the generated tools file cannot drift to a newer upstream release during
+// `go mod tidy`.
+func bootstrapSyncCommands(cfg config) [][]string {
+	commands := make([][]string, 0, len(ddTraceGoModules)+3)
+	versions := cfg.effectiveDDTraceGoVersions()
+	commands = append(commands, []string{"mod", "edit", "-require=github.com/DataDog/orchestrion@" + cfg.orchestrionVersion})
+	for _, modulePath := range ddTraceGoModules {
+		commands = append(commands, []string{"mod", "edit", "-require=" + modulePath + "@" + versions[modulePath]})
+	}
+	commands = append(commands,
+		[]string{"get", "github.com/DataDog/dd-trace-go/v2/orchestrion@" + versions["github.com/DataDog/dd-trace-go/v2"]},
+		[]string{"mod", "tidy"},
+	)
+	return commands
 }
 
 func normalizeDDTraceGoVersion(cfg *config) error {
@@ -1118,7 +1143,15 @@ type goListModule struct {
 	} `json:"Replace"`
 }
 
-func verifyResolvedDDTraceGoVersion(cfg config) error {
+func verifyResolvedBootstrapModuleVersions(cfg config) error {
+	orchestrionVersion, err := resolvedModuleVersion(cfg.goModuleDir, orchestrionBootstrapEnv(), "github.com/DataDog/orchestrion")
+	if err != nil {
+		return err
+	}
+	if orchestrionVersion != cfg.orchestrionVersion {
+		return fmt.Errorf("resolved orchestrion version mismatch in %s: configured %s, resolved %s", cfg.goModuleDir, cfg.orchestrionVersion, orchestrionVersion)
+	}
+
 	expected := cfg.effectiveDDTraceGoVersions()
 	for _, modulePath := range ddTraceGoModules {
 		resolved, err := resolvedModuleVersion(cfg.goModuleDir, orchestrionBootstrapEnv(), modulePath)

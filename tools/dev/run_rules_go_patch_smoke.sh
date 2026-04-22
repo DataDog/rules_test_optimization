@@ -51,6 +51,15 @@ patch_vendor_module
 run_vendor() {
   (
     cd "${vendor_root}"
+    # Keep the smoke lane independent from host-injected private Go proxy
+    # settings so the materialized vendor tree resolves public modules the same
+    # way on maintainer laptops and in CI.
+    GOPROXY="https://proxy.golang.org,direct" \
+    GOSUMDB="sum.golang.org" \
+    GOPRIVATE="" \
+    GONOPROXY="" \
+    GONOSUMDB="" \
+    GIT_TERMINAL_PROMPT="0" \
     USE_BAZEL_VERSION="${BAZEL_VERSION}" "$@"
   )
 }

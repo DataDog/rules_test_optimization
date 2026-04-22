@@ -14,12 +14,13 @@
 
 """Module extension for configuring orchestrion in rules_go."""
 
-DEFAULT_DD_TRACE_GO_VERSION = "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
-ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v2"
+DEFAULT_DD_TRACE_GO_VERSION = "v2.7.3"
+ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v3"
+ORCHESTRION_SEED_GO_MOD_VERSION = "1.21"
 
 # Bump this identifier whenever the in-repo Orchestrion patch block changes in
 # a way that should invalidate previously cached bootstrap binaries.
-ORCHESTRION_PATCHSET_ID = "20260326-bootstrap-cache-v2-no-tool-repin"
+ORCHESTRION_PATCHSET_ID = "20260421-module-proxy-v2"
 _DD_TRACE_GO_MODULES = [
     "github.com/DataDog/dd-trace-go/v2",
     "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
@@ -100,8 +101,15 @@ def _go_env(ctx):
         "GO111MODULE": "on",
         "GOWORK": "off",
         "GOTOOLCHAIN": "go1.25.0+auto",
+        # Repository resolution only needs public modules. Clear host-specific
+        # private-module settings so bootstrap does not silently fall back to
+        # direct VCS fetches based on the developer environment.
+        "GOPRIVATE": "",
+        "GONOPROXY": "",
+        "GONOSUMDB": "",
         "GOPROXY": "https://proxy.golang.org,direct",
         "GOSUMDB": "sum.golang.org",
+        "GIT_TERMINAL_PROMPT": "0",
         "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
         "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
     }
@@ -236,9 +244,7 @@ def _bootstrap_cache_key(version, version_map, go_identity):
         "dd-%s" % _dd_trace_go_versions_cache_fragment(version_map),
     ])
 
-def _bootstrap_cache_paths(ctx, version, version_map, go_identity, binary_name):
-    cache_root = _bootstrap_cache_root(ctx)
-    key = _bootstrap_cache_key(version, version_map, go_identity)
+def _bootstrap_cache_paths_with_root(ctx, cache_root, key, binary_name):
     entry_dir = _path_join(ctx, cache_root, "bootstrap", key)
     return struct(
         cache_root = cache_root,
@@ -246,17 +252,74 @@ def _bootstrap_cache_paths(ctx, version, version_map, go_identity, binary_name):
         entry_dir = entry_dir,
         binary_path = _path_join(ctx, entry_dir, binary_name),
         version_file_path = _path_join(ctx, entry_dir, "dd_trace_go_versions.json"),
+        tool_version_file_path = _path_join(ctx, entry_dir, "orchestrion_version.txt"),
+        module_proxy_dir = _path_join(ctx, entry_dir, "module_proxy"),
+        module_proxy_root_marker = _path_join(ctx, entry_dir, "module_proxy", "root.marker"),
+        resolved_modules_file_path = _path_join(ctx, entry_dir, "module_proxy_resolved_modules.json"),
+        seed_go_sum_file_path = _path_join(ctx, entry_dir, "module_proxy_seed.go.sum"),
         manifest_path = _path_join(ctx, entry_dir, "manifest.json"),
         ready_path = _path_join(ctx, entry_dir, "ready"),
     )
 
-def _bootstrap_cache_entry_ready(ctx, paths):
-    return (
-        ctx.path(paths.binary_path).exists and
-        ctx.path(paths.version_file_path).exists and
-        ctx.path(paths.manifest_path).exists and
-        ctx.path(paths.ready_path).exists
+def _bootstrap_cache_paths(ctx, version, version_map, go_identity, binary_name):
+    cache_root = _bootstrap_cache_root(ctx)
+    key = _bootstrap_cache_key(version, version_map, go_identity)
+    return _bootstrap_cache_paths_with_root(ctx, cache_root, key, binary_name)
+
+def _bootstrap_cache_required_entries(paths):
+    return struct(
+        files = [
+            paths.binary_path,
+            paths.version_file_path,
+            paths.tool_version_file_path,
+            paths.resolved_modules_file_path,
+            paths.seed_go_sum_file_path,
+            paths.manifest_path,
+            paths.ready_path,
+            paths.module_proxy_root_marker,
+        ],
+        module_proxy_dir = paths.module_proxy_dir,
+        module_proxy_root_marker = paths.module_proxy_root_marker,
     )
+
+def _module_proxy_tree_has_payload(ctx, module_proxy_dir, root_marker):
+    if not ctx.path(module_proxy_dir).exists or not ctx.path(root_marker).exists:
+        return False
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            return False
+        command = "$files = Get-ChildItem -LiteralPath %s -Recurse -File -Force | Where-Object { $_.FullName -ne %s }; if ($files) { Write-Output 'present' }" % (
+            _powershell_single_quoted_literal(str(ctx.path(module_proxy_dir))),
+            _powershell_single_quoted_literal(str(ctx.path(root_marker))),
+        )
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            timeout = 30,
+        )
+    else:
+        shell = ctx.which("sh") or "/bin/sh"
+        result = _ctx_execute_checked(
+            ctx,
+            [
+                str(shell),
+                "-c",
+                "find \"$1\" -type f ! -path \"$2\" -print -quit",
+                "module-proxy-payload-check",
+                str(ctx.path(module_proxy_dir)),
+                str(ctx.path(root_marker)),
+            ],
+            timeout = 30,
+        )
+    return result.return_code == 0 and bool(result.stdout.strip())
+
+def _bootstrap_cache_entry_ready(ctx, paths):
+    required = _bootstrap_cache_required_entries(paths)
+    for required_path in required.files:
+        if not ctx.path(required_path).exists:
+            return False
+    return _module_proxy_tree_has_payload(ctx, required.module_proxy_dir, required.module_proxy_root_marker)
 
 def _dd_trace_go_versions_from_shared(version):
     version_map = {}
@@ -316,10 +379,26 @@ go 1.21
     ])
     return "\n".join(lines)
 
+def _should_append_go_toolchain_hint(args):
+    if not args:
+        return False
+    argv = [str(arg) for arg in args]
+    if not argv[0].endswith("go") and not argv[0].endswith("go.exe"):
+        return False
+    if "build" in argv or "list" in argv:
+        return True
+    return "mod" in argv and "download" in argv
+
+def _go_toolchain_hint():
+    return "Bootstrap uses GOTOOLCHAIN=go1.25.0+auto. If Go 1.25.0 is not already installed, the Go tool may try to download it during repository resolution. In restricted environments, preinstall Go 1.25.0 or allow fetch-time egress, then rerun bazel sync."
+
 def _ctx_execute_or_fail(ctx, args, env, error_prefix):
     result = ctx.execute(args, timeout = 600, environment = env)
     if result.return_code != 0:
-        fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
+        details = "%s: %s\n%s" % (error_prefix, result.stdout, result.stderr)
+        if _should_append_go_toolchain_hint(args):
+            details += "\n" + _go_toolchain_hint()
+        fail(details)
     return result
 
 def _parse_key_value_lines(output, expected_keys, error_prefix):
@@ -469,6 +548,109 @@ def _dd_trace_go_versions_json(version_map):
         entries.append('    "%s": "%s"' % (module_path, version_map[module_path]))
     return "{\n  \"modules\": {\n%s\n  }\n}\n" % ",\n".join(entries)
 
+def _orchestrion_tool_version_txt(version):
+    return "%s\n" % version
+
+def _module_proxy_seed_tool_go():
+    return """//go:build tools
+
+package tools
+
+import (
+    _ "github.com/DataDog/orchestrion"
+    _ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"
+    _ "github.com/DataDog/dd-trace-go/contrib/net/http/v2"
+    _ "github.com/DataDog/dd-trace-go/v2/orchestrion"
+)
+"""
+
+def _module_proxy_seed_go_mod(version, version_map, resolved_versions = None):
+    entries = []
+    if resolved_versions == None:
+        entries.append("    github.com/DataDog/orchestrion %s" % version)
+        for module_path in _DD_TRACE_GO_MODULES:
+            entries.append("    %s %s" % (module_path, version_map[module_path]))
+    else:
+        for module_path in sorted(resolved_versions.keys()):
+            entries.append("    %s %s" % (module_path, resolved_versions[module_path]))
+    return "\n".join([
+        "module bazel_orchestrion_tool_proxy",
+        "",
+        "go %s" % ORCHESTRION_SEED_GO_MOD_VERSION,
+        "",
+        "require (",
+        "\n".join(entries),
+        ")",
+        "",
+    ])
+
+def _module_proxy_resolved_modules_json(resolved_versions):
+    entries = []
+    for module_path in sorted(resolved_versions.keys()):
+        entries.append('  "%s": "%s"' % (module_path, resolved_versions[module_path]))
+    return "{\n%s\n}\n" % ",\n".join(entries)
+
+def _split_go_list_json_objects(output, error_prefix):
+    objects = []
+    current = []
+    depth = 0
+    in_string = False
+    escaping = False
+    for idx in range(len(output)):
+        ch = output[idx]
+        if depth == 0 and ch in [" ", "\t", "\r", "\n"]:
+            continue
+        if depth == 0 and ch != "{":
+            fail("%s: unexpected JSON stream byte %r" % (error_prefix, ch))
+        current.append(ch)
+        if in_string:
+            if escaping:
+                escaping = False
+            elif ch == "\\":
+                escaping = True
+            elif ch == "\"":
+                in_string = False
+            continue
+        if ch == "\"":
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                fail("%s: malformed JSON stream" % error_prefix)
+            if depth == 0:
+                objects.append("".join(current))
+                current = []
+    if depth != 0 or in_string or escaping:
+        fail("%s: truncated JSON stream" % error_prefix)
+    return objects
+
+def _parse_module_proxy_resolved_versions(output, error_prefix):
+    resolved = {}
+    for raw_json in _split_go_list_json_objects(output, error_prefix):
+        decoded = json.decode(raw_json)
+        module_path = decoded.get("Path", "").strip()
+        if not module_path or module_path == "bazel_orchestrion_tool_proxy":
+            continue
+        replace = decoded.get("Replace")
+        if replace:
+            replace_version = replace.get("Version", "").strip()
+            if not replace_version:
+                fail("%s: local replace without resolved version for %s" % (error_prefix, module_path))
+            resolved[module_path] = replace_version
+            continue
+        version = decoded.get("Version", "").strip()
+        if not version:
+            fail("%s: empty resolved version for %s" % (error_prefix, module_path))
+        resolved[module_path] = version
+    if "github.com/DataDog/orchestrion" not in resolved:
+        fail("%s: missing github.com/DataDog/orchestrion in resolved module graph" % error_prefix)
+    for module_path in _DD_TRACE_GO_MODULES:
+        if module_path not in resolved:
+            fail("%s: missing %s in resolved module graph" % (error_prefix, module_path))
+    return resolved
+
 def _host_copy_file(ctx, src, dst, error_prefix):
     copied, stdout, stderr = _host_copy_file_result(ctx, src, dst)
     if not copied:
@@ -500,6 +682,72 @@ def _host_copy_file_result(ctx, src, dst):
             ctx,
             [str(shell), "-c", "mkdir -p \"$1\" && cp \"$2\" \"$3\"", "bootstrap-copy", parent, src_path, dst_path],
             timeout = 120,
+        )
+    if result.return_code != 0:
+        return (False, result.stdout, result.stderr)
+    return (True, result.stdout, result.stderr)
+
+def _host_copy_tree(ctx, src, dst, error_prefix):
+    copied, stdout, stderr = _host_copy_tree_result(ctx, src, dst)
+    if not copied:
+        fail("%s: %s\n%s" % (error_prefix, stdout, stderr))
+
+def _host_remove_path_if_exists(ctx, path, error_prefix):
+    removed, stdout, stderr = _host_remove_path_if_exists_result(ctx, path)
+    if not removed:
+        fail("%s: %s\n%s" % (error_prefix, stdout, stderr))
+
+def _host_remove_path_if_exists_result(ctx, path):
+    target_path = str(ctx.path(path))
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            return (False, "", "could not find PowerShell")
+        command = "$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath %s) { Remove-Item -LiteralPath %s -Recurse -Force }" % (
+            _powershell_single_quoted_literal(target_path),
+            _powershell_single_quoted_literal(target_path),
+        )
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            timeout = 120,
+        )
+    else:
+        shell = ctx.which("sh") or "/bin/sh"
+        result = _ctx_execute_checked(
+            ctx,
+            [str(shell), "-c", "rm -rf \"$1\"", "bootstrap-remove-path", target_path],
+            timeout = 120,
+        )
+    if result.return_code != 0:
+        return (False, result.stdout, result.stderr)
+    return (True, result.stdout, result.stderr)
+
+def _host_copy_tree_result(ctx, src, dst):
+    src_path = str(ctx.path(src))
+    dst_path = str(ctx.path(dst))
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            return (False, "", "could not find PowerShell")
+        command = "$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath %s) { Remove-Item -LiteralPath %s -Recurse -Force }; New-Item -ItemType Directory -Force -Path %s | Out-Null; Get-ChildItem -LiteralPath %s -Force | Copy-Item -Destination %s -Recurse -Force" % (
+            _powershell_single_quoted_literal(dst_path),
+            _powershell_single_quoted_literal(dst_path),
+            _powershell_single_quoted_literal(dst_path),
+            _powershell_single_quoted_literal(src_path),
+            _powershell_single_quoted_literal(dst_path),
+        )
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            timeout = 180,
+        )
+    else:
+        shell = ctx.which("sh") or "/bin/sh"
+        result = _ctx_execute_checked(
+            ctx,
+            [str(shell), "-c", "rm -rf \"$2\" && mkdir -p \"$2\" && cp -R \"$1/.\" \"$2\"", "bootstrap-copy-tree", src_path, dst_path],
+            timeout = 180,
         )
     if result.return_code != 0:
         return (False, result.stdout, result.stderr)
@@ -537,6 +785,77 @@ def _host_path_is_writable(ctx, path):
             timeout = 30,
         )
     return result.return_code == 0
+
+def _write_orchestrion_module_proxy(ctx, go_path, version, version_map):
+    seed_dir = ".orchestrion_module_proxy_seed"
+    seed_cache_root = ".orchestrion_module_proxy_seed_go"
+    seed_cache_root_path = str(ctx.path(seed_cache_root))
+    seed_env = _go_env(ctx)
+    seed_env["GOMODCACHE"] = _path_join(ctx, seed_cache_root_path, "pkg", "mod")
+    seed_env["GOCACHE"] = _path_join(ctx, seed_cache_root_path, "cache")
+
+    # Resolve the offline proxy seed through the public module proxy rather than
+    # inheriting private-module bypass rules from the host bootstrap environment.
+    # The seed graph is intentionally limited to public modules and must be
+    # reproducible across machines without falling back to direct VCS access.
+    seed_env["GOPRIVATE"] = ""
+    seed_env["GONOPROXY"] = ""
+    seed_env["GONOSUMDB"] = ""
+
+    ctx.file(seed_dir + "/go.mod", _module_proxy_seed_go_mod(version, version_map))
+    ctx.file(seed_dir + "/orchestrion.tool.go", _module_proxy_seed_tool_go())
+
+    result = _ctx_execute_or_fail(
+        ctx,
+        [
+            str(go_path),
+            "-C",
+            seed_dir,
+            "list",
+            "-mod=mod",
+            "-m",
+            "-json",
+            "all",
+        ],
+        seed_env,
+        "Failed to resolve Orchestrion module proxy graph",
+    )
+    resolved_versions = _parse_module_proxy_resolved_versions(result.stdout, "Failed to parse Orchestrion module proxy graph")
+    ctx.file(seed_dir + "/go.mod", _module_proxy_seed_go_mod(version, version_map, resolved_versions))
+
+    _ctx_execute_or_fail(
+        ctx,
+        [
+            str(go_path),
+            "-C",
+            seed_dir,
+            "mod",
+            "download",
+            "all",
+        ],
+        seed_env,
+        "Failed to download Orchestrion module proxy graph",
+    )
+
+    seed_go_sum_path = seed_dir + "/go.sum"
+    if not ctx.path(seed_go_sum_path).exists:
+        fail("Failed to generate Orchestrion module proxy seed go.sum in %s" % seed_dir)
+
+    ctx.file("module_proxy_resolved_modules.json", _module_proxy_resolved_modules_json(resolved_versions))
+    ctx.file("module_proxy_seed.go.sum", ctx.read(seed_go_sum_path))
+    _host_copy_tree(
+        ctx,
+        _path_join(ctx, seed_env["GOMODCACHE"], "cache", "download"),
+        "module_proxy",
+        "Failed to stage Orchestrion module proxy",
+    )
+
+    # The action-time offline contract uses GOSUMDB=off and GOTOOLCHAIN=local,
+    # so the checksum database mirror and downloaded toolchain module are not
+    # required inputs for Orchestrion module resolution.
+    _host_remove_path_if_exists(ctx, "module_proxy/sumdb", "Failed to prune Orchestrion module proxy sumdb cache")
+    _host_remove_path_if_exists(ctx, "module_proxy/golang.org/toolchain", "Failed to prune Orchestrion module proxy toolchain module")
+    ctx.file("module_proxy/root.marker", "offline module proxy root\n")
 
 def _powershell_single_quoted_literal(value):
     """Render a string as a PowerShell single-quoted literal."""
@@ -614,10 +933,29 @@ filegroup(
     srcs = ["dd_trace_go_versions.json"],
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "dd_trace_go_module_proxy_files",
+    srcs = glob(["module_proxy/**"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "dd_trace_go_module_proxy_root_marker",
+    srcs = ["module_proxy/root.marker"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "orchestrion_tool_version_file",
+    srcs = ["orchestrion_version.txt"],
+    visibility = ["//visibility:public"],
+)
 """.format(binary_name = binary_name)
 
-def _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions):
+def _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions, version):
     ctx.file("dd_trace_go_versions.json", _dd_trace_go_versions_json(dd_trace_go_versions))
+    ctx.file("orchestrion_version.txt", _orchestrion_tool_version_txt(version))
     ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
 
 def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
@@ -641,6 +979,10 @@ def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary
     ctx.file(ready_repo_path, "ready\n")
     _host_copy_file(ctx, binary_name, paths.binary_path, "Failed to persist cached Orchestrion binary")
     _host_copy_file(ctx, "dd_trace_go_versions.json", paths.version_file_path, "Failed to persist cached Orchestrion version file")
+    _host_copy_file(ctx, "orchestrion_version.txt", paths.tool_version_file_path, "Failed to persist cached Orchestrion tool version file")
+    _host_copy_file(ctx, "module_proxy_resolved_modules.json", paths.resolved_modules_file_path, "Failed to persist cached Orchestrion module proxy manifest")
+    _host_copy_file(ctx, "module_proxy_seed.go.sum", paths.seed_go_sum_file_path, "Failed to persist cached Orchestrion module proxy go.sum")
+    _host_copy_tree(ctx, "module_proxy", paths.module_proxy_dir, "Failed to persist cached Orchestrion module proxy")
     _host_copy_file(ctx, manifest_repo_path, paths.manifest_path, "Failed to persist Orchestrion bootstrap manifest")
     _host_copy_file(ctx, ready_repo_path, paths.ready_path, "Failed to persist Orchestrion bootstrap ready sentinel")
 
@@ -653,13 +995,29 @@ def _restore_bootstrap_cache(ctx, paths, binary_name):
     versions_restored, _, _ = _host_copy_file_result(ctx, paths.version_file_path, "dd_trace_go_versions.json")
     if not versions_restored:
         return False
+    tool_version_restored, _, _ = _host_copy_file_result(ctx, paths.tool_version_file_path, "orchestrion_version.txt")
+    if not tool_version_restored:
+        return False
+    resolved_modules_restored, _, _ = _host_copy_file_result(ctx, paths.resolved_modules_file_path, "module_proxy_resolved_modules.json")
+    if not resolved_modules_restored:
+        return False
+    seed_go_sum_restored, _, _ = _host_copy_file_result(ctx, paths.seed_go_sum_file_path, "module_proxy_seed.go.sum")
+    if not seed_go_sum_restored:
+        return False
+    module_proxy_restored, _, _ = _host_copy_tree_result(ctx, paths.module_proxy_dir, "module_proxy")
+    if not module_proxy_restored:
+        return False
     ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
     return True
 
 orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
+    bootstrap_cache_paths = _bootstrap_cache_paths_with_root,
+    bootstrap_cache_required_entries = _bootstrap_cache_required_entries,
     fallback_go_tool_identity = _fallback_go_tool_identity,
     host_path_is_writable = _host_path_is_writable,
+    module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
+    module_proxy_seed_go_mod = _module_proxy_seed_go_mod,
     normalize_host_goarch = _normalize_host_goarch,
     normalize_host_goos = _normalize_host_goos,
     parse_certutil_sha256 = _parse_certutil_sha256,
@@ -927,9 +1285,13 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     if result.return_code == 0:
         _probe_emit(ctx, "extensions.go_build", start_ms = build_start_ms, status = "ok")
     else:
-        fail("Failed to build orchestrion from upstream module graph: %s\n%s" % (result.stdout, result.stderr))
+        fail("Failed to build orchestrion from upstream module graph: %s\n%s\n%s" % (result.stdout, result.stderr, _go_toolchain_hint()))
 
-    _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions)
+    proxy_start_ms = _probe_now_ms(ctx)
+    _write_orchestrion_module_proxy(ctx, go_path, version, dd_trace_go_versions)
+    _probe_emit(ctx, "extensions.write_module_proxy", start_ms = proxy_start_ms)
+
+    _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions, version)
     cache_write_start_ms = _probe_now_ms(ctx)
     _write_bootstrap_cache(ctx, bootstrap_cache, version, dd_trace_go_versions, go_identity, binary_name)
     _probe_emit(
@@ -965,6 +1327,24 @@ filegroup(
 
 filegroup(
     name = "dd_trace_go_version_file",
+    srcs = [],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "dd_trace_go_module_proxy_files",
+    srcs = [],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "dd_trace_go_module_proxy_root_marker",
+    srcs = [],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "orchestrion_tool_version_file",
     srcs = [],
     visibility = ["//visibility:public"],
 )
@@ -1018,7 +1398,7 @@ _from_source = tag_class(
     attrs = {
         "version": attr.string(
             mandatory = True,
-            doc = "Orchestrion version to build (e.g., 'v1.5.0')",
+            doc = "Orchestrion version to build (e.g., 'v1.6.0')",
         ),
         "dd_trace_go_version": attr.string(
             default = "",

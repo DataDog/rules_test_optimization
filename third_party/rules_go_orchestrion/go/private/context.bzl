@@ -508,6 +508,9 @@ def go_context(
     stdlib = None
     orchestrion = None
     orchestrion_version_file = None
+    orchestrion_module_proxy_files = depset()
+    orchestrion_module_proxy_root_marker = None
+    orchestrion_tool_version_file = None
 
     if go_context_data == None:
         if hasattr(attr, "_go_context_data"):
@@ -527,6 +530,9 @@ def go_context(
     if go_context_info and go_context_info.orchestrion:
         orchestrion = go_context_info.orchestrion
         orchestrion_version_file = getattr(go_context_info, "orchestrion_version_file", None)
+        orchestrion_module_proxy_files = getattr(go_context_info, "orchestrion_module_proxy_files", depset())
+        orchestrion_module_proxy_root_marker = getattr(go_context_info, "orchestrion_module_proxy_root_marker", None)
+        orchestrion_tool_version_file = getattr(go_context_info, "orchestrion_tool_version_file", None)
     elif getattr(attr, "_orchestrion_enabled", None) and getattr(attr, "_orchestrion_tool_binary", None):
         if attr._orchestrion_enabled[BuildSettingInfo].value:
             orchestrion_files = attr._orchestrion_tool_binary.files.to_list()
@@ -536,6 +542,16 @@ def go_context(
                 version_files = attr._orchestrion_version_file.files.to_list()
                 if version_files:
                     orchestrion_version_file = version_files[0]
+            if getattr(attr, "_orchestrion_module_proxy_files", None):
+                orchestrion_module_proxy_files = depset(attr._orchestrion_module_proxy_files.files.to_list())
+            if getattr(attr, "_orchestrion_module_proxy_root_marker", None):
+                marker_files = attr._orchestrion_module_proxy_root_marker.files.to_list()
+                if marker_files:
+                    orchestrion_module_proxy_root_marker = marker_files[0]
+            if getattr(attr, "_orchestrion_tool_version_file", None):
+                tool_version_files = attr._orchestrion_tool_version_file.files.to_list()
+                if tool_version_files:
+                    orchestrion_tool_version_file = tool_version_files[0]
 
     if getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
         cgo_context_info = cgo_context_data_impl(ctx)
@@ -670,6 +686,9 @@ def go_context(
         coverdata = go_context_info.coverdata if go_context_info else None,
         orchestrion = orchestrion,
         orchestrion_version_file = orchestrion_version_file,
+        orchestrion_module_proxy_files = orchestrion_module_proxy_files,
+        orchestrion_module_proxy_root_marker = orchestrion_module_proxy_root_marker,
+        orchestrion_tool_version_file = orchestrion_tool_version_file,
         coverage_enabled = ctx.configuration.coverage_enabled,
         coverage_instrumented = ctx.coverage_instrumented(),
         export_stdlib = go_config_info.export_stdlib,
@@ -711,6 +730,9 @@ def _go_context_data_impl(ctx):
     orchestrion_enabled = ctx.attr._orchestrion_enabled[BuildSettingInfo].value
     orchestrion = None
     orchestrion_version_file = None
+    orchestrion_module_proxy_files = depset()
+    orchestrion_module_proxy_root_marker = None
+    orchestrion_tool_version_file = None
     if orchestrion_enabled:
         orchestrion_files = ctx.attr._orchestrion_tool_binary.files.to_list()
         if orchestrion_files:
@@ -718,6 +740,13 @@ def _go_context_data_impl(ctx):
         version_files = ctx.attr._orchestrion_version_file.files.to_list()
         if version_files:
             orchestrion_version_file = version_files[0]
+        orchestrion_module_proxy_files = depset(ctx.attr._orchestrion_module_proxy_files.files.to_list())
+        marker_files = ctx.attr._orchestrion_module_proxy_root_marker.files.to_list()
+        if marker_files:
+            orchestrion_module_proxy_root_marker = marker_files[0]
+        tool_version_files = ctx.attr._orchestrion_tool_version_file.files.to_list()
+        if tool_version_files:
+            orchestrion_tool_version_file = tool_version_files[0]
 
     providers = [
         GoContextInfo(
@@ -725,6 +754,9 @@ def _go_context_data_impl(ctx):
             nogo = ctx.attr.nogo[DefaultInfo].files_to_run,
             orchestrion = orchestrion,
             orchestrion_version_file = orchestrion_version_file,
+            orchestrion_module_proxy_files = orchestrion_module_proxy_files,
+            orchestrion_module_proxy_root_marker = orchestrion_module_proxy_root_marker,
+            orchestrion_tool_version_file = orchestrion_tool_version_file,
         ),
         ctx.attr.stdlib[GoStdLib],
         ctx.attr.go_config[GoConfigInfo],
@@ -768,6 +800,21 @@ go_context_data = rule(
         ),
         "_orchestrion_version_file": attr.label(
             default = "//go/private/orchestrion:dd_trace_go_version_file",
+            allow_files = True,
+            cfg = "exec",
+        ),
+        "_orchestrion_module_proxy_files": attr.label(
+            default = "//go/private/orchestrion:dd_trace_go_module_proxy_files",
+            allow_files = True,
+            cfg = "exec",
+        ),
+        "_orchestrion_module_proxy_root_marker": attr.label(
+            default = "//go/private/orchestrion:dd_trace_go_module_proxy_root_marker",
+            allow_files = True,
+            cfg = "exec",
+        ),
+        "_orchestrion_tool_version_file": attr.label(
+            default = "//go/private/orchestrion:orchestrion_tool_version_file",
             allow_files = True,
             cfg = "exec",
         ),

@@ -16,19 +16,6 @@ index facea60..bb2b385 100644
  
  go_sdk = use_extension("//go:extensions.bzl", "go_sdk")
  
-diff --git a/MODULE.bazel.lock b/MODULE.bazel.lock
-index 9170033..56c9b03 100644
---- a/MODULE.bazel.lock
-+++ b/MODULE.bazel.lock
-@@ -161,7 +161,7 @@
-   "moduleExtensions": {
-     "//go:extensions.bzl%orchestrion": {
-       "general": {
--        "bzlTransitiveDigest": "kgPCbXSZWH1XocMbNHY9oKTRQLxF2Jgj1gllfbBdhw8=",
-+        "bzlTransitiveDigest": "OpC5TQhfvhxYrFqovVi8vIxwyeiH0mLFd20kYyZdDlI=",
-         "usagesDigest": "uzG4j+dPOAh/T8fqRnNWcwaH4INbm74AsvyHGrBh/Go=",
-         "recordedFileInputs": {},
-         "recordedDirentsInputs": {},
 diff --git a/go/BUILD.bazel b/go/BUILD.bazel
 index f582021..9c2c994 100644
 --- a/go/BUILD.bazel
@@ -64,10 +51,10 @@ index 4af8109..97d8a9d 100644
      cgo_dynamic_deps = [
          d
 diff --git a/go/private/actions/link.bzl b/go/private/actions/link.bzl
-index a62c14b..b36b623 100644
+index 59a0760..ad88098 100644
 --- a/go/private/actions/link.bzl
 +++ b/go/private/actions/link.bzl
-@@ -60,7 +60,9 @@ def emit_link(
+@@ -68,7 +68,9 @@ def emit_link(
          executable = None,
          gc_linkopts = [],
          version_file = None,
@@ -78,7 +65,7 @@ index a62c14b..b36b623 100644
      """See go/toolchains.rst#link for full documentation."""
  
      if archive == None:
-@@ -68,6 +70,52 @@ def emit_link(
+@@ -76,6 +78,52 @@ def emit_link(
      if executable == None:
          fail("executable is a required parameter")
  
@@ -131,7 +118,7 @@ index a62c14b..b36b623 100644
      # Exclude -lstdc++ from link options. We don't want to link against it
      # unless we actually have some C++ code. _cgo_codegen will include it
      # in archives via CGO_LDFLAGS if it's needed.
-@@ -163,6 +211,12 @@ def emit_link(
+@@ -171,6 +219,12 @@ def emit_link(
      builder_args.add("-o", executable)
      builder_args.add("-main", archive.data.file)
      builder_args.add("-p", archive.data.importmap)
@@ -144,7 +131,7 @@ index a62c14b..b36b623 100644
      builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
      tool_args.add_all(gc_linkopts)
      tool_args.add_all(go.toolchain.flags.link)
-@@ -174,6 +228,10 @@ def emit_link(
+@@ -182,6 +236,10 @@ def emit_link(
      tool_args.add_joined("-extldflags", extldflags, join_with = " ")
  
      inputs_direct = stamp_inputs + [go.sdk.package_list]
@@ -406,10 +393,10 @@ index be3da1f..d204927 100644
                  binary's sources. Labels listed here must name `go_library`,
                  `go_proto_library`, or other compatible targets with the [GoInfo] provider.
 diff --git a/go/tools/builders/BUILD.bazel b/go/tools/builders/BUILD.bazel
-index 536aafd..e52d3fc 100644
+index 49601c3..0dbf34d 100644
 --- a/go/tools/builders/BUILD.bazel
 +++ b/go/tools/builders/BUILD.bazel
-@@ -122,6 +122,18 @@ go_test(
+@@ -130,6 +130,18 @@ go_test(
      },
  )
  
@@ -428,7 +415,7 @@ index 536aafd..e52d3fc 100644
  go_test(
      name = "probe_test",
      size = "small",
-@@ -137,6 +149,7 @@ filegroup(
+@@ -145,6 +157,7 @@ filegroup(
          "ar.go",
          "asm.go",
          "builder.go",
@@ -436,14 +423,14 @@ index 536aafd..e52d3fc 100644
          "cc.go",
          "cgo2.go",
          "compilepkg.go",
-@@ -152,6 +165,7 @@ filegroup(
+@@ -158,6 +171,7 @@ filegroup(
+         "flags.go",
+         "generate_nogo_main.go",
          "generate_test_main.go",
++        "modinfo.go",
          "importcfg.go",
          "link.go",
-+        "modinfo.go",
-         "nogo.go",
-         "nogo_validation.go",
-         "orchestrion.go",
+         "module_proxy.go",
 diff --git a/go/tools/builders/buildinfo.go b/go/tools/builders/buildinfo.go
 new file mode 100644
 index 0000000..58ec8be
@@ -690,7 +677,7 @@ index 0000000..2e86ff1
 +	}
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index 8c60f22..d903be1 100644
+index a36db5d..0b9f713 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -22,10 +22,10 @@ import (

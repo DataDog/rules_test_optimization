@@ -31,21 +31,38 @@ BAZEL="${BAZEL:-$REPO_ROOT/bazelw}"
 BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion")}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev.0.20260409102143-ddd4e03ab47d}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.7.3}"
 SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_bzlmod_go_integration}"
 OUT_DIR="${OUT_DIR:-custom_topt}"
+HELLO_TEST_TARGET="${HELLO_TEST_TARGET:-//app:hello_test}"
+INTEGRATION_SCENARIO_MODE="${INTEGRATION_SCENARIO_MODE:-full}"
+MEASURE_OUTPUT_PATH="${MEASURE_OUTPUT_PATH:-}"
 ARCHIVE_SHA256=""
 ARCHIVE_URL=""
 RULES_GO_PATCH_BUNDLE="${RULES_GO_PATCH_BUNDLE:-none}"
 PATCH_LABELS_BZL=""
+HERMETIC_BUILD_FLAGS=(
+  --spawn_strategy=sandboxed
+  --incompatible_strict_action_env
+  --sandbox_default_allow_network=false
+  --enable_runfiles
+)
+HERMETIC_TEST_FLAGS=(
+  --strategy=TestRunner=sandboxed
+  --modify_execution_info=TestRunner=+block-network
+  --test_env=TZ=UTC
+  --test_env=LANG=C
+  --test_env=LC_ALL=C
+)
 
 cleanup() {
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
     return
   fi
+  chmod -R u+w "$TMP_ROOT" 2>/dev/null || true
   rm -rf "$TMP_ROOT"
 }
 trap cleanup EXIT INT TERM HUP
@@ -94,6 +111,51 @@ sha256_file() {
   exit 1
 }
 
+wall_time_ns() {
+  "$PYTHON" - <<'PY'
+import time
+print(time.time_ns())
+PY
+}
+
+module_proxy_size_bytes() {
+  local output_base="$1"
+  "$PYTHON" - <<'PY' "$output_base"
+from pathlib import Path
+import sys
+
+external_root = Path(sys.argv[1]) / "external"
+candidates = sorted(external_root.glob("*rules_go_orchestrion_tool*/module_proxy"))
+if not candidates:
+    print(0)
+    raise SystemExit(0)
+total = 0
+for path in candidates[0].rglob("*"):
+    if path.is_file():
+        total += path.stat().st_size
+print(total)
+PY
+}
+
+write_measure_json() {
+  local elapsed_seconds="$1"
+  local module_proxy_size="$2"
+  local output_path="$3"
+  "$PYTHON" - <<'PY' "$elapsed_seconds" "$module_proxy_size" "$output_path"
+import json
+import sys
+
+payload = {
+    "mode": "bzlmod",
+    "elapsed_seconds": float(sys.argv[1]),
+    "module_proxy_size_bytes": int(sys.argv[2]),
+}
+with open(sys.argv[3], "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, sort_keys=True)
+    fh.write("\n")
+PY
+}
+
 create_fixture_archive() {
   local root_dir="$ARCHIVE_ROOT/$ARCHIVE_NAME"
 
@@ -140,11 +202,12 @@ export_patch_bundle() {
     echo "error: patch bundle $RULES_GO_PATCH_BUNDLE exported no patch labels" >&2
     exit 1
   fi
-  mapfile -t patch_labels <<<"$patch_output"
   PATCH_LABELS_BZL=""
-  for patch_label in "${patch_labels[@]}"; do
+  local patch_label
+  while IFS= read -r patch_label; do
+    [[ -n "$patch_label" ]] || continue
     PATCH_LABELS_BZL+=$(printf '        "%s",\n' "$patch_label")
-  done
+  done <<<"$patch_output"
 }
 
 write_shared_fixture_sources() {
@@ -334,6 +397,7 @@ require (
 	github.com/DataDog/orchestrion ${ORCHESTRION_VERSION}
 )
 EOF
+  write_orchestrion_go_sum "$ws_dir"
 
   cat > "$ws_dir/orchestrion.tool.go" <<'EOF'
 //go:build tools
@@ -356,6 +420,32 @@ meta:
 
 aspects: []
 EOF
+}
+
+# write_orchestrion_go_sum keeps the maintained fixture on a real checked-in
+# style go.sum for the default tracer/tool versions. Only ad hoc version
+# overrides fall back to generating go.sum dynamically.
+write_orchestrion_go_sum() {
+  local ws_dir="$1"
+
+  if [[ "$DD_TRACE_GO_VERSION" == "v2.7.3" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
+    cat > "$ws_dir/go.sum" <<'EOF'
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3 h1:l4Uaefp1bXzb9E3x6VbJDMoBqIcfhmjrTfrmtM6PZb0=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3/go.mod h1:jli1jidldlU46UvU4aA9B0DZQnZsBIK21ZflvwtTPEU=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3 h1:bXasqgAk+6J/MdoRoNKxryo4GMDnvyTgUumYphG2vC4=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3/go.mod h1:fYK/2lv+okgQbys4k4O3TWAnTYkiXYflqFJYvYChnUI=
+github.com/DataDog/dd-trace-go/v2 v2.7.3 h1:luLd8qQyoS23mKHvdDxqS3WHdP6E4z27XWVzFcunNFQ=
+github.com/DataDog/dd-trace-go/v2 v2.7.3/go.mod h1:wpDvium/HsCzcTSmvpq4wieWBrnTm7Q+bUqkefKp/B0=
+github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=
+github.com/DataDog/orchestrion v1.6.0/go.mod h1:CYY2VfaEQVr+gwKSlpUoHBF9JIO4eV3BfSeG0YAQwZE=
+EOF
+    return
+  fi
+
+  (
+    cd "$ws_dir"
+    GOWORK=off "$GO_BIN" mod download all
+  )
 }
 
 write_module_file() {
@@ -435,22 +525,120 @@ run_fixture() {
   export_patch_bundle "$ws_dir"
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
+  if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
+    run_fixture_subscenario "$ws_dir" "hermetic"
+    return
+  fi
+  run_fixture_subscenario "$ws_dir" "standard"
+  run_fixture_subscenario "$ws_dir" "hermetic"
+}
+
+# run_fixture_subscenario executes the positive Bzlmod fixture in standard or
+# hermetic mode and uses aquery in the hermetic lane to verify the declared
+# action graph.
+run_fixture_subscenario() {
+  local ws_dir="$1"
+  local mode="$2"
+  local -a bzlmod_flags=(--enable_bzlmod)
+
+  if [[ "$mode" == "standard" ]]; then
+    (
+      cd "$ws_dir"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test "${bzlmod_flags[@]}" "$HELLO_TEST_TARGET"
+    )
+    return
+  fi
+
+  if [[ "$mode" != "hermetic" ]]; then
+    echo "error: unsupported bzlmod-go subscenario mode=$mode" >&2
+    exit 1
+  fi
+
+  local hermetic_root="$ws_dir/.hermetic"
+  local hermetic_home="$hermetic_root/home"
+  local hermetic_xdg="$hermetic_root/xdg-cache"
+  local aquery_output="$hermetic_root/hello_test_aquery.textproto"
+  local output_base=""
+  local start_ns=""
+  local end_ns=""
+  local elapsed_seconds=""
+  local proxy_size_bytes=""
+  mkdir -p "$hermetic_home" "$hermetic_xdg"
+
+  if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
+    (
+      cd "$ws_dir"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" aquery \
+        "${bzlmod_flags[@]}" \
+        "deps(${HELLO_TEST_TARGET})" \
+        --output=textproto > /dev/null
+    )
+    (
+      cd "$ws_dir"
+      output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" info "${bzlmod_flags[@]}" output_base)"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" shutdown
+      start_ns="$(wall_time_ns)"
+      HOME="$hermetic_home" \
+      XDG_CACHE_HOME="$hermetic_xdg" \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test \
+        "${bzlmod_flags[@]}" \
+        "${HERMETIC_BUILD_FLAGS[@]}" \
+        "${HERMETIC_TEST_FLAGS[@]}" \
+        "$HELLO_TEST_TARGET"
+      end_ns="$(wall_time_ns)"
+      elapsed_seconds="$("$PYTHON" - <<'PY' "$start_ns" "$end_ns"
+import sys
+start_ns = int(sys.argv[1])
+end_ns = int(sys.argv[2])
+print(f"{(end_ns - start_ns) / 1_000_000_000:.6f}")
+PY
+)"
+      proxy_size_bytes="$(module_proxy_size_bytes "$output_base")"
+      write_measure_json "$elapsed_seconds" "$proxy_size_bytes" "$MEASURE_OUTPUT_PATH"
+    )
+    return
+  fi
 
   (
     cd "$ws_dir"
-    GOWORK=off "$GO_BIN" mod download \
-      github.com/DataDog/orchestrion \
-      github.com/DataDog/dd-trace-go/v2 \
-      github.com/DataDog/dd-trace-go/contrib/net/http/v2 \
-      github.com/DataDog/dd-trace-go/contrib/log/slog/v2
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test \
+      "${bzlmod_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      "${HERMETIC_TEST_FLAGS[@]}" \
+      "$HELLO_TEST_TARGET"
   )
 
   (
-    cd "$ws_dir"
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test --enable_bzlmod //app:hello_test
+      cd "$ws_dir"
+      HOME="$hermetic_home" \
+      XDG_CACHE_HOME="$hermetic_xdg" \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" aquery \
+        "${bzlmod_flags[@]}" \
+        "${HERMETIC_BUILD_FLAGS[@]}" \
+        "deps(${HELLO_TEST_TARGET})" \
+        --output=textproto > "$aquery_output"
   )
+
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" "$aquery_output"
 }
 
 mkdir -p "$WORKSPACE_ROOT"
 create_fixture_archive
+
+if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
+  if [[ -z "$MEASURE_OUTPUT_PATH" ]]; then
+    echo "error: MEASURE_OUTPUT_PATH is required when INTEGRATION_SCENARIO_MODE=measure" >&2
+    exit 1
+  fi
+  run_fixture
+  exit 0
+fi
+
+if [[ "$INTEGRATION_SCENARIO_MODE" != "full" ]]; then
+  echo "error: unsupported INTEGRATION_SCENARIO_MODE=$INTEGRATION_SCENARIO_MODE" >&2
+  exit 1
+fi
+
 run_fixture

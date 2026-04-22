@@ -62,13 +62,17 @@
     and no-match fallback behavior.
 - Go consumer integration harnesses:
   - WORKSPACE base-only:
-    `tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 tools/tests/integration/run_workspace_go_integration.sh`
   - WORKSPACE with the canonical full patch bundle:
-    `RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base-only:
-    `tools/tests/integration/run_bzlmod_go_patch_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 tools/tests/integration/run_bzlmod_go_patch_integration.sh`
   - Bzlmod with the canonical full patch bundle:
-    `RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_bzlmod_go_patch_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_bzlmod_go_patch_integration.sh`
+  - Each script now validates:
+    - normal mode
+    - hermetic mode with the inline CI sandbox/network-blocking flags
+    - structural `aquery` assertions for the Orchestrion offline module proxy wiring
 - Vendored rules_go patch smoke:
   - `tools/dev/run_rules_go_patch_smoke.sh`
   - materializes `base + dd_source_full`, applies the maintainer-only proof
@@ -112,6 +116,12 @@
   - core tests with hermetic flags
   - go companion tests with hermetic flags
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
+- `workspace-compat`:
+  - WORKSPACE base-only
+  - WORKSPACE `dd_source_full`
+  - Bzlmod base-only
+  - Bzlmod `dd_source_full`
+  - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
 - `rules-go-patch-smoke`:
   - vendored `rules_go` patch-series verification and fast fork regression coverage
   - Linux-only by design so the PR gate stays fast and stable
