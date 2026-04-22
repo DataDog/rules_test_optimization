@@ -616,7 +616,7 @@
       "path": "go/private/orchestrion/extensions.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "65e17cc677c6c6a2f2decbb94910d4a0c116ac15be563ae24a1d57d20f8aa297"
+      "sha256": "a1f514f6f4ff50f15ccf044d252df07ef733a971eb194ff72173ca19f98ad2a9"
     },
     {
       "path": "go/private/platforms.bzl",
@@ -1060,7 +1060,7 @@
       "path": "go/tools/builders/env_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "d6fd1f3ed4115778b04f03809c568c58b8fa977a4b69f6cce7b3bfcc8f544fa9"
+      "sha256": "51e1c5724047e05d6f3789b21185efc8b0238e484ef9fcf0fcc5bceece78c1df"
     },
     {
       "path": "go/tools/builders/filter.go",
@@ -1144,7 +1144,7 @@
       "path": "go/tools/builders/module_proxy.go",
       "kind": "file",
       "executable": false,
-      "sha256": "f2534427ca4b230b7882172c4c52da214098e937c042f6acdec734ee0d9638d2"
+      "sha256": "293d2a5998dffa8ec4bee523203056755d27508aeb17ae259401855250772605"
     },
     {
       "path": "go/tools/builders/nogo.go",
@@ -1204,7 +1204,7 @@
       "path": "go/tools/builders/orchestrion.go",
       "kind": "file",
       "executable": false,
-      "sha256": "2411c8aefb88fb4ffb324b8d91a78f05aa71333b1a1fef2e55e73959d116392f"
+      "sha256": "087a8898294ec34dfb0a587428cb1f1605e12dfa0c8f3bdf27e4c260e7d53820"
     },
     {
       "path": "go/tools/builders/orchestrion_cache.go",
@@ -1234,13 +1234,13 @@
       "path": "go/tools/builders/orchestrion_version.go",
       "kind": "file",
       "executable": false,
-      "sha256": "11269c553c035b9c5d57c70246adabeb0d88dd479527eff0aa56164ef77bdb1c"
+      "sha256": "508cec81b70b8d39c3d1351cb3b3d494a2909cc2abd56dfe52537a2c263d5481"
     },
     {
       "path": "go/tools/builders/orchestrion_version_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "6a62267c656b233426aac846b83e4fc8650a278df77ddbbe9e3f9b7d2b5d327f"
+      "sha256": "7c5de16807e346cbceae1e5d6f55c81706b2bf9fde3c5c0cafde0bd0327039de"
     },
     {
       "path": "go/tools/builders/path.go",
@@ -1300,7 +1300,7 @@
       "path": "go/tools/builders/stdlib.go",
       "kind": "file",
       "executable": false,
-      "sha256": "2b040f18e3801251b20eb94faa797beb48741ebad286f45197f11df86c0333df"
+      "sha256": "8ec857a1369fa0f0aa6d76166fbb49e37719f2624c12f583f701cb2aa7a4c765"
     },
     {
       "path": "go/tools/builders/stdlib_test.go",
@@ -1324,7 +1324,7 @@
       "path": "go/tools/builders/tool_version.go",
       "kind": "file",
       "executable": false,
-      "sha256": "dfafa14c23acd857ea09a66699cd44b6846c6797de5995b1bd5b809052356e1e"
+      "sha256": "ea01efa89452c95a38731aa270e344af53e379b3a75280de67b1fa9abe23716e"
     },
     {
       "path": "go/tools/bzltestutil/BUILD.bazel",
