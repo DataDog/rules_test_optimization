@@ -15,16 +15,31 @@ const (
 )
 
 var legacyModuleProxyFallbackWarningOnce sync.Once
+var moduleProxyResolutionBaseDir = mustGetwd()
 
 // moduleProxyFileURL converts a filesystem path into the file:// URL syntax
 // accepted by GOPROXY.
 func moduleProxyFileURL(path string) (string, error) {
+	return moduleProxyFileURLFromBase(path, moduleProxyResolutionBaseDir)
+}
+
+// moduleProxyFileURLFromBase resolves relative module proxy roots against the
+// builder's initial working directory so later orchestrion chdir calls do not
+// retarget GOPROXY into the package module root.
+func moduleProxyFileURLFromBase(path, baseDir string) (string, error) {
 	cleanedPath := strings.TrimSpace(path)
 	if cleanedPath == "" {
 		return "", fmt.Errorf("module proxy path is empty")
 	}
 	if isWindowsAbsolutePath(cleanedPath) {
 		return "file:///" + strings.ReplaceAll(cleanedPath, "\\", "/"), nil
+	}
+	if !filepath.IsAbs(cleanedPath) {
+		resolvedBaseDir := strings.TrimSpace(baseDir)
+		if resolvedBaseDir == "" {
+			return "", fmt.Errorf("module proxy path %s has no base dir", cleanedPath)
+		}
+		cleanedPath = filepath.Join(resolvedBaseDir, cleanedPath)
 	}
 	absolutePath, err := filepath.Abs(cleanedPath)
 	if err != nil {

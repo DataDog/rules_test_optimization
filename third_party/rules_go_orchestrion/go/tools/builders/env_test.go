@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,6 +52,44 @@ func TestModuleProxyFileURLWindowsPath(t *testing.T) {
 	}
 	if got != "file:///C:/tmp/module_proxy" {
 		t.Fatalf("moduleProxyFileURL=%q, want %q", got, "file:///C:/tmp/module_proxy")
+	}
+}
+
+func TestNormalizeGoModuleResolutionEnvUsesInitialWorkingDirForRelativeProxyRoot(t *testing.T) {
+	baseDir := t.TempDir()
+	otherDir := t.TempDir()
+	relativeProxyRoot := filepath.Join("external", "rules_go_orchestrion_tool", "module_proxy")
+
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(otherDir); err != nil {
+		t.Fatalf("chdir otherDir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(previousWD)
+	}()
+
+	env, err := normalizeGoModuleResolutionEnv([]string{
+		rulesGoOrchestrionModuleProxyRootEnvVar + "=" + relativeProxyRoot,
+	})
+	if err != nil {
+		t.Fatalf("normalizeGoModuleResolutionEnv error: %v", err)
+	}
+	envMap := envSliceToMap(env)
+	wantProxy, err := moduleProxyFileURLFromBase(relativeProxyRoot, baseDir)
+	if err != nil {
+		t.Fatalf("moduleProxyFileURLFromBase error: %v", err)
+	}
+	if envMap["GOPROXY"] != wantProxy {
+		t.Fatalf("GOPROXY=%q, want %q", envMap["GOPROXY"], wantProxy)
 	}
 }
 
