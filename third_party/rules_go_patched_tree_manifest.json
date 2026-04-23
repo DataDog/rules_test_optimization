@@ -484,13 +484,13 @@
       "path": "go/private/BUILD.bazel",
       "kind": "file",
       "executable": false,
-      "sha256": "fad10a2bae5764208eac5cc90e7c37dfe20f58f680c3aa9ebf67a3a8d0955c20"
+      "sha256": "91bb0185ef492824021d94935eaeddabd6d9d8c50c7c0698bfc888fa7fd9811d"
     },
     {
       "path": "go/private/BUILD.bazel.orig",
       "kind": "file",
       "executable": false,
-      "sha256": "436bef92b0d5f321aba379cbf2a9965ba6c7e41e4a628f8ee657f546f2510ab8"
+      "sha256": "451dbe147325ce6e6d76768a1afe602ba765400233647f8c56301123be24b450"
     },
     {
       "path": "go/private/BUILD.nogo.bazel",
@@ -616,7 +616,7 @@
       "path": "go/private/orchestrion/BUILD",
       "kind": "file",
       "executable": false,
-      "sha256": "2456d773be8214934ad62b8858836c9e154ad9b2a4f6c7fbe11ec6b7b7f63461"
+      "sha256": "827edaabd1e614fef8e3de4e4294162c70ce9be1b30ef29439b5d46e8d1007b2"
     },
     {
       "path": "go/private/orchestrion/extensions.bzl",
