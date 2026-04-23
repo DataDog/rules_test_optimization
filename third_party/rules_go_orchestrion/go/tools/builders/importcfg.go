@@ -1463,9 +1463,21 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	if goenv == nil || goenv.sdk == "" || goenv.goroot == "" {
 		return nil
 	}
-	exports, err := resolveCacheStdlibExports(goenv, orchestrionCacheStdlibPackages)
-	if err != nil {
-		return err
+	var exports map[string]string
+	if goenv.stdlibCache != "" {
+		// Bazel passes a stdlib cache directory for both plain and Orchestrion
+		// stdlib builds. Only the Orchestrion cache has a manifest that maps
+		// packages to safe archive paths; the plain cache is an action output and
+		// must not be reused as a writable GOCACHE by downstream actions.
+		exports, err = readStdlibCacheManifest(goenv.stdlibCache, orchestrionCacheStdlibPackages)
+		if err != nil {
+			return err
+		}
+	} else {
+		exports, err = resolveCacheStdlibExports(goenv, orchestrionCacheStdlibPackages)
+		if err != nil {
+			return err
+		}
 	}
 	if len(exports) == 0 {
 		return nil
@@ -1556,6 +1568,12 @@ func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) 
 		exports, err = readStdlibCacheManifest(goenv.stdlibCache, packages)
 		if err != nil {
 			return err
+		}
+		if len(exports) == 0 {
+			// A stdlib cache without an Orchestrion manifest is the plain
+			// rules_go cache. Keep the importcfg as generated instead of running
+			// go list with that action-output tree as a writable GOCACHE.
+			return nil
 		}
 	}
 	if len(exports) == 0 {

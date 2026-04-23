@@ -3,8 +3,73 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestRewriteImportcfgForDefaultCacheStdlibExportsIgnoresPlainCache(t *testing.T) {
+	importcfgPath := filepath.Join(t.TempDir(), "importcfg")
+	original := strings.Join([]string{
+		"packagefile fmt=/bazel-out/stdlib/pkg/fmt.a",
+		"packagefile os=/bazel-out/stdlib/pkg/os.a",
+		"",
+	}, "\n")
+	if err := os.WriteFile(importcfgPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write importcfg: %v", err)
+	}
+
+	goroot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(goroot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir goroot src: %v", err)
+	}
+	goenv := &env{
+		sdk:         t.TempDir(),
+		goroot:      goroot,
+		stdlibCache: t.TempDir(),
+	}
+	if err := rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath, goenv); err != nil {
+		t.Fatalf("rewrite importcfg: %v", err)
+	}
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		t.Fatalf("read importcfg: %v", err)
+	}
+	if string(data) != original {
+		t.Fatalf("importcfg changed for plain stdlib cache:\n%s", string(data))
+	}
+}
+
+func TestRewriteImportcfgFromCurrentStdlibEntriesIgnoresPlainCache(t *testing.T) {
+	importcfgPath := filepath.Join(t.TempDir(), "importcfg")
+	original := strings.Join([]string{
+		"packagefile fmt=/bazel-out/stdlib/pkg/fmt.a",
+		"packagefile runtime=/bazel-out/stdlib/pkg/runtime.a",
+		"",
+	}, "\n")
+	if err := os.WriteFile(importcfgPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write importcfg: %v", err)
+	}
+
+	goroot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(goroot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir goroot src: %v", err)
+	}
+	goenv := &env{
+		sdk:         t.TempDir(),
+		goroot:      goroot,
+		stdlibCache: t.TempDir(),
+	}
+	if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv); err != nil {
+		t.Fatalf("rewrite importcfg: %v", err)
+	}
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		t.Fatalf("read importcfg: %v", err)
+	}
+	if string(data) != original {
+		t.Fatalf("importcfg changed for plain stdlib cache:\n%s", string(data))
+	}
+}
 
 func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 	moduleDir := t.TempDir()
