@@ -213,6 +213,7 @@ def _orch_go_test_impl(ctx):
     # Materialize the raw test binary next to the wrapper so the launcher does
     # not have to guess which configuration-specific execroot path Bazel chose.
     ctx.actions.symlink(output = actual_out, target_file = dep_exe)
+
     # Materialize the helper binary next to the wrapper so the launcher can
     # start CI Visibility capture without relying on runfile path probing.
     ctx.actions.symlink(output = helper_out, target_file = helper_exe)
