@@ -25,9 +25,9 @@ rollout gate.
 This document was re-derived from the local checkouts inspected on 2026-04-23:
 
 - `rules_test_optimization`:
-  `1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e`
+  `2917f0df87da958513fc9c4532abfa5895013913`
 - `rules_test_optimization_tests`:
-  `680d6f1b093d761e25ebd9c6ac95d8f8e35698ce`
+  `39dd1300859e1df0d094714e6c70028a83e44df0`
 - `dd-source`:
   `bdab29a34063b73d6274e29e59631441b7838acd`
 
@@ -220,11 +220,11 @@ central `is_flaky(name)` path after the wrapper refactor.
 Use these exact names:
 
 ```text
-RTO_ROOT=<local checkout of rules_test_optimization at 1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e>
+RTO_ROOT=<local checkout of rules_test_optimization at 2917f0df87da958513fc9c4532abfa5895013913>
 RTO_TESTS_ROOT=<local checkout of rules_test_optimization_tests whose contents include fixtures/workspace-go-dd-source-shape>
 DD_SOURCE_ROOT=<local checkout of dd-source at bdab29a34063b73d6274e29e59631441b7838acd>
-RTO_COMMIT=1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e
-RTO_TESTS_COMMIT=680d6f1b093d761e25ebd9c6ac95d8f8e35698ce
+RTO_COMMIT=2917f0df87da958513fc9c4532abfa5895013913
+RTO_TESTS_COMMIT=39dd1300859e1df0d094714e6c70028a83e44df0
 DD_SOURCE_BASE_COMMIT=bdab29a34063b73d6274e29e59631441b7838acd
 PILOT_SERVICE=test-optimization-worker
 PILOT_SYNC_REPO=test_optimization_data_test_optimization_worker
@@ -237,7 +237,7 @@ DD_TRACE_GO_V1_VERSION=v1.74.8
 RTO_REMOTE=https://github.com/Datadog/rules_test_optimization.git
 RTO_ARCHIVE_URL=https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/${RTO_COMMIT}
 RTO_ARCHIVE_PREFIX=rules_test_optimization-${RTO_COMMIT}
-RTO_ARCHIVE_SHA256=bc9bac2e1bcdb4d3b5d7b9610b105f189bcc8a99b7890276d15e3249bf4b659c
+RTO_ARCHIVE_SHA256=266af99edecaff5dd0ba0468b9f511c29b395723a15332c0c15259049a03ede1
 EXPECTED_PAYLOAD_SELECTION=<set in Validation Sequence step 3>
 ```
 
@@ -288,11 +288,11 @@ consumer-owned patch bundle. The first pilot keeps the proven
 Use this shape:
 
 ```bzl
-RTO_COMMIT = "1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e"
+RTO_COMMIT = "2917f0df87da958513fc9c4532abfa5895013913"
 RTO_REMOTE = "https://github.com/Datadog/rules_test_optimization.git"
 RTO_ARCHIVE_URL = "https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/%s" % RTO_COMMIT
 RTO_ARCHIVE_PREFIX = "rules_test_optimization-%s" % RTO_COMMIT
-RTO_ARCHIVE_SHA256 = "bc9bac2e1bcdb4d3b5d7b9610b105f189bcc8a99b7890276d15e3249bf4b659c"
+RTO_ARCHIVE_SHA256 = "266af99edecaff5dd0ba0468b9f511c29b395723a15332c0c15259049a03ede1"
 
 git_repository(
     name = "datadog-rules-test-optimization",
