@@ -152,14 +152,14 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
 Go module. `--dd-trace-go-version` is optional; if you omit it, the default is
-`v2.7.3`.
+`v2.9.0-dev`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.7.3
+  --dd-trace-go-version v2.9.0-dev
 ```
 
 If the Go module lives below the workspace root:
@@ -169,7 +169,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.7.3 \
+  --dd-trace-go-version v2.9.0-dev \
   --go-module-dir path/to/go-module
 ```
 
@@ -877,7 +877,7 @@ workspace Go module. Repository/bootstrap resolution may use network access.
 After that, Orchestrion build actions consume a declared offline Go module
 proxy staged in `@rules_go_orchestrion_tool`; they do not depend on a warmed
 host Go module cache. Pass `--dd-trace-go-version <query>` if you want a
-non-default tracer version; otherwise the default is `v2.7.3`.
+non-default tracer version; otherwise the default is `v2.9.0-dev`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
@@ -891,7 +891,7 @@ Shared-version form:
 ```bzl
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.6.0",
+    version = "v1.9.0",
     dd_trace_go_version = "v2.7.0-rc.4",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
@@ -902,7 +902,7 @@ Per-module form:
 ```bzl
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.6.0",
+    version = "v1.9.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -916,7 +916,7 @@ The maintained repository integration scripts validate the hermetic Go path
 with explicit Bazel flags in the script itself. There is no special repo-root
 `--config=hermetic` shortcut for this flow.
 
-If both settings are omitted, the default is still `v2.7.3`. Manual setups
+If both settings are omitted, the default is still `v2.9.0-dev`. Manual setups
 must keep the local Go module pins on the same effective versions, or the build
 will stop with a mismatch error. Do not set both `dd_trace_go_version` and
 `dd_trace_go_versions` in the same `orchestrion.from_source(...)` call.

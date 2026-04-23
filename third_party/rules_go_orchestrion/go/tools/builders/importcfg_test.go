@@ -58,6 +58,77 @@ func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 	}
 }
 
+func TestModuleExportRequestKeyIncludesLogSlogStdlibCacheState(t *testing.T) {
+	moduleDir := t.TempDir()
+	for _, name := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
+		if err := os.WriteFile(filepath.Join(moduleDir, name), []byte(name+"\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	cacheDir := filepath.Join(t.TempDir(), "gocache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+	writeArchive := func(relPath, content string) {
+		path := filepath.Join(cacheDir, relPath)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir archive dir for %s: %v", relPath, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write archive %s: %v", relPath, err)
+		}
+	}
+
+	writeArchive("aa/testing-d", "testing")
+	writeArchive("aa/runtime-d", "runtime")
+	writeArchive("aa/fmt-d", "fmt")
+	writeArchive("aa/flag-d", "flag")
+	writeArchive("aa/log-d", "log")
+	writeArchive("aa/log-slog-v1-d", "log-slog-v1")
+	manifestPath := filepath.Join(cacheDir, orchestrionStdlibCacheManifestName)
+	manifestV1 := strings.Join([]string{
+		"testing=aa/testing-d",
+		"runtime=aa/runtime-d",
+		"fmt=aa/fmt-d",
+		"flag=aa/flag-d",
+		"log=aa/log-d",
+		"log/slog=aa/log-slog-v1-d",
+		"",
+	}, "\n")
+	if err := os.WriteFile(manifestPath, []byte(manifestV1), 0o644); err != nil {
+		t.Fatalf("write manifest v1: %v", err)
+	}
+
+	goenv := &env{stdlibCache: cacheDir}
+	keyV1, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey v1 error: %v", err)
+	}
+
+	writeArchive("bb/log-slog-v2-d", "log-slog-v2")
+	manifestV2 := strings.Join([]string{
+		"testing=aa/testing-d",
+		"runtime=aa/runtime-d",
+		"fmt=aa/fmt-d",
+		"flag=aa/flag-d",
+		"log=aa/log-d",
+		"log/slog=bb/log-slog-v2-d",
+		"",
+	}, "\n")
+	if err := os.WriteFile(manifestPath, []byte(manifestV2), 0o644); err != nil {
+		t.Fatalf("write manifest v2: %v", err)
+	}
+
+	keyV2, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"github.com/DataDog/go-runtime-metrics-internal/pkg/runtimemetrics"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey v2 error: %v", err)
+	}
+	if keyV1 == keyV2 {
+		t.Fatalf("moduleExportRequestKey ignored log/slog stdlib cache change: %q", keyV1)
+	}
+}
+
 func TestModuleExportRequestKeyIgnoresSyntheticTempDir(t *testing.T) {
 	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
 	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.7.3"}}`))

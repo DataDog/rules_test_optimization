@@ -36,7 +36,7 @@ GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.7.3}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev}"
 SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
@@ -433,14 +433,14 @@ EOF
 write_orchestrion_go_sum() {
   local ws_dir="$1"
 
-  if [[ "$DD_TRACE_GO_VERSION" == "v2.7.3" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
+  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0-dev" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
     cat > "$ws_dir/go.sum" <<'EOF'
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3 h1:l4Uaefp1bXzb9E3x6VbJDMoBqIcfhmjrTfrmtM6PZb0=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3/go.mod h1:jli1jidldlU46UvU4aA9B0DZQnZsBIK21ZflvwtTPEU=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3 h1:bXasqgAk+6J/MdoRoNKxryo4GMDnvyTgUumYphG2vC4=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3/go.mod h1:fYK/2lv+okgQbys4k4O3TWAnTYkiXYflqFJYvYChnUI=
-github.com/DataDog/dd-trace-go/v2 v2.7.3 h1:luLd8qQyoS23mKHvdDxqS3WHdP6E4z27XWVzFcunNFQ=
-github.com/DataDog/dd-trace-go/v2 v2.7.3/go.mod h1:wpDvium/HsCzcTSmvpq4wieWBrnTm7Q+bUqkefKp/B0=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev h1:l4Uaefp1bXzb9E3x6VbJDMoBqIcfhmjrTfrmtM6PZb0=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev/go.mod h1:jli1jidldlU46UvU4aA9B0DZQnZsBIK21ZflvwtTPEU=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev h1:bXasqgAk+6J/MdoRoNKxryo4GMDnvyTgUumYphG2vC4=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev/go.mod h1:fYK/2lv+okgQbys4k4O3TWAnTYkiXYflqFJYvYChnUI=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev h1:luLd8qQyoS23mKHvdDxqS3WHdP6E4z27XWVzFcunNFQ=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev/go.mod h1:wpDvium/HsCzcTSmvpq4wieWBrnTm7Q+bUqkefKp/B0=
 github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=
 github.com/DataDog/orchestrion v1.6.0/go.mod h1:CYY2VfaEQVr+gwKSlpUoHBF9JIO4eV3BfSeG0YAQwZE=
 EOF
