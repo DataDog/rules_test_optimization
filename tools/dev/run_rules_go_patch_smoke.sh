@@ -96,7 +96,12 @@ else
     //tests/core/cross:proto_test \
     //tests/legacy/info:info \
     //tests/legacy/providers:source_test
-  run_vendor bazelisk test //tests/core/nogo/custom:custom_test
+  # custom_test creates WORKSPACE-style nested Bazel workspaces through
+  # go/tools/bazel_testing. Bazel 8 requires WORKSPACE mode to be enabled
+  # explicitly in those recursive invocations.
+  run_vendor bazelisk test \
+    --test_env=GO_BAZEL_TEST_BAZELFLAGS=--enable_workspace \
+    //tests/core/nogo/custom:custom_test
 fi
 run_vendor bazelisk test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
 run_vendor bazelisk build //tests/core/c_linkmodes:go_with_cgo_dep_caller
