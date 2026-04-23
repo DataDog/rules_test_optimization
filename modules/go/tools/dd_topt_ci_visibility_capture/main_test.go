@@ -62,6 +62,43 @@ func TestWriteTestPayload(t *testing.T) {
 	}
 }
 
+// TestNormalizeOptionsRejectsHelperFilesOutsideOutputDir verifies that wrapper helper files cannot escape Bazel outputs.
+func TestNormalizeOptionsRejectsHelperFilesOutsideOutputDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	_, err := normalizeOptions(options{
+		PortFile:    filepath.Join(outside, "port.txt"),
+		StopFile:    filepath.Join(root, ".dd_topt_capture", "stop.txt"),
+		OutputDir:   root,
+		UpstreamURL: "http://localhost:8126",
+	})
+	if err == nil {
+		t.Fatal("normalizeOptions accepted a port-file outside output-dir")
+	}
+}
+
+// TestWritePortFileWritesInsideOutputDir verifies that the helper publishes the port under Bazel outputs.
+func TestWritePortFileWritesInsideOutputDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, ".dd_topt_capture", "port.txt")
+	if err := writePortFile(root, path, 8126); err != nil {
+		t.Fatalf("writePortFile: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read port-file: %v", err)
+	}
+	if string(got) != "8126" {
+		t.Fatalf("port-file = %q, want 8126", got)
+	}
+}
+
 // TestExtractCoveragePart verifies that multipart coverage uploads preserve the tracer payload bytes and extension.
 func TestExtractCoveragePart(t *testing.T) {
 	t.Parallel()

@@ -90,6 +90,10 @@ func run(args []string) error {
 	if err := validateOptions(cfg); err != nil {
 		return err
 	}
+	cfg, err = normalizeOptions(cfg)
+	if err != nil {
+		return err
+	}
 
 	upstreamURL, err := url.Parse(cfg.UpstreamURL)
 	if err != nil {
@@ -111,7 +115,7 @@ func run(args []string) error {
 	defer listener.Close()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	if err := writePortFile(cfg.PortFile, port); err != nil {
+	if err := writePortFile(cfg.OutputDir, cfg.PortFile, port); err != nil {
 		return err
 	}
 
@@ -179,15 +183,60 @@ func validateOptions(cfg options) error {
 	return nil
 }
 
+// normalizeOptions canonicalizes wrapper-provided paths and keeps helper files inside Bazel's output tree.
+func normalizeOptions(cfg options) (options, error) {
+	outputDir, err := filepath.Abs(filepath.Clean(cfg.OutputDir))
+	if err != nil {
+		return options{}, fmt.Errorf("clean output-dir: %w", err)
+	}
+	portFile, err := pathWithinRoot(outputDir, cfg.PortFile, "port-file")
+	if err != nil {
+		return options{}, err
+	}
+	stopFile, err := pathWithinRoot(outputDir, cfg.StopFile, "stop-file")
+	if err != nil {
+		return options{}, err
+	}
+	cfg.OutputDir = outputDir
+	cfg.PortFile = portFile
+	cfg.StopFile = stopFile
+	return cfg, nil
+}
+
 // writePortFile publishes the chosen local port so the wrapper can point the tracer at the helper.
-func writePortFile(path string, port int) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func writePortFile(outputDir, path string, port int) error {
+	portFile, err := pathWithinRoot(outputDir, path, "port-file")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(portFile), 0o755); err != nil {
 		return fmt.Errorf("create port-file directory: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(strconv.Itoa(port)), 0o644); err != nil {
-		return fmt.Errorf("write port-file %s: %w", path, err)
+	if err := os.WriteFile(portFile, []byte(strconv.Itoa(port)), 0o644); err != nil {
+		return fmt.Errorf("write port-file %s: %w", portFile, err)
 	}
 	return nil
+}
+
+// pathWithinRoot returns a cleaned absolute path only when the candidate stays under the trusted root directory.
+func pathWithinRoot(root, candidate, name string) (string, error) {
+	cleanRoot, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", fmt.Errorf("clean output-dir: %w", err)
+	}
+	cleanCandidate, err := filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return "", fmt.Errorf("clean %s: %w", name, err)
+	}
+
+	rel, err := filepath.Rel(cleanRoot, cleanCandidate)
+	if err != nil {
+		return "", fmt.Errorf("compare %s with output-dir: %w", name, err)
+	}
+	if rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s %q must be under output-dir %q", name, candidate, root)
+	}
+	return cleanCandidate, nil
 }
 
 // watchForShutdown waits until either the wrapper stop sentinel appears or the process receives a termination signal.
