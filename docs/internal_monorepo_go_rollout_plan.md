@@ -1,173 +1,191 @@
-> Superseded note: this document is historical. The current execution spec for
-> the clean `rules_go` base split, optional patch bundle, proof overlay, and
-> validation matrix lives in
-> [docs/rules_go_optional_patch_selection_plan.md](./rules_go_optional_patch_selection_plan.md).
-> Use that document for active implementation work.
+# dd-source Go Test Optimization Pilot Plan
 
-# dd-source First Go Pilot Plan
+## Goal
 
-## Objective
+Instrument one CI App-owned Go service in `dd-source` with Datadog Test
+Optimization in WORKSPACE mode and prove all of these together:
 
-Instrument one CI App-owned Go service in `dd-source` with Bazel-native
-Datadog Test Optimization while keeping `dd-source`'s existing `dd_go_test`
-policy intact.
+1. `dd-source` can consume the current public `rules_test_optimization`
+   WORKSPACE Go contract.
+2. Instrumented pilot targets emit Datadog test payload files from hermetic
+   Bazel tests.
+3. The workspace-level uploader can find and upload those payloads from
+   `bazel-testlogs`.
+4. Untouched `dd_go_test` targets still run through the current plain
+   `go_test(...)` path.
+5. The repository-local flaky companion behavior still works for both:
+   - explicit `flaky = True`
+   - central `is_flaky(name)` registration
 
-The first pilot must prove all of these at the same time:
+This pilot is intentionally limited to the test-payload path. Coverage is not a
+rollout gate.
 
-1. `dd-source` can consume the current `rules_test_optimization` WORKSPACE Go
-   contract.
-2. `dd-source` keeps its repository-local `dd_go_test` behavior when Test
-   Optimization is enabled for selected targets.
-3. Sync metadata, Bazel metadata, and test payload files are produced
-   correctly for nested Go packages.
-4. The workspace-level uploader works end to end from `dd-source` after test
-   runs.
+## Execution Baseline
 
-This first pilot is intentionally scoped to the test-payload path. Coverage is
-not a required gate for the first rollout.
+This document was re-derived from the local checkouts inspected on 2026-04-23:
 
-This document is intentionally a single-service execution spec. If
-`test-optimization-worker` is rejected as the first pilot, stop this plan,
-restore `dd-source` to the frozen baseline for all `dd-source`-local edits made
-under this document, and write a separate replacement-service plan instead of
-mutating this one in flight.
+- `rules_test_optimization`:
+  `1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e`
+- `rules_test_optimization_tests`:
+  `680d6f1b093d761e25ebd9c6ac95d8f8e35698ce`
+- `dd-source`:
+  `bdab29a34063b73d6274e29e59631441b7838acd`
 
-For this plan, "keep `dd_go_test` policy intact" has a precise meaning:
+Important: the current effective consumer proof baseline is the content of the
+local `rules_test_optimization_tests` checkout, not just its clean commit SHA.
+At inspection time that checkout also contained the currently required
+dd-source-shaped proof lane:
 
-- `dd_go_test` remains the public macro surface used by Gazelle-generated and
-  hand-written BUILD files.
-- the wrapper still owns repository policy such as Docker defaults, local and
-  exclusive enforcement, and flaky companion generation.
-- unchanged targets that do not opt into Test Optimization still expand to raw
-  `go_test(...)` exactly as they do today.
-- instrumented targets do not need to preserve the exact same hidden target
-  graph as raw `go_test(...)`; `dd_topt_go_test(...)` intentionally inserts a
-  wrapper around a hidden raw test target.
+- `fixtures/workspace-go-dd-source-shape/`
+- `README.md` updates that document that fixture
+- `.github/workflows/bazel-tests.yml` updates that run that fixture in CI
 
-## Public Baseline
+If any of the three repositories move, or if the local
+`rules_test_optimization_tests` checkout no longer contains the
+dd-source-shaped fixture and its README/workflow wiring, re-derive this plan
+from source instead of reusing it unchanged.
 
-Use the current checked-in `rules_test_optimization` state and freeze its exact
-commit before touching `dd-source`.
+## Current Facts That Drive The Plan
 
-For this plan, freeze:
+### Public rules repository
 
-- `rules_test_optimization` commit:
-  - `783f4184214f8c0fa14b0bfd4977d9e6d9fbb3ab`
-- `dd-source` commit:
-  - `f6835a8ce196706dc7dc67cc0d65ceb297e3f049`
+- The public WORKSPACE-mode Go consumer contract is:
+  - clean Orchestrion-enabled base fork in
+    `third_party/rules_go_orchestrion/`
+  - optional consumer-owned patch bundle exported from
+    `third_party/rules_go_patches/`
+- WORKSPACE-mode Go still uses separate external repositories for:
+  - core rules
+  - Go companion module
+  - Orchestrion-enabled `@io_bazel_rules_go`
+- `go_orchestrion_tool_repo(...)` still requires:
+  - repository name `rules_go_orchestrion_tool`
+  - explicit `version`
+  - either shared `dd_trace_go_version` or exact
+    `dd_trace_go_versions`, never both
+- The Go companion still expects module-root Orchestrion pin files to be
+  staged through `orchestrion_pin_files` for nested packages.
+- The current default tracer setting in the vendored rules_go fork is already
+  `v2.9.0-dev`.
 
-The current Go companion code already provides the pieces this pilot needs:
+### Current public consumer proof baseline
 
-- WORKSPACE-mode consumption through separate core and Go companion repos.
-- A public `go_orchestrion_tool_repo(...)` helper from the Orchestrion-enabled
-  `rules_go` fork.
-- Explicit `orchestrion_pin_files` support for nested Go packages.
-- A documented wrapper boundary:
-  - repository-local wrappers must stay outside `dd_topt_go_test`
-  - repository-local wrappers must not be passed through `go_test_rule`
-- A validated WORKSPACE Go path through
-  `tools/tests/integration/run_workspace_go_integration.sh`,
-  including:
-  - `repo_mapping = {"@rules_go": "@io_bazel_rules_go"}`
-  - the public `go_orchestrion_tool_repo(...)` helper
-  - nested-package `orchestrion_pin_files`
-  - a real `dd_topt_go_test` execution path
+The current external consumer proof lives in the local
+`rules_test_optimization_tests` checkout and covers four Go shapes:
 
-One current constraint in the public repo matters for this plan:
+- `fixtures/workspace-go/`
+  - clean WORKSPACE consumer
+  - expected metadata path: `payload_selection = "module"`
+- `fixtures/workspace-go-patched/`
+  - patched WORKSPACE consumer with the exported `dd_source_full` patch bundle
+  - expected metadata path: `payload_selection = "module"`
+- `fixtures/bzlmod-go-patched/`
+  - patched Bzlmod consumer with the same patch bundle
+  - expected metadata path: `payload_selection = "module"`
+- `fixtures/workspace-go-dd-source-shape/`
+  - patched WORKSPACE consumer that models the current dd-source wrapper split
+    and package layout
+  - pinned tuple: Go `1.25.9`, Orchestrion `v1.9.0`,
+    `dd-trace-go/v2`
+    `v2.9.0-dev`,
+    `dd-trace-go.v1` `v1.74.8`
+  - current expected metadata path:
+    `payload_selection = "full_bundle_disabled"`
 
-- the bootstrap helper and the WORKSPACE helper both take the Orchestrion
-  version as an explicit input
-- the rule does not auto-select Orchestrion from the requested Go version or
-  from the repo's tracer version
+`dd-source` must follow the patched WORKSPACE consumer shape and the
+dd-source-shaped wrapper split that is already proven publicly. This pilot must
+not invent a new integration model.
 
-For this pilot, do not treat the helper default as authoritative. Select the
-Orchestrion release explicitly from the pilot service's effective v2 tracer
-version before editing `dd-source`, then pin that same version in every place
-that configures Orchestrion.
+### Current dd-source state
 
-Only change `rules_test_optimization` during the pilot if `dd-source` exposes a
-generic defect that also reproduces in a normal WORKSPACE consumer.
-
-## dd-source Facts Used By This Plan
-
-The current `dd-source` repository has these relevant properties:
-
-- `dd-source` is a WORKSPACE Bazel repository.
-- `dd-source` uses a repo-root Go module:
-  - module: `github.com/DataDog/dd-source`
+- `dd-source` is a WORKSPACE repository.
+- The repo-root Go module is:
+  - module path: `github.com/DataDog/dd-source`
   - Go version: `1.25.9`
-- `dd-source` pins the Bazel Go toolchain version to `1.25.9` in
+- Bazel Go toolchain version is pinned to `1.25.9` in
   `rules/go/version.bzl`.
-- `dd-source` currently binds `@io_bazel_rules_go` in
-  `WORKSPACE`
-  to `rules_go v0.60.0` plus the current `dd-source` patch stack.
-- `dd-source` already has a repository-local Go wrapper:
-  - public alias:
-    `rules/go/dd_go_test.bzl`
-  - implementation:
-    `rules/go/private/dd_go_test/dd_go_test.bzl`
-- `dd_go_test` currently adds repository policy around raw `go_test`:
+- `WORKSPACE` currently binds `@io_bazel_rules_go` to upstream
+  `rules_go v0.60.0` plus nine local patch files under
+  `third_party/rules_go/`.
+- Those nine patch filenames are the same bundle that the public repo now
+  exports as `dd_source_full`.
+- Root `BUILD.bazel` already exports `go.mod` and `go.sum`, but not
+  `orchestrion.tool.go` or `orchestrion.yml`.
+- Root `.bazelrc` already imports `tools/bazelrc/*.bazelrc` fragments and
+  explicitly warns against putting shared `--repo_env` flags into unscoped
+  configs.
+- `dd-source` already has a repository-local `dd_go_test` wrapper at:
+  - public alias: `rules/go/dd_go_test.bzl`
+  - implementation: `rules/go/private/dd_go_test/dd_go_test.bzl`
+- The current `dd_go_test` behavior that must stay intact is:
   - Docker defaults when `dd-requires-docker` is present
-  - `local` and `exclusive` enforcement for non-manual targets
-  - flaky companion `<name>.build_test` generation
-- The repo root
-  `BUILD.bazel`
-  maps Gazelle `go_test` generation to `dd_go_test`, so the pilot should keep
-  `dd_go_test` as the public local macro surface.
+  - `local` / `exclusive` enforcement for non-manual targets
+  - flaky companion `<name>.build_test` for both explicit `flaky = True` and
+    `is_flaky(name)`
 - `dd-source` does not currently contain:
-  - `dd_topt_go_test` wiring
-  - a Test Optimization sync repo
-  - `//:dd_upload_payloads`
-  - `orchestrion.tool.go`
-  - `orchestrion.yml`
-- The root
-  `go.mod`
-  already contains both `gopkg.in/DataDog/dd-trace-go.v1` and
-  `github.com/DataDog/dd-trace-go/v2` dependencies. The Orchestrion bootstrap
-  for this pilot must still be pinned explicitly against the v2 tracer module
-  set required by `go_orchestrion_tool_repo(...)`.
-- The current repo-root v2 tracer pins are:
+  - Datadog core WORKSPACE repo wiring
+  - Datadog Go companion WORKSPACE repo wiring
+  - Test Optimization sync repo wiring
+  - a root uploader target
+  - root `orchestrion.tool.go`
+  - root `orchestrion.yml`
+- The current repo-root tracer state is mixed:
+  - `gopkg.in/DataDog/dd-trace-go.v1 v1.74.8`
   - `github.com/DataDog/dd-trace-go/v2 v2.7.1`
   - `github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.1`
-  - `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` is not present yet
-    and must be added by the repo-root Orchestrion bootstrap flow.
-- CI config in
-  `tools/bazelrc/ci.bazelrc`
-  filters out Docker-tagged tests. The first pilot must not rely on a
-  Docker-only parity target.
+  - `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` is not pinned yet
 
-## Pilot Service
+### Non-negotiable decisions already made
 
-Use `domains/ci-app/apps/apis/test-optimization-worker` as the pilot service.
+To keep this pilot executable without mid-flight decisions, treat all of these
+as fixed:
+
+1. The pilot uses the currently proven dd-source-shaped tuple:
+   - `ORCHESTRION_VERSION = v1.9.0`
+   - `DD_TRACE_GO_VERSION = v2.9.0-dev`
+2. This pilot intentionally updates the repo-root v2 tracer modules from
+   `v2.7.1` to that proven pseudo-version. Do not try to keep the root module on
+   `v2.7.1` under this plan.
+3. Use the shared `dd_trace_go_version = "<exact version>"` form, not the
+   per-module map. The current dd-source-shaped proof uses one exact version
+   across all required v2 tracer modules.
+4. Keep the current v1 tracer line at the effective version already used by the
+   service shape (`v1.74.8`) unless `go mod tidy` only rewrites formatting or
+   indirect ordering.
+5. Keep the repo-local wrapper split outside the public Datadog macro:
+   - `dd_go_test(...)` stays the plain path
+   - `dd_topt_go_test(...)` is the opt-in pilot path
+6. Do not introduce `stage_sources` in this pilot. The current dd-source-shaped
+   public proof does not cover it. The pilot uses normal nested packages plus
+   module-root `orchestrion_pin_files`.
+7. The sync/export preflight decides whether the current backend state supports
+   `payload_selection = "module"` or still requires
+   `payload_selection = "full_bundle_disabled"`.
+8. `payload_selection = "full_bundle_no_match"` is always a rollout failure.
+
+If the pilot cannot use the proven pseudo-version tuple in the repo-root Go
+module, stop and write a different plan. Do not partially execute this one.
+
+## Pilot Scope
+
+### Service
+
+Use `domains/ci-app/apps/apis/test-optimization-worker`.
 
 Why this service:
 
-- Its service metadata is
-  `service.datadog.yaml`,
-  and the service name is exactly `test-optimization-worker`.
-- Its owner is `ci-app-backend`, so the pilot stays inside the CI App backend
-  team boundary.
-- It already has several existing nested `dd_go_test` targets.
-- It provides better pilot coverage than a single small target:
-  - `worker` proves the main service package path
-  - `worker/notifications` already depends on dd-trace-go v2 and embeds
-    template files
-  - `worker/store` already uses `data = glob([".recordings/**"])`
-- The selected pilot targets currently mix tracer generations:
-  - `worker/notifications` imports `github.com/DataDog/dd-trace-go/v2/...`
-  - `worker` and `worker/store` still import
-    `gopkg.in/DataDog/dd-trace-go.v1/...`
-  - for Orchestrion selection, use the repo-root v2 tracer version, because
-    `go_orchestrion_tool_repo(...)` validates the v2 tracer module set rather
-    than the legacy v1 import path
-- It does not currently have an existing entry in
-  `etc/ci/test-all/flaky_test_targets*.txt`, so a pilot-only flaky parity
-  target can be added without colliding with repo state.
-- It also has one nearby unchanged `dd_go_test` target that can stay fully
-  outside the pilot and act as a control:
-  - `//domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test`
+- Its service name is exactly `test-optimization-worker`.
+- Its owner is `ci-app-backend`, so the pilot stays inside the CI App team.
+- It has several nested Go test packages with different characteristics:
+  - `worker`
+  - `worker/notifications`
+  - `worker/store`
+- `worker/notifications` already imports `dd-trace-go/v2`.
+- `worker/store` already uses runfile data via
+  `data = glob([".recordings/**"])`.
+- `worker/flaky_test_categorization` gives one untouched local control target.
 
-## Pilot Targets
+### Targets
 
 Instrument these existing targets:
 
@@ -177,221 +195,178 @@ Instrument these existing targets:
 
 Adopt them in this order:
 
-1. `//domains/ci-app/apps/apis/test-optimization-worker/worker/notifications:go_default_test`
-2. `//domains/ci-app/apps/apis/test-optimization-worker/worker:go_default_test`
-3. `//domains/ci-app/apps/apis/test-optimization-worker/worker/store:go_default_test`
-
-Why this order:
-
-- `worker/notifications` is the lowest-risk first target because it already
-  depends on dd-trace-go v2 and still exercises nested-package instrumentation.
-- `worker` then proves the main service package path.
-- `worker/store` comes last because it adds both runfile-heavy test inputs and
-  an existing v1 tracer dependency, which makes it the most useful
-  compatibility check after the first instrumented target is already green.
+1. `worker/notifications`
+2. `worker`
+3. `worker/store`
 
 Add one pilot-only parity target:
 
 - `//domains/ci-app/apps/apis/test-optimization-worker/worker:topt_flaky_test`
 
-The parity target should:
+Keep this target unchanged as the plain-path local control:
 
-- reuse the current `worker` test sources and deps
-- set `flaky = True`
-- validate that `dd_go_test` still emits
-  `//domains/ci-app/apps/apis/test-optimization-worker/worker:topt_flaky_test.build_test`
+- `//domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test`
 
-Do not use a Docker-tagged target as a required gate for the first pilot.
+Use this existing registry-flaky target as the `is_flaky(name)` control:
 
-Rollout decision rule for the mixed-tracer target set:
+- `//domains/case_management/modules/slack:go_default_test.build_test`
 
-- `worker/notifications` is the first required gate because it is already on
-  dd-trace-go v2.
-- if `worker/notifications` passes but `worker` or `worker/store` fail because
-  the service's mixed v1 and v2 tracer imports cannot satisfy the selected
-  Orchestrion tuple, stop widening the rollout immediately.
-- in that case, do not land a partial `test-optimization-worker` rollout under
-  this plan.
-- restore the `dd-source` checkout to the frozen baseline commit for every
-  `dd-source`-local change introduced by this document, including:
-  - the merged `@io_bazel_rules_go` source selection in `WORKSPACE`
-  - the service-specific sync repo wiring, uploader target, and pilot Bazel RC
-    fragment
-  - the repo-root Orchestrion files and root-module edits
-  - the pilot BUILD-file conversions
-- treat that outcome as pilot-service rejection, not as a signal to start
-  package-by-package tracer experiments inside one service.
-- do not choose a replacement service inside this document. A different pilot
-  service requires a new plan with its own service-specific targets, repo alias,
-  control targets, and acceptance matrix.
+That target is already listed in `etc/ci/test-all/flaky_test_targets.txt`, so
+its `.build_test` target only exists if the shared helper still preserves the
+central `is_flaky(name)` path after the wrapper refactor.
 
-## Compatibility Tuple
+### Stable names used in this plan
 
-Freeze this tuple before editing `dd-source`:
+Use these exact names:
 
-- exact `rules_test_optimization` commit
-- exact `dd-source` commit
-- exact `dd-source` `rules_go` source:
-  - `rules_go v0.60.0`
-  - the current patch list from `dd-source` `WORKSPACE`
-- Orchestrion version:
-  - select it before editing `dd-source` with this exact rule:
-    1. read the repo-root `github.com/DataDog/dd-trace-go/v2` version used by
-       the pilot's current Go module graph
-    2. inspect Orchestrion releases from newest to oldest and read each
-       release tag's `go.mod`
-    3. choose the newest Orchestrion release whose `go.mod` requires that same
-       `github.com/DataDog/dd-trace-go/v2` version
-  - current resolved result for this pilot:
-    - `v1.9.0`
-    - as of 2026-04-17, that is the latest official Orchestrion release whose
-      `go.mod` requires `github.com/DataDog/dd-trace-go/v2 v2.7.1`
-- upload mode:
-  - agentless for the first pilot
-- Orchestrion tracer configuration:
-  - one shared `dd_trace_go_version`
-  - current pilot value:
-    - `v2.7.1`
-- Bazel Go toolchain version:
-  - `1.25.9`
-- sync repo runtime version:
-  - `1.25.9`
-- sync repo alias:
-  - `test_optimization_data_test_optimization_worker`
-- pilot service name:
-  - `test-optimization-worker`
-
-Important constraint:
-
-- use a shared `dd_trace_go_version` for the first pilot. That matches the
-  current `dd-source` root module's v2 tracer version and keeps the first
-  rollout smaller than a module-by-module tracer experiment.
-- do not derive the Orchestrion release from the pilot service's legacy
-  `gopkg.in/DataDog/dd-trace-go.v1/...` imports. The release-selection rule is
-  keyed to the v2 tracer module version that the Orchestrion helper validates.
-- `dd_trace_go_versions` is a tracer-module map, not a per-service or
-  per-package map. Do not use it to express different versions per `dd-source`
-  service.
-- only switch from shared `dd_trace_go_version = "v2.7.1"` to
-  `dd_trace_go_versions` if the repo-root module validation in Step 3 proves
-  the shared version cannot satisfy the required tracer modules.
-- if later pilot targets fail because they still depend on legacy
-  `gopkg.in/DataDog/dd-trace-go.v1/...` imports, reject the pilot service,
-  restore `dd-source` to the frozen baseline for all `dd-source`-local edits
-  from this document, and stop. Do not use `dd_trace_go_versions` to paper over
-  a v1-versus-v2 service mix.
-
-If the tuple cannot be satisfied for `test-optimization-worker`, stop before
-touching BUILD files, restore `dd-source` to the frozen baseline for any
-partial `dd-source`-local setup already attempted, and create a separate
-replacement-service plan.
-
-## dd-source Changes Required For The First Pilot
-
-### 1. Replace the current `@io_bazel_rules_go` base with an Orchestrion-enabled merge
-
-Do not assume the current `dd-source` `rules_go` patch series is already
-enough. The first pilot needs an Orchestrion-enabled `@io_bazel_rules_go`
-repository while preserving the current `dd-source` patch stack.
-
-The final `@io_bazel_rules_go` repository used by `dd-source` must expose:
-
-- `@io_bazel_rules_go//go:orchestrion_workspace.bzl`
-  - exporting `go_orchestrion_tool_repo`
-- `@io_bazel_rules_go//go/private/orchestrion:enabled`
-- `@io_bazel_rules_go//go/private/orchestrion:tool_binary`
-- `@io_bazel_rules_go//go/private/orchestrion:dd_trace_go_version_file`
-
-It must also preserve the fixed tool repository name expected by the public
-contract:
-
-- `rules_go_orchestrion_tool`
-
-Do not try to rename that repository. The public helper rejects a custom name.
-
-Implementation rule:
-
-- start from the current `dd-source` `rules_go v0.60.0` base and merge in the
-  Orchestrion-enabled fork
-- preserve the current patch behavior while adding the missing Orchestrion
-  entrypoints
-- before publishing the merged result, inventory every `dd-source`-specific
-  patch currently applied on top of `rules_go v0.60.0` and classify it as one
-  of:
-  - already present in the Orchestrion-enabled merge
-  - must be re-applied unchanged
-  - intentionally dropped with a written rationale
-
-Expected `dd-source` files to change:
-
-- `WORKSPACE`
-- any internal patch files or mirror metadata used to publish the merged
-  `rules_go`
-
-This step is done when:
-
-- `load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")`
-  works in `WORKSPACE`
-- the public Go companion resolves the Orchestrion labels listed above through
-  `repo_mapping = {"@rules_go": "@io_bazel_rules_go"}`
-- the merge has a reviewed patch inventory showing how every current
-  `dd-source`-specific `rules_go` patch was preserved, replaced, or dropped
-- the merged `@io_bazel_rules_go` repository passes this minimum pre-pilot
-  smoke matrix before any Test Optimization wiring is added:
-  - `bzl test //rules/go/private/dd_go_test:dd_go_test_suite_tests`
-  - `bzl build //domains/case_management/modules/slack:go_default_test.build_test`
-  - `bzl build //domains/app-builder/apps/apis/apps-datastore-api/client:go_default_test`
-  - `bzl test //domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test`
-
-### 2. Add WORKSPACE wiring for the public repos, sync repo, and uploader
-
-Wire `dd-source` as a real WORKSPACE consumer of `rules_test_optimization`.
-
-Use these repository names exactly:
-
-- `datadog-rules-test-optimization`
-- `datadog-rules-test-optimization-go`
-- `test_optimization_data_test_optimization_worker`
-
-The Go companion declaration must set:
-
-```bzl
-repo_mapping = {"@rules_go": "@io_bazel_rules_go"}
+```text
+RTO_ROOT=<local checkout of rules_test_optimization at 1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e>
+RTO_TESTS_ROOT=<local checkout of rules_test_optimization_tests whose contents include fixtures/workspace-go-dd-source-shape>
+DD_SOURCE_ROOT=<local checkout of dd-source at bdab29a34063b73d6274e29e59631441b7838acd>
+RTO_COMMIT=1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e
+RTO_TESTS_COMMIT=680d6f1b093d761e25ebd9c6ac95d8f8e35698ce
+DD_SOURCE_BASE_COMMIT=bdab29a34063b73d6274e29e59631441b7838acd
+PILOT_SERVICE=test-optimization-worker
+PILOT_SYNC_REPO=test_optimization_data_test_optimization_worker
+PILOT_BAZEL_CONFIG=test-optimization-worker-pilot
+PILOT_FIXTURE=workspace-go-dd-source-shape
+DD_SOURCE_GO_VERSION=1.25.9
+ORCHESTRION_VERSION=v1.9.0
+DD_TRACE_GO_VERSION=v2.9.0-dev
+DD_TRACE_GO_V1_VERSION=v1.74.8
+RTO_REMOTE=https://github.com/Datadog/rules_test_optimization.git
+RTO_ARCHIVE_URL=https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/${RTO_COMMIT}
+RTO_ARCHIVE_PREFIX=rules_test_optimization-${RTO_COMMIT}
+RTO_ARCHIVE_SHA256=bc9bac2e1bcdb4d3b5d7b9610b105f189bcc8a99b7890276d15e3249bf4b659c
+EXPECTED_PAYLOAD_SELECTION=<set in Validation Sequence step 3>
 ```
 
-Representative WORKSPACE shape:
+## dd-source Changes
+
+### 1. Re-home `rules_go` consumption to the current public model
+
+Files to change:
+
+- `WORKSPACE`
+- `third_party/rules_go_patches/**`
+- `third_party/rules_go_patches/README.md`
+- remove `third_party/rules_go/**` after all references move
+
+Make these changes:
+
+1. Export the canonical `dd_source_full` bundle from the frozen
+   `rules_test_optimization` checkout into a consumer-owned
+   `dd-source/third_party/rules_go_patches/` directory.
+2. Commit the generated `BUILD.bazel` from the export tool.
+3. Port the current patch-maintenance notes from
+   `dd-source/third_party/rules_go/README.md` into
+   `dd-source/third_party/rules_go_patches/README.md`, but update the text so
+   it describes the new source of truth:
+   - clean base from `rules_test_optimization`
+   - consumer-owned patch bundle in `third_party/rules_go_patches/`
+4. Remove the old `third_party/rules_go/` directory so `dd-source` has only one
+   patch-bundle location.
+
+From `$RTO_ROOT`, run the export tool:
+
+```bash
+python3 tools/dev/export_rules_go_patch_bundle.py \
+  --bundle dd_source_full \
+  --destination "$DD_SOURCE_ROOT/third_party/rules_go_patches" \
+  --force
+```
+
+In `dd-source/WORKSPACE`, replace the current upstream `rules_go` zip plus
+local patch labels with the frozen public baseline and the exported
+consumer-owned patch bundle. The first pilot keeps the proven
+`workspace-go-dd-source-shape` fetch model:
+
+- `git_repository(...)` for `datadog-rules-test-optimization`
+- `git_repository(...)` for `datadog-rules-test-optimization-go`
+- `http_archive(...)` only for `@io_bazel_rules_go`
+
+Use this shape:
 
 ```bzl
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+RTO_COMMIT = "1dcaf26cdb4eccd90dddb71cde4aa5b1643b691e"
+RTO_REMOTE = "https://github.com/Datadog/rules_test_optimization.git"
+RTO_ARCHIVE_URL = "https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/%s" % RTO_COMMIT
+RTO_ARCHIVE_PREFIX = "rules_test_optimization-%s" % RTO_COMMIT
+RTO_ARCHIVE_SHA256 = "bc9bac2e1bcdb4d3b5d7b9610b105f189bcc8a99b7890276d15e3249bf4b659c"
 
-# Use the archive URL and sha256 that your approved source mirror publishes for
-# commit 783f4184214f8c0fa14b0bfd4977d9e6d9fbb3ab.
-http_archive(
+git_repository(
     name = "datadog-rules-test-optimization",
-    urls = ["<approved-archive-url-for-783f4184214f8c0fa14b0bfd4977d9e6d9fbb3ab>"],
-    sha256 = "<sha256-for-that-archive>",
-    strip_prefix = "rules_test_optimization-783f4184214f8c0fa14b0bfd4977d9e6d9fbb3ab",
+    commit = RTO_COMMIT,
+    remote = RTO_REMOTE,
+)
+
+git_repository(
+    name = "datadog-rules-test-optimization-go",
+    commit = RTO_COMMIT,
+    remote = RTO_REMOTE,
+    strip_prefix = "modules/go",
+    repo_mapping = {
+        "@rules_go": "@io_bazel_rules_go",
+    },
 )
 
 http_archive(
-    name = "datadog-rules-test-optimization-go",
-    urls = ["<approved-archive-url-for-783f4184214f8c0fa14b0bfd4977d9e6d9fbb3ab>"],
-    sha256 = "<sha256-for-that-archive>",
-    strip_prefix = "rules_test_optimization-783f4184214f8c0fa14b0bfd4977d9e6d9fbb3ab/modules/go",
-    repo_mapping = {"@rules_go": "@io_bazel_rules_go"},
+    name = "io_bazel_rules_go",
+    urls = [RTO_ARCHIVE_URL],
+    sha256 = RTO_ARCHIVE_SHA256,
+    type = "tar.gz",
+    strip_prefix = RTO_ARCHIVE_PREFIX + "/third_party/rules_go_orchestrion",
+    patch_tool = "patch",
+    patch_args = ["-p1"],
+    patches = [
+        "//third_party/rules_go_patches:0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
+        "//third_party/rules_go_patches:0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch",
+        "//third_party/rules_go_patches:0009-Use-LLVM-for-all-linking.patch",
+        "//third_party/rules_go_patches:0011-fix-cdeps-propagation.patch",
+        "//third_party/rules_go_patches:0013-Add-buildInfo-metadata-support.patch",
+        "//third_party/rules_go_patches:0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
+        "//third_party/rules_go_patches:0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
+        "//third_party/rules_go_patches:0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch",
+        "//third_party/rules_go_patches:0016-lazy-cc-toolchain-resolution.patch",
+    ],
 )
+```
 
-load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
-load(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
-    "test_optimization_sync",
-)
+Keep the existing `@io_bazel_rules_go` repository name and keep the existing
+`go_rules_dependencies()`, `go_download_sdk(...)`, `go_register_toolchains()`,
+and the rest of the current toolchain setup unchanged.
 
+Do not convert the Datadog repos themselves to `http_archive(...)` in this
+first pilot. That migration is out of scope until it is re-proven in the public
+fixture repository first.
+
+### 2. Add Datadog WORKSPACE repositories, the public Orchestrion helper, and the sync repo
+
+Files to change:
+
+- `WORKSPACE`
+
+Add these declarations in `WORKSPACE`:
+
+1. Load `test_optimization_sync` from
+   `@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl`.
+2. Load `go_orchestrion_tool_repo` from
+   `@io_bazel_rules_go//go:orchestrion_workspace.bzl`.
+3. Add local WORKSPACE constants:
+   - `ORCHESTRION_VERSION = "v1.9.0"`
+   - `DD_TRACE_GO_VERSION = "v2.9.0-dev"`
+4. Instantiate `go_orchestrion_tool_repo(...)` with the shared-version form:
+
+```bzl
 go_orchestrion_tool_repo(
-    version = "v1.9.0",
-    dd_trace_go_version = "v2.7.1",
+    version = ORCHESTRION_VERSION,
+    dd_trace_go_version = DD_TRACE_GO_VERSION,
 )
+```
 
+5. Instantiate the sync repo:
+
+```bzl
 test_optimization_sync(
     name = "test_optimization_data_test_optimization_worker",
     service = "test-optimization-worker",
@@ -400,171 +375,67 @@ test_optimization_sync(
 )
 ```
 
-If `dd-source` requires internal mirror macros instead of raw `http_archive`,
-transpose the same selected values into that existing mechanism without changing
-the repository names above.
+Do not rename `rules_go_orchestrion_tool`.
 
-Add a workspace-level uploader target to root
-`BUILD.bazel`:
+Do not use `dd_trace_go_versions` in this pilot. The currently proven
+dd-source-shaped tuple does not require the per-module override form.
 
-```bzl
-load(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl",
-    "dd_payload_uploader",
-)
+### 3. Add repo-root Orchestrion pin files and export them for nested packages
 
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = [
-        "@test_optimization_data_test_optimization_worker//:test_optimization_context",
-    ],
-    fail_on_error = True,
-)
-```
+Files to change:
 
-Do not add the pilot's `--repo_env` lines directly to shared root `common`.
-The current
-`.bazelrc`
-already warns that `--repo_env` on shared command scopes can churn caches
-across normal workflows.
-
-For the first pilot, add a dedicated imported Bazel RC fragment instead, for
-example:
-
-- `tools/bazelrc/test-optimization-worker-pilot.bazelrc`
-
-Import that file from the root
-`.bazelrc`
-alongside the existing `tools/bazelrc/*.bazelrc` imports:
-
-- `import %workspace%/tools/bazelrc/test-optimization-worker-pilot.bazelrc`
-
-Wire the pilot repository-rule environment there:
-
-- `common:test-optimization-worker-pilot --repo_env=DD_API_KEY`
-- `common:test-optimization-worker-pilot --repo_env=DD_SITE`
-- `common:test-optimization-worker-pilot --repo_env=GO_MODULE_PATH=github.com/DataDog/dd-source`
-- optionally
-  `common:test-optimization-worker-pilot --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`
-
-Set `GO_MODULE_PATH` explicitly for the first pilot. The sync rule can detect
-Go module paths from some CI workspace layouts, but this pilot should not rely
-on best-effort discovery for a repo-root module that drives module payload
-selection and fallback importpath wiring.
-
-Important runtime distinction:
-
-- `--repo_env` is for the sync repository rule.
-- the uploader still needs `DD_API_KEY` and `DD_SITE` in the runtime
-  environment of `bazel run //:dd_upload_payloads`.
-
-After changing the tuple or sync config, force a refetch of the sync repo:
-
-```bash
-bzl --config=test-optimization-worker-pilot sync --only=test_optimization_data_test_optimization_worker --repo_env=FETCH_SALT=<timestamp>
-```
-
-If Bazel requires WORKSPACE mode explicitly:
-
-```bash
-bzl --config=test-optimization-worker-pilot sync --enable_workspace --only=test_optimization_data_test_optimization_worker --repo_env=FETCH_SALT=<timestamp>
-```
-
-Expected `dd-source` files to change:
-
-- `WORKSPACE`
+- `go.mod`
+- `go.sum`
+- add `orchestrion.tool.go`
+- add `orchestrion.yml`
 - `BUILD.bazel`
-- `.bazelrc`
-- `tools/bazelrc/test-optimization-worker-pilot.bazelrc`
 
-This step is done when:
+Run the repo-root bootstrap work at the `dd-source` root, because the root Go
+module is the authoritative module for the pilot service.
 
-- the pilot targets reach analysis without repository mapping failures
-- `bzl --config=test-optimization-worker-pilot build //:dd_upload_payloads`
-  works from the repo root
-
-### 3. Create the repo-root Orchestrion pin set and validate the root module
-
-Because `dd-source` uses a repo-root Go module, the Orchestrion pin files for
-the pilot must live at the repo root.
-
-Use this exact repo-root pin set:
-
-- `//:go.mod`
-- `//:go.sum`
-- `//:orchestrion.tool.go`
-- `//:orchestrion.yml`
-
-`go.mod` and `go.sum` already exist. Add these new repo-root files:
-
-- `orchestrion.tool.go`
-- `orchestrion.yml`
-
-Expose the full repo-root pin set from
-`BUILD.bazel`
-so nested packages can reference:
-
-- `//:go.mod`
-- `//:go.sum`
-- `//:orchestrion.tool.go`
-- `//:orchestrion.yml`
-
-In the current `dd-source` root BUILD file, extend the existing
-`exports_files([...])` list with these filenames.
-
-Representative root BUILD fragment:
-
-```bzl
-exports_files([
-    "go.mod",
-    "go.sum",
-    "orchestrion.tool.go",
-    "orchestrion.yml",
-])
-```
-
-Mirror the current bootstrap helper order for the repo-root Go module even
-though `dd-source` is a WORKSPACE consumer:
-
-1. run `orchestrion pin`
-2. rewrite `orchestrion.tool.go` to the required v2 integration imports
-3. align the root module to the selected Orchestrion and tracer tuple
-4. verify the exact resolved Orchestrion and tracer module versions
-5. preflight the exact tracer package paths Bazel and Orchestrion will load
-
-Use a Go `1.25.x` toolchain for these repo-root commands. To mirror the current
-bootstrap helper more closely, prefer running them with:
-
-- `GOWORK=off`
-- `GOTOOLCHAIN=go1.25.0+auto`
-
-The first pilot must make the repo-root module internally consistent with the
-selected Orchestrion release and tracer tuple. At minimum:
-
-- add `github.com/DataDog/orchestrion`
-- ensure the selected v2 tracer modules resolve in the root module:
-  - `github.com/DataDog/dd-trace-go/v2`
-  - `github.com/DataDog/dd-trace-go/contrib/net/http/v2`
-  - `github.com/DataDog/dd-trace-go/contrib/log/slog/v2`
-
-Start from a real pin operation in the repo-root module:
+Use the repo's pinned Go version for all manual Go module commands:
 
 ```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go run github.com/DataDog/orchestrion@v1.9.0 pin
+export GO111MODULE=on
+export GOWORK=off
+export GOTOOLCHAIN=go1.25.9+auto
 ```
 
-After `orchestrion pin`, do not keep the legacy v1 CI Visibility import if it
-appears in `orchestrion.tool.go`. Make the tool file match the current
-bootstrap helper contract by ensuring it imports exactly this v2 integration
-set:
+Then:
 
-- `github.com/DataDog/orchestrion`
-- `github.com/DataDog/dd-trace-go/v2/orchestrion`
-- `github.com/DataDog/dd-trace-go/contrib/net/http/v2`
-- `github.com/DataDog/dd-trace-go/contrib/log/slog/v2`
+1. Run Orchestrion pin at the repository root:
 
-If `orchestrion pin` does not leave an `orchestrion.yml` in the repo root,
-write a minimal starter file before moving on:
+```bash
+go run github.com/DataDog/orchestrion@"${ORCHESTRION_VERSION}" pin
+```
+
+2. Patch the generated `orchestrion.tool.go` import block so it contains these
+   blank imports and no legacy CI Visibility import:
+
+```go
+import (
+    _ "github.com/DataDog/orchestrion"
+    _ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
+    _ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+    _ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
+)
+```
+
+3. Align the repo-root module pins with the proven tuple:
+
+```bash
+go mod edit -require=github.com/DataDog/dd-trace-go/v2@"${DD_TRACE_GO_VERSION}"
+go mod edit -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@"${DD_TRACE_GO_VERSION}"
+go mod edit -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@"${DD_TRACE_GO_VERSION}"
+go get github.com/DataDog/dd-trace-go/v2/orchestrion@"${DD_TRACE_GO_VERSION}"
+go mod tidy
+```
+
+4. Keep `gopkg.in/DataDog/dd-trace-go.v1` at the effective version already used
+   by this service shape (`v1.74.8`). If `go mod tidy` changes that line's
+   effective version, restore it before continuing.
+5. If `orchestrion pin` did not leave `orchestrion.yml` behind, create this
+   starter file at the repo root:
 
 ```yaml
 ---
@@ -576,575 +447,509 @@ meta:
 aspects: []
 ```
 
-After `orchestrion pin`, apply the selected tracer tuple explicitly in the
-repo-root module. For the first pilot, use the shared tracer version from the
-compatibility tuple:
+6. Extend root `BUILD.bazel` `exports_files([...])` to include:
+   - `orchestrion.tool.go`
+   - `orchestrion.yml`
 
-```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod edit -require=github.com/DataDog/dd-trace-go/v2@v2.7.1
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod edit -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.7.1
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod edit -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.7.1
-
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go get github.com/DataDog/dd-trace-go/v2/orchestrion@v2.7.1
-
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod tidy
-```
-
-Only if that shared version fails before BUILD-file conversion, switch to
-`dd_trace_go_versions` and mirror the same per-module versions in the repo-root
-module edit plus `go get` update.
-
-If that switch is required, also change the WORKSPACE helper call from:
-
-- `dd_trace_go_version = "v2.7.1"`
-
-to:
-
-- `dd_trace_go_versions = {`
-- `    "github.com/DataDog/dd-trace-go/v2": "<exact resolved version>",`
-- `    "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "<exact resolved version>",`
-- `    "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "<exact resolved version>",`
-- `}`
-
-Do not add or omit keys in that map. The current helper validates exactly those
-three tracer modules and rejects any other shape.
-
-When taking this fallback path, mirror the same three exact versions in the
-repo-root module update:
-
-```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod edit -require=github.com/DataDog/dd-trace-go/v2@<exact resolved version>
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod edit -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@<exact resolved version>
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod edit -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@<exact resolved version>
-
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go get github.com/DataDog/dd-trace-go/v2/orchestrion@<exact version for github.com/DataDog/dd-trace-go/v2>
-
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod tidy
-```
-
-so the Bazel-side tool repo and the repo-root Go module stay aligned.
-
-Representative `orchestrion.tool.go` shape:
-
-```go
-//go:build tools
-
-package tools
-
-import (
-	_ "github.com/DataDog/orchestrion"
-	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"
-	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2"
-	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"
-)
-```
-
-Validate the repo-root module outside Bazel after updating it:
-
-```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod download \
-  github.com/DataDog/orchestrion \
-  github.com/DataDog/dd-trace-go/v2 \
-  github.com/DataDog/dd-trace-go/contrib/net/http/v2 \
-  github.com/DataDog/dd-trace-go/contrib/log/slog/v2
-```
-
-Then verify the exact resolved module versions match the selected Bazel-side
-tuple, not just that the modules download:
-
-```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/orchestrion
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/dd-trace-go/v2
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2
-```
-
-For the shared-version first pilot, the commands above must resolve to:
-
-- `github.com/DataDog/orchestrion v1.9.0`
-- `github.com/DataDog/dd-trace-go/v2 v2.7.1`
-- `github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.1`
-- `github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.1`
-
-Then preflight the exact package paths the current bootstrap logic validates:
-
-```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2
-```
-
-Expected `dd-source` files to change:
-
-- `BUILD.bazel`
-- `go.mod`
-- `go.sum`
-- `orchestrion.tool.go`
-- `orchestrion.yml`
-
-This step is done when:
-
-- the root module resolves successfully with the selected Orchestrion and
-  tracer tuple
-- the resolved Orchestrion and tracer module versions, not just `go.mod`,
-  match the Bazel-side `go_orchestrion_tool_repo(...)` configuration
-- `orchestrion.tool.go` and `orchestrion.yml` exist at the repo root and match
-  the current v2 bootstrap contract
-- the repo-root pin files are visible to nested packages through `//:` labels
-- the root module diff has been reviewed explicitly, because it affects the
-  whole repository
-
-### 4. Extend `dd_go_test` with an opt-in Test Optimization path
-
-Do not add a second repo-local public macro for the first pilot. `dd-source`
-already routes Go tests through `dd_go_test`, and that is the cleanest place to
-keep repository policy.
-
-Recommended shape for
-`rules/go/private/dd_go_test/dd_go_test.bzl`:
-
-- keep the current behavior exactly as-is when Test Optimization is not
-  requested
-- add optional parameters:
-  - `topt_data = None`
-  - `topt_service = None`
-  - `module_label_override = None`
-  - `orchestrion_pin_files = None`
-- keep the current tag, timeout, and `exec_compatible_with` normalization
-- keep the current `ban_exclusive_if_not_manual(...)` and
-  `ban_local_if_not_manual(...)` calls
-- when `topt_data` is not set:
-  - call raw `go_test(...)` exactly as today
-- when `topt_data` is set:
-  - call external `dd_topt_go_test(...)`
-  - pass the normalized wrapper values plus:
-    - `topt_data = topt_data`
-    - `topt_service = topt_service`
-    - `module_label_override = module_label_override`
-    - `orchestrion_pin_files = orchestrion_pin_files`
-- do not pass `go_test_rule = dd_go_test`
-- keep the current flaky `.build_test` generation after the call
-- update the wrapper comments and docstrings in English as part of the same
-  change:
-  - document the new optional Test Optimization parameters
-  - document that the no-`topt_data` branch still delegates to raw `go_test`
-  - document that `dd_go_test` preserves repository policy while
-    Test-Optimization-enabled targets intentionally use the
-    `dd_topt_go_test(...)` wrapper shape internally
-
-Why this shape is preferred:
-
-- it preserves Gazelle's existing `dd_go_test` mapping
-- it avoids duplicating repository policy in a second local macro
-- it keeps non-pilot callsites unchanged
-- it keeps the public wrapper contract stable without pretending that
-  Test-Optimization-enabled targets still expand to the exact same hidden
-  implementation graph as raw `go_test(...)`
-
-Representative structure:
+Without those exports, nested packages cannot reliably use:
 
 ```bzl
-load(
-    "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
-    _dd_topt_go_test = "dd_topt_go_test",
-)
-
-def dd_go_test(
-        *,
-        name,
-        timeout = None,
-        tags = None,
-        exec_compatible_with = None,
-        topt_data = None,
-        topt_service = None,
-        module_label_override = None,
-        orchestrion_pin_files = None,
-        **kwargs):
-    tags = tags or []
-
-    if TAG_DD_REQUIRES_DOCKER in tags:
-        tags, timeout, exec_compatible_with = apply_docker_test_defaults(
-            tags = tags,
-            timeout = timeout,
-            exec_compatible_with = exec_compatible_with,
-        )
-
-    ban_exclusive_if_not_manual(tags)
-    ban_local_if_not_manual(tags)
-
-    if topt_data == None:
-        go_test(
-            name = name,
-            tags = tags,
-            timeout = timeout,
-            exec_compatible_with = exec_compatible_with,
-            **kwargs
-        )
-    else:
-        _dd_topt_go_test(
-            name = name,
-            tags = tags,
-            timeout = timeout,
-            exec_compatible_with = exec_compatible_with,
-            topt_data = topt_data,
-            topt_service = topt_service,
-            module_label_override = module_label_override,
-            orchestrion_pin_files = orchestrion_pin_files,
-            **kwargs
-        )
-
-    if kwargs.get("flaky", False) or is_flaky(name):
-        build_test(
-            name = name + ".build_test",
-            targets = [":" + name],
-        )
+[
+    "//:go.mod",
+    "//:go.sum",
+    "//:orchestrion.tool.go",
+    "//:orchestrion.yml",
+]
 ```
 
-Expected `dd-source` files to change:
+The root `go.mod` change is repo-wide module state. That is expected in
+WORKSPACE mode and is part of this pilot.
+
+### 4. Add the pilot uploader target
+
+Files to change:
+
+- `BUILD.bazel`
+
+Add a workspace-level uploader target at the repo root:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = [
+        "@test_optimization_data_test_optimization_worker//:test_optimization_context",
+    ],
+    fail_on_error = True,
+)
+```
+
+The pilot is single-service, so the uploader should carry exactly one
+`test_optimization_context` target.
+
+### 5. Add a dedicated pilot Bazel config instead of shared `.bazelrc` changes
+
+Files to change:
+
+- add `tools/bazelrc/test-optimization-worker-pilot.bazelrc`
+- `.bazelrc`
+
+Add this import to root `.bazelrc` next to the other `tools/bazelrc/*.bazelrc`
+imports:
+
+```text
+import %workspace%/tools/bazelrc/test-optimization-worker-pilot.bazelrc
+```
+
+Create `tools/bazelrc/test-optimization-worker-pilot.bazelrc` and scope the
+pilot settings under a named config so they do not affect ordinary builds:
+
+```text
+common:test-optimization-worker-pilot --repo_env=DD_API_KEY
+common:test-optimization-worker-pilot --repo_env=DD_SITE
+common:test-optimization-worker-pilot --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL
+common:test-optimization-worker-pilot --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS
+common:test-optimization-worker-pilot --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS
+common:test-optimization-worker-pilot --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS
+common:test-optimization-worker-pilot --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS
+common:test-optimization-worker-pilot --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS
+common:test-optimization-worker-pilot --repo_env=DD_ENV
+common:test-optimization-worker-pilot --repo_env=DD_GIT_REPOSITORY_URL
+common:test-optimization-worker-pilot --repo_env=DD_GIT_BRANCH
+common:test-optimization-worker-pilot --repo_env=DD_GIT_TAG
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_SHA
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_COMMIT
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_MESSAGE
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_MESSAGE
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_AUTHOR_NAME
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_AUTHOR_DATE
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_COMMITTER_NAME
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL
+common:test-optimization-worker-pilot --repo_env=DD_GIT_COMMIT_COMMITTER_DATE
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_AUTHOR_NAME
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_AUTHOR_EMAIL
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_AUTHOR_DATE
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_COMMITTER_NAME
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_COMMITTER_EMAIL
+common:test-optimization-worker-pilot --repo_env=DD_GIT_HEAD_COMMITTER_DATE
+common:test-optimization-worker-pilot --repo_env=DD_GIT_PR_BASE_BRANCH
+common:test-optimization-worker-pilot --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
+common:test-optimization-worker-pilot --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
+common:test-optimization-worker-pilot --repo_env=DD_PR_NUMBER
+common:test-optimization-worker-pilot --repo_env=GO_MODULE_PATH=github.com/DataDog/dd-source
+common:test-optimization-worker-pilot --repo_env=FETCH_SALT
+test:test-optimization-worker-pilot --remote_download_outputs=all
+```
+
+Every sync, test, run, and query command for this pilot must use
+`--config=test-optimization-worker-pilot`.
+
+Keep the explicit `GO_MODULE_PATH=github.com/DataDog/dd-source` passthrough in
+the pilot config. That removes avoidable ambiguity when sync runs from
+non-standard local contexts.
+
+### 6. Add a dedicated pilot wrapper that preserves `dd_go_test` policy
+
+Files to change:
 
 - `rules/go/private/dd_go_test/dd_go_test.bzl`
-- `rules/go/dd_go_test.bzl`
-  if its module-level comments need updating to match the expanded wrapper
-  contract
+- add `rules/go/private/dd_go_test/dd_topt_go_test.bzl`
+- add `rules/go/dd_topt_go_test.bzl`
 
-This step is done when:
+Do not replace the current public `dd_go_test` macro.
 
-- the no-`topt_data` branch still calls raw `go_test(...)` with the same
-  wrapper policy behavior as today
-- pilot BUILD files can opt in by adding attributes instead of changing macro
-  names
-- the wrapper comments and docstrings describe both branches and the preserved
-  public policy surface accurately
+Instead:
 
-### 5. Convert only the pilot BUILD files
+1. Factor the existing policy logic in
+   `rules/go/private/dd_go_test/dd_go_test.bzl` into one shared helper that:
+   - applies Docker defaults
+   - bans unmanaged `local` / `exclusive`
+   - calls the chosen underlying test macro
+   - emits `<name>.build_test` when
+     `kwargs.get("flaky", False) or is_flaky(name)` is true
+2. Keep `dd_go_test(...)` calling that helper with raw `go_test`.
+3. Add a new pilot-only `dd_topt_go_test(...)` wrapper that calls the same
+   helper with Datadog's companion macro and prebinds:
+   - `topt_data` from
+     `@test_optimization_data_test_optimization_worker//:export.bzl`
+   - `orchestrion_pin_files = ["//:go.mod", "//:go.sum", "//:orchestrion.tool.go", "//:orchestrion.yml"]`
 
-Do not batch-convert unrelated Go packages.
+The new pilot wrapper must pass ordinary test kwargs through unchanged so these
+existing target shapes still work:
 
-Change only these BUILD files:
+- `embed = [":go_default_library"]`
+- `data = glob([".recordings/**"])`
+- `embedsrcs = [...]`
+- explicit `deps`
+- explicit `flaky = True`
+
+This keeps the repository policy in one place while limiting Test Optimization
+to the pilot targets.
+
+### 7. Convert only the pilot BUILD files
+
+Files to change:
 
 - `domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel`
 - `domains/ci-app/apps/apis/test-optimization-worker/worker/notifications/BUILD.bazel`
 - `domains/ci-app/apps/apis/test-optimization-worker/worker/store/BUILD.bazel`
 
-Convert them in the same order listed in **Pilot Targets** and run validation
-after each conversion before moving to the next file.
+Make these changes:
 
-Keep this BUILD file unchanged and use it as the plain local control target
-that proves the non-pilot `dd_go_test` path still works without Test
-Optimization:
+1. For the three pilot targets, change the load from:
 
-- `domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization/BUILD.bazel`
+```bzl
+load("//rules/go:dd_go_test.bzl", "dd_go_test")
+```
 
-For each existing pilot target:
+to:
 
-- keep the target on `dd_go_test`
-- load `topt_data` from
-  `@test_optimization_data_test_optimization_worker//:export.bzl`
-- add:
-  - `topt_data = topt_data`
-  - `orchestrion_pin_files = ["//:go.mod", "//:go.sum", "//:orchestrion.tool.go", "//:orchestrion.yml"]`
-- preserve existing `srcs`, `embed`, `deps`, `data`, `tags`, and `timeout`
-  values exactly
+```bzl
+load("//rules/go:dd_topt_go_test.bzl", "dd_topt_go_test")
+```
 
-For the pilot-only flaky parity target in
-`domains/ci-app/apps/apis/test-optimization-worker/worker/BUILD.bazel`:
+2. Rename only the macro call, not the target name:
 
-- add a second `dd_go_test`
-- reuse the current `worker` test sources and deps
-- reuse `embed = [":go_default_library"]`
-- name it `topt_flaky_test`
-- set `flaky = True`
-- set the same `topt_data` and `orchestrion_pin_files` values
-- do not add it to `etc/ci/test-all/flaky_test_targets*.txt`
+```bzl
+dd_topt_go_test(
+    name = "go_default_test",
+    ...
+)
+```
 
-This step is done when:
+3. Leave `flaky_test_categorization` unchanged on `dd_go_test`.
+4. In `worker/BUILD.bazel`, add:
 
-- the three existing pilot targets build through the instrumented `dd_go_test`
-  path
-- `topt_flaky_test.build_test` is created automatically by the existing wrapper
-  logic
+```bzl
+dd_topt_go_test(
+    name = "topt_flaky_test",
+    srcs = [
+        "kpi_statistics_test.go",
+        "kpi_test.go",
+        "purger_test.go",
+        "testmanagement_test.go",
+    ],
+    embed = [":go_default_library"],
+    flaky = True,
+    deps = [
+        ...the same deps as go_default_test...
+    ],
+)
+```
+
+The parity target must reuse the same `embed`, source set, and dependency set
+as `worker:go_default_test`. The only behavioral difference is the name and
+`flaky = True`.
 
 ## Validation Sequence
 
-Use `bzl` as the repo-standard Bazel launcher for `dd-source` local work.
+Run the validation in this exact order.
 
-### 1. Refetch the sync repo after tuple or environment changes
+### 1. Public contract preflight
+
+Before touching `dd-source`, confirm that the current public consumer shapes are
+healthy and still match the current contract:
+
+- `rules_test_optimization_tests/fixtures/workspace-go`
+- `rules_test_optimization_tests/fixtures/workspace-go-patched`
+- `rules_test_optimization_tests/fixtures/bzlmod-go-patched`
+- `rules_test_optimization_tests/fixtures/workspace-go-dd-source-shape`
+
+Run:
 
 ```bash
-bzl --config=test-optimization-worker-pilot sync --only=test_optimization_data_test_optimization_worker --repo_env=FETCH_SALT=<timestamp>
+(cd "$RTO_TESTS_ROOT/fixtures/workspace-go" && ./runtests && ./runtests-hermetic)
+(cd "$RTO_TESTS_ROOT/fixtures/workspace-go-patched" && ./runtests && ./runtests-hermetic)
+(cd "$RTO_TESTS_ROOT/fixtures/bzlmod-go-patched" && ./runtests && ./runtests-hermetic)
+(cd "$RTO_TESTS_ROOT/fixtures/workspace-go-dd-source-shape" && ./runtests && ./runtests-hermetic)
 ```
 
-If required:
+Expected baseline:
+
+- the first three fixtures still validate the normal per-module path
+- the dd-source-shaped fixture still validates
+  `payload_selection = "full_bundle_disabled"`
+- the dd-source-shaped fixture still exercises:
+  - repo-local `dd_go_test` / `dd_topt_go_test` split
+  - `embedsrcs`
+  - `data = glob(...)`
+  - explicit flaky companion generation
+  - uploader flow
+
+If you must validate unpublished local `rules_test_optimization` changes before
+landing them, use the fixture repo's documented local-archive path for the
+patched fixtures:
 
 ```bash
-bzl --config=test-optimization-worker-pilot sync --enable_workspace --only=test_optimization_data_test_optimization_worker --repo_env=FETCH_SALT=<timestamp>
+RTO_LOCAL_ARCHIVE=1 ./runtests
 ```
 
-### 2. Validate the sync export and repo-root Go module
+Do not require cold-start `RTO_LOCAL_ARCHIVE=1 ./runtests-hermetic` runs for
+the patched fixtures. That path is intentionally unsupported today.
 
-Before running Bazel tests, inspect the generated sync export to confirm the
-pilot repo alias, service name, and Go module path are what the macro layer
-expects:
+If executing the pilot reveals a generic bug in the public rules repo, stop the
+`dd-source` rollout and fix that public bug first with the current fixture
+coverage. Do not widen this pilot into a cross-repository refactor.
+
+### 2. Repo-root Orchestrion and tracer validation
+
+After the `dd-source` repo-root Go module changes are in place, verify the
+exact pinned tuple at the `dd-source` root:
 
 ```bash
-OUTPUT_BASE="$(bzl --config=test-optimization-worker-pilot info output_base)"
-cat "$OUTPUT_BASE/external/test_optimization_data_test_optimization_worker/export.bzl"
+go list -mod=mod -m -json github.com/DataDog/dd-trace-go/v2
+go list -mod=mod -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2
+go list -mod=mod -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2
+go list -mod=mod -m -json gopkg.in/DataDog/dd-trace-go.v1
+go list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion
 ```
 
-Verify these exported values:
+Required outcome:
 
-- `repo_name = "test_optimization_data_test_optimization_worker"`
-- `service_name = "test-optimization-worker"`
-- `runtimes["go"]["module_path"] = "github.com/DataDog/dd-source"`
+- all three v2 modules resolve to
+  `v2.9.0-dev`
+- `gopkg.in/DataDog/dd-trace-go.v1` still resolves to `v1.74.8`
+- `github.com/DataDog/dd-trace-go/v2/orchestrion` resolves cleanly from the
+  same root module
 
-Also confirm the repo-root pin files are addressable before converting nested
-pilot BUILD files:
+Also verify the root labels exist:
 
 ```bash
-bzl query 'set(//:go.mod //:go.sum //:orchestrion.tool.go //:orchestrion.yml)'
+bzl query 'set("//:go.mod" "//:go.sum" "//:orchestrion.tool.go" "//:orchestrion.yml")'
 ```
 
+### 3. Sync repo validation
+
+Force a fresh sync with the pilot config:
+
 ```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go mod download \
-  github.com/DataDog/orchestrion \
-  github.com/DataDog/dd-trace-go/v2 \
-  github.com/DataDog/dd-trace-go/contrib/net/http/v2 \
-  github.com/DataDog/dd-trace-go/contrib/log/slog/v2
+bzl sync \
+  --config=test-optimization-worker-pilot \
+  --only=test_optimization_data_test_optimization_worker \
+  --repo_env=FETCH_SALT="$(date +%s)"
 ```
 
+If Bazel reports a WORKSPACE-disabled sync error, rerun the same command with
+`--enable_workspace`.
+
+Then inspect the generated repo:
+
 ```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/orchestrion
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/dd-trace-go/v2
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/dd-trace-go/contrib/net/http/v2
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod -m -json github.com/DataDog/dd-trace-go/contrib/log/slog/v2
+SYNC_ROOT="$(bzl info output_base)/external/test_optimization_data_test_optimization_worker/.testoptimization"
+EXPORT_BZL="$(bzl info output_base)/external/test_optimization_data_test_optimization_worker/export.bzl"
+BUILD_FILE="$(bzl info output_base)/external/test_optimization_data_test_optimization_worker/BUILD"
+
+ls -R "$SYNC_ROOT"
+rg -n 'module_path|module_included|test-optimization-worker' "$EXPORT_BZL"
+rg -n 'module_' "$BUILD_FILE"
 ```
 
+Verify the generated repo contains:
+
+- `cache/http/settings.json`
+- `cache/http/known_tests.json`
+- `cache/http/test_management.json`
+- `manifest.txt`
+- `context.json`
+
+Then set `EXPECTED_PAYLOAD_SELECTION` using exactly one of these valid states:
+
+1. Current fallback state:
+   - Go export data shows `module_included = False`
+   - there is no usable Go per-module filegroup set for this pilot
+   - set `EXPECTED_PAYLOAD_SELECTION=full_bundle_disabled`
+2. Provisioned per-module state:
+   - Go export data shows `module_included = True`
+   - Go per-module filegroups are exported
+   - set `EXPECTED_PAYLOAD_SELECTION=module`
+
+Any mixed state is a stop condition. Examples:
+
+- `module_included = True` but no exported Go per-module filegroups
+- exported Go per-module filegroups exist but `module_included = False`
+
+The current likely outcome, based on the existing dd-source-shaped public
+fixture, is `EXPECTED_PAYLOAD_SELECTION=full_bundle_disabled`.
+
+### 4. Local plain-path control
+
+Run the untouched local control target:
+
 ```bash
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod github.com/DataDog/dd-trace-go/contrib/net/http/v2
-GOWORK=off GOTOOLCHAIN=go1.25.0+auto go list -mod=mod github.com/DataDog/dd-trace-go/contrib/log/slog/v2
+bzl test \
+  --config=test-optimization-worker-pilot \
+  //domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test
 ```
 
-### 3. Run the pilot targets
+This target must still succeed through the ordinary `dd_go_test -> go_test`
+path.
 
-Before converting any pilot BUILD file, run the unchanged control target once
-after the `dd_go_test` wrapper change:
+### 5. Registry-flaky build_test control
+
+Run the existing registry-flaky control target:
 
 ```bash
-bzl --config=test-optimization-worker-pilot test //domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test
+bzl test \
+  --config=test-optimization-worker-pilot \
+  //domains/case_management/modules/slack:go_default_test.build_test
 ```
 
-Keep this target as a plain-path local control only. The current repo already
-lists it in
-`etc/ci/test-all/failing_test_targets_rbe.txt`,
-so it is a poor required gate for the pilot's CI-shaped matrix even though it
-is still useful to prove that the unchanged non-pilot `dd_go_test` path keeps
-working locally.
+This validates that the shared helper still emits `.build_test` targets for the
+central `is_flaky(name)` path, not only for explicit `flaky = True`.
 
-Also verify the registry-driven flaky path on an unchanged target outside the
-pilot service. Use an existing target that is already listed in
-`etc/ci/test-all/flaky_test_targets.txt`, for example:
+### 6. Instrumented target validation
+
+Run the instrumented targets in rollout order:
 
 ```bash
-bzl query //domains/case_management/modules/slack:go_default_test.build_test
-```
+bzl test \
+  --config=test-optimization-worker-pilot \
+  //domains/ci-app/apps/apis/test-optimization-worker/worker/notifications:go_default_test
 
-```bash
-bzl build //domains/case_management/modules/slack:go_default_test.build_test
-```
-
-Those commands must succeed without editing that BUILD file or setting
-`flaky = True`, which proves that the wrapper still honors `is_flaky(name)` for
-repo-listed flaky targets.
-
-Run the staged rollout in this order first:
-
-```bash
-bzl --config=test-optimization-worker-pilot test //domains/ci-app/apps/apis/test-optimization-worker/worker/notifications:go_default_test
-```
-
-```bash
-bzl --config=test-optimization-worker-pilot test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker/notifications:go_default_test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker:go_default_test
-```
-
-```bash
-bzl --config=test-optimization-worker-pilot test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker/notifications:go_default_test \
+bzl test \
+  --config=test-optimization-worker-pilot \
   //domains/ci-app/apps/apis/test-optimization-worker/worker:go_default_test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker/store:go_default_test
-```
-
-Decision rule during the staged rollout:
-
-- if `worker/notifications` fails, stop and debug that first target before
-  changing any other pilot BUILD file.
-- if `worker/notifications` passes but adding `worker` or `worker/store` fails
-  with a failure that looks generic, use this exact public repro lane before
-  classifying it as a `rules_test_optimization` defect:
-  - from this repository root, run
-    `GO_VERSION=1.25.9 ORCHESTRION_VERSION=v1.9.0 DD_TRACE_GO_VERSION=v2.7.1 ./tools/tests/integration/run_workspace_go_integration.sh`
-  - only if that command fails with the same class of error may the issue be
-    treated as a normal WORKSPACE-consumer defect
-  - after a candidate public fix, rerun that same command and the original
-    failing `dd-source` command before restarting the staged rollout
-- if `worker/notifications` passes but `worker` or `worker/store` fail because
-  the mixed v1 and v2 tracer service cannot satisfy the selected Orchestrion
-  tuple, reject `test-optimization-worker` as the first pilot service, revert
-  every `dd-source`-local change introduced by this document back to the frozen
-  baseline, and stop. Do not land the `worker/notifications` conversion by
-  itself under this plan.
-
-After the staged rollout is green, run the full pilot matrix:
-
-```bash
-bzl --config=test-optimization-worker-pilot test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker:go_default_test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker/notifications:go_default_test \
   //domains/ci-app/apps/apis/test-optimization-worker/worker/store:go_default_test \
   //domains/ci-app/apps/apis/test-optimization-worker/worker:topt_flaky_test \
   //domains/ci-app/apps/apis/test-optimization-worker/worker:topt_flaky_test.build_test
 ```
 
-If remote execution or remote caching is in play, add:
+If `worker/notifications` fails because the proven tuple does not work with the
+pilot service, stop the rollout.
+
+If `worker/notifications` succeeds but `worker` or `worker/store` fail because
+the mixed v1/v2 service shape is not compatible with the proven tuple, stop the
+rollout and revert the `dd-source` pilot changes. Do not land a partial service
+rollout under this plan.
+
+### 7. Metadata and payload validation
+
+After the instrumented tests run, inspect the test outputs:
 
 ```bash
---remote_download_outputs=all
+find bazel-testlogs/domains/ci-app/apps/apis/test-optimization-worker \
+  -name '*_topt_bazel_metadata.json' -print
+
+find bazel-testlogs/domains/ci-app/apps/apis/test-optimization-worker \
+  -path '*/test.outputs/payloads/tests/*.json' -print
 ```
 
-Run the same target set under CI config:
+For each instrumented target, verify the emitted Bazel metadata JSON contains:
+
+- `bazel.test_optimization.repo_name = "test_optimization_data_test_optimization_worker"`
+- `bazel.test_optimization.service_name = "test-optimization-worker"`
+- `bazel.test_optimization.runtime_name = "go"`
+- `bazel.go.importpath_source = "inferred"`
+- `bazel.go.orchestrion.enabled = true`
+- `bazel.go.payload_selection = "${EXPECTED_PAYLOAD_SELECTION}"`
+- `bazel.go.importpath = "github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker"`
+  for `worker:go_default_test` and `worker:topt_flaky_test`
+- `bazel.go.importpath = "github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/notifications"`
+  for `worker/notifications:go_default_test`
+- `bazel.go.importpath = "github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/store"`
+  for `worker/store:go_default_test`
+
+Interpretation rules:
+
+- If `EXPECTED_PAYLOAD_SELECTION=module`, then `full_bundle_disabled` is a
+  failure.
+- If `EXPECTED_PAYLOAD_SELECTION=full_bundle_disabled`, then that fallback is
+  acceptable for this pilot.
+- `full_bundle_no_match` is always a failure.
+
+For the untouched local control target, there should be no
+`*_topt_bazel_metadata.json` file because it did not go through the Datadog
+wrapper.
+
+### 8. Uploader validation
+
+Run the uploader against downloaded test outputs:
 
 ```bash
-bzl test --config=test-optimization-worker-pilot --config=ci \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker:go_default_test \
+bzl test \
+  --config=test-optimization-worker-pilot \
   //domains/ci-app/apps/apis/test-optimization-worker/worker/notifications:go_default_test \
+  //domains/ci-app/apps/apis/test-optimization-worker/worker:go_default_test \
   //domains/ci-app/apps/apis/test-optimization-worker/worker/store:go_default_test \
   //domains/ci-app/apps/apis/test-optimization-worker/worker:topt_flaky_test \
-  //domains/ci-app/apps/apis/test-optimization-worker/worker:topt_flaky_test.build_test
+  || test_status=$?; test_status=${test_status:-0}
+
+DD_API_KEY="$DD_API_KEY" DD_SITE="${DD_SITE:-datadoghq.com}" \
+  bzl run --config=test-optimization-worker-pilot //:dd_upload_payloads
+
+exit $test_status
 ```
 
-### 4. Inspect runtime outputs
-
-After the test run, verify all of these outcomes:
-
-- each pilot target produced a `test.outputs` directory under `bazel-testlogs`
-- `bazel_target_metadata.json` exists for each instrumented target
-- `bazel_target_metadata.json` reports:
-  - `bazel.test_optimization.repo_name = "test_optimization_data_test_optimization_worker"`
-  - `bazel.test_optimization.service_name = "test-optimization-worker"`
-  - `bazel.test_optimization.runtime_name = "go"`
-  - `bazel.go.importpath_source = "inferred"` for the three existing pilot
-    targets, because they all use `embed = [":go_default_library"]`
-  - `bazel.go.importpath` matches the package under test:
-    - `worker:go_default_test` and `worker:topt_flaky_test`:
-      `github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker`
-    - `worker/notifications:go_default_test`:
-      `github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/notifications`
-    - `worker/store:go_default_test`:
-      `github.com/DataDog/dd-source/domains/ci-app/apps/apis/test-optimization-worker/worker/store`
-  - `bazel.go.orchestrion.enabled = true`
-  - `bazel.go.payload_selection` is not empty
-- `DD_SERVICE` resolves to `test-optimization-worker`
-- `DD_TEST_OPTIMIZATION_MANIFEST_FILE` is present in the test environment
-- the synced metadata bundle is available next to the manifest path
-- test payload JSON files were written under Bazel-owned test outputs
-- `topt_flaky_test.build_test` exists and passes
-
-Useful inspection command:
-
-```bash
-TESTLOGS_DIR="$(bzl --config=test-optimization-worker-pilot info bazel-testlogs)"
-find "$TESTLOGS_DIR/domains/ci-app/apps/apis/test-optimization-worker" -path '*test.outputs*' -type f | sort
-```
-
-The `worker/store` target is part of the required matrix specifically to prove
-that existing `data = glob([".recordings/**"])` inputs still work after
-instrumentation. The `worker/notifications` target is part of the matrix to
-prove that the pilot still works for a package that embeds template assets and
-already uses dd-trace-go v2.
-
-For the three existing pilot targets, a metadata value of
-`bazel.go.payload_selection = "module"` is the preferred outcome because it
-proves the per-module split path is active. If any target reports
-`full_bundle_no_match`, stop and investigate backend module coverage or module
-label mapping before widening the rollout beyond this first pilot.
-
-### 5. Run the uploader
-
-Use the first pilot in agentless mode:
-
-```bash
-DD_API_KEY="$DD_API_KEY" \
-DD_SITE="$DD_SITE" \
-bzl --config=test-optimization-worker-pilot run //:dd_upload_payloads
-```
-
-If the environment uses a non-default agentless base URL, add:
-
-```bash
-DD_TEST_OPTIMIZATION_AGENTLESS_URL="$DD_TEST_OPTIMIZATION_AGENTLESS_URL"
-```
-
-Because the pilot uploader target sets `fail_on_error = True`, a run that finds
-no payloads after tests must fail instead of silently succeeding.
+Because the pilot config sets `--remote_download_outputs=all` for tests, this
+same command works for local runs and remote-exec runs.
 
 ## Acceptance Criteria
 
-The first pilot is complete only when all of these are true:
+The pilot is complete only when all of these are true:
 
-- `dd-source` resolves the public core repo, the public Go companion repo, the
-  service-specific sync repo, and `rules_go_orchestrion_tool` in WORKSPACE mode
-- the internal `@io_bazel_rules_go` exposes the Orchestrion labels required by
-  the public Go companion while preserving the current `dd-source` patch stack
-- the `rules_go` merge has a reviewed patch inventory showing how every current
-  `dd-source`-specific patch was preserved, replaced, or intentionally dropped
-- the merged `@io_bazel_rules_go` repository passed the pre-pilot smoke matrix
-  before any Test Optimization wiring was added:
-  - `//rules/go/private/dd_go_test:dd_go_test_suite_tests`
-  - `//domains/case_management/modules/slack:go_default_test.build_test`
-  - `//domains/app-builder/apps/apis/apps-datastore-api/client:go_default_test`
-  - `//domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test`
-- the repo-root module files (`go.mod`, `go.sum`, `orchestrion.tool.go`,
-  `orchestrion.yml`) are internally consistent and pass the repo-root
-  `go mod download`, `go list -mod=mod -m -json`, and `go list -mod=mod`
-  smoke checks with the selected Orchestrion release and tracer tuple
-- the repo-root pin files are exported so nested packages can load them through
-  `//:` labels
-- the three existing pilot targets pass under
-  `bzl --config=test-optimization-worker-pilot test`
-- the same instrumented pilot targets pass under
-  `bzl test --config=test-optimization-worker-pilot --config=ci`
-- the unchanged control target
-  `//domains/ci-app/apps/apis/test-optimization-worker/worker/flaky_test_categorization:go_default_test`
-  still passes through the plain `dd_go_test` path in the plain pilot config
-- an unchanged target that is already listed in
-  `etc/ci/test-all/flaky_test_targets.txt`, for example
-  `//domains/case_management/modules/slack:go_default_test`, still exposes and
-  builds its generated `.build_test` companion through the `is_flaky(name)`
-  path
-- the pilot-only flaky target passes and still generates its `.build_test`
-  companion
-- the unchanged local default `dd_go_test` path is still proven by a target
-  that does not opt into Test Optimization
-- `dd_go_test` remains the public macro surface and repository-policy layer,
-  while Test-Optimization-enabled targets are allowed to use a different hidden
-  implementation graph internally
-- the first pilot does not claim remote-exec parity for the unchanged control
-  path, because that control target is already excluded from the repo's normal
-  RBE-shaped test set
-- Bazel metadata and test payload files are present in `bazel-testlogs`
-- the uploader succeeds through
-  `bzl --config=test-optimization-worker-pilot run //:dd_upload_payloads`
+1. `dd-source` consumes the frozen public repo commit through:
+   - clean `rules_go` base from `third_party/rules_go_orchestrion`
+   - consumer-owned `third_party/rules_go_patches`
+   - Datadog core + Go companion external repos
+2. Root `go.mod`, `go.sum`, `orchestrion.tool.go`, and `orchestrion.yml` are
+   present and exported from root `BUILD.bazel`.
+3. The repo-root Go module resolves the proven tuple:
+   - Orchestrion `v1.9.0`
+   - v2 tracer modules
+     `v2.9.0-dev`
+   - v1 tracer `v1.74.8`
+4. `test_optimization_data_test_optimization_worker` syncs successfully and
+   exports a consistent state for either:
+   - per-module selection (`EXPECTED_PAYLOAD_SELECTION=module`)
+   - fallback disabled selection
+     (`EXPECTED_PAYLOAD_SELECTION=full_bundle_disabled`)
+5. The three pilot targets run successfully with the Datadog wrapper.
+6. `worker:topt_flaky_test.build_test` exists and passes.
+7. The existing registry-flaky control target
+   `//domains/case_management/modules/slack:go_default_test.build_test`
+   still exists and passes.
+8. Each instrumented target emits:
+   - payload files under `test.outputs/payloads/tests/`
+   - Bazel metadata with repo, service, runtime, importpath source, and
+     `payload_selection = "${EXPECTED_PAYLOAD_SELECTION}"`
+9. No instrumented target emits `payload_selection = "full_bundle_no_match"`.
+10. `//:dd_upload_payloads` succeeds with `fail_on_error = True`.
+11. The untouched local control target still succeeds through the plain local
+    `dd_go_test` path.
 
-## Explicit Non-Goals For The First Pilot
+## Stop Conditions
 
-- instrumenting every Go test in `dd-source`
-- changing services owned outside the CI App backend team
-- replacing Gazelle's `dd_go_test` mapping with direct `dd_topt_go_test` loads
-  across the repository
-- creating service-local Go modules
-- proving Docker-tagged test parity in the first pilot
-- making coverage a first-pilot gate
-- changing `rules_test_optimization` unless the pilot reveals a generic defect
+Stop the rollout and revert the `dd-source` pilot changes if any of these
+happen:
+
+- the local `rules_test_optimization_tests` checkout no longer contains the
+  dd-source-shaped fixture, README documentation, and workflow lane that define
+  the current public proof baseline
+- the pilot cannot use the repo-root pseudo-version tuple
+  (`v1.9.0` plus
+  `v2.9.0-dev`)
+- the sync/export state is internally inconsistent
+- any instrumented target emits `payload_selection = "full_bundle_no_match"`
+- `worker/notifications` cannot be instrumented with the proven tuple
+- the later `worker` or `worker/store` targets fail because the mixed v1/v2
+  service shape is incompatible with the proven tuple
+- the pilot requires a generic fix in `rules_test_optimization` or
+  `rules_test_optimization_tests`
+
+If a generic rules change is needed, land that fix with the current public
+fixture coverage first, then re-freeze the inputs and write a new `dd-source`
+pilot plan against the new state.
+
+## Out Of Scope
+
+This plan does not include:
+
+- repository-wide conversion of `dd_go_test`
+- a generic multi-service `dd-source` wrapper architecture
+- coverage payload rollout gates
+- non-Go runtimes in `dd-source`
+- backend provisioning work to create module data for `test-optimization-worker`
+- changes to the public rules repositories beyond fixing a generic bug that
+  reproduces outside `dd-source`
