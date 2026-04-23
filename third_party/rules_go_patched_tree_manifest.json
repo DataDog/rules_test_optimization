@@ -571,12 +571,6 @@
       "sha256": "cb850d230b738b16b16020a278309db39946b6f7ed72c8c6653c032765ce2d5b"
     },
     {
-      "path": "go/private/context.bzl.orig",
-      "kind": "file",
-      "executable": false,
-      "sha256": "303a21a3db8c79b85638c4a6d53d3577ecf187b51716db13450c7e131eb59841"
-    },
-    {
       "path": "go/private/coverage_shim.go",
       "kind": "file",
       "executable": false,
@@ -1763,12 +1757,6 @@
       "kind": "file",
       "executable": false,
       "sha256": "f1a51adf89f20fdc63ac1d9019ac17e8c276bbb7083e5762890e8418a90a5b30"
-    },
-    {
-      "path": "proto/compiler.bzl.orig",
-      "kind": "file",
-      "executable": false,
-      "sha256": "9476db39262d408b81e9b0024db1a69ccef80721365c022341a6a1b3917e2777"
     },
     {
       "path": "proto/core.rst",
