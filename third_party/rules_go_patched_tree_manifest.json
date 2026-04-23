@@ -1120,13 +1120,13 @@
       "path": "go/tools/builders/importcfg.go",
       "kind": "file",
       "executable": false,
-      "sha256": "98589272b58351a89698742e789e87b374c6d7de0b7d8a2bf40771f20f6a3383"
+      "sha256": "b5953660bc73d2166b25eb3b84725c331628f3fc694ae418991a108091371b14"
     },
     {
       "path": "go/tools/builders/importcfg_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "c22206db24f9ca9316b8efe4fce1ff78baab3031449aa9f709f3c8508164c65f"
+      "sha256": "325278b18ed9c713283e7915ed88b0515e8e2fe33ad57e025b22aaae06dd82ec"
     },
     {
       "path": "go/tools/builders/info.go",
