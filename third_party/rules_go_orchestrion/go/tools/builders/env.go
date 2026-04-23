@@ -189,41 +189,6 @@ func (e *env) runCommand(args []string) error {
 	return err
 }
 
-// runCommandWithJobserver executes a subprocess with the orchestrion jobserver
-// URL set in the environment if a jobserver is provided. If importPath is non-empty,
-// TOOLEXEC_IMPORTPATH is also set for orchestrion. The Go SDK's bin directory
-// is prepended to PATH so orchestrion can find the `go` binary.
-func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobserver, importPath string) error {
-	span := beginProbe(
-		"env.run_command_with_jobserver",
-		newProbeField("argv0", filepath.Base(args[0])),
-		newProbeField("arg_count", strconv.Itoa(len(args)-1)),
-		newProbeField("import_path", importPath),
-		newProbeField("jobserver", strconv.FormatBool(jobserver != nil && jobserver.URL() != "")),
-	)
-	cmd := exec.Command(args[0], args[1:]...)
-	buf := &bytes.Buffer{}
-	cmd.Stdout = buf
-	cmd.Stderr = buf
-	if cmd.Env == nil {
-		cmd.Env = os.Environ()
-	}
-	if e.stdlibCache != "" {
-		if info, err := os.Stat(e.stdlibCache); err == nil && info.IsDir() {
-			cmd.Env = setEnv(cmd.Env, "GOCACHE", e.stdlibCache)
-			cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, e.stdlibCache)
-		}
-	}
-	goRootPath := e.goroot
-	if goRootPath == "" {
-		goRootPath = os.Getenv("GOROOT")
-	}
-	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose)
-	span.End(err)
-	os.Stderr.Write(relativizePaths(buf.Bytes()))
-	return err
-}
-
 // runCommandToFile executes a subprocess and writes stdout/stderr to the given
 // writers.
 func (e *env) runCommandToFile(out, err io.Writer, args []string) error {

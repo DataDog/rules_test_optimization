@@ -153,6 +153,7 @@ filegroup(
         "edit.go",
         "embedcfg.go",
         "env.go",
+        "env_orchestrion.go",
         "filter.go",
         "filter_buildid.go",
         "flags.go",
@@ -231,7 +232,6 @@ go_binary(
         "env.go",
         "flags.go",
         "info.go",
-        "orchestrion.go",
         "probe.go",
     ],
     visibility = ["//visibility:public"],
@@ -250,7 +250,6 @@ go_binary(
     srcs = [
         "env.go",
         "flags.go",
-        "orchestrion.go",
         "probe.go",
         "protoc.go",
     ],
