@@ -61,5 +61,14 @@ run_vendor env GOWORK=off go test ./go/tools/bzltestutil -count=1
 run_vendor bazelisk test //go/tools/builders:buildinfo_test
 run_vendor bazelisk test //tests/core/buildinfo:metadata_test //tests/core/buildinfo:srcs_only_test
 run_vendor bazelisk test //tests/core/starlark:context_tests_test_0 //tests/core/starlark:context_tests_test_1 //tests/core/starlark:link_tests_test_0 //tests/core/starlark:link_tests_test_1
+run_vendor bazelisk test \
+  //tests/extras/gomock/source:client_test \
+  //tests/extras/gomock/source_with_importpath:client_test \
+  //tests/core/go_proto_library:compilers_multi_suffix_test
+if [[ "$(uname -s)" != "Windows_NT" ]]; then
+  run_vendor bazelisk test //tests/extras/gomock/reflective:client_test
+else
+  echo "Skipping //tests/extras/gomock/reflective:client_test on Windows hosts." >&2
+fi
 run_vendor bazelisk test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
 run_vendor bazelisk build //tests/core/c_linkmodes:go_with_cgo_dep_caller //tests/core/cgo:embed_chain_bin

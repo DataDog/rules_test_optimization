@@ -26,7 +26,7 @@ EXPECTED_PATCH_FILENAMES = (
     "0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
     "0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
     "0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch",
-    "0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
+    "0016-lazy-cc-toolchain-resolution.patch",
 )
 
 

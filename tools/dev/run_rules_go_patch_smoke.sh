@@ -81,7 +81,19 @@ run_vendor bazelisk test \
   //tests/core/starlark:context_tests_test_1 \
   //tests/core/starlark:link_tests_test_0 \
   //tests/core/starlark:link_tests_test_1
-run_vendor bazelisk test //tests/core/cross:go_cross_binary_test
+if [[ "${host_os}" == "Darwin" ]]; then
+  run_vendor bazelisk test \
+    //tests/core/cross:go_cross_binary_test \
+    //tests/legacy/providers:source_test
+  echo "Skipping //tests/core/cross:proto_test, //tests/legacy/info:info, and //tests/core/nogo/custom:custom_test on ${host_os}/${host_arch}; those maintainer proof targets are currently not stable on the local macOS host." >&2
+else
+  run_vendor bazelisk test \
+    //tests/core/cross:go_cross_binary_test \
+    //tests/core/cross:proto_test \
+    //tests/legacy/info:info \
+    //tests/legacy/providers:source_test
+  run_vendor bazelisk test //tests/core/nogo/custom:custom_test
+fi
 run_vendor bazelisk test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
 run_vendor bazelisk build //tests/core/c_linkmodes:go_with_cgo_dep_caller
 run_vendor bazelisk build //tests/core/cgo:embed_chain_bin

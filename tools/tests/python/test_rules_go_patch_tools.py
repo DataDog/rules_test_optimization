@@ -176,7 +176,7 @@ class RulesGoPatchToolTests(unittest.TestCase):
             self.lib.resolve_patch_selection(
                 self.manifest,
                 patch_filenames=[
-                    "0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
+                    "0016-lazy-cc-toolchain-resolution.patch",
                 ],
             )
 
