@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `40`
-- Modified files: `24`
-- Added files: `16`
+- Total changed paths: `45`
+- Modified files: `25`
+- Added files: `20`
 - Removed files: `0`
 
 ## Modified files
@@ -36,6 +36,7 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/builder.go`
 - `go/tools/builders/compilepkg.go`
 - `go/tools/builders/env.go`
+- `go/tools/builders/env_test.go`
 - `go/tools/builders/filter_buildid.go`
 - `go/tools/builders/importcfg.go`
 - `go/tools/builders/link.go`
@@ -52,15 +53,19 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/compilepkg_test.go`
 - `go/tools/builders/env_orchestrion.go`
 - `go/tools/builders/importcfg_test.go`
+- `go/tools/builders/module_proxy.go`
 - `go/tools/builders/orchestrion.go`
 - `go/tools/builders/orchestrion_cache.go`
 - `go/tools/builders/orchestrion_cache_test.go`
 - `go/tools/builders/orchestrion_synthetic_tool.go`
 - `go/tools/builders/orchestrion_test.go`
+- `go/tools/builders/orchestrion_test_helpers_test.go`
 - `go/tools/builders/orchestrion_version.go`
 - `go/tools/builders/orchestrion_version_test.go`
 - `go/tools/builders/probe.go`
 - `go/tools/builders/probe_test.go`
+- `go/tools/builders/stdlib_test.go`
+- `go/tools/builders/tool_version.go`
 - `tests/core/starlark/orchestrion_extension_tests.bzl`
 
 ## Removed files
