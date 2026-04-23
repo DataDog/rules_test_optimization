@@ -87,7 +87,11 @@ if [[ "${host_os}" == "Darwin" ]]; then
     //tests/legacy/providers:source_test
   echo "Skipping //tests/core/cross:proto_test, //tests/legacy/info:info, and //tests/core/nogo/custom:custom_test on ${host_os}/${host_arch}; those maintainer proof targets are currently not stable on the local macOS host." >&2
 else
+  # proto_test starts a nested Bazel invocation that may build protobuf from
+  # source on fresh Linux runners, so give that smoke lane enough time without
+  # weakening the surrounding job timeout.
   run_vendor bazelisk test \
+    --test_timeout=900 \
     //tests/core/cross:go_cross_binary_test \
     //tests/core/cross:proto_test \
     //tests/legacy/info:info \
