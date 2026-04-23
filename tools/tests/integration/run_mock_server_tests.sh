@@ -34,7 +34,7 @@ SNAPSHOT_DIR="$REPO_ROOT/tools/tests/integration/snapshots"
 PYTHON="${PYTHON:-python3}"
 # Keep the mock-server harness aligned with the supported Orchestrion version
 # under test instead of relying on the old hardcoded bootstrap tag.
-ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 export ORCHESTRION_VERSION
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
   if command -v python >/dev/null 2>&1; then
@@ -1588,7 +1588,7 @@ cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
 #!/bin/sh
 set -eu
 
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 
 # The plain bootstrap scenario still validates file edits, but deterministic
 # proxy generation now resolves real modules during repository bootstrap. Keep
@@ -1913,7 +1913,7 @@ cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
 #!/bin/sh
 set -eu
 
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 
 # The guided bootstrap scenario later builds a real Go test, so the fake Go
 # tool delegates the download-heavy paths to the host Go binary using temporary
