@@ -430,10 +430,10 @@ write_orchestrion_go_sum() {
 
   if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0-dev" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
     cat > "$ws_dir/go.sum" <<'EOF'
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev h1:l4Uaefp1bXzb9E3x6VbJDMoBqIcfhmjrTfrmtM6PZb0=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev/go.mod h1:jli1jidldlU46UvU4aA9B0DZQnZsBIK21ZflvwtTPEU=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev h1:bXasqgAk+6J/MdoRoNKxryo4GMDnvyTgUumYphG2vC4=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev/go.mod h1:fYK/2lv+okgQbys4k4O3TWAnTYkiXYflqFJYvYChnUI=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev h1:WVGHErclGDYowS/0ROrnXw0pPcxSHWNMnEw/+g4cbbo=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev/go.mod h1:lJgKQz0CkbXSjn2LysuMZC0fyp5E4IHNdc1Pg4FprCQ=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev h1:vydpo2e5maPZbfa9oUNokWKyA/iU0Nd2DI/lMLzspBU=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev/go.mod h1:ftRJ7ZxpQrPe1j4WNHtVvxQSa0bvNcVPdEnOgdnet8s=
 github.com/DataDog/dd-trace-go/v2 v2.9.0-dev h1:CVSMydw9FRPzC07o8GHLOZtpkOk/JJcRpEKgOIeaPDA=
 github.com/DataDog/dd-trace-go/v2 v2.9.0-dev/go.mod h1:DnPEO+93yfskSYAcOw5v5EJVBZ3Z1ENMNtOQX/D/lME=
 github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=

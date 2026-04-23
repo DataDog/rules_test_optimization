@@ -484,6 +484,12 @@
       "path": "go/private/BUILD.bazel",
       "kind": "file",
       "executable": false,
+      "sha256": "fad10a2bae5764208eac5cc90e7c37dfe20f58f680c3aa9ebf67a3a8d0955c20"
+    },
+    {
+      "path": "go/private/BUILD.bazel.orig",
+      "kind": "file",
+      "executable": false,
       "sha256": "436bef92b0d5f321aba379cbf2a9965ba6c7e41e4a628f8ee657f546f2510ab8"
     },
     {
