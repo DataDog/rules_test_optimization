@@ -215,10 +215,10 @@ class RulesGoPatchToolTests(unittest.TestCase):
             with self.assertRaisesRegex(self.lib.PatchSeriesError, "does not exist"):
                 self.lib.load_manifest(manifest_path, git_runner=fake_git_runner)
 
-    def test_manifest_rejects_unreachable_commits(self) -> None:
-        """Validate manifest loading fails when a commit exists but is detached from history."""
+    def test_manifest_rejects_unreachable_base_commit(self) -> None:
+        """Validate manifest loading fails when the clean-base ref is detached from history."""
         broken_manifest = copy.deepcopy(self.manifest)
-        broken_manifest["patches"][0]["commit"] = "1111111111111111111111111111111111111111"
+        broken_manifest["base_commit"] = "1111111111111111111111111111111111111111"
         with tempfile.TemporaryDirectory() as tmp:
             manifest_path = Path(tmp) / "rules_go_patch_series.json"
             manifest_path.write_text(
@@ -238,8 +238,8 @@ class RulesGoPatchToolTests(unittest.TestCase):
             with self.assertRaisesRegex(self.lib.PatchSeriesError, "not reachable"):
                 self.lib.load_manifest(manifest_path, git_runner=fake_git_runner)
 
-    def test_manifest_can_skip_commit_reachability_for_copy_only_flows(self) -> None:
-        """Validate copy-only tools can load the manifest without local git history."""
+    def test_manifest_allows_unreachable_patch_source_commits_after_squash(self) -> None:
+        """Validate normal loading does not require branch-only patch source commits."""
         broken_manifest = copy.deepcopy(self.manifest)
         broken_manifest["patches"][0]["commit"] = "1111111111111111111111111111111111111111"
         with tempfile.TemporaryDirectory() as tmp:
@@ -253,9 +253,50 @@ class RulesGoPatchToolTests(unittest.TestCase):
                 if args[:2] == ("cat-file", "-e"):
                     return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
                 if args[:2] == ("merge-base", "--is-ancestor"):
+                    if args[2] == broken_manifest["base_commit"]:
+                        return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
                     raise subprocess.CalledProcessError(1, ["git", *args])
                 if args[0] == "for-each-ref":
                     return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+                return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+            loaded = self.lib.load_manifest(manifest_path, git_runner=fake_git_runner)
+            self.assertEqual(
+                "1111111111111111111111111111111111111111",
+                loaded["patches"][0]["commit"],
+            )
+
+    def test_patch_source_validation_rejects_unreachable_patch_commits(self) -> None:
+        """Validate maintainer regeneration can require source patch commits."""
+        broken_manifest = copy.deepcopy(self.manifest)
+        broken_manifest["patches"][0]["commit"] = "1111111111111111111111111111111111111111"
+
+        def fake_git_runner(*args: str, capture_output: bool = True):
+            if args[:2] == ("cat-file", "-e"):
+                return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+            if args[:2] == ("merge-base", "--is-ancestor"):
+                raise subprocess.CalledProcessError(1, ["git", *args])
+            if args[0] == "for-each-ref":
+                return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+
+        with self.assertRaisesRegex(self.lib.PatchSeriesError, "not reachable"):
+            self.lib.validate_patch_source_commits(broken_manifest, git_runner=fake_git_runner)
+
+    def test_manifest_can_skip_commit_reachability_for_copy_only_flows(self) -> None:
+        """Validate copy-only tools can load the manifest without local git history."""
+        broken_manifest = copy.deepcopy(self.manifest)
+        broken_manifest["base_commit"] = "1111111111111111111111111111111111111111"
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "rules_go_patch_series.json"
+            manifest_path.write_text(
+                json.dumps(broken_manifest, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            def fake_git_runner(*args: str, capture_output: bool = True):
+                if args[:2] == ("cat-file", "-e"):
+                    raise subprocess.CalledProcessError(128, ["git", *args])
                 return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
 
             loaded = self.lib.load_manifest(
@@ -265,7 +306,7 @@ class RulesGoPatchToolTests(unittest.TestCase):
             )
             self.assertEqual(
                 "1111111111111111111111111111111111111111",
-                loaded["patches"][0]["commit"],
+                loaded["base_commit"],
             )
 
     def test_export_bundle_writes_explicit_build_file_and_labels(self) -> None:

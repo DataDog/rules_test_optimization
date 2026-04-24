@@ -28,7 +28,8 @@ Why it matters:
 
 - the repository root and `modules/go/MODULE.bazel` both point here directly
 - `verify_rules_go_patch_series.py --bundle none` proves this subtree matches
-  the manifest’s `base_commit`
+  the manifest's clean-base ref; it is `HEAD` so this proof still works after a
+  squash merge
 - `diff_rules_go_fork.py` now reports the clean-base delta against upstream,
   not a mixed base-plus-patches tree
 

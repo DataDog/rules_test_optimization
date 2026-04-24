@@ -82,8 +82,9 @@ The proof overlay must not carry consumer-visible behavior.
 
 ### Clean Base Fork
 
-`third_party/rules_go_orchestrion/` is reset to the subtree recorded by
-`base_commit` in the manifest.
+`third_party/rules_go_orchestrion/` is reset to the subtree recorded by the
+manifest's clean-base ref. The ref is intentionally `HEAD` so the proof survives
+the repository's squash-merge workflow.
 
 After this reset:
 
@@ -177,8 +178,8 @@ It must never export the maintainer-only proof overlay.
 `tools/dev/verify_rules_go_patch_series.py` supports four modes:
 
 - `--bundle none`
-  verifies that the checked-in clean base subtree matches the archived
-  `base_commit` byte-for-byte
+  verifies that the checked-in clean base subtree matches the manifest's
+  clean-base ref byte-for-byte
 - `--bundle dd_source_full`
   materializes `base + dd_source_full`, normalizes it, and compares it to
   `third_party/rules_go_patched_tree_manifest.json`
