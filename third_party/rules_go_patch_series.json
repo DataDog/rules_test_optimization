@@ -1,7 +1,7 @@
 {
   "subtree_path": "third_party/rules_go_orchestrion",
   "patch_dir": "third_party/rules_go_patches",
-  "base_commit": "e217a1333cf6549d11aedb0a7c84581b7d0680e2",
+  "base_commit": "a05a0233fb4f8c2b3f864d256112bc416fb917ea",
   "base_remote": "https://github.com/Datadog/rules_test_optimization.git",
   "base_strip_prefix": "third_party/rules_go_orchestrion",
   "full_tree_manifest": "third_party/rules_go_patched_tree_manifest.json",

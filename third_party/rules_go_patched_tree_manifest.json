@@ -970,13 +970,13 @@
       "path": "go/tools/builders/BUILD.bazel",
       "kind": "file",
       "executable": false,
-      "sha256": "0973047a15e0e77bc3e3d9f9dfaa3882a038326d9a07c8930cb7311add4b9d6f"
+      "sha256": "7a8f1e7c78f20520fd23712faf62131b45fee7d9b8b49b1986ca8f8bc4414479"
     },
     {
       "path": "go/tools/builders/BUILD.bazel.orig",
       "kind": "file",
       "executable": false,
-      "sha256": "a0de3851c0b5185d3c7af043be84df9ead1cb60fb498f4d3bb33ac85dc8b7815"
+      "sha256": "7b0d7d412608a03f210767f2a56044f77bd33283585960f5ebe2d0625e7a1973"
     },
     {
       "path": "go/tools/builders/ar.go",
