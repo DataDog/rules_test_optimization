@@ -724,7 +724,7 @@ function Get-LatestMTimeAll {
         foreach ($subdir in @("payloads/tests", "payloads/coverage", "payloads/telemetry")) {
             $dir = Join-Path $outputsDir.FullName $subdir
             if (-not (Test-Path -LiteralPath $dir)) { continue }
-            $files = Get-ChildItem -Path $dir -Filter "*.json" -File -ErrorAction SilentlyContinue
+            $files = Get-ChildItem -Path $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }
             foreach ($file in $files) {
                 if ($file.LastWriteTime -gt $maxTime) {
                     $maxTime = $file.LastWriteTime
@@ -742,13 +742,13 @@ function Count-PayloadFiles {
         $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
         $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
         if (Test-Path -LiteralPath $testsDir) {
-            $count += @(Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+            $count += @(Get-ChildItem -Path $testsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
         }
         if (Test-Path -LiteralPath $covDir) {
-            $count += @(Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+            $count += @(Get-ChildItem -Path $covDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
         }
         if (Test-Path -LiteralPath $telemetryDir) {
-            $count += @(Get-ChildItem -Path $telemetryDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+            $count += @(Get-ChildItem -Path $telemetryDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
         }
     }
     return $count
@@ -1885,10 +1885,10 @@ function Test-PrefixFilter([string]$FilePath, [string]$ExpectedPrefix) {
     return $basename.StartsWith($ExpectedPrefix)
 }
 
-# Enumerate JSON payload files in deterministic lexicographic order.
+# Enumerate replayable payload files in deterministic lexicographic order.
 function Get-SortedPayloadFiles([string]$DirPath) {
     if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
-    $files = @(Get-ChildItem -Path $DirPath -Filter "*.json" -File -ErrorAction SilentlyContinue)
+    $files = @(Get-ChildItem -Path $DirPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") })
     if ($files.Count -gt 1) {
         [Array]::Sort(
             $files,
@@ -1903,6 +1903,23 @@ function Get-SortedPayloadFiles([string]$DirPath) {
         )
     }
     return $files
+}
+
+# Detect whether one replay payload is stored in raw msgpack form.
+function Test-MsgpackPayload([string]$FilePath) {
+    return ([System.StringComparer]::OrdinalIgnoreCase.Compare([System.IO.Path]::GetExtension($FilePath), ".msgpack") -eq 0)
+}
+
+# Select the coverage multipart content type that matches the captured payload.
+function Get-CoveragePayloadContentType([string]$FilePath) {
+    if (Test-MsgpackPayload $FilePath) { return "application/msgpack" }
+    return "application/json"
+}
+
+# Select the coverage multipart filename that matches the captured payload.
+function Get-CoveragePayloadFileName([string]$FilePath) {
+    if (Test-MsgpackPayload $FilePath) { return "filecoveragex.msgpack" }
+    return "filecoveragex.json"
 }
 
 # Delete file unless KeepPayloads is set
@@ -2623,7 +2640,73 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
   return [bool]$false
 }
 
+function Send-PostMsgpack([string]$url, [hashtable]$headers, [string]$file) {
+  $maxRetries = 3
+  $retryDelay = 2
+  if (-not (Ensure-HttpClientTypes)) {
+    Log "upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
+    return [bool]$false
+  }
+  for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+    $client = $null
+    try {
+      $client = New-Object System.Net.Http.HttpClient
+      $client.Timeout = [TimeSpan]::FromSeconds(60)
+      foreach ($k in $headers.Keys) {
+        $null = $client.DefaultRequestHeaders.Add($k, [string]$headers[$k])
+      }
+      Dbg "Send-PostMsgpack: POST $url (file '$file'; attempt $attempt/$maxRetries)"
+      $bytes = [IO.File]::ReadAllBytes($file)
+      $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $bytes)
+      $content.Headers.ContentType = 'application/msgpack'
+      Dbg "Send-PostMsgpack: Content-Type=application/msgpack"
+      $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
+      if ($resp.IsSuccessStatusCode) {
+        if ($script:DebugMode) {
+          $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+          if ($body) { Dbg "Send-PostMsgpack response: $body" }
+        }
+        return [bool]$true
+      } else {
+        $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        Dbg "Send-PostMsgpack: HTTP $([int]$resp.StatusCode) on attempt $attempt"
+        if ($attempt -eq $maxRetries) {
+          Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
+          return [bool]$false
+        }
+      }
+    } catch {
+      Dbg "Send-PostMsgpack: Exception on attempt $attempt - $_"
+      if ($attempt -eq $maxRetries) {
+        Log "upload failed: $_"
+        return [bool]$false
+      }
+    } finally {
+      if ($client) { $client.Dispose() }
+    }
+    Start-Sleep -Seconds $retryDelay
+  }
+  return [bool]$false
+}
+
 function Upload-SingleTest([string]$FilePath) {
+    if (Test-MsgpackPayload $FilePath) {
+        $hdrs = Get-CommonHeaders $null
+        if (-not $Agentless) { $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }
+        Dbg "Upload-SingleTest: posting raw msgpack '$FilePath'"
+        if ($script:DebugMode) {
+            Dbg "request: POST $TestUrl"
+            Dbg-Headers "common" $hdrs
+            Dbg "headers: Content-Type=application/msgpack"
+        }
+        $resultStream = @(Send-PostMsgpack $TestUrl $hdrs $FilePath)
+        $result = $false
+        if ($resultStream.Count -gt 0) {
+            $result = [bool]$resultStream[-1]
+        }
+        return [bool]$result
+    }
+
     $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
     Validate-Payload $body
@@ -2651,6 +2734,8 @@ function Upload-SingleTest([string]$FilePath) {
 
 function Upload-SingleCoverage([string]$FilePath) {
     $eventFile = Join-Path $script:TmpPayloadDir ("coverage_event_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+    $coverageContentType = Get-CoveragePayloadContentType $FilePath
+    $coverageFileName = Get-CoveragePayloadFileName $FilePath
     # Coverage endpoint expects multipart with an `event` part; a small dummy
     # object is sufficient and matches agentless/EVP server expectations.
     Write-Utf8NoBomFile -Path $eventFile -Content '{"dummy":true}'
@@ -2690,9 +2775,9 @@ function Upload-SingleCoverage([string]$FilePath) {
                 $content.Add($eventContent, 'event', 'fileevent.json')
                 $fs = [System.IO.File]::OpenRead($FilePath)
                 $covContent = New-Object System.Net.Http.StreamContent($fs)
-                $covContent.Headers.ContentType = 'application/json'
-                $content.Add($covContent, 'coveragex', 'filecoveragex.json')
-                Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries; Content-Type=multipart/form-data)"
+                $covContent.Headers.ContentType = $coverageContentType
+                $content.Add($covContent, 'coveragex', $coverageFileName)
+                Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries; Content-Type=multipart/form-data; coveragex=$coverageContentType)"
                 $resp = $client.PostAsync($CovUrl, $content).GetAwaiter().GetResult()
                 if ($resp.IsSuccessStatusCode) {
                     $uploaded = $true

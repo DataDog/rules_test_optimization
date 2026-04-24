@@ -485,9 +485,10 @@ def _go_macro_public_wrapper_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
-    asserts.equals(env, 2, len(files))
+    asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "go_macro_single_service_target"))
     asserts.true(env, _has_file_basename(files, "go_macro_single_service_target__wrapped_go_macro_single_service_target__raw_go_test.sh"))
+    asserts.true(env, _has_file_basename(files, "go_macro_single_service_target__ci_visibility_capture"))
     run_env = target[RunEnvironmentInfo].environment
     manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -560,25 +561,29 @@ def _wrapper_output_name_windows_test_impl(ctx):
     return analysistest.end(env)
 
 def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
-    """Assert the wrapper target ships the sibling raw executable."""
+    """Assert the wrapper target ships sibling raw and capture executables."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__ci_visibility_capture"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__ci_visibility_capture"))
     return analysistest.end(env)
 
 def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
-    """Assert the Windows wrapper target carries the sibling raw executable."""
+    """Assert the Windows wrapper target carries sibling raw and capture executables."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target.bat"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__ci_visibility_capture.exe"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__ci_visibility_capture.exe"))
     return analysistest.end(env)
 
 go_macro_single_service_wiring_test = analysistest.make(

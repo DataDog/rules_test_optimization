@@ -32,7 +32,7 @@ func TestReplaceManagedSectionAppendsWhenMissing(t *testing.T) {
 
 func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.6.0",
+		orchestrionVersion: "v1.9.0",
 		ddTraceGoVersion:   "v2.5.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
@@ -50,7 +50,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `orchestrion.from_source(`) {
 		t.Fatalf("expected orchestrion extension call in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `version = "v1.6.0"`) {
+	if !strings.Contains(got, `version = "v1.9.0"`) {
 		t.Fatalf("expected orchestrion version in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `dd_trace_go_version = "v2.5.0"`) {
@@ -63,7 +63,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 
 func TestManagedModuleBlockIncludesPerModuleVersions(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.6.0",
+		orchestrionVersion: "v1.9.0",
 		ddTraceGoVersions: map[string]string{
 			"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
 			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -165,15 +165,15 @@ func TestWriteOrchestrionToolFileWritesManagedImports(t *testing.T) {
 
 func TestBootstrapSyncCommandsPinConfiguredOrchestrionVersion(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.6.0",
-		ddTraceGoVersion:   "v2.7.3",
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev",
 	}
 
 	got := bootstrapSyncCommands(cfg)
 	if len(got) < 2 {
 		t.Fatalf("bootstrapSyncCommands returned too few commands: %#v", got)
 	}
-	if strings.Join(got[0], " ") != "mod edit -require=github.com/DataDog/orchestrion@v1.6.0" {
+	if strings.Join(got[0], " ") != "mod edit -require=github.com/DataDog/orchestrion@v1.9.0" {
 		t.Fatalf("first bootstrap sync command=%q, want orchestrion version pin", strings.Join(got[0], " "))
 	}
 	if strings.Join(got[len(got)-1], " ") != "mod tidy" {
@@ -624,7 +624,7 @@ func TestEnsureBootstrapCanManageTracerConfigRejectsManualTracerConfig(t *testin
 	content := `module(name = "example")
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.6.0",
+    version = "v1.9.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -649,7 +649,7 @@ git_override(
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.6.0",
+    version = "v1.9.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
