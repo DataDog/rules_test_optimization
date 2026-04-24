@@ -8,7 +8,7 @@ layers:
 - `third_party/rules_go_orchestrion/`:
   the clean Orchestrion-enabled base fork
 - `third_party/rules_go_patches/`:
-  the canonical optional external `dd-source` patch series
+  the canonical optional external `internal monorepo` patch series
 - `tools/tests/rules_go_patch_regressions/`:
   maintainer-only proof fixtures that strengthen local regression coverage but
   are not exported to consumers
@@ -41,13 +41,14 @@ It records:
 - the per-patch filename, commit, ordering, summary, prerequisites, and
   `touches_module_files` flag
 
-The current nine patch filenames and their ordering stay unchanged.
+The canonical patch ordering stays unchanged, but the final `0016` patch is now
+`0016-lazy-cc-toolchain-resolution.patch`.
 
 ### Exact-Tree Manifest
 
 `third_party/rules_go_patched_tree_manifest.json` records the canonical
 full-patched fork that consumers should get when they apply
-`dd_source_full`.
+`all_patches`.
 
 It records only:
 
@@ -81,12 +82,13 @@ The proof overlay must not carry consumer-visible behavior.
 
 ### Clean Base Fork
 
-`third_party/rules_go_orchestrion/` is reset to the subtree recorded by
-`base_commit` in the manifest.
+`third_party/rules_go_orchestrion/` is reset to the subtree recorded by the
+manifest's clean-base ref. The ref is intentionally `HEAD` so the proof survives
+the repository's squash-merge workflow.
 
 After this reset:
 
-- no `dd-source` patch artifacts remain under the vendored subtree
+- no `internal monorepo` patch artifacts remain under the vendored subtree
 - no maintainer-only proof fixtures remain under the vendored subtree
 - the checked-in subtree represents the clean Orchestrion-enabled base fork
 
@@ -176,10 +178,10 @@ It must never export the maintainer-only proof overlay.
 `tools/dev/verify_rules_go_patch_series.py` supports four modes:
 
 - `--bundle none`
-  verifies that the checked-in clean base subtree matches the archived
-  `base_commit` byte-for-byte
-- `--bundle dd_source_full`
-  materializes `base + dd_source_full`, normalizes it, and compares it to
+  verifies that the checked-in clean base subtree matches the manifest's
+  clean-base ref byte-for-byte
+- `--bundle all_patches`
+  materializes `base + all_patches`, normalizes it, and compares it to
   `third_party/rules_go_patched_tree_manifest.json`
 - repeated `--patch <filename>`
   verifies canonical ordering, prerequisites, and clean `patch -p1`
@@ -189,7 +191,7 @@ It must never export the maintainer-only proof overlay.
 
 `LOCAL_VALIDATION_ONLY_PATHS` is removed completely. The old excluded files
 `go/private/context.bzl` and `tests/core/starlark/context_tests.bzl` are now
-required outputs of `dd_source_full`.
+required outputs of `all_patches`.
 
 ### Temp-Tree Materialization
 
@@ -243,7 +245,7 @@ The documented and tool-generated destination for Bzlmod patch files is always
 
 The exact-tree proof is mandatory:
 
-- `base + dd_source_full` must reproduce
+- `base + all_patches` must reproduce
   `third_party/rules_go_patched_tree_manifest.json`
 
 This is the mechanical proof that the canonical patch bundle still describes the
@@ -259,7 +261,7 @@ proof.
 
 Both scripts:
 
-1. materialize `base + dd_source_full` in a temp tree
+1. materialize `base + all_patches` in a temp tree
 2. apply the maintainer-only proof overlay
 3. run vendored-fork regression targets from that temp tree
 
@@ -276,7 +278,7 @@ The generic consumer proof uses only two named public-consumer lanes:
 Each supports:
 
 - base-only mode
-- `RULES_GO_PATCH_BUNDLE=dd_source_full`
+- `RULES_GO_PATCH_BUNDLE=all_patches`
 
 These are the only canonical generic patch-layer repro lanes. If a bug is
 described as a generic consumer defect, it must reproduce in at least one of
@@ -338,13 +340,13 @@ Done means all of these pass:
 
 - `./bazelw test //...`
 - `python3 tools/dev/verify_rules_go_patch_series.py --bundle none`
-- `python3 tools/dev/verify_rules_go_patch_series.py --bundle dd_source_full`
+- `python3 tools/dev/verify_rules_go_patch_series.py --bundle all_patches`
 - `./tools/dev/run_rules_go_patch_smoke.sh`
 - `./tools/dev/run_rules_go_patch_extended.sh`
 - `./tools/tests/integration/run_workspace_go_integration.sh`
-- `RULES_GO_PATCH_BUNDLE=dd_source_full ./tools/tests/integration/run_workspace_go_integration.sh`
+- `RULES_GO_PATCH_BUNDLE=all_patches ./tools/tests/integration/run_workspace_go_integration.sh`
 - `./tools/tests/integration/run_bzlmod_go_patch_integration.sh`
-- `RULES_GO_PATCH_BUNDLE=dd_source_full ./tools/tests/integration/run_bzlmod_go_patch_integration.sh`
+- `RULES_GO_PATCH_BUNDLE=all_patches ./tools/tests/integration/run_bzlmod_go_patch_integration.sh`
 - `cd ../rules_test_optimization_tests && ./runtests && ./runtests-hermetic`
 - `cd ../rules_test_optimization_tests/fixtures/workspace-go && ./runtests && ./runtests-hermetic`
 

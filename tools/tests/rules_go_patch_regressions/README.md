@@ -11,6 +11,6 @@ These files are intentionally separate from the canonical external patch bundle:
   `third_party/rules_go_patched_tree_manifest.json`
 
 The shell harnesses in `tools/dev/run_rules_go_patch_smoke.sh` and
-`tools/dev/run_rules_go_patch_extended.sh` materialize `base + dd_source_full`
+`tools/dev/run_rules_go_patch_extended.sh` materialize `base + all_patches`
 first, then copy this overlay into the temporary tree before running the local
 maintainer regression targets.

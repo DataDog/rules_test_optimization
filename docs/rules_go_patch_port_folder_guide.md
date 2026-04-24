@@ -5,7 +5,7 @@ This note explains the current `rules_go` split in plain maintainer terms.
 The repository no longer keeps one mixed vendored tree that tries to represent:
 
 - the clean Orchestrion-enabled base fork
-- the optional `dd-source` patch stack
+- the optional `internal monorepo` patch stack
 - extra local-only regression fixtures
 
 Those concerns now live in separate places so the resulting model is easier to
@@ -28,7 +28,8 @@ Why it matters:
 
 - the repository root and `modules/go/MODULE.bazel` both point here directly
 - `verify_rules_go_patch_series.py --bundle none` proves this subtree matches
-  the manifest’s `base_commit`
+  the manifest's clean-base ref; it is `HEAD` so this proof still works after a
+  squash merge
 - `diff_rules_go_fork.py` now reports the clean-base delta against upstream,
   not a mixed base-plus-patches tree
 
@@ -52,7 +53,7 @@ Why it matters:
 
 - this is the artifact set `export_rules_go_patch_bundle.py` copies into
   consumer-owned workspaces
-- this is the bundle `verify_rules_go_patch_series.py --bundle dd_source_full`
+- this is the bundle `verify_rules_go_patch_series.py --bundle all_patches`
   applies on top of the clean base
 - consumers must export their own copy of this directory; they must not point at
   the checked-in copy through
@@ -116,8 +117,8 @@ It intentionally excludes:
 
 Why it matters:
 
-- `verify_rules_go_patch_series.py --bundle dd_source_full` proves that
-  `base + dd_source_full` reproduces this manifest exactly
+- `verify_rules_go_patch_series.py --bundle all_patches` proves that
+  `base + all_patches` reproduces this manifest exactly
 
 ## The Tooling Layout
 
@@ -159,7 +160,7 @@ vendored subtree.
 Verifies:
 
 - clean base identity with `--bundle none`
-- canonical full bundle exact-tree reproduction with `--bundle dd_source_full`
+- canonical full bundle exact-tree reproduction with `--bundle all_patches`
 - subset ordering, prerequisites, and clean `patch -p1` application with
   repeated `--patch`
 
@@ -176,7 +177,7 @@ fork?”
 
 That proof is:
 
-- `python3 tools/dev/verify_rules_go_patch_series.py --bundle dd_source_full`
+- `python3 tools/dev/verify_rules_go_patch_series.py --bundle all_patches`
 
 ### Maintainer Regression Proof
 
@@ -191,7 +192,7 @@ That proof lives in:
 - `tools/dev/run_rules_go_patch_extended.sh`
 
 Both scripts materialize a temp tree from the clean base, apply
-`dd_source_full`, overlay the maintainer-only regressions, and run the vendored
+`all_patches`, overlay the maintainer-only regressions, and run the vendored
 fork test targets there.
 
 ### Consumer Repro Proof

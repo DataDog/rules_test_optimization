@@ -26,7 +26,7 @@ EXPECTED_PATCH_FILENAMES = (
     "0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
     "0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
     "0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch",
-    "0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
+    "0016-lazy-cc-toolchain-resolution.patch",
 )
 
 
@@ -57,10 +57,8 @@ def _git_command_succeeds(
     return True
 
 
-def _validate_manifest_commit_reachability(manifest: dict, git_runner=run_git) -> None:
-    """Reject manifest commits that are missing from or detached from repository history."""
-    commit_labels = [("base_commit", manifest["base_commit"])]
-    commit_labels.extend((patch["filename"], patch["commit"]) for patch in manifest["patches"])
+def _validate_commit_refs(commit_labels: Iterable[tuple[str, str]], git_runner=run_git) -> None:
+    """Reject commit refs that are missing from or detached from repository history."""
     for label, commit in commit_labels:
         if not _git_command_succeeds(git_runner, "cat-file", "-e", f"{commit}^{{commit}}"):
             raise PatchSeriesError(f"manifest commit for {label!r} does not exist: {commit}")
@@ -79,6 +77,26 @@ def _validate_manifest_commit_reachability(manifest: dict, git_runner=run_git) -
             )
 
 
+def _validate_manifest_commit_reachability(manifest: dict, git_runner=run_git) -> None:
+    """Reject the clean-base ref when it is missing from repository history."""
+    _validate_commit_refs([("base_commit", manifest["base_commit"])], git_runner=git_runner)
+
+
+def validate_patch_source_commits(manifest: dict, git_runner=run_git) -> None:
+    """Validate maintainer-only source commits used to regenerate checked-in patch files.
+
+    The repository uses squash merges, so patch-source commits from a review
+    branch are not guaranteed to survive in ``main`` history. Normal validation
+    therefore treats checked-in patch files as the consumer contract and only
+    validates the clean-base ref. Maintainer regeneration flows can call this
+    helper when the source commits are available locally.
+    """
+    _validate_commit_refs(
+        ((patch["filename"], patch["commit"]) for patch in manifest["patches"]),
+        git_runner=git_runner,
+    )
+
+
 def load_manifest(
     path: Path = DEFAULT_MANIFEST_PATH,
     *,
@@ -90,6 +108,9 @@ def load_manifest(
     Set ``validate_commit_reachability`` to ``False`` only for workflows that
     consume the checked-in patch files directly and do not need local git
     history, such as exporting a bundle from a shallow clone or source snapshot.
+    Patch-source commits are maintainer provenance for regenerating checked-in
+    patch files; use ``validate_patch_source_commits`` when that history is
+    intentionally available.
     """
     manifest = json.loads(path.read_text(encoding="utf-8"))
     patch_filenames = tuple(patch["filename"] for patch in manifest["patches"])
@@ -101,9 +122,9 @@ def load_manifest(
         )
 
     patch_lookup = {patch["filename"]: patch for patch in manifest["patches"]}
-    if set(manifest["bundles"]) != {"none", "dd_source_full"}:
+    if set(manifest["bundles"]) != {"none", "all_patches"}:
         raise PatchSeriesError(
-            f"manifest bundles must be exactly ['dd_source_full', 'none'], got {sorted(manifest['bundles'])}"
+            f"manifest bundles must be exactly ['all_patches', 'none'], got {sorted(manifest['bundles'])}"
         )
 
     for bundle_name, bundle_patches in manifest["bundles"].items():

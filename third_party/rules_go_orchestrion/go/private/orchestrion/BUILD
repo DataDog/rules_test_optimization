@@ -1,5 +1,18 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 
+filegroup(
+    name = "all_rules",
+    srcs = glob(["**/*.bzl"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "all_files",
+    testonly = True,
+    srcs = glob(["**"]),
+    visibility = ["//visibility:public"],
+)
+
 bool_flag(
     name = "enabled",
     build_setting_default = False,

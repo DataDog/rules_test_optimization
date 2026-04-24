@@ -40,6 +40,7 @@ class Action:
     """Represents the subset of aquery action data needed by this check."""
 
     mnemonic: str
+    arguments: list[str] = field(default_factory=list)
     environment: dict[str, str] = field(default_factory=dict)
     input_dep_set_ids: list[int] = field(default_factory=list)
 
@@ -148,6 +149,7 @@ def _parse_dep_set(lines: list[str]) -> DepSetOfFiles:
 
 def _parse_action(lines: list[str]) -> Action:
     mnemonic = None
+    arguments: list[str] = []
     environment: dict[str, str] = {}
     input_dep_set_ids: list[int] = []
 
@@ -156,6 +158,8 @@ def _parse_action(lines: list[str]) -> Action:
         line = lines[idx]
         if line.startswith("mnemonic:"):
             mnemonic = _strip_quoted(_parse_scalar(line, "mnemonic:"))
+        elif line.startswith("arguments:"):
+            arguments.append(_strip_quoted(_parse_scalar(line, "arguments:")))
         elif line.startswith("input_dep_set_ids:"):
             input_dep_set_ids.append(int(_parse_scalar(line, "input_dep_set_ids:")))
         elif line == "environment_variables {":
@@ -175,7 +179,12 @@ def _parse_action(lines: list[str]) -> Action:
 
     if mnemonic is None:
         raise ValueError(f"invalid action block: {lines}")
-    return Action(mnemonic=mnemonic, environment=environment, input_dep_set_ids=input_dep_set_ids)
+    return Action(
+        mnemonic=mnemonic,
+        arguments=arguments,
+        environment=environment,
+        input_dep_set_ids=input_dep_set_ids,
+    )
 
 
 def _build_path(path_fragments: dict[int, PathFragment], fragment_id: int) -> str:
@@ -240,6 +249,12 @@ def _contains_module_proxy_payload(paths: list[str]) -> bool:
             continue
         return True
     return False
+
+
+def _uses_orchestrion(action: Action) -> bool:
+    """Return whether the action is expected to use Orchestrion inputs."""
+
+    return "-orchestrion" in action.arguments
 
 
 def _assert_expected_action(
@@ -334,8 +349,21 @@ def main() -> int:
     _require(link_actions, "aquery did not contain any GoLink actions")
     _require(stdlib_list_actions, "aquery did not contain any GoStdlibList actions")
 
+    orchestrion_actions = []
     for action in compile_actions + stdlib_actions + link_actions:
-        _assert_expected_action(action, _action_inputs(action, artifacts, dep_sets, path_fragments), require_proxy=True)
+        require_proxy = _uses_orchestrion(action)
+        if require_proxy:
+            orchestrion_actions.append(action)
+        _assert_expected_action(
+            action,
+            _action_inputs(action, artifacts, dep_sets, path_fragments),
+            require_proxy=require_proxy,
+        )
+
+    _require(
+        orchestrion_actions,
+        "aquery did not contain any Orchestrion-enabled Go compile, stdlib, or link actions",
+    )
 
     for action in stdlib_list_actions:
         _assert_expected_action(action, _action_inputs(action, artifacts, dep_sets, path_fragments), require_proxy=False)

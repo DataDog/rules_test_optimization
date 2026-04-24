@@ -1,6 +1,6 @@
 # Go + Orchestrion + Bazel Deep Dive
 
-> Scope note: the consumer-visible optional `dd-source` patch layer now lives in
+> Scope note: the consumer-visible optional `internal monorepo` patch layer now lives in
 > `third_party/rules_go_patches`, and maintainer-only local regression fixtures
 > live in `tools/tests/rules_go_patch_regressions`. References in this document
 > to `third_party/rules_go_orchestrion` describe the clean base fork unless a
@@ -184,7 +184,7 @@ It aligns:
 - the selected `dd-trace-go` version used by Bazel injection
 - the pinned Go module files that Orchestrion expects
 
-If no tracer setting is present, the default is still `v2.7.3`. Bootstrap keeps
+If no tracer setting is present, the default is still `v2.9.0-dev`. Bootstrap keeps
 the local Go module on the same effective versions, and the Bazel build now
 fails fast if the workspace setting and the local Go module pins drift apart.
 

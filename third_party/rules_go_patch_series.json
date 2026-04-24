@@ -1,7 +1,7 @@
 {
   "subtree_path": "third_party/rules_go_orchestrion",
   "patch_dir": "third_party/rules_go_patches",
-  "base_commit": "51076fd726f6261248071422b13c6d409e103dad",
+  "base_commit": "HEAD",
   "base_remote": "https://github.com/Datadog/rules_test_optimization.git",
   "base_strip_prefix": "third_party/rules_go_orchestrion",
   "full_tree_manifest": "third_party/rules_go_patched_tree_manifest.json",
@@ -12,7 +12,7 @@
   ],
   "bundles": {
     "none": [],
-    "dd_source_full": [
+    "all_patches": [
       "0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
       "0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch",
       "0009-Use-LLVM-for-all-linking.patch",
@@ -21,7 +21,7 @@
       "0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
       "0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
       "0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch",
-      "0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch"
+      "0016-lazy-cc-toolchain-resolution.patch"
     ]
   },
   "patches": [
@@ -97,10 +97,10 @@
       "touches_module_files": false
     },
     {
-      "filename": "0016-Fix-go_context-check-cached-CgoContextInfo-provider-b.patch",
-      "commit": "faaab0fbd06980b891a022bd8422f5f254d78f6f",
+      "filename": "0016-lazy-cc-toolchain-resolution.patch",
+      "commit": "1efadd381e17b17815d076fae3a7ca41f9c669e5",
       "order": 9,
-      "summary": "Reuse cached CgoContextInfo providers safely in go_context.",
+      "summary": "Resolve the C/C++ toolchain lazily for rules that do not use cgo.",
       "requires": [
         "0011-fix-cdeps-propagation.patch",
         "0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch"
