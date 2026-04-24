@@ -184,7 +184,7 @@ It aligns:
 - the selected `dd-trace-go` version used by Bazel injection
 - the pinned Go module files that Orchestrion expects
 
-If no tracer setting is present, the default is still `v2.7.3`. Bootstrap keeps
+If no tracer setting is present, the default is still `v2.9.0-dev`. Bootstrap keeps
 the local Go module on the same effective versions, and the Bazel build now
 fails fast if the workspace setting and the local Go module pins drift apart.
 

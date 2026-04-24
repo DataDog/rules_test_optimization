@@ -41,7 +41,8 @@ It records:
 - the per-patch filename, commit, ordering, summary, prerequisites, and
   `touches_module_files` flag
 
-The current nine patch filenames and their ordering stay unchanged.
+The canonical patch ordering stays unchanged, but the final `0016` patch is now
+`0016-lazy-cc-toolchain-resolution.patch`.
 
 ### Exact-Tree Manifest
 
