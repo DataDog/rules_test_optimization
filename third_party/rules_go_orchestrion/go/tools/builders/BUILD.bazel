@@ -192,11 +192,13 @@ go_source(
         "nogo_typeparams_go117.go",
         "nogo_typeparams_go118.go",
         "nolint.go",
+        "module_proxy.go",
         "orchestrion.go",
         "orchestrion_cache.go",
         "orchestrion_synthetic_tool.go",
         "orchestrion_version.go",
         "probe.go",
+        "tool_version.go",
     ],
     # //go/tools/builders:nogo_srcs is considered a different target by
     # Bazel's visibility check than
@@ -218,11 +220,13 @@ go_binary(
         "env.go",
         "flags.go",
         "go_path.go",
+        "module_proxy.go",
         "orchestrion.go",
         "orchestrion_cache.go",
         "orchestrion_synthetic_tool.go",
         "orchestrion_version.go",
         "probe.go",
+        "tool_version.go",
     ],
     visibility = ["//visibility:public"],
 )
