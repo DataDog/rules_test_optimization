@@ -57,13 +57,16 @@ capture_helper="$script_dir/%s"
 metadata_basename="${DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME:-}"
 undeclared_dir="${TEST_UNDECLARED_OUTPUTS_DIR:-}"
 payloads_in_files="${DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES:-}"
-test_exit=0
+test_exit=""
 capture_pid=""
 capture_port_file=""
 capture_stop_file=""
 
 cleanup() {
-  local exitcode="${test_exit:-0}"
+  local exitcode="$?"
+  if [[ -n "${test_exit:-}" ]]; then
+    exitcode="$test_exit"
+  fi
   if [[ -n "$capture_stop_file" ]]; then
     : > "$capture_stop_file" 2>/dev/null || true
   fi
