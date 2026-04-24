@@ -14,7 +14,7 @@
 
 """Module extension for configuring orchestrion in rules_go."""
 
-DEFAULT_DD_TRACE_GO_VERSION = "v2.7.3"
+DEFAULT_DD_TRACE_GO_VERSION = "v2.9.0-dev"
 ORCHESTRION_BOOTSTRAP_CACHE_ABI = "v3"
 ORCHESTRION_SEED_GO_MOD_VERSION = "1.21"
 

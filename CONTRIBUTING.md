@@ -41,7 +41,7 @@
   - `./bazelw test //tools/tests/python:python_tools_test`
 - rules_go clean-base and patch-bundle verification:
   - `python3 tools/dev/verify_rules_go_patch_series.py --bundle none`
-  - `python3 tools/dev/verify_rules_go_patch_series.py --bundle dd_source_full`
+  - `python3 tools/dev/verify_rules_go_patch_series.py --bundle all_patches`
 - Optional Python tooling dependencies (for local script execution):
   - `python3 -m pip install --require-hashes -r tools/requirements.txt`
 - Local lint prerequisites (match CI tooling):
@@ -64,18 +64,18 @@
   - WORKSPACE base-only:
     `USE_BAZEL_VERSION=8.4.1 tools/tests/integration/run_workspace_go_integration.sh`
   - WORKSPACE with the canonical full patch bundle:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base-only:
     `USE_BAZEL_VERSION=8.4.1 tools/tests/integration/run_bzlmod_go_patch_integration.sh`
   - Bzlmod with the canonical full patch bundle:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full tools/tests/integration/run_bzlmod_go_patch_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches tools/tests/integration/run_bzlmod_go_patch_integration.sh`
   - Each script now validates:
     - normal mode
     - hermetic mode with the inline CI sandbox/network-blocking flags
     - structural `aquery` assertions for the Orchestrion offline module proxy wiring
 - Vendored rules_go patch smoke:
   - `tools/dev/run_rules_go_patch_smoke.sh`
-  - materializes `base + dd_source_full`, applies the maintainer-only proof
+  - materializes `base + all_patches`, applies the maintainer-only proof
     overlay, and runs the fast vendored-fork regression set from that temp tree
 - Vendored rules_go extended patch coverage:
   - `tools/dev/run_rules_go_patch_extended.sh`
@@ -118,9 +118,9 @@
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
 - `workspace-compat`:
   - WORKSPACE base-only
-  - WORKSPACE `dd_source_full`
+  - WORKSPACE `all_patches`
   - Bzlmod base-only
-  - Bzlmod `dd_source_full`
+  - Bzlmod `all_patches`
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
 - `rules-go-patch-smoke`:
   - vendored `rules_go` patch-series verification and fast fork regression coverage

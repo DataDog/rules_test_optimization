@@ -29,9 +29,12 @@ PYTHON="${PYTHON:-python3}"
 GO_BIN="${GO_BIN:-go}"
 BAZEL="${BAZEL:-$REPO_ROOT/bazelw}"
 BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion")}"
+# Keep Bazel's output roots inside the fixture temp tree so each CI step can
+# release downloaded SDKs, extracted repos, and sandbox outputs during cleanup.
+BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.7.3}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev}"
 SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_bzlmod_go_integration}"
@@ -58,6 +61,7 @@ HERMETIC_TEST_FLAGS=(
 )
 
 cleanup() {
+  USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown >/dev/null 2>&1 || true
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
     return
@@ -183,7 +187,7 @@ export_patch_bundle() {
     return
   fi
 
-  if [[ "$RULES_GO_PATCH_BUNDLE" != "dd_source_full" ]]; then
+  if [[ "$RULES_GO_PATCH_BUNDLE" != "all_patches" ]]; then
     echo "error: unsupported RULES_GO_PATCH_BUNDLE=$RULES_GO_PATCH_BUNDLE" >&2
     exit 1
   fi
@@ -428,14 +432,14 @@ EOF
 write_orchestrion_go_sum() {
   local ws_dir="$1"
 
-  if [[ "$DD_TRACE_GO_VERSION" == "v2.7.3" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
+  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0-dev" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
     cat > "$ws_dir/go.sum" <<'EOF'
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3 h1:l4Uaefp1bXzb9E3x6VbJDMoBqIcfhmjrTfrmtM6PZb0=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3/go.mod h1:jli1jidldlU46UvU4aA9B0DZQnZsBIK21ZflvwtTPEU=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3 h1:bXasqgAk+6J/MdoRoNKxryo4GMDnvyTgUumYphG2vC4=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3/go.mod h1:fYK/2lv+okgQbys4k4O3TWAnTYkiXYflqFJYvYChnUI=
-github.com/DataDog/dd-trace-go/v2 v2.7.3 h1:luLd8qQyoS23mKHvdDxqS3WHdP6E4z27XWVzFcunNFQ=
-github.com/DataDog/dd-trace-go/v2 v2.7.3/go.mod h1:wpDvium/HsCzcTSmvpq4wieWBrnTm7Q+bUqkefKp/B0=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev h1:WVGHErclGDYowS/0ROrnXw0pPcxSHWNMnEw/+g4cbbo=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev/go.mod h1:lJgKQz0CkbXSjn2LysuMZC0fyp5E4IHNdc1Pg4FprCQ=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev h1:vydpo2e5maPZbfa9oUNokWKyA/iU0Nd2DI/lMLzspBU=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev/go.mod h1:ftRJ7ZxpQrPe1j4WNHtVvxQSa0bvNcVPdEnOgdnet8s=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev h1:CVSMydw9FRPzC07o8GHLOZtpkOk/JJcRpEKgOIeaPDA=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev/go.mod h1:DnPEO+93yfskSYAcOw5v5EJVBZ3Z1ENMNtOQX/D/lME=
 github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=
 github.com/DataDog/orchestrion v1.6.0/go.mod h1:CYY2VfaEQVr+gwKSlpUoHBF9JIO4eV3BfSeG0YAQwZE=
 EOF
@@ -544,7 +548,7 @@ run_fixture_subscenario() {
   if [[ "$mode" == "standard" ]]; then
     (
       cd "$ws_dir"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test "${bzlmod_flags[@]}" "$HELLO_TEST_TARGET"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test "${bzlmod_flags[@]}" "$HELLO_TEST_TARGET"
     )
     return
   fi
@@ -568,19 +572,19 @@ run_fixture_subscenario() {
   if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     (
       cd "$ws_dir"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" aquery \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
         "${bzlmod_flags[@]}" \
         "deps(${HELLO_TEST_TARGET})" \
         --output=textproto > /dev/null
     )
     (
       cd "$ws_dir"
-      output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" info "${bzlmod_flags[@]}" output_base)"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" shutdown
+      output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${bzlmod_flags[@]}" output_base)"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
       start_ns="$(wall_time_ns)"
       HOME="$hermetic_home" \
       XDG_CACHE_HOME="$hermetic_xdg" \
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
         "${bzlmod_flags[@]}" \
         "${HERMETIC_BUILD_FLAGS[@]}" \
         "${HERMETIC_TEST_FLAGS[@]}" \
@@ -603,7 +607,7 @@ PY
     cd "$ws_dir"
     HOME="$hermetic_home" \
     XDG_CACHE_HOME="$hermetic_xdg" \
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       "${bzlmod_flags[@]}" \
       "${HERMETIC_BUILD_FLAGS[@]}" \
       "${HERMETIC_TEST_FLAGS[@]}" \
@@ -614,7 +618,7 @@ PY
       cd "$ws_dir"
       HOME="$hermetic_home" \
       XDG_CACHE_HOME="$hermetic_xdg" \
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" aquery \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
         "${bzlmod_flags[@]}" \
         "${HERMETIC_BUILD_FLAGS[@]}" \
         "deps(${HELLO_TEST_TARGET})" \

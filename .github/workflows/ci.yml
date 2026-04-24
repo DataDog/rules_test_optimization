@@ -315,10 +315,10 @@ jobs:
         run: |
           USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_workspace_go_integration.sh
 
-      - name: Validate WORKSPACE Go companion path (dd_source_full)
+      - name: Validate WORKSPACE Go companion path (all_patches)
         shell: bash
         run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full \
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches \
             ./tools/tests/integration/run_workspace_go_integration.sh
 
       - name: Validate Bzlmod Go companion path (base-only)
@@ -326,10 +326,10 @@ jobs:
         run: |
           USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_bzlmod_go_patch_integration.sh
 
-      - name: Validate Bzlmod Go companion path (dd_source_full)
+      - name: Validate Bzlmod Go companion path (all_patches)
         shell: bash
         run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=dd_source_full \
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches \
             ./tools/tests/integration/run_bzlmod_go_patch_integration.sh
 
   coverage-tools:

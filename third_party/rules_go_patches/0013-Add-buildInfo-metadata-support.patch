@@ -28,6 +28,28 @@ index f582021..9c2c994 100644
          "//go/private/rules:library",
          "//go/private/rules:nogo",
          "//go/private/rules:sdk",
+diff --git a/go/private/BUILD.bazel b/go/private/BUILD.bazel
+index 8edbc7c..48c07d7 100644
+--- a/go/private/BUILD.bazel
++++ b/go/private/BUILD.bazel
+@@ -7,7 +7,8 @@ filegroup(
+     srcs = [
+         "//go/private/actions:all_rules",
+         "//go/private/orchestrion:all_rules",
++        "//go/private/aspects:all_rules",
+         "//go/private/rules:all_rules",
+         "//go/private/skylib/lib:all_rules",
+         "//go/private/tools:all_rules",
+     ] + glob(["**/*.bzl"]),
+@@ -20,7 +21,8 @@ filegroup(
+     srcs = [
+         "//go/private/actions:all_files",
+         "//go/private/orchestrion:all_files",
++        "//go/private/aspects:all_files",
+         "//go/private/rules:all_files",
+         "//go/private/skylib/lib:all_files",
+         "//go/private/tools:all_files",
+     ] + glob(["**"]),
 diff --git a/go/private/actions/binary.bzl b/go/private/actions/binary.bzl
 index 4af8109..97d8a9d 100644
 --- a/go/private/actions/binary.bzl

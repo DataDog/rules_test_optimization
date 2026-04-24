@@ -358,7 +358,7 @@
       "path": "extras/gomock.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "672b242c192160baac017636c6ce2fb59f5da9b9969e50c7c6b6fa48d3f0d500"
+      "sha256": "015ee8aab51b996703d132852915cff8900aec3d6e10b155f3adbe99f823b434"
     },
     {
       "path": "extras/gomock/BUILD.bazel",
@@ -484,7 +484,13 @@
       "path": "go/private/BUILD.bazel",
       "kind": "file",
       "executable": false,
-      "sha256": "436bef92b0d5f321aba379cbf2a9965ba6c7e41e4a628f8ee657f546f2510ab8"
+      "sha256": "91bb0185ef492824021d94935eaeddabd6d9d8c50c7c0698bfc888fa7fd9811d"
+    },
+    {
+      "path": "go/private/BUILD.bazel.orig",
+      "kind": "file",
+      "executable": false,
+      "sha256": "451dbe147325ce6e6d76768a1afe602ba765400233647f8c56301123be24b450"
     },
     {
       "path": "go/private/BUILD.nogo.bazel",
@@ -568,7 +574,7 @@
       "path": "go/private/context.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "99e7dcb468d7f5cadf910df458d7d5511e6d3f2d2eb55f16efe786cd29cb25c7"
+      "sha256": "cb850d230b738b16b16020a278309db39946b6f7ed72c8c6653c032765ce2d5b"
     },
     {
       "path": "go/private/coverage_shim.go",
@@ -610,13 +616,13 @@
       "path": "go/private/orchestrion/BUILD",
       "kind": "file",
       "executable": false,
-      "sha256": "2456d773be8214934ad62b8858836c9e154ad9b2a4f6c7fbe11ec6b7b7f63461"
+      "sha256": "827edaabd1e614fef8e3de4e4294162c70ce9be1b30ef29439b5d46e8d1007b2"
     },
     {
       "path": "go/private/orchestrion/extensions.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "a1f514f6f4ff50f15ccf044d252df07ef733a971eb194ff72173ca19f98ad2a9"
+      "sha256": "1f476b66b20b9217683763f7d82f5c5b29e5891a350c6063601a40f630eb9d60"
     },
     {
       "path": "go/private/platforms.bzl",
@@ -688,19 +694,19 @@
       "path": "go/private/rules/info.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "f7e4eb3395425c16cd44ab49d9b2f58333102521664af7a2f00a862ab85f2be4"
+      "sha256": "06c81b16bfb0305548ae2c54723c0ab25673160156c891d29db83165e958073e"
     },
     {
       "path": "go/private/rules/library.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "c4156ad4622daea6887bc1828b33ab128fc60d1ca7988bea8761ec397dcd684b"
+      "sha256": "780f3db9dd7185b4263df3ef6cac4790a9ead0a7919dff086f58cd377ffbd503"
     },
     {
       "path": "go/private/rules/nogo.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "8967f0c98d38d2da56f13f6e2035e51aca24b7a40cd7c6c6c3b963b1539857ca"
+      "sha256": "0d4c6dfb4ea146b2443733473147fe49f683220d5268fab0aecc4bd7155e7569"
     },
     {
       "path": "go/private/rules/sdk.bzl",
@@ -712,7 +718,7 @@
       "path": "go/private/rules/source.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "34f2e04ea3f5442756bb146603b4991e8081b56a4773ef1a3a65fac76a804021"
+      "sha256": "0eb5f2936affa2c3381e0cfa3a1bf323ae76845df35fdc359813cd6654c20656"
     },
     {
       "path": "go/private/rules/stdlib.bzl",
@@ -964,7 +970,13 @@
       "path": "go/tools/builders/BUILD.bazel",
       "kind": "file",
       "executable": false,
-      "sha256": "82254c66e5535c5b267d1ef4d0124822219f8da2b7bad14cb5d5f3e87e384ddb"
+      "sha256": "7a8f1e7c78f20520fd23712faf62131b45fee7d9b8b49b1986ca8f8bc4414479"
+    },
+    {
+      "path": "go/tools/builders/BUILD.bazel.orig",
+      "kind": "file",
+      "executable": false,
+      "sha256": "7b0d7d412608a03f210767f2a56044f77bd33283585960f5ebe2d0625e7a1973"
     },
     {
       "path": "go/tools/builders/ar.go",
@@ -1018,7 +1030,7 @@
       "path": "go/tools/builders/compilepkg_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "a100fc846a5262490f2620509e80484d2561e454f919e424e352a1d996ee39ca"
+      "sha256": "8064964ea1eea963f736baf16b2a0b1918a46f8209f52e2912ff5b67a91073e3"
     },
     {
       "path": "go/tools/builders/constants.go",
@@ -1054,7 +1066,13 @@
       "path": "go/tools/builders/env.go",
       "kind": "file",
       "executable": false,
-      "sha256": "6ac7636abf7ecec8e13b6385214eadfeb380f7a2e6100646722442ee0e7a3bf3"
+      "sha256": "8d7c58fe16a7745926738dad960ffdc5b4d1933e468732a87ec1aa61cb8985c7"
+    },
+    {
+      "path": "go/tools/builders/env_orchestrion.go",
+      "kind": "file",
+      "executable": false,
+      "sha256": "946bf6e89f2acdf2a0009aa48e8ad9d69bf47591fed0210ebb59b75fdccaa0a7"
     },
     {
       "path": "go/tools/builders/env_test.go",
@@ -1108,13 +1126,13 @@
       "path": "go/tools/builders/importcfg.go",
       "kind": "file",
       "executable": false,
-      "sha256": "98589272b58351a89698742e789e87b374c6d7de0b7d8a2bf40771f20f6a3383"
+      "sha256": "b5953660bc73d2166b25eb3b84725c331628f3fc694ae418991a108091371b14"
     },
     {
       "path": "go/tools/builders/importcfg_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "a3ebad727b48188ddaafd9fe4fde6b0a89d3774430d5fc1214019c93190200f1"
+      "sha256": "325278b18ed9c713283e7915ed88b0515e8e2fe33ad57e025b22aaae06dd82ec"
     },
     {
       "path": "go/tools/builders/info.go",
@@ -1210,13 +1228,19 @@
       "path": "go/tools/builders/orchestrion_cache.go",
       "kind": "file",
       "executable": false,
-      "sha256": "76da5c377f308d64374515832719dd975f9527f88ce1094c1e16d67134fdd15e"
+      "sha256": "0241470abe68f5c05f2d2830f1f8f928922e84eba3534d42f1ff951a6302e1d0"
     },
     {
       "path": "go/tools/builders/orchestrion_cache_test.go",
       "kind": "file",
       "executable": false,
       "sha256": "6aaca3a0039999a8ce851c7ae5db06f6e87201d3f5e3a9e377aa258d43a9f2fe"
+    },
+    {
+      "path": "go/tools/builders/orchestrion_synthetic_tool.go",
+      "kind": "file",
+      "executable": false,
+      "sha256": "6f0961057f1e0a2d2f5f63e7413a61565f881eb7c2ed40d8f50f1ef7d020afe8"
     },
     {
       "path": "go/tools/builders/orchestrion_test.go",
@@ -1234,7 +1258,7 @@
       "path": "go/tools/builders/orchestrion_version.go",
       "kind": "file",
       "executable": false,
-      "sha256": "508cec81b70b8d39c3d1351cb3b3d494a2909cc2abd56dfe52537a2c263d5481"
+      "sha256": "776dc83bb8cc70c1e294622eac6f9928ea33bcc081d8d5da0cd92b6533239272"
     },
     {
       "path": "go/tools/builders/orchestrion_version_test.go",
@@ -1300,7 +1324,7 @@
       "path": "go/tools/builders/stdlib.go",
       "kind": "file",
       "executable": false,
-      "sha256": "8ec857a1369fa0f0aa6d76166fbb49e37719f2624c12f583f701cb2aa7a4c765"
+      "sha256": "974c884b6c0435c95158ba4aca294ecd52e12f4a76cf57e426d8b0b9ea57fd98"
     },
     {
       "path": "go/tools/builders/stdlib_test.go",
@@ -1738,7 +1762,7 @@
       "path": "proto/compiler.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "9476db39262d408b81e9b0024db1a69ccef80721365c022341a6a1b3917e2777"
+      "sha256": "f1a51adf89f20fdc63ac1d9019ac17e8c276bbb7083e5762890e8418a90a5b30"
     },
     {
       "path": "proto/core.rst",
@@ -1750,7 +1774,7 @@
       "path": "proto/def.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "bc6b5383628321a00b061b7e6d30893ccc9272a24954920a1d62660049785fd9"
+      "sha256": "29ff7f98e30cb97a8ddd3b9f60a95fc537ddccd1b3a4bb8c1cc63e5488c7c28d"
     },
     {
       "path": "proto/gogo.bzl",

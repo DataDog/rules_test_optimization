@@ -742,9 +742,9 @@ latest_mtime_all() {
             [[ -d "$dir" ]] || continue
             local mt
             if [[ "$STAT_FLAVOR" == "bsd" ]]; then
-                mt=$(find "$dir" -type f -name "*.json" -exec stat -f '%m' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
+                mt=$(find "$dir" -type f \( -name "*.json" -o -name "*.msgpack" \) -exec stat -f '%m' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
             else
-                mt=$(find "$dir" -type f -name "*.json" -exec stat -c '%Y' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
+                mt=$(find "$dir" -type f \( -name "*.json" -o -name "*.msgpack" \) -exec stat -c '%Y' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
             fi
             mt=${mt:-0}
             if (( mt > max_mtime )); then
@@ -765,17 +765,17 @@ count_payload_files() {
         local telemetry_dir="$outputs_dir/payloads/telemetry"
         if [[ -d "$tests_dir" ]]; then
             local tests_count
-            tests_count=$(find "$tests_dir" -name "*.json" 2>/dev/null | wc -l)
+            tests_count=$(find "$tests_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
             count=$((count + tests_count))
         fi
         if [[ -d "$cov_dir" ]]; then
             local cov_count
-            cov_count=$(find "$cov_dir" -name "*.json" 2>/dev/null | wc -l)
+            cov_count=$(find "$cov_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
             count=$((count + cov_count))
         fi
         if [[ -d "$telemetry_dir" ]]; then
             local telemetry_count
-            telemetry_count=$(find "$telemetry_dir" -name "*.json" 2>/dev/null | wc -l)
+            telemetry_count=$(find "$telemetry_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
             count=$((count + telemetry_count))
         fi
     done < <(echo "$TEST_OUTPUTS_CACHE")
@@ -2028,10 +2028,36 @@ matches_filter() {
     fi
 }
 
-# List JSON payload files in deterministic lexicographic order.
+# List replayable payload files in deterministic lexicographic order.
 list_sorted_payload_files() {
     local dir="$1"
-    find "$dir" -maxdepth 1 -type f -name "*.json" -print 2>/dev/null | LC_ALL=C sort
+    find "$dir" -maxdepth 1 -type f \( -name "*.json" -o -name "*.msgpack" \) -print 2>/dev/null | LC_ALL=C sort
+}
+
+# Detect whether one replay payload is stored in raw msgpack form.
+is_msgpack_payload() {
+    local file="$1"
+    [[ "$file" == *.msgpack ]]
+}
+
+# Select the coverage multipart content type that matches the captured payload.
+coverage_payload_content_type() {
+    local file="$1"
+    if is_msgpack_payload "$file"; then
+        echo "application/msgpack"
+    else
+        echo "application/json"
+    fi
+}
+
+# Select the coverage multipart filename that matches the captured payload.
+coverage_payload_filename() {
+    local file="$1"
+    if is_msgpack_payload "$file"; then
+        echo "filecoveragex.msgpack"
+    else
+        echo "filecoveragex.json"
+    fi
 }
 
 # Delete file unless KEEP_PAYLOADS is set
@@ -2782,10 +2808,62 @@ PY
 # Track upload failures globally
 UPLOAD_FAILURES=0
 
+# Handle upload single raw msgpack test behavior.
+upload_single_test_msgpack() {
+    local file="$1"
+    local resp http rc
+    build_common_headers ""
+    dbg "upload_single_test_msgpack: posting '$file'"
+    resp="$(mktemp "$TMP_PAYLOAD_DIR/test_resp.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$resp" ]]; then
+        dbg "upload_single_test_msgpack: failed to create response temp file"
+        return 1
+    fi
+    if [[ "$DEBUG" == "1" ]]; then
+        dbg "request: POST $TEST_URL"
+        dbg_headers "common" "${COMMON_HDRS[@]}"
+        if (( AGENTLESS == 0 )); then
+            dbg_headers "evp" "${TEST_EVP[@]}"
+        fi
+        dbg "headers: Content-Type=application/msgpack"
+    fi
+    if (( AGENTLESS == 1 )); then
+      if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" -H "Content-Type: application/msgpack" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
+    else
+      if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${TEST_EVP[@]}" -H "Content-Type: application/msgpack" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
+        rc=0
+      else
+        rc=$?
+      fi
+    fi
+    http="${http:-000}"
+    if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        dbg "upload_single_test_msgpack: HTTP $http (rc=$rc)"
+        if [[ -s "$resp" ]]; then
+            dbg "upload_single_test_msgpack response: $(head -c 2000 "$resp")"
+        fi
+    fi
+    rm -f "$resp" 2>/dev/null || true
+    if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        return 1
+    fi
+    return 0
+}
+
 # Handle upload single test behavior.
 upload_single_test() {
     local file="$1"
     local body resp payload_file gz http rc
+    if is_msgpack_payload "$file"; then
+        upload_single_test_msgpack "$file"
+        return $?
+    fi
     # Use a temp file to avoid collisions when multiple uploads run in parallel.
     body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$body" ]]; then
@@ -2876,6 +2954,7 @@ upload_single_test() {
 # Handle upload single coverage behavior.
 upload_single_coverage() {
     local file="$1"
+    local coverage_content_type coverage_filename
     # Create event.json for multipart
     local eventjson resp http rc
     # Use a temp file for multipart metadata to avoid leaking into runfiles.
@@ -2885,6 +2964,8 @@ upload_single_coverage() {
         return 1
     fi
     echo '{"dummy":true}' > "$eventjson"
+    coverage_content_type="$(coverage_payload_content_type "$file")"
+    coverage_filename="$(coverage_payload_filename "$file")"
     build_common_headers ""
     dbg "upload_single_coverage: posting '$file'"
     resp="$(mktemp "$TMP_PAYLOAD_DIR/coverage_resp.XXXXXX" 2>/dev/null || true)"
@@ -2899,13 +2980,13 @@ upload_single_coverage() {
         if (( AGENTLESS == 0 )); then
             dbg_headers "evp" "${COV_EVP[@]}"
         fi
-        dbg "headers: multipart/form-data (event + coveragex)"
+        dbg "headers: multipart/form-data (event + coveragex=${coverage_content_type})"
     fi
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}"); then
+        -F "coveragex=@${file};type=${coverage_content_type};filename=${coverage_filename}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?
@@ -2914,7 +2995,7 @@ upload_single_coverage() {
       if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" "${COV_EVP[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}"); then
+        -F "coveragex=@${file};type=${coverage_content_type};filename=${coverage_filename}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?

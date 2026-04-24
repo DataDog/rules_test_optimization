@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `43`
-- Modified files: `25`
-- Added files: `18`
+- Total changed paths: `46`
+- Modified files: `26`
+- Added files: `20`
 - Removed files: `0`
 
 ## Modified files
@@ -23,6 +23,7 @@ This file is generated. Do not edit by hand.
 - `MODULE.bazel.lock`
 - `docs/doc_helpers.bzl`
 - `go/extensions.bzl`
+- `go/private/BUILD.bazel`
 - `go/private/actions/archive.bzl`
 - `go/private/actions/compilepkg.bzl`
 - `go/private/actions/link.bzl`
@@ -51,11 +52,13 @@ This file is generated. Do not edit by hand.
 - `go/private/orchestrion/BUILD`
 - `go/private/orchestrion/extensions.bzl`
 - `go/tools/builders/compilepkg_test.go`
+- `go/tools/builders/env_orchestrion.go`
 - `go/tools/builders/importcfg_test.go`
 - `go/tools/builders/module_proxy.go`
 - `go/tools/builders/orchestrion.go`
 - `go/tools/builders/orchestrion_cache.go`
 - `go/tools/builders/orchestrion_cache_test.go`
+- `go/tools/builders/orchestrion_synthetic_tool.go`
 - `go/tools/builders/orchestrion_test.go`
 - `go/tools/builders/orchestrion_test_helpers_test.go`
 - `go/tools/builders/orchestrion_version.go`

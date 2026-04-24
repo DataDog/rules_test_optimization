@@ -32,6 +32,7 @@ load(
     "wrapper_output_name_non_windows_test",
     "wrapper_output_name_target_rule",
     "wrapper_output_name_windows_test",
+    "windows_wrapper_waits_for_numeric_capture_port_test",
 )
 load(
     ":test_payloads_selector.bzl",
@@ -447,6 +448,10 @@ orch_wrapper_materialized_actual_windows_test(
     target_under_test = ":orch_wrapper_materialized_actual_windows_target",
 )
 
+windows_wrapper_waits_for_numeric_capture_port_test(
+    name = "windows_wrapper_waits_for_numeric_capture_port_test",
+)
+
 test_suite(
     name = "tests",
     tests = [
@@ -489,5 +494,6 @@ test_suite(
         ":service_mapping_entries_filters_non_service_test",
         ":wrapper_output_name_non_windows_test",
         ":wrapper_output_name_windows_test",
+        ":windows_wrapper_waits_for_numeric_capture_port_test",
     ],
 )

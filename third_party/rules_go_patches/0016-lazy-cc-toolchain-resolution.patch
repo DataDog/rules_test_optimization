@@ -1,0 +1,438 @@
+Add maybe_needs_cc_toolchain parameter to go_context() for lazy C/C++
+toolchain resolution. Rules that do not use CGO in their own actions can
+pass maybe_needs_cc_toolchain=False to skip invoking cgo_context_data_impl,
+reducing unnecessary analysis-time work.
+
+Source: https://github.com/bazel-contrib/rules_go/pull/4593
+
+
+diff --git a/extras/gomock.bzl b/extras/gomock.bzl
+index d2faa7e..da40963 100644
+--- a/extras/gomock.bzl
++++ b/extras/gomock.bzl
+@@ -32,7 +32,11 @@ _MOCKGEN_TOOL = Label("//extras/gomock:mockgen")
+ _MOCKGEN_MODEL_LIB = Label("//extras/gomock:mockgen_model")
+ 
+ def _gomock_source_impl(ctx):
+-    go = go_context(ctx, include_deprecated_properties = False)
++    go = go_context(
++        ctx,
++        include_deprecated_properties = False,
++        maybe_needs_cc_toolchain = False,
++    )
+ 
+     # In Source mode, it's not necessary to pass through a library, as the only thing we use it for is setting up
+     # the relative file locations. Forcing users to pass a library makes it difficult in the case where a mock should
+@@ -313,7 +317,11 @@ _gomock_prog_gen = rule(
+ )
+ 
+ def _gomock_prog_exec_impl(ctx):
+-    go = go_context(ctx, include_deprecated_properties = False)
++    go = go_context(
++        ctx,
++        include_deprecated_properties = False,
++        maybe_needs_cc_toolchain = False,
++    )
+ 
+     args = ["-exec_only", ctx.file.prog_bin.path]
+     args, needed_files = _handle_shared_args(ctx, args)
+diff --git a/go/private/context.bzl b/go/private/context.bzl
+index 9e76639..2f3eef9 100644
+--- a/go/private/context.bzl
++++ b/go/private/context.bzl
+@@ -467,127 +467,165 @@ def _matches_scopes(label, scopes):
+             return True
+     return False
+ 
++def _go_infos_use_cgo(go_infos):
++    """Return whether any GoInfo provider in the input list uses cgo."""
++    for go_info in go_infos:
++        if GoInfo in go_info and go_info[GoInfo].cgo:
++            return True
++    return False
++
++def _source_uses_cgo(attr, go_infos):
++    """Return whether this rule's own sources may need cgo processing."""
++    if getattr(attr, "cgo", False):
++        return True
++    return _go_infos_use_cgo(getattr(attr, "embed", [])) or _go_infos_use_cgo(go_infos)
++
++def maybe_needs_cc_toolchain(attr, go_infos = []):
++    """Return whether this rule's own sources may use the C/C++ toolchain."""
++    return _source_uses_cgo(attr, go_infos)
++
++def _precomputed_cgo_context_info(attr, go_context_data):
++    """Return any precomputed CgoContextInfo provider already attached to the rule."""
++    if go_context_data and CgoContextInfo in go_context_data:
++        return go_context_data[CgoContextInfo]
++    if getattr(attr, "_cgo_context_data", None) and CgoContextInfo in attr._cgo_context_data:
++        return attr._cgo_context_data[CgoContextInfo]
++    if getattr(attr, "cgo_context_data", None) and CgoContextInfo in attr.cgo_context_data:
++        return attr.cgo_context_data[CgoContextInfo]
++    return None
++
+ def validate_nogo(go):
+     """Whether nogo should be run as a validation action rather than just to generate fact files for the current
+     target."""
+     label = go.label
+     return _matches_scopes(label, NOGO_INCLUDES) and not _matches_scopes(label, NOGO_EXCLUDES)
+ 
+ default_go_config_info = GoConfigInfo(
+     static = False,
+     race = False,
+     msan = False,
+     pure = False,
+     strip = False,
+     debug = False,
+     linkmode = LINKMODE_NORMAL,
+     gc_linkopts = [],
+     tags = [],
+     stamp = False,
+     cover_format = None,
+     gc_goopts = [],
+     amd64 = None,
+     arm = None,
+     pgoprofile = None,
+     export_stdlib = False,
+ )
+ 
+ def _defaults_to_pie(goos, race):
+     # based on DefaultPIE in src/internal/platform/supported.go
+     if goos in ["android", "darwin", "ios"]:
+         return True
+     if goos == "windows" and not race:
+         return True
+     return False
+ 
+ def go_context(
+         ctx,
+         attr = None,
+         include_deprecated_properties = True,
+         importpath = None,
+         importmap = None,
+         embed = None,
+         importpath_aliases = None,
+         go_context_data = None,
++        maybe_needs_cc_toolchain = True,
+         goos = "auto",
+         goarch = "auto"):
+     """Returns an API used to build Go code.
+ 
+     See /go/toolchains.rst#go-context
+     """
+     if not attr:
+         attr = ctx.attr
+     toolchain = ctx.toolchains[GO_TOOLCHAIN]
+     cgo_context_info = None
+     go_context_info = None
+     go_config_info = None
+     stdlib = None
+     orchestrion = None
+     orchestrion_version_file = None
+     orchestrion_module_proxy_files = depset()
+     orchestrion_module_proxy_root_marker = None
+     orchestrion_tool_version_file = None
+ 
+     if go_context_data == None:
+         if hasattr(attr, "_go_context_data"):
+             go_context_data = attr._go_context_data
+             go_config_info = go_context_data[GoConfigInfo]
+             stdlib = go_context_data[GoStdLib]
+             go_context_info = go_context_data[GoContextInfo]
+         if hasattr(attr, "_go_config"):
+             go_config_info = attr._go_config[GoConfigInfo]
+         if hasattr(attr, "_stdlib"):
+             stdlib = attr._stdlib[GoStdLib]
+     else:
+         go_config_info = go_context_data[GoConfigInfo]
+         stdlib = go_context_data[GoStdLib]
+         go_context_info = go_context_data[GoContextInfo]
+ 
+     if go_context_info and go_context_info.orchestrion:
+         orchestrion = go_context_info.orchestrion
+         orchestrion_version_file = getattr(go_context_info, "orchestrion_version_file", None)
+         orchestrion_module_proxy_files = getattr(go_context_info, "orchestrion_module_proxy_files", depset())
+         orchestrion_module_proxy_root_marker = getattr(go_context_info, "orchestrion_module_proxy_root_marker", None)
+         orchestrion_tool_version_file = getattr(go_context_info, "orchestrion_tool_version_file", None)
+     elif getattr(attr, "_orchestrion_enabled", None) and getattr(attr, "_orchestrion_tool_binary", None):
+         if attr._orchestrion_enabled[BuildSettingInfo].value:
+             orchestrion_files = attr._orchestrion_tool_binary.files.to_list()
+             if orchestrion_files:
+                 orchestrion = orchestrion_files[0]
+             if getattr(attr, "_orchestrion_version_file", None):
+                 version_files = attr._orchestrion_version_file.files.to_list()
+                 if version_files:
+                     orchestrion_version_file = version_files[0]
+             if getattr(attr, "_orchestrion_module_proxy_files", None):
+                 orchestrion_module_proxy_files = depset(attr._orchestrion_module_proxy_files.files.to_list())
+             if getattr(attr, "_orchestrion_module_proxy_root_marker", None):
+                 marker_files = attr._orchestrion_module_proxy_root_marker.files.to_list()
+                 if marker_files:
+                     orchestrion_module_proxy_root_marker = marker_files[0]
+             if getattr(attr, "_orchestrion_tool_version_file", None):
+                 tool_version_files = attr._orchestrion_tool_version_file.files.to_list()
+                 if tool_version_files:
+                     orchestrion_tool_version_file = tool_version_files[0]
+ 
+-    if getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
+-        cgo_context_info = cgo_context_data_impl(ctx)
+-    elif go_context_data and CgoContextInfo in go_context_data:
+-        cgo_context_info = go_context_data[CgoContextInfo]
+-    elif getattr(attr, "_cgo_context_data", None) and CgoContextInfo in attr._cgo_context_data:
+-        cgo_context_info = attr._cgo_context_data[CgoContextInfo]
+-    elif getattr(attr, "cgo_context_data", None) and CgoContextInfo in attr.cgo_context_data:
+-        cgo_context_info = attr.cgo_context_data[CgoContextInfo]
++    cgo_disabled = (go_config_info and go_config_info.pure) or (
++        getattr(attr, "_pure_constraint", None) and
++        ctx.target_platform_has_constraint(attr._pure_constraint[platform_common.ConstraintValueInfo])
++    )
++
++    if maybe_needs_cc_toolchain and not cgo_disabled:
++        has_cc_toolchain = getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains
++        if has_cc_toolchain:
++            cgo_context_info = cgo_context_data_impl(ctx)
++        else:
++            cgo_context_info = _precomputed_cgo_context_info(attr, go_context_data)
++
++    if maybe_needs_cc_toolchain:
++        cgo_available = cgo_context_info != None
++    else:
++        # Keep cgo tag and build-mode behavior stable for rules that do not use
++        # the C/C++ toolchain in their own actions.
++        cgo_available = not cgo_disabled and _precomputed_cgo_context_info(attr, go_context_data) != None
+ 
+-    if goos == "auto" and goarch == "auto" and cgo_context_info and (go_config_info == None or not go_config_info.pure):
++    if goos == "auto" and goarch == "auto" and cgo_available and (go_config_info == None or not go_config_info.pure):
+         # Fast-path to reuse the GoConfigInfo as-is
+         mode = go_config_info or default_go_config_info
+     else:
+         if go_config_info == None:
+             go_config_info = default_go_config_info
+         mode_kwargs = structs.to_dict(go_config_info)
+         mode_kwargs["goos"] = toolchain.default_goos if goos == "auto" else goos
+         mode_kwargs["goarch"] = toolchain.default_goarch if goarch == "auto" else goarch
+-        if not cgo_context_info:
++        if not cgo_available:
+             if getattr(ctx.attr, "pure", None) == "off":
+                 fail("{} has pure explicitly set to off, but no C++ toolchain could be found for its platform".format(ctx.label))
+             mode_kwargs["pure"] = True
+diff --git a/go/private/rules/info.bzl b/go/private/rules/info.bzl
+index 261c571..e06e540 100644
+--- a/go/private/rules/info.bzl
++++ b/go/private/rules/info.bzl
+@@ -22,7 +22,7 @@ load(
+ )
+ 
+ def _go_info_impl(ctx):
+-    go = go_context(ctx)
++    go = go_context(ctx, maybe_needs_cc_toolchain = False)
+     report = go.declare_file(go, ext = ".txt")
+     args = go.actions.args()
+     args.add("-sdk", go.sdk.root_file.dirname)
+diff --git a/go/private/rules/library.bzl b/go/private/rules/library.bzl
+index e195072..5a9d1dc 100644
+--- a/go/private/rules/library.bzl
++++ b/go/private/rules/library.bzl
+@@ -26,27 +26,29 @@ load(
+     "CGO_FRAGMENTS",
+     "CGO_TOOLCHAINS",
+     "go_context",
++    rule_maybe_needs_cc_toolchain = "maybe_needs_cc_toolchain",
+     "new_go_info",
+ )
+ load(
+     "//go/private:providers.bzl",
+     "GoInfo",
+ )
+ load(
+     "//go/private/rules:transition.bzl",
+     "non_go_transition",
+ )
+ 
+ def _go_library_impl(ctx):
+     """Implements the go_library() rule."""
+     go = go_context(
+         ctx,
+         include_deprecated_properties = False,
+         importpath = ctx.attr.importpath,
+         importmap = ctx.attr.importmap,
+         importpath_aliases = ctx.attr.importpath_aliases,
+         embed = ctx.attr.embed,
+         go_context_data = ctx.attr._go_context_data,
++        maybe_needs_cc_toolchain = rule_maybe_needs_cc_toolchain(ctx.attr),
+     )
+ 
+     go_info = new_go_info(go, ctx.attr)
+@@ -214,7 +216,11 @@ go_library = rule(
+ 
+ def _go_tool_library_impl(ctx):
+     """Implements the go_tool_library() rule."""
+-    go = go_context(ctx, include_deprecated_properties = False)
++    go = go_context(
++        ctx,
++        include_deprecated_properties = False,
++        maybe_needs_cc_toolchain = rule_maybe_needs_cc_toolchain(ctx.attr),
++    )
+ 
+     go_info = new_go_info(go, ctx.attr)
+     archive = go.archive(go, go_info)
+diff --git a/go/private/rules/nogo.bzl b/go/private/rules/nogo.bzl
+index e7ea643..5bd08e1 100644
+--- a/go/private/rules/nogo.bzl
++++ b/go/private/rules/nogo.bzl
+@@ -41,15 +41,15 @@ def _nogo_impl(ctx):
+         return None
+ 
+     # Generate the source for the nogo binary.
++    analyzer_archives = [dep[GoArchive] for dep in ctx.attr.deps]
+     go = go_context(ctx, include_deprecated_properties = False)
+     nogo_main = go.declare_file(go, path = "nogo_main.go")
+     nogo_args = ctx.actions.args()
+     nogo_args.add("gennogomain")
+     nogo_args.add("-output", nogo_main)
+     if ctx.attr.debug:
+         nogo_args.add("-debug")
+     nogo_inputs = []
+-    analyzer_archives = [dep[GoArchive] for dep in ctx.attr.deps]
+     analyzer_importpaths = [archive.data.importpath for archive in analyzer_archives]
+     nogo_args.add_all(analyzer_importpaths, before_each = "-analyzer_importpath")
+     if ctx.file.config:
+diff --git a/go/private/rules/source.bzl b/go/private/rules/source.bzl
+index 4c55dca..58c8fb0 100644
+--- a/go/private/rules/source.bzl
++++ b/go/private/rules/source.bzl
+@@ -28,7 +28,11 @@ load(
+ 
+ def _go_source_impl(ctx):
+     """Implements the go_source() rule."""
+-    go = go_context(ctx, include_deprecated_properties = False)
++    go = go_context(
++        ctx,
++        include_deprecated_properties = False,
++        maybe_needs_cc_toolchain = False,
++    )
+     go_info = new_go_info(go, ctx.attr)
+     return [
+         go_info,
+diff --git a/proto/compiler.bzl b/proto/compiler.bzl
+index 2e8289e..428c6f2 100644
+--- a/proto/compiler.bzl
++++ b/proto/compiler.bzl
+@@ -214,7 +214,11 @@ def proto_path(src, proto):
+     return src.path[len(prefix):]
+ 
+ def _go_proto_compiler_impl(ctx):
+-    go = go_context(ctx, include_deprecated_properties = False)
++    go = go_context(
++        ctx,
++        include_deprecated_properties = False,
++        maybe_needs_cc_toolchain = False,
++    )
+     go_info = new_go_info(go, ctx.attr)
+     proto_toolchain = _find_toolchain(
+         ctx,
+diff --git a/proto/def.bzl b/proto/def.bzl
+index bfb1ad8..ab89f0d 100644
+--- a/proto/def.bzl
++++ b/proto/def.bzl
+@@ -34,92 +34,100 @@ load(
+     "CGO_ATTRS",
+     "CGO_FRAGMENTS",
+     "CGO_TOOLCHAINS",
++    rule_maybe_needs_cc_toolchain = "maybe_needs_cc_toolchain",
+     "new_go_info",
+ )
+ load(
+     "//go/private/rules:transition.bzl",
+     "non_go_tool_transition",
+ )
+ load(
+     "//proto:compiler.bzl",
+     "GoProtoCompiler",
+     "proto_path",
+ )
+ 
+ GoProtoImports = provider()
+ 
+ def get_imports(attr, importpath):
+     # ctx.attr.proto is a one-element array since there is a Starlark transition attached to it.
+     if hasattr(attr, "proto") and attr.proto and types.is_list(attr.proto) and ProtoInfo in attr.proto[0]:
+         proto_deps = [attr.proto[0]]
+     elif hasattr(attr, "protos"):
+         proto_deps = [d for d in attr.protos if ProtoInfo in d]
+     else:
+         proto_deps = []
+ 
+     direct = dict()
+     for dep in proto_deps:
+         for src in dep[ProtoInfo].check_deps_sources.to_list():
+             direct["{}={}".format(proto_path(src, dep[ProtoInfo]), importpath)] = True
+ 
+     deps = getattr(attr, "deps", []) + getattr(attr, "embed", [])
+     transitive = [
+         dep[GoProtoImports].imports
+         for dep in deps
+         if GoProtoImports in dep
+     ]
+     return depset(direct = direct.keys(), transitive = transitive)
+ 
+ def _go_proto_aspect_impl(_target, ctx):
+     attr = ctx.rule.attr
+     for attr_name in ["importpath", "_go_context_data"]:
+         if not hasattr(attr, attr_name):
+             fail("""While processing go_proto_library deps: {label}, which is a {kind} is missing the '{attr_name}' \
+ attribute. go_proto_library deps are usually other go_proto_library targets. We recommend double-checking the deps \
+ to make sure they're the right type. If this is intentional (for example you're developing a new rule) make sure it \
+ declares the \"{attr_name}\" attribute.""".format(
+                 label = _target.label,
+                 kind = ctx.rule.kind,
+                 attr_name = attr_name,
+             ))
+ 
+     go = go_context(
+         ctx,
+         attr,
+         include_deprecated_properties = False,
+         importpath = attr.importpath,
+         go_context_data = attr._go_context_data,
++        maybe_needs_cc_toolchain = False,
+     )
+     imports = get_imports(attr, go.importpath)
+     return [GoProtoImports(imports = imports)]
+ 
+ _go_proto_aspect = aspect(
+     _go_proto_aspect_impl,
+     attr_aspects = [
+         "deps",
+         "embed",
+     ],
+     toolchains = [GO_TOOLCHAIN],
+ )
+ 
+ def _proto_library_to_source(_go, attr, source, merge):
+     if attr.compiler:
+         compilers = [attr.compiler]
+     else:
+         compilers = attr.compilers
+     for compiler in compilers:
+         if GoInfo in compiler:
+             merge(source, compiler[GoInfo])
+ 
++def _go_proto_library_maybe_needs_cc_toolchain(ctx):
++    """Return whether this proto library's own actions may need the CC toolchain."""
++    compilers = [ctx.attr.compiler] if ctx.attr.compiler else ctx.attr.compilers
++    return rule_maybe_needs_cc_toolchain(ctx.attr, go_infos = compilers)
++
+ def _go_proto_library_impl(ctx):
+     go = go_context(
+         ctx,
+         include_deprecated_properties = False,
+         importpath = ctx.attr.importpath,
+         importmap = ctx.attr.importmap,
+         importpath_aliases = ctx.attr.importpath_aliases,
+         embed = ctx.attr.embed,
+         go_context_data = ctx.attr._go_context_data,
++        maybe_needs_cc_toolchain = _go_proto_library_maybe_needs_cc_toolchain(ctx),
+     )
+     if ctx.attr.compiler:
+         #TODO: print("DEPRECATED: compiler attribute on {}, use compilers instead".format(ctx.label))

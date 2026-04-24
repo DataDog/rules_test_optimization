@@ -12,6 +12,7 @@ from rules_go_patch_series_lib import (
     export_patch,
     load_manifest,
     manifest_path,
+    validate_patch_source_commits,
     write_patch_build_file,
 )
 
@@ -19,6 +20,7 @@ from rules_go_patch_series_lib import (
 def main() -> int:
     """Write the checked-in 1:1 patch series into the canonical patch directory."""
     manifest = load_manifest(DEFAULT_MANIFEST_PATH)
+    validate_patch_source_commits(manifest)
     patch_dir = manifest_path(manifest["patch_dir"])
     patch_dir.mkdir(parents=True, exist_ok=True)
 

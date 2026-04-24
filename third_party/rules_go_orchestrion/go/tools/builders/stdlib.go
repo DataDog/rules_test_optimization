@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"go/build"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,18 +25,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-const syntheticOrchestrionToolGo = `//go:build tools
-
-package tools
-
-import (
-	_ "github.com/DataDog/orchestrion"
-	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"
-	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2"
-	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"
-)
-`
 
 const syntheticStdlibModulePath = "module github.com/DataDog/dd-trace-go/v2/bazel_orchestrion_stdlib"
 const orchestrionStdlibCacheManifestName = ".orchestrion_stdlib_cache_manifest"
@@ -559,23 +546,6 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 		}
 	}
 	return nil
-}
-
-func copyArchiveFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
 }
 
 func ensureSyntheticOrchestrionToolGo(verbose bool) (func(), error) {

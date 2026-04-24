@@ -72,7 +72,7 @@ def canonical_full_bundle_entries(manifest: dict) -> dict[str, dict]:
     """Materialize the canonical full bundle and return its normalized tree entries."""
     with tempfile.TemporaryDirectory(prefix="rules_go_patch_verify_full_") as tempdir:
         materialized_tree = Path(tempdir) / "tree"
-        selection = resolve_patch_selection(manifest, bundle_name="dd_source_full")
+        selection = resolve_patch_selection(manifest, bundle_name="all_patches")
         materialize_bundle_tree(manifest, selection=selection, destination=materialized_tree, force=True)
         remove_normalized_paths(materialized_tree, manifest["proof_overlay_paths"])
         return {entry["path"]: entry for entry in tree_entries(materialized_tree)}
@@ -82,9 +82,9 @@ def verify_bundle(manifest: dict, bundle_name: str) -> int:
     """Verify one named bundle against its expected proof surface."""
     if bundle_name == "none":
         return verify_clean_base(manifest)
-    if bundle_name != "dd_source_full":
+    if bundle_name != "all_patches":
         raise PatchSeriesError(
-            f"bundle verification is only supported for 'none' or 'dd_source_full', got {bundle_name!r}"
+            f"bundle verification is only supported for 'none' or 'all_patches', got {bundle_name!r}"
         )
 
     expected_entries = load_tree_manifest(manifest_path(manifest["full_tree_manifest"]))
