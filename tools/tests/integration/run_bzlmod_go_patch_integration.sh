@@ -29,6 +29,9 @@ PYTHON="${PYTHON:-python3}"
 GO_BIN="${GO_BIN:-go}"
 BAZEL="${BAZEL:-$REPO_ROOT/bazelw}"
 BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion")}"
+# Keep Bazel's output roots inside the fixture temp tree so each CI step can
+# release downloaded SDKs, extracted repos, and sandbox outputs during cleanup.
+BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev}"
@@ -58,6 +61,7 @@ HERMETIC_TEST_FLAGS=(
 )
 
 cleanup() {
+  USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown >/dev/null 2>&1 || true
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
     return
@@ -544,7 +548,7 @@ run_fixture_subscenario() {
   if [[ "$mode" == "standard" ]]; then
     (
       cd "$ws_dir"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test "${bzlmod_flags[@]}" "$HELLO_TEST_TARGET"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test "${bzlmod_flags[@]}" "$HELLO_TEST_TARGET"
     )
     return
   fi
@@ -568,19 +572,19 @@ run_fixture_subscenario() {
   if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     (
       cd "$ws_dir"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" aquery \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
         "${bzlmod_flags[@]}" \
         "deps(${HELLO_TEST_TARGET})" \
         --output=textproto > /dev/null
     )
     (
       cd "$ws_dir"
-      output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" info "${bzlmod_flags[@]}" output_base)"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" shutdown
+      output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${bzlmod_flags[@]}" output_base)"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
       start_ns="$(wall_time_ns)"
       HOME="$hermetic_home" \
       XDG_CACHE_HOME="$hermetic_xdg" \
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
         "${bzlmod_flags[@]}" \
         "${HERMETIC_BUILD_FLAGS[@]}" \
         "${HERMETIC_TEST_FLAGS[@]}" \
@@ -603,7 +607,7 @@ PY
     cd "$ws_dir"
     HOME="$hermetic_home" \
     XDG_CACHE_HOME="$hermetic_xdg" \
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" test \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       "${bzlmod_flags[@]}" \
       "${HERMETIC_BUILD_FLAGS[@]}" \
       "${HERMETIC_TEST_FLAGS[@]}" \
@@ -614,7 +618,7 @@ PY
       cd "$ws_dir"
       HOME="$hermetic_home" \
       XDG_CACHE_HOME="$hermetic_xdg" \
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" aquery \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
         "${bzlmod_flags[@]}" \
         "${HERMETIC_BUILD_FLAGS[@]}" \
         "deps(${HELLO_TEST_TARGET})" \
