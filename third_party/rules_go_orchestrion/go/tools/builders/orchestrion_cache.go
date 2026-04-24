@@ -12,12 +12,20 @@ import (
 )
 
 const (
-	validationCacheABIVersion      = "v2"
-	syntheticModuleCacheABIVersion = "v2"
-	helperDecisionCacheABIVersion  = "v2"
+	validationCacheABIVersion = "v2"
+	// Bump the synthetic module cache ABI whenever the bootstrap preparation
+	// logic changes. The prepared cache snapshot only keys off the copied module
+	// files plus selected toolchain metadata, so code-only changes would
+	// otherwise keep restoring stale synthetic go.mod state.
+	syntheticModuleCacheABIVersion = "v4"
+	helperDecisionCacheABIVersion  = "v3"
 	helperExportCacheABIVersion    = "v3"
-	helperArchiveCacheABIVersion   = "v3"
-	helperSourceSetVersion         = "v1"
+	helperArchiveCacheABIVersion   = "v4"
+	// Bump the helper source-set version whenever the synthetic testmain source
+	// compile closure changes. The helper decision and archive caches both key
+	// off this value, so widening the recursive source-compile set must force a
+	// rebuild instead of reusing bundles prepared for the older closure.
+	helperSourceSetVersion = "v2"
 
 	orchestrionPersistentCacheDirName = "rules-go-orchestrion"
 
