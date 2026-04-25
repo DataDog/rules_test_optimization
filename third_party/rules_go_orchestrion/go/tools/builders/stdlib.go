@@ -101,7 +101,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	if err := os.MkdirAll(cachePath, 0o755); err != nil {
 		return fmt.Errorf("prepare stdlib gocache at %s: %w", cachePath, err)
 	}
-	if *orchestrion == "" {
+	if shouldRemoveStdlibCache(*orchestrion, *cacheOut) {
 		defer os.RemoveAll(cachePath)
 	}
 
@@ -347,6 +347,14 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		return err
 	}
 	return nil
+}
+
+// shouldRemoveStdlibCache reports whether the builder owns the cache directory
+// as scratch space. A non-empty -cacheout value is a Bazel-declared TreeArtifact
+// output, so it must remain present even for plain non-Orchestrion stdlib
+// actions.
+func shouldRemoveStdlibCache(orchestrionPath, cacheOut string) bool {
+	return strings.TrimSpace(orchestrionPath) == "" && strings.TrimSpace(cacheOut) == ""
 }
 
 func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool) (err error) {
