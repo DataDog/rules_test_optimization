@@ -7,6 +7,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/rules_go_patch_extended.XXXXXX")"
 vendor_root="${tmp_root}/rules_go_orchestrion"
 BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "${repo_root}/.bazelversion")}"
+BAZEL_JOBS="${BAZEL_JOBS:-1}"
 
 cleanup() {
   rm -rf "${tmp_root}"
@@ -52,23 +53,31 @@ run_vendor() {
   )
 }
 
+bazel_test() {
+  run_vendor bazelisk test --jobs="${BAZEL_JOBS}" "$@"
+}
+
+bazel_build() {
+  run_vendor bazelisk build --jobs="${BAZEL_JOBS}" "$@"
+}
+
 # The legacy extended lane used Bazel go_test/go_bazel_test and some slower
 # proto/link targets that are already broken in the pre-split vendored fork for
 # reasons unrelated to this patch split. Keep this maintainer lane on the
 # stable, meaningful vendored checks that still exercise the split-sensitive
 # surfaces end to end in the materialized tree.
 run_vendor env GOWORK=off go test ./go/tools/bzltestutil -count=1
-run_vendor bazelisk test //go/tools/builders:buildinfo_test
-run_vendor bazelisk test //tests/core/buildinfo:metadata_test //tests/core/buildinfo:srcs_only_test
-run_vendor bazelisk test //tests/core/starlark:context_tests_test_0 //tests/core/starlark:context_tests_test_1 //tests/core/starlark:link_tests_test_0 //tests/core/starlark:link_tests_test_1
-run_vendor bazelisk test \
+bazel_test //go/tools/builders:buildinfo_test
+bazel_test //tests/core/buildinfo:metadata_test //tests/core/buildinfo:srcs_only_test
+bazel_test //tests/core/starlark:context_tests_test_0 //tests/core/starlark:context_tests_test_1 //tests/core/starlark:link_tests_test_0 //tests/core/starlark:link_tests_test_1
+bazel_test \
   //tests/extras/gomock/source:client_test \
   //tests/extras/gomock/source_with_importpath:client_test \
   //tests/core/go_proto_library:compilers_multi_suffix_test
 if [[ "$(uname -s)" != "Windows_NT" ]]; then
-  run_vendor bazelisk test //tests/extras/gomock/reflective:client_test
+  bazel_test //tests/extras/gomock/reflective:client_test
 else
   echo "Skipping //tests/extras/gomock/reflective:client_test on Windows hosts." >&2
 fi
-run_vendor bazelisk test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
-run_vendor bazelisk build //tests/core/c_linkmodes:go_with_cgo_dep_caller //tests/core/cgo:embed_chain_bin
+bazel_test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
+bazel_build //tests/core/c_linkmodes:go_with_cgo_dep_caller //tests/core/cgo:embed_chain_bin

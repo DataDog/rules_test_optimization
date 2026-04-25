@@ -8,6 +8,7 @@ tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/rules_go_patch_smoke.XXXXXX")"
 vendor_root="${tmp_root}/rules_go_orchestrion"
 empty_orchestrion_tool_repo="${tmp_root}/rules_go_orchestrion_tool_empty"
 BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "${repo_root}/.bazelversion")}"
+BAZEL_JOBS="${BAZEL_JOBS:-1}"
 host_os="$(uname -s)"
 host_arch="$(uname -m)"
 
@@ -111,25 +112,33 @@ run_vendor() {
   )
 }
 
+bazel_test() {
+  run_vendor bazelisk test --jobs="${BAZEL_JOBS}" "$@"
+}
+
+bazel_build() {
+  run_vendor bazelisk build --jobs="${BAZEL_JOBS}" "$@"
+}
+
 run_vendor env GOWORK=off go test ./go/tools/bzltestutil -count=1
-run_vendor bazelisk test //go/tools/builders:buildinfo_test
+bazel_test //go/tools/builders:buildinfo_test
 # Keep the buildinfo smoke lane on the stable metadata regressions that the
 # patch split is expected to preserve directly. The broader suite's external
 # dependency version check still depends on vendored self-test module plumbing
 # that is outside the clean-base versus optional-bundle split itself.
-run_vendor bazelisk test \
+bazel_test \
   //tests/core/buildinfo:metadata_test \
   //tests/core/buildinfo:srcs_only_test
 # Keep the Starlark smoke lane focused on the patch-sensitive suites instead of
 # the whole package. The broader package pulls in unrelated SDK/provider tests
 # that do not prove the optional patch split and are less stable across hosts.
-run_vendor bazelisk test \
+bazel_test \
   //tests/core/starlark:context_tests_test_0 \
   //tests/core/starlark:context_tests_test_1 \
   //tests/core/starlark:link_tests_test_0 \
   //tests/core/starlark:link_tests_test_1
 if [[ "${host_os}" == "Darwin" ]]; then
-  run_vendor bazelisk test \
+  bazel_test \
     //tests/core/cross:go_cross_binary_test \
     //tests/legacy/providers:source_test
   echo "Skipping //tests/core/cross:proto_test, //tests/legacy/info:info, and //tests/core/nogo/custom:custom_test on ${host_os}/${host_arch}; those maintainer proof targets are currently not stable on the local macOS host." >&2
@@ -139,7 +148,7 @@ else
   # proto_test starts a nested Bazel invocation that may build protobuf from
   # source on fresh Linux runners, so give that smoke lane enough time without
   # weakening the surrounding job timeout.
-  run_vendor bazelisk test \
+  bazel_test \
     --test_timeout=900 \
     //tests/core/cross:go_cross_binary_test \
     //tests/core/cross:proto_test \
@@ -148,15 +157,15 @@ else
   # custom_test creates WORKSPACE-style nested Bazel workspaces through
   # go/tools/bazel_testing. Bazel 8 requires WORKSPACE mode to be enabled
   # explicitly in those recursive invocations.
-  run_vendor bazelisk test \
+  bazel_test \
     --test_env="GO_BAZEL_TEST_BAZELFLAGS=${nested_workspace_flags}" \
     //tests/core/nogo/custom:custom_test
 fi
-run_vendor bazelisk test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
-run_vendor bazelisk build //tests/core/c_linkmodes:go_with_cgo_dep_caller
-run_vendor bazelisk build //tests/core/cgo:embed_chain_bin
+bazel_test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
+bazel_build //tests/core/c_linkmodes:go_with_cgo_dep_caller
+bazel_build //tests/core/cgo:embed_chain_bin
 if [[ "${host_os}" == "Linux" && "${host_arch}" == "x86_64" ]]; then
-  run_vendor bazelisk test //tests/core/cgo/asm_cflags:asm_cflags_test
+  bazel_test //tests/core/cgo/asm_cflags:asm_cflags_test
 else
   echo "Skipping //tests/core/cgo/asm_cflags:asm_cflags_test on ${host_os}/${host_arch}; the regression target is Linux x86_64 only." >&2
 fi
