@@ -390,6 +390,22 @@ func replaceManagedSection(content, startMarker, endMarker, block string) (strin
 	return buf.String(), nil
 }
 
+// removeManagedSectionIfPresent removes a managed block without creating it
+// when it is absent.
+func removeManagedSectionIfPresent(content, startMarker, endMarker string) (string, error) {
+	start := strings.Index(content, startMarker)
+	end := strings.Index(content, endMarker)
+	switch {
+	case start >= 0 && end >= 0 && end > start:
+		end += len(endMarker)
+		return content[:start] + content[end:], nil
+	case start >= 0 || end >= 0:
+		return "", fmt.Errorf("existing Datadog managed block is malformed: %s / %s", startMarker, endMarker)
+	default:
+		return content, nil
+	}
+}
+
 func inferDatadogRepoOverride(content string) (string, string) {
 	overridePattern := regexp.MustCompile(`(?s)git_override\(\s*module_name\s*=\s*"([^"]+)"(.*?)\n\)`)
 	remotePattern := regexp.MustCompile(`remote\s*=\s*"([^"]+)"`)
@@ -557,6 +573,9 @@ func ensureGuidedWorkspaceFiles(cfg config) error {
 	if err := ensureGuidedRootBuild(cfg); err != nil {
 		return err
 	}
+	if err := ensureGuidedGoModuleBuild(cfg); err != nil {
+		return err
+	}
 	if err := ensureGuidedWrapper(cfg); err != nil {
 		return err
 	}
@@ -601,6 +620,42 @@ dd_payload_uploader(
 		return err
 	}
 
+	if sameCleanPath(goModuleDirOrWorkspace(cfg), cfg.workspaceDir) {
+		pinBlock := renderPinExportsBlock()
+		text, err = replaceManagedSection(text, pinExportsBlockStart, pinExportsBlockEnd, pinBlock)
+		if err != nil {
+			return err
+		}
+	} else {
+		text, err = removeManagedSectionIfPresent(text, pinExportsBlockStart, pinExportsBlockEnd)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := os.WriteFile(buildPath, []byte(text), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", buildPath, err)
+	}
+	return nil
+}
+
+// ensureGuidedGoModuleBuild ensures the configured Go module package exports
+// Orchestrion pin files.
+func ensureGuidedGoModuleBuild(cfg config) error {
+	if _, err := goModuleBazelPackage(cfg); err != nil {
+		return err
+	}
+	moduleDir := goModuleDirOrWorkspace(cfg)
+	buildPath, err := selectPackageFile(moduleDir)
+	if err != nil {
+		return err
+	}
+	content, err := os.ReadFile(buildPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", buildPath, err)
+	}
+	text := string(content)
+
 	pinBlock := renderPinExportsBlock()
 	text, err = replaceManagedSection(text, pinExportsBlockStart, pinExportsBlockEnd, pinBlock)
 	if err != nil {
@@ -627,6 +682,11 @@ func renderPinExportsBlock() string {
 }
 
 func ensureGuidedWrapper(cfg config) error {
+	pinLabels, err := orchestrionPinFileLabels(cfg)
+	if err != nil {
+		return err
+	}
+
 	wrapperDir := filepath.Join(cfg.workspaceDir, toolsBuildDir)
 	if err := os.MkdirAll(wrapperDir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", wrapperDir, err)
@@ -659,10 +719,7 @@ load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test"
 load("@%s//:export.bzl", "topt_data")
 
 _ORCHESTRION_PIN_FILES = [
-    "//:go.mod",
-    "//:go.sum",
-    "//:orchestrion.tool.go",
-    "//:orchestrion.yml",
+%s
 ]
 
 def dd_go_test(name, **kwargs):
@@ -673,11 +730,72 @@ def dd_go_test(name, **kwargs):
         **kwargs
     )
 %s
-`, wrapperBlockStart, cfg.syncRepoName, wrapperBlockEnd)
+`, wrapperBlockStart, cfg.syncRepoName, renderPinLabelLines(pinLabels), wrapperBlockEnd)
 	if err := os.WriteFile(wrapperPath, []byte(wrapperContent), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", wrapperPath, err)
 	}
 	return nil
+}
+
+// renderPinLabelLines renders Starlark list entries for Orchestrion pin-file
+// labels.
+func renderPinLabelLines(labels []string) string {
+	var buf bytes.Buffer
+	for _, label := range labels {
+		fmt.Fprintf(&buf, "    %q,\n", label)
+	}
+	return buf.String()
+}
+
+// orchestrionPinFileLabels returns Bazel labels for pin files in the
+// configured Go module package.
+func orchestrionPinFileLabels(cfg config) ([]string, error) {
+	pkg, err := goModuleBazelPackage(cfg)
+	if err != nil {
+		return nil, err
+	}
+	labels := make([]string, 0, len(orchestrionPinFiles))
+	for _, file := range orchestrionPinFiles {
+		if pkg == "//" {
+			labels = append(labels, "//:"+file)
+		} else {
+			labels = append(labels, pkg+":"+file)
+		}
+	}
+	return labels, nil
+}
+
+// goModuleBazelPackage returns the Bazel package label for the configured Go
+// module directory.
+func goModuleBazelPackage(cfg config) (string, error) {
+	moduleDir := goModuleDirOrWorkspace(cfg)
+	rel, err := filepath.Rel(cfg.workspaceDir, moduleDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve Go module package: %w", err)
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." {
+		return "//", nil
+	}
+	if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("go module directory %s must be inside workspace %s", moduleDir, cfg.workspaceDir)
+	}
+	return "//" + filepath.ToSlash(rel), nil
+}
+
+// goModuleDirOrWorkspace returns cfg.goModuleDir, defaulting to the workspace
+// root.
+func goModuleDirOrWorkspace(cfg config) string {
+	if cfg.goModuleDir != "" {
+		return cfg.goModuleDir
+	}
+	return cfg.workspaceDir
+}
+
+// sameCleanPath returns whether two local paths are equal after filepath
+// cleanup.
+func sameCleanPath(left, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
 }
 
 func selectPackageFile(dir string) (string, error) {
