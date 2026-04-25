@@ -82,6 +82,9 @@ load(
     "fnv1a_symbol_distinguishes_common_symbols_test",
     "http_execute_timeout_seconds_test",
     "load_github_event_payload_ctx_test",
+    "local_git_metadata_detached_head_has_no_branch_test",
+    "local_git_metadata_fills_empty_fields_test",
+    "local_git_metadata_preserves_existing_fields_test",
     "module_label_map_collision_test",
     "module_label_map_empty_inputs_test",
     "normalize_out_dir_absolute_failure_test",
@@ -111,6 +114,7 @@ load(
     "render_module_runfiles_bzl_escaping_test",
     "render_module_runfiles_bzl_respects_manifest_root_test",
     "resolve_dd_api_base_test",
+    "required_git_metadata_missing_fields_test",
     "runtime_module_path_from_environ_test",
     "sanitize_repository_url_test",
     "set_context_tag_from_env_test",
@@ -269,6 +273,30 @@ first_env_from_environ_test(
 
 first_env_ctx_test(
     name = "first_env_ctx_test",
+    size = "small",
+    timeout = "short",
+)
+
+local_git_metadata_fills_empty_fields_test(
+    name = "local_git_metadata_fills_empty_fields_test",
+    size = "small",
+    timeout = "short",
+)
+
+local_git_metadata_preserves_existing_fields_test(
+    name = "local_git_metadata_preserves_existing_fields_test",
+    size = "small",
+    timeout = "short",
+)
+
+local_git_metadata_detached_head_has_no_branch_test(
+    name = "local_git_metadata_detached_head_has_no_branch_test",
+    size = "small",
+    timeout = "short",
+)
+
+required_git_metadata_missing_fields_test(
+    name = "required_git_metadata_missing_fields_test",
     size = "small",
     timeout = "short",
 )
@@ -1032,6 +1060,9 @@ test_suite(
         ":fnv1a_symbol_distinguishes_common_symbols_test",
         ":http_execute_timeout_seconds_test",
         ":load_github_event_payload_ctx_test",
+        ":local_git_metadata_detached_head_has_no_branch_test",
+        ":local_git_metadata_fills_empty_fields_test",
+        ":local_git_metadata_preserves_existing_fields_test",
         ":log_helpers_and_is_dict_test",
         ":manifest_trim_and_bom_helpers_test",
         ":merge_optional_env_defaults_ignores_empty_defaults_test",
@@ -1067,6 +1098,7 @@ test_suite(
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",
         ":resolve_dd_api_base_test",
+        ":required_git_metadata_missing_fields_test",
         ":runfile_manifest_bash_resolution_test",
         ":runfile_manifest_not_found_parity_test",
         ":runfile_manifest_parser_parity_test",

@@ -112,7 +112,11 @@ dd_payload_uploader(
 ```bash
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 ```
 
 ```powershell
@@ -123,7 +127,9 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+exit $uploadStatus
 ```
 
 ### Bzlmod + Go companion (`dd_topt_go_test`)
@@ -413,6 +419,12 @@ def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         topt_data = topt_data,
+        orchestrion_pin_files = [
+            "//:go.mod",
+            "//:go.sum",
+            "//:orchestrion.tool.go",
+            "//:orchestrion.yml",
+        ],
         **kwargs
     )
 ```
@@ -942,6 +954,9 @@ dd_topt_go_test(
     topt_data = topt_data,
 )
 ```
+
+`dd_topt_go_test` enables CI Visibility and payload-to-files mode by default,
+so opt-in Go tests emit payload files without extra `--test_env` settings.
 
 If the tracer needs runtime-visible source files for AST-derived metadata such
 as `test.source.end`, enable source staging explicitly:

@@ -622,7 +622,7 @@
       "path": "go/private/orchestrion/extensions.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "1f476b66b20b9217683763f7d82f5c5b29e5891a350c6063601a40f630eb9d60"
+      "sha256": "806d7316e276270ebdf2b51bbc5b8151cb508438e24093fa2e0c27afe560befa"
     },
     {
       "path": "go/private/platforms.bzl",
@@ -736,7 +736,7 @@
       "path": "go/private/rules/transition.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "052a83638ebff129828dec32ff889b070558d14b0fe0f872364a61bd5b50113d"
+      "sha256": "944dbef1445915764e08164332fa082235c320faab31492563a6b1fa563b4f2e"
     },
     {
       "path": "go/private/rules/wrappers.bzl",

@@ -350,10 +350,13 @@ def main() -> int:
     _require(stdlib_list_actions, "aquery did not contain any GoStdlibList actions")
 
     orchestrion_actions = []
+    orchestrion_stdlib_actions = []
     for action in compile_actions + stdlib_actions + link_actions:
         require_proxy = _uses_orchestrion(action)
         if require_proxy:
             orchestrion_actions.append(action)
+            if action.mnemonic == "GoStdlib":
+                orchestrion_stdlib_actions.append(action)
         _assert_expected_action(
             action,
             _action_inputs(action, artifacts, dep_sets, path_fragments),
@@ -363,6 +366,10 @@ def main() -> int:
     _require(
         orchestrion_actions,
         "aquery did not contain any Orchestrion-enabled Go compile, stdlib, or link actions",
+    )
+    _require(
+        orchestrion_stdlib_actions,
+        "aquery did not contain any Orchestrion-enabled GoStdlib actions",
     )
 
     for action in stdlib_list_actions:

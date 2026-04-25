@@ -235,6 +235,16 @@ def go_macro_select_inputs_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_ci_visibility_opt_out_target(name, tags = None):
+    """Target under test for caller-owned CI Visibility enablement."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        ci_visibility_enabled = False,
+        tags = tags,
+    )
+
 def go_macro_stage_sources_target(name, tags = None):
     """Target under test for source staging with the default repo-root rundir."""
     dd_topt_go_test(
@@ -343,8 +353,10 @@ def _go_macro_single_service_wiring_test_impl(ctx):
         captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
     )
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
 
@@ -384,6 +396,7 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(
         env,
         "go_macro_env_none_target_topt_bazel_metadata.json",
@@ -405,6 +418,7 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(
         env,
         "go_macro_select_inputs_target_topt_bazel_metadata.json",
@@ -413,6 +427,15 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _go_macro_ci_visibility_opt_out_wiring_test_impl(ctx):
+    """Assert callers can intentionally own the CI Visibility tracer switch."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     return analysistest.end(env)
 
 def _go_macro_stage_sources_wiring_test_impl(ctx):
@@ -500,6 +523,7 @@ def _go_macro_public_wrapper_test_impl(ctx):
         run_env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
     )
     asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", run_env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
@@ -610,6 +634,9 @@ go_macro_env_none_wiring_test = analysistest.make(
 )
 go_macro_select_inputs_wiring_test = analysistest.make(
     _go_macro_select_inputs_wiring_test_impl,
+)
+go_macro_ci_visibility_opt_out_wiring_test = analysistest.make(
+    _go_macro_ci_visibility_opt_out_wiring_test_impl,
 )
 go_macro_stage_sources_wiring_test = analysistest.make(
     _go_macro_stage_sources_wiring_test_impl,

@@ -632,7 +632,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "SA6tWQoz0lUIPbqtYrirl5Ex7kGrjqs4dXB2J8bCyck=",
+        "bzlTransitiveDigest": "UIaDqcmaTtliLO79j4RoWyvaZGeKTiADcwH4RFNL2g8=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

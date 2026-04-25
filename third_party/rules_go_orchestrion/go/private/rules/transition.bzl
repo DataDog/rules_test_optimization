@@ -219,6 +219,7 @@ _reset_transition_keys = sorted(_reset_transition_dict.keys())
 _ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
 
 _stdlib_keep_keys = sorted([
+    _ORCHESTRION_ENABLED_SETTING,
     "//go/config:msan",
     "//go/config:race",
     "//go/config:pure",

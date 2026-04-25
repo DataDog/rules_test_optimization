@@ -280,12 +280,20 @@ Running tests and uploading payloads:
 # Run tests (preserving exit code) then upload payloads
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 
 # RBE users: download outputs so uploader can discover payload files
 bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 ```
 
 ```powershell
@@ -297,19 +305,23 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+exit $uploadStatus
 
 # RBE users: download outputs so uploader can discover payload files
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+exit $uploadStatus
 ```
 
 Notes:
-- The sequence above intentionally preserves the test exit code.
-- Uploader failures are still reported in uploader logs/output; monitor those in CI.
+- The sequence above preserves test failures and also fails on uploader errors
+  when tests passed.
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
 - Windows-friendly wrappers are provided as `examples/*/runtests.ps1` and use
   native PowerShell + Bazel (no Git Bash dependency).

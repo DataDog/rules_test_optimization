@@ -20,13 +20,17 @@ For a quick path, use the upload section in `README.md`.
 # RECOMMENDED: Run tests, then upload payloads (preserves test exit code)
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 
 # Or as a one-liner:
-bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
+bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; exit "$upload_status"
 
 # REMOTE EXECUTION (RBE) - add flag to download outputs:
-bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
+bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; exit "$upload_status"
 ```
 
 ```powershell
@@ -38,18 +42,22 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+exit $uploadStatus
 
 # REMOTE EXECUTION (RBE) - add flag to download outputs:
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+exit $uploadStatus
 ```
 
-Always preserve the test exit code. Using plain `;` can make CI report success
-when tests failed.
+Always preserve both statuses. Test failures should win, and uploader failures
+must still fail the job when tests passed.
 
 Credential handling:
 

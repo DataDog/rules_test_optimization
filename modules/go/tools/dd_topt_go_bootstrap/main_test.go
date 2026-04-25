@@ -842,6 +842,9 @@ func TestEnsureGuidedRootBuildCreatesBuildBazel(t *testing.T) {
 	if !strings.Contains(text, uploaderBlockStart) || !strings.Contains(text, `name = "dd_upload_payloads"`) {
 		t.Fatalf("expected managed uploader block in BUILD.bazel:\n%s", text)
 	}
+	if !strings.Contains(text, pinExportsBlockStart) || !strings.Contains(text, `"orchestrion.tool.go"`) || !strings.Contains(text, `"orchestrion.yml"`) {
+		t.Fatalf("expected managed pin-file exports in BUILD.bazel:\n%s", text)
+	}
 }
 
 func TestEnsureGuidedWrapperCreatesFiles(t *testing.T) {
@@ -865,6 +868,52 @@ func TestEnsureGuidedWrapperCreatesFiles(t *testing.T) {
 	text := string(content)
 	if !strings.Contains(text, wrapperBlockStart) || !strings.Contains(text, `load("@test_optimization_data//:export.bzl", "topt_data")`) {
 		t.Fatalf("expected managed wrapper content:\n%s", text)
+	}
+	if !strings.Contains(text, `orchestrion_pin_files = _ORCHESTRION_PIN_FILES`) || !strings.Contains(text, `"//:orchestrion.tool.go"`) {
+		t.Fatalf("expected wrapper to pass root Orchestrion pin files:\n%s", text)
+	}
+}
+
+func TestEnsureGuidedWorkspaceFilesUsesGoModulePackagePinLabels(t *testing.T) {
+	dir := t.TempDir()
+	goModuleDir := filepath.Join(dir, "services", "worker")
+	if err := os.MkdirAll(goModuleDir, 0o755); err != nil {
+		t.Fatalf("mkdir go module dir: %v", err)
+	}
+	cfg := config{
+		workspaceDir:       dir,
+		goModuleDir:        goModuleDir,
+		syncRepoName:       "test_optimization_data",
+		uploaderTargetName: "dd_upload_payloads",
+	}
+	if err := ensureGuidedWorkspaceFiles(cfg); err != nil {
+		t.Fatalf("ensureGuidedWorkspaceFiles error: %v", err)
+	}
+
+	rootBuild, err := os.ReadFile(filepath.Join(dir, "BUILD.bazel"))
+	if err != nil {
+		t.Fatalf("read root BUILD.bazel: %v", err)
+	}
+	if strings.Contains(string(rootBuild), pinExportsBlockStart) {
+		t.Fatalf("root BUILD.bazel should not export non-root Go module pin files:\n%s", string(rootBuild))
+	}
+
+	moduleBuild, err := os.ReadFile(filepath.Join(goModuleDir, "BUILD.bazel"))
+	if err != nil {
+		t.Fatalf("read module BUILD.bazel: %v", err)
+	}
+	if !strings.Contains(string(moduleBuild), pinExportsBlockStart) || !strings.Contains(string(moduleBuild), `"orchestrion.tool.go"`) {
+		t.Fatalf("expected module BUILD.bazel to export Orchestrion pin files:\n%s", string(moduleBuild))
+	}
+
+	wrapperPath := filepath.Join(dir, "tools", "build", "dd_go_test.bzl")
+	wrapperContent, err := os.ReadFile(wrapperPath)
+	if err != nil {
+		t.Fatalf("read dd_go_test.bzl: %v", err)
+	}
+	wrapper := string(wrapperContent)
+	if !strings.Contains(wrapper, `"//services/worker:orchestrion.tool.go"`) || strings.Contains(wrapper, `"//:orchestrion.tool.go"`) {
+		t.Fatalf("expected wrapper to reference Go module package pin labels:\n%s", wrapper)
 	}
 }
 

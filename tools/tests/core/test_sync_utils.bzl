@@ -32,12 +32,14 @@ load(
     "http_retry_attempts_for_tests",
     "http_retry_delay_seconds_for_tests",
     "load_github_event_payload_for_tests",
+    "missing_required_git_metadata_for_tests",
     "new_telemetry_facts_for_tests",
     "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
     "parse_curl_time_ms_for_tests",
     "parse_go_module_path_for_tests",
     "partition_unix_headers_for_tests",
+    "populate_local_git_metadata_for_tests",
     "record_sync_extension_repo_owner_or_fail_for_tests",
     "redact_url_userinfo_for_tests",
     "render_export_bzl_for_tests",
@@ -73,6 +75,41 @@ def _fake_read_ctx(file_map):
     return struct(
         path = _path,
         read = _read,
+    )
+
+def _fake_git_ctx(workspace_root, command_map, file_map = None):
+    """Build a fake repository ctx for local git metadata tests."""
+    files = file_map or {}
+    watched = []
+
+    def _path(path):
+        return struct(
+            path = path,
+            exists = path in files,
+            is_dir = files.get(path) == "<dir>",
+        )
+
+    def _read(path):
+        return files.get(path.path, "")
+
+    def _watch(path):
+        watched.append(path.path)
+
+    def _execute(args, timeout = 10):
+        key = " ".join(args[3:])
+        value = command_map.get(key)
+        if value == None:
+            return struct(return_code = 1, stdout = "", stderr = "missing command")
+        return struct(return_code = 0, stdout = value, stderr = "")
+
+    return struct(
+        os = struct(name = "linux", environ = {}),
+        workspace_root = workspace_root,
+        path = _path,
+        read = _read,
+        watch = _watch,
+        execute = _execute,
+        watched = watched,
     )
 
 def _dd_site_normalization_test(ctx):
@@ -256,6 +293,139 @@ def _first_env_ctx_test(ctx):
     }))
     asserts.equals(env, "value-b", first_env_for_tests(fake_ctx, ["A", "B"]))
     asserts.equals(env, "", first_env_for_tests(fake_ctx, ["X", "Y"]))
+    return unittest.end(env)
+
+def _local_git_metadata_fills_empty_fields_test(ctx):
+    """Validate local git fallback fills only missing settings metadata."""
+    env = unittest.begin(ctx)
+    repo = "/tmp/repo"
+    fake_ctx = _fake_git_ctx(
+        repo,
+        {
+            "config --get remote.origin.url": "https://token@github.com/DataDog/example.git\n",
+            "rev-parse --verify HEAD": "abc123\n",
+            "symbolic-ref --quiet --short HEAD": "feature/local\n",
+            "log -1 --date=iso-strict --pretty=%s abc123": "subject\n",
+            "log -1 --date=iso-strict --pretty=%an abc123": "Author\n",
+            "log -1 --date=iso-strict --pretty=%ae abc123": "author@example.com\n",
+            "log -1 --date=iso-strict --pretty=%aI abc123": "2026-04-25T00:00:00Z\n",
+            "log -1 --date=iso-strict --pretty=%cn abc123": "Committer\n",
+            "log -1 --date=iso-strict --pretty=%ce abc123": "committer@example.com\n",
+            "log -1 --date=iso-strict --pretty=%cI abc123": "2026-04-25T00:00:01Z\n",
+        },
+        {
+            repo + "/.git": "<dir>",
+            repo + "/.git/HEAD": "ref: refs/heads/feature/local\n",
+            repo + "/.git/config": "[remote \"origin\"]\n",
+            repo + "/.git/refs/heads/feature/local": "abc123\n",
+        },
+    )
+    env_data = {
+        "repository_url": "",
+        "branch": "",
+        "tag": "",
+        "sha": "",
+        "head_sha": "",
+        "commit_message": "",
+        "commit_author_name": "",
+        "commit_author_email": "",
+        "commit_author_date": "",
+        "commit_committer_name": "",
+        "commit_committer_email": "",
+        "commit_committer_date": "",
+        "head_message": "",
+        "head_author_name": "",
+        "head_author_email": "",
+        "head_author_date": "",
+        "head_committer_name": "",
+        "head_committer_email": "",
+        "head_committer_date": "",
+    }
+    populate_local_git_metadata_for_tests(fake_ctx, env_data)
+    asserts.equals(env, "https://github.com/DataDog/example.git", env_data.get("repository_url"))
+    asserts.equals(env, "feature/local", env_data.get("branch"))
+    asserts.equals(env, "abc123", env_data.get("sha"))
+    asserts.equals(env, "abc123", env_data.get("head_sha"))
+    asserts.equals(env, "subject", env_data.get("commit_message"))
+    asserts.true(env, repo + "/.git/refs/heads/feature/local" in fake_ctx.watched)
+    return unittest.end(env)
+
+def _local_git_metadata_preserves_existing_fields_test(ctx):
+    """Validate fallback does not overwrite provider or explicit metadata."""
+    env = unittest.begin(ctx)
+    repo = "/tmp/repo"
+    fake_ctx = _fake_git_ctx(
+        repo,
+        {
+            "config --get remote.origin.url": "https://github.com/DataDog/local.git\n",
+            "rev-parse --verify HEAD": "localsha\n",
+            "symbolic-ref --quiet --short HEAD": "local-branch\n",
+        },
+        {repo + "/.git": "<dir>"},
+    )
+    env_data = {
+        "repository_url": "https://github.com/DataDog/provider.git",
+        "branch": "provider-branch",
+        "tag": "",
+        "sha": "providersha",
+        "head_sha": "",
+    }
+    populate_local_git_metadata_for_tests(fake_ctx, env_data)
+    asserts.equals(env, "https://github.com/DataDog/provider.git", env_data.get("repository_url"))
+    asserts.equals(env, "provider-branch", env_data.get("branch"))
+    asserts.equals(env, "providersha", env_data.get("sha"))
+    asserts.equals(env, "providersha", env_data.get("head_sha"))
+    return unittest.end(env)
+
+def _local_git_metadata_detached_head_has_no_branch_test(ctx):
+    """Validate detached HEAD does not synthesize a fake backend branch."""
+    env = unittest.begin(ctx)
+    repo = "/tmp/repo"
+    fake_ctx = _fake_git_ctx(
+        repo,
+        {
+            "config --get remote.origin.url": "https://github.com/DataDog/example.git\n",
+            "rev-parse --verify HEAD": "abc123\n",
+        },
+        {
+            repo + "/.git": "<dir>",
+            repo + "/.git/HEAD": "abc123\n",
+        },
+    )
+    env_data = {
+        "repository_url": "",
+        "branch": "",
+        "tag": "",
+        "sha": "",
+        "head_sha": "",
+    }
+    populate_local_git_metadata_for_tests(fake_ctx, env_data)
+    asserts.equals(env, "", env_data.get("branch"))
+    asserts.equals(env, "abc123", env_data.get("sha"))
+    asserts.equals(env, ["branch/DD_GIT_BRANCH"], missing_required_git_metadata_for_tests(env_data))
+    return unittest.end(env)
+
+def _required_git_metadata_missing_fields_test(ctx):
+    """Validate strict-mode missing-field reporting."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        [
+            "repository_url/DD_GIT_REPOSITORY_URL",
+            "branch/DD_GIT_BRANCH",
+            "sha/DD_GIT_COMMIT_SHA",
+        ],
+        missing_required_git_metadata_for_tests({}),
+    )
+    asserts.equals(
+        env,
+        [],
+        missing_required_git_metadata_for_tests({
+            "repository_url": "https://github.com/DataDog/example.git",
+            "branch": "main",
+            "sha": "abc123",
+        }),
+    )
     return unittest.end(env)
 
 def _apply_dd_git_overrides_test(ctx):
@@ -1729,6 +1899,10 @@ normalize_ref_edge_cases_test = unittest.make(_normalize_ref_edge_cases_test)
 sanitize_repository_url_test = unittest.make(_sanitize_repository_url_test)
 first_env_from_environ_test = unittest.make(_first_env_from_environ_test)
 first_env_ctx_test = unittest.make(_first_env_ctx_test)
+local_git_metadata_fills_empty_fields_test = unittest.make(_local_git_metadata_fills_empty_fields_test)
+local_git_metadata_preserves_existing_fields_test = unittest.make(_local_git_metadata_preserves_existing_fields_test)
+local_git_metadata_detached_head_has_no_branch_test = unittest.make(_local_git_metadata_detached_head_has_no_branch_test)
+required_git_metadata_missing_fields_test = unittest.make(_required_git_metadata_missing_fields_test)
 apply_dd_git_overrides_test = unittest.make(_apply_dd_git_overrides_test)
 set_context_tag_from_env_test = unittest.make(_set_context_tag_from_env_test)
 collect_env_from_environ_provider_mapping_test = unittest.make(_collect_env_from_environ_provider_mapping_test)
