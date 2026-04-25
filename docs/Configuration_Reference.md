@@ -60,6 +60,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
 | `http_execute_timeout_buffer_seconds` | int | `-1` attr / `60` effective | Optional outer execute-timeout buffer override (`-1` keeps env/default behavior) |
 | `known_tests` | bool | `True` | Local switch for Known Tests request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `known_tests_enabled=false` |
 | `test_management` | bool | `True` | Local switch for Test Management request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `test_management.enabled=false` |
+| `require_git_metadata` | bool | `False` | Strict local/CI validation for settings-request Git metadata. When `True`, sync fails before HTTP if repository URL, branch, or commit SHA cannot be resolved |
 | `debug` | bool | `False` | Enables verbose repository-rule logging |
 
 Notes:
@@ -214,11 +215,13 @@ Provider-name note: AWS CodePipeline is emitted as `awscodepipeline` in sync
 metadata (`ci.provider.name`).
 
 Provider precedence note:
-- explicit `DD_GIT_*` overrides win first;
-- CI-provider environment detection is second;
-- wrapper git synthesis (`git rev-parse`, `git log`, etc.) is last and is used
-  mainly for local workflows or to fill GitHub metadata gaps such as commit
-  author and committer identity.
+- CI-provider environment detection and event payloads are collected first;
+- local Git fallback fills only fields that are still empty;
+- explicit `DD_GIT_*` overrides win last.
+
+When `require_git_metadata = True`, sync fails before the settings request if
+repository URL, branch, or commit SHA are still missing. Detached HEAD checkouts
+must pass `DD_GIT_BRANCH` explicitly when strict mode is enabled.
 
 Additional mapped metadata inputs include:
 

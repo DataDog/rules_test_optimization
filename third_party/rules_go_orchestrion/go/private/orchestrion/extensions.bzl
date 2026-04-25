@@ -20,7 +20,7 @@ ORCHESTRION_SEED_GO_MOD_VERSION = "1.21"
 
 # Bump this identifier whenever the in-repo Orchestrion patch block changes in
 # a way that should invalidate previously cached bootstrap binaries.
-ORCHESTRION_PATCHSET_ID = "20260421-module-proxy-v2"
+ORCHESTRION_PATCHSET_ID = "20260425-stdlib-transition"
 _DD_TRACE_GO_MODULES = [
     "github.com/DataDog/dd-trace-go/v2",
     "github.com/DataDog/dd-trace-go/contrib/net/http/v2",

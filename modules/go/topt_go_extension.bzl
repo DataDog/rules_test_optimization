@@ -54,6 +54,7 @@ def _materialize_single_service_repo(call):
         http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
         known_tests = call.known_tests,
         test_management = call.test_management,
+        require_git_metadata = call.require_git_metadata,
         debug = call.debug,
     )
 
@@ -77,6 +78,7 @@ def _materialize_multi_service_repos(call):
             http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
             known_tests = call.known_tests,
             test_management = call.test_management,
+            require_git_metadata = call.require_git_metadata,
             debug = call.debug,
         )
 
@@ -126,6 +128,7 @@ test_optimization_go_extension = module_extension(
             "http_execute_timeout_buffer_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
+            "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),
     },

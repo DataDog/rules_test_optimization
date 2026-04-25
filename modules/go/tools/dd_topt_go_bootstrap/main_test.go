@@ -842,6 +842,9 @@ func TestEnsureGuidedRootBuildCreatesBuildBazel(t *testing.T) {
 	if !strings.Contains(text, uploaderBlockStart) || !strings.Contains(text, `name = "dd_upload_payloads"`) {
 		t.Fatalf("expected managed uploader block in BUILD.bazel:\n%s", text)
 	}
+	if !strings.Contains(text, pinExportsBlockStart) || !strings.Contains(text, `"orchestrion.tool.go"`) || !strings.Contains(text, `"orchestrion.yml"`) {
+		t.Fatalf("expected managed pin-file exports in BUILD.bazel:\n%s", text)
+	}
 }
 
 func TestEnsureGuidedWrapperCreatesFiles(t *testing.T) {
@@ -865,6 +868,9 @@ func TestEnsureGuidedWrapperCreatesFiles(t *testing.T) {
 	text := string(content)
 	if !strings.Contains(text, wrapperBlockStart) || !strings.Contains(text, `load("@test_optimization_data//:export.bzl", "topt_data")`) {
 		t.Fatalf("expected managed wrapper content:\n%s", text)
+	}
+	if !strings.Contains(text, `orchestrion_pin_files = _ORCHESTRION_PIN_FILES`) || !strings.Contains(text, `"//:orchestrion.tool.go"`) {
+		t.Fatalf("expected wrapper to pass root Orchestrion pin files:\n%s", text)
 	}
 }
 

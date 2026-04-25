@@ -28,6 +28,8 @@ const (
 	guidedBlockEnd               = "# END Datadog Go Guided Setup"
 	uploaderBlockStart           = "# BEGIN Datadog Go Uploader"
 	uploaderBlockEnd             = "# END Datadog Go Uploader"
+	pinExportsBlockStart         = "# BEGIN Datadog Go Pin Files"
+	pinExportsBlockEnd           = "# END Datadog Go Pin Files"
 	wrapperBlockStart            = "# BEGIN Datadog Go Wrapper"
 	wrapperBlockEnd              = "# END Datadog Go Wrapper"
 	defaultStarterOrchestrionYML = `---
@@ -42,6 +44,13 @@ aspects: []
 	toolsBuildDir                 = "tools/build"
 	wrapperFileName               = "dd_go_test.bzl"
 )
+
+var orchestrionPinFiles = []string{
+	"go.mod",
+	"go.sum",
+	"orchestrion.tool.go",
+	"orchestrion.yml",
+}
 
 var ddTraceGoModules = []string{
 	"github.com/DataDog/dd-trace-go/v2",
@@ -592,10 +601,29 @@ dd_payload_uploader(
 		return err
 	}
 
+	pinBlock := renderPinExportsBlock()
+	text, err = replaceManagedSection(text, pinExportsBlockStart, pinExportsBlockEnd, pinBlock)
+	if err != nil {
+		return err
+	}
+
 	if err := os.WriteFile(buildPath, []byte(text), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", buildPath, err)
 	}
 	return nil
+}
+
+func renderPinExportsBlock() string {
+	var buf bytes.Buffer
+	buf.WriteString(pinExportsBlockStart)
+	buf.WriteString("\nexports_files([\n")
+	for _, file := range orchestrionPinFiles {
+		fmt.Fprintf(&buf, "    %q,\n", file)
+	}
+	buf.WriteString("])\n")
+	buf.WriteString(pinExportsBlockEnd)
+	buf.WriteString("\n")
+	return buf.String()
 }
 
 func ensureGuidedWrapper(cfg config) error {
@@ -630,10 +658,18 @@ func ensureGuidedWrapper(cfg config) error {
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@%s//:export.bzl", "topt_data")
 
+_ORCHESTRION_PIN_FILES = [
+    "//:go.mod",
+    "//:go.sum",
+    "//:orchestrion.tool.go",
+    "//:orchestrion.yml",
+]
+
 def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         topt_data = topt_data,
+        orchestrion_pin_files = _ORCHESTRION_PIN_FILES,
         **kwargs
     )
 %s

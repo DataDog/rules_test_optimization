@@ -127,6 +127,9 @@ def dd_topt_go_test(
         # Optional: stage direct test sources in runtime runfiles so dd-trace-go
         # can open them for AST-derived metadata such as test.source.end.
         stage_sources = False,
+        # Enable CI Visibility in opt-in Go tests by default so payload-to-files
+        # mode works without extra test_env wiring in consumer repos.
+        ci_visibility_enabled = True,
         # Optional module-root Orchestrion pin file labels for nested packages.
         orchestrion_pin_files = None,
         **kwargs):
@@ -158,6 +161,9 @@ def dd_topt_go_test(
         into runtime runfiles so the tracer can open source files for
         AST-derived metadata. When enabled, the macro defaults `rundir` to `.`
         only if the caller did not already set `rundir`.
+      ci_visibility_enabled: Optional boolean. When true, the macro forces
+        `DD_CIVISIBILITY_ENABLED=true` on the generated test environment.
+        Set false only when the caller intentionally owns this tracer switch.
       orchestrion_pin_files: Optional labels for module-root Orchestrion pin
         files such as `//:go.mod` and `//:orchestrion.tool.go`. Use this when
         the BUILD file lives in a nested package below the Go module root.
@@ -372,17 +378,20 @@ def dd_topt_go_test(
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
     data = _append_data_dependencies(data, [manifest_label])
+    required_env = {
+        "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
+        # Signal to the library that payloads should be written to files
+        # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
+        "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+        # The Orchestrion wrapper copies this file into test.outputs so the
+        # uploader can enrich payloads with target-specific Bazel metadata.
+        "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
+    }
+    if ci_visibility_enabled:
+        required_env["DD_CIVISIBILITY_ENABLED"] = "true"
     env = _merge_user_env(
         user_env,
-        {
-            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
-            # Signal to the library that payloads should be written to files
-            # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
-            "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
-            # The Orchestrion wrapper copies this file into test.outputs so the
-            # uploader can enrich payloads with target-specific Bazel metadata.
-            "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
-        },
+        required_env,
         macro_name = "dd_topt_go_test",
     )
 

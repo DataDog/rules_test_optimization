@@ -883,19 +883,23 @@ def _extract_provider_env(environ, env_data):
         env_data["pr_base_branch"] = normalize_ref(environ.get("DRONE_TARGET_BRANCH") or "")
         return
 
-def collect_env_from_environ(environ, attr_service = None, github_event_payload = None):
+def normalize_env_data(env_data):
+    """Normalize git refs and repository URL fields in-place."""
+    env_data["branch"] = normalize_ref(env_data.get("branch"))
+    env_data["tag"] = normalize_ref(env_data.get("tag"))
+    env_data["pr_base_branch"] = normalize_ref(env_data.get("pr_base_branch"))
+    env_data["repository_url"] = sanitize_repository_url(env_data.get("repository_url"))
+
+def collect_env_from_environ(environ, attr_service = None, github_event_payload = None, apply_dd_git = True):
     """Collect CI/git/service context from a plain env mapping."""
     env_data = _new_env_data(attr_service, environ)
     _extract_provider_env(environ, env_data)
     if environ.get("GITHUB_SHA") and github_event_payload:
         apply_github_event_payload(env_data, github_event_payload)
-    env_data["branch"] = normalize_ref(env_data.get("branch"))
-    env_data["tag"] = normalize_ref(env_data.get("tag"))
-    apply_dd_git_overrides(env_data, environ)
-    env_data["branch"] = normalize_ref(env_data.get("branch"))
-    env_data["tag"] = normalize_ref(env_data.get("tag"))
-    env_data["pr_base_branch"] = normalize_ref(env_data.get("pr_base_branch"))
-    env_data["repository_url"] = sanitize_repository_url(env_data.get("repository_url"))
+    normalize_env_data(env_data)
+    if apply_dd_git:
+        apply_dd_git_overrides(env_data, environ)
+        normalize_env_data(env_data)
     return env_data
 
 def set_context_tag_from_env(environ, tags, env_key, tag_key):

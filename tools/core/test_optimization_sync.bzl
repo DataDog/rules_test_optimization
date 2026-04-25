@@ -70,6 +70,7 @@ load(
     _collect_env_from_environ = "collect_env_from_environ",
     _first_env = "first_env",
     _first_env_from_environ = "first_env_from_environ",
+    _normalize_env_data = "normalize_env_data",
     _normalize_ref = "normalize_ref",
     _sanitize_repository_url = "sanitize_repository_url",
     _set_context_tag_from_env = "set_context_tag_from_env",
@@ -1451,6 +1452,128 @@ def _git_output_from_workspace(ctx, workspace_path, git_args):
         return ""
     return (result.stdout or "").strip()
 
+def _path_join_for_host(ctx, *parts):
+    """Join path fragments using the repository host's path separator."""
+    sep = "\\" if _is_windows(ctx) else "/"
+    cleaned = []
+    for index, part in enumerate(parts):
+        text = str(part or "")
+        if not text:
+            continue
+        if index == 0:
+            cleaned.append(text.rstrip("/\\"))
+        else:
+            cleaned.append(text.strip("/\\"))
+    return sep.join(cleaned)
+
+def _looks_absolute_path(path):
+    """Return whether a path string is already absolute on Unix or Windows."""
+    if not path:
+        return False
+    if path.startswith("/") or path.startswith("\\\\"):
+        return True
+    return len(path) > 2 and path[1] == ":" and (path[2] == "\\" or path[2] == "/")
+
+def _path_exists(ctx, path):
+    """Best-effort repository_ctx path existence check."""
+    return bool(path) and ctx.path(path).exists
+
+def _watch_path_if_exists(ctx, path):
+    """Watch one concrete path if Bazel and the filesystem expose it."""
+    if not path or not hasattr(ctx, "watch"):
+        return
+    if not _path_exists(ctx, path):
+        return
+    ctx.watch(ctx.path(path))
+
+def _gitdir_from_workspace(ctx, workspace_path):
+    """Resolve the checkout's gitdir and watch concrete files that affect metadata."""
+    dot_git = _path_join_for_host(ctx, workspace_path, ".git")
+    git_dir = dot_git
+    if _path_exists(ctx, dot_git) and not ctx.path(dot_git).is_dir:
+        _watch_path_if_exists(ctx, dot_git)
+        content = ctx.read(ctx.path(dot_git)).strip()
+        prefix = "gitdir:"
+        if content.startswith(prefix):
+            candidate = content[len(prefix):].strip()
+            git_dir = candidate if _looks_absolute_path(candidate) else _path_join_for_host(ctx, workspace_path, candidate)
+
+    head_path = _path_join_for_host(ctx, git_dir, "HEAD")
+    _watch_path_if_exists(ctx, head_path)
+    _watch_path_if_exists(ctx, _path_join_for_host(ctx, git_dir, "config"))
+    _watch_path_if_exists(ctx, _path_join_for_host(ctx, git_dir, "packed-refs"))
+
+    if _path_exists(ctx, head_path):
+        head_content = ctx.read(ctx.path(head_path)).strip()
+        ref_prefix = "ref:"
+        if head_content.startswith(ref_prefix):
+            ref_name = head_content[len(ref_prefix):].strip()
+            _watch_path_if_exists(ctx, _path_join_for_host(ctx, git_dir, ref_name))
+    return git_dir
+
+def _populate_local_git_metadata(ctx, env_data):
+    """Fill missing git metadata from the local workspace checkout.
+
+    The fallback is intentionally conservative: provider metadata and explicit
+    DD_GIT_* overrides remain authoritative, and this helper only fills empty
+    fields before those overrides are applied.
+    """
+    workspace_path = str(getattr(ctx, "workspace_root", "") or "")
+    if not workspace_path:
+        return
+
+    _gitdir_from_workspace(ctx, workspace_path)
+
+    if not env_data.get("repository_url"):
+        remote_url = _git_output_from_workspace(ctx, workspace_path, ["config", "--get", "remote.origin.url"])
+        if remote_url:
+            env_data["repository_url"] = _sanitize_repository_url(remote_url)
+
+    if not env_data.get("sha"):
+        env_data["sha"] = _git_output_from_workspace(ctx, workspace_path, ["rev-parse", "--verify", "HEAD"])
+
+    if not env_data.get("head_sha") and env_data.get("sha"):
+        env_data["head_sha"] = env_data.get("sha")
+
+    if not env_data.get("branch") and not env_data.get("tag"):
+        branch = _git_output_from_workspace(ctx, workspace_path, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+        if branch:
+            env_data["branch"] = _normalize_ref(branch)
+        else:
+            tag = _git_output_from_workspace(ctx, workspace_path, ["describe", "--tags", "--exact-match", "HEAD"])
+            if tag:
+                env_data["tag"] = _normalize_ref(tag)
+
+    _normalize_env_data(env_data)
+    _populate_git_revision_metadata(ctx, env_data, workspace_path, env_data.get("sha") or "", "commit_")
+    _populate_git_revision_metadata(ctx, env_data, workspace_path, env_data.get("head_sha") or "", "head_")
+
+def _missing_required_git_metadata(env_data):
+    """Return missing settings-request metadata fields for strict sync mode."""
+    missing = []
+    if not env_data.get("repository_url"):
+        missing.append("repository_url/DD_GIT_REPOSITORY_URL")
+    if not env_data.get("branch"):
+        missing.append("branch/DD_GIT_BRANCH")
+    if not env_data.get("sha"):
+        missing.append("sha/DD_GIT_COMMIT_SHA")
+    return missing
+
+def _validate_required_git_metadata_or_fail(env_data, require_git_metadata):
+    """Fail early when strict sync mode lacks metadata required by settings."""
+    if not require_git_metadata:
+        return
+    missing = _missing_required_git_metadata(env_data)
+    if not missing:
+        return
+    fail(
+        (
+            "test_optimization_sync(require_git_metadata = True) could not resolve required git metadata before calling Datadog settings: %s. " +
+            "Run from a branch checkout or pass DD_GIT_REPOSITORY_URL, DD_GIT_BRANCH, and DD_GIT_COMMIT_SHA via --repo_env."
+        ) %
+        ", ".join(missing),
+    )
+
 def _populate_git_revision_metadata(ctx, env_data, workspace_path, revision, key_prefix):
     """Fill missing message/author/committer fields for one git revision."""
     if not revision or not workspace_path:
@@ -1522,17 +1645,24 @@ def _populate_missing_git_metadata(ctx, env_data):
 
 def _collect_env(ctx):
     """Collect CI/git/service context into a normalized metadata dict."""
+    environ = ctx.os.environ
     env_data = _collect_env_from_environ(
-        ctx.os.environ,
+        environ,
         getattr(ctx.attr, "service", None),
         _load_github_event_payload(ctx),
+        apply_dd_git = False,
     )
+    _populate_local_git_metadata(ctx, env_data)
+    _apply_dd_git_overrides(env_data, environ)
+    _normalize_env_data(env_data)
     _populate_missing_git_metadata(ctx, env_data)
     return env_data
 
 # Public aliases for tests (helpers defined after the first alias section).
 collect_env_for_tests = _collect_env
 collect_env_from_environ_for_tests = _collect_env_from_environ
+populate_local_git_metadata_for_tests = _populate_local_git_metadata
+missing_required_git_metadata_for_tests = _missing_required_git_metadata
 load_github_event_payload_for_tests = _load_github_event_payload
 build_windows_read_abs_file_command_for_tests = _build_windows_read_abs_file_command
 build_unix_read_abs_file_command_for_tests = _build_unix_read_abs_file_command
@@ -1943,6 +2073,7 @@ def _impl(ctx):
     raw_service = env_data.get("service")
     validated_service = validate_service_name(raw_service, debug)
     env_data["service"] = validated_service
+    _validate_required_git_metadata_or_fail(env_data, ctx.attr.require_git_metadata)
 
     log_debug(debug, "validation", "Env data collected and validated")
 
@@ -2353,6 +2484,7 @@ test_optimization_sync = repository_rule(
         #                    settings.data.attributes.test_management.enabled=false in the settings file.
         "known_tests": attr.bool(default = True),
         "test_management": attr.bool(default = True),
+        "require_git_metadata": attr.bool(default = False),
         "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
     environ = [
@@ -2457,6 +2589,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 http_execute_timeout_buffer_seconds = test_optimization_call.http_execute_timeout_buffer_seconds,
                 known_tests = test_optimization_call.known_tests,
                 test_management = test_optimization_call.test_management,
+                require_git_metadata = test_optimization_call.require_git_metadata,
                 debug = call_debug,
             )
 
@@ -2484,6 +2617,7 @@ test_optimization_sync_extension = module_extension(
             # Optional kill-switches (default True keeps server behavior; False disables feature locally)
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
+            "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),
     },
