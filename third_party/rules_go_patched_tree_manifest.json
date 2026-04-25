@@ -112,7 +112,7 @@
       "path": "MODULE.bazel.lock",
       "kind": "file",
       "executable": false,
-      "sha256": "a88bcfb7995094f7163a3c975b7d4d5702a53d56cc80f083c22aee166824e1cb"
+      "sha256": "dcc7e6ea49797e124f4e87eff952ec337bd64cf6e2f2a973206ae9ced5d26eae"
     },
     {
       "path": "README.rst",
@@ -1324,13 +1324,13 @@
       "path": "go/tools/builders/stdlib.go",
       "kind": "file",
       "executable": false,
-      "sha256": "974c884b6c0435c95158ba4aca294ecd52e12f4a76cf57e426d8b0b9ea57fd98"
+      "sha256": "d270ae2b30d999a86cff16a9e60f1a18bb9e4a048c298de1c983da1a5c99cf0f"
     },
     {
       "path": "go/tools/builders/stdlib_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "6cdeb44063c76c6569538760bd529774ef305c923be36ca8b3b8bd54533961ea"
+      "sha256": "479c04c2bbd028da835885d6d94ac4ab985b9e019c3bfffc2e2a55a21c855e74"
     },
     {
       "path": "go/tools/builders/stdliblist.go",

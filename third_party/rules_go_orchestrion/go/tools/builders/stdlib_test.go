@@ -88,3 +88,45 @@ func TestEnsureImportableStdlibModulePathRewritesAndRestores(t *testing.T) {
 		t.Fatalf("go.mod was not restored:\n%s", string(restored))
 	}
 }
+
+func TestShouldRemoveStdlibCache(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		orchestrionPath string
+		cacheOut        string
+		want            bool
+	}{
+		{
+			name: "plain internal cache",
+			want: true,
+		},
+		{
+			name:     "plain declared cache output",
+			cacheOut: "bazel-out/bin/external/rules_go/stdlib_/gocache",
+			want:     false,
+		},
+		{
+			name:            "orchestrion internal cache",
+			orchestrionPath: "external/rules_go_orchestrion_tool/orchestrion",
+			want:            false,
+		},
+		{
+			name:            "orchestrion declared cache output",
+			orchestrionPath: "external/rules_go_orchestrion_tool/orchestrion",
+			cacheOut:        "bazel-out/bin/external/rules_go/stdlib_/gocache",
+			want:            false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldRemoveStdlibCache(tt.orchestrionPath, tt.cacheOut); got != tt.want {
+				t.Fatalf("shouldRemoveStdlibCache(%q, %q) = %v, want %v", tt.orchestrionPath, tt.cacheOut, got, tt.want)
+			}
+		})
+	}
+}
