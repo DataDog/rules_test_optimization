@@ -219,7 +219,7 @@ func cgo2(goenv *env, goSrcs, cgoSrcs, cSrcs, cxxSrcs, objcSrcs, objcxxSrcs, sSr
 		{cxxSrcs, combineFlags(cppFlags, hdrIncludes, cxxFlags, defaultCFlags)},
 		{objcSrcs, combineFlags(cppFlags, hdrIncludes, objcFlags, defaultCFlags)},
 		{objcxxSrcs, combineFlags(cppFlags, hdrIncludes, objcxxFlags, defaultCFlags)},
-		{sSrcs, combinedCFlags},
+		{sSrcs, nil},
 	} {
 		for _, src := range lang.srcs {
 			obj := filepath.Join(workDir, fmt.Sprintf("_x%d.o", len(cObjs)))
