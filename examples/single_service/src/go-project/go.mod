@@ -2,6 +2,8 @@ module example.com/single-service-go-project
 
 go 1.25.0
 
+toolchain go1.26.1
+
 require (
 	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev
 	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev
