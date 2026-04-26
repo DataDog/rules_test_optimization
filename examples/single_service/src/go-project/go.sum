@@ -28,12 +28,12 @@ github.com/DataDog/datadog-agent/pkg/version v0.77.0 h1:fxpMWuoaRHS5vHzCNHftvJ6w
 github.com/DataDog/datadog-agent/pkg/version v0.77.0/go.mod h1:h9eJjfeTHlYYv+kzq6n3rQ07qXGirdCCacn1Ryu4TFQ=
 github.com/DataDog/datadog-go/v5 v5.8.3 h1:s58CUJ9s8lezjhTNJO/SxkPBv2qZjS3ktpRSqGF5n0s=
 github.com/DataDog/datadog-go/v5 v5.8.3/go.mod h1:K9kcYBlxkcPP8tvvjZZKs/m1edNAUFzBbdpTUKfCsuw=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d h1:lPHGUwpTTfTR+uLsIzGhi8YA5HOjUkg3ov3fzu3JjUE=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d/go.mod h1:A1OBuqc+Hvqd5qDd72PcxgGyTG/pOoiOzL26myJBxLM=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d h1:jPG69SjTKeT8K9c3RZ+iAkX/HXpSYsqYatGrZ0qZyRk=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d/go.mod h1:WFpNwr9EAQZj2/EXlpm/b1N5BWVkGUUnNudzK4SICTU=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d h1:Kb2P4f2yEggr3GwnQtnNEYJDVe7Y2qy3UTzlSlJr6mk=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d/go.mod h1:IVkBpsq66Cw/YIRM/Te3pl2F0M9n4zguAB2ReGczWeo=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3 h1:l4Uaefp1bXzb9E3x6VbJDMoBqIcfhmjrTfrmtM6PZb0=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.7.3/go.mod h1:jli1jidldlU46UvU4aA9B0DZQnZsBIK21ZflvwtTPEU=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3 h1:bXasqgAk+6J/MdoRoNKxryo4GMDnvyTgUumYphG2vC4=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3/go.mod h1:fYK/2lv+okgQbys4k4O3TWAnTYkiXYflqFJYvYChnUI=
+github.com/DataDog/dd-trace-go/v2 v2.7.3 h1:luLd8qQyoS23mKHvdDxqS3WHdP6E4z27XWVzFcunNFQ=
+github.com/DataDog/dd-trace-go/v2 v2.7.3/go.mod h1:wpDvium/HsCzcTSmvpq4wieWBrnTm7Q+bUqkefKp/B0=
 github.com/DataDog/go-libddwaf/v4 v4.9.0 h1:a788e37iuH7sR9uIYHkulvTnp2FkXTiZ3yY/kuaHgZE=
 github.com/DataDog/go-libddwaf/v4 v4.9.0/go.mod h1:/AZqP6zw3qGJK5mLrA0PkfK3UQDk1zCI2fUNCt4xftE=
 github.com/DataDog/go-runtime-metrics-internal v0.0.4-0.20260217080614-b0f4edc38a6d h1:cH9Bm0tJ8FEQbA4FRi0iRm7Zr/5Lata/Or31c+Dth0E=
@@ -42,6 +42,8 @@ github.com/DataDog/go-sqllexer v0.1.13 h1:HhT2G21y7SDZYQx9i1b+3Sy/CHhESHet/YKMSm
 github.com/DataDog/go-sqllexer v0.1.13/go.mod h1:vOw7Ia7z+z6nl3zGZlLIZe0vQlPtCPR906WIPBJadxc=
 github.com/DataDog/go-tuf v1.1.1-0.5.2 h1:YWvghV4ZvrQsPcUw8IOUMSDpqc3W5ruOIC+KJxPknv0=
 github.com/DataDog/go-tuf v1.1.1-0.5.2/go.mod h1:zBcq6f654iVqmkk8n2Cx81E1JnNTMOAx1UEO/wZR+P0=
+github.com/DataDog/gostackparse v0.7.0 h1:i7dLkXHvYzHV308hnkvVGDL3BR4FWl7IsXNPz/IGQh4=
+github.com/DataDog/gostackparse v0.7.0/go.mod h1:lTfqcJKqS9KnXQGnyQMCugq3u1FP6UZMfWR0aitKFMM=
 github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=
 github.com/DataDog/orchestrion v1.6.0/go.mod h1:CYY2VfaEQVr+gwKSlpUoHBF9JIO4eV3BfSeG0YAQwZE=
 github.com/DataDog/sketches-go v1.4.8 h1:pFk9BNn+Rzv8IMIoPUttoOpOr3bJOqU3P6EP5wK+Lv8=
@@ -310,8 +312,6 @@ go.opentelemetry.io/otel/sdk/metric v1.40.0 h1:mtmdVqgQkeRxHgRv4qhyJduP3fYJRMX4A
 go.opentelemetry.io/otel/sdk/metric v1.40.0/go.mod h1:4Z2bGMf0KSK3uRjlczMOeMhKU2rhUqdWNoKcYrtcBPg=
 go.opentelemetry.io/otel/trace v1.41.0 h1:Vbk2co6bhj8L59ZJ6/xFTskY+tGAbOnCtQGVVa9TIN0=
 go.opentelemetry.io/otel/trace v1.41.0/go.mod h1:U1NU4ULCoxeDKc09yCWdWe+3QoyweJcISEVa1RBzOis=
-go.opentelemetry.io/proto/otlp v1.9.0 h1:l706jCMITVouPOqEnii2fIAuO3IVGBRPV5ICjceRb/A=
-go.opentelemetry.io/proto/otlp v1.9.0/go.mod h1:xE+Cx5E/eEHw+ISFkwPLwCZefwVjY+pqKg1qcK03+/4=
 go.opentelemetry.io/proto/slim/otlp v1.9.0 h1:fPVMv8tP3TrsqlkH1HWYUpbCY9cAIemx184VGkS6vlE=
 go.opentelemetry.io/proto/slim/otlp v1.9.0/go.mod h1:xXdeJJ90Gqyll+orzUkY4bOd2HECo5JofeoLpymVqdI=
 go.opentelemetry.io/proto/slim/otlp/collector/profiles/v1development v0.2.0 h1:o13nadWDNkH/quoDomDUClnQBpdQQ2Qqv0lQBjIXjE8=
