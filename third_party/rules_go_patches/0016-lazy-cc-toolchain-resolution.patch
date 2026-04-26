@@ -855,19 +855,6 @@ index 2e86ff1..0000000
 -		t.Fatalf("expected dependency module in modinfo, got %q", text)
 -	}
 -}
-diff --git a/go/tools/builders/cgo2.go b/go/tools/builders/cgo2.go
-index 175cf80..ca3de49 100644
---- a/go/tools/builders/cgo2.go
-+++ b/go/tools/builders/cgo2.go
-@@ -219,7 +219,7 @@ func cgo2(goenv *env, goSrcs, cgoSrcs, cSrcs, cxxSrcs, objcSrcs, objcxxSrcs, sSr
- 		{cxxSrcs, combineFlags(cppFlags, hdrIncludes, cxxFlags, defaultCFlags)},
- 		{objcSrcs, combineFlags(cppFlags, hdrIncludes, objcFlags, defaultCFlags)},
- 		{objcxxSrcs, combineFlags(cppFlags, hdrIncludes, objcxxFlags, defaultCFlags)},
--		{sSrcs, combinedCFlags},
-+		{sSrcs, nil},
- 	} {
- 		for _, src := range lang.srcs {
- 			obj := filepath.Join(workDir, fmt.Sprintf("_x%d.o", len(cObjs)))
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
 index 00a960e..63a5cf1 100644
 --- a/go/tools/builders/importcfg.go
