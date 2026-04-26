@@ -12,8 +12,8 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `47`
-- Modified files: `27`
+- Total changed paths: `46`
+- Modified files: `26`
 - Added files: `20`
 - Removed files: `0`
 
@@ -35,7 +35,6 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/BUILD.bazel`
 - `go/tools/builders/ar.go`
 - `go/tools/builders/builder.go`
-- `go/tools/builders/cgo2.go`
 - `go/tools/builders/compilepkg.go`
 - `go/tools/builders/env.go`
 - `go/tools/builders/env_test.go`
