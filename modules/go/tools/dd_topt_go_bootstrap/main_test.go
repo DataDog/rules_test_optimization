@@ -119,6 +119,36 @@ git_override(
 	}
 }
 
+func TestReadGoModulePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "go.mod")
+	if err := os.WriteFile(path, []byte("// comment\nmodule example.com/service // production module\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	got, err := readGoModulePath(path)
+	if err != nil {
+		t.Fatalf("readGoModulePath error: %v", err)
+	}
+	if got != "example.com/service" {
+		t.Fatalf("readGoModulePath=%q, want example.com/service", got)
+	}
+}
+
+func TestManagedGuidedModuleBlockIncludesModulePath(t *testing.T) {
+	cfg := config{
+		syncRepoName:   "test_optimization_data",
+		service:        "go-service",
+		runtimeVersion: "1.25.0",
+		goModulePath:   "github.com/DataDog/example-service",
+	}
+
+	got := managedGuidedModuleBlock(cfg)
+	if !strings.Contains(got, `module_path = "github.com/DataDog/example-service"`) {
+		t.Fatalf("expected guided block to include explicit module_path:\n%s", got)
+	}
+}
+
 func TestWriteStarterOrchestrionYML(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config{goModuleDir: dir}

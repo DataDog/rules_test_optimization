@@ -795,16 +795,23 @@ Telemetry-specific notes:
 ### Basic usage
 
 ```bash
-# RECOMMENDED: Run tests, then upload payloads (preserves test exit code)
+# RECOMMENDED: Run tests, then upload payloads (preserves test and upload failures)
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
-
-# Or as a one-liner:
-bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 
 # REMOTE EXECUTION (RBE) - add flag so the uploader can discover outputs locally:
-bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
+bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 ```
 
 ```powershell
@@ -879,10 +886,15 @@ go_topt.test_optimization_go(
     name = "test_optimization_data",
     service = "go-service",
     runtime_version = "1.25.0",
+    module_path = "github.com/example/service",
 )
 
 use_repo(go_topt, "test_optimization_data")
 ```
+
+`module_path` should match the Go module path from `go.mod`. The sync rule
+still honors `GO_MODULE_PATH` first for CI overrides, but the explicit attr is
+the recommended default because it avoids repo-local `--repo_env` glue.
 
 Then run the Datadog bootstrap helper once so Orchestrion is pinned into the
 workspace Go module. Repository/bootstrap resolution may use network access.
@@ -980,7 +992,11 @@ Then run tests and upload:
 ```bash
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 ```
 
 ```powershell

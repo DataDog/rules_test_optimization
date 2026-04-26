@@ -100,9 +100,15 @@
       "filename": "0016-lazy-cc-toolchain-resolution.patch",
       "commit": "1efadd381e17b17815d076fae3a7ca41f9c669e5",
       "order": 9,
-      "summary": "Resolve the C/C++ toolchain lazily for rules that do not use cgo.",
+      "summary": "Resolve lazy C/C++ toolchains and Orchestrion synthetic testmain archives.",
       "requires": [
+        "0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
+        "0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch",
+        "0009-Use-LLVM-for-all-linking.patch",
         "0011-fix-cdeps-propagation.patch",
+        "0013-Add-buildInfo-metadata-support.patch",
+        "0014-Fix-protobuf-compatibility-use-rules_proto-for-Proto.patch",
+        "0015-Set-GoLink-resource_set-to-match-lld-thread-count.patch",
         "0015-Optimize-_filter_options-use-O1-dict-lookup-for-exac.patch"
       ],
       "touches_module_files": false

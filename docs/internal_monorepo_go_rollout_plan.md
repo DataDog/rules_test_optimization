@@ -65,8 +65,9 @@ from source instead of reusing it unchanged.
     `dd_trace_go_versions`, never both
 - The Go companion still expects module-root Orchestrion pin files to be
   staged through `orchestrion_pin_files` for nested packages.
-- The current default tracer setting in the vendored rules_go fork is already
-  `v2.9.0-dev`.
+- The public vendored rules_go fork still defaults to `v2.9.0-dev`; the
+  internal pilot can pass the exact pseudo-version explicitly where the private
+  module revision is resolvable.
 
 ### Current public consumer proof baseline
 
@@ -87,7 +88,7 @@ The current external consumer proof lives in the local
     and package layout
   - pinned tuple: Go `1.25.9`, Orchestrion `v1.9.0`,
     `dd-trace-go/v2`
-    `v2.9.0-dev`,
+    `v2.9.0-dev.0.20260409102143-ddd4e03ab47d`,
     `dd-trace-go.v1` `v1.74.8`
   - current expected metadata path:
     `payload_selection = "full_bundle_disabled"`
@@ -142,7 +143,7 @@ as fixed:
 
 1. The pilot uses the currently proven monorepo-shaped tuple:
    - `ORCHESTRION_VERSION = v1.9.0`
-   - `DD_TRACE_GO_VERSION = v2.9.0-dev`
+   - `DD_TRACE_GO_VERSION = v2.9.0-dev.0.20260409102143-ddd4e03ab47d`
 2. This pilot intentionally updates the repo-root v2 tracer modules from
    `v2.7.1` to that proven pseudo-version. Do not try to keep the root module on
    `v2.7.1` under this plan.
@@ -232,7 +233,7 @@ PILOT_BAZEL_CONFIG=test-optimization-worker-pilot
 PILOT_FIXTURE=workspace-go-monorepo-shape
 INTERNAL_MONOREPO_GO_VERSION=1.25.9
 ORCHESTRION_VERSION=v1.9.0
-DD_TRACE_GO_VERSION=v2.9.0-dev
+DD_TRACE_GO_VERSION=v2.9.0-dev.0.20260409102143-ddd4e03ab47d
 DD_TRACE_GO_V1_VERSION=v1.74.8
 RTO_REMOTE=https://github.com/Datadog/rules_test_optimization.git
 RTO_ARCHIVE_URL=https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/${RTO_COMMIT}
@@ -317,7 +318,7 @@ http_archive(
     type = "tar.gz",
     strip_prefix = RTO_ARCHIVE_PREFIX + "/third_party/rules_go_orchestrion",
     patch_tool = "patch",
-    patch_args = ["-p1"],
+    patch_args = ["-p1", "-V", "none", "-E"],
     patches = [
         "//third_party/rules_go_patches:0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
         "//third_party/rules_go_patches:0008-Pass-through-cflags-to-the-assembler-in-cgo-mode.patch",
@@ -354,7 +355,7 @@ Add these declarations in `WORKSPACE`:
    `@io_bazel_rules_go//go:orchestrion_workspace.bzl`.
 3. Add local WORKSPACE constants:
    - `ORCHESTRION_VERSION = "v1.9.0"`
-   - `DD_TRACE_GO_VERSION = "v2.9.0-dev"`
+   - `DD_TRACE_GO_VERSION = "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"`
 4. Instantiate `go_orchestrion_tool_repo(...)` with the shared-version form:
 
 ```bzl
@@ -372,6 +373,7 @@ test_optimization_sync(
     service = "test-optimization-worker",
     runtime_name = "go",
     runtime_version = "1.25.9",
+    runtime_module_path = "<internal_go_module>",
 )
 ```
 
@@ -538,7 +540,6 @@ common:test-optimization-worker-pilot --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization-worker-pilot --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization-worker-pilot --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization-worker-pilot --repo_env=DD_PR_NUMBER
-common:test-optimization-worker-pilot --repo_env=GO_MODULE_PATH=<internal_go_module>
 common:test-optimization-worker-pilot --repo_env=FETCH_SALT
 test:test-optimization-worker-pilot --remote_download_outputs=all
 ```
@@ -546,9 +547,9 @@ test:test-optimization-worker-pilot --remote_download_outputs=all
 Every sync, test, run, and query command for this pilot must use
 `--config=test-optimization-worker-pilot`.
 
-Keep the explicit `GO_MODULE_PATH=<internal_go_module>` passthrough in
-the pilot config. That removes avoidable ambiguity when sync runs from
-non-standard local contexts.
+Do not add a `GO_MODULE_PATH` passthrough for this pilot. The sync repo gets the
+same value from `runtime_module_path`, and `GO_MODULE_PATH` remains only an
+emergency override for non-standard local contexts.
 
 ### 6. Add a dedicated pilot wrapper that preserves `dd_go_test` policy
 
@@ -709,7 +710,7 @@ go list -mod=mod github.com/DataDog/dd-trace-go/v2/orchestrion
 Required outcome:
 
 - all three v2 modules resolve to
-  `v2.9.0-dev`
+  `v2.9.0-dev.0.20260409102143-ddd4e03ab47d`
 - `gopkg.in/DataDog/dd-trace-go.v1` still resolves to `v1.74.8`
 - `github.com/DataDog/dd-trace-go/v2/orchestrion` resolves cleanly from the
   same root module
@@ -878,8 +879,12 @@ bzl test \
 
 DD_API_KEY="$DD_API_KEY" DD_SITE="${DD_SITE:-datadoghq.com}" \
   bzl run --config=test-optimization-worker-pilot //:dd_upload_payloads
+upload_status=$?
 
-exit $test_status
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 ```
 
 Because the pilot config sets `--remote_download_outputs=all` for tests, this
@@ -898,7 +903,7 @@ The pilot is complete only when all of these are true:
 3. The repo-root Go module resolves the proven tuple:
    - Orchestrion `v1.9.0`
    - v2 tracer modules
-     `v2.9.0-dev`
+     `v2.9.0-dev.0.20260409102143-ddd4e03ab47d`
    - v1 tracer `v1.74.8`
 4. `test_optimization_data_test_optimization_worker` syncs successfully and
    exports a consistent state for either:
@@ -929,7 +934,7 @@ happen:
   the current public proof baseline
 - the pilot cannot use the repo-root pseudo-version tuple
   (`v1.9.0` plus
-  `v2.9.0-dev`)
+  `v2.9.0-dev.0.20260409102143-ddd4e03ab47d`)
 - the sync/export state is internally inconsistent
 - any instrumented target emits `payload_selection = "full_bundle_no_match"`
 - `worker/notifications` cannot be instrumented with the proven tuple

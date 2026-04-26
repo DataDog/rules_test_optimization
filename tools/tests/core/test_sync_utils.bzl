@@ -22,6 +22,8 @@ load(
     "count_known_tests_response_tests_for_tests",
     "count_test_management_response_tests_for_tests",
     "decode_json_object_or_fail_for_tests",
+    "detect_go_module_path_for_tests",
+    "detect_runtime_module_path_for_tests",
     "dirname_for_tests",
     "first_env_for_tests",
     "first_env_from_environ_for_tests",
@@ -110,6 +112,18 @@ def _fake_git_ctx(workspace_root, command_map, file_map = None):
         watch = _watch,
         execute = _execute,
         watched = watched,
+    )
+
+def _fake_module_path_ctx(environ):
+    """Build a fake repository ctx for module-path precedence tests."""
+
+    def _execute(args, timeout = 10):
+        return struct(return_code = 1, stdout = "", stderr = "unexpected execute")
+
+    return struct(
+        os = struct(name = "linux", environ = environ),
+        workspace_root = "",
+        execute = _execute,
     )
 
 def _dd_site_normalization_test(ctx):
@@ -402,7 +416,7 @@ def _local_git_metadata_detached_head_has_no_branch_test(ctx):
     populate_local_git_metadata_for_tests(fake_ctx, env_data)
     asserts.equals(env, "", env_data.get("branch"))
     asserts.equals(env, "abc123", env_data.get("sha"))
-    asserts.equals(env, ["branch/DD_GIT_BRANCH"], missing_required_git_metadata_for_tests(env_data))
+    asserts.equals(env, ["branch_or_tag/DD_GIT_BRANCH or DD_GIT_TAG"], missing_required_git_metadata_for_tests(env_data))
     return unittest.end(env)
 
 def _required_git_metadata_missing_fields_test(ctx):
@@ -412,7 +426,7 @@ def _required_git_metadata_missing_fields_test(ctx):
         env,
         [
             "repository_url/DD_GIT_REPOSITORY_URL",
-            "branch/DD_GIT_BRANCH",
+            "branch_or_tag/DD_GIT_BRANCH or DD_GIT_TAG",
             "sha/DD_GIT_COMMIT_SHA",
         ],
         missing_required_git_metadata_for_tests({}),
@@ -423,6 +437,15 @@ def _required_git_metadata_missing_fields_test(ctx):
         missing_required_git_metadata_for_tests({
             "repository_url": "https://github.com/DataDog/example.git",
             "branch": "main",
+            "sha": "abc123",
+        }),
+    )
+    asserts.equals(
+        env,
+        [],
+        missing_required_git_metadata_for_tests({
+            "repository_url": "https://github.com/DataDog/example.git",
+            "tag": "v1.2.3",
             "sha": "abc123",
         }),
     )
@@ -1041,6 +1064,46 @@ def _runtime_module_path_from_environ_test(ctx):
         env,
         "apps/web",
         runtime_module_path_from_environ_for_tests({"RUBY_MODULE_PATH": "apps/web"}, "RUBY_MODULE_PATH"),
+    )
+    asserts.equals(
+        env,
+        "example.com/env",
+        detect_runtime_module_path_for_tests(
+            _fake_module_path_ctx({"GO_MODULE_PATH": " example.com/env "}),
+            False,
+            "go",
+            "GO_MODULE_PATH",
+            "example.com/attr",
+        ),
+    )
+    asserts.equals(
+        env,
+        "example.com/attr",
+        detect_runtime_module_path_for_tests(
+            _fake_module_path_ctx({}),
+            False,
+            "go",
+            "GO_MODULE_PATH",
+            " example.com/attr ",
+        ),
+    )
+    asserts.equals(
+        env,
+        "example.com/go-env",
+        detect_go_module_path_for_tests(
+            _fake_module_path_ctx({"GO_MODULE_PATH": "example.com/go-env"}),
+            False,
+            "example.com/go-attr",
+        ),
+    )
+    asserts.equals(
+        env,
+        "example.com/go-attr",
+        detect_go_module_path_for_tests(
+            _fake_module_path_ctx({}),
+            False,
+            " example.com/go-attr ",
+        ),
     )
     return unittest.end(env)
 

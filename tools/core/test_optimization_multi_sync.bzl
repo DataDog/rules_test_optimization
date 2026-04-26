@@ -241,6 +241,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                     runtime_name = call.runtime_name,
                     runtime_version = call.runtime_version,
                     runtime_arch = call.runtime_arch,
+                    runtime_module_path = call.runtime_module_path,
                     # Optional HTTP timeout/retry policy overrides.
                     # Use -1 to keep default/env behavior.
                     http_connect_timeout_seconds = call.http_connect_timeout_seconds,
@@ -274,6 +275,7 @@ test_optimization_multi_sync_extension = module_extension(
             "runtime_name": attr.string(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            "runtime_module_path": attr.string(),
             # Optional HTTP timeout/retry policy overrides propagated to each
             # per-service sync repo. Use -1 to keep default/env behavior.
             "http_connect_timeout_seconds": attr.int(default = -1),

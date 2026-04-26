@@ -188,6 +188,21 @@ If the workspace already has a matching single-service
 `test_optimization_go_extension` plus `use_repo(...)`, guided bootstrap can
 reuse that wiring and continue.
 
+For manual Go extension wiring, set `module_path` to the Go module path from
+`go.mod`:
+
+```bzl
+go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.25.0",
+    module_path = "github.com/example/service",
+)
+```
+
+`GO_MODULE_PATH` remains an env override and wins when set, but new workspaces
+should prefer the attr so CI does not need an extra repo-env passthrough.
+
 The generated package-facing API is:
 
 ```bzl
@@ -583,7 +598,7 @@ http_archive(
     sha256 = "<rules_go_sha256>",
     # Optional. Use only when the consumer owns the exported patch bundle.
     # patch_tool = "patch",
-    # patch_args = ["-p1"],
+    # patch_args = ["-p1", "-V", "none", "-E"],
     # patches = [
     #     "//third_party/rules_go_patches:0002-Include-logs-for-test-reports-regardless-of-failure-.patch",
     #     "...",

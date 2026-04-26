@@ -162,6 +162,28 @@ def patch_filenames_in_canonical_order(manifest: dict, filenames: Iterable[str])
     return sorted(dict.fromkeys(filenames), key=lambda filename: order_lookup[filename])
 
 
+def expand_patch_prerequisites(patch_lookup: dict[str, dict], filenames: Iterable[str]) -> set[str]:
+    """Return the requested patch filenames plus every transitive prerequisite."""
+    expanded: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(filename: str) -> None:
+        if filename in expanded:
+            return
+        if filename in visiting:
+            cycle = " -> ".join([*visiting, filename])
+            raise PatchSeriesError(f"cyclic patch prerequisite graph: {cycle}")
+        visiting.add(filename)
+        for required in patch_lookup[filename]["requires"]:
+            visit(required)
+        visiting.remove(filename)
+        expanded.add(filename)
+
+    for filename in filenames:
+        visit(filename)
+    return expanded
+
+
 def resolve_patch_selection(
     manifest: dict,
     *,
@@ -183,7 +205,10 @@ def resolve_patch_selection(
         unknown = sorted(set(patch_filenames) - set(patch_lookup))
         if unknown:
             raise PatchSeriesError(f"unknown patch selection: {', '.join(unknown)}")
-        selected = patch_filenames_in_canonical_order(manifest, patch_filenames)
+        selected = patch_filenames_in_canonical_order(
+            manifest,
+            expand_patch_prerequisites(patch_lookup, patch_filenames),
+        )
 
     missing_prerequisites: dict[str, list[str]] = {}
     for filename in selected:
@@ -297,11 +322,31 @@ def copy_worktree_subtree(subtree_path: str, destination: Path) -> None:
             shutil.copy2(source, target)
 
 
+def patch_command(*, patch_help_runner=subprocess.run) -> list[str]:
+    """Return the portable patch command used for materialized bundle checks."""
+    command = ["patch", "-p1", "-V", "none", "-E"]
+    try:
+        help_result = patch_help_runner(
+            ["patch", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        help_text = ""
+    else:
+        help_text = (help_result.stdout or "") + (help_result.stderr or "")
+    if "--no-backup-if-mismatch" in help_text:
+        command.append("--no-backup-if-mismatch")
+    return command
+
+
 def apply_patch_files(tree_root: Path, patch_paths: Iterable[Path]) -> None:
     """Apply a sequence of patch files with the consumer-visible patch tool."""
+    command = patch_command()
     for patch_path in patch_paths:
         subprocess.run(
-            ["patch", "-p1", "-i", str(patch_path)],
+            [*command, "-i", str(patch_path)],
             cwd=tree_root,
             check=True,
             stdout=subprocess.PIPE,

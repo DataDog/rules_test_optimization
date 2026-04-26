@@ -80,6 +80,7 @@ type config struct {
 	guided              bool
 	service             string
 	runtimeVersion      string
+	goModulePath        string
 	syncRepoName        string
 	uploaderTargetName  string
 	orchestrionVersion  string
@@ -164,6 +165,11 @@ func run(cfg config) error {
 	if err := ensureFileExists(filepath.Join(cfg.goModuleDir, "go.mod"), "go.mod"); err != nil {
 		return err
 	}
+	goModulePath, err := readGoModulePath(filepath.Join(cfg.goModuleDir, "go.mod"))
+	if err != nil {
+		return err
+	}
+	cfg.goModulePath = goModulePath
 
 	moduleContent, err := os.ReadFile(cfg.moduleFile)
 	if err != nil {
@@ -238,6 +244,33 @@ func ensureFileExists(path, label string) error {
 		return fmt.Errorf("%s path is a directory: %s", label, path)
 	}
 	return nil
+}
+
+// readGoModulePath returns the module path declared by a go.mod file.
+func readGoModulePath(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read go.mod: %w", err)
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "module ") || strings.HasPrefix(trimmed, "module\t") {
+			modulePath := strings.TrimSpace(strings.TrimPrefix(trimmed, "module"))
+			fields := strings.Fields(modulePath)
+			if len(fields) > 0 {
+				modulePath = fields[0]
+			}
+			modulePath = strings.Trim(modulePath, `"`)
+			if modulePath == "" {
+				return "", fmt.Errorf("go.mod at %s has an empty module path", path)
+			}
+			return modulePath, nil
+		}
+	}
+	return "", fmt.Errorf("go.mod at %s does not declare a module path", path)
 }
 
 func patchModuleFile(cfg config) error {
@@ -331,6 +364,10 @@ func managedTracerConfigBlock(cfg config) string {
 }
 
 func managedGuidedModuleBlock(cfg config) string {
+	modulePathLine := ""
+	if cfg.goModulePath != "" {
+		modulePathLine = fmt.Sprintf("    module_path = %q,\n", cfg.goModulePath)
+	}
 	return fmt.Sprintf(`%s
 datadog_go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
@@ -341,11 +378,11 @@ datadog_go_topt.test_optimization_go(
     name = "%s",
     service = "%s",
     runtime_version = "%s",
-)
+%s)
 
 use_repo(datadog_go_topt, "%s")
 %s
-`, guidedBlockStart, cfg.syncRepoName, cfg.service, cfg.runtimeVersion, cfg.syncRepoName, guidedBlockEnd)
+`, guidedBlockStart, cfg.syncRepoName, cfg.service, cfg.runtimeVersion, modulePathLine, cfg.syncRepoName, guidedBlockEnd)
 }
 
 func insertAfterModuleDecl(content, snippet string) (string, error) {
