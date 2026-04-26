@@ -184,6 +184,35 @@ class RulesGoPatchToolTests(unittest.TestCase):
             [patch["filename"] for patch in selection],
         )
 
+    def test_patch_command_disables_gnu_mismatch_backups_when_available(self) -> None:
+        """Validate GNU patch backup files are disabled without breaking BSD patch."""
+
+        def fake_help_runner(args, **kwargs):
+            self.assertEqual(["patch", "--help"], args)
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout="Usage: patch [OPTION]... --no-backup-if-mismatch\n",
+                stderr="",
+            )
+
+        self.assertIn(
+            "--no-backup-if-mismatch",
+            self.lib.patch_command(patch_help_runner=fake_help_runner),
+        )
+
+    def test_patch_command_omits_gnu_only_backup_flag_when_unavailable(self) -> None:
+        """Validate portable patch args do not require GNU-only options."""
+
+        def fake_help_runner(args, **kwargs):
+            self.assertEqual(["patch", "--help"], args)
+            return subprocess.CompletedProcess(args, 0, stdout="Usage: patch\n", stderr="")
+
+        self.assertNotIn(
+            "--no-backup-if-mismatch",
+            self.lib.patch_command(patch_help_runner=fake_help_runner),
+        )
+
     def test_subset_selection_rejects_unknown_patches(self) -> None:
         """Validate explicit patch subsets fail on unknown patch filenames."""
         with self.assertRaisesRegex(self.lib.PatchSeriesError, "unknown patch selection"):

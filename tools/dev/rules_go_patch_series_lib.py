@@ -322,11 +322,31 @@ def copy_worktree_subtree(subtree_path: str, destination: Path) -> None:
             shutil.copy2(source, target)
 
 
+def patch_command(*, patch_help_runner=subprocess.run) -> list[str]:
+    """Return the portable patch command used for materialized bundle checks."""
+    command = ["patch", "-p1", "-V", "none", "-E"]
+    try:
+        help_result = patch_help_runner(
+            ["patch", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        help_text = ""
+    else:
+        help_text = (help_result.stdout or "") + (help_result.stderr or "")
+    if "--no-backup-if-mismatch" in help_text:
+        command.append("--no-backup-if-mismatch")
+    return command
+
+
 def apply_patch_files(tree_root: Path, patch_paths: Iterable[Path]) -> None:
     """Apply a sequence of patch files with the consumer-visible patch tool."""
+    command = patch_command()
     for patch_path in patch_paths:
         subprocess.run(
-            ["patch", "-p1", "-V", "none", "-E", "-i", str(patch_path)],
+            [*command, "-i", str(patch_path)],
             cwd=tree_root,
             check=True,
             stdout=subprocess.PIPE,
