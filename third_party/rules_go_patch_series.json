@@ -98,7 +98,7 @@
     },
     {
       "filename": "0016-lazy-cc-toolchain-resolution.patch",
-      "commit": "1efadd381e17b17815d076fae3a7ca41f9c669e5",
+      "commit": "91fcb2623553970c959a520845ea7a9a28087c85",
       "order": 9,
       "summary": "Resolve lazy C/C++ toolchains and Orchestrion synthetic testmain archives.",
       "requires": [

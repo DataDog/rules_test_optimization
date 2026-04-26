@@ -1,14 +1,12 @@
 Resolve lazy C/C++ toolchains and Orchestrion synthetic testmain archives.
 
-This final public patch matches the vendored rules_go fork used by the Go
-companion. It keeps non-cgo rules from forcing C/C++ toolchain resolution and
-carries the Orchestrion fixes needed for offline module proxy inputs, stdlib
-transitions, synthetic testmain archive reuse, sandbox-stable paths, and
-packagefile manifest merging.
+This final public patch matches the vendored rules_go fork used by the Go companion. It keeps non-cgo rules from forcing C/C++ toolchain resolution and carries the Orchestrion fixes needed for offline module proxy inputs, stdlib transitions, synthetic testmain archive reuse, sandbox-stable paths, packagefile manifest merging, and absolute compiler command paths for Go module resolution.
 
 Sources:
 - https://github.com/bazel-contrib/rules_go/pull/4593
 - third_party/rules_go_orchestrion in this repository
+
+
 
 diff --git a/MODULE.bazel b/MODULE.bazel
 index bb2b385..facea60 100644
@@ -254,7 +252,7 @@ index 107d2b6..a3dc359 100644
      )
  
  def _extract_extldflags(gc_linkopts, extldflags):
-diff --git a/go/private/aspects/BUILD.bazel a/go/private/aspects/BUILD.bazel
+diff --git a/go/private/aspects/BUILD.bazel b/go/private/aspects/BUILD.bazel
 deleted file mode 100644
 index fdcc4d4..0000000
 --- a/go/private/aspects/BUILD.bazel
@@ -277,7 +275,7 @@ index fdcc4d4..0000000
 -    srcs = glob(["**"]),
 -    visibility = ["//visibility:public"],
 -)
-diff --git a/go/private/aspects/buildinfo_aspect.bzl a/go/private/aspects/buildinfo_aspect.bzl
+diff --git a/go/private/aspects/buildinfo_aspect.bzl b/go/private/aspects/buildinfo_aspect.bzl
 deleted file mode 100644
 index 7d73ee1..0000000
 --- a/go/private/aspects/buildinfo_aspect.bzl
@@ -610,7 +608,7 @@ index feeb9ad..7ef84c9 100644
          "importcfg.go",
          "link.go",
          "module_proxy.go",
-diff --git a/go/tools/builders/buildinfo.go a/go/tools/builders/buildinfo.go
+diff --git a/go/tools/builders/buildinfo.go b/go/tools/builders/buildinfo.go
 deleted file mode 100644
 index 58ec8be..0000000
 --- a/go/tools/builders/buildinfo.go
@@ -743,7 +741,7 @@ index 58ec8be..0000000
 -
 -	return buf.String()
 -}
-diff --git a/go/tools/builders/buildinfo_test.go a/go/tools/builders/buildinfo_test.go
+diff --git a/go/tools/builders/buildinfo_test.go b/go/tools/builders/buildinfo_test.go
 deleted file mode 100644
 index 2e86ff1..0000000
 --- a/go/tools/builders/buildinfo_test.go
@@ -855,6 +853,19 @@ index 2e86ff1..0000000
 -		t.Fatalf("expected dependency module in modinfo, got %q", text)
 -	}
 -}
+diff --git a/go/tools/builders/cgo2.go b/go/tools/builders/cgo2.go
+index 175cf80..ca3de49 100644
+--- a/go/tools/builders/cgo2.go
++++ b/go/tools/builders/cgo2.go
+@@ -219,7 +219,7 @@ func cgo2(goenv *env, goSrcs, cgoSrcs, cSrcs, cxxSrcs, objcSrcs, objcxxSrcs, sSr
+ 		{cxxSrcs, combineFlags(cppFlags, hdrIncludes, cxxFlags, defaultCFlags)},
+ 		{objcSrcs, combineFlags(cppFlags, hdrIncludes, objcFlags, defaultCFlags)},
+ 		{objcxxSrcs, combineFlags(cppFlags, hdrIncludes, objcxxFlags, defaultCFlags)},
+-		{sSrcs, combinedCFlags},
++		{sSrcs, nil},
+ 	} {
+ 		for _, src := range lang.srcs {
+ 			obj := filepath.Join(workDir, fmt.Sprintf("_x%d.o", len(cObjs)))
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
 index 00a960e..63a5cf1 100644
 --- a/go/tools/builders/importcfg.go
@@ -1413,7 +1424,7 @@ index 7005f2a..469f0f6 100644
  		}
  	}
  
-diff --git a/go/tools/builders/modinfo.go a/go/tools/builders/modinfo.go
+diff --git a/go/tools/builders/modinfo.go b/go/tools/builders/modinfo.go
 deleted file mode 100644
 index 2346730..0000000
 --- a/go/tools/builders/modinfo.go
@@ -1623,7 +1634,7 @@ index 36c1943..d6ce8b0 100644
  def _legacy_proto_toolchain_impl(ctx):
      return [
          ProtoLangToolchainInfo(
-diff --git a/tests/core/buildinfo/BUILD.bazel a/tests/core/buildinfo/BUILD.bazel
+diff --git a/tests/core/buildinfo/BUILD.bazel b/tests/core/buildinfo/BUILD.bazel
 deleted file mode 100644
 index 8de6c6c..0000000
 --- a/tests/core/buildinfo/BUILD.bazel
@@ -1737,7 +1748,7 @@ index 8de6c6c..0000000
 -    rundir = ".",
 -    deps = ["@io_bazel_rules_go//go/tools/bazel:go_default_library"],
 -)
-diff --git a/tests/core/buildinfo/README.md a/tests/core/buildinfo/README.md
+diff --git a/tests/core/buildinfo/README.md b/tests/core/buildinfo/README.md
 deleted file mode 100644
 index b61d4cd..0000000
 --- a/tests/core/buildinfo/README.md
@@ -1836,7 +1847,7 @@ index b61d4cd..0000000
 -- The BuildInfoMetadata provider is internal to the binary rule implementation and not exposed on targets
 -- The aspect is automatically applied to go_binary targets via the deps and embed attributes
 -- Tests focus on runtime behavior validation via `runtime/debug.ReadBuildInfo()`
-diff --git a/tests/core/buildinfo/external_deps_bin_unix.go a/tests/core/buildinfo/external_deps_bin_unix.go
+diff --git a/tests/core/buildinfo/external_deps_bin_unix.go b/tests/core/buildinfo/external_deps_bin_unix.go
 deleted file mode 100644
 index 2da239c..0000000
 --- a/tests/core/buildinfo/external_deps_bin_unix.go
@@ -1871,7 +1882,7 @@ index 2da239c..0000000
 -		fmt.Printf("Dep=%s@%s\n", dep.Path, dep.Version)
 -	}
 -}
-diff --git a/tests/core/buildinfo/external_deps_bin_windows.go a/tests/core/buildinfo/external_deps_bin_windows.go
+diff --git a/tests/core/buildinfo/external_deps_bin_windows.go b/tests/core/buildinfo/external_deps_bin_windows.go
 deleted file mode 100644
 index 2cc6749..0000000
 --- a/tests/core/buildinfo/external_deps_bin_windows.go
@@ -1906,7 +1917,7 @@ index 2cc6749..0000000
 -		fmt.Printf("Dep=%s@%s\n", dep.Path, dep.Version)
 -	}
 -}
-diff --git a/tests/core/buildinfo/external_deps_test.go a/tests/core/buildinfo/external_deps_test.go
+diff --git a/tests/core/buildinfo/external_deps_test.go b/tests/core/buildinfo/external_deps_test.go
 deleted file mode 100644
 index 7ef8124..0000000
 --- a/tests/core/buildinfo/external_deps_test.go
@@ -1985,7 +1996,7 @@ index 7ef8124..0000000
 -		}
 -	})
 -}
-diff --git a/tests/core/buildinfo/leaf_lib.go a/tests/core/buildinfo/leaf_lib.go
+diff --git a/tests/core/buildinfo/leaf_lib.go b/tests/core/buildinfo/leaf_lib.go
 deleted file mode 100644
 index 2e44a26..0000000
 --- a/tests/core/buildinfo/leaf_lib.go
@@ -1997,7 +2008,7 @@ index 2e44a26..0000000
 -func LeafFunc() string {
 -	return "leaf"
 -}
-diff --git a/tests/core/buildinfo/metadata_bin.go a/tests/core/buildinfo/metadata_bin.go
+diff --git a/tests/core/buildinfo/metadata_bin.go b/tests/core/buildinfo/metadata_bin.go
 deleted file mode 100644
 index 42f3a15..0000000
 --- a/tests/core/buildinfo/metadata_bin.go
@@ -2030,7 +2041,7 @@ index 42f3a15..0000000
 -		fmt.Printf("Dep=%s@%s\n", dep.Path, dep.Version)
 -	}
 -}
-diff --git a/tests/core/buildinfo/metadata_test.go a/tests/core/buildinfo/metadata_test.go
+diff --git a/tests/core/buildinfo/metadata_test.go b/tests/core/buildinfo/metadata_test.go
 deleted file mode 100644
 index bc203a2..0000000
 --- a/tests/core/buildinfo/metadata_test.go
@@ -2108,7 +2119,7 @@ index bc203a2..0000000
 -		}
 -	})
 -}
-diff --git a/tests/core/buildinfo/mid_lib.go a/tests/core/buildinfo/mid_lib.go
+diff --git a/tests/core/buildinfo/mid_lib.go b/tests/core/buildinfo/mid_lib.go
 deleted file mode 100644
 index fc8b68e..0000000
 --- a/tests/core/buildinfo/mid_lib.go
@@ -2122,7 +2133,7 @@ index fc8b68e..0000000
 -func MidFunc() string {
 -	return "mid-" + leaf.LeafFunc()
 -}
-diff --git a/tests/core/buildinfo/srcs_only_bin.go a/tests/core/buildinfo/srcs_only_bin.go
+diff --git a/tests/core/buildinfo/srcs_only_bin.go b/tests/core/buildinfo/srcs_only_bin.go
 deleted file mode 100644
 index 1a26c4b..0000000
 --- a/tests/core/buildinfo/srcs_only_bin.go
@@ -2145,7 +2156,7 @@ index 1a26c4b..0000000
 -	fmt.Printf("Path=%s\n", info.Path)
 -	fmt.Printf("GoVersion=%s\n", info.GoVersion)
 -}
-diff --git a/tests/core/buildinfo/srcs_only_test.go a/tests/core/buildinfo/srcs_only_test.go
+diff --git a/tests/core/buildinfo/srcs_only_test.go b/tests/core/buildinfo/srcs_only_test.go
 deleted file mode 100644
 index ed5ac99..0000000
 --- a/tests/core/buildinfo/srcs_only_test.go
@@ -2190,7 +2201,7 @@ index ed5ac99..0000000
 -		t.Fatalf("srcs-only binary missing Go version:\n%s", output)
 -	}
 -}
-diff --git a/tests/core/buildinfo/top_lib.go a/tests/core/buildinfo/top_lib.go
+diff --git a/tests/core/buildinfo/top_lib.go b/tests/core/buildinfo/top_lib.go
 deleted file mode 100644
 index 15f7e2f..0000000
 --- a/tests/core/buildinfo/top_lib.go
@@ -2204,7 +2215,7 @@ index 15f7e2f..0000000
 -func TopFunc() string {
 -	return "top-" + mid.MidFunc()
 -}
-diff --git a/tests/core/buildinfo/x_sys_unix_wrapper.go a/tests/core/buildinfo/x_sys_unix_wrapper.go
+diff --git a/tests/core/buildinfo/x_sys_unix_wrapper.go b/tests/core/buildinfo/x_sys_unix_wrapper.go
 deleted file mode 100644
 index 8f0908f..0000000
 --- a/tests/core/buildinfo/x_sys_unix_wrapper.go
@@ -2222,7 +2233,7 @@ index 8f0908f..0000000
 -func UnixErrno() unix.Errno {
 -	return unix.ENOENT
 -}
-diff --git a/tests/core/buildinfo/x_sys_windows_wrapper.go a/tests/core/buildinfo/x_sys_windows_wrapper.go
+diff --git a/tests/core/buildinfo/x_sys_windows_wrapper.go b/tests/core/buildinfo/x_sys_windows_wrapper.go
 deleted file mode 100644
 index 411d4be..0000000
 --- a/tests/core/buildinfo/x_sys_windows_wrapper.go
@@ -2303,7 +2314,7 @@ index dba8cc8..bbc5c2b 100644
  go_library(
      name = "transitive_dep",
      srcs = ["transitive_dep.go"],
-diff --git a/tests/core/cgo/embed_chain_leaf.c a/tests/core/cgo/embed_chain_leaf.c
+diff --git a/tests/core/cgo/embed_chain_leaf.c b/tests/core/cgo/embed_chain_leaf.c
 deleted file mode 100644
 index d5b8900..0000000
 --- a/tests/core/cgo/embed_chain_leaf.c
@@ -2316,7 +2327,7 @@ index d5b8900..0000000
 -    embedChainMid();
 -    embedChainTop();
 -}
-diff --git a/tests/core/cgo/embed_chain_leaf.go a/tests/core/cgo/embed_chain_leaf.go
+diff --git a/tests/core/cgo/embed_chain_leaf.go b/tests/core/cgo/embed_chain_leaf.go
 deleted file mode 100644
 index dd462c7..0000000
 --- a/tests/core/cgo/embed_chain_leaf.go
@@ -2334,7 +2345,7 @@ index dd462c7..0000000
 -func CallLeafSymbol() {
 -	C.embedChainLeaf()
 -}
-diff --git a/tests/core/cgo/embed_chain_leaf.h a/tests/core/cgo/embed_chain_leaf.h
+diff --git a/tests/core/cgo/embed_chain_leaf.h b/tests/core/cgo/embed_chain_leaf.h
 deleted file mode 100644
 index 482c97b..0000000
 --- a/tests/core/cgo/embed_chain_leaf.h
@@ -2343,14 +2354,14 @@ index 482c97b..0000000
 -void embedChainLeafDep(void);
 -void embedChainMid(void);
 -void embedChainTop(void);
-diff --git a/tests/core/cgo/embed_chain_leaf_dep.cc a/tests/core/cgo/embed_chain_leaf_dep.cc
+diff --git a/tests/core/cgo/embed_chain_leaf_dep.cc b/tests/core/cgo/embed_chain_leaf_dep.cc
 deleted file mode 100644
 index 9e50295..0000000
 --- a/tests/core/cgo/embed_chain_leaf_dep.cc
 +++ /dev/null
 @@ -1 +0,0 @@
 -extern "C" void embedChainLeafDep(void) {}
-diff --git a/tests/core/cgo/embed_chain_main.go a/tests/core/cgo/embed_chain_main.go
+diff --git a/tests/core/cgo/embed_chain_main.go b/tests/core/cgo/embed_chain_main.go
 deleted file mode 100644
 index dfc5064..0000000
 --- a/tests/core/cgo/embed_chain_main.go
@@ -2363,14 +2374,14 @@ index dfc5064..0000000
 -func main() {
 -	embedchain.CallEmbeddedChain()
 -}
-diff --git a/tests/core/cgo/embed_chain_mid.cc a/tests/core/cgo/embed_chain_mid.cc
+diff --git a/tests/core/cgo/embed_chain_mid.cc b/tests/core/cgo/embed_chain_mid.cc
 deleted file mode 100644
 index ad26555..0000000
 --- a/tests/core/cgo/embed_chain_mid.cc
 +++ /dev/null
 @@ -1 +0,0 @@
 -extern "C" void embedChainMid(void) {}
-diff --git a/tests/core/cgo/embed_chain_mid.go a/tests/core/cgo/embed_chain_mid.go
+diff --git a/tests/core/cgo/embed_chain_mid.go b/tests/core/cgo/embed_chain_mid.go
 deleted file mode 100644
 index 9193971..0000000
 --- a/tests/core/cgo/embed_chain_mid.go
@@ -2383,14 +2394,14 @@ index 9193971..0000000
 -func CallEmbeddedLeaf() {
 -	CallLeafSymbol()
 -}
-diff --git a/tests/core/cgo/embed_chain_top.cc a/tests/core/cgo/embed_chain_top.cc
+diff --git a/tests/core/cgo/embed_chain_top.cc b/tests/core/cgo/embed_chain_top.cc
 deleted file mode 100644
 index 5b8994d..0000000
 --- a/tests/core/cgo/embed_chain_top.cc
 +++ /dev/null
 @@ -1 +0,0 @@
 -extern "C" void embedChainTop(void) {}
-diff --git a/tests/core/cgo/embed_chain_top_lib.go a/tests/core/cgo/embed_chain_top_lib.go
+diff --git a/tests/core/cgo/embed_chain_top_lib.go b/tests/core/cgo/embed_chain_top_lib.go
 deleted file mode 100644
 index 1af44ac..0000000
 --- a/tests/core/cgo/embed_chain_top_lib.go
@@ -2560,7 +2571,7 @@ index 457bc76..a1cd2ea 100644
          matches_scope_test,
 -        filter_options_test,
      )
-diff --git a/tests/core/starlark/link_tests.bzl a/tests/core/starlark/link_tests.bzl
+diff --git a/tests/core/starlark/link_tests.bzl b/tests/core/starlark/link_tests.bzl
 deleted file mode 100644
 index 17523e7..0000000
 --- a/tests/core/starlark/link_tests.bzl

@@ -976,7 +976,7 @@
       "path": "go/tools/builders/cgo2.go",
       "kind": "file",
       "executable": false,
-      "sha256": "60aafc4b6787db4ebe366fe1b31b5ff571be6ebee36cf2932aeeec00cf5e64e3"
+      "sha256": "dee514492df601aeaa373df3baee74209d96989444a4446837d511f73e436129"
     },
     {
       "path": "go/tools/builders/compilepkg.go",
@@ -1036,7 +1036,7 @@
       "path": "go/tools/builders/env_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "51e1c5724047e05d6f3789b21185efc8b0238e484ef9fcf0fcc5bceece78c1df"
+      "sha256": "b7c9a9dc8d7dffe22ec39392dc140f4cfc62e979697e469c61c747170daebaba"
     },
     {
       "path": "go/tools/builders/filter.go",
@@ -1114,7 +1114,7 @@
       "path": "go/tools/builders/module_proxy.go",
       "kind": "file",
       "executable": false,
-      "sha256": "293d2a5998dffa8ec4bee523203056755d27508aeb17ae259401855250772605"
+      "sha256": "0308143d949c81ef21dd81be4e75b930c50c1eade3cf32b4a9d46773dc7a8797"
     },
     {
       "path": "go/tools/builders/nogo.go",
