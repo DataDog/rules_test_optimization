@@ -473,22 +473,27 @@ def _parse_go_module_path(go_mod_content):
             return rest
     return ""
 
-def _detect_go_module_path(ctx, debug):
+def _detect_go_module_path(ctx, debug, runtime_module_path = ""):
     """Best-effort Go module path detection for export metadata.
 
     Precedence:
     1) `GO_MODULE_PATH` override
-    2) go.mod in known CI workspace directories
-    3) go.mod under git top-level directory
+    2) `runtime_module_path` attr
+    3) go.mod in known CI workspace directories
+    4) go.mod under git top-level directory
     """
 
-    # _detect_go_module_path: best-effort detection of Go module path.
-    # Precedence: GO_MODULE_PATH env > discover go.mod under known workspace envs > git toplevel go.mod
     mod_env = ctx.os.environ.get("GO_MODULE_PATH") or ""
     log_debug(debug, "go", "GO_MODULE_PATH env: %s" % (mod_env or "<unset>"))
     if mod_env:
         log_debug(debug, "go", "Using GO_MODULE_PATH from env")
         return mod_env
+
+    explicit_module_path = (runtime_module_path or "").strip()
+    log_debug(debug, "go", "runtime_module_path attr: %s" % (explicit_module_path or "<unset>"))
+    if explicit_module_path:
+        log_debug(debug, "go", "Using runtime_module_path attr")
+        return explicit_module_path
 
     # Candidate workspace roots
     candidates = []
@@ -513,12 +518,13 @@ def _detect_go_module_path(ctx, debug):
                 log_debug(debug, "go", "Detected module path '%s' from %s" % (mp, go_mod_path))
                 return mp
 
-    # Fallback: try using git to find toplevel go.mod
+    # Fallback: try using git to find toplevel go.mod.
     top = ""
-    if _is_windows(ctx):
-        r = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "git rev-parse --show-toplevel"], timeout = 10)
+    workspace_root = str(getattr(ctx, "workspace_root", "") or "")
+    if workspace_root:
+        r = ctx.execute(["git", "-C", workspace_root, "rev-parse", "--show-toplevel"], timeout = 10)
     else:
-        r = ctx.execute(["bash", "-c", "git rev-parse --show-toplevel"], timeout = 10)
+        r = ctx.execute(["git", "rev-parse", "--show-toplevel"], timeout = 10)
     if r.return_code == 0 and r.stdout:
         top = r.stdout.strip()
     log_debug(debug, "go", "git toplevel: %s" % (top or "<unset>"))
@@ -539,13 +545,18 @@ def _runtime_module_path_from_environ(environ, env_key):
     """Return a normalized runtime module path override from environment."""
     return (environ.get(env_key) or "").strip()
 
-def _detect_runtime_module_path_from_env(ctx, debug, runtime_name, env_key):
-    """Return runtime module path override from env for non-Go runtimes."""
+def _detect_runtime_module_path(ctx, debug, runtime_name, env_key, runtime_module_path = ""):
+    """Return explicit runtime module path metadata with env-first precedence."""
     module_path = _runtime_module_path_from_environ(ctx.os.environ, env_key)
     log_debug(debug, runtime_name, "%s env: %s" % (env_key, module_path or "<unset>"))
     if module_path:
         log_debug(debug, runtime_name, "Using %s from env" % env_key)
-    return module_path
+        return module_path
+    explicit_module_path = (runtime_module_path or "").strip()
+    log_debug(debug, runtime_name, "runtime_module_path attr: %s" % (explicit_module_path or "<unset>"))
+    if explicit_module_path:
+        log_debug(debug, runtime_name, "Using runtime_module_path attr")
+    return explicit_module_path
 
 def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_filename, label_map = None):
     """Split one payload JSON map into per-module canonical files."""
@@ -1391,7 +1402,9 @@ sanitize_repository_url_for_tests = _sanitize_repository_url
 apply_dd_git_overrides_for_tests = _apply_dd_git_overrides
 set_context_tag_from_env_for_tests = _set_context_tag_from_env
 parse_go_module_path_for_tests = _parse_go_module_path
+detect_go_module_path_for_tests = _detect_go_module_path
 runtime_module_path_from_environ_for_tests = _runtime_module_path_from_environ
+detect_runtime_module_path_for_tests = _detect_runtime_module_path
 dirname_for_tests = _dirname
 normalize_out_dir_or_fail_for_tests = _normalize_out_dir_or_fail
 render_export_bzl_for_tests = _render_export_bzl
@@ -1553,8 +1566,8 @@ def _missing_required_git_metadata(env_data):
     missing = []
     if not env_data.get("repository_url"):
         missing.append("repository_url/DD_GIT_REPOSITORY_URL")
-    if not env_data.get("branch"):
-        missing.append("branch/DD_GIT_BRANCH")
+    if not env_data.get("branch") and not env_data.get("tag"):
+        missing.append("branch_or_tag/DD_GIT_BRANCH or DD_GIT_TAG")
     if not env_data.get("sha"):
         missing.append("sha/DD_GIT_COMMIT_SHA")
     return missing
@@ -1569,7 +1582,7 @@ def _validate_required_git_metadata_or_fail(env_data, require_git_metadata):
     fail(
         (
             "test_optimization_sync(require_git_metadata = True) could not resolve required git metadata before calling Datadog settings: %s. " +
-            "Run from a branch checkout or pass DD_GIT_REPOSITORY_URL, DD_GIT_BRANCH, and DD_GIT_COMMIT_SHA via --repo_env."
+            "Run from a branch/tag checkout or pass DD_GIT_REPOSITORY_URL, DD_GIT_BRANCH or DD_GIT_TAG, and DD_GIT_COMMIT_SHA via --repo_env."
         ) %
         ", ".join(missing),
     )
@@ -2273,17 +2286,53 @@ def _impl(ctx):
     ctx.file(telemetry_facts_file, json.encode(telemetry_facts) + "\n")
 
     # Emit helper runtime metadata for downstream macros.
-    go_module_path = _detect_go_module_path(ctx, debug)
+    runtime_module_path = (ctx.attr.runtime_module_path or "").strip()
+    runtime_name = (ctx.attr.runtime_name or "").strip()
+    go_module_path = _detect_go_module_path(
+        ctx,
+        debug,
+        runtime_module_path if runtime_name == "" or runtime_name == "go" else "",
+    )
     sanitized_go_module_path = sanitize_label_fragment(go_module_path) if go_module_path else ""
-    python_module_path = _detect_runtime_module_path_from_env(ctx, debug, "python", "PYTHON_MODULE_PATH")
+    python_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "python",
+        "PYTHON_MODULE_PATH",
+        runtime_module_path if runtime_name == "python" else "",
+    )
     sanitized_python_module_path = sanitize_label_fragment(python_module_path) if python_module_path else ""
-    java_module_path = _detect_runtime_module_path_from_env(ctx, debug, "java", "JAVA_MODULE_PATH")
+    java_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "java",
+        "JAVA_MODULE_PATH",
+        runtime_module_path if runtime_name == "java" else "",
+    )
     sanitized_java_module_path = sanitize_label_fragment(java_module_path) if java_module_path else ""
-    nodejs_module_path = _detect_runtime_module_path_from_env(ctx, debug, "nodejs", "NODEJS_MODULE_PATH")
+    nodejs_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "nodejs",
+        "NODEJS_MODULE_PATH",
+        runtime_module_path if runtime_name == "nodejs" else "",
+    )
     sanitized_nodejs_module_path = sanitize_label_fragment(nodejs_module_path) if nodejs_module_path else ""
-    dotnet_module_path = _detect_runtime_module_path_from_env(ctx, debug, "dotnet", "DOTNET_MODULE_PATH")
+    dotnet_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "dotnet",
+        "DOTNET_MODULE_PATH",
+        runtime_module_path if runtime_name == "dotnet" else "",
+    )
     sanitized_dotnet_module_path = sanitize_label_fragment(dotnet_module_path) if dotnet_module_path else ""
-    ruby_module_path = _detect_runtime_module_path_from_env(ctx, debug, "ruby", "RUBY_MODULE_PATH")
+    ruby_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "ruby",
+        "RUBY_MODULE_PATH",
+        runtime_module_path if runtime_name == "ruby" else "",
+    )
     sanitized_ruby_module_path = sanitize_label_fragment(ruby_module_path) if ruby_module_path else ""
 
     # Build a modules index for per-module filegroups (labels are sanitized suffixes)
@@ -2470,6 +2519,7 @@ test_optimization_sync = repository_rule(
         "runtime_name": attr.string(),
         "runtime_version": attr.string(),
         "runtime_arch": attr.string(),
+        "runtime_module_path": attr.string(),
         # Optional HTTP timeout/retry policy overrides.
         # Use -1 to keep default/env behavior.
         "http_connect_timeout_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
@@ -2582,6 +2632,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
+                runtime_module_path = test_optimization_call.runtime_module_path,
                 http_connect_timeout_seconds = test_optimization_call.http_connect_timeout_seconds,
                 http_max_time_seconds = test_optimization_call.http_max_time_seconds,
                 http_retry_attempts = test_optimization_call.http_retry_attempts,
@@ -2607,6 +2658,7 @@ test_optimization_sync_extension = module_extension(
             "runtime_name": attr.string(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            "runtime_module_path": attr.string(),
             # Optional HTTP timeout/retry policy overrides.
             # Use -1 to keep default/env behavior.
             "http_connect_timeout_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),

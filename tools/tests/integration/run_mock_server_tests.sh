@@ -2240,6 +2240,11 @@ if ! grep -q 'test_optimization_go_extension' "$GUIDED_BOOT_WS/MODULE.bazel"; th
   cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
+if ! grep -q 'module_path = "example.com/guided-bootstrap-go"' "$GUIDED_BOOT_WS/MODULE.bazel"; then
+  echo "error: guided bootstrap did not persist the Go module path in sync wiring"
+  cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
 if [ ! -f "$GUIDED_BOOT_WS/BUILD.bazel" ]; then
   echo "error: guided bootstrap did not create root BUILD.bazel"
   exit 1

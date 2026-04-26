@@ -227,7 +227,7 @@ The supported patched consumer model is:
 - export the patch bundle into a consumer-owned
   `third_party/rules_go_patches/`
 - apply those patches via `http_archive(..., patch_tool = "patch",
-  patch_args = ["-p1"], patches = [...])`
+  patch_args = ["-p1", "-V", "none", "-E"], patches = [...])`
 
 ### Bzlmod Consumers
 

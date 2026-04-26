@@ -676,11 +676,35 @@ if ($env:TESTLOGS_DIR) {
     Dbg "auto-discovered TestlogsDir=$TestlogsDir"
 }
 
+function Resolve-DirectoryPhysicalPath {
+    param([string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($item.LinkType) {
+            try {
+                $target = $item.ResolveLinkTarget($true)
+                if ($target) { return $target.FullName }
+            } catch {
+                Dbg "Resolve-DirectoryPhysicalPath could not resolve link target for '$Path': $($_.Exception.Message)"
+            }
+        }
+        return $item.FullName
+    } catch {
+        return $Path
+    }
+}
+
+# Keep the logical path for messages/context derivation, but walk the physical
+# directory so a workspace bazel-testlogs symlink is handled consistently.
+$TestlogsScanDir = Resolve-DirectoryPhysicalPath $TestlogsDir
+Dbg "using TestlogsScanDir=$TestlogsScanDir"
+
 # Find all test.outputs directories (supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth)
 # Note: -Depth parameter requires PowerShell 7+; on older versions, depth limiting is ignored
 function Find-TestOutputs {
     $params = @{
-        Path = $TestlogsDir
+        Path = $TestlogsScanDir
         Recurse = $true
         Directory = $true
         Filter = "test.outputs"
@@ -757,7 +781,7 @@ function Count-PayloadFiles {
 # Detect if tests actually ran by looking for test.log or test.xml files
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 function Test-ExecutedTests {
-    $testFiles = Get-ChildItem -Path $TestlogsDir -Recurse -File -Include @("test.log", "test.xml") -ErrorAction SilentlyContinue | Select-Object -First 1
+    $testFiles = Get-ChildItem -Path $TestlogsScanDir -Recurse -File -Include @("test.log", "test.xml") -ErrorAction SilentlyContinue | Select-Object -First 1
     return $null -ne $testFiles
 }
 

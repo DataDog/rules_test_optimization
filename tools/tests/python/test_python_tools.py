@@ -875,6 +875,12 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("rc=$?", bash_text)
         self.assertIn('http="${http:-000}"', bash_text)
 
+    def test_bash_runtime_scans_physical_testlogs_path(self) -> None:
+        """Validate bash runtime follows bazel-testlogs symlinks for discovery."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        self.assertIn('TESTLOGS_SCAN_DIR="$(cd "$TESTLOGS_DIR" 2>/dev/null && pwd -P)"', bash_text)
+        self.assertIn('find "$TESTLOGS_SCAN_DIR"', bash_text)
+
     def test_powershell_runtime_temp_and_testlogs_guards(self) -> None:
         """Validate PowerShell runtime temp fallback and TESTLOGS_DIR checks."""
         powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
@@ -884,6 +890,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("unable to determine a temporary directory (TEMP/GetTempPath)", powershell_text)
         self.assertIn("Test-Path -LiteralPath $env:TESTLOGS_DIR -PathType Container", powershell_text)
         self.assertIn("TESTLOGS_DIR is set but is not a directory", powershell_text)
+        self.assertIn("Resolve-DirectoryPhysicalPath", powershell_text)
+        self.assertIn("Path = $TestlogsScanDir", powershell_text)
 
     def test_powershell_runtime_max_depth_warning(self) -> None:
         """Validate PowerShell runtime emits visible max-depth compatibility warning."""

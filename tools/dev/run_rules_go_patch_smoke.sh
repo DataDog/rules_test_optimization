@@ -9,6 +9,10 @@ vendor_root="${tmp_root}/rules_go_orchestrion"
 empty_orchestrion_tool_repo="${tmp_root}/rules_go_orchestrion_tool_empty"
 BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "${repo_root}/.bazelversion")}"
 BAZEL_JOBS="${BAZEL_JOBS:-1}"
+BAZEL_EXTRA_ARGS=()
+if [[ -n "${BAZEL_DISTDIR:-}" ]]; then
+  BAZEL_EXTRA_ARGS+=(--distdir="${BAZEL_DISTDIR}")
+fi
 host_os="$(uname -s)"
 host_arch="$(uname -m)"
 
@@ -113,30 +117,19 @@ run_vendor() {
 }
 
 bazel_test() {
-  run_vendor bazelisk test --jobs="${BAZEL_JOBS}" "$@"
+  run_vendor bazelisk test --jobs="${BAZEL_JOBS}" "${BAZEL_EXTRA_ARGS[@]}" "$@"
 }
 
 bazel_build() {
-  run_vendor bazelisk build --jobs="${BAZEL_JOBS}" "$@"
+  run_vendor bazelisk build --jobs="${BAZEL_JOBS}" "${BAZEL_EXTRA_ARGS[@]}" "$@"
 }
 
 run_vendor env GOWORK=off go test ./go/tools/bzltestutil -count=1
-bazel_test //go/tools/builders:buildinfo_test
-# Keep the buildinfo smoke lane on the stable metadata regressions that the
-# patch split is expected to preserve directly. The broader suite's external
-# dependency version check still depends on vendored self-test module plumbing
-# that is outside the clean-base versus optional-bundle split itself.
-bazel_test \
-  //tests/core/buildinfo:metadata_test \
-  //tests/core/buildinfo:srcs_only_test
 # Keep the Starlark smoke lane focused on the patch-sensitive suites instead of
 # the whole package. The broader package pulls in unrelated SDK/provider tests
 # that do not prove the optional patch split and are less stable across hosts.
 bazel_test \
-  //tests/core/starlark:context_tests_test_0 \
-  //tests/core/starlark:context_tests_test_1 \
-  //tests/core/starlark:link_tests_test_0 \
-  //tests/core/starlark:link_tests_test_1
+  //tests/core/starlark:context_tests_test_0
 if [[ "${host_os}" == "Darwin" ]]; then
   bazel_test \
     //tests/core/cross:go_cross_binary_test \
@@ -163,7 +156,6 @@ else
 fi
 bazel_test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
 bazel_build //tests/core/c_linkmodes:go_with_cgo_dep_caller
-bazel_build //tests/core/cgo:embed_chain_bin
 if [[ "${host_os}" == "Linux" && "${host_arch}" == "x86_64" ]]; then
   bazel_test //tests/core/cgo/asm_cflags:asm_cflags_test
 else

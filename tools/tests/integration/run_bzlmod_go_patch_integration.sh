@@ -17,6 +17,8 @@ set -euo pipefail
 # - Set KEEP_TMP=1 to inspect the generated workspaces after a failure.
 # - Override BAZEL=<path> to run with a different Bazel launcher locally.
 # - Override GO_BIN=<path> to use a specific Go binary locally.
+# - Set BAZEL_DISTDIR=<path> when local network mirrors cannot fetch release
+#   assets directly; Bazel will reuse matching archive files from that directory.
 #
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -59,6 +61,10 @@ HERMETIC_TEST_FLAGS=(
   --test_env=LANG=C
   --test_env=LC_ALL=C
 )
+BAZEL_EXTRA_ARGS=()
+if [[ -n "${BAZEL_DISTDIR:-}" ]]; then
+  BAZEL_EXTRA_ARGS+=(--distdir="$BAZEL_DISTDIR")
+fi
 
 cleanup() {
   USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown >/dev/null 2>&1 || true
@@ -548,7 +554,10 @@ run_fixture_subscenario() {
   if [[ "$mode" == "standard" ]]; then
     (
       cd "$ws_dir"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test "${bzlmod_flags[@]}" "$HELLO_TEST_TARGET"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+        "${BAZEL_EXTRA_ARGS[@]}" \
+        "${bzlmod_flags[@]}" \
+        "$HELLO_TEST_TARGET"
     )
     return
   fi
@@ -573,6 +582,7 @@ run_fixture_subscenario() {
     (
       cd "$ws_dir"
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+        "${BAZEL_EXTRA_ARGS[@]}" \
         "${bzlmod_flags[@]}" \
         "deps(${HELLO_TEST_TARGET})" \
         --output=textproto > /dev/null
@@ -585,6 +595,7 @@ run_fixture_subscenario() {
       HOME="$hermetic_home" \
       XDG_CACHE_HOME="$hermetic_xdg" \
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+        "${BAZEL_EXTRA_ARGS[@]}" \
         "${bzlmod_flags[@]}" \
         "${HERMETIC_BUILD_FLAGS[@]}" \
         "${HERMETIC_TEST_FLAGS[@]}" \
@@ -608,6 +619,7 @@ PY
     HOME="$hermetic_home" \
     XDG_CACHE_HOME="$hermetic_xdg" \
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${BAZEL_EXTRA_ARGS[@]}" \
       "${bzlmod_flags[@]}" \
       "${HERMETIC_BUILD_FLAGS[@]}" \
       "${HERMETIC_TEST_FLAGS[@]}" \
@@ -619,6 +631,7 @@ PY
       HOME="$hermetic_home" \
       XDG_CACHE_HOME="$hermetic_xdg" \
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+        "${BAZEL_EXTRA_ARGS[@]}" \
         "${bzlmod_flags[@]}" \
         "${HERMETIC_BUILD_FLAGS[@]}" \
         "deps(${HELLO_TEST_TARGET})" \

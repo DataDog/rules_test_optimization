@@ -517,7 +517,7 @@ EOF
     if [[ "$RULES_GO_PATCH_BUNDLE" != "none" ]]; then
       cat >> "$ws_dir/WORKSPACE" <<EOF
     patch_tool = "patch",
-    patch_args = ["-p1"],
+    patch_args = ["-p1", "-V", "none", "-E"],
     patches = [
 ${PATCH_LABELS_BZL}
     ],

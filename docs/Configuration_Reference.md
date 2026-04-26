@@ -53,6 +53,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
 | `runtime_name` | string | empty | Optional runtime name (examples: `go`, `python`, `java`, `nodejs`, `dotnet`, `ruby`) |
 | `runtime_version` | string | empty | Optional runtime version (example: `1.25.0`) |
 | `runtime_arch` | string | auto-detected | Optional runtime arch; defaults to detected `os.architecture` |
+| `runtime_module_path` | string | empty | Optional module path for the selected runtime. Runtime-specific env vars such as `GO_MODULE_PATH` still win, then this attr is used, then Go falls back to `go.mod` autodetection |
 | `http_connect_timeout_seconds` | int | `-1` attr / `10` effective | Optional connect-timeout override for sync HTTP requests (`-1` keeps env/default behavior) |
 | `http_max_time_seconds` | int | `-1` attr / `60` effective | Optional per-request max-time override for sync HTTP requests (`-1` keeps env/default behavior) |
 | `http_retry_attempts` | int | `-1` attr / `3` effective | Optional retry-attempt override for sync HTTP requests (`-1` keeps env/default behavior) |
@@ -60,7 +61,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
 | `http_execute_timeout_buffer_seconds` | int | `-1` attr / `60` effective | Optional outer execute-timeout buffer override (`-1` keeps env/default behavior) |
 | `known_tests` | bool | `True` | Local switch for Known Tests request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `known_tests_enabled=false` |
 | `test_management` | bool | `True` | Local switch for Test Management request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `test_management.enabled=false` |
-| `require_git_metadata` | bool | `False` | Strict local/CI validation for settings-request Git metadata. When `True`, sync fails before HTTP if repository URL, branch, or commit SHA cannot be resolved |
+| `require_git_metadata` | bool | `False` | Strict local/CI validation for settings-request Git metadata. When `True`, sync fails before HTTP if repository URL, branch or tag, and commit SHA cannot be resolved |
 | `debug` | bool | `False` | Enables verbose repository-rule logging |
 
 Notes:
@@ -85,6 +86,7 @@ Extension tag: `test_optimization_multi_sync.test_optimization_multi_sync(...)`
 | `runtime_name` | string | empty | Optional runtime name propagated to each per-service sync repo |
 | `runtime_version` | string | empty | Optional runtime version propagated to each per-service sync repo |
 | `runtime_arch` | string | auto-detected | Optional runtime arch propagated to each per-service sync repo |
+| `runtime_module_path` | string | empty | Optional module path propagated to each per-service sync repo |
 | `http_connect_timeout_seconds` | int | `-1` attr / `10` effective | Optional connect-timeout override propagated to each per-service sync repo (`-1` keeps env/default behavior) |
 | `http_max_time_seconds` | int | `-1` attr / `60` effective | Optional per-request max-time override propagated to each per-service sync repo (`-1` keeps env/default behavior) |
 | `http_retry_attempts` | int | `-1` attr / `3` effective | Optional retry-attempt override propagated to each per-service sync repo (`-1` keeps env/default behavior) |
@@ -92,6 +94,7 @@ Extension tag: `test_optimization_multi_sync.test_optimization_multi_sync(...)`
 | `http_execute_timeout_buffer_seconds` | int | `-1` attr / `60` effective | Optional outer execute-timeout buffer override propagated to each per-service sync repo (`-1` keeps env/default behavior) |
 | `known_tests` | bool | `True` | Known Tests kill-switch propagated to each per-service sync repo |
 | `test_management` | bool | `True` | Test Management kill-switch propagated to each per-service sync repo |
+| `require_git_metadata` | bool | `False` | Strict Git metadata validation propagated to each per-service sync repo |
 | `debug` | bool | `False` | Enables verbose logging for generated per-service sync repos |
 
 ## Uploader rule attributes

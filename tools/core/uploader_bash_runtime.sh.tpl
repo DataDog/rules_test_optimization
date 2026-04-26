@@ -700,6 +700,15 @@ else
     dbg "auto-discovered TESTLOGS_DIR=$TESTLOGS_DIR"
 fi
 
+# Keep the logical path for messages/context derivation, but walk the physical
+# directory so a workspace `bazel-testlogs` symlink is handled consistently.
+if TESTLOGS_SCAN_DIR="$(cd "$TESTLOGS_DIR" 2>/dev/null && pwd -P)"; then
+    dbg "using TESTLOGS_SCAN_DIR=$TESTLOGS_SCAN_DIR"
+else
+    log "error: failed to resolve testlogs directory for scanning: $TESTLOGS_DIR"
+    exit 2
+fi
+
 # Find all test.outputs directories
 # Supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth for large testlogs trees
 MAX_DEPTH=${DD_TEST_OPTIMIZATION_MAX_DEPTH:-0}
@@ -710,7 +719,7 @@ find_test_outputs() {
         depth_args=(-maxdepth "$MAX_DEPTH")
         dbg "limiting find depth to $MAX_DEPTH"
     fi
-    find "$TESTLOGS_DIR" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null | LC_ALL=C sort || true
+    find "$TESTLOGS_SCAN_DIR" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null | LC_ALL=C sort || true
 }
 
 # Warn if MAX_DEPTH is set and no test.outputs found (likely depth too shallow)
@@ -789,7 +798,7 @@ dbg "Uploader start time: $start_ts"
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 tests_executed() {
     local found
-    found=$(find "$TESTLOGS_DIR" \( -name "test.log" -o -name "test.xml" \) -type f -print -quit 2>/dev/null)
+    found=$(find "$TESTLOGS_SCAN_DIR" \( -name "test.log" -o -name "test.xml" \) -type f -print -quit 2>/dev/null)
     [[ -n "$found" ]]
 }
 

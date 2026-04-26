@@ -170,15 +170,19 @@ class RulesGoPatchToolTests(unittest.TestCase):
             [patch["filename"] for patch in selection],
         )
 
-    def test_subset_selection_rejects_missing_prerequisites(self) -> None:
-        """Validate explicit patch subsets fail when prerequisites are omitted."""
-        with self.assertRaisesRegex(self.lib.PatchSeriesError, "missing patch prerequisites"):
-            self.lib.resolve_patch_selection(
-                self.manifest,
-                patch_filenames=[
-                    "0016-lazy-cc-toolchain-resolution.patch",
-                ],
-            )
+    def test_subset_selection_expands_missing_prerequisites(self) -> None:
+        """Validate explicit patch subsets include transitive prerequisites."""
+        selection = self.lib.resolve_patch_selection(
+            self.manifest,
+            patch_filenames=[
+                "0016-lazy-cc-toolchain-resolution.patch",
+            ],
+        )
+
+        self.assertEqual(
+            list(self.lib.EXPECTED_PATCH_FILENAMES),
+            [patch["filename"] for patch in selection],
+        )
 
     def test_subset_selection_rejects_unknown_patches(self) -> None:
         """Validate explicit patch subsets fail on unknown patch filenames."""
