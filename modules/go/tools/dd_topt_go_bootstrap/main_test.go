@@ -122,7 +122,7 @@ git_override(
 func TestReadGoModulePath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "go.mod")
-	if err := os.WriteFile(path, []byte("// comment\nmodule example.com/service\n\ngo 1.24\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("// comment\nmodule example.com/service // production module\n\ngo 1.24\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
 

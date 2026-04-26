@@ -259,6 +259,10 @@ func readGoModulePath(path string) (string, error) {
 		}
 		if strings.HasPrefix(trimmed, "module ") || strings.HasPrefix(trimmed, "module\t") {
 			modulePath := strings.TrimSpace(strings.TrimPrefix(trimmed, "module"))
+			fields := strings.Fields(modulePath)
+			if len(fields) > 0 {
+				modulePath = fields[0]
+			}
 			modulePath = strings.Trim(modulePath, `"`)
 			if modulePath == "" {
 				return "", fmt.Errorf("go.mod at %s has an empty module path", path)
