@@ -164,6 +164,55 @@ func TestNormalizeGoModuleResolutionEnvFillsDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeGoModuleResolutionEnvAbsolutizesRelativeCompilerPaths(t *testing.T) {
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	env, err := normalizeGoModuleResolutionEnv([]string{
+		"CC=external/llvm_toolchain/bin/cc_wrapper.sh",
+		"CXX='external/llvm_toolchain/bin/cxx wrapper.sh' -stdlib=libc++",
+		"FC=external/llvm_toolchain/bin/flang",
+	})
+	if err != nil {
+		t.Fatalf("normalizeGoModuleResolutionEnv error: %v", err)
+	}
+	envMap := envSliceToMap(env)
+	if got, want := envMap["CC"], filepath.Join(baseDir, "external/llvm_toolchain/bin/cc_wrapper.sh"); got != want {
+		t.Fatalf("CC=%q, want %q", got, want)
+	}
+	if got, want := envMap["CXX"], "'"+filepath.Join(baseDir, "external/llvm_toolchain/bin/cxx wrapper.sh")+"' -stdlib=libc++"; got != want {
+		t.Fatalf("CXX=%q, want %q", got, want)
+	}
+	if got, want := envMap["FC"], filepath.Join(baseDir, "external/llvm_toolchain/bin/flang"); got != want {
+		t.Fatalf("FC=%q, want %q", got, want)
+	}
+}
+
+func TestNormalizeGoModuleResolutionEnvPreservesValidCompilerCommands(t *testing.T) {
+	env, err := normalizeGoModuleResolutionEnv([]string{
+		"CC=clang",
+		"CXX=/usr/bin/clang++",
+		`FC=C:\Toolchains\flang.exe -O2`,
+	})
+	if err != nil {
+		t.Fatalf("normalizeGoModuleResolutionEnv error: %v", err)
+	}
+	envMap := envSliceToMap(env)
+	if envMap["CC"] != "clang" {
+		t.Fatalf("CC=%q, want clang", envMap["CC"])
+	}
+	if envMap["CXX"] != "/usr/bin/clang++" {
+		t.Fatalf("CXX=%q, want /usr/bin/clang++", envMap["CXX"])
+	}
+	if envMap["FC"] != `C:\Toolchains\flang.exe -O2` {
+		t.Fatalf("FC=%q, want Windows absolute path", envMap["FC"])
+	}
+}
+
 func TestNormalizeGoActionCacheEnvTreatsEmptyValuesAsUnset(t *testing.T) {
 	env, err := normalizeGoActionCacheEnv([]string{
 		"GOPATH=",
