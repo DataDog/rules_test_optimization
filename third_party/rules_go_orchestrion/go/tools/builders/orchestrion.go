@@ -17,6 +17,8 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +43,10 @@ const (
 
 	// jobserverStartTimeout is the maximum time to wait for the jobserver to start.
 	jobserverStartTimeout = 10 * time.Second
+
+	// jobserverReadyTimeout is the maximum time to wait for the advertised
+	// jobserver socket to accept connections after the URL file is written.
+	jobserverReadyTimeout = 30 * time.Second
 
 	// jobserverPollInterval is the interval to poll for the URL file.
 	jobserverPollInterval = 50 * time.Millisecond
@@ -884,6 +890,15 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 		_ = os.Remove(urlFile)
 		return nil, fmt.Errorf("failed to get orchestrion jobserver URL: %w", err)
 	}
+	readySpan := beginProbe("orchestrion.start_jobserver.wait_for_ready")
+	err = waitForJobserverReady(url, jobserverReadyTimeout)
+	readySpan.End(err)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.Remove(urlFile)
+		return nil, fmt.Errorf("failed waiting for orchestrion jobserver readiness: %w", err)
+	}
 
 	return &orchestrionJobserver{
 		url:     url,
@@ -930,6 +945,35 @@ func waitForURLFile(path string, timeout time.Duration) (string, error) {
 	}
 
 	return "", fmt.Errorf("timeout waiting for orchestrion jobserver URL file: %s", path)
+}
+
+// waitForJobserverReady waits until the host and port advertised by the
+// Orchestrion jobserver can accept TCP connections. The server writes its URL
+// before it is always ready to serve, and starting the toolexec client too early
+// can surface as flaky NATS connection failures.
+func waitForJobserverReady(rawURL string, timeout time.Duration) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("parse jobserver URL %q: %w", rawURL, err)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("jobserver URL %q has no host", rawURL)
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", parsed.Host, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+		time.Sleep(jobserverPollInterval)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("timeout waiting for %s: %w", parsed.Host, lastErr)
+	}
+	return fmt.Errorf("timeout waiting for %s", parsed.Host)
 }
 
 // executeCommandWithJobserver runs a command with the orchestrion jobserver URL set

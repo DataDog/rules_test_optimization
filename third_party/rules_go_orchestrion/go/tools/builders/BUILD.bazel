@@ -120,6 +120,7 @@ go_test(
     size = "small",
     srcs = [
         "orchestrion_cache_test.go",
+        "orchestrion_skip_test.go",
         "orchestrion_test_helpers_test.go",
         "orchestrion_test.go",
         "stdlib_test.go",

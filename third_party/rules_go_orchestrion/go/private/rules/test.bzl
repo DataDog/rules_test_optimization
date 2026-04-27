@@ -54,6 +54,52 @@ load(
     "non_go_transition",
 )
 
+def _archive_data_for_testmain(go, archive_data):
+    """Wraps transitive archive data so testmain compile can use it directly.
+
+    The synthetic Orchestrion testmain helper may import packages that are
+    already present only transitively in the consumer's normal Go graph.
+    Wrapping the existing GoArchiveData keeps those packagefiles as declared
+    inputs to the testmain compile action without changing the consumer's BUILD
+    deps.
+    """
+    return struct(
+        source = struct(mode = go.mode),
+        data = archive_data,
+        direct = [],
+        libs = depset(direct = [archive_data.file]),
+        transitive = depset(direct = [archive_data]),
+        x_defs = dict(archive_data._x_defs),
+        cgo_deps = archive_data._cgo_deps,
+        cgo_exports = depset(),
+        runfiles = archive_data.runfiles,
+        _headers = depset(),
+    )
+
+def _archive_importpath(dep):
+    """Returns the import path for either a GoArchive struct or Go target."""
+    if type(dep) == "struct":
+        return dep.data.importpath
+    return dep[GoArchive].data.importpath
+
+def _orchestrion_testmain_transitive_deps(go, archive, existing_deps):
+    """Returns transitive archives visible to synthetic Orchestrion testmain.
+
+    Synthetic helper packages compile during the generated testmain action. If a
+    helper package imports something already present in the consumer's
+    transitive Bazel graph, exposing that archive here lets the helper builder
+    use the same packagefile that the final link action will see.
+    """
+    existing_importpaths = {_archive_importpath(dep): None for dep in existing_deps}
+    extra_deps = []
+    for archive_data in archive.transitive.to_list():
+        importpath = archive_data.importpath
+        if importpath in existing_importpaths:
+            continue
+        existing_importpaths[importpath] = None
+        extra_deps.append(_archive_data_for_testmain(go, archive_data))
+    return extra_deps
+
 def _go_test_impl(ctx):
     """go_test_impl implements go testing.
 
@@ -169,6 +215,8 @@ def _go_test_impl(ctx):
 
     # Now compile the test binary itself
     test_deps = external_archive.direct + [external_archive] + ctx.attr._testmain_additional_deps
+    if go.orchestrion:
+        test_deps = test_deps + _orchestrion_testmain_transitive_deps(go, external_archive, test_deps)
     if go.coverage_enabled:
         test_deps.append(go.coverdata)
     test_go_info = new_go_info(

@@ -20,7 +20,7 @@ const (
 	syntheticModuleCacheABIVersion = "v4"
 	helperDecisionCacheABIVersion  = "v3"
 	helperExportCacheABIVersion    = "v3"
-	helperArchiveCacheABIVersion   = "v4"
+	helperArchiveCacheABIVersion   = "v9"
 	// Bump the helper source-set version whenever the synthetic testmain source
 	// compile closure changes. The helper decision and archive caches both key
 	// off this value, so widening the recursive source-compile set must force a
