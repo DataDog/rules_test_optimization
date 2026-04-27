@@ -257,6 +257,12 @@ def _uses_orchestrion(action: Action) -> bool:
     return "-orchestrion" in action.arguments
 
 
+def _is_fixture_go_tool_action(action: Action) -> bool:
+    """Return whether an action belongs to the fixture Go tool transition proof."""
+
+    return any("fixture_tool" in arg for arg in action.arguments)
+
+
 def _assert_expected_action(
     action: Action,
     inputs: list[str],
@@ -351,7 +357,10 @@ def main() -> int:
 
     orchestrion_actions = []
     orchestrion_stdlib_actions = []
+    fixture_go_tool_actions = []
     for action in compile_actions + stdlib_actions + link_actions:
+        if _is_fixture_go_tool_action(action):
+            fixture_go_tool_actions.append(action)
         require_proxy = _uses_orchestrion(action)
         if require_proxy:
             orchestrion_actions.append(action)
@@ -371,6 +380,21 @@ def main() -> int:
         orchestrion_stdlib_actions,
         "aquery did not contain any Orchestrion-enabled GoStdlib actions",
     )
+    _require(
+        fixture_go_tool_actions,
+        "aquery did not contain the fixture Go tool transition actions",
+    )
+
+    for action in fixture_go_tool_actions:
+        _require(
+            not _uses_orchestrion(action),
+            f"{action.mnemonic} for fixture Go tool unexpectedly inherited Orchestrion",
+        )
+        _assert_expected_action(
+            action,
+            _action_inputs(action, artifacts, dep_sets, path_fragments),
+            require_proxy=False,
+        )
 
     for action in stdlib_list_actions:
         _assert_expected_action(action, _action_inputs(action, artifacts, dep_sets, path_fragments), require_proxy=False)
