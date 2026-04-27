@@ -1174,7 +1174,7 @@
       "path": "go/tools/builders/orchestrion.go",
       "kind": "file",
       "executable": false,
-      "sha256": "8c9704200ea3c33d6f03b2623f2efe67d390278c3a4bd58b3234629b04f06985"
+      "sha256": "5a6a12af06e8254dee30ab1a2c168e8e8a059ce70cb385e3a39b45c0920a9b25"
     },
     {
       "path": "go/tools/builders/orchestrion_cache.go",
@@ -1192,7 +1192,7 @@
       "path": "go/tools/builders/orchestrion_skip_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "c74dc5da7cbd5f83c73394532ab554c7689ed3626722ada803455533a450ed18"
+      "sha256": "24b7a4676b929362d107caa665587f39749378dd27d9eb1b6c127e85da8bf4e0"
     },
     {
       "path": "go/tools/builders/orchestrion_synthetic_tool.go",
