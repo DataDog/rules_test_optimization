@@ -235,7 +235,8 @@ exports_files([
 EOF
 
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go/private/rules:transition.bzl", "go_reset_target")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -245,9 +246,21 @@ go_library(
     importpath = "${MODULE_IMPORTPATH}",
 )
 
+go_binary(
+    name = "fixture_tool",
+    srcs = ["fixture_tool.go"],
+    importpath = "${MODULE_IMPORTPATH}/fixture_tool",
+)
+
+go_reset_target(
+    name = "fixture_tool_reset",
+    dep = ":fixture_tool",
+)
+
 dd_topt_go_test(
     name = "hello_test",
     srcs = ["hello_test.go"],
+    data = [":fixture_tool_reset"],
     embed = [":hello_lib"],
     orchestrion_pin_files = [
         "//:go.mod",
@@ -265,6 +278,12 @@ package main
 func greeting() string {
 	return "Hello, Bzlmod!"
 }
+EOF
+
+  cat > "$ws_dir/app/fixture_tool.go" <<'EOF'
+package main
+
+func main() {}
 EOF
 
   cat > "$ws_dir/app/hello_test.go" <<EOF

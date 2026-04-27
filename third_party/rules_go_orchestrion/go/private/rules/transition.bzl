@@ -199,6 +199,8 @@ non_request_nogo_transition = transition(
     outputs = ["//go/private:request_nogo", "//go/private/orchestrion:enabled"],
 )
 
+_ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
+
 _common_reset_transition_dict = dict({
     "//go/private:request_nogo": False,
     "//go/config:static": False,
@@ -213,10 +215,10 @@ _common_reset_transition_dict = dict({
 
 _reset_transition_dict = dict(_common_reset_transition_dict, **{
     "//go/private:bootstrap_nogo": True,
+    _ORCHESTRION_ENABLED_SETTING: False,
 })
 
 _reset_transition_keys = sorted(_reset_transition_dict.keys())
-_ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
 
 _stdlib_keep_keys = sorted([
     _ORCHESTRION_ENABLED_SETTING,
@@ -235,10 +237,12 @@ def _go_tool_transition_impl(settings, _attr):
     values and disables nogo. This is used for Go tool binaries like nogo
     itself. Tool binaries shouldn't depend on the link mode or tags of the
     target configuration and neither the tools nor the code they potentially
-    generate should be subject to nogo's static analysis. This transition
-    doesn't change the platform (goos, goarch), but tool binaries should also
-    have `cfg = "exec"` so tool binaries should be built for the execution
-    platform.
+    generate should be subject to nogo's static analysis. They also should not
+    inherit Orchestrion from instrumented tests, because proto generators and
+    other build tools are not part of the test binary under observation. This
+    transition doesn't change the platform (goos, goarch), but tool binaries
+    should also have `cfg = "exec"` so tool binaries should be built for the
+    execution platform.
     """
     return dict(settings, **_reset_transition_dict)
 
@@ -289,8 +293,8 @@ def _go_stdlib_transition_impl(settings, _attr):
 
 go_stdlib_transition = transition(
     implementation = _go_stdlib_transition_impl,
-    inputs = _reset_transition_keys + [_ORCHESTRION_ENABLED_SETTING],
-    outputs = _reset_transition_keys + [_ORCHESTRION_ENABLED_SETTING, "//command_line_option:collect_code_coverage"],
+    inputs = _reset_transition_keys,
+    outputs = _reset_transition_keys + ["//command_line_option:collect_code_coverage"],
 )
 
 def _go_reset_target_impl(ctx):
