@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -306,5 +307,21 @@ func TestWaitForJobserverReadyAcceptsListeningTCPPort(t *testing.T) {
 func TestWaitForJobserverReadyRejectsURLWithoutHost(t *testing.T) {
 	if err := waitForJobserverReady("nats://", time.Millisecond); err == nil {
 		t.Fatal("waitForJobserverReady() succeeded for URL without host")
+	}
+}
+
+func TestWaitForJobserverReadyMarksTimeoutAsBestEffort(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = waitForJobserverReady("nats://"+addr, time.Millisecond)
+	if !errors.Is(err, errJobserverReadyTimeout) {
+		t.Fatalf("waitForJobserverReady() error = %v, want errJobserverReadyTimeout", err)
 	}
 }

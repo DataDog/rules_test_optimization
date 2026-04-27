@@ -16,6 +16,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -66,6 +67,11 @@ var orchestrionWovenPackagePatterns = []string{
 	"github.com/DataDog/dd-trace-go/v2/profiler",
 	"github.com/DataDog/dd-trace-go/v2/instrumentation/env",
 }
+
+// errJobserverReadyTimeout marks a best-effort readiness timeout. The
+// advertised jobserver URL is still passed to Orchestrion clients because the
+// server process may finish binding after the probe window on slow runners.
+var errJobserverReadyTimeout = errors.New("orchestrion jobserver readiness timeout")
 
 // ensureGoModuleCacheEnv provisions a writable Go cache/module cache for
 // orchestrion subprocesses. Some Bazel sandboxes do not provide GOPATH or
@@ -894,10 +900,15 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 	err = waitForJobserverReady(url, jobserverReadyTimeout)
 	readySpan.End(err)
 	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		_ = os.Remove(urlFile)
-		return nil, fmt.Errorf("failed waiting for orchestrion jobserver readiness: %w", err)
+		if !errors.Is(err, errJobserverReadyTimeout) {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			_ = os.Remove(urlFile)
+			return nil, fmt.Errorf("failed waiting for orchestrion jobserver readiness: %w", err)
+		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "orchestrion: continuing after best-effort jobserver readiness timeout: %v\n", err)
+		}
 	}
 
 	return &orchestrionJobserver{
@@ -971,9 +982,9 @@ func waitForJobserverReady(rawURL string, timeout time.Duration) error {
 		time.Sleep(jobserverPollInterval)
 	}
 	if lastErr != nil {
-		return fmt.Errorf("timeout waiting for %s: %w", parsed.Host, lastErr)
+		return fmt.Errorf("%w waiting for %s: %v", errJobserverReadyTimeout, parsed.Host, lastErr)
 	}
-	return fmt.Errorf("timeout waiting for %s", parsed.Host)
+	return fmt.Errorf("%w waiting for %s", errJobserverReadyTimeout, parsed.Host)
 }
 
 // executeCommandWithJobserver runs a command with the orchestrion jobserver URL set
