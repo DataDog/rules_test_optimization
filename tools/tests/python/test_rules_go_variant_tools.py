@@ -123,6 +123,7 @@ class RulesGoVariantToolTests(unittest.TestCase):
             finally:
                 self.mod.REPO_ROOT = original_root
 
+    @unittest.skipIf(os.name == "nt", "Windows does not preserve POSIX executable bits")
     def test_verify_rejects_permission_only_difference(self) -> None:
         """The verifier treats executable-bit drift as a variant difference."""
         with tempfile.TemporaryDirectory() as tmp:
