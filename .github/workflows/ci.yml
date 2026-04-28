@@ -192,12 +192,13 @@ jobs:
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             ./bazelw --output_user_root=C:/b test \
+              --test_output=errors \
               -- \
               //examples/... \
               -//examples/single_service/src/go-project/... \
               -//examples/multi_service/src/go-project/...
           else
-            ./bazelw test //examples/...
+            ./bazelw test //examples/... --test_output=errors
           fi
 
       - name: Exercise single-service runtests script (dry-run)
