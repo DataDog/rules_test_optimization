@@ -1,10 +1,8 @@
 # Go + Orchestrion + Bazel Deep Dive
 
-> Scope note: the consumer-visible optional `internal monorepo` patch layer now lives in
-> `third_party/rules_go_patches`, and maintainer-only local regression fixtures
-> live in `tools/tests/rules_go_patch_regressions`. References in this document
-> to `third_party/rules_go_orchestrion` describe the clean base fork unless a
-> section says otherwise.
+> Scope note: consumers choose either `third_party/rules_go_orchestrion_base` or
+> `third_party/rules_go_orchestrion_complete`. Maintainer-only local regression
+> fixtures live in `tools/tests/rules_go_variant_regressions`.
 
 ## Purpose
 
@@ -47,14 +45,14 @@ Primary implementation entry points:
 - [modules/go/topt_go_test.bzl](../modules/go/topt_go_test.bzl)
 - [modules/go/topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 - [modules/go/tools/dd_topt_go_bootstrap/main.go](../modules/go/tools/dd_topt_go_bootstrap/main.go)
-- [third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
-- [third_party/rules_go_orchestrion/go/private/actions/archive.bzl](../third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
-- [third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl](../third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
-- [third_party/rules_go_orchestrion/go/private/actions/link.bzl](../third_party/rules_go_orchestrion/go/private/actions/link.bzl)
-- [third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](../third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+- [third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl)
+- [third_party/rules_go_orchestrion_base/go/private/actions/archive.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/archive.bzl)
+- [third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl)
+- [third_party/rules_go_orchestrion_base/go/private/actions/link.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/link.bzl)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/link.go](../third_party/rules_go_orchestrion_base/go/tools/builders/link.go)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go)
 
 ### Why This Section Exists
 
@@ -164,7 +162,7 @@ Bootstrap does five things that matter for the current architecture:
 
 1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.59.0")`
 2. Writes a managed `git_override` for `rules_go` pointing back to this repo
-   with `strip_prefix = "third_party/rules_go_orchestrion"`
+   with `strip_prefix = "third_party/rules_go_orchestrion_base"`
 3. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension and
    `use_repo(orchestrion, "rules_go_orchestrion_tool")`
 4. Sets the workspace-wide tracer selection with either
@@ -330,9 +328,9 @@ the Bazel pipeline and Orchestrion pipeline behave coherently.
 
 ### Starlark action layer
 
-- [archive.bzl](../third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
-- [compilepkg.bzl](../third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
-- [link.bzl](../third_party/rules_go_orchestrion/go/private/actions/link.bzl)
+- [archive.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/archive.bzl)
+- [compilepkg.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl)
+- [link.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/link.bzl)
 
 Responsibilities:
 
@@ -348,12 +346,12 @@ use them later.
 
 ### Builder layer
 
-- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-- [importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
-- [orchestrion.go](../third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
-- [stdlib.go](../third_party/rules_go_orchestrion/go/tools/builders/stdlib.go)
-- [stdliblist.go](../third_party/rules_go_orchestrion/go/tools/builders/stdliblist.go)
+- [compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
+- [importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
+- [link.go](../third_party/rules_go_orchestrion_base/go/tools/builders/link.go)
+- [orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go)
+- [stdlib.go](../third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go)
+- [stdliblist.go](../third_party/rules_go_orchestrion_base/go/tools/builders/stdliblist.go)
 
 Responsibilities:
 
@@ -373,7 +371,7 @@ is where the environment, importcfg, and archive family are made consistent.
 The vendored `rules_go` fork does not use upstream Orchestrion unchanged.
 
 Implementation:
-- [extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+- [extensions.bzl](../third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl)
 
 The Orchestrion repository rule downloads Orchestrion source and patches it
 before building the binary. The patches fall into a few categories:
@@ -447,7 +445,7 @@ to "producing instrumented artifacts". This section explains that boundary.
 
 The compile entry point is:
 
-- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
 
 At compile time, the builder:
 
@@ -481,9 +479,9 @@ For synthetic `testmain`, compilepkg generates a sidecar manifest:
 
 Implementation details:
 
-- [archive.bzl](../third_party/rules_go_orchestrion/go/private/actions/archive.bzl)
-- [compilepkg.bzl](../third_party/rules_go_orchestrion/go/private/actions/compilepkg.bzl)
-- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+- [archive.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/archive.bzl)
+- [compilepkg.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl)
+- [compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
 
 The sidecar records the compile-time `packagefile` directives for the Datadog
 helper packages that synthetic `testmain` was rooted against. That is the
@@ -501,7 +499,7 @@ The importcfg layer is where the Bazel/Orchestrion integration becomes most
 concrete.
 
 Implementation:
-- [importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
+- [importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
 
 This file owns several distinct jobs:
 
@@ -562,7 +560,7 @@ keeps them inside the same Datadog package universe.
 
 The link entry point is:
 
-- [link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
+- [link.go](../third_party/rules_go_orchestrion_base/go/tools/builders/link.go)
 
 The link builder has two modes:
 
@@ -618,7 +616,7 @@ make that join deterministic.
 ## The Orchestrion Runtime Environment Inside Builders
 
 Implementation:
-- [orchestrion.go](../third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
+- [orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go)
 
 This file centralizes the environment preparation Orchestrion needs under Bazel.
 
@@ -872,7 +870,7 @@ chance to do the right thing.
 
 ### Orchestrion source patching
 
-- [extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+- [extensions.bzl](../third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl)
 
 Look here if:
 
@@ -887,9 +885,9 @@ Starlark or the builders. This section points directly at that integration seam.
 
 ### Compile/link consistency
 
-- [compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-- [importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [link.go](../third_party/rules_go_orchestrion/go/tools/builders/link.go)
+- [compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
+- [importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
+- [link.go](../third_party/rules_go_orchestrion_base/go/tools/builders/link.go)
 
 Look here if:
 

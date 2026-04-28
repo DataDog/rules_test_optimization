@@ -41,7 +41,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `git_override(`) {
 		t.Fatalf("expected rules_go override in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion"`) {
+	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion_base"`) {
 		t.Fatalf("expected vendored rules_go strip_prefix in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `use_extension("@rules_go//go:extensions.bzl", "orchestrion")`) {
@@ -58,6 +58,47 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	}
 	if !strings.Contains(got, `use_repo(orchestrion, "rules_go_orchestrion_tool")`) {
 		t.Fatalf("expected rules_go orchestrion repo wiring in managed block:\n%s", got)
+	}
+}
+
+func TestManagedModuleBlockCanSelectCompleteRulesGoVariant(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.5.0",
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rulesGoCommit:      "deadbeef",
+		rulesGoVariant:     "complete",
+	}
+	got := managedModuleBlock(cfg)
+	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion_complete"`) {
+		t.Fatalf("expected complete rules_go variant in managed block:\n%s", got)
+	}
+}
+
+func TestValidateRulesGoVariantRejectsUnknownVariant(t *testing.T) {
+	if err := validateRulesGoVariant("custom"); err == nil {
+		t.Fatal("expected unknown rules_go variant to fail")
+	}
+}
+
+func TestHydrateManagedRulesGoVariantPreservesCompleteVariant(t *testing.T) {
+	content := `module(name = "example")
+
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/example/repo.git",
+    commit = "deadbeef",
+    strip_prefix = "third_party/rules_go_orchestrion_complete",
+)
+# END Datadog Go Orchestrion bootstrap
+`
+	cfg := config{rulesGoVariant: defaultRulesGoVariant}
+	if err := hydrateManagedRulesGoVariant(&cfg, content); err != nil {
+		t.Fatalf("hydrateManagedRulesGoVariant error: %v", err)
+	}
+	if cfg.rulesGoVariant != "complete" {
+		t.Fatalf("rulesGoVariant=%q, want complete", cfg.rulesGoVariant)
 	}
 }
 
@@ -94,7 +135,7 @@ git_override(
 `
 	cfg := config{
 		rulesGoRemote: defaultRulesGoRemote,
-		rulesGoCommit: defaultRulesGoCommit,
+		rulesGoCommit: "deadbeef",
 	}
 	if rulesGoOverrideCompatible(input, cfg) {
 		t.Fatal("expected incompatible rules_go override to be rejected")
@@ -116,6 +157,123 @@ git_override(
 	}
 	if commit != "cafebabe" {
 		t.Fatalf("unexpected commit: %q", commit)
+	}
+}
+
+func TestPatchModuleFileInfersRulesGoCommitFromDatadogOverride(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	input := `module(name = "example")
+
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "published-main-sha",
+    strip_prefix = "modules/go",
+)
+`
+	if err := os.WriteFile(moduleFile, []byte(input), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      defaultRulesGoVariant,
+		rulesGoCommitSet:    false,
+		ddTraceGoVersionSet: true,
+	}
+	if err := patchModuleFile(cfg); err != nil {
+		t.Fatalf("patchModuleFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(moduleFile)
+	if err != nil {
+		t.Fatalf("read MODULE.bazel: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `commit = "published-main-sha"`) {
+		t.Fatalf("expected inferred rules_go commit in managed block:\n%s", text)
+	}
+	if !strings.Contains(text, `strip_prefix = "third_party/rules_go_orchestrion_base"`) {
+		t.Fatalf("expected base variant strip_prefix in managed block:\n%s", text)
+	}
+}
+
+func TestPatchModuleFilePreservesManagedRulesGoCommitOnRerun(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	input := `module(name = "example")
+
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "already-published-sha",
+    strip_prefix = "third_party/rules_go_orchestrion_complete",
+)
+
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.9.0",
+    dd_trace_go_version = "v2.9.0-dev",
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+# END Datadog Go Orchestrion bootstrap
+`
+	if err := os.WriteFile(moduleFile, []byte(input), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      "complete",
+		ddTraceGoVersionSet: true,
+	}
+	if err := patchModuleFile(cfg); err != nil {
+		t.Fatalf("patchModuleFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(moduleFile)
+	if err != nil {
+		t.Fatalf("read MODULE.bazel: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `commit = "already-published-sha"`) {
+		t.Fatalf("expected existing managed rules_go commit to be preserved:\n%s", text)
+	}
+	if !strings.Contains(text, `strip_prefix = "third_party/rules_go_orchestrion_complete"`) {
+		t.Fatalf("expected existing complete variant to be preserved:\n%s", text)
+	}
+}
+
+func TestPatchModuleFileRequiresRulesGoCommitWhenNoPublishedSourceExists(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	if err := os.WriteFile(moduleFile, []byte("module(name = \"example\")\n"), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      defaultRulesGoVariant,
+		ddTraceGoVersionSet: true,
+	}
+	err := patchModuleFile(cfg)
+	if err == nil {
+		t.Fatal("expected patchModuleFile to require a rules_go commit")
+	}
+	if !strings.Contains(err.Error(), "rules_go fork commit is required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -674,7 +832,7 @@ git_override(
     module_name = "rules_go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "deadbeef",
-    strip_prefix = "third_party/rules_go_orchestrion",
+    strip_prefix = "third_party/rules_go_orchestrion_base",
 )
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")

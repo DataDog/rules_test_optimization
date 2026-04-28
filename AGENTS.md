@@ -16,7 +16,7 @@ The solution separates concerns into three phases:
 - Usage snippets: see `examples/README.md` for copy/paste single-service and multi-service examples.
 - Cross-repository integration fixture: see the sibling repository `../rules_test_optimization_tests` and its `README.md` for the consumer-style validation flow that must stay green after changes here.
   - For local validation of unpublished changes from this repo, switch that fixture repo from its pinned `git_override(...)` entries to the commented `local_path_override(...)` entries in `../rules_test_optimization_tests/MODULE.bazel` so Bazel resolves this checkout instead of GitHub.
-- Go fork maintenance details: see `third_party/rules_go_orchestrion.METADATA.json`, `third_party/rules_go_orchestrion.CHANGED_FILES.md`, and `tools/dev/diff_rules_go_fork.py`.
+- Go fork maintenance details: see `third_party/rules_go_orchestrion_base.METADATA.json`, `third_party/rules_go_orchestrion_complete.METADATA.json`, `third_party/rules_go_orchestrion_variants.json`, and `tools/dev/diff_rules_go_fork.py`.
 
 Agents: start with `README.md` for current operational behavior, then `CONTRIBUTING.md` for the maintained validation workflow, then use the overview and RFC when you need architecture details or design rationale/trade-off context.
 
@@ -37,7 +37,8 @@ Agents: start with `README.md` for current operational behavior, then `CONTRIBUT
 - `modules/nodejs/` — NodeJS companion module sources (`topt_nodejs_test.bzl`, `topt_nodejs_infer.bzl`, companion tests).
 - `modules/dotnet/` — .NET companion module sources (`topt_dotnet_test.bzl`, `topt_dotnet_infer.bzl`, companion tests).
 - `modules/ruby/` — Ruby companion module sources (`topt_ruby_test.bzl`, `topt_ruby_infer.bzl`, companion tests).
-- `third_party/rules_go_orchestrion/` — vendored `rules_go` fork used by this repository's dev-only root module wiring and Orchestrion integration.
+- `third_party/rules_go_orchestrion_base/` — vendored `rules_go` fork used by this repository's dev-only root module wiring and the generic Orchestrion integration.
+- `third_party/rules_go_orchestrion_complete/` — vendored `rules_go` fork variant that layers declared monorepo compatibility changes on top of the base Orchestrion integration.
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
@@ -52,7 +53,7 @@ The sync rule creates `@test_optimization_data//` containing:
 - **Per-module splitting**: known tests and test management data are split by module to reduce cache invalidation.
 - **Sanitization**: module names are converted into Bazel-safe labels using `sanitize_label_fragment()` (lowercase, `[a-z0-9_]` only, deterministic suffixes).
 - **Go importpath inference**: `topt_go_payloads_selector` mirrors rules_go importpath logic (explicit `importpath` > `embed` provider > fallback `<module>/<package>`).
-- **Vendored rules_go fork for root workflows**: the repository root pins `rules_go` as a dev-only dependency and redirects it to `third_party/rules_go_orchestrion` with `local_path_override(...)`; consumer-facing core usage remains rules_go-free.
+- **Vendored rules_go forks for root workflows**: the repository root pins `rules_go` as a dev-only dependency and redirects it to `third_party/rules_go_orchestrion_base` with `local_path_override(...)`; consumer-facing core usage remains rules_go-free.
 - **Cross-platform uploader**: Unix uses Bash/curl; Windows uses PowerShell and .NET `HttpClient`.
 
 ## Build, Test, and Development Commands
@@ -93,10 +94,10 @@ The sync rule creates `@test_optimization_data//` containing:
 - Typical workflow: edit Starlark, then run the narrowest matching validation command from `CONTRIBUTING.md`.
 - Python tooling tests: `./bazelw test //tools/tests/python:python_tools_test`.
 - Release guard: `python3 tools/dev/check_module_versions.py` (core and all companion module version alignment).
-- Fork delta refresh: `python3 tools/dev/diff_rules_go_fork.py --write-report` after intentional edits under `third_party/rules_go_orchestrion/`.
+- Fork delta refresh: run `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report` or `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --write-report` after intentional edits under the matching fork variant. Then run `python3 tools/dev/verify_rules_go_variants.py`.
 - Cross-repo regression check: after this repository's own validation passes, also validate the change in `../rules_test_optimization_tests` using that repo's documented commands (`./runtests`, `./runtests-hermetic`, or `./bazelw test //src/...`) so consumer-style integration stays intact.
   - Before running those checks against local changes, update `../rules_test_optimization_tests/MODULE.bazel` to enable the commented `local_path_override(...)` entries for the core module and any companion modules affected by the change.
-  - If the change touches the vendored `rules_go` fork or Go bootstrap/orchestrion wiring, also add a temporary local override for `rules_go` that points to `../rules_test_optimization/third_party/rules_go_orchestrion`.
+  - If the change touches the vendored `rules_go` fork or Go bootstrap/orchestrion wiring, also add a temporary local override for `rules_go` that points to `../rules_test_optimization/third_party/rules_go_orchestrion_base` or `../rules_test_optimization/third_party/rules_go_orchestrion_complete`, matching the fixture under test.
 
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.
@@ -119,7 +120,7 @@ The sync rule creates `@test_optimization_data//` containing:
   - After validating changes in this repo, also run the relevant checks in sibling repo `../rules_test_optimization_tests`.
   - Minimum expectation: use that repo's documented integration entrypoints (`./runtests`, `./runtests-hermetic`, or `./bazelw test //src/...`) to confirm this repo still works in a consumer-style workspace before calling the change done.
   - Use local overrides there while validating local work: enable the commented `local_path_override(...)` entries in `../rules_test_optimization_tests/MODULE.bazel` for `datadog-rules-test-optimization` and each affected companion module so the fixture tests the current checkout instead of the pinned GitHub commit.
-  - When validating changes under `third_party/rules_go_orchestrion/` or related Go bootstrap/orchestrion wiring, add a matching temporary `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion")` in the fixture repo before running its tests.
+  - When validating changes under `third_party/rules_go_orchestrion_base/`, `third_party/rules_go_orchestrion_complete/`, or related Go bootstrap/orchestrion wiring, add a matching temporary `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion_base")` or `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion_complete")` in the fixture repo before running its tests.
 - Local vs CI troubleshooting for `../rules_test_optimization_tests`:
   - If local fixture results differ from CI, compare the local environment to CI before assuming the fork is broken.
   - Match the host Go version used in CI when reproducing Go or Orchestrion issues. For the current fixture setup, use Go `1.25.0`.
@@ -160,11 +161,11 @@ Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go c
 - NodeJS ownership (`modules/nodejs/*`): NodeJS macro/inference rule and companion tests.
 - .NET ownership (`modules/dotnet/*`): .NET macro/inference rule and companion tests.
 - Ruby ownership (`modules/ruby/*`): Ruby macro/inference rule and companion tests.
-- Vendored fork ownership (`third_party/rules_go_orchestrion/*`): in-repo `rules_go` fork used by the repository root for dev/test/example flows; when modifying it, keep the metadata and changed-files report in sync.
+- Vendored fork ownership (`third_party/rules_go_orchestrion_base/*`, `third_party/rules_go_orchestrion_complete/*`): in-repo `rules_go` fork variants used by the repository root and consumer validation flows; when modifying them, keep the metadata, changed-files reports, and variant verifier in sync.
 - Bootstrap ownership (`tools/dev/*_bootstrap.bzl`): dev-only local companion wiring for root workspace testing; do not convert bootstrap wiring into module dependency edges.
 - Invariants:
   - root module must not `bazel_dep` the Go companion module (avoid `core -> go -> core` cycle),
-  - root module keeps `rules_go` as a dev-only dependency and redirects it to `third_party/rules_go_orchestrion` via `local_path_override(...)` (not consumer-facing core behavior),
+  - root module keeps `rules_go` as a dev-only dependency and redirects it to `third_party/rules_go_orchestrion_base` via `local_path_override(...)` (not consumer-facing core behavior),
   - Go companion must depend on core and `rules_go`,
   - non-Go companion modules are also wired into the root workspace through dev-only `tools/dev/*_bootstrap.bzl` extensions instead of root `bazel_dep(...)` edges,
   - public generated labels in synced repos remain stable (`test_optimization_files`, `test_optimization_context`, `module_<sanitized>`).
@@ -177,9 +178,9 @@ Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go c
 - Symptom: companion tests resolve released core instead of local core.
   - Run companion tests with `--override_module=datadog-rules-test-optimization=../..`.
 - Symptom: repo-root Go/example builds stop reflecting the in-tree fork.
-  - Verify root `MODULE.bazel` still has `bazel_dep(name = "rules_go", ..., dev_dependency = True)` plus `local_path_override(module_name = "rules_go", path = "third_party/rules_go_orchestrion")`.
-- Symptom: fork metadata report no longer matches `third_party/rules_go_orchestrion/`.
-  - Run `python3 tools/dev/diff_rules_go_fork.py --write-report` and review the updated `third_party/rules_go_orchestrion.CHANGED_FILES.md`.
+  - Verify root `MODULE.bazel` still has `bazel_dep(name = "rules_go", ..., dev_dependency = True)` plus `local_path_override(module_name = "rules_go", path = "third_party/rules_go_orchestrion_base")`.
+- Symptom: fork metadata report no longer matches a `rules_go` variant.
+  - Run `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report` or `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --write-report`, review the matching changed-files report, then run `python3 tools/dev/verify_rules_go_variants.py`.
 
 ## Multi‑Service Usage
 - Use `test_optimization_multi_sync_extension` (`@...//tools/core:test_optimization_multi_sync.bzl`) with `services = ["<svc1>", "<svc2>"]` to fetch multiple services at once.

@@ -53,7 +53,7 @@ case "$MODE" in
     INTEGRATION_SCENARIO_MODE=measure \
     MEASURE_OUTPUT_PATH="$measure_json" \
     USE_BAZEL_VERSION="$BAZEL_VERSION" \
-    "$REPO_ROOT/tools/tests/integration/run_bzlmod_go_patch_integration.sh" >/dev/null
+    "$REPO_ROOT/tools/tests/integration/run_bzlmod_go_integration.sh" >/dev/null
     ;;
 esac
 

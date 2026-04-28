@@ -170,7 +170,7 @@ jobs:
           )
 
       - name: Build examples
-        timeout-minutes: 10
+        timeout-minutes: 20
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
@@ -187,7 +187,7 @@ jobs:
           fi
 
       - name: Test examples
-        timeout-minutes: 10
+        timeout-minutes: 20
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
@@ -241,18 +241,18 @@ jobs:
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
-  rules-go-patch-smoke:
+  rules-go-variant-smoke:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
-    timeout-minutes: 25
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # The patch-series verifier archives the recorded base commit directly,
-          # so this lane needs the full git history instead of the default
-          # shallow checkout.
+          # The variant verifier and smoke harness inspect the vendored fork
+          # contract directly, so keep the checkout complete for maintainer
+          # diagnostics instead of relying on a shallow history.
           fetch-depth: 0
 
       - name: Set up Python
@@ -271,19 +271,13 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Fetch main history for patch verifier
+      - name: Run vendored rules_go base smoke coverage
         shell: bash
-        run: |
-          # actions/checkout with the PR ref does not guarantee that commits
-          # reachable only from maintainer support branches are present in the
-          # local object store. The patch-series verifier archives the
-          # recorded base commit and validates per-patch commit reachability,
-          # so fetch all remote branch heads before running it.
-          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+        run: RULES_GO_VARIANT=base ./tools/dev/run_rules_go_variant_smoke.sh
 
-      - name: Run vendored rules_go patch smoke coverage
+      - name: Run vendored rules_go complete smoke coverage
         shell: bash
-        run: ./tools/dev/run_rules_go_patch_smoke.sh
+        run: RULES_GO_VARIANT=complete ./tools/dev/run_rules_go_variant_smoke.sh
 
   workspace-compat:
     needs: changes
@@ -310,27 +304,29 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Validate WORKSPACE Go companion path (base-only)
+      - name: Validate WORKSPACE Go companion path (base)
         shell: bash
         run: |
-          USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_workspace_go_integration.sh
-
-      - name: Validate WORKSPACE Go companion path (all_patches)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches \
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
             ./tools/tests/integration/run_workspace_go_integration.sh
 
-      - name: Validate Bzlmod Go companion path (base-only)
+      - name: Validate WORKSPACE Go companion path (complete)
         shell: bash
         run: |
-          USE_BAZEL_VERSION=8.4.1 ./tools/tests/integration/run_bzlmod_go_patch_integration.sh
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
+            ./tools/tests/integration/run_workspace_go_integration.sh
 
-      - name: Validate Bzlmod Go companion path (all_patches)
+      - name: Validate Bzlmod Go companion path (base)
         shell: bash
         run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches \
-            ./tools/tests/integration/run_bzlmod_go_patch_integration.sh
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
+            ./tools/tests/integration/run_bzlmod_go_integration.sh
+
+      - name: Validate Bzlmod Go companion path (complete)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
+            ./tools/tests/integration/run_bzlmod_go_integration.sh
 
   coverage-tools:
     needs: changes

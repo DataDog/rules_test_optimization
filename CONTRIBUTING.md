@@ -39,9 +39,10 @@
   - `python3 tools/dev/check_module_versions.py`
 - Python tooling tests:
   - `./bazelw test //tools/tests/python:python_tools_test`
-- rules_go clean-base and patch-bundle verification:
-  - `python3 tools/dev/verify_rules_go_patch_series.py --bundle none`
-  - `python3 tools/dev/verify_rules_go_patch_series.py --bundle all_patches`
+- rules_go variant verification:
+  - `python3 tools/dev/verify_rules_go_variants.py`
+  - `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report`
+  - `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --write-report`
 - Optional Python tooling dependencies (for local script execution):
   - `python3 -m pip install --require-hashes -r tools/requirements.txt`
 - Local lint prerequisites (match CI tooling):
@@ -61,35 +62,36 @@
     they cover single-context, explicit override, multi-context repo selection,
     and no-match fallback behavior.
 - Go consumer integration harnesses:
-  - WORKSPACE base-only:
-    `USE_BAZEL_VERSION=8.4.1 tools/tests/integration/run_workspace_go_integration.sh`
-  - WORKSPACE with the canonical full patch bundle:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches tools/tests/integration/run_workspace_go_integration.sh`
-  - Bzlmod base-only:
-    `USE_BAZEL_VERSION=8.4.1 tools/tests/integration/run_bzlmod_go_patch_integration.sh`
-  - Bzlmod with the canonical full patch bundle:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_PATCH_BUNDLE=all_patches tools/tests/integration/run_bzlmod_go_patch_integration.sh`
+  - WORKSPACE base:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - WORKSPACE complete:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete tools/tests/integration/run_workspace_go_integration.sh`
+  - Bzlmod base:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+  - Bzlmod complete:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete tools/tests/integration/run_bzlmod_go_integration.sh`
   - Each script now validates:
     - normal mode
     - hermetic mode with the inline CI sandbox/network-blocking flags
     - structural `aquery` assertions for the Orchestrion offline module proxy wiring
-- Vendored rules_go patch smoke:
-  - `tools/dev/run_rules_go_patch_smoke.sh`
-  - materializes `base + all_patches`, applies the maintainer-only proof
-    overlay, and runs the fast vendored-fork regression set from that temp tree
-- Vendored rules_go extended patch coverage:
-  - `tools/dev/run_rules_go_patch_extended.sh`
-  - materializes the same temp tree shape and runs the slower extended
-    regression set there
+- Vendored rules_go variant smoke:
+  - `RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh`
+  - `RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_smoke.sh`
+  - copies the selected variant into a temp tree, applies the maintainer-only
+    proof overlay, and runs the fast vendored-fork regression set
+- Vendored rules_go extended variant coverage:
+  - `RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_extended.sh`
+  - `RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_extended.sh`
+  - runs the slower extended regression set against the selected variant
 - Hermetic smoke (mirror CI flags):
   - run the same test commands with sandbox/network-blocking flags from `.github/workflows/ci.yml`
 - Cross-repo fixture validation for mixed-runtime changes:
   - In `../rules_test_optimization_tests/MODULE.bazel`, temporarily enable the
     documented `local_path_override(...)` entries for core and each affected
     companion module so the fixture repo resolves this checkout.
-  - If the change touches `third_party/rules_go_orchestrion` or related Go
+  - If the change touches `third_party/rules_go_orchestrion_base` or related Go
     bootstrap/orchestrion wiring, also add a temporary
-    `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion")`
+    `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion_base")`
     there so the sibling repo resolves the local clean base fork.
   - Run the relevant fixture entrypoints there before calling the work done.
   - Restore the fixture repo to `git_override(...)` pins before pushing its PR.
@@ -117,16 +119,16 @@
   - go companion tests with hermetic flags
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
 - `workspace-compat`:
-  - WORKSPACE base-only
-  - WORKSPACE `all_patches`
-  - Bzlmod base-only
-  - Bzlmod `all_patches`
+  - WORKSPACE base
+  - WORKSPACE complete
+  - Bzlmod base
+  - Bzlmod complete
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
-- `rules-go-patch-smoke`:
-  - vendored `rules_go` patch-series verification and fast fork regression coverage
+- `rules-go-variant-smoke`:
+  - vendored `rules_go` variant verification and fast fork regression coverage
   - Linux-only by design so the PR gate stays fast and stable
-- `rules-go-patch-extended`:
-  - nightly/manual vendored `rules_go` patch coverage for slower XML, proto, cross, and cgo regression suites
+- `rules-go-variant-extended`:
+  - nightly/manual vendored `rules_go` variant coverage for slower XML, proto, cross, and cgo regression suites
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)

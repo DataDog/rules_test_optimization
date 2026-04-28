@@ -178,7 +178,7 @@ PY
 ESCAPED_RULES_GO_VENDOR=$("$PYTHON" - <<'PY'
 import json
 import os
-path = os.path.normpath(os.path.join(os.environ["REPO_ROOT"], "third_party", "rules_go_orchestrion"))
+path = os.path.normpath(os.path.join(os.environ["REPO_ROOT"], "third_party", "rules_go_orchestrion_base"))
 print(json.dumps(path.replace("\\\\", "/")))
 PY
 )
@@ -1849,7 +1849,7 @@ if ! grep -q 'git_override(' "$BOOT_WS/MODULE.bazel"; then
   cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
-if ! grep -q 'strip_prefix = "third_party/rules_go_orchestrion"' "$BOOT_WS/MODULE.bazel"; then
+if ! grep -q 'strip_prefix = "third_party/rules_go_orchestrion_base"' "$BOOT_WS/MODULE.bazel"; then
   echo "error: bootstrap helper did not add vendored rules_go strip_prefix"
   cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
