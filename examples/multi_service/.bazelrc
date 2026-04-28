@@ -1,3 +1,9 @@
+# Required for dd_topt_java_test on Windows: -javaagent uses a $(rootpath)
+# value that only resolves when runfiles are materialized as symlinks. Linux
+# and macOS already symlink runfiles by default; this flag makes Windows
+# behave the same. No-op when runfiles are already enabled.
+build --enable_runfiles
+
 # Hermetic config (sandbox, stable env, network blocking)
 build:hermetic --incompatible_strict_action_env
 build:hermetic --spawn_strategy=sandboxed
@@ -7,7 +13,6 @@ test:hermetic --modify_execution_info=TestRunner=+block-network
 test:hermetic --test_env=TZ=UTC
 test:hermetic --test_env=LANG=C
 test:hermetic --test_env=LC_ALL=C
-build:hermetic --enable_runfiles
 
 # Uncomment and provide values via shell/CI secret store:
 # common --repo_env=DD_API_KEY
