@@ -8,13 +8,13 @@ This file is generated. Do not edit by hand.
 - Commit: `fbbafef6e737fe18d3cdedfff4f8f060ac71d5f3`
 - Tag: `v0.60.0`
 - Vendored fork: `third_party/rules_go_orchestrion_complete`
-- Regenerate: `python3 tools/dev/diff_rules_go_fork.py --write-report`
+- Regenerate: `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --write-report`
 
 ## Summary
 
-- Total changed paths: `49`
-- Modified files: `28`
-- Added files: `21`
+- Total changed paths: `76`
+- Modified files: `41`
+- Added files: `35`
 - Removed files: `0`
 
 ## Modified files
@@ -22,14 +22,23 @@ This file is generated. Do not edit by hand.
 - `MODULE.bazel`
 - `MODULE.bazel.lock`
 - `docs/doc_helpers.bzl`
+- `extras/gomock.bzl`
+- `go/BUILD.bazel`
 - `go/extensions.bzl`
 - `go/private/BUILD.bazel`
 - `go/private/actions/archive.bzl`
+- `go/private/actions/binary.bzl`
 - `go/private/actions/compilepkg.bzl`
 - `go/private/actions/link.bzl`
 - `go/private/actions/stdlib.bzl`
 - `go/private/context.bzl`
+- `go/private/repositories.bzl`
+- `go/private/rules/BUILD.bazel`
+- `go/private/rules/binary.bzl`
+- `go/private/rules/info.bzl`
 - `go/private/rules/library.bzl`
+- `go/private/rules/nogo.bzl`
+- `go/private/rules/source.bzl`
 - `go/private/rules/stdlib.bzl`
 - `go/private/rules/test.bzl`
 - `go/private/rules/transition.bzl`
@@ -46,16 +55,24 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/nogo.go`
 - `go/tools/builders/stdlib.go`
 - `go/tools/builders/stdliblist.go`
+- `go/tools/bzltestutil/xml.go`
+- `proto/compiler.bzl`
+- `proto/def.bzl`
+- `proto/private/toolchain.bzl`
 - `tests/core/starlark/BUILD.bazel`
 
 ## Added files
 
 - `go/orchestrion_workspace.bzl`
+- `go/private/aspects/BUILD.bazel`
+- `go/private/aspects/buildinfo_aspect.bzl`
 - `go/private/orchestrion/BUILD`
 - `go/private/orchestrion/extensions.bzl`
+- `go/tools/builders/buildinfo.go`
 - `go/tools/builders/compilepkg_test.go`
 - `go/tools/builders/env_orchestrion.go`
 - `go/tools/builders/importcfg_test.go`
+- `go/tools/builders/modinfo.go`
 - `go/tools/builders/module_proxy.go`
 - `go/tools/builders/orchestrion.go`
 - `go/tools/builders/orchestrion_cache.go`
@@ -70,6 +87,16 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/probe_test.go`
 - `go/tools/builders/stdlib_test.go`
 - `go/tools/builders/tool_version.go`
+- `tests/core/buildinfo/BUILD.bazel`
+- `tests/core/buildinfo/README.md`
+- `tests/core/buildinfo/external_deps_bin_unix.go`
+- `tests/core/buildinfo/external_deps_bin_windows.go`
+- `tests/core/buildinfo/external_deps_test.go`
+- `tests/core/buildinfo/leaf_lib.go`
+- `tests/core/buildinfo/metadata_bin.go`
+- `tests/core/buildinfo/metadata_test.go`
+- `tests/core/buildinfo/mid_lib.go`
+- `tests/core/buildinfo/top_lib.go`
 - `tests/core/starlark/orchestrion_extension_tests.bzl`
 
 ## Removed files

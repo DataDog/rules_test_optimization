@@ -88,7 +88,7 @@ def _go_transition_impl(settings, attr):
     if pure == "on":
         settings["//go/config:race"] = False
         settings["//go/config:msan"] = False
-    cgo = pure == "off"
+    cgo = "on"
 
     goos = getattr(attr, "goos", "auto")
     goarch = getattr(attr, "goarch", "auto")

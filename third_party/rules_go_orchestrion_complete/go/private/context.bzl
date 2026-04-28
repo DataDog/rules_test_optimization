@@ -154,10 +154,16 @@ def _match_option(option, pattern):
         return option == pattern
 
 def _filter_options(options, denylist):
+    # The denylist is a dict. Split into exact-match and prefix-match patterns.
+    # Exact matches use O(1) dict lookup; only the rare prefix patterns (ending
+    # in "=", e.g. "-fmax-errors=") need a linear scan.  This avoids the
+    # previous O(options x denylist) _match_option loop.
+    prefix_patterns = [p for p in denylist if p.endswith("=")]
     return [
         option
         for option in options
-        if not any([_match_option(option, pattern) for pattern in denylist])
+        if option not in denylist and
+           not any([option.startswith(p) for p in prefix_patterns])
     ]
 
 def _child_name(go, path, ext, name):
@@ -225,11 +231,17 @@ def _merge_embed(source, embed):
         if source["cgo"]:
             fail("multiple libraries with cgo enabled")
         source["cgo"] = s.cgo
-        source["cdeps"] = s.cdeps
-        source["cppopts"] = s.cppopts
-        source["copts"] = s.copts
-        source["cxxopts"] = s.cxxopts
-        source["clinkopts"] = s.clinkopts
+
+    # Merge cgo-related attributes if the embedded library has them,
+    # even if it doesn't have cgo=True itself. This is necessary because
+    # a library can have cdeps without cgo=True if it embeds another library
+    # that has cgo=True. The cdeps must propagate through the embed chain.
+    if s.cdeps or s.cppopts or s.copts or s.cxxopts or s.clinkopts:
+        source["cdeps"] = source["cdeps"] or s.cdeps
+        source["cppopts"] = source["cppopts"] or s.cppopts
+        source["copts"] = source["copts"] or s.copts
+        source["cxxopts"] = source["cxxopts"] or s.cxxopts
+        source["clinkopts"] = source["clinkopts"] or s.clinkopts
 
 def _dedup_archives(archives):
     """Returns a list of archives without duplicate import paths.
@@ -451,6 +463,31 @@ def _matches_scopes(label, scopes):
             return True
     return False
 
+def _go_infos_use_cgo(go_infos):
+    for go_info in go_infos:
+        if GoInfo in go_info and go_info[GoInfo].cgo:
+            return True
+    return False
+
+def _source_uses_cgo(attr, go_infos):
+    """Returns whether attr's sources may need cgo processing."""
+    if getattr(attr, "cgo", False):
+        return True
+    return _go_infos_use_cgo(getattr(attr, "embed", [])) or _go_infos_use_cgo(go_infos)
+
+def maybe_needs_cc_toolchain(attr, go_infos = []):
+    """Returns whether this rule's own sources may use the C/C++ toolchain."""
+    return _source_uses_cgo(attr, go_infos)
+
+def _precomputed_cgo_context_info(attr, go_context_data):
+    if go_context_data and CgoContextInfo in go_context_data:
+        return go_context_data[CgoContextInfo]
+    if getattr(attr, "_cgo_context_data", None) and CgoContextInfo in attr._cgo_context_data:
+        return attr._cgo_context_data[CgoContextInfo]
+    if getattr(attr, "cgo_context_data", None) and CgoContextInfo in attr.cgo_context_data:
+        return attr.cgo_context_data[CgoContextInfo]
+    return None
+
 def validate_nogo(go):
     """Whether nogo should be run as a validation action rather than just to generate fact files for the current
     target."""
@@ -493,6 +530,7 @@ def go_context(
         embed = None,
         importpath_aliases = None,
         go_context_data = None,
+        maybe_needs_cc_toolchain = True,
         goos = "auto",
         goarch = "auto"):
     """Returns an API used to build Go code.
@@ -553,16 +591,26 @@ def go_context(
                 if tool_version_files:
                     orchestrion_tool_version_file = tool_version_files[0]
 
-    if getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains:
-        cgo_context_info = cgo_context_data_impl(ctx)
-    elif go_context_data and CgoContextInfo in go_context_data:
-        cgo_context_info = go_context_data[CgoContextInfo]
-    elif getattr(attr, "_cgo_context_data", None) and CgoContextInfo in attr._cgo_context_data:
-        cgo_context_info = attr._cgo_context_data[CgoContextInfo]
-    elif getattr(attr, "cgo_context_data", None) and CgoContextInfo in attr.cgo_context_data:
-        cgo_context_info = attr.cgo_context_data[CgoContextInfo]
+    cgo_disabled = (go_config_info and go_config_info.pure) or (
+        getattr(attr, "_pure_constraint", None) and
+        ctx.target_platform_has_constraint(attr._pure_constraint[platform_common.ConstraintValueInfo])
+    )
 
-    if goos == "auto" and goarch == "auto" and cgo_context_info and (go_config_info == None or not go_config_info.pure):
+    if maybe_needs_cc_toolchain and not cgo_disabled:
+        has_cc_toolchain = getattr(attr, "_cc_toolchain", None) and CPP_TOOLCHAIN_TYPE in ctx.toolchains
+        if has_cc_toolchain:
+            cgo_context_info = cgo_context_data_impl(ctx)
+        else:
+            cgo_context_info = _precomputed_cgo_context_info(attr, go_context_data)
+
+    if maybe_needs_cc_toolchain:
+        cgo_available = cgo_context_info != None
+    else:
+        # Preserve cgo build-mode/tag behavior for rules that won't use the
+        # C/C++ toolchain in their own actions.
+        cgo_available = not cgo_disabled and _precomputed_cgo_context_info(attr, go_context_data) != None
+
+    if goos == "auto" and goarch == "auto" and cgo_available and (go_config_info == None or not go_config_info.pure):
         # Fast-path to reuse the GoConfigInfo as-is
         mode = go_config_info or default_go_config_info
     else:
@@ -571,7 +619,7 @@ def go_context(
         mode_kwargs = structs.to_dict(go_config_info)
         mode_kwargs["goos"] = toolchain.default_goos if goos == "auto" else goos
         mode_kwargs["goarch"] = toolchain.default_goarch if goarch == "auto" else goarch
-        if not cgo_context_info:
+        if not cgo_available:
             if getattr(ctx.attr, "pure", None) == "off":
                 fail("{} has pure explicitly set to off, but no C++ toolchain could be found for its platform".format(ctx.label))
             mode_kwargs["pure"] = True

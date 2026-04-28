@@ -61,6 +61,39 @@ def _orchestrion_action_env(
         env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
 
+def _parse_lld_thread_count(extldflags):
+    """Extract --threads=N from extldflags to determine lld CPU usage."""
+    for flag in extldflags:
+        # Flags arrive as -Wl,--threads=N
+        for part in flag.split(","):
+            if part.startswith("--threads="):
+                count = part.removeprefix("--threads=")
+                if count.isdigit():
+                    return int(count)
+    return 1
+
+# Pre-built resource_set callbacks keyed by CPU count. Starlark does not
+# support closures, so we select the right function from this dict.
+def _golink_resource_set_1(_os, _inputs):
+    return {"cpu": 1, "memory": 512}
+
+def _golink_resource_set_2(_os, _inputs):
+    return {"cpu": 2, "memory": 512}
+
+def _golink_resource_set_4(_os, _inputs):
+    return {"cpu": 4, "memory": 512}
+
+_GOLINK_RESOURCE_SETS = {
+    1: _golink_resource_set_1,
+    2: _golink_resource_set_2,
+    4: _golink_resource_set_4,
+}
+
+def _golink_resource_set_for(extldflags):
+    """Return a resource_set callback matching the lld --threads value."""
+    threads = _parse_lld_thread_count(extldflags)
+    return _GOLINK_RESOURCE_SETS.get(threads, _golink_resource_set_1)
+
 def emit_link(
         go,
         archive = None,
@@ -68,13 +101,63 @@ def emit_link(
         executable = None,
         gc_linkopts = [],
         version_file = None,
-        info_file = None):
+        info_file = None,
+        buildinfo_metadata = None,
+        target_label = None):
     """See go/toolchains.rst#link for full documentation."""
 
     if archive == None:
         fail("archive is a required parameter")
     if executable == None:
         fail("executable is a required parameter")
+
+    # Generate buildinfo dependency file for Go 1.18+ buildInfo support
+    buildinfo_file = None
+    version_map_file = None
+    if buildinfo_metadata:
+        buildinfo_file = go.declare_file(go, path = executable.basename + ".buildinfo.txt")
+
+        # Materialize depsets at link time
+        version_infos = buildinfo_metadata.version_infos.to_list()
+
+        # Build version map from VersionInfo structs
+        # Data was already extracted from PackageInfo providers at aspect time
+        # Deduplicate modules by keeping first version found (depset order is deterministic)
+        version_map = {}
+        for info in version_infos:
+            module = info.module
+            version = info.version
+            if module and module not in version_map:
+                version_map[module] = version
+
+        # Write version map to file for Go builder
+        version_map_file = go.declare_file(go, path = executable.basename + ".versions.txt")
+        version_lines = ["{}\t{}".format(module, ver) for module, ver in sorted(version_map.items())]
+        go.actions.write(
+            output = version_map_file,
+            content = "\n".join(version_lines) + "\n" if version_lines else "",
+        )
+        # Build buildinfo content
+        content_lines = []
+
+        # Add main package path
+        if archive.data.importpath:
+            content_lines.append("path\t{}".format(archive.data.importpath))
+
+        # Add dependencies with versions
+        # Sort modules for deterministic output, which is required for:
+        # 1. Bazel action caching - identical inputs must produce identical outputs
+        # 2. Reproducible builds across different machines
+        # 3. Easier debugging and testing with predictable output order
+        # Only output one entry per module (not per package)
+        for module in sorted(version_map.keys()):
+            version = version_map[module]
+            content_lines.append("dep\t{}\t{}".format(module, version))
+
+        go.actions.write(
+            output = buildinfo_file,
+            content = "\n".join(content_lines) + "\n" if content_lines else "",
+        )
 
     # Exclude -lstdc++ from link options. We don't want to link against it
     # unless we actually have some C++ code. _cgo_codegen will include it
@@ -98,30 +181,10 @@ def emit_link(
     if go.mode.msan:
         tool_args.add("-msan")
 
-    if go.mode.pure:
-        tool_args.add("-linkmode", "internal")
-    else:
-        extld = extld_from_cc_toolchain(go)
-        tool_args.add_all(extld)
-        if extld and (go.mode.static or
-                      go.mode.race or
-                      go.mode.linkmode != LINKMODE_NORMAL or
-                      go.mode.goos == "windows" and go.mode.msan):
-            # Force external linking for the following conditions:
-            # * Mode is static but not pure: -static must be passed to the C
-            #   linker if the binary contains cgo code. See #2168, #2216.
-            # * Non-normal build mode: may not be strictly necessary, especially
-            #   for modes like "pie".
-            # * Race or msan build for Windows: Go linker has pairwise
-            #   incompatibilities with mingw, and we get link errors in race mode.
-            #   Using the C linker avoids that. Race and msan always require a
-            #   a C toolchain. See #2614.
-            # * Linux race builds: we get linker errors during build with Go's
-            #   internal linker. For example, when using zig cc v0.10
-            #   (clang-15.0.3):
-            #
-            #       runtime/cgo(.text): relocation target memset not defined
-            tool_args.add("-linkmode", "external")
+    extld = extld_from_cc_toolchain(go)
+    tool_args.add_all(extld)
+    if extld:
+        tool_args.add("-linkmode", "external")
 
     if go.mode.static:
         extldflags.append("-static")
@@ -192,6 +255,15 @@ def emit_link(
     builder_args.add("-main", archive.data.file)
     builder_args.add("-p", archive.data.importmap)
     builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
+
+    # Pass buildinfo file to builder if available
+    if buildinfo_file:
+        builder_args.add("-buildinfo", buildinfo_file)
+    if version_map_file:
+        builder_args.add("-versionmap", version_map_file)
+    if target_label:
+        builder_args.add("-bazeltarget", target_label)
+
     tool_args.add_all(gc_linkopts)
     tool_args.add_all(go.toolchain.flags.link)
 
@@ -205,6 +277,10 @@ def emit_link(
     synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
     if synthetic_testmain_manifest:
         inputs_direct.append(synthetic_testmain_manifest)
+    if buildinfo_file:
+        inputs_direct.append(buildinfo_file)
+    if version_map_file:
+        inputs_direct.append(version_map_file)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
     orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
@@ -261,6 +337,7 @@ def emit_link(
             orchestrion_tool_version_file = orchestrion_tool_version_file,
         ),
         toolchain = GO_TOOLCHAIN_LABEL,
+        resource_set = _golink_resource_set_for(extldflags),
     )
 
 def _extract_extldflags(gc_linkopts, extldflags):

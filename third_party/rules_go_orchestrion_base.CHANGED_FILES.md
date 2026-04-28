@@ -8,7 +8,7 @@ This file is generated. Do not edit by hand.
 - Commit: `fbbafef6e737fe18d3cdedfff4f8f060ac71d5f3`
 - Tag: `v0.60.0`
 - Vendored fork: `third_party/rules_go_orchestrion_base`
-- Regenerate: `python3 tools/dev/diff_rules_go_fork.py --write-report`
+- Regenerate: `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report`
 
 ## Summary
 

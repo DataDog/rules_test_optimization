@@ -3,9 +3,184 @@
   "complete_path": "third_party/rules_go_orchestrion_complete",
   "allowed_differences": [
     {
+      "path": "MODULE.bazel",
+      "owner": "complete",
+      "reason": "Complete compatibility layer self-containment: declares rules_license so buildinfo metadata works for Bzlmod and WORKSPACE consumers without manual dependency wiring."
+    },
+    {
+      "path": "extras/gomock.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/BUILD.bazel",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/actions/binary.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/actions/link.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/aspects/BUILD.bazel",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/aspects/buildinfo_aspect.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/context.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/repositories.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer self-containment: declares rules_license so buildinfo metadata works for Bzlmod and WORKSPACE consumers without manual dependency wiring."
+    },
+    {
+      "path": "go/private/rules/BUILD.bazel",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/rules/binary.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/rules/info.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/rules/library.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/rules/nogo.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/rules/source.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/private/rules/transition.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/tools/builders/BUILD.bazel",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/tools/builders/buildinfo.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
       "path": "go/tools/builders/cgo2.go",
       "owner": "complete",
-      "reason": "Historical monorepo compatibility: assembler cflags passthrough carried from the previous complete compatibility layer."
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/tools/builders/importcfg.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/tools/builders/link.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/tools/builders/modinfo.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "go/tools/bzltestutil/xml.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "proto/compiler.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "proto/def.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "proto/private/toolchain.bzl",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/BUILD.bazel",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/README.md",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/external_deps_bin_unix.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/external_deps_bin_windows.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/external_deps_test.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/leaf_lib.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/metadata_bin.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/metadata_test.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/mid_lib.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
+    },
+    {
+      "path": "tests/core/buildinfo/top_lib.go",
+      "owner": "complete",
+      "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
     }
   ]
 }

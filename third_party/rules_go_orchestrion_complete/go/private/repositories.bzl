@@ -60,6 +60,18 @@ def go_rules_dependencies(force = False):
         strip_prefix = "",
     )
 
+    # Needed by the complete variant's buildinfo aspect, which reads
+    # PackageInfo providers from default package metadata.
+    wrapper(
+        http_archive,
+        name = "rules_license",
+        sha256 = "26d4021f6898e23b82ef953078389dd49ac2b5618ac564ade4ef87cced147b38",
+        urls = [
+            "https://mirror.bazel.build/github.com/bazelbuild/rules_license/releases/download/1.0.0/rules_license-1.0.0.tar.gz",
+            "https://github.com/bazelbuild/rules_license/releases/download/1.0.0/rules_license-1.0.0.tar.gz",
+        ],
+    )
+
     # Needed for nogo vet checks and go/packages.
     # releaser:upgrade-dep golang tools
     wrapper(
