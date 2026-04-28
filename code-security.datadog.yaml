@@ -1,0 +1,9 @@
+schema-version: v1.0
+sast:
+  global-config:
+    ignore-paths:
+      # Vendored rules_go forks are maintained as upstream-derived trees. Scan
+      # repository-owned tooling and integration code, but do not open SAST
+      # findings for third-party fork contents copied into these variants.
+      - "third_party/rules_go_orchestrion_base/**"
+      - "third_party/rules_go_orchestrion_complete/**"
