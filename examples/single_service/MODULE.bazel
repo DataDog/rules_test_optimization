@@ -89,9 +89,11 @@ register_toolchains("@ruby_toolchains//:all")
 
 # dd-java-agent JAR for the Java example. dd_topt_java_test wires this label
 # into -javaagent so the tracer attaches to the JVM and emits payloads.
-# Pull the master build from S3: the object tracks the branch head and is
-# rebuilt on each push, so we omit sha256 to avoid re-pinning every time. CI
-# runners start cold and always pull the latest jar.
+# Pull the master build from S3 (internal) because CI exercises CI Visibility
+# end-to-end against payload-file mode + the JUnit4 fix that haven't landed
+# in a stable release. Customers who copy this example should swap the URL
+# for a public Maven Central artifact (see README); the documentation
+# snippets reference the public URL.
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 
 http_file(
