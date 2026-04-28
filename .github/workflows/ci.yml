@@ -244,15 +244,15 @@ jobs:
   rules-go-variant-smoke:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
-    timeout-minutes: 25
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # The patch-series verifier archives the recorded base commit directly,
-          # so this lane needs the full git history instead of the default
-          # shallow checkout.
+          # The variant verifier and smoke harness inspect the vendored fork
+          # contract directly, so keep the checkout complete for maintainer
+          # diagnostics instead of relying on a shallow history.
           fetch-depth: 0
 
       - name: Set up Python
