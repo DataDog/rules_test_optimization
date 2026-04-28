@@ -616,6 +616,7 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 	defer func() {
 		span.End(err)
 	}()
+	existingArchives := existingArchivesByPackagePath(deps)
 	packages := make([]string, 0, len(syntheticTestmainRootPackages)+len(orchestrionLinkClosurePackages))
 	for _, root := range syntheticTestmainRootPackages {
 		packages = append(packages, root.packagePath)
@@ -645,14 +646,14 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 	compileExports := make(map[string]string)
 	exportPackages := make([]string, 0, len(packages))
 	for _, pkg := range packages {
-		if syntheticTestmainSourceCompiledPackages[pkg] {
+		if isSyntheticTestmainSourceCompileCandidate(pkg) {
 			continue
 		}
 		exportPackages = append(exportPackages, pkg)
 	}
 
 	forcedExportRoot := ""
-	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, pack, workDir, moduleDir, packages); err != nil {
+	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, pack, workDir, moduleDir, packages, existingArchives); err != nil {
 		return srcs, deps, "", fmt.Errorf("compile synthetic testmain source packages: %w", err)
 	} else {
 		forcedExportRoot = exportRoot
@@ -694,6 +695,10 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 	for _, root := range syntheticTestmainRootPackages {
 		compilePath := strings.TrimSpace(compileExports[root.packagePath])
 		linkPath := strings.TrimSpace(exports[root.packagePath])
+		if existing, ok := existingArchives[root.packagePath]; ok {
+			compilePath = existing.file
+			linkPath = linkArchiveForExistingDependency(existing.file)
+		}
 		if compilePath == "" {
 			compilePath = linkPath
 		}
@@ -718,6 +723,9 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 		if !strings.Contains(pkg, ".") {
 			continue
 		}
+		if existing, ok := existingArchives[pkg]; ok {
+			exportPath = linkArchiveForExistingDependency(existing.file)
+		}
 		addManifestLine(fmt.Sprintf("packagefile %s=%s", pkg, exportPath))
 	}
 
@@ -741,6 +749,67 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 	}
 	srcs.goSrcs = append(srcs.goSrcs, extraSrcs.goSrcs...)
 	return srcs, deps, manifestPath, nil
+}
+
+// existingArchivesByPackagePath indexes the archives Bazel already passed to
+// the synthetic testmain compile. These archives belong to the consumer's
+// normal dependency graph, so synthetic packagefile manifests must prefer them
+// over module-built helper archives to keep compile and link fingerprints
+// aligned.
+func existingArchivesByPackagePath(deps []archive) map[string]archive {
+	archives := make(map[string]archive, len(deps))
+	for _, dep := range deps {
+		packagePath := strings.TrimSpace(dep.packagePath)
+		file := strings.TrimSpace(dep.file)
+		if packagePath == "" || file == "" {
+			continue
+		}
+		if _, ok := archives[packagePath]; ok {
+			continue
+		}
+		dep.file = file
+		archives[packagePath] = dep
+	}
+	return archives
+}
+
+// linkArchiveForExistingDependency converts a compile-time export archive into
+// the matching full archive when rules_go emitted the conventional .x/.a pair.
+// Link manifests need the full archive and must not capture the absolute
+// sandbox path from the compile action, because the manifest is consumed by a
+// later link action in a different sandbox.
+func linkArchiveForExistingDependency(file string) string {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return ""
+	}
+	file = execrootRelativePath(file)
+	if strings.HasSuffix(file, ".x") {
+		file = strings.TrimSuffix(file, ".x") + ".a"
+	}
+	return file
+}
+
+// execrootRelativePath strips the current action's execroot prefix from Bazel
+// input paths before those paths are written to reusable artifacts. Absolute
+// paths outside the execroot are left intact because they refer to cache files
+// outside Bazel's action sandbox.
+func execrootRelativePath(file string) string {
+	if !filepath.IsAbs(file) {
+		return file
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return file
+	}
+	rel, err := filepath.Rel(cwd, file)
+	if err != nil || rel == "." || rel == "" {
+		return file
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return file
+	}
+	return rel
 }
 
 type modulePackageMetadata struct {
@@ -783,6 +852,8 @@ type helperArchiveManifestPkg struct {
 	LinkClosure map[string]string `json:"link_closure"`
 }
 
+const helperManifestExecrootPathPrefix = "execroot:"
+
 // helperDecisionManifest stores the reusable synthetic testmain dependency
 // classification so helper bundle rebuilds can skip rediscovering the same
 // source-compile closure on later cold misses.
@@ -806,7 +877,7 @@ type syntheticTestmainHelperDecisionState struct {
 	externalPackages []string
 }
 
-func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir string, packages []string) (_ map[string]compiledModuleArchive, _ string, err error) {
+func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir string, packages []string, existingArchives map[string]archive) (_ map[string]compiledModuleArchive, _ string, err error) {
 	span := beginProbe(
 		"compilepkg.compile_synthetic_testmain_source_packages",
 		newProbeField("package_count", strconv.Itoa(len(packages))),
@@ -816,7 +887,7 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 	}()
 	selected := make([]string, 0, len(packages))
 	for _, pkg := range packages {
-		if syntheticTestmainSourceCompiledPackages[pkg] {
+		if isSyntheticTestmainSourceCompileCandidate(pkg) {
 			selected = append(selected, pkg)
 		}
 	}
@@ -824,7 +895,34 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 		return nil, "", nil
 	}
 
-	cachePaths, helperKeyParts, err := syntheticTestmainHelperCachePaths(goenv)
+	resolveModuleDir, err := prepareSyntheticTestmainModuleDir(workDir, moduleDir)
+	if err != nil {
+		return nil, "", err
+	}
+	decisionCachePaths, decisionKeyParts, err := syntheticTestmainHelperDecisionCachePaths(goenv)
+	if err != nil {
+		return nil, "", err
+	}
+	sourceCompiledSet := syntheticSourceCompiledSet(selected, existingArchives)
+	decisionModuleCacheRoot, err := syntheticTestmainHelperModuleCacheRoot(decisionKeyParts)
+	if err != nil {
+		return nil, "", err
+	}
+	var decisionState syntheticTestmainHelperDecisionState
+	if err := withSyntheticTestmainModuleCacheEnv(decisionModuleCacheRoot, func() error {
+		var loadErr error
+		decisionState, loadErr = loadOrBuildSyntheticTestmainHelperDecisionState(goenv, resolveModuleDir, decisionCachePaths, decisionKeyParts, selected)
+		return loadErr
+	}); err != nil {
+		return nil, "", err
+	}
+	decisionState = decisionState.withExistingArchiveOverrides(sourceCompiledSet, existingArchives)
+
+	existingKeyParts, err := syntheticExistingArchiveKeyParts(syntheticRelevantExistingArchives(selected, decisionState, existingArchives))
+	if err != nil {
+		return nil, "", err
+	}
+	cachePaths, helperKeyParts, err := syntheticTestmainHelperCachePaths(goenv, existingKeyParts)
 	if err != nil {
 		return nil, "", err
 	}
@@ -844,15 +942,6 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 		newProbeField("status", "ok"),
 	)
 
-	resolveModuleDir, err := prepareSyntheticTestmainModuleDir(workDir)
-	if err != nil {
-		return nil, "", err
-	}
-	decisionCachePaths, decisionKeyParts, err := syntheticTestmainHelperDecisionCachePaths(goenv)
-	if err != nil {
-		return nil, "", err
-	}
-
 	releaseLock, err := acquireCacheLock(cachePaths.lockDir, cacheLockTimeout, cacheLockStaleAfter)
 	if err != nil {
 		return nil, "", err
@@ -861,6 +950,10 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 
 	if cacheEntryReady(cachePaths) {
 		return loadSyntheticTestmainHelperCache(cachePaths)
+	}
+	helperModuleCacheRoot, err := syntheticTestmainHelperModuleCacheRoot(helperKeyParts)
+	if err != nil {
+		return nil, "", err
 	}
 
 	tempEntryDir, err := os.MkdirTemp(filepath.Dir(cachePaths.entryDir), filepath.Base(cachePaths.entryDir)+".tmp-*")
@@ -878,23 +971,25 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 	if err := prepareModuleExportRootAt(goenv, exportRoot); err != nil {
 		return nil, "", err
 	}
-	decisionState, err := loadOrBuildSyntheticTestmainHelperDecisionState(goenv, resolveModuleDir, decisionCachePaths, decisionKeyParts, selected)
-	if err != nil {
-		return nil, "", err
-	}
+
 	compiled := make(map[string]compiledModuleArchive, len(selected))
-	sourceCompiledSet := make(map[string]bool, len(selected))
-	for _, pkg := range selected {
-		sourceCompiledSet[pkg] = true
-	}
-	externalExports, err := resolveSyntheticTestmainExternalExports(goenv, resolveModuleDir, decisionState.externalPackages)
-	if err != nil {
-		return nil, "", err
-	}
-	for _, pkg := range selected {
-		if _, _, err := compileSyntheticTestmainSourcePackage(goenv, pack, workDir, resolveModuleDir, exportRoot, sourceCompiledSet, decisionState.sourceDecisions, decisionState.metaCache, compiled, externalExports, pkg); err != nil {
-			return nil, "", err
+	if err := withSyntheticTestmainModuleCacheEnv(helperModuleCacheRoot, func() error {
+		externalExports, err := resolveSyntheticTestmainExternalExports(goenv, resolveModuleDir, decisionState.externalPackages)
+		if err != nil {
+			return err
 		}
+		preferExistingArchiveExports(externalExports, existingArchives)
+		for _, pkg := range selected {
+			if !sourceCompiledSet[pkg] {
+				continue
+			}
+			if _, _, err := compileSyntheticTestmainSourcePackage(goenv, pack, workDir, resolveModuleDir, exportRoot, sourceCompiledSet, decisionState.sourceDecisions, decisionState.metaCache, compiled, externalExports, pkg); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, "", err
 	}
 	if err := writeSyntheticTestmainHelperManifest(tempEntryDir, compiled, decisionState, helperKeyParts); err != nil {
 		return nil, "", err
@@ -909,7 +1004,7 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 	return loadSyntheticTestmainHelperCache(cachePaths)
 }
 
-func prepareSyntheticTestmainModuleDir(workDir string) (string, error) {
+func prepareSyntheticTestmainModuleDir(workDir, sourceModuleDir string) (string, error) {
 	versions, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return "", err
@@ -922,11 +1017,41 @@ func prepareSyntheticTestmainModuleDir(workDir string) (string, error) {
 	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
 		return "", fmt.Errorf("prepare synthetic testmain module dir: %w", err)
 	}
-	goModPath := filepath.Join(moduleDir, "go.mod")
-	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(orchestrionVersion, versions)), 0o644); err != nil {
-		return "", fmt.Errorf("write synthetic testmain go.mod: %w", err)
+	if _, err := seedSyntheticTestmainModuleFiles(sourceModuleDir, moduleDir, orchestrionVersion, versions); err != nil {
+		return "", err
 	}
 	return moduleDir, nil
+}
+
+// seedSyntheticTestmainModuleFiles prepares the module files used by synthetic
+// helper subprocesses. When the consumer module exposes all Orchestrion pin
+// files, the helper reuses them so `go list` and helper compiles see the same
+// dependency graph as the target. Otherwise it falls back to a minimal module
+// generated from the repository-rule version pins.
+func seedSyntheticTestmainModuleFiles(sourceModuleDir, syntheticDir, orchestrionVersion string, versions map[string]string) (bool, error) {
+	pinFiles := []string{"go.mod", "go.sum", "orchestrion.tool.go", "orchestrion.yml"}
+	if strings.TrimSpace(sourceModuleDir) != "" {
+		allCopied := true
+		for _, name := range pinFiles {
+			copied, err := copyFileIfExists(filepath.Join(sourceModuleDir, name), filepath.Join(syntheticDir, name))
+			if err != nil {
+				return false, fmt.Errorf("copy synthetic testmain module file %s: %w", name, err)
+			}
+			if !copied {
+				allCopied = false
+				break
+			}
+		}
+		if allCopied {
+			return true, nil
+		}
+	}
+
+	goModPath := filepath.Join(syntheticDir, "go.mod")
+	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(orchestrionVersion, versions)), 0o644); err != nil {
+		return false, fmt.Errorf("write synthetic testmain go.mod: %w", err)
+	}
+	return false, nil
 }
 
 // prepareModuleExportRoot returns the shared module-export cache root for a
@@ -952,6 +1077,65 @@ func prepareModuleExportRoot(goenv *env, moduleDir string, packages []string) (s
 		return "", err
 	}
 	return exportRoot, nil
+}
+
+// orchestrionPersistentCacheRoot returns the stable cache root shared by
+// Orchestrion helper subprocesses for a single action environment.
+func orchestrionPersistentCacheRoot(env []string) (string, error) {
+	return orchestrionActionCacheRoot(env)
+}
+
+// syntheticTestmainHelperModuleCacheRoot returns the GOPATH root dedicated to a
+// synthetic helper cache key. Isolating module and build caches per helper key
+// prevents stale module downloads or compiled exports from one helper graph
+// from affecting a later graph with different inputs.
+func syntheticTestmainHelperModuleCacheRoot(keyParts []string) (string, error) {
+	cacheRoot, err := orchestrionPersistentCacheRoot(os.Environ())
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheRoot, "synthetic-testmain-helper-module-cache", stableDigestParts(keyParts...)), nil
+}
+
+// withSyntheticTestmainModuleCacheEnv points Go module subprocesses at a
+// helper-specific cache root for the duration of fn, then restores the caller's
+// environment exactly.
+func withSyntheticTestmainModuleCacheEnv(cacheRoot string, fn func() error) error {
+	names := []string{"GOPATH", "GOMODCACHE", "GOCACHE"}
+	previous := make(map[string]string, len(names))
+	present := make(map[string]bool, len(names))
+	for _, name := range names {
+		value, ok := os.LookupEnv(name)
+		previous[name] = value
+		present[name] = ok
+	}
+	restore := func() {
+		for _, name := range names {
+			if present[name] {
+				_ = os.Setenv(name, previous[name])
+				continue
+			}
+			_ = os.Unsetenv(name)
+		}
+	}
+	defer restore()
+
+	if err := os.MkdirAll(filepath.Join(cacheRoot, "pkg", "mod"), 0o755); err != nil {
+		return fmt.Errorf("prepare synthetic helper module cache: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(cacheRoot, "gocache"), 0o755); err != nil {
+		return fmt.Errorf("prepare synthetic helper build cache: %w", err)
+	}
+	if err := os.Setenv("GOPATH", cacheRoot); err != nil {
+		return err
+	}
+	if err := os.Setenv("GOMODCACHE", filepath.Join(cacheRoot, "pkg", "mod")); err != nil {
+		return err
+	}
+	if err := os.Setenv("GOCACHE", filepath.Join(cacheRoot, "gocache")); err != nil {
+		return err
+	}
+	return fn()
 }
 
 func prepareModuleExportRootAt(goenv *env, exportRoot string) error {
@@ -986,6 +1170,12 @@ func modulePackageCommandEnv(goenv *env, exportRoot string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 	}
+	moduleCacheRoot := filepath.Join(filepath.Dir(abs(exportRoot)), ".exports_gopath")
+	env = setEnv(env, "GOPATH", moduleCacheRoot)
+	env = setEnv(env, "GOMODCACHE", filepath.Join(moduleCacheRoot, "pkg", "mod"))
+	env = setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)
+	env = setEnv(env, "GIT_CONFIG_NOSYSTEM", "1")
+	env = setEnv(env, "GIT_TERMINAL_PROMPT", "0")
 	if getEnv(env, "GOFLAGS") == "" {
 		env = setEnv(env, "GOFLAGS", "-mod=mod")
 	}
@@ -1033,7 +1223,7 @@ func loadModulePackageMetadataBatch(goenv *env, moduleDir, exportRoot string, pa
 	if len(packages) == 0 {
 		return map[string]*modulePackageMetadata{}, nil
 	}
-	args := goenv.goCmd("list", append([]string{"-deps", "-json"}, packages...)...)
+	args := goenv.goCmd("list", append([]string{"-e", "-json"}, packages...)...)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = "."
 	if moduleDir != "" {
@@ -1083,11 +1273,12 @@ func loadModulePackageMetadataCached(goenv *env, moduleDir, exportRoot string, c
 	return meta, nil
 }
 
-func syntheticTestmainHelperCachePaths(goenv *env) (cachePaths, []string, error) {
+func syntheticTestmainHelperCachePaths(goenv *env, extraKeyParts []string) (cachePaths, []string, error) {
 	keyParts, err := syntheticTestmainHelperCacheKeyParts(goenv)
 	if err != nil {
 		return cachePaths{}, nil, err
 	}
+	keyParts = append(keyParts, extraKeyParts...)
 	cacheRoot, err := orchestrionActionCacheRoot(os.Environ())
 	if err != nil {
 		return cachePaths{}, nil, err
@@ -1120,6 +1311,35 @@ func syntheticTestmainHelperCacheKeyParts(goenv *env) ([]string, error) {
 		"source_set=" + helperSourceSetVersion,
 		"helper_archive_cache=" + helperArchiveCacheABIVersion,
 	}, nil
+}
+
+// syntheticExistingArchiveKeyParts returns target-specific cache inputs for
+// packages that are already present in Bazel's dependency graph and also
+// participate in the synthetic helper bundle. Synthetic helpers compile
+// against those Bazel-provided export archives, so the helper cache key must
+// include those exact files instead of the module-built helper archives.
+func syntheticExistingArchiveKeyParts(existingArchives map[string]archive) ([]string, error) {
+	if len(existingArchives) == 0 {
+		return nil, nil
+	}
+	packages := make([]string, 0, len(existingArchives))
+	for pkg := range existingArchives {
+		packages = append(packages, pkg)
+	}
+	sort.Strings(packages)
+	keyParts := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		archivePath := existingArchiveCompileExport(existingArchives[pkg].file)
+		if strings.TrimSpace(archivePath) == "" {
+			continue
+		}
+		digest, err := digestFileOrMissing(archivePath)
+		if err != nil {
+			return nil, fmt.Errorf("digest existing synthetic helper archive %s: %w", archivePath, err)
+		}
+		keyParts = append(keyParts, fmt.Sprintf("existing_archive=%s=%s=%s", pkg, execrootRelativePath(archivePath), digest))
+	}
+	return keyParts, nil
 }
 
 // syntheticTestmainHelperDecisionCachePaths returns the reusable decision graph
@@ -1172,20 +1392,11 @@ func writeSyntheticTestmainHelperManifest(entryDir string, compiled map[string]c
 	for pkg, archive := range compiled {
 		linkClosure := make(map[string]string, len(archive.linkClosure))
 		for depPkg, depPath := range archive.linkClosure {
-			relPath, err := filepath.Rel(entryDir, depPath)
-			if err != nil {
-				return fmt.Errorf("relativize synthetic helper link closure for %s -> %s: %w", pkg, depPkg, err)
-			}
+			relPath := syntheticHelperManifestPath(entryDir, depPath)
 			linkClosure[depPkg] = relPath
 		}
-		compileRel, err := filepath.Rel(entryDir, archive.compilePath)
-		if err != nil {
-			return fmt.Errorf("relativize synthetic helper compile archive for %s: %w", pkg, err)
-		}
-		linkRel, err := filepath.Rel(entryDir, archive.linkPath)
-		if err != nil {
-			return fmt.Errorf("relativize synthetic helper link archive for %s: %w", pkg, err)
-		}
+		compileRel := syntheticHelperManifestPath(entryDir, archive.compilePath)
+		linkRel := syntheticHelperManifestPath(entryDir, archive.linkPath)
 		manifest.Packages[pkg] = helperArchiveManifestPkg{
 			CompilePath: compileRel,
 			LinkPath:    linkRel,
@@ -1193,6 +1404,45 @@ func writeSyntheticTestmainHelperManifest(entryDir string, compiled map[string]c
 		}
 	}
 	return writeJSONAtomically(filepath.Join(entryDir, cacheManifestFileName), manifest)
+}
+
+// syntheticHelperManifestPath encodes a helper cache path so cache-owned files
+// stay relative to the cache entry while Bazel execroot-relative paths keep
+// pointing at the later action's execroot. Synthetic helper link closures may
+// reference both kinds of files when a target already provides an archive that
+// the helper graph also imports.
+func syntheticHelperManifestPath(entryDir, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		rel, err := filepath.Rel(entryDir, path)
+		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return rel
+		}
+		return helperManifestExecrootPathPrefix + path
+	}
+	return helperManifestExecrootPathPrefix + path
+}
+
+// resolveSyntheticHelperManifestPath decodes paths written by
+// syntheticHelperManifestPath. Unprefixed paths are cache-entry relative for
+// compatibility with the helper archive manifest format; prefixed paths are
+// already relative to the consuming Bazel action's execroot or intentionally
+// absolute outside the helper cache.
+func resolveSyntheticHelperManifestPath(entryDir, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, helperManifestExecrootPathPrefix) {
+		return strings.TrimPrefix(path, helperManifestExecrootPathPrefix)
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(entryDir, path)
 }
 
 // loadOrBuildSyntheticTestmainHelperDecisionState loads a reusable helper
@@ -1429,15 +1679,145 @@ func loadSyntheticTestmainHelperCache(paths cachePaths) (map[string]compiledModu
 	for pkg, archive := range manifest.Packages {
 		linkClosure := make(map[string]string, len(archive.LinkClosure))
 		for depPkg, depPath := range archive.LinkClosure {
-			linkClosure[depPkg] = filepath.Join(paths.entryDir, depPath)
+			linkClosure[depPkg] = resolveSyntheticHelperManifestPath(paths.entryDir, depPath)
 		}
 		compiled[pkg] = compiledModuleArchive{
-			compilePath: filepath.Join(paths.entryDir, archive.CompilePath),
-			linkPath:    filepath.Join(paths.entryDir, archive.LinkPath),
+			compilePath: resolveSyntheticHelperManifestPath(paths.entryDir, archive.CompilePath),
+			linkPath:    resolveSyntheticHelperManifestPath(paths.entryDir, archive.LinkPath),
 			linkClosure: linkClosure,
 		}
 	}
 	return compiled, filepath.Join(paths.entryDir, manifest.ExportRoot), nil
+}
+
+// syntheticSourceCompiledSet returns the helper packages that must still be
+// compiled from source for this target. Packages already supplied by Bazel are
+// treated as external archives so synthetic helpers compile against the same Go
+// fingerprints that the final link action will see.
+func syntheticSourceCompiledSet(selected []string, existingArchives map[string]archive) map[string]bool {
+	rootSet := make(map[string]bool, len(selected))
+	for _, pkg := range selected {
+		if _, ok := existingArchives[pkg]; ok {
+			continue
+		}
+		rootSet[pkg] = true
+	}
+	return rootSet
+}
+
+// withExistingArchiveOverrides adjusts a reusable helper decision graph for the
+// current Bazel target by forcing already-present packages onto the external
+// archive path.
+func (state syntheticTestmainHelperDecisionState) withExistingArchiveOverrides(rootSet map[string]bool, existingArchives map[string]archive) syntheticTestmainHelperDecisionState {
+	sourceDecisions := copyBoolMap(state.sourceDecisions)
+	existingArchiveSet := make(map[string]bool, len(existingArchives))
+	for pkg := range existingArchives {
+		existingArchiveSet[pkg] = true
+		sourceDecisions[pkg] = false
+	}
+	for pkg := range rootSet {
+		if !existingArchiveSet[pkg] {
+			sourceDecisions[pkg] = true
+		}
+	}
+	propagateExistingArchiveSourceDecisions(sourceDecisions, rootSet, existingArchiveSet, state.metaCache)
+	return syntheticTestmainHelperDecisionState{
+		metaCache:        state.metaCache,
+		sourceDecisions:  sourceDecisions,
+		sourcePackages:   sortedTrueDecisionPackages(sourceDecisions),
+		externalPackages: collectSyntheticTestmainExternalPackages(rootSet, sourceDecisions, state.metaCache),
+	}
+}
+
+// propagateExistingArchiveSourceDecisions marks helper packages for source
+// compilation when they depend on a package that must be supplied by Bazel or by
+// another source-compiled helper package. Without this propagation, a module
+// cache export can be linked next to a Bazel archive with a different Go
+// fingerprint for the same dependency.
+func propagateExistingArchiveSourceDecisions(sourceDecisions map[string]bool, rootSet map[string]bool, existingArchiveSet map[string]bool, metaCache map[string]*modulePackageMetadata) {
+	changed := true
+	for changed {
+		changed = false
+		for pkg, meta := range metaCache {
+			if meta == nil || existingArchiveSet[pkg] || len(meta.CgoFiles) > 0 {
+				continue
+			}
+			needsSource := rootSet[pkg] || sourceDecisions[pkg]
+			if !needsSource {
+				for _, imp := range meta.Imports {
+					imp = strings.TrimSpace(imp)
+					if imp == "" || imp == "C" || !strings.Contains(imp, ".") {
+						continue
+					}
+					if existingArchiveSet[imp] || sourceDecisions[imp] {
+						needsSource = true
+						break
+					}
+				}
+			}
+			if needsSource && !sourceDecisions[pkg] {
+				sourceDecisions[pkg] = true
+				changed = true
+			}
+		}
+	}
+	for pkg := range existingArchiveSet {
+		sourceDecisions[pkg] = false
+	}
+}
+
+// syntheticRelevantExistingArchives returns the subset of Bazel-provided
+// archives that can affect the synthetic helper bundle. This keeps helper cache
+// keys precise without hashing every transitive package in a large consumer
+// target.
+func syntheticRelevantExistingArchives(selected []string, decisionState syntheticTestmainHelperDecisionState, existingArchives map[string]archive) map[string]archive {
+	relevant := make(map[string]archive)
+	addIfPresent := func(pkg string) {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" {
+			return
+		}
+		if archive, ok := existingArchives[pkg]; ok {
+			relevant[pkg] = archive
+		}
+	}
+	for _, pkg := range selected {
+		addIfPresent(pkg)
+	}
+	for _, pkg := range decisionState.externalPackages {
+		addIfPresent(pkg)
+	}
+	return relevant
+}
+
+// preferExistingArchiveExports replaces module-built helper dependency exports
+// with Bazel-provided compile exports when the final link is already going to
+// contain that package. The compile path intentionally stays as the .x export
+// file Bazel provided to this action; only the later packagefile manifest
+// converts that path to the full .a archive for the link action.
+func preferExistingArchiveExports(exports map[string]string, existingArchives map[string]archive) {
+	for pkg := range exports {
+		existing, ok := existingArchives[pkg]
+		if !ok {
+			continue
+		}
+		archivePath := existingArchiveCompileExport(existing.file)
+		if strings.TrimSpace(archivePath) == "" {
+			continue
+		}
+		exports[pkg] = archivePath
+	}
+}
+
+// existingArchiveCompileExport returns the Bazel-provided export archive path
+// used while compiling synthetic helper sources. It strips only the current
+// execroot prefix so helper caches do not capture sandbox-local absolute paths.
+func existingArchiveCompileExport(file string) string {
+	file = strings.TrimSpace(file)
+	if file == "" {
+		return ""
+	}
+	return execrootRelativePath(file)
 }
 
 // collectSyntheticTestmainExternalPackages returns the external helper
@@ -1711,7 +2091,34 @@ func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir,
 }
 
 func shouldSkipOrchestrionForImportPath(importPath string) bool {
-	return strings.HasPrefix(importPath, "github.com/bazelbuild/rules_go/go/tools/")
+	if strings.HasPrefix(importPath, "github.com/bazelbuild/rules_go/go/tools/") {
+		return true
+	}
+	// Do not weave the tracer runtime itself. Final test links may replace these
+	// packages with helper archives; compiling consumers against woven Bazel
+	// archives can otherwise leave import and link fingerprints out of sync.
+	return strings.HasPrefix(importPath, "github.com/DataDog/dd-trace-go/") ||
+		strings.HasPrefix(importPath, "gopkg.in/DataDog/dd-trace-go.v1/")
+}
+
+// isSyntheticTestmainSourceCompileCandidate reports whether a helper package
+// should be compiled from source in the synthetic testmain helper graph. The
+// explicit set covers public helper entry points, while the prefix rules keep
+// internal helper packages aligned without adding every new helper dependency
+// to a fixed list.
+func isSyntheticTestmainSourceCompileCandidate(importPath string) bool {
+	importPath = strings.TrimSpace(importPath)
+	if syntheticTestmainSourceCompiledPackages[importPath] {
+		return true
+	}
+	if strings.HasPrefix(importPath, "github.com/DataDog/dd-trace-go/v2/internal/") {
+		return true
+	}
+	if strings.HasPrefix(importPath, "github.com/DataDog/dd-trace-go/contrib/") &&
+		strings.Contains(importPath, "/internal/orchestrion") {
+		return true
+	}
+	return false
 }
 
 func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string, _ string) (string, error) {

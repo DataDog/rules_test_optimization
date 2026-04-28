@@ -16,7 +16,10 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +45,10 @@ const (
 	// jobserverStartTimeout is the maximum time to wait for the jobserver to start.
 	jobserverStartTimeout = 10 * time.Second
 
+	// jobserverReadyTimeout is the maximum time to wait for the advertised
+	// jobserver socket to accept connections after the URL file is written.
+	jobserverReadyTimeout = 30 * time.Second
+
 	// jobserverPollInterval is the interval to poll for the URL file.
 	jobserverPollInterval = 50 * time.Millisecond
 
@@ -60,6 +67,11 @@ var orchestrionWovenPackagePatterns = []string{
 	"github.com/DataDog/dd-trace-go/v2/profiler",
 	"github.com/DataDog/dd-trace-go/v2/instrumentation/env",
 }
+
+// errJobserverReadyTimeout marks a best-effort readiness timeout. The
+// advertised jobserver URL is still passed to Orchestrion clients because the
+// server process may finish binding after the probe window on slow runners.
+var errJobserverReadyTimeout = errors.New("orchestrion jobserver readiness timeout")
 
 // ensureGoModuleCacheEnv provisions a writable Go cache/module cache for
 // orchestrion subprocesses. Some Bazel sandboxes do not provide GOPATH or
@@ -884,6 +896,20 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 		_ = os.Remove(urlFile)
 		return nil, fmt.Errorf("failed to get orchestrion jobserver URL: %w", err)
 	}
+	readySpan := beginProbe("orchestrion.start_jobserver.wait_for_ready")
+	err = waitForJobserverReady(url, jobserverReadyTimeout)
+	readySpan.End(err)
+	if err != nil {
+		if !errors.Is(err, errJobserverReadyTimeout) {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			_ = os.Remove(urlFile)
+			return nil, fmt.Errorf("failed waiting for orchestrion jobserver readiness: %w", err)
+		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "orchestrion: continuing after best-effort jobserver readiness timeout: %v\n", err)
+		}
+	}
 
 	return &orchestrionJobserver{
 		url:     url,
@@ -930,6 +956,35 @@ func waitForURLFile(path string, timeout time.Duration) (string, error) {
 	}
 
 	return "", fmt.Errorf("timeout waiting for orchestrion jobserver URL file: %s", path)
+}
+
+// waitForJobserverReady waits until the host and port advertised by the
+// Orchestrion jobserver can accept TCP connections. The server writes its URL
+// before it is always ready to serve, and starting the toolexec client too early
+// can surface as flaky NATS connection failures.
+func waitForJobserverReady(rawURL string, timeout time.Duration) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("parse jobserver URL %q: %w", rawURL, err)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("jobserver URL %q has no host", rawURL)
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", parsed.Host, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+		time.Sleep(jobserverPollInterval)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("%w waiting for %s: %v", errJobserverReadyTimeout, parsed.Host, lastErr)
+	}
+	return fmt.Errorf("%w waiting for %s", errJobserverReadyTimeout, parsed.Host)
 }
 
 // executeCommandWithJobserver runs a command with the orchestrion jobserver URL set

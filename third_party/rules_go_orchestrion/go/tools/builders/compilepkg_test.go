@@ -94,11 +94,11 @@ func TestSyntheticTestmainHelperDecisionCacheKeyIgnoresSdkExecrootPath(t *testin
 		return sdk
 	}
 
-	keyPartsA, err := syntheticTestmainHelperDecisionCacheKeyParts(&env{sdk: makeSDK(filepath.Join(t.TempDir(), "execroot-a"))}, "")
+	keyPartsA, err := syntheticTestmainHelperDecisionCacheKeyParts(&env{sdk: makeSDK(filepath.Join(t.TempDir(), "execroot-a"))})
 	if err != nil {
 		t.Fatalf("syntheticTestmainHelperDecisionCacheKeyParts sdk A error: %v", err)
 	}
-	keyPartsB, err := syntheticTestmainHelperDecisionCacheKeyParts(&env{sdk: makeSDK(filepath.Join(t.TempDir(), "execroot-b"))}, "")
+	keyPartsB, err := syntheticTestmainHelperDecisionCacheKeyParts(&env{sdk: makeSDK(filepath.Join(t.TempDir(), "execroot-b"))})
 	if err != nil {
 		t.Fatalf("syntheticTestmainHelperDecisionCacheKeyParts sdk B error: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestSeedSyntheticTestmainModuleFilesPrefersSourceModule(t *testing.T) {
 		}
 	}
 
-	usedSourceModule, err := seedSyntheticTestmainModuleFiles(sourceDir, syntheticDir, defaultDDTraceGoVersions())
+	usedSourceModule, err := seedSyntheticTestmainModuleFiles(sourceDir, syntheticDir, "v1.6.0", defaultDDTraceGoVersions())
 	if err != nil {
 		t.Fatalf("seedSyntheticTestmainModuleFiles error: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestSeedSyntheticTestmainModuleFilesPrefersSourceModule(t *testing.T) {
 func TestSeedSyntheticTestmainModuleFilesFallsBack(t *testing.T) {
 	syntheticDir := t.TempDir()
 
-	usedSourceModule, err := seedSyntheticTestmainModuleFiles("", syntheticDir, defaultDDTraceGoVersions())
+	usedSourceModule, err := seedSyntheticTestmainModuleFiles("", syntheticDir, "v1.6.0", defaultDDTraceGoVersions())
 	if err != nil {
 		t.Fatalf("seedSyntheticTestmainModuleFiles error: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestSeedSyntheticTestmainModuleFilesFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fallback go.mod: %v", err)
 	}
-	want := syntheticOrchestrionGoMod(defaultDDTraceGoVersions())
+	want := syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions())
 	if string(goMod) != want {
 		t.Fatalf("fallback go.mod = %q, want %q", string(goMod), want)
 	}

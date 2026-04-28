@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `46`
-- Modified files: `26`
-- Added files: `20`
+- Total changed paths: `48`
+- Modified files: `27`
+- Added files: `21`
 - Removed files: `0`
 
 ## Modified files
@@ -31,6 +31,7 @@ This file is generated. Do not edit by hand.
 - `go/private/context.bzl`
 - `go/private/rules/library.bzl`
 - `go/private/rules/stdlib.bzl`
+- `go/private/rules/test.bzl`
 - `go/private/rules/transition.bzl`
 - `go/tools/builders/BUILD.bazel`
 - `go/tools/builders/ar.go`
@@ -58,6 +59,7 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/orchestrion.go`
 - `go/tools/builders/orchestrion_cache.go`
 - `go/tools/builders/orchestrion_cache_test.go`
+- `go/tools/builders/orchestrion_skip_test.go`
 - `go/tools/builders/orchestrion_synthetic_tool.go`
 - `go/tools/builders/orchestrion_test.go`
 - `go/tools/builders/orchestrion_test_helpers_test.go`

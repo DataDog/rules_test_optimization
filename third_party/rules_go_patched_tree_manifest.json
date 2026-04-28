@@ -706,7 +706,7 @@
       "path": "go/private/rules/test.bzl",
       "kind": "file",
       "executable": false,
-      "sha256": "627cdaaf5478c15d9e338d60c109dffd6f5fd370fc77ea2c71ee718259061d7c"
+      "sha256": "7d10999a4f3edde0d869f374f9feb8eddab891ef34a911e6d74a401a750873b4"
     },
     {
       "path": "go/private/rules/transition.bzl",
@@ -946,7 +946,7 @@
       "path": "go/tools/builders/BUILD.bazel",
       "kind": "file",
       "executable": false,
-      "sha256": "7b0d7d412608a03f210767f2a56044f77bd33283585960f5ebe2d0625e7a1973"
+      "sha256": "5223553f196e3f5b40cb1db380d1e7d919731f27d681fb0f4588d18de5d20792"
     },
     {
       "path": "go/tools/builders/ar.go",
@@ -982,13 +982,13 @@
       "path": "go/tools/builders/compilepkg.go",
       "kind": "file",
       "executable": false,
-      "sha256": "5cde30783f77685b929d908f3a7ca3709505a0d3373a1616b70871a895e318d8"
+      "sha256": "9414fcddb6fa0e65362a3568853a3e62fb96892727a2ccdd6a8c82b8fa8490d6"
     },
     {
       "path": "go/tools/builders/compilepkg_test.go",
       "kind": "file",
       "executable": false,
-      "sha256": "8064964ea1eea963f736baf16b2a0b1918a46f8209f52e2912ff5b67a91073e3"
+      "sha256": "3f12b57f019b4e0b608d89cf7e5b471fa2e83cd6e15cedb6c286babed18ea00f"
     },
     {
       "path": "go/tools/builders/constants.go",
@@ -1174,19 +1174,25 @@
       "path": "go/tools/builders/orchestrion.go",
       "kind": "file",
       "executable": false,
-      "sha256": "087a8898294ec34dfb0a587428cb1f1605e12dfa0c8f3bdf27e4c260e7d53820"
+      "sha256": "5a6a12af06e8254dee30ab1a2c168e8e8a059ce70cb385e3a39b45c0920a9b25"
     },
     {
       "path": "go/tools/builders/orchestrion_cache.go",
       "kind": "file",
       "executable": false,
-      "sha256": "0241470abe68f5c05f2d2830f1f8f928922e84eba3534d42f1ff951a6302e1d0"
+      "sha256": "b7aacb85ed5ad8365b3e97ba9b4ef8e458d13d6e3334a98eaa3a1f999cdbd636"
     },
     {
       "path": "go/tools/builders/orchestrion_cache_test.go",
       "kind": "file",
       "executable": false,
       "sha256": "6aaca3a0039999a8ce851c7ae5db06f6e87201d3f5e3a9e377aa258d43a9f2fe"
+    },
+    {
+      "path": "go/tools/builders/orchestrion_skip_test.go",
+      "kind": "file",
+      "executable": false,
+      "sha256": "24b7a4676b929362d107caa665587f39749378dd27d9eb1b6c127e85da8bf4e0"
     },
     {
       "path": "go/tools/builders/orchestrion_synthetic_tool.go",
