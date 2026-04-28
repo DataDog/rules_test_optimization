@@ -1,0 +1,11 @@
+{
+  "base_path": "third_party/rules_go_orchestrion_base",
+  "complete_path": "third_party/rules_go_orchestrion_complete",
+  "allowed_differences": [
+    {
+      "path": "go/tools/builders/cgo2.go",
+      "owner": "complete",
+      "reason": "Historical monorepo compatibility: assembler cflags passthrough carried from the previous complete compatibility layer."
+    }
+  ]
+}

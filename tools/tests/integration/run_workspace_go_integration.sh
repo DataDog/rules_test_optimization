@@ -49,8 +49,7 @@ INTEGRATION_SCENARIO_MODE="${INTEGRATION_SCENARIO_MODE:-full}"
 MEASURE_OUTPUT_PATH="${MEASURE_OUTPUT_PATH:-}"
 ARCHIVE_SHA256=""
 ARCHIVE_URL=""
-RULES_GO_PATCH_BUNDLE="${RULES_GO_PATCH_BUNDLE:-none}"
-PATCH_LABELS_BZL=""
+RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
 HERMETIC_BUILD_FLAGS=(
   --spawn_strategy=sandboxed
   --incompatible_strict_action_env
@@ -96,6 +95,15 @@ fi
 
 require_command "$GO_BIN" "go binary not found (tried '$GO_BIN')"
 require_command tar "tar is required for the WORKSPACE archive fixture"
+
+case "$RULES_GO_VARIANT" in
+  base|complete)
+    ;;
+  *)
+    echo "error: RULES_GO_VARIANT must be 'base' or 'complete', got '$RULES_GO_VARIANT'" >&2
+    exit 1
+    ;;
+esac
 
 bzl_quote() {
   "$PYTHON" - <<'PY' "$1"
@@ -181,42 +189,6 @@ create_fixture_archive() {
   )
   ARCHIVE_SHA256="$(sha256_file "$ARCHIVE_PATH")"
   ARCHIVE_URL="file://$ARCHIVE_PATH"
-}
-
-export_patch_bundle() {
-  local ws_dir="$1"
-  local bundle_dir="$ws_dir/third_party/rules_go_patches"
-
-  if [[ "$RULES_GO_PATCH_BUNDLE" == "none" ]]; then
-    PATCH_LABELS_BZL=""
-    return
-  fi
-
-  if [[ "$RULES_GO_PATCH_BUNDLE" != "all_patches" ]]; then
-    echo "error: unsupported RULES_GO_PATCH_BUNDLE=$RULES_GO_PATCH_BUNDLE" >&2
-    exit 1
-  fi
-
-  mkdir -p "$(dirname "$bundle_dir")"
-  local patch_output
-  if ! patch_output="$(
-    "$PYTHON" "$REPO_ROOT/tools/dev/export_rules_go_patch_bundle.py" \
-      --bundle "$RULES_GO_PATCH_BUNDLE" \
-      --destination "$bundle_dir"
-  )"; then
-    echo "error: failed to export patch bundle $RULES_GO_PATCH_BUNDLE" >&2
-    exit 1
-  fi
-  if [[ -z "$patch_output" ]]; then
-    echo "error: patch bundle $RULES_GO_PATCH_BUNDLE exported no patch labels" >&2
-    exit 1
-  fi
-  PATCH_LABELS_BZL=""
-  local patch_label
-  while IFS= read -r patch_label; do
-    [[ -n "$patch_label" ]] || continue
-    PATCH_LABELS_BZL+=$(printf '        "%s",\n' "$patch_label")
-  done <<<"$patch_output"
 }
 
 write_shared_fixture_sources() {
@@ -485,7 +457,7 @@ write_positive_workspace() {
   local archive_url_bzl
 
   repo_root_bzl="$(bzl_quote "$REPO_ROOT")"
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
+  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}")"
   companion_root_bzl="$(bzl_quote "$REPO_ROOT/modules/go")"
   archive_url_bzl="$(bzl_quote "$ARCHIVE_URL")"
 
@@ -531,17 +503,8 @@ http_archive(
     name = "io_bazel_rules_go",
     urls = [${archive_url_bzl}],
     sha256 = "${ARCHIVE_SHA256}",
-    strip_prefix = "${ARCHIVE_NAME}/third_party/rules_go_orchestrion",
+    strip_prefix = "${ARCHIVE_NAME}/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}",
 EOF
-    if [[ "$RULES_GO_PATCH_BUNDLE" != "none" ]]; then
-      cat >> "$ws_dir/WORKSPACE" <<EOF
-    patch_tool = "patch",
-    patch_args = ["-p1", "-V", "none", "-E"],
-    patches = [
-${PATCH_LABELS_BZL}
-    ],
-EOF
-    fi
     cat >> "$ws_dir/WORKSPACE" <<EOF
 )
 
@@ -603,7 +566,7 @@ write_invalid_workspace() {
   local scenario="$2"
   local rules_go_fork_bzl
 
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
+  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}")"
 
   cat > "$ws_dir/WORKSPACE" <<EOF
 workspace(name = "workspace_go_invalid_${scenario}")
@@ -653,14 +616,8 @@ run_positive_fixture() {
   local repo_mode="$1"
   local ws_dir="$WORKSPACE_ROOT/${repo_mode}"
 
-  if [[ "$RULES_GO_PATCH_BUNDLE" != "none" && "$repo_mode" == "local" ]]; then
-    echo "Skipping local_repository positive lane for patched mode; patch application must run through http_archive()."
-    return
-  fi
-
   rm -rf "$ws_dir"
   mkdir -p "$ws_dir"
-  export_patch_bundle "$ws_dir"
   write_positive_workspace "$ws_dir" "$repo_mode"
   write_shared_fixture_sources "$ws_dir"
   if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
@@ -810,9 +767,7 @@ if [[ "$INTEGRATION_SCENARIO_MODE" != "full" ]]; then
   exit 1
 fi
 
-if [[ "$RULES_GO_PATCH_BUNDLE" == "none" ]]; then
-  run_positive_fixture "local"
-fi
+run_positive_fixture "local"
 run_positive_fixture "archive"
 run_expected_failure "custom_name" "name must be rules_go_orchestrion_tool"
 run_expected_failure "missing_version" "version is required in WORKSPACE mode"

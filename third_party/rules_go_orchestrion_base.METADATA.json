@@ -1,0 +1,15 @@
+{
+  "fork_path": "third_party/rules_go_orchestrion_base",
+  "upstream": {
+    "repository": "https://github.com/bazel-contrib/rules_go.git",
+    "commit": "fbbafef6e737fe18d3cdedfff4f8f060ac71d5f3",
+    "tag": "v0.60.0"
+  },
+  "generated_report": "third_party/rules_go_orchestrion_base.CHANGED_FILES.md",
+  "generator": "python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report",
+  "notes": [
+    "This repository keeps the clean Orchestrion-enabled rules_go base variant in-tree at third_party/rules_go_orchestrion_base.",
+    "The complete variant lives in third_party/rules_go_orchestrion_complete and carries declared historical monorepo compatibility differences.",
+    "Use the generator to compare the vendored tree against the pinned upstream base commit and regenerate the checked-in changed-files report."
+  ]
+}

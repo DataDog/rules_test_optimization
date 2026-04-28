@@ -17,7 +17,7 @@ const (
 	defaultRulesGoVersion        = "0.60.0"
 	defaultRulesGoRemote         = "https://github.com/DataDog/rules_test_optimization.git"
 	defaultRulesGoCommit         = "16712cc851915317659b932471dcb68af48dd5bb"
-	defaultRulesGoStripPrefix    = "third_party/rules_go_orchestrion"
+	defaultRulesGoVariant        = "base"
 	defaultOrchestrionVersion    = "v1.9.0"
 	defaultDDTraceGoVersion      = "v2.9.0-dev"
 	defaultSyncRepoName          = "test_optimization_data"
@@ -89,6 +89,7 @@ type config struct {
 	ddTraceGoVersionSet bool
 	rulesGoRemote       string
 	rulesGoCommit       string
+	rulesGoVariant      string
 }
 
 func main() {
@@ -119,6 +120,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.ddTraceGoVersion, "dd-trace-go-version", defaultDDTraceGoVersion, "dd-trace-go version to pin for Orchestrion-backed instrumentation")
 	flag.StringVar(&cfg.rulesGoRemote, "rules-go-remote", defaultRulesGoRemote, "rules_go fork remote used for Orchestrion support")
 	flag.StringVar(&cfg.rulesGoCommit, "rules-go-commit", defaultRulesGoCommit, "rules_go fork commit used for Orchestrion support")
+	flag.StringVar(&cfg.rulesGoVariant, "rules-go-variant", defaultRulesGoVariant, "rules_go Orchestrion variant to use: base or complete")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "dd-trace-go-version" {
@@ -131,6 +133,9 @@ func parseFlags() config {
 func run(cfg config) error {
 	if cfg.workspaceDir == "" {
 		return errors.New("workspace directory is required")
+	}
+	if err := validateRulesGoVariant(cfg.rulesGoVariant); err != nil {
+		return err
 	}
 	workspaceDir, err := filepath.Abs(cfg.workspaceDir)
 	if err != nil {
@@ -347,7 +352,24 @@ orchestrion.from_source(
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, defaultRulesGoStripPrefix, cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd)
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, rulesGoStripPrefix(cfg), cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd)
+}
+
+func validateRulesGoVariant(variant string) error {
+	// Keep the public bootstrap contract explicit: normal consumers use the
+	// generic base variant, while large monorepos can opt into complete.
+	if variant == "base" || variant == "complete" {
+		return nil
+	}
+	return fmt.Errorf("--rules-go-variant must be \"base\" or \"complete\", got %q", variant)
+}
+
+func rulesGoStripPrefix(cfg config) string {
+	variant := cfg.rulesGoVariant
+	if variant == "" {
+		variant = defaultRulesGoVariant
+	}
+	return "third_party/rules_go_orchestrion_" + variant
 }
 
 func managedTracerConfigBlock(cfg config) string {
@@ -603,7 +625,7 @@ func rulesGoOverrideCompatible(content string, cfg config) bool {
 	if len(remoteMatch) < 2 || len(commitMatch) < 2 || len(stripPrefixMatch) < 2 {
 		return false
 	}
-	return remoteMatch[1] == cfg.rulesGoRemote && commitMatch[1] == cfg.rulesGoCommit && stripPrefixMatch[1] == defaultRulesGoStripPrefix
+	return remoteMatch[1] == cfg.rulesGoRemote && commitMatch[1] == cfg.rulesGoCommit && stripPrefixMatch[1] == rulesGoStripPrefix(cfg)
 }
 
 func ensureGuidedWorkspaceFiles(cfg config) error {

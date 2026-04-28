@@ -1,9 +1,10 @@
 exports_files(
     [
-        "rules_go_patched_tree_manifest.json",
-        "rules_go_patch_series.json",
-        "rules_go_orchestrion.METADATA.json",
-        "rules_go_orchestrion.CHANGED_FILES.md",
+        "rules_go_orchestrion_base.METADATA.json",
+        "rules_go_orchestrion_base.CHANGED_FILES.md",
+        "rules_go_orchestrion_complete.METADATA.json",
+        "rules_go_orchestrion_complete.CHANGED_FILES.md",
+        "rules_go_orchestrion_variants.json",
     ],
     visibility = ["//visibility:public"],
 )

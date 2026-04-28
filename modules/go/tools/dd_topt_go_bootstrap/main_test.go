@@ -41,7 +41,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `git_override(`) {
 		t.Fatalf("expected rules_go override in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion"`) {
+	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion_base"`) {
 		t.Fatalf("expected vendored rules_go strip_prefix in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `use_extension("@rules_go//go:extensions.bzl", "orchestrion")`) {
@@ -58,6 +58,26 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	}
 	if !strings.Contains(got, `use_repo(orchestrion, "rules_go_orchestrion_tool")`) {
 		t.Fatalf("expected rules_go orchestrion repo wiring in managed block:\n%s", got)
+	}
+}
+
+func TestManagedModuleBlockCanSelectCompleteRulesGoVariant(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.5.0",
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rulesGoCommit:      "deadbeef",
+		rulesGoVariant:     "complete",
+	}
+	got := managedModuleBlock(cfg)
+	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion_complete"`) {
+		t.Fatalf("expected complete rules_go variant in managed block:\n%s", got)
+	}
+}
+
+func TestValidateRulesGoVariantRejectsUnknownVariant(t *testing.T) {
+	if err := validateRulesGoVariant("custom"); err == nil {
+		t.Fatal("expected unknown rules_go variant to fail")
 	}
 }
 
@@ -674,7 +694,7 @@ git_override(
     module_name = "rules_go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "deadbeef",
-    strip_prefix = "third_party/rules_go_orchestrion",
+    strip_prefix = "third_party/rules_go_orchestrion_base",
 )
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")

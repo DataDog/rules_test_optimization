@@ -22,24 +22,26 @@ Pick the path that matches your repository:
 
 ## Maintainer note on the vendored rules_go split
 
-The repository now keeps the Go integration in three explicit layers:
+The repository now publishes the Go integration as two complete `rules_go`
+variants:
 
-- clean Orchestrion-enabled base fork:
-  `third_party/rules_go_orchestrion`
-- canonical optional consumer patch bundle:
-  `third_party/rules_go_patches`
-- maintainer-only regression overlay:
-  `tools/tests/rules_go_patch_regressions`
+- generic Orchestrion-enabled base variant:
+  `third_party/rules_go_orchestrion_base`
+- complete Orchestrion-enabled variant with declared historical monorepo
+  compatibility:
+  `third_party/rules_go_orchestrion_complete`
+- maintainer-only regression overlay used by variant smoke tests:
+  `tools/tests/rules_go_variant_regressions`
 
-The patch-bundle contract and exact-tree proof live in:
+The base/complete difference contract lives in:
 
-- `third_party/rules_go_patch_series.json`
-- `third_party/rules_go_patched_tree_manifest.json`
+- `third_party/rules_go_orchestrion_variants.json`
+- `tools/dev/verify_rules_go_variants.py`
 
-Maintainers can track the clean-base delta against upstream `rules_go` with:
+Maintainers can track each variant delta against upstream `rules_go` with:
 
-- `third_party/rules_go_orchestrion.METADATA.json`
-- `third_party/rules_go_orchestrion.CHANGED_FILES.md`
+- `third_party/rules_go_orchestrion_<variant>.METADATA.json`
+- `third_party/rules_go_orchestrion_<variant>.CHANGED_FILES.md`
 - `python3 tools/dev/diff_rules_go_fork.py --write-report`
 
 ## First-run checklist (all scenarios)
@@ -186,7 +188,7 @@ writes anything back to the workspace. If you rerun bootstrap without
 in place.
 
 The bootstrap helper:
-- patches `MODULE.bazel` with a Datadog-managed `rules_go` override back to this repository's clean vendored `third_party/rules_go_orchestrion` base module and the `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
+- updates `MODULE.bazel` with a Datadog-managed `rules_go` override back to this repository's clean vendored `third_party/rules_go_orchestrion_base` base module and the `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
 - adds the Datadog-managed single-service Go sync block (`test_optimization_go_extension`)
 - creates a root `dd_upload_payloads` target when missing
 - creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
@@ -632,11 +634,11 @@ consumer-owned merge that preserves the Orchestrion workspace helper and the
 `//go/private/orchestrion:*` targets used by the companion transition. Add
 `repo_mapping = {"@rules_go": "@io_bazel_rules_go"}` on the Go companion
 repository declaration so the companion resolves that fork consistently.
-If you need the optional Datadog patch bundle on top of the clean base fork,
-export the checked-in patch series into a consumer-owned
-`third_party/rules_go_patches/` directory and reference those patch labels from
-the consumer's `http_archive(...)`; do not reference
-`@datadog-rules-test-optimization//third_party/rules_go_patches` directly.
+Use `third_party/rules_go_orchestrion_base` for normal consumers. Use
+`third_party/rules_go_orchestrion_complete` only when the consumer needs the
+declared extended monorepo compatibility layer. Both variants are complete
+`rules_go` trees and do not require `patches`, `patch_tool`, or a
+consumer-owned patch directory.
 The public WORKSPACE helper also expects the default tool-repo name
 `rules_go_orchestrion_tool`, so consumers should not rename that repository.
 When Go tests live below the module root, pass the module-root pin files through

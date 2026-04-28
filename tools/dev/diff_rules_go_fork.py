@@ -17,7 +17,7 @@ import urllib.request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_METADATA = REPO_ROOT / "third_party" / "rules_go_orchestrion.METADATA.json"
+DEFAULT_METADATA = REPO_ROOT / "third_party" / "rules_go_orchestrion_base.METADATA.json"
 
 
 def load_metadata(path: Path) -> dict:
@@ -157,7 +157,7 @@ def print_list(changed: dict[str, list[str]]) -> None:
 
 
 def emit_patch(upstream_root: Path, fork_root: Path) -> int:
-    with tempfile.TemporaryDirectory(prefix="rules_go_patch_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="rules_go_diff_") as tmp:
         patch_root = Path(tmp)
         upstream_view = patch_root / "upstream"
         fork_view = patch_root / "fork"
