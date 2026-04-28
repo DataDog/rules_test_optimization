@@ -16,6 +16,13 @@ dd_topt_java_test(
     # loaded so the -javaagent wiring is exercised.
     ci_visibility_enabled = False,
     env = {"DD_CIVISIBILITY_ENABLED": "false"},
+    # Windows end-to-end coverage for the Java example is deferred: the
+    # dd-java-agent integration is verified on Linux/macOS only, matching
+    # the Java entry in the integration test matrix. Mirrors hello_pytest_test.
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     test_class = "com.example.topt.HelloTest",
     topt_data = topt_data,
     deps = [":hello_lib"],
