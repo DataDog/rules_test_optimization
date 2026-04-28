@@ -23,6 +23,9 @@ local_path_override(
 # Dev-only dependency for in-repo Python companion/example builds.
 bazel_dep(name = "rules_python", version = "1.7.0", dev_dependency = True)
 
+# Dev-only dependency for in-repo Java companion/example builds.
+bazel_dep(name = "rules_java", version = "8.14.0", dev_dependency = True)
+
 # Dev-only dependencies for in-repo NodeJS/.NET/Ruby companion/example builds.
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5", dev_dependency = True)
 bazel_dep(name = "rules_nodejs", version = "6.7.3", dev_dependency = True)
@@ -162,6 +165,15 @@ pip.parse(
     requirements_lock = "//examples/single_service/src/python-project:requirements_lock.txt",
 )
 use_repo(pip, "example_pip")
+
+# Dev-only http_file for the Java example so //examples/single_service/src/java-project/...
+# resolves the dd-java-agent label that dd_topt_java_test wires into -javaagent.
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+http_file(
+    name = "dd_java_agent",
+    downloaded_file_path = "dd-java-agent.jar",
+    urls = ["https://repo1.maven.org/maven2/com/datadoghq/dd-java-agent/1.60.0/dd-java-agent-1.60.0.jar"],
+)
 
 # Dev-only stub repository so //examples/... can be analyzed from this root
 # workspace without fetching real Datadog data.

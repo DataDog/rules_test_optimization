@@ -8,6 +8,12 @@ versioning.
 ## [Unreleased]
 
 ### Changed
+- `dd_topt_java_test`: `agent_jar` is now required so `-javaagent` is always
+  wired into the JVM and the dd-java-agent emits payloads. `java_test_rule`
+  defaults to `@rules_java//java:defs.bzl%java_test`, matching the Go and
+  Python companions; pass it only to wrap a custom test macro. Added
+  `ci_visibility_enabled` (default `True`) which sets `DD_CIVISIBILITY_ENABLED=true`
+  on the test environment so payload-to-files mode works without extra wiring.
 - Hardened git repository URL handling by stripping URL userinfo before
   forwarding metadata.
 - Improved sync schema parser fallback behavior to try Ruby after any PyYAML

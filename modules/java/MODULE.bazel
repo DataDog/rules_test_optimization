@@ -4,6 +4,7 @@ module(
 )
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "rules_java", version = "8.14.0")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
 # Dev-only stub repository so companion-module tests can resolve

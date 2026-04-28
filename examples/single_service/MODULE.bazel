@@ -87,6 +87,15 @@ use_repo(ruby, "ruby", "ruby_toolchains")
 
 register_toolchains("@ruby_toolchains//:all")
 
+# dd-java-agent JAR for the Java example. dd_topt_java_test wires this label
+# into -javaagent so the tracer attaches to the JVM and emits payloads.
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+http_file(
+    name = "dd_java_agent",
+    downloaded_file_path = "dd-java-agent.jar",
+    urls = ["https://repo1.maven.org/maven2/com/datadoghq/dd-java-agent/1.60.0/dd-java-agent-1.60.0.jar"],
+)
+
 go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
     "test_optimization_go_extension",

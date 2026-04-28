@@ -6,8 +6,13 @@ load(
     "dd_topt_java_test",
     "resolve_topt_service_key_for_tests",
     "select_service_entry_for_tests",
-    "validate_java_test_rule_for_tests",
 )
+
+# Reused agent_jar fixture label for analysis-time tests. The label only needs
+# to resolve to an existing file; the macro never reads its contents. Pick a
+# file that callers do not pass through user `data` to avoid duplicate-label
+# errors when the macro adds the agent JAR to data dependencies.
+_FIXTURE_AGENT_JAR = ":example_stub_repo.bzl"
 
 ToptJavaMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_java_test to java_test_rule.",
@@ -113,6 +118,7 @@ def java_macro_single_service_target(name, tags = None):
         name = name,
         topt_data = _single_service_topt_data(),
         java_test_rule = _java_test_capture_rule,
+        agent_jar = _FIXTURE_AGENT_JAR,
         data = [":test_macro.bzl"],
         env = {
             "CUSTOM_ENV": "1",
@@ -128,6 +134,7 @@ def java_macro_multi_service_target(name, tags = None):
         topt_data = _multi_service_topt_data(),
         topt_service = "java-service",
         java_test_rule = _java_test_capture_rule,
+        agent_jar = _FIXTURE_AGENT_JAR,
         test_class = "com.example.tests.MultiTest",
         tags = tags,
     )
@@ -137,6 +144,7 @@ def java_macro_env_none_target(name, tags = None):
         name = name,
         topt_data = _single_service_topt_data(),
         java_test_rule = _java_test_capture_rule,
+        agent_jar = _FIXTURE_AGENT_JAR,
         env = None,
         tags = tags,
     )
@@ -146,6 +154,7 @@ def java_macro_explicit_service_target(name, tags = None):
         name = name,
         topt_data = _single_service_topt_data(),
         java_test_rule = _java_test_capture_rule,
+        agent_jar = _FIXTURE_AGENT_JAR,
         env = {
             "DD_SERVICE": "caller-service",
         },
@@ -157,6 +166,7 @@ def java_macro_select_inputs_target(name, tags = None):
         name = name,
         topt_data = _single_service_topt_data(),
         java_test_rule = _java_test_capture_rule,
+        agent_jar = _FIXTURE_AGENT_JAR,
         data = select({
             "//conditions:default": [":test_macro.bzl"],
         }),
@@ -169,6 +179,17 @@ def java_macro_select_inputs_target(name, tags = None):
         java_package = select({
             "//conditions:default": "com.example.select.pkg",
         }),
+        tags = tags,
+    )
+
+def java_macro_ci_visibility_disabled_target(name, tags = None):
+    dd_topt_java_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        java_test_rule = _java_test_capture_rule,
+        agent_jar = _FIXTURE_AGENT_JAR,
+        ci_visibility_enabled = False,
+        test_class = "com.example.tests.NoCiVisTest",
         tags = tags,
     )
 
@@ -193,9 +214,16 @@ def _java_macro_single_service_wiring_test_impl(ctx):
         captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
     )
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "java-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "com.example.tests.SampleTest", captured.test_class)
+
+    # Mandatory agent_jar wires both -javaagent and runfiles.
+    asserts.equals(env, 1, len(captured.jvm_flags))
+    asserts.true(env, captured.jvm_flags[0].startswith("-javaagent:"), "expected -javaagent prefix")
+    asserts.true(env, "example_stub_repo.bzl" in captured.jvm_flags[0], "expected agent jar label in flag")
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":example_stub_repo.bzl"), "expected agent jar in data")
     return analysistest.end(env)
 
 def _java_macro_multi_service_wiring_test_impl(ctx):
@@ -222,6 +250,7 @@ def _java_macro_env_none_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "java-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(
         env,
         "java_macro_env_none_target_topt_bazel_metadata.json",
@@ -230,6 +259,14 @@ def _java_macro_env_none_wiring_test_impl(ctx):
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _java_macro_ci_visibility_disabled_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptJavaMacroCaptureInfo]
+    asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     return analysistest.end(env)
 
 def _java_macro_select_inputs_wiring_test_impl(ctx):
@@ -311,10 +348,6 @@ def _resolve_topt_service_key_unknown_target_impl(_ctx):
     )
     return []
 
-def _validate_java_test_rule_missing_target_impl(_ctx):
-    validate_java_test_rule_for_tests(None)
-    return []
-
 def _select_service_entry_malformed_topt_data_target_impl(_ctx):
     select_service_entry_for_tests("bad-shape", None)
     return []
@@ -329,10 +362,6 @@ resolve_topt_service_key_missing_target_rule = rule(
 
 resolve_topt_service_key_unknown_target_rule = rule(
     implementation = _resolve_topt_service_key_unknown_target_impl,
-)
-
-validate_java_test_rule_missing_target_rule = rule(
-    implementation = _validate_java_test_rule_missing_target_impl,
 )
 
 select_service_entry_malformed_topt_data_target_rule = rule(
@@ -355,11 +384,6 @@ def _resolve_topt_service_key_unknown_failure_test_impl(ctx):
     asserts.expect_failure(env, "java_service, ruby_service")
     return analysistest.end(env)
 
-def _validate_java_test_rule_missing_failure_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "you must pass java_test_rule")
-    return analysistest.end(env)
-
 def _select_service_entry_malformed_topt_data_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "topt_data is required and must be the dict")
@@ -370,50 +394,16 @@ def _select_service_entry_empty_mapping_failure_test_impl(ctx):
     asserts.expect_failure(env, "did not contain any service entries")
     return analysistest.end(env)
 
-def java_macro_agent_jar_target(name, tags = None):
-    dd_topt_java_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        java_test_rule = _java_test_capture_rule,
-        agent_jar = ":test_macro.bzl",
-        test_class = "com.example.tests.AgentTest",
-        tags = tags,
-    )
-
 def java_macro_agent_jar_with_user_flags_target(name, tags = None):
     dd_topt_java_test(
         name = name,
         topt_data = _single_service_topt_data(),
         java_test_rule = _java_test_capture_rule,
-        agent_jar = ":test_macro.bzl",
+        agent_jar = _FIXTURE_AGENT_JAR,
         jvm_flags = ["-Xmx512m"],
         test_class = "com.example.tests.AgentTest",
         tags = tags,
     )
-
-def java_macro_no_agent_jar_with_flags_target(name, tags = None):
-    dd_topt_java_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        java_test_rule = _java_test_capture_rule,
-        jvm_flags = ["-Xmx512m"],
-        test_class = "com.example.tests.AgentTest",
-        tags = tags,
-    )
-
-def _java_macro_agent_jar_wiring_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    captured = target[ToptJavaMacroCaptureInfo]
-
-    # jvm_flags should contain the -javaagent flag.
-    asserts.true(env, len(captured.jvm_flags) == 1, "expected exactly one jvm_flag")
-    asserts.true(env, captured.jvm_flags[0].startswith("-javaagent:"), "expected -javaagent prefix")
-    asserts.true(env, "test_macro.bzl" in captured.jvm_flags[0], "expected agent jar label in flag")
-
-    # data should include the agent jar label.
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
-    return analysistest.end(env)
 
 def _java_macro_agent_jar_with_user_flags_test_impl(ctx):
     env = analysistest.begin(ctx)
@@ -431,19 +421,6 @@ def _java_macro_agent_jar_with_user_flags_test_impl(ctx):
             break
     asserts.true(env, has_agent, "expected -javaagent flag")
     asserts.true(env, len(captured.jvm_flags) == 2, "expected exactly two jvm_flags")
-    return analysistest.end(env)
-
-def _java_macro_no_agent_jar_with_flags_test_impl(ctx):
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    captured = target[ToptJavaMacroCaptureInfo]
-
-    # User flags should pass through unchanged.
-    asserts.equals(env, ["-Xmx512m"], captured.jvm_flags)
-
-    # No agent flag should be present.
-    for flag in captured.jvm_flags:
-        asserts.true(env, not flag.startswith("-javaagent:"), "unexpected -javaagent flag")
     return analysistest.end(env)
 
 java_macro_single_service_wiring_test = analysistest.make(
@@ -472,10 +449,6 @@ resolve_topt_service_key_unknown_failure_test = analysistest.make(
     _resolve_topt_service_key_unknown_failure_test_impl,
     expect_failure = True,
 )
-validate_java_test_rule_missing_failure_test = analysistest.make(
-    _validate_java_test_rule_missing_failure_test_impl,
-    expect_failure = True,
-)
 select_service_entry_malformed_topt_data_failure_test = analysistest.make(
     _select_service_entry_malformed_topt_data_failure_test_impl,
     expect_failure = True,
@@ -484,12 +457,9 @@ select_service_entry_empty_mapping_failure_test = analysistest.make(
     _select_service_entry_empty_mapping_failure_test_impl,
     expect_failure = True,
 )
-java_macro_agent_jar_wiring_test = analysistest.make(
-    _java_macro_agent_jar_wiring_test_impl,
-)
 java_macro_agent_jar_with_user_flags_test = analysistest.make(
     _java_macro_agent_jar_with_user_flags_test_impl,
 )
-java_macro_no_agent_jar_with_flags_test = analysistest.make(
-    _java_macro_no_agent_jar_with_flags_test_impl,
+java_macro_ci_visibility_disabled_test = analysistest.make(
+    _java_macro_ci_visibility_disabled_test_impl,
 )
