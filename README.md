@@ -273,9 +273,23 @@ dd_topt_java_test(
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.SampleTest",
     topt_data = topt_data,
-    java_test_rule = java_test,
+    agent_jar = "@dd_java_agent//file",
 )
 ```
+
+`dd_topt_java_test` defaults to `@rules_java//java:defs.bzl%java_test`, so most
+callers do not need to pass `java_test_rule`. Override it only when wrapping a
+custom test macro (e.g. a junit5 wrapper). The macro requires `agent_jar` so
+the dd-java-agent is wired into `-javaagent` and emits payloads; source the
+JAR with `http_file`/`maven_install`/a local filegroup.
+
+On Windows, add `build --enable_runfiles` to your `.bazelrc`. The macro injects
+`-javaagent:$(rootpath <agent_jar>)`, which only resolves when runfiles are
+materialized as symlinks; Linux and macOS already do this by default.
+
+CI Visibility is on by
+default — set `ci_visibility_enabled = False` only if your callsite owns
+`DD_CIVISIBILITY_ENABLED`.
 
 ### Bzlmod + NodeJS companion (`dd_topt_nodejs_test`)
 
@@ -464,7 +478,7 @@ def dd_java_test(name, **kwargs):
     dd_topt_java_test(
         name = name,
         topt_data = topt_data,
-        java_test_rule = native.java_test,
+        agent_jar = "@dd_java_agent//file",
         **kwargs
     )
 ```

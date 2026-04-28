@@ -8,9 +8,9 @@ java_library(
 
 dd_topt_java_test(
     name = "hello_test",
-    java_test_rule = java_test,
-    topt_data = topt_data,
     srcs = ["HelloTest.java"],
-    deps = [":hello_lib"],
+    agent_jar = "@dd_java_agent//file",
     test_class = "com.example.topt.HelloTest",
+    topt_data = topt_data,
+    deps = [":hello_lib"],
 )

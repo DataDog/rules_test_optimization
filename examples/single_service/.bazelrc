@@ -1,3 +1,6 @@
+# Required on Windows for dd_topt_java_test: -javaagent paths only resolve under symlinked runfiles.
+build --enable_runfiles
+
 # Hermetic config (sandbox, stable env, network blocking)
 build:hermetic --incompatible_strict_action_env
 build:hermetic --spawn_strategy=sandboxed
@@ -7,7 +10,6 @@ test:hermetic --modify_execution_info=TestRunner=+block-network
 test:hermetic --test_env=TZ=UTC
 test:hermetic --test_env=LANG=C
 test:hermetic --test_env=LC_ALL=C
-build:hermetic --enable_runfiles
 
 # Uncomment and provide values via shell/CI secret store:
 # common --repo_env=DD_API_KEY

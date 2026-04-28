@@ -202,7 +202,7 @@ dd_topt_java_test(
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.SampleTest",
     topt_data = topt_data,
-    java_test_rule = java_test,
+    agent_jar = "@dd_java_agent//file",
 )
 ```
 

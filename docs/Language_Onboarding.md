@@ -388,6 +388,14 @@ topt.test_optimization_sync(
 )
 
 use_repo(topt, "test_optimization_data")
+
+# dd-java-agent JAR consumed by dd_topt_java_test's agent_jar.
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+http_file(
+    name = "dd_java_agent",
+    downloaded_file_path = "dd-java-agent.jar",
+    urls = ["https://repo1.maven.org/maven2/com/datadoghq/dd-java-agent/1.60.0/dd-java-agent-1.60.0.jar"],
+)
 ```
 
 ```bzl
@@ -415,8 +423,8 @@ dd_topt_java_test(
     srcs = ["HelloTest.java"],
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.HelloTest",
-    java_test_rule = java_test,
     topt_data = topt_data,
+    agent_jar = "@dd_java_agent//file",
 )
 ```
 
@@ -457,6 +465,14 @@ use_repo(
     "test_optimization_data_java_service_a",
     "test_optimization_data_java_service_b",
 )
+
+# dd-java-agent JAR consumed by dd_topt_java_test's agent_jar.
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+http_file(
+    name = "dd_java_agent",
+    downloaded_file_path = "dd-java-agent.jar",
+    urls = ["https://repo1.maven.org/maven2/com/datadoghq/dd-java-agent/1.60.0/dd-java-agent-1.60.0.jar"],
+)
 ```
 
 ```bzl
@@ -468,9 +484,9 @@ dd_topt_java_test(
     name = "pkg_java_test",
     srcs = ["HelloTest.java"],
     test_class = "com.example.pkg.HelloTest",
-    java_test_rule = java_test,
     topt_data = topt_data_by_service,
     topt_service = "java_service_a",
+    agent_jar = "@dd_java_agent//file",
 )
 ```
 
