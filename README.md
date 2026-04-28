@@ -281,7 +281,13 @@ dd_topt_java_test(
 callers do not need to pass `java_test_rule`. Override it only when wrapping a
 custom test macro (e.g. a junit5 wrapper). The macro requires `agent_jar` so
 the dd-java-agent is wired into `-javaagent` and emits payloads; source the
-JAR with `http_file`/`maven_install`/a local filegroup. CI Visibility is on by
+JAR with `http_file`/`maven_install`/a local filegroup.
+
+On Windows, add `build --enable_runfiles` to your `.bazelrc`. The macro injects
+`-javaagent:$(rootpath <agent_jar>)`, which only resolves when runfiles are
+materialized as symlinks; Linux and macOS already do this by default.
+
+CI Visibility is on by
 default — set `ci_visibility_enabled = False` only if your callsite owns
 `DD_CIVISIBILITY_ENABLED`.
 

@@ -1,0 +1,5 @@
+# Required for dd_topt_java_test on Windows: -javaagent uses a $(rootpath)
+# value that only resolves when runfiles are materialized as symlinks. Linux
+# and macOS already symlink runfiles by default; this flag makes Windows
+# behave the same. No-op when runfiles are already enabled.
+build --enable_runfiles
