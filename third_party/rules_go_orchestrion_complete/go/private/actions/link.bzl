@@ -137,6 +137,7 @@ def emit_link(
             output = version_map_file,
             content = "\n".join(version_lines) + "\n" if version_lines else "",
         )
+
         # Build buildinfo content
         content_lines = []
 
