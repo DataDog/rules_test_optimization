@@ -164,8 +164,10 @@ else
 fi
 bazel_test //tests/core/c_linkmodes:c-archive_test //tests/core/c_linkmodes:c-shared_test
 bazel_build //tests/core/c_linkmodes:go_with_cgo_dep_caller
-if [[ "${host_os}" == "Linux" && "${host_arch}" == "x86_64" ]]; then
+if [[ "${RULES_GO_VARIANT}" == "complete" && "${host_os}" == "Linux" && "${host_arch}" == "x86_64" ]]; then
   bazel_test //tests/core/cgo/asm_cflags:asm_cflags_test
+elif [[ "${RULES_GO_VARIANT}" != "complete" ]]; then
+  echo "Skipping //tests/core/cgo/asm_cflags:asm_cflags_test for ${RULES_GO_VARIANT}; the asm cflags compatibility target belongs to the complete variant." >&2
 else
   echo "Skipping //tests/core/cgo/asm_cflags:asm_cflags_test on ${host_os}/${host_arch}; the regression target is Linux x86_64 only." >&2
 fi
