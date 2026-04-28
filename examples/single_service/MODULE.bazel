@@ -90,6 +90,7 @@ register_toolchains("@ruby_toolchains//:all")
 # dd-java-agent JAR for the Java example. dd_topt_java_test wires this label
 # into -javaagent so the tracer attaches to the JVM and emits payloads.
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 http_file(
     name = "dd_java_agent",
     downloaded_file_path = "dd-java-agent.jar",

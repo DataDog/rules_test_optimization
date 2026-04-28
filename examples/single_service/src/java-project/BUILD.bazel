@@ -8,7 +8,7 @@ java_library(
 
 dd_topt_java_test(
     name = "hello_test",
-    topt_data = topt_data,
+    srcs = ["HelloTest.java"],
     agent_jar = "@dd_java_agent//file",
     # Stable dd-java-agent (1.60.0) crashes JUnit4 instrumentation with
     # `Could not find test suite with descriptor`. Disable CI Visibility in
@@ -16,7 +16,7 @@ dd_topt_java_test(
     # loaded so the -javaagent wiring is exercised.
     ci_visibility_enabled = False,
     env = {"DD_CIVISIBILITY_ENABLED": "false"},
-    srcs = ["HelloTest.java"],
-    deps = [":hello_lib"],
     test_class = "com.example.topt.HelloTest",
+    topt_data = topt_data,
+    deps = [":hello_lib"],
 )

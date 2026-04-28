@@ -169,6 +169,7 @@ use_repo(pip, "example_pip")
 # Dev-only http_file for the Java example so //examples/single_service/src/java-project/...
 # resolves the dd-java-agent label that dd_topt_java_test wires into -javaagent.
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 http_file(
     name = "dd_java_agent",
     downloaded_file_path = "dd-java-agent.jar",
