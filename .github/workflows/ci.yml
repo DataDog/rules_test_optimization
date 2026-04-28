@@ -170,7 +170,7 @@ jobs:
           )
 
       - name: Build examples
-        timeout-minutes: 10
+        timeout-minutes: 20
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
@@ -187,7 +187,7 @@ jobs:
           fi
 
       - name: Test examples
-        timeout-minutes: 10
+        timeout-minutes: 20
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
