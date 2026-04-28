@@ -18,6 +18,11 @@
       "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."
     },
     {
+      "path": "go/private/BUILD.bazel",
+      "owner": "complete",
+      "reason": "Complete compatibility layer self-containment: includes the complete-only go/private/aspects package in rules_go all_files/all_rules so nested rules_go Bazel tests materialize a complete fork tree."
+    },
+    {
       "path": "go/private/actions/binary.bzl",
       "owner": "complete",
       "reason": "Complete compatibility layer: preserves extended rules_go behavior needed by large monorepo consumers while the base variant stays minimal."

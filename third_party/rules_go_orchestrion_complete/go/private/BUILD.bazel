@@ -7,6 +7,7 @@ filegroup(
     name = "all_rules",
     srcs = [
         "//go/private/actions:all_rules",
+        "//go/private/aspects:all_rules",
         "//go/private/orchestrion:all_rules",
         "//go/private/rules:all_rules",
         "//go/private/skylib/lib:all_rules",
@@ -20,6 +21,7 @@ filegroup(
     testonly = True,
     srcs = [
         "//go/private/actions:all_files",
+        "//go/private/aspects:all_files",
         "//go/private/orchestrion:all_files",
         "//go/private/rules:all_files",
         "//go/private/skylib/lib:all_files",
