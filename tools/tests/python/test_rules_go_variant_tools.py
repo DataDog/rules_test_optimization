@@ -123,6 +123,71 @@ class RulesGoVariantToolTests(unittest.TestCase):
             finally:
                 self.mod.REPO_ROOT = original_root
 
+    def test_verify_rejects_permission_only_difference(self) -> None:
+        """The verifier treats executable-bit drift as a variant difference."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            complete = root / "complete"
+            base.mkdir()
+            complete.mkdir()
+            (base / "tool.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (complete / "tool.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            os.chmod(base / "tool.sh", 0o644)
+            os.chmod(complete / "tool.sh", 0o755)
+            metadata = root / "variants.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "base_path": str(base),
+                        "complete_path": str(complete),
+                        "allowed_differences": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            original_root = self.mod.REPO_ROOT
+            self.mod.REPO_ROOT = root
+            try:
+                with redirect_stderr(io.StringIO()):
+                    self.assertEqual(1, self.mod.verify(metadata))
+            finally:
+                self.mod.REPO_ROOT = original_root
+
+    def test_verify_rejects_symlink_target_difference(self) -> None:
+        """The verifier treats symlink-target drift as a variant difference."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "base"
+            complete = root / "complete"
+            base.mkdir()
+            complete.mkdir()
+            try:
+                (base / "link").symlink_to("base-target")
+                (complete / "link").symlink_to("complete-target")
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+            metadata = root / "variants.json"
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "base_path": str(base),
+                        "complete_path": str(complete),
+                        "allowed_differences": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            original_root = self.mod.REPO_ROOT
+            self.mod.REPO_ROOT = root
+            try:
+                with redirect_stderr(io.StringIO()):
+                    self.assertEqual(1, self.mod.verify(metadata))
+            finally:
+                self.mod.REPO_ROOT = original_root
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -81,6 +81,27 @@ func TestValidateRulesGoVariantRejectsUnknownVariant(t *testing.T) {
 	}
 }
 
+func TestHydrateManagedRulesGoVariantPreservesCompleteVariant(t *testing.T) {
+	content := `module(name = "example")
+
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/example/repo.git",
+    commit = "deadbeef",
+    strip_prefix = "third_party/rules_go_orchestrion_complete",
+)
+# END Datadog Go Orchestrion bootstrap
+`
+	cfg := config{rulesGoVariant: defaultRulesGoVariant}
+	if err := hydrateManagedRulesGoVariant(&cfg, content); err != nil {
+		t.Fatalf("hydrateManagedRulesGoVariant error: %v", err)
+	}
+	if cfg.rulesGoVariant != "complete" {
+		t.Fatalf("rulesGoVariant=%q, want complete", cfg.rulesGoVariant)
+	}
+}
+
 func TestManagedModuleBlockIncludesPerModuleVersions(t *testing.T) {
 	cfg := config{
 		orchestrionVersion: "v1.9.0",

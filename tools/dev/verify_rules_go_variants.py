@@ -8,6 +8,7 @@ import filecmp
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 
 
@@ -39,9 +40,21 @@ def changed_paths(base_root: Path, complete_root: Path) -> list[str]:
         if base_path is None or complete_path is None:
             changed.append(path)
             continue
+        if file_metadata(base_path) != file_metadata(complete_path):
+            changed.append(path)
+            continue
+        if base_path.is_symlink() or complete_path.is_symlink():
+            continue
         if not filecmp.cmp(base_path, complete_path, shallow=False):
             changed.append(path)
     return changed
+
+
+def file_metadata(path: Path) -> tuple[int, int, str]:
+    """Return the file type, permission bits, and symlink target for comparison."""
+    path_stat = path.lstat()
+    link_target = os.readlink(path) if path.is_symlink() else ""
+    return (stat.S_IFMT(path_stat.st_mode), stat.S_IMODE(path_stat.st_mode), link_target)
 
 
 def load_metadata(path: Path) -> dict:

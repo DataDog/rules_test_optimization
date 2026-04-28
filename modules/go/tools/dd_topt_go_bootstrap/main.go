@@ -90,6 +90,7 @@ type config struct {
 	rulesGoRemote       string
 	rulesGoCommit       string
 	rulesGoVariant      string
+	rulesGoVariantSet   bool
 }
 
 func main() {
@@ -125,6 +126,9 @@ func parseFlags() config {
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "dd-trace-go-version" {
 			cfg.ddTraceGoVersionSet = true
+		}
+		if f.Name == "rules-go-variant" {
+			cfg.rulesGoVariantSet = true
 		}
 	})
 	return cfg
@@ -187,6 +191,11 @@ func run(cfg config) error {
 	}
 	if !cfg.ddTraceGoVersionSet {
 		if err := hydrateManagedTracerConfig(&cfg, string(moduleContent)); err != nil {
+			return err
+		}
+	}
+	if !cfg.rulesGoVariantSet {
+		if err := hydrateManagedRulesGoVariant(&cfg, string(moduleContent)); err != nil {
 			return err
 		}
 	}
@@ -1067,6 +1076,27 @@ func hydrateManagedTracerConfig(cfg *config, content string) error {
 	}
 	cfg.ddTraceGoVersion = managed.shared
 	cfg.ddTraceGoVersions = copyDDTraceGoVersions(managed.perModule)
+	return nil
+}
+
+func hydrateManagedRulesGoVariant(cfg *config, content string) error {
+	// Rerunning the bootstrap should preserve the variant the managed block
+	// already selected. Without this, complete-variant workspaces silently
+	// downgrade to the base variant unless every rerun repeats the flag.
+	start := strings.Index(content, managedBlockStart)
+	end := strings.Index(content, managedBlockEnd)
+	if start < 0 || end < 0 || end <= start {
+		return nil
+	}
+	stripPrefixPattern := regexp.MustCompile(`strip_prefix\s*=\s*"third_party/rules_go_orchestrion_([^"]+)"`)
+	match := stripPrefixPattern.FindStringSubmatch(content[start:end])
+	if len(match) != 2 {
+		return nil
+	}
+	if err := validateRulesGoVariant(match[1]); err != nil {
+		return err
+	}
+	cfg.rulesGoVariant = match[1]
 	return nil
 }
 
