@@ -16,7 +16,7 @@ import (
 const (
 	defaultRulesGoVersion        = "0.60.0"
 	defaultRulesGoRemote         = "https://github.com/DataDog/rules_test_optimization.git"
-	defaultRulesGoCommit         = "16712cc851915317659b932471dcb68af48dd5bb"
+	defaultRulesGoCommit         = ""
 	defaultRulesGoVariant        = "base"
 	defaultOrchestrionVersion    = "v1.9.0"
 	defaultDDTraceGoVersion      = "v2.9.0-dev"
@@ -89,8 +89,14 @@ type config struct {
 	ddTraceGoVersionSet bool
 	rulesGoRemote       string
 	rulesGoCommit       string
-	rulesGoVariant      string
-	rulesGoVariantSet   bool
+	// rulesGoRemoteSet records whether the operator explicitly selected the
+	// rules_go fork remote instead of accepting the inferred/default remote.
+	rulesGoRemoteSet bool
+	// rulesGoCommitSet records whether the operator explicitly selected the
+	// rules_go fork commit instead of accepting an inferred commit.
+	rulesGoCommitSet  bool
+	rulesGoVariant    string
+	rulesGoVariantSet bool
 }
 
 func main() {
@@ -120,12 +126,18 @@ func parseFlags() config {
 	flag.StringVar(&cfg.orchestrionVersion, "orchestrion-version", defaultOrchestrionVersion, "Orchestrion version to configure")
 	flag.StringVar(&cfg.ddTraceGoVersion, "dd-trace-go-version", defaultDDTraceGoVersion, "dd-trace-go version to pin for Orchestrion-backed instrumentation")
 	flag.StringVar(&cfg.rulesGoRemote, "rules-go-remote", defaultRulesGoRemote, "rules_go fork remote used for Orchestrion support")
-	flag.StringVar(&cfg.rulesGoCommit, "rules-go-commit", defaultRulesGoCommit, "rules_go fork commit used for Orchestrion support")
+	flag.StringVar(&cfg.rulesGoCommit, "rules-go-commit", defaultRulesGoCommit, "rules_go fork commit used for Orchestrion support; inferred from Datadog git_override wiring when omitted")
 	flag.StringVar(&cfg.rulesGoVariant, "rules-go-variant", defaultRulesGoVariant, "rules_go Orchestrion variant to use: base or complete")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "dd-trace-go-version" {
 			cfg.ddTraceGoVersionSet = true
+		}
+		if f.Name == "rules-go-remote" {
+			cfg.rulesGoRemoteSet = true
+		}
+		if f.Name == "rules-go-commit" {
+			cfg.rulesGoCommitSet = true
 		}
 		if f.Name == "rules-go-variant" {
 			cfg.rulesGoVariantSet = true
@@ -308,11 +320,24 @@ func patchModuleFile(cfg config) error {
 		}
 	}
 
-	if cfg.rulesGoRemote == defaultRulesGoRemote && cfg.rulesGoCommit == defaultRulesGoCommit {
+	if !cfg.rulesGoCommitSet {
+		if remote, commit := inferManagedRulesGoOverride(text); remote != "" && commit != "" {
+			if !cfg.rulesGoRemoteSet {
+				cfg.rulesGoRemote = remote
+			}
+			cfg.rulesGoCommit = commit
+		}
+	}
+
+	if !cfg.rulesGoRemoteSet && !cfg.rulesGoCommitSet && cfg.rulesGoCommit == "" {
 		if remote, commit := inferDatadogRepoOverride(text); remote != "" && commit != "" {
 			cfg.rulesGoRemote = remote
 			cfg.rulesGoCommit = commit
 		}
+	}
+
+	if strings.TrimSpace(cfg.rulesGoCommit) == "" {
+		return errors.New("rules_go fork commit is required; add a git_override for datadog-rules-test-optimization-go/datadog-rules-test-optimization or pass --rules-go-commit explicitly")
 	}
 
 	if !strings.Contains(text, managedBlockStart) && strings.Contains(text, `module_name = "rules_go"`) && !rulesGoOverrideCompatible(text, cfg) {
@@ -493,6 +518,38 @@ func inferDatadogRepoOverride(content string) (string, string) {
 		return remoteMatch[1], commitMatch[1]
 	}
 	return "", ""
+}
+
+func inferManagedRulesGoOverride(content string) (string, string) {
+	// Rerunning bootstrap should preserve the published fork commit already
+	// written in the managed rules_go override. This avoids depending on an
+	// embedded commit that may not survive squash-merge publication.
+	start := strings.Index(content, managedBlockStart)
+	end := strings.Index(content, managedBlockEnd)
+	if start < 0 || end < 0 || end <= start {
+		return "", ""
+	}
+	return inferRulesGoOverride(content[start:end])
+}
+
+func inferRulesGoOverride(content string) (string, string) {
+	// Return the remote and commit from an existing rules_go override when the
+	// workspace already owns that wiring.
+	overridePattern := regexp.MustCompile(`(?s)git_override\(\s*module_name\s*=\s*"rules_go"(.*?)\n\)`)
+	remotePattern := regexp.MustCompile(`remote\s*=\s*"([^"]+)"`)
+	commitPattern := regexp.MustCompile(`commit\s*=\s*"([^"]+)"`)
+
+	match := overridePattern.FindStringSubmatch(content)
+	if len(match) < 2 {
+		return "", ""
+	}
+	body := match[1]
+	remoteMatch := remotePattern.FindStringSubmatch(body)
+	commitMatch := commitPattern.FindStringSubmatch(body)
+	if len(remoteMatch) < 2 || len(commitMatch) < 2 {
+		return "", ""
+	}
+	return remoteMatch[1], commitMatch[1]
 }
 
 type goExtensionCall struct {

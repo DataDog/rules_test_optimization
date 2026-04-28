@@ -135,7 +135,7 @@ git_override(
 `
 	cfg := config{
 		rulesGoRemote: defaultRulesGoRemote,
-		rulesGoCommit: defaultRulesGoCommit,
+		rulesGoCommit: "deadbeef",
 	}
 	if rulesGoOverrideCompatible(input, cfg) {
 		t.Fatal("expected incompatible rules_go override to be rejected")
@@ -157,6 +157,123 @@ git_override(
 	}
 	if commit != "cafebabe" {
 		t.Fatalf("unexpected commit: %q", commit)
+	}
+}
+
+func TestPatchModuleFileInfersRulesGoCommitFromDatadogOverride(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	input := `module(name = "example")
+
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "published-main-sha",
+    strip_prefix = "modules/go",
+)
+`
+	if err := os.WriteFile(moduleFile, []byte(input), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      defaultRulesGoVariant,
+		rulesGoCommitSet:    false,
+		ddTraceGoVersionSet: true,
+	}
+	if err := patchModuleFile(cfg); err != nil {
+		t.Fatalf("patchModuleFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(moduleFile)
+	if err != nil {
+		t.Fatalf("read MODULE.bazel: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `commit = "published-main-sha"`) {
+		t.Fatalf("expected inferred rules_go commit in managed block:\n%s", text)
+	}
+	if !strings.Contains(text, `strip_prefix = "third_party/rules_go_orchestrion_base"`) {
+		t.Fatalf("expected base variant strip_prefix in managed block:\n%s", text)
+	}
+}
+
+func TestPatchModuleFilePreservesManagedRulesGoCommitOnRerun(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	input := `module(name = "example")
+
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "already-published-sha",
+    strip_prefix = "third_party/rules_go_orchestrion_complete",
+)
+
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.9.0",
+    dd_trace_go_version = "v2.9.0-dev",
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+# END Datadog Go Orchestrion bootstrap
+`
+	if err := os.WriteFile(moduleFile, []byte(input), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      "complete",
+		ddTraceGoVersionSet: true,
+	}
+	if err := patchModuleFile(cfg); err != nil {
+		t.Fatalf("patchModuleFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(moduleFile)
+	if err != nil {
+		t.Fatalf("read MODULE.bazel: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `commit = "already-published-sha"`) {
+		t.Fatalf("expected existing managed rules_go commit to be preserved:\n%s", text)
+	}
+	if !strings.Contains(text, `strip_prefix = "third_party/rules_go_orchestrion_complete"`) {
+		t.Fatalf("expected existing complete variant to be preserved:\n%s", text)
+	}
+}
+
+func TestPatchModuleFileRequiresRulesGoCommitWhenNoPublishedSourceExists(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	if err := os.WriteFile(moduleFile, []byte("module(name = \"example\")\n"), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      defaultRulesGoVariant,
+		ddTraceGoVersionSet: true,
+	}
+	err := patchModuleFile(cfg)
+	if err == nil {
+		t.Fatal("expected patchModuleFile to require a rules_go commit")
+	}
+	if !strings.Contains(err.Error(), "rules_go fork commit is required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
