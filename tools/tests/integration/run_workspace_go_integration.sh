@@ -39,7 +39,7 @@ GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev.0.20260416093245-194346a71c51}"
 SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
@@ -173,6 +173,36 @@ with open(sys.argv[3], "w", encoding="utf-8") as fh:
 PY
 }
 
+assert_json_test_payloads() {
+  local ws_dir="$1"
+  local mode="$2"
+  local payload_dir="$ws_dir/bazel-testlogs/app/hello_test/test.outputs/payloads/tests"
+
+  if [[ ! -d "$payload_dir" ]]; then
+    echo "error: $mode did not create test payload directory $payload_dir" >&2
+    exit 1
+  fi
+
+  "$PYTHON" - <<'PY' "$payload_dir" "$mode"
+import json
+from pathlib import Path
+import sys
+
+payload_dir = Path(sys.argv[1])
+mode = sys.argv[2]
+json_files = sorted(payload_dir.glob("*.json"))
+msgpack_files = sorted(payload_dir.glob("*.msgpack"))
+if not json_files:
+    raise SystemExit(f"error: {mode} did not emit JSON test payloads in {payload_dir}")
+if msgpack_files:
+    names = ", ".join(path.name for path in msgpack_files)
+    raise SystemExit(f"error: {mode} emitted raw msgpack test payloads instead of RFC JSON files: {names}")
+for path in json_files:
+    with path.open(encoding="utf-8") as fh:
+        json.load(fh)
+PY
+}
+
 create_fixture_archive() {
   local root_dir="$ARCHIVE_ROOT/$ARCHIVE_NAME"
 
@@ -273,6 +303,9 @@ const (
 	wantServiceName = "${SERVICE_NAME}"
 	wantModuleLabel = "${MODULE_LABEL}"
 	wantOutDir = "${OUT_DIR}"
+	wantBazelPackage = "//app"
+	wantBazelTarget = "//app:hello_test"
+	wantModuleImportpath = "${MODULE_IMPORTPATH}"
 	wantOrchestrionEnabled = true
 )
 
@@ -317,6 +350,15 @@ func TestGreeting(t *testing.T) {
 func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if got := os.Getenv("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"); got != "true" {
 		t.Fatalf("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = %q, want true", got)
+	}
+	if got := os.Getenv("DD_TRACE_AGENT_URL"); got != "" {
+		t.Fatalf("DD_TRACE_AGENT_URL = %q, want unset so Bazel file mode is not proxied", got)
+	}
+	if got := os.Getenv("DD_CIVISIBILITY_AGENTLESS_ENABLED"); got != "" {
+		t.Fatalf("DD_CIVISIBILITY_AGENTLESS_ENABLED = %q, want unset so Bazel file mode is not proxied", got)
+	}
+	if got := os.Getenv("DD_CIVISIBILITY_AGENTLESS_URL"); got != "" {
+		t.Fatalf("DD_CIVISIBILITY_AGENTLESS_URL = %q, want unset so Bazel file mode is not proxied", got)
 	}
 	if got := os.Getenv("DD_SERVICE"); got != wantServiceName {
 		t.Fatalf("DD_SERVICE = %q, want %s", got, wantServiceName)
@@ -376,11 +418,33 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if err := json.Unmarshal(metadataContent, &metadata); err != nil {
 		t.Fatalf("decode bazel_target_metadata.json: %v", err)
 	}
+	wantMetadataStrings := map[string]string{
+		"bazel.package": wantBazelPackage,
+		"bazel.target": wantBazelTarget,
+		"bazel.test_optimization.repo_name": "test_optimization_data",
+		"bazel.test_optimization.service_name": wantServiceName,
+		"bazel.test_optimization.runtime_name": "go",
+		"bazel.go.importpath": wantModuleImportpath,
+		"bazel.go.importpath_source": "inferred",
+		"bazel.go.payload_selection": "module",
+		"bazel.go.attr.pure": "auto",
+		"bazel.go.attr.race": "auto",
+		"bazel.go.attr.msan": "auto",
+		"bazel.go.attr.linkmode": "auto",
+	}
+	for key, want := range wantMetadataStrings {
+		if got, _ := metadata[key].(string); got != want {
+			t.Fatalf("%s = %v, want %q", key, metadata[key], want)
+		}
+	}
 	if got, _ := metadata["bazel.go.payload_selection"].(string); got != "module" {
 		t.Fatalf("bazel.go.payload_selection = %v, want module", metadata["bazel.go.payload_selection"])
 	}
 	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
 		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
+	}
+	if got, _ := metadata["bazel.go.attr.cgo"].(bool); got {
+		t.Fatalf("bazel.go.attr.cgo = %v, want false", metadata["bazel.go.attr.cgo"])
 	}
 }
 EOF
@@ -428,14 +492,14 @@ EOF
 write_orchestrion_go_sum() {
   local ws_dir="$1"
 
-  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0-dev" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
+  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0-dev.0.20260416093245-194346a71c51" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
     cat > "$ws_dir/go.sum" <<'EOF'
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev h1:WVGHErclGDYowS/0ROrnXw0pPcxSHWNMnEw/+g4cbbo=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev/go.mod h1:lJgKQz0CkbXSjn2LysuMZC0fyp5E4IHNdc1Pg4FprCQ=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev h1:vydpo2e5maPZbfa9oUNokWKyA/iU0Nd2DI/lMLzspBU=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev/go.mod h1:ftRJ7ZxpQrPe1j4WNHtVvxQSa0bvNcVPdEnOgdnet8s=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-dev h1:CVSMydw9FRPzC07o8GHLOZtpkOk/JJcRpEKgOIeaPDA=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-dev/go.mod h1:DnPEO+93yfskSYAcOw5v5EJVBZ3Z1ENMNtOQX/D/lME=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev.0.20260416093245-194346a71c51 h1:03H0QyfGKLE3DXw2WXCmN1+ewZ0zwkCUa/IdaBjTC90=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev.0.20260416093245-194346a71c51/go.mod h1:A1OBuqc+Hvqd5qDd72PcxgGyTG/pOoiOzL26myJBxLM=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev.0.20260416093245-194346a71c51 h1:afxqmyEMasZwKrrfApPpmZrnJTQGryniS24tksEUcCE=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev.0.20260416093245-194346a71c51/go.mod h1:WFpNwr9EAQZj2/EXlpm/b1N5BWVkGUUnNudzK4SICTU=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev.0.20260416093245-194346a71c51 h1:kNNsnqUxZi+6Rac4yFH6fsQGG0km84pSLkfSN6D7Be0=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev.0.20260416093245-194346a71c51/go.mod h1:IVkBpsq66Cw/YIRM/Te3pl2F0M9n4zguAB2ReGczWeo=
 github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=
 github.com/DataDog/orchestrion v1.6.0/go.mod h1:CYY2VfaEQVr+gwKSlpUoHBF9JIO4eV3BfSeG0YAQwZE=
 EOF
@@ -641,6 +705,7 @@ run_positive_subscenario() {
       cd "$ws_dir"
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test "${workspace_flags[@]}" "$HELLO_TEST_TARGET"
     )
+    assert_json_test_payloads "$ws_dir" "$mode"
     return
   fi
 
@@ -696,24 +761,25 @@ PY
 
   (
     cd "$ws_dir"
-      HOME="$hermetic_home" \
-      XDG_CACHE_HOME="$hermetic_xdg" \
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
-        "${workspace_flags[@]}" \
-        "${HERMETIC_BUILD_FLAGS[@]}" \
-        "${HERMETIC_TEST_FLAGS[@]}" \
-        "$HELLO_TEST_TARGET"
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      "${HERMETIC_TEST_FLAGS[@]}" \
+      "$HELLO_TEST_TARGET"
   )
+  assert_json_test_payloads "$ws_dir" "$mode"
 
   (
-      cd "$ws_dir"
-      HOME="$hermetic_home" \
-      XDG_CACHE_HOME="$hermetic_xdg" \
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
-        "${workspace_flags[@]}" \
-        "${HERMETIC_BUILD_FLAGS[@]}" \
-        "deps(${HELLO_TEST_TARGET})" \
-        --output=textproto > "$aquery_output"
+    cd "$ws_dir"
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      "deps(${HELLO_TEST_TARGET})" \
+      --output=textproto > "$aquery_output"
   )
 
   "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" "$aquery_output"

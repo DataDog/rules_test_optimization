@@ -1929,6 +1929,46 @@ function Get-SortedPayloadFiles([string]$DirPath) {
     return $files
 }
 
+# Enumerate Bazel-mode test payload files. Test payloads must stay JSON so the
+# uploader can enrich them with repository and Bazel metadata before upload.
+function Get-SortedTestPayloadFiles([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
+    $files = @(Get-ChildItem -Path $DirPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq ".json" })
+    if ($files.Count -gt 1) {
+        [Array]::Sort(
+            $files,
+            [System.Collections.Generic.Comparer[object]]::Create(
+                [System.Comparison[object]]{
+                    param($left, $right)
+                    $leftName = if ($null -eq $left) { "" } else { [string]$left.Name }
+                    $rightName = if ($null -eq $right) { "" } else { [string]$right.Name }
+                    return [System.StringComparer]::Ordinal.Compare($leftName, $rightName)
+                }
+            )
+        )
+    }
+    return $files
+}
+
+function Get-SortedRawTestMsgpackFiles([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
+    $files = @(Get-ChildItem -Path $DirPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq ".msgpack" })
+    if ($files.Count -gt 1) {
+        [Array]::Sort(
+            $files,
+            [System.Collections.Generic.Comparer[object]]::Create(
+                [System.Comparison[object]]{
+                    param($left, $right)
+                    $leftName = if ($null -eq $left) { "" } else { [string]$left.Name }
+                    $rightName = if ($null -eq $right) { "" } else { [string]$right.Name }
+                    return [System.StringComparer]::Ordinal.Compare($leftName, $rightName)
+                }
+            )
+        )
+    }
+    return $files
+}
+
 # Detect whether one replay payload is stored in raw msgpack form.
 function Test-MsgpackPayload([string]$FilePath) {
     return ([System.StringComparer]::OrdinalIgnoreCase.Compare([System.IO.Path]::GetExtension($FilePath), ".msgpack") -eq 0)
@@ -2664,73 +2704,7 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
   return [bool]$false
 }
 
-function Send-PostMsgpack([string]$url, [hashtable]$headers, [string]$file) {
-  $maxRetries = 3
-  $retryDelay = 2
-  if (-not (Ensure-HttpClientTypes)) {
-    Log "upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
-    return [bool]$false
-  }
-  for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
-    $client = $null
-    try {
-      $client = New-Object System.Net.Http.HttpClient
-      $client.Timeout = [TimeSpan]::FromSeconds(60)
-      foreach ($k in $headers.Keys) {
-        $null = $client.DefaultRequestHeaders.Add($k, [string]$headers[$k])
-      }
-      Dbg "Send-PostMsgpack: POST $url (file '$file'; attempt $attempt/$maxRetries)"
-      $bytes = [IO.File]::ReadAllBytes($file)
-      $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $bytes)
-      $content.Headers.ContentType = 'application/msgpack'
-      Dbg "Send-PostMsgpack: Content-Type=application/msgpack"
-      $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
-      if ($resp.IsSuccessStatusCode) {
-        if ($script:DebugMode) {
-          $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-          if ($body) { Dbg "Send-PostMsgpack response: $body" }
-        }
-        return [bool]$true
-      } else {
-        $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-        Dbg "Send-PostMsgpack: HTTP $([int]$resp.StatusCode) on attempt $attempt"
-        if ($attempt -eq $maxRetries) {
-          Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
-          return [bool]$false
-        }
-      }
-    } catch {
-      Dbg "Send-PostMsgpack: Exception on attempt $attempt - $_"
-      if ($attempt -eq $maxRetries) {
-        Log "upload failed: $_"
-        return [bool]$false
-      }
-    } finally {
-      if ($client) { $client.Dispose() }
-    }
-    Start-Sleep -Seconds $retryDelay
-  }
-  return [bool]$false
-}
-
 function Upload-SingleTest([string]$FilePath) {
-    if (Test-MsgpackPayload $FilePath) {
-        $hdrs = Get-CommonHeaders $null
-        if (-not $Agentless) { $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }
-        Dbg "Upload-SingleTest: posting raw msgpack '$FilePath'"
-        if ($script:DebugMode) {
-            Dbg "request: POST $TestUrl"
-            Dbg-Headers "common" $hdrs
-            Dbg "headers: Content-Type=application/msgpack"
-        }
-        $resultStream = @(Send-PostMsgpack $TestUrl $hdrs $FilePath)
-        $result = $false
-        if ($resultStream.Count -gt 0) {
-            $result = [bool]$resultStream[-1]
-        }
-        return [bool]$result
-    }
-
     $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
     Validate-Payload $body
@@ -2903,7 +2877,12 @@ function Upload-AllTests {
     foreach ($outputsDir in $script:TestOutputsCache) {
         $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
         if (-not (Test-Path -LiteralPath $testsDir)) { continue }
-        $files = Get-SortedPayloadFiles $testsDir
+        foreach ($f in @(Get-SortedRawTestMsgpackFiles $testsDir)) {
+            Log "error: raw msgpack test payload is not supported in Bazel file mode: $($f.FullName)"
+            $failed++
+            $script:UploadFailures++
+        }
+        $files = Get-SortedTestPayloadFiles $testsDir
         foreach ($f in $files) {
             if (-not (Test-PrefixFilter $f.FullName "span_events_")) {
                 Dbg "skipping (prefix filter): $($f.FullName)"

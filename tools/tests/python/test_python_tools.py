@@ -838,6 +838,24 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn('log "warning: context enrichment failed for payload:', bash_text)
         self.assertIn('cp "$infile" "$tmpfile"', bash_text)
 
+    def test_uploader_rejects_raw_msgpack_test_payloads(self) -> None:
+        """Validate test uploads keep the Bazel JSON enrichment contract."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("list_sorted_test_payload_files()", bash_text)
+        self.assertIn("list_sorted_raw_test_msgpack_files()", bash_text)
+        self.assertIn("raw msgpack test payload is not supported in Bazel file mode", bash_text)
+        self.assertNotIn("upload_single_test_msgpack", bash_text)
+
+        self.assertIn("function Get-SortedTestPayloadFiles", powershell_text)
+        self.assertIn("function Get-SortedRawTestMsgpackFiles", powershell_text)
+        self.assertIn("raw msgpack test payload is not supported in Bazel file mode", powershell_text)
+        self.assertNotIn("Send-PostMsgpack", powershell_text)
+        self.assertNotIn("Upload-SingleTest: posting raw msgpack", powershell_text)
+
     def test_bash_runtime_prefers_context_override_before_runfiles(self) -> None:
         """Validate bash runtime prefers explicit context override before data files."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")

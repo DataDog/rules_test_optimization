@@ -160,14 +160,14 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
 Go module. `--dd-trace-go-version` is optional; if you omit it, the default is
-`v2.9.0-dev`.
+`v2.9.0-dev.0.20260416093245-194346a71c51`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51
 ```
 
 If the Go module lives below the workspace root:
@@ -177,7 +177,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev \
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
   --go-module-dir path/to/go-module
 ```
 
@@ -901,9 +901,12 @@ the recommended default because it avoids repo-local `--repo_env` glue.
 Then run the Datadog bootstrap helper once so Orchestrion is pinned into the
 workspace Go module. Repository/bootstrap resolution may use network access.
 After that, Orchestrion build actions consume a declared offline Go module
-proxy staged in `@rules_go_orchestrion_tool`; they do not depend on a warmed
-host Go module cache. Pass `--dd-trace-go-version <query>` if you want a
-non-default tracer version; otherwise the default is `v2.9.0-dev`.
+download cache staged in `@rules_go_orchestrion_tool`; they do not depend on a
+warmed host Go module cache. Test payloads still use the Bazel file-output
+contract: the tracer writes JSON files under `TEST_UNDECLARED_OUTPUTS_DIR`, and
+the uploader enriches those JSON files with repository and Bazel metadata. Pass
+`--dd-trace-go-version <query>` if you want a non-default tracer version;
+otherwise the default is `v2.9.0-dev.0.20260416093245-194346a71c51`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
@@ -942,10 +945,11 @@ The maintained repository integration scripts validate the hermetic Go path
 with explicit Bazel flags in the script itself. There is no special repo-root
 `--config=hermetic` shortcut for this flow.
 
-If both settings are omitted, the default is still `v2.9.0-dev`. Manual setups
-must keep the local Go module pins on the same effective versions, or the build
-will stop with a mismatch error. Do not set both `dd_trace_go_version` and
-`dd_trace_go_versions` in the same `orchestrion.from_source(...)` call.
+If both settings are omitted, the default is still
+`v2.9.0-dev.0.20260416093245-194346a71c51`. Manual setups must keep the local Go
+module pins on the same effective versions, or the build will stop with a
+mismatch error. Do not set both `dd_trace_go_version` and `dd_trace_go_versions`
+in the same `orchestrion.from_source(...)` call.
 Bootstrap also refuses to take over tracer settings that are already managed
 manually outside its own managed block.
 

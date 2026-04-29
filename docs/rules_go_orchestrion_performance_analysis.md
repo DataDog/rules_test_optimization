@@ -66,7 +66,7 @@ Analysis date: `2026-03-25`
 The fork is deep, not a thin wrapper.
 
 At the time of this analysis, the fork was already deep and touched dozens of
-paths against upstream `rules_go v0.59.0`, including:
+paths against upstream `rules_go v0.60.0`, including:
 
 - module extension setup for Orchestrion
 - `rules_go` analysis-time context wiring

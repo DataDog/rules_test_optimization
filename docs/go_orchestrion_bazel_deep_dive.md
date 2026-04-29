@@ -160,7 +160,7 @@ Implementation:
 
 Bootstrap does five things that matter for the current architecture:
 
-1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.59.0")`
+1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.60.0")`
 2. Writes a managed `git_override` for `rules_go` pointing back to this repo
    with `strip_prefix = "third_party/rules_go_orchestrion_base"`
 3. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension and
@@ -182,9 +182,10 @@ It aligns:
 - the selected `dd-trace-go` version used by Bazel injection
 - the pinned Go module files that Orchestrion expects
 
-If no tracer setting is present, the default is still `v2.9.0-dev`. Bootstrap keeps
-the local Go module on the same effective versions, and the Bazel build now
-fails fast if the workspace setting and the local Go module pins drift apart.
+If no tracer setting is present, the default is still
+`v2.9.0-dev.0.20260416093245-194346a71c51`. Bootstrap keeps the local Go module
+on the same effective versions, and the Bazel build now fails fast if the
+workspace setting and the local Go module pins drift apart.
 
 The downloaded Orchestrion tool source is still patched before Bazel builds the
 binary, but Bazel now builds that tool from Orchestrion's upstream module graph
