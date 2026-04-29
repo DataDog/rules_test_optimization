@@ -237,6 +237,16 @@ func TestNormalizeGoActionCacheEnvTreatsEmptyValuesAsUnset(t *testing.T) {
 	}
 }
 
+func TestIsOrchestrionJobserverConnectionFailure(t *testing.T) {
+	output := "failed to connect to NATS job server at nats://127.0.0.1:64506 after 15 attempts"
+	if !isOrchestrionJobserverConnectionFailure(output) {
+		t.Fatalf("isOrchestrionJobserverConnectionFailure(%q) = false, want true", output)
+	}
+	if isOrchestrionJobserverConnectionFailure("compilepkg: unrelated failure") {
+		t.Fatal("isOrchestrionJobserverConnectionFailure matched an unrelated error")
+	}
+}
+
 func envSliceToMap(env []string) map[string]string {
 	result := make(map[string]string, len(env))
 	for _, entry := range env {

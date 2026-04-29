@@ -16,10 +16,12 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // runCommandWithJobserver executes a subprocess with the orchestrion jobserver
@@ -34,25 +36,45 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 		newProbeField("import_path", importPath),
 		newProbeField("jobserver", strconv.FormatBool(jobserver != nil && jobserver.URL() != "")),
 	)
-	cmd := exec.Command(args[0], args[1:]...)
 	buf := &bytes.Buffer{}
+	goRootPath := e.goroot
+	if goRootPath == "" {
+		goRootPath = os.Getenv("GOROOT")
+	}
+	cmd := e.newBufferedCommand(args, buf)
+	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose)
+	if err != nil && jobserver != nil && isOrchestrionJobserverConnectionFailure(buf.String()) {
+		if e.verbose {
+			os.Stderr.Write(relativizePaths(buf.Bytes()))
+		}
+		fmt.Fprintln(os.Stderr, "orchestrion: jobserver connection failed; retrying command without jobserver")
+		buf.Reset()
+		cmd = e.newBufferedCommand(args, buf)
+		err = executeCommandWithJobserver(cmd, nil, importPath, e.sdk, goRootPath, e.verbose)
+	}
+	span.End(err)
+	os.Stderr.Write(relativizePaths(buf.Bytes()))
+	return err
+}
+
+// newBufferedCommand creates a subprocess command wired to the shared builder
+// buffer and applies the stdlib cache override needed by Orchestrion actions.
+func (e *env) newBufferedCommand(args []string, buf *bytes.Buffer) *exec.Cmd {
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = buf
 	cmd.Stderr = buf
-	if cmd.Env == nil {
-		cmd.Env = os.Environ()
-	}
+	cmd.Env = os.Environ()
 	if e.stdlibCache != "" {
 		if info, err := os.Stat(e.stdlibCache); err == nil && info.IsDir() {
 			cmd.Env = setEnv(cmd.Env, "GOCACHE", e.stdlibCache)
 			cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, e.stdlibCache)
 		}
 	}
-	goRootPath := e.goroot
-	if goRootPath == "" {
-		goRootPath = os.Getenv("GOROOT")
-	}
-	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose)
-	span.End(err)
-	os.Stderr.Write(relativizePaths(buf.Bytes()))
-	return err
+	return cmd
+}
+
+// isOrchestrionJobserverConnectionFailure reports whether Orchestrion failed
+// before compilation because the advertised localhost jobserver was unreachable.
+func isOrchestrionJobserverConnectionFailure(output string) bool {
+	return strings.Contains(output, "failed to connect to NATS job server")
 }
