@@ -2043,6 +2043,19 @@ list_sorted_payload_files() {
     find "$dir" -maxdepth 1 -type f \( -name "*.json" -o -name "*.msgpack" \) -print 2>/dev/null | LC_ALL=C sort
 }
 
+# List Bazel-mode test payload files. The RFC contract requires JSON test
+# payloads so they can be enriched with repository and Bazel metadata before
+# upload; raw msgpack test payloads are rejected separately.
+list_sorted_test_payload_files() {
+    local dir="$1"
+    find "$dir" -maxdepth 1 -type f -name "*.json" -print 2>/dev/null | LC_ALL=C sort
+}
+
+list_sorted_raw_test_msgpack_files() {
+    local dir="$1"
+    find "$dir" -maxdepth 1 -type f -name "*.msgpack" -print 2>/dev/null | LC_ALL=C sort
+}
+
 # Detect whether one replay payload is stored in raw msgpack form.
 is_msgpack_payload() {
     local file="$1"
@@ -2817,62 +2830,10 @@ PY
 # Track upload failures globally
 UPLOAD_FAILURES=0
 
-# Handle upload single raw msgpack test behavior.
-upload_single_test_msgpack() {
-    local file="$1"
-    local resp http rc
-    build_common_headers ""
-    dbg "upload_single_test_msgpack: posting '$file'"
-    resp="$(mktemp "$TMP_PAYLOAD_DIR/test_resp.XXXXXX" 2>/dev/null || true)"
-    if [[ -z "$resp" ]]; then
-        dbg "upload_single_test_msgpack: failed to create response temp file"
-        return 1
-    fi
-    if [[ "$DEBUG" == "1" ]]; then
-        dbg "request: POST $TEST_URL"
-        dbg_headers "common" "${COMMON_HDRS[@]}"
-        if (( AGENTLESS == 0 )); then
-            dbg_headers "evp" "${TEST_EVP[@]}"
-        fi
-        dbg "headers: Content-Type=application/msgpack"
-    fi
-    if (( AGENTLESS == 1 )); then
-      if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
-        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" -H "Content-Type: application/msgpack" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
-        rc=0
-      else
-        rc=$?
-      fi
-    else
-      if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
-        -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${TEST_EVP[@]}" -H "Content-Type: application/msgpack" --data-binary @"${file}" -o "$resp" -w "%{http_code}"); then
-        rc=0
-      else
-        rc=$?
-      fi
-    fi
-    http="${http:-000}"
-    if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
-        dbg "upload_single_test_msgpack: HTTP $http (rc=$rc)"
-        if [[ -s "$resp" ]]; then
-            dbg "upload_single_test_msgpack response: $(head -c 2000 "$resp")"
-        fi
-    fi
-    rm -f "$resp" 2>/dev/null || true
-    if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
-        return 1
-    fi
-    return 0
-}
-
 # Handle upload single test behavior.
 upload_single_test() {
     local file="$1"
     local body resp payload_file gz http rc
-    if is_msgpack_payload "$file"; then
-        upload_single_test_msgpack "$file"
-        return $?
-    fi
     # Use a temp file to avoid collisions when multiple uploads run in parallel.
     body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$body" ]]; then
@@ -3107,6 +3068,13 @@ upload_all_tests() {
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
+            log "error: raw msgpack test payload is not supported in Bazel file mode: $f"
+            ((++failed))
+            ((++UPLOAD_FAILURES))
+        done < <(list_sorted_raw_test_msgpack_files "$tests_dir")
+
+        while IFS= read -r f; do
+            [[ -f "$f" ]] || continue
             # Skip files not matching prefix filter (when enabled)
             if ! matches_filter "$f" "span_events_"; then
                 dbg "skipping (prefix filter): $f"
@@ -3124,7 +3092,7 @@ upload_all_tests() {
                 ((++failed))
                 ((++UPLOAD_FAILURES))
             fi
-        done < <(list_sorted_payload_files "$tests_dir")
+        done < <(list_sorted_test_payload_files "$tests_dir")
     done < <(echo "$TEST_OUTPUTS_CACHE")
     log "uploaded $total test payloads"
     if (( failed > 0 )); then

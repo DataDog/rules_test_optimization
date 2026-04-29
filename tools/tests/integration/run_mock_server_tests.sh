@@ -1671,9 +1671,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260416093245-194346a71c51)
       run_real_go "$@"
       exit 0
       ;;
@@ -1694,9 +1694,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260416093245-194346a71c51)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -1706,8 +1706,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-dev"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260416093245-194346a71c51" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-dev.0.20260416093245-194346a71c51"
   exit 0
 fi
 
@@ -1721,7 +1721,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0-dev\n'
+      printf 'v2.9.0-dev.0.20260416093245-194346a71c51\n'
       exit 0
       ;;
   esac
@@ -1729,10 +1729,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev)
-      printf '{"Version":"v2.9.0-dev"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260416093245-194346a71c51)
+      printf '{"Version":"v2.9.0-dev.0.20260416093245-194346a71c51"}\n'
       exit 0
       ;;
   esac
@@ -1747,7 +1747,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0-dev"}\n'
+      printf '{"Version":"v2.9.0-dev.0.20260416093245-194346a71c51"}\n'
       exit 0
       ;;
   esac
@@ -1995,9 +1995,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260416093245-194346a71c51)
       run_real_go "$@"
       exit 0
       ;;
@@ -2010,9 +2010,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260416093245-194346a71c51)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -2022,8 +2022,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-dev"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-dev.0.20260416093245-194346a71c51" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-dev.0.20260416093245-194346a71c51"
   exit 0
 fi
 
@@ -2037,7 +2037,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0-dev\n'
+      printf 'v2.9.0-dev.0.20260416093245-194346a71c51\n'
       exit 0
       ;;
   esac
@@ -2045,10 +2045,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev)
-      printf '{"Version":"v2.9.0-dev"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-dev.0.20260416093245-194346a71c51|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-dev.0.20260416093245-194346a71c51)
+      printf '{"Version":"v2.9.0-dev.0.20260416093245-194346a71c51"}\n'
       exit 0
       ;;
   esac
@@ -2063,7 +2063,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0-dev"}\n'
+      printf '{"Version":"v2.9.0-dev.0.20260416093245-194346a71c51"}\n'
       exit 0
       ;;
   esac
@@ -2170,8 +2170,45 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func resolveRlocation(p string) (string, bool) {
+	if _, err := os.Stat(p); err == nil {
+		return p, true
+	}
+	if d := os.Getenv("RUNFILES_DIR"); d != "" {
+		cand := filepath.Join(d, p)
+		if _, err := os.Stat(cand); err == nil {
+			return cand, true
+		}
+	}
+	if mf := os.Getenv("RUNFILES_MANIFEST_FILE"); mf != "" {
+		if f, err := os.Open(mf); err == nil {
+			defer f.Close()
+			sc := bufio.NewScanner(f)
+			for sc.Scan() {
+				line := sc.Text()
+				i := strings.IndexByte(line, ' ')
+				if i > 0 && line[:i] == p {
+					return line[i+1:], true
+				}
+			}
+		}
+	}
+	if s := os.Getenv("TEST_SRCDIR"); s != "" {
+		cand := filepath.Join(s, p)
+		if _, err := os.Stat(cand); err == nil {
+			return cand, true
+		}
+	}
+	return p, false
+}
 
 func TestGreeting(t *testing.T) {
 	if Greeting() != "Hello World from Go" {
@@ -2200,6 +2237,46 @@ func TestStageSourcesEnablesRepoRelativeAstLookup(t *testing.T) {
 		t.Fatalf("failed to resolve TestGreeting end line from AST")
 	}
 }
+
+func TestGuidedGoRuntimeWiring(t *testing.T) {
+	if got := os.Getenv("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"); got != "true" {
+		t.Fatalf("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = %q, want true", got)
+	}
+	if got := os.Getenv("DD_TRACE_AGENT_URL"); got != "" {
+		t.Fatalf("DD_TRACE_AGENT_URL = %q, want unset so Bazel file mode is not proxied", got)
+	}
+	if got := os.Getenv("DD_CIVISIBILITY_AGENTLESS_ENABLED"); got != "" {
+		t.Fatalf("DD_CIVISIBILITY_AGENTLESS_ENABLED = %q, want unset so Bazel file mode is not proxied", got)
+	}
+
+	manifestPath := os.Getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+	if manifestPath == "" {
+		t.Fatal("DD_TEST_OPTIMIZATION_MANIFEST_FILE not set")
+	}
+	if resolved, ok := resolveRlocation(manifestPath); !ok {
+		t.Fatalf("failed to resolve manifest runfile %q", manifestPath)
+	} else if _, err := os.Stat(resolved); err != nil {
+		t.Fatalf("manifest file is not readable: %v", err)
+	}
+
+	undeclaredDir := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
+	if undeclaredDir == "" {
+		t.Fatal("TEST_UNDECLARED_OUTPUTS_DIR not set")
+	}
+	metadataPath := filepath.Join(undeclaredDir, "bazel_target_metadata.json")
+	metadataContent, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatalf("read bazel_target_metadata.json: %v", err)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(metadataContent, &metadata); err != nil {
+		t.Fatalf("decode bazel_target_metadata.json: %v", err)
+	}
+	if got, _ := metadata["bazel.target"].(string); got != "//src/go-project:hello_test" {
+		t.Fatalf("bazel.target = %v, want //src/go-project:hello_test", metadata["bazel.target"])
+	}
+}
 GO_TEST_GUIDED_EOF
 
 cat > "$GUIDED_BOOT_WS/src/go-project/BUILD.bazel" <<'BUILD_GUIDED_EOF'
@@ -2209,6 +2286,7 @@ load("//tools/build:dd_go_test.bzl", "dd_go_test")
 go_library(
     name = "hello_lib",
     srcs = ["main.go"],
+    importpath = "example.com/guided-bootstrap-go",
 )
 
 dd_go_test(

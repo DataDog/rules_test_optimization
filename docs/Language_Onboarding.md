@@ -77,17 +77,17 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51
 ```
 
 The bootstrap writes `//tools/build:dd_go_test.bzl` and creates
 `//:dd_upload_payloads` when it is missing.
 
-`--dd-trace-go-version` is optional. If omitted, the default is `v2.9.0-dev`. It
-accepts a tag, pseudo-version, branch, or commit SHA. Bootstrap resolves that
-input to the exact tracer versions Bazel will use, repins the local Go module
-to match, and later builds fail fast if the workspace setting and local pins no
-longer match.
+`--dd-trace-go-version` is optional. If omitted, the default is
+`v2.9.0-dev.0.20260416093245-194346a71c51`. It accepts a tag, pseudo-version,
+branch, or commit SHA. Bootstrap resolves that input to the exact tracer
+versions Bazel will use, repins the local Go module to match, and later builds
+fail fast if the workspace setting and local pins no longer match.
 
 ```bzl
 # package BUILD.bazel

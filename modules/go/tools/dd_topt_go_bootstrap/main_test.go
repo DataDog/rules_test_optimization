@@ -180,7 +180,7 @@ git_override(
 	cfg := config{
 		moduleFile:          moduleFile,
 		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0-dev",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
 		rulesGoRemote:       defaultRulesGoRemote,
 		rulesGoVariant:      defaultRulesGoVariant,
 		rulesGoCommitSet:    false,
@@ -219,7 +219,7 @@ git_override(
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0-dev",
+    dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 # END Datadog Go Orchestrion bootstrap
@@ -231,7 +231,7 @@ use_repo(orchestrion, "rules_go_orchestrion_tool")
 	cfg := config{
 		moduleFile:          moduleFile,
 		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0-dev",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
 		rulesGoRemote:       defaultRulesGoRemote,
 		rulesGoVariant:      "complete",
 		ddTraceGoVersionSet: true,
@@ -263,7 +263,7 @@ func TestPatchModuleFileRequiresRulesGoCommitWhenNoPublishedSourceExists(t *test
 	cfg := config{
 		moduleFile:          moduleFile,
 		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0-dev",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
 		rulesGoRemote:       defaultRulesGoRemote,
 		rulesGoVariant:      defaultRulesGoVariant,
 		ddTraceGoVersionSet: true,
@@ -354,7 +354,7 @@ func TestWriteOrchestrionToolFileWritesManagedImports(t *testing.T) {
 func TestBootstrapSyncCommandsPinConfiguredOrchestrionVersion(t *testing.T) {
 	cfg := config{
 		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0-dev",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
 	}
 
 	got := bootstrapSyncCommands(cfg)
