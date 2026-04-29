@@ -1024,29 +1024,11 @@ func prepareSyntheticTestmainModuleDir(workDir, sourceModuleDir string) (string,
 }
 
 // seedSyntheticTestmainModuleFiles prepares the module files used by synthetic
-// helper subprocesses. When the consumer module exposes all Orchestrion pin
-// files, the helper reuses them so `go list` and helper compiles see the same
-// dependency graph as the target. Otherwise it falls back to a minimal module
-// generated from the repository-rule version pins.
+// helper subprocesses. Synthetic helpers compile Datadog helper packages, not
+// consumer packages, so they use the configured Orchestrion/dd-trace module graph
+// instead of copying the consumer go.mod. Copying the consumer graph can require
+// module versions that are intentionally absent from the offline tool proxy.
 func seedSyntheticTestmainModuleFiles(sourceModuleDir, syntheticDir, orchestrionVersion string, versions map[string]string) (bool, error) {
-	pinFiles := []string{"go.mod", "go.sum", "orchestrion.tool.go", "orchestrion.yml"}
-	if strings.TrimSpace(sourceModuleDir) != "" {
-		allCopied := true
-		for _, name := range pinFiles {
-			copied, err := copyFileIfExists(filepath.Join(sourceModuleDir, name), filepath.Join(syntheticDir, name))
-			if err != nil {
-				return false, fmt.Errorf("copy synthetic testmain module file %s: %w", name, err)
-			}
-			if !copied {
-				allCopied = false
-				break
-			}
-		}
-		if allCopied {
-			return true, nil
-		}
-	}
-
 	goModPath := filepath.Join(syntheticDir, "go.mod")
 	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(orchestrionVersion, versions)), 0o644); err != nil {
 		return false, fmt.Errorf("write synthetic testmain go.mod: %w", err)
@@ -1855,33 +1837,29 @@ func resolveSyntheticTestmainExternalExports(goenv *env, moduleDir string, exter
 }
 
 func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg string, rootSet map[string]bool, decisions map[string]bool, metaCache map[string]*modulePackageMetadata, visiting map[string]bool) (bool, error) {
-	if rootSet[pkg] {
-		decisions[pkg] = true
-		return true, nil
-	}
 	if decision, ok := decisions[pkg]; ok {
 		return decision, nil
 	}
 	if visiting[pkg] {
-		return false, nil
+		return rootSet[pkg], nil
 	}
 	meta, err := loadModulePackageMetadataCached(goenv, moduleDir, exportRoot, metaCache, pkg)
 	if err != nil {
 		return false, err
 	}
-	if len(meta.CgoFiles) > 0 {
+	if len(meta.CgoFiles) > 0 && !rootSet[pkg] {
 		decisions[pkg] = false
 		return false, nil
 	}
 	visiting[pkg] = true
 	defer delete(visiting, pkg)
+	needsCompile := rootSet[pkg]
 	for _, imp := range meta.Imports {
 		imp = strings.TrimSpace(imp)
 		if imp == "" || !strings.Contains(imp, ".") {
 			switch imp {
 			case "flag", "log", "log/slog", "net/http", "os", "os/exec", "testing":
-				decisions[pkg] = true
-				return true, nil
+				needsCompile = true
 			}
 			continue
 		}
@@ -1890,12 +1868,11 @@ func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg s
 			return false, err
 		}
 		if depNeedsCompile {
-			decisions[pkg] = true
-			return true, nil
+			needsCompile = true
 		}
 	}
-	decisions[pkg] = false
-	return false, nil
+	decisions[pkg] = needsCompile
+	return needsCompile, nil
 }
 
 func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir, exportRoot string, rootSet map[string]bool, sourceDecisions map[string]bool, metaCache map[string]*modulePackageMetadata, compiled map[string]compiledModuleArchive, externalExports map[string]string, pkg string) (_ string, _ string, err error) {

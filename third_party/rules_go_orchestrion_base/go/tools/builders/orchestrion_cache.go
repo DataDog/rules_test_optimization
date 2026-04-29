@@ -25,7 +25,7 @@ const (
 	// compile closure changes. The helper decision and archive caches both key
 	// off this value, so widening the recursive source-compile set must force a
 	// rebuild instead of reusing bundles prepared for the older closure.
-	helperSourceSetVersion = "v2"
+	helperSourceSetVersion = "v3"
 
 	orchestrionPersistentCacheDirName = "rules-go-orchestrion"
 

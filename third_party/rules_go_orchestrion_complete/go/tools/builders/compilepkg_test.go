@@ -77,6 +77,76 @@ func TestCollectSyntheticTestmainExternalPackagesIsStable(t *testing.T) {
 	}
 }
 
+func TestPackageNeedsSyntheticSourceCompileWalksRootDependencies(t *testing.T) {
+	rootSet := map[string]bool{"example.com/root": true}
+	sourceDecisions := map[string]bool{}
+	metaCache := map[string]*modulePackageMetadata{
+		"example.com/root": {
+			ImportPath: "example.com/root",
+			Imports:    []string{"example.com/dep"},
+		},
+		"example.com/dep": {
+			ImportPath: "example.com/dep",
+			Imports:    []string{"example.com/external"},
+		},
+		"example.com/external": {
+			ImportPath: "example.com/external",
+		},
+	}
+	got, err := packageNeedsSyntheticSourceCompile(nil, "", "", "example.com/root", rootSet, sourceDecisions, metaCache, map[string]bool{})
+	if err != nil {
+		t.Fatalf("packageNeedsSyntheticSourceCompile error: %v", err)
+	}
+	if !got {
+		t.Fatal("root package was not marked for source compilation")
+	}
+	if _, ok := sourceDecisions["example.com/dep"]; !ok {
+		t.Fatalf("root dependency was not inspected: decisions=%v", sourceDecisions)
+	}
+}
+
+func TestExistingArchiveOverridesPromoteExternalImporters(t *testing.T) {
+	rootSet := map[string]bool{"example.com/root": true}
+	state := syntheticTestmainHelperDecisionState{
+		metaCache: map[string]*modulePackageMetadata{
+			"example.com/root": {
+				ImportPath: "example.com/root",
+				Imports:    []string{"example.com/dep"},
+			},
+			"example.com/dep": {
+				ImportPath: "example.com/dep",
+				Imports:    []string{"example.com/existing"},
+			},
+			"example.com/existing": {
+				ImportPath: "example.com/existing",
+			},
+		},
+		sourceDecisions: map[string]bool{
+			"example.com/root":     true,
+			"example.com/dep":      false,
+			"example.com/existing": false,
+		},
+		sourcePackages:   []string{"example.com/root"},
+		externalPackages: []string{"example.com/dep"},
+	}
+	got := state.withExistingArchiveOverrides(rootSet, map[string]archive{
+		"example.com/existing": {
+			packagePath: "example.com/existing",
+			file:        "bazel-out/existing.x",
+		},
+	})
+	if !got.sourceDecisions["example.com/dep"] {
+		t.Fatalf("external importer was not promoted to source compilation: decisions=%v", got.sourceDecisions)
+	}
+	if got.sourceDecisions["example.com/existing"] {
+		t.Fatalf("existing archive package should stay external: decisions=%v", got.sourceDecisions)
+	}
+	wantExternal := []string{"example.com/existing"}
+	if !reflect.DeepEqual(got.externalPackages, wantExternal) {
+		t.Fatalf("externalPackages got=%v want=%v", got.externalPackages, wantExternal)
+	}
+}
+
 func TestSyntheticTestmainHelperDecisionCacheKeyIgnoresSdkExecrootPath(t *testing.T) {
 	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
 	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.7.3"}}`))
@@ -107,10 +177,10 @@ func TestSyntheticTestmainHelperDecisionCacheKeyIgnoresSdkExecrootPath(t *testin
 	}
 }
 
-// TestSeedSyntheticTestmainModuleFilesPrefersSourceModule verifies that the
-// synthetic testmain helper bootstrap reuses the real consumer module files
-// when they are available, instead of rebuilding a minimal temporary graph.
-func TestSeedSyntheticTestmainModuleFilesPrefersSourceModule(t *testing.T) {
+// TestSeedSyntheticTestmainModuleFilesIgnoresSourceModule verifies that
+// synthetic testmain helpers do not inherit the consumer module graph. The
+// helper graph must stay aligned with the offline Orchestrion tool proxy.
+func TestSeedSyntheticTestmainModuleFilesIgnoresSourceModule(t *testing.T) {
 	sourceDir := t.TempDir()
 	syntheticDir := t.TempDir()
 	files := map[string]string{
@@ -129,18 +199,17 @@ func TestSeedSyntheticTestmainModuleFilesPrefersSourceModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seedSyntheticTestmainModuleFiles error: %v", err)
 	}
-	if !usedSourceModule {
-		t.Fatal("seedSyntheticTestmainModuleFiles did not reuse the source module")
+	if usedSourceModule {
+		t.Fatal("seedSyntheticTestmainModuleFiles unexpectedly reused the source module")
 	}
 
-	for name, want := range files {
-		got, err := os.ReadFile(filepath.Join(syntheticDir, name))
-		if err != nil {
-			t.Fatalf("read seeded %s: %v", name, err)
-		}
-		if string(got) != want {
-			t.Fatalf("seeded %s = %q, want %q", name, string(got), want)
-		}
+	goMod, err := os.ReadFile(filepath.Join(syntheticDir, "go.mod"))
+	if err != nil {
+		t.Fatalf("read seeded go.mod: %v", err)
+	}
+	want := syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions())
+	if string(goMod) != want {
+		t.Fatalf("seeded go.mod = %q, want %q", string(goMod), want)
 	}
 }
 
