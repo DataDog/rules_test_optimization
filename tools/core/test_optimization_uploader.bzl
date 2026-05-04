@@ -47,10 +47,10 @@ load(
 )
 load(
     "//tools/core:test_optimization_context_utils.bzl",
-    _shared_apparent_repo_key_from_label_text_or_fail = "apparent_repo_key_from_label_text_or_fail",
     _context_manifest_content = "context_manifest_content",
     _context_manifest_entries_or_fail_shared = "context_manifest_entries_or_fail",
     _legacy_single_context_entry_or_fail_shared = "legacy_single_context_entry_or_fail",
+    _shared_apparent_repo_key_from_label_text_or_fail = "apparent_repo_key_from_label_text_or_fail",
 )
 
 # NOTE: `UPLOADER_VERSION` and `RULES_VERSION` are intentionally independent.
