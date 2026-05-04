@@ -118,7 +118,12 @@ resolve_runfile() {
   done
 
   if [[ -n "${RUNFILES_MANIFEST_FILE:-}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
-    while IFS= read -r manifest_key manifest_path; do
+    while IFS= read -r manifest_line; do
+      manifest_key="${manifest_line%% *}"
+      manifest_path="${manifest_line#* }"
+      if [[ "$manifest_key" == "$manifest_line" ]]; then
+        continue
+      fi
       for candidate in "${all_candidates[@]}"; do
         if [[ "$manifest_key" == "$candidate" || ( -n "$RUNFILES_WORKSPACE" && "$manifest_key" == "$RUNFILES_WORKSPACE/$candidate" ) ]]; then
           printf '%%s\\n' "$manifest_path"
