@@ -35,6 +35,89 @@ def _workspace_root() -> Path:
     return Path(os.environ.get("BUILD_WORKSPACE_DIRECTORY") or os.getcwd()).resolve()
 
 
+def _runfile_candidate_strings(raw: str) -> list[str]:
+    """Return path variants Bazel may use for the same runfile.
+
+    External repository files can appear as `external/<repo>/...` from action
+    paths, `<repo>/...` in directory runfiles, or `../<repo>/...` from short
+    paths. The doctor accepts all of those forms so WORKSPACE and Bzlmod
+    consumers do not need different target definitions.
+    """
+    candidates = [raw]
+    stripped = raw
+    while stripped.startswith("../"):
+        stripped = stripped[3:]
+        candidates.append(stripped)
+    if raw.startswith("external/"):
+        candidates.append(raw[len("external/") :])
+    if stripped.startswith("external/"):
+        candidates.append(stripped[len("external/") :])
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
+
+
+def _runfiles_roots() -> list[Path]:
+    """Return directory runfiles roots available to this process."""
+    roots: list[Path] = []
+    runfiles_dir = os.environ.get("RUNFILES_DIR")
+    if runfiles_dir:
+        roots.append(Path(runfiles_dir))
+    for parent in Path(__file__).resolve().parents:
+        if parent.name.endswith(".runfiles"):
+            roots.append(parent)
+            break
+    return list(dict.fromkeys(root.resolve() for root in roots if root.exists()))
+
+
+def _lookup_manifest_runfile(candidates: list[str], workspace: str) -> Path | None:
+    """Resolve a runfile through RUNFILES_MANIFEST_FILE when directory runfiles are unavailable."""
+    manifest = os.environ.get("RUNFILES_MANIFEST_FILE")
+    if not manifest:
+        return None
+    manifest_path = Path(manifest)
+    if not manifest_path.is_file():
+        return None
+    manifest_keys = set(candidates)
+    if workspace:
+        manifest_keys.update(f"{workspace}/{candidate}" for candidate in candidates)
+    with manifest_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            key, sep, value = line.rstrip("\n").partition(" ")
+            if sep and key in manifest_keys:
+                return Path(value)
+    return None
+
+
+def _resolve_runfile_path(raw_paths: list[str]) -> Path:
+    """Resolve one file from direct paths, directory runfiles, or manifest runfiles."""
+    workspace = os.environ.get("DD_TEST_OPTIMIZATION_DOCTOR_RUNFILES_WORKSPACE", "")
+    candidates: list[str] = []
+    for raw in raw_paths:
+        candidates.extend(_runfile_candidate_strings(raw))
+    candidates = list(dict.fromkeys(candidates))
+
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.is_file():
+            return path.resolve()
+
+    roots = _runfiles_roots()
+    for root in roots:
+        for candidate in candidates:
+            path = root / candidate
+            if path.is_file():
+                return path.resolve()
+            if workspace:
+                workspace_path = root / workspace / candidate
+                if workspace_path.is_file():
+                    return workspace_path.resolve()
+
+    manifest_match = _lookup_manifest_runfile(candidates, workspace)
+    if manifest_match is not None:
+        return manifest_match
+
+    return Path(raw_paths[0])
+
+
 def _resolve_testlogs_dir(workspace: Path) -> Path:
     override = os.environ.get("TESTLOGS_DIR")
     if override:
@@ -125,8 +208,8 @@ def _load_contexts(context_manifest: Path) -> list[tuple[str, Path]]:
         parts = raw_line.split("\t")
         if len(parts) != 3:
             _fail(f"invalid context manifest line in {context_manifest}: {raw_line!r}")
-        repo_key, _short_path, direct_path = parts
-        contexts.append((repo_key, Path(direct_path)))
+        repo_key, short_path, direct_path = parts
+        contexts.append((repo_key, _resolve_runfile_path([direct_path, short_path])))
     return contexts
 
 
@@ -208,7 +291,11 @@ def main(argv: list[str]) -> int:
     if config["forbid_dd_git_test_env"]:
         _validate_bazelrc(workspace)
     if config["require_git_metadata"]:
-        _validate_git_metadata(Path(config["context_manifest_path"]))
+        context_manifest = _resolve_runfile_path([
+            config["context_manifest_path"],
+            config.get("context_manifest_short_path", ""),
+        ])
+        _validate_git_metadata(context_manifest)
 
     expected_targets = config["expected_targets"]
     if expected_targets:
