@@ -317,18 +317,27 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         """Validate local Bazel labels map to bazel-testlogs output dirs."""
         root = Path("/tmp/bazel-testlogs")
         self.assertEqual(
-            root / "target" / "test.outputs",
-            self.mod._expected_target_output(root, "//:target"),
+            root / "target",
+            self.mod._expected_target_root(root, "//:target"),
         )
         self.assertEqual(
-            root / "pkg" / "sub" / "target" / "test.outputs",
-            self.mod._expected_target_output(root, "//pkg/sub:target"),
+            root / "pkg" / "sub" / "target",
+            self.mod._expected_target_root(root, "//pkg/sub:target"),
         )
 
     def test_expected_target_rejects_external_label(self) -> None:
         """Validate external labels are rejected before path mapping."""
         with self.assertRaises(SystemExit):
-            self.mod._expected_target_output(Path("/tmp/bazel-testlogs"), "@repo//pkg:test")
+            self.mod._expected_target_root(Path("/tmp/bazel-testlogs"), "@repo//pkg:test")
+
+    def test_expected_target_outputs_discovers_nested_runs(self) -> None:
+        """Validate expected targets accept retry and shard output layouts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            testlogs = Path(tmp) / "bazel-testlogs"
+            nested = testlogs / "pkg" / "target" / "shard_1_of_2" / "attempt_1" / "test.outputs"
+            nested.mkdir(parents=True)
+
+            self.assertEqual([nested], self.mod._expected_target_outputs(testlogs, "//pkg:target"))
 
     def test_validate_git_metadata_requires_core_tags(self) -> None:
         """Validate context.json must contain git metadata used by enrichment."""
@@ -374,6 +383,17 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
 
             self.assertEqual([instrumented], self.mod._discover_candidate_output_dirs(root))
+
+    def test_bazelrc_validation_ignores_comments(self) -> None:
+        """Validate commented DD_GIT test_env examples are not active config."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / ".bazelrc").write_text(
+                "# test --test_env=DD_GIT_BRANCH=main\n"
+                "test --test_env=TZ=UTC # --test_env=DD_GIT_COMMIT_SHA=abc\n",
+                encoding="utf-8",
+            )
+            self.mod._validate_bazelrc(workspace)
 
 
 class CheckSchemaParserParityTests(unittest.TestCase):

@@ -51,7 +51,8 @@ def _resolve_testlogs_dir(workspace: Path) -> Path:
     _fail("could not find bazel-testlogs; set TESTLOGS_DIR or run from the Bazel workspace root")
 
 
-def _expected_target_output(testlogs_dir: Path, label: str) -> Path:
+def _expected_target_root(testlogs_dir: Path, label: str) -> Path:
+    """Return the bazel-testlogs target root for one local target label."""
     if label.startswith("@"):
         _fail(f"expected_targets does not support external labels, got {label!r}")
     if not label.startswith("//"):
@@ -65,7 +66,23 @@ def _expected_target_output(testlogs_dir: Path, label: str) -> Path:
     if target.startswith("/") or ".." in target.split("/"):
         _fail(f"expected target label has unsupported target path: {label!r}")
     parts = [p for p in pkg.split("/") if p]
-    return testlogs_dir.joinpath(*parts, target, "test.outputs")
+    return testlogs_dir.joinpath(*parts, target)
+
+
+def _expected_target_outputs(testlogs_dir: Path, label: str) -> list[Path]:
+    """Return all test.outputs directories for one expected local target.
+
+    Bazel can nest outputs under shard/retry directories, so strict expected
+    targets discover recursively below the target root instead of assuming only
+    `<pkg>/<target>/test.outputs`.
+    """
+    target_root = _expected_target_root(testlogs_dir, label)
+    if not target_root.exists():
+        _fail(f"expected target output root not found for {label}: {target_root}")
+    output_dirs = _discover_output_dirs(target_root)
+    if not output_dirs:
+        _fail(f"expected target output directory not found for {label}: {target_root}")
+    return output_dirs
 
 
 def _discover_output_dirs(testlogs_dir: Path) -> list[Path]:
@@ -140,7 +157,8 @@ def _validate_bazelrc(workspace: Path) -> None:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for line_number, line in enumerate(text.splitlines(), start=1):
-            if DD_GIT_TEST_ENV_RE.search(line):
+            active_line = line.split("#", 1)[0]
+            if DD_GIT_TEST_ENV_RE.search(active_line):
                 _fail(f"{path}:{line_number} sets DD_GIT_* with --test_env; use --repo_env instead")
 
 
@@ -189,10 +207,7 @@ def main(argv: list[str]) -> int:
     if expected_targets:
         output_dirs = []
         for label in expected_targets:
-            output_dir = _expected_target_output(testlogs_dir, label)
-            if not output_dir.exists():
-                _fail(f"expected target output directory not found for {label}: {output_dir}")
-            output_dirs.append(output_dir)
+            output_dirs.extend(_expected_target_outputs(testlogs_dir, label))
     else:
         output_dirs = _discover_candidate_output_dirs(testlogs_dir)
         if not output_dirs:
