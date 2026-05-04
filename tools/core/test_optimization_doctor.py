@@ -13,6 +13,7 @@ from typing import Any
 
 
 DD_GIT_TEST_ENV_RE = re.compile(r"--test_env(?:=|\s+)DD_GIT_[A-Z0-9_]*")
+VALID_GO_PAYLOAD_SELECTIONS = {"module", "full_bundle_disabled"}
 
 
 def _fail(message: str) -> None:
@@ -180,8 +181,14 @@ def _validate_outputs(output_dirs: list[Path], require_json_payloads: bool, requ
             _fail(f"missing bazel_target_metadata.json under {output_dir}")
         for metadata_file in metadata:
             doc = _load_json(metadata_file)
-            if forbid_full_bundle_no_match and doc.get("bazel.go.payload_selection") == "full_bundle_no_match":
+            selection = doc.get("bazel.go.payload_selection")
+            if forbid_full_bundle_no_match and selection == "full_bundle_no_match":
                 _fail(f"{metadata_file} has bazel.go.payload_selection=full_bundle_no_match")
+            if selection is not None and selection not in VALID_GO_PAYLOAD_SELECTIONS:
+                _fail(
+                    f"{metadata_file} has unsupported bazel.go.payload_selection={selection!r}; "
+                    "expected 'module' or 'full_bundle_disabled'"
+                )
 
     if require_json_payloads and payload_count == 0:
         _fail("no JSON payload files were found under selected test.outputs directories")

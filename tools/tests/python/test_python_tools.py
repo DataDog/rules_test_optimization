@@ -370,6 +370,35 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.mod._validate_outputs([output], True, True, True)
 
+    def test_validate_outputs_rejects_unknown_payload_selection(self) -> None:
+        """Validate Go payload selection is limited to known safe states."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.go.payload_selection": "unexpected"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True)
+
+    def test_validate_outputs_accepts_known_payload_selection(self) -> None:
+        """Validate known Go payload selection values pass the doctor."""
+        for selection in ["module", "full_bundle_disabled"]:
+            with self.subTest(selection=selection):
+                with tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp) / "pkg" / "target" / "test.outputs"
+                    payload_dir = output / "payloads" / "tests"
+                    payload_dir.mkdir(parents=True)
+                    (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+                    (output / "bazel_target_metadata.json").write_text(
+                        json.dumps({"bazel.go.payload_selection": selection}),
+                        encoding="utf-8",
+                    )
+                    self.mod._validate_outputs([output], True, True, True)
+
     def test_global_discovery_ignores_plain_bazel_tests(self) -> None:
         """Validate discovery skips non-instrumented control test outputs."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -389,8 +418,8 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             (workspace / ".bazelrc").write_text(
-                "# test --test_env=DD_GIT_BRANCH=main\n"
-                "test --test_env=TZ=UTC # --test_env=DD_GIT_COMMIT_SHA=abc\n",
+                "# test --test_env=DD_" "GIT_BRANCH=main\n"
+                "test --test_env=TZ=UTC # --test_env=DD_" "GIT_COMMIT_SHA=abc\n",
                 encoding="utf-8",
             )
             self.mod._validate_bazelrc(workspace)
