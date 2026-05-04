@@ -45,6 +45,7 @@ def _doctor_impl(ctx):
         content = "\n".join([
             "{",
             '  "context_manifest_path": %s,' % json.encode(context_manifest.path),
+            '  "context_manifest_short_path": %s,' % json.encode(context_manifest.short_path),
             '  "expected_targets": %s,' % _json_string_list(ctx.attr.expected_targets),
             '  "require_git_metadata": %s,' % _json_bool(ctx.attr.require_git_metadata),
             '  "require_bazel_metadata": %s,' % _json_bool(ctx.attr.require_bazel_metadata),
@@ -62,6 +63,74 @@ def _doctor_impl(ctx):
         is_executable = True,
         content = """#!/usr/bin/env bash
 set -euo pipefail
+
+RUNFILES_WORKSPACE="%s"
+
+runfile_candidates() {
+  local raw="$1"
+  local stripped="$raw"
+
+  printf '%%s\\n' "$raw"
+
+  while [[ "$stripped" == ../* ]]; do
+    stripped="${stripped#../}"
+    printf '%%s\\n' "$stripped"
+  done
+
+  if [[ "$raw" == external/* ]]; then
+    printf '%%s\\n' "${raw#external/}"
+  fi
+  if [[ "$stripped" == external/* ]]; then
+    printf '%%s\\n' "${stripped#external/}"
+  fi
+}
+
+resolve_runfile() {
+  local raw candidate manifest_key manifest_path
+  local all_candidates=()
+
+  for raw in "$@"; do
+    while IFS= read -r candidate; do
+      [[ -z "$candidate" ]] && continue
+      all_candidates+=("$candidate")
+
+      if [[ -f "$candidate" ]]; then
+        printf '%%s\\n' "$candidate"
+        return 0
+      fi
+      if [[ -n "${RUNFILES_DIR:-}" && -f "$RUNFILES_DIR/$candidate" ]]; then
+        printf '%%s\\n' "$RUNFILES_DIR/$candidate"
+        return 0
+      fi
+      if [[ -n "${RUNFILES_DIR:-}" && -n "$RUNFILES_WORKSPACE" && -f "$RUNFILES_DIR/$RUNFILES_WORKSPACE/$candidate" ]]; then
+        printf '%%s\\n' "$RUNFILES_DIR/$RUNFILES_WORKSPACE/$candidate"
+        return 0
+      fi
+      if [[ -f "$0.runfiles/$candidate" ]]; then
+        printf '%%s\\n' "$0.runfiles/$candidate"
+        return 0
+      fi
+      if [[ -n "$RUNFILES_WORKSPACE" && -f "$0.runfiles/$RUNFILES_WORKSPACE/$candidate" ]]; then
+        printf '%%s\\n' "$0.runfiles/$RUNFILES_WORKSPACE/$candidate"
+        return 0
+      fi
+    done < <(runfile_candidates "$raw")
+  done
+
+  if [[ -n "${RUNFILES_MANIFEST_FILE:-}" && -f "$RUNFILES_MANIFEST_FILE" ]]; then
+    while IFS= read -r manifest_key manifest_path; do
+      for candidate in "${all_candidates[@]}"; do
+        if [[ "$manifest_key" == "$candidate" || ( -n "$RUNFILES_WORKSPACE" && "$manifest_key" == "$RUNFILES_WORKSPACE/$candidate" ) ]]; then
+          printf '%%s\\n' "$manifest_path"
+          return 0
+        fi
+      done
+    done < "$RUNFILES_MANIFEST_FILE"
+  fi
+
+  return 1
+}
+
 PYTHON_BIN="${PYTHON:-}"
 if [[ -z "$PYTHON_BIN" ]]; then
   if command -v python3 >/dev/null 2>&1; then
@@ -73,14 +142,103 @@ if [[ -z "$PYTHON_BIN" ]]; then
     exit 2
   fi
 fi
-exec "$PYTHON_BIN" "%s" --config "%s"
-""" % (ctx.file._runtime.path, config_file.path),
+RUNTIME_PATH="$(resolve_runfile "%s" "%s")" || {
+  echo "[dd-test-optimization-doctor] could not resolve doctor runtime from runfiles" >&2
+  exit 2
+}
+CONFIG_PATH="$(resolve_runfile "%s" "%s")" || {
+  echo "[dd-test-optimization-doctor] could not resolve doctor config from runfiles" >&2
+  exit 2
+}
+export DD_TEST_OPTIMIZATION_DOCTOR_RUNFILES_WORKSPACE="$RUNFILES_WORKSPACE"
+exec "$PYTHON_BIN" "$RUNTIME_PATH" --config "$CONFIG_PATH"
+""" % (ctx.workspace_name, ctx.file._runtime.path, ctx.file._runtime.short_path, config_file.path, config_file.short_path),
     )
 
     ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
     ctx.actions.write(
         output = ps_file,
         content = """$ErrorActionPreference = "Stop"
+$RunfilesWorkspace = "%s"
+
+function Get-RunfileCandidates([string]$Raw) {
+  $candidates = New-Object System.Collections.Generic.List[string]
+  $candidates.Add($Raw)
+
+  $stripped = $Raw
+  while ($stripped.StartsWith("../")) {
+    $stripped = $stripped.Substring(3)
+    $candidates.Add($stripped)
+  }
+
+  if ($Raw.StartsWith("external/")) {
+    $candidates.Add($Raw.Substring(9))
+  }
+  if ($stripped.StartsWith("external/")) {
+    $candidates.Add($stripped.Substring(9))
+  }
+
+  return $candidates
+}
+
+function Resolve-Runfile([string[]]$RawPaths) {
+  $allCandidates = New-Object System.Collections.Generic.List[string]
+  $scriptRunfiles = "$PSCommandPath.runfiles"
+
+  foreach ($raw in $RawPaths) {
+    foreach ($candidate in Get-RunfileCandidates $raw) {
+      if ([string]::IsNullOrWhiteSpace($candidate)) {
+        continue
+      }
+      $allCandidates.Add($candidate)
+
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return (Resolve-Path -LiteralPath $candidate).Path
+      }
+      if ($env:RUNFILES_DIR) {
+        $path = Join-Path $env:RUNFILES_DIR $candidate
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+          return (Resolve-Path -LiteralPath $path).Path
+        }
+        if ($RunfilesWorkspace) {
+          $workspacePath = Join-Path (Join-Path $env:RUNFILES_DIR $RunfilesWorkspace) $candidate
+          if (Test-Path -LiteralPath $workspacePath -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $workspacePath).Path
+          }
+        }
+      }
+      if (Test-Path -LiteralPath $scriptRunfiles -PathType Container) {
+        $path = Join-Path $scriptRunfiles $candidate
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+          return (Resolve-Path -LiteralPath $path).Path
+        }
+        if ($RunfilesWorkspace) {
+          $workspacePath = Join-Path (Join-Path $scriptRunfiles $RunfilesWorkspace) $candidate
+          if (Test-Path -LiteralPath $workspacePath -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $workspacePath).Path
+          }
+        }
+      }
+    }
+  }
+
+  if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path -LiteralPath $env:RUNFILES_MANIFEST_FILE -PathType Leaf)) {
+    foreach ($line in Get-Content -LiteralPath $env:RUNFILES_MANIFEST_FILE) {
+      $parts = $line -split " ", 2
+      if ($parts.Length -ne 2) {
+        continue
+      }
+      foreach ($candidate in $allCandidates) {
+        if ($parts[0] -eq $candidate -or ($RunfilesWorkspace -and $parts[0] -eq "$RunfilesWorkspace/$candidate")) {
+          return $parts[1]
+        }
+      }
+    }
+  }
+
+  return $null
+}
+
 $PythonBin = $env:PYTHON
 if (-not $PythonBin) {
   $cmd = Get-Command python -ErrorAction SilentlyContinue
@@ -90,9 +248,26 @@ if (-not $PythonBin) {
   }
   $PythonBin = $cmd.Source
 }
-& $PythonBin "%s" --config "%s"
+$RuntimePath = Resolve-Runfile @("%s", "%s")
+if (-not $RuntimePath) {
+  Write-Error "[dd-test-optimization-doctor] could not resolve doctor runtime from runfiles"
+  exit 2
+}
+$ConfigPath = Resolve-Runfile @("%s", "%s")
+if (-not $ConfigPath) {
+  Write-Error "[dd-test-optimization-doctor] could not resolve doctor config from runfiles"
+  exit 2
+}
+$env:DD_TEST_OPTIMIZATION_DOCTOR_RUNFILES_WORKSPACE = $RunfilesWorkspace
+& $PythonBin $RuntimePath --config $ConfigPath
 exit $LASTEXITCODE
-""" % (ctx.file._runtime.path.replace("\\", "\\\\"), config_file.path.replace("\\", "\\\\")),
+""" % (
+            ctx.workspace_name,
+            ctx.file._runtime.path.replace("\\", "\\\\"),
+            ctx.file._runtime.short_path.replace("\\", "\\\\"),
+            config_file.path.replace("\\", "\\\\"),
+            config_file.short_path.replace("\\", "\\\\"),
+        ),
     )
 
     bat_file = ctx.actions.declare_file(ctx.label.name + ".bat")
