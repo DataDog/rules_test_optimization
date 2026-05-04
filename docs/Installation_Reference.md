@@ -365,7 +365,9 @@ git_repository(
 
 Pin an immutable commit SHA (or internal mirrored archive) for reproducibility.
 
-For WORKSPACE Go usage, pin both repositories at the same revision:
+For WORKSPACE Go usage, declare the core repository first, then use the public
+helper in step 6 to declare the Go companion and the Orchestrion-enabled
+`rules_go` fork at the same revision:
 
 - `datadog-rules-test-optimization` for sync and uploader rules
 - `datadog-rules-test-optimization-go` for `dd_topt_go_test`
@@ -426,11 +428,17 @@ filegroup(
 )
 ```
 
-### 4) Add the uploader target (one per workspace)
+### 4) Add the doctor and uploader targets (one pair per workspace)
 
 ```bzl
 # In root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -442,6 +450,14 @@ dd_payload_uploader(
 Multi-service aggregator variant:
 
 ```bzl
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_service_a",
+        "@test_optimization_data//:test_optimization_context_service_b",
+    ],
+)
+
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
@@ -514,6 +530,8 @@ common --repo_env=RUBY_MODULE_PATH
 
 # Tests (runtime)
 # Keep uploader credentials out of test runtime by default.
+# Do not pass DD_GIT_* through --test_env. Git metadata belongs to the
+# repository-rule phase through --repo_env so it cannot invalidate test actions.
 test --test_env=DD_TEST_OPTIMIZATION_AGENT_URL
 test --test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional override for intake base URL (agentless only, test/dev)
 ```
@@ -532,71 +550,55 @@ Repository policy note: this repository intentionally has no root `.bazelrc`.
 Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags
 from `README.md` and `docs/Maintainers.md`.
 
-### 6) Configure Go support in WORKSPACE with the Go companion repository
+### 6) Configure Go support in WORKSPACE with the public helper
 
-This is the lower-level/manual setup path. For Bzlmod single-service Go
-workspaces, prefer guided bootstrap instead.
+For Bzlmod single-service Go workspaces, prefer guided bootstrap instead. For
+WORKSPACE consumers, prefer this helper over hand-written companion and
+`rules_go` declarations. It keeps the Go companion repo mapping and the selected
+Orchestrion-enabled `rules_go` variant consistent.
 
-If your repository already configures an Orchestrion-enabled `rules_go` fork or
-consumer-owned merge, keep that setup and skip to the companion-repo and BUILD
-snippets below.
+The helper assumes the core `datadog-rules-test-optimization` repository has
+already been declared in step 1.
 
-First, add the Go companion repository. For a local checkout:
+Default Git fetch mode:
 
 ```bzl
-load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
 
-local_repository(
-    name = "datadog-rules-test-optimization-go",
-    path = "/absolute/path/to/rules_test_optimization/modules/go",
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_variant = "base",  # or "complete" for extended monorepo compatibility
 )
 ```
 
-For mirrored archives, publish the `modules/go` subtree as the repository root:
+Archive mode for mirrored environments:
 
 ```bzl
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
 
-http_archive(
-    name = "datadog-rules-test-optimization-go",
-    urls = [
-        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
-    ],
-    strip_prefix = "rules_test_optimization-<commit-sha>/modules/go",
-    sha256 = "<go_companion_sha256>",
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    datadog_fetch = "archive",
+    rules_go_fetch = "archive",
+    rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_variant = "complete",
+    rto_archive_url = "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
+    rto_archive_sha256 = "<sha256-for-archive>",
+    rto_archive_prefix = "rules_test_optimization-<commit-sha>",
 )
 ```
 
-Then configure an Orchestrion-enabled `rules_go` fork and the public WORKSPACE
-Orchestrion helper. The repository bound to `@io_bazel_rules_go` must be the
-forked, Orchestrion-enabled copy, not an upstream release archive. If you are
-mirroring this repository directly, publish either
-`third_party/rules_go_orchestrion_base` or
-`third_party/rules_go_orchestrion_complete` as the `@io_bazel_rules_go`
-repository root. Use `base` for normal consumers and `complete` for consumers
-that need the declared extended monorepo compatibility layer. If you maintain
-your own merged fork, keep the same public files and labels, including
-`go/orchestrion_workspace.bzl` and the `//go/private/orchestrion:*` targets,
-including the `:enabled` build setting that `dd_topt_go_test` flips through its
-wrapper transition.
+Supported helper combinations are `git/git`, `git/archive`, and
+`archive/archive`. Use `rules_go_variant = "base"` for normal consumers and
+`rules_go_variant = "complete"` for repositories that need the declared extended
+monorepo compatibility layer. The helper never applies `patches`, `patch_tool`,
+or `patch_args`; both variants are complete `rules_go` trees.
+
+Then configure Go, Gazelle, and the Orchestrion tool repository:
 
 ```bzl
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "io_bazel_rules_go",
-    urls = [
-        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
-    ],
-    strip_prefix = "rules_test_optimization-<commit-sha>/third_party/rules_go_orchestrion_base",
-    sha256 = "<rules_go_sha256>",
-)
 
 http_archive(
     name = "bazel_gazelle",

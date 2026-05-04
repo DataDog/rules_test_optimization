@@ -1,0 +1,6 @@
+exports_files(
+    [
+        "workspace_repositories.bzl",
+    ],
+    visibility = ["//visibility:public"],
+)

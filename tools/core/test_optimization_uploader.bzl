@@ -45,6 +45,13 @@ load(
     "log_debug",
     "log_info",
 )
+load(
+    "//tools/core:test_optimization_context_utils.bzl",
+    _context_manifest_content = "context_manifest_content",
+    _context_manifest_entries_or_fail_shared = "context_manifest_entries_or_fail",
+    _legacy_single_context_entry_or_fail_shared = "legacy_single_context_entry_or_fail",
+    _shared_apparent_repo_key_from_label_text_or_fail = "apparent_repo_key_from_label_text_or_fail",
+)
 
 # NOTE: `UPLOADER_VERSION` and `RULES_VERSION` are intentionally independent.
 # Uploader runtime behavior can evolve without forcing a rules contract bump,
@@ -168,27 +175,13 @@ bash_curl_retry_flags_for_tests = _bash_curl_retry_flags_for_tests
 
 def _context_manifest_content_for_tests(entries):
     """Render deterministic context-manifest content from repo/path entries."""
-    lines = []
-    repo_keys = sorted(entries.keys())
-    for repo_key in repo_keys:
-        entry = entries[repo_key]
-        lines.append("%s\t%s\t%s" % (repo_key, entry[0], entry[1]))
-    return "\n".join(lines) + ("\n" if lines else "")
+    return _context_manifest_content(entries)
 
 context_manifest_content_for_tests = _context_manifest_content_for_tests
 
 def _apparent_repo_key_from_label_text_or_fail(label_text, owner):
     """Return the apparent external repo name from external label text."""
-    if not label_text.startswith("@") or "//" not in label_text:
-        fail_with_prefix("test_optimization_uploader", "context.json owner for %s must come from an external repo" % owner)
-    repo_key = label_text.split("//", 1)[0]
-    if repo_key.startswith("@@"):
-        repo_key = repo_key[2:]
-    elif repo_key.startswith("@"):
-        repo_key = repo_key[1:]
-    if not repo_key:
-        fail_with_prefix("test_optimization_uploader", "context.json owner for %s must have a non-empty repo name" % owner)
-    return repo_key
+    return _shared_apparent_repo_key_from_label_text_or_fail(label_text, owner, "test_optimization_uploader")
 
 def _apparent_repo_key_or_fail(label):
     """Return the apparent external repo name from the attribute label text."""
@@ -205,24 +198,7 @@ def _legacy_single_context_entry_or_fail(data_files):
     repo matching, but it should continue to work when exactly one bundled
     `context.json` exists.
     """
-    raw_context_files = {}
-    for f in data_files:
-        if f.basename == "context.json":
-            raw_context_files[f.path] = f
-
-    if not raw_context_files:
-        return {}
-
-    if len(raw_context_files) > 1:
-        fail_with_prefix(
-            "test_optimization_uploader",
-            "bundled multiple context.json files without explicit :test_optimization_context targets; pass those targets directly in dd_payload_uploader(data = [...]) for multi-context selection",
-        )
-
-    context_file = raw_context_files.values()[0]
-    return {
-        "__single_context_fallback__": (context_file.short_path, context_file.path),
-    }
+    return _legacy_single_context_entry_or_fail_shared(data_files, "test_optimization_uploader")
 
 def _context_manifest_entries_or_fail(data_targets, data_files):
     """Collect bundled context.json files keyed by the source sync repo name.
@@ -237,26 +213,7 @@ def _context_manifest_entries_or_fail(data_targets, data_files):
     working when there is exactly one bundled `context.json`, but require
     explicit context targets for multi-context uploaders.
     """
-    entries = {}
-    for dep in data_targets:
-        if dep.label.name != "test_optimization_context":
-            continue
-        context_files = []
-        for f in dep[DefaultInfo].files.to_list():
-            if f.basename == "context.json":
-                context_files.append(f)
-        if len(context_files) != 1:
-            fail_with_prefix("test_optimization_uploader", "expected exactly one context.json from %s, found %d" % (dep.label, len(context_files)))
-        context_file = context_files[0]
-        repo_key = _apparent_repo_key_or_fail(dep.label)
-        if repo_key in entries:
-            fail_with_prefix("test_optimization_uploader", "duplicate bundled context repo name '%s'" % repo_key)
-        entries[repo_key] = (context_file.short_path, context_file.path)
-
-    if entries:
-        return entries
-
-    return _legacy_single_context_entry_or_fail(data_files)
+    return _context_manifest_entries_or_fail_shared(data_targets, data_files, "test_optimization_uploader")
 
 legacy_single_context_entry_or_fail_for_tests = _legacy_single_context_entry_or_fail
 

@@ -10,54 +10,69 @@ For a quick path, use the upload section in `README.md`.
    `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`
 2. Bazel automatically collects these to
    `bazel-testlogs/<package>/<target>/test.outputs/`
-3. After tests complete, run the uploader via `bazel run`
-4. The uploader discovers all `test.outputs/` directories, waits for
+3. After tests complete, run the doctor via `bazel run` to validate local
+   payloads and metadata before upload
+4. Then run the uploader via `bazel run`
+5. The uploader discovers all `test.outputs/` directories, waits for
    quiescence, uploads, and deletes files
 
 ## Basic usage
 
 ```bash
-# RECOMMENDED: Run tests, then upload payloads (preserves test exit code)
+# RECOMMENDED: Run tests, validate payloads, then upload payloads.
 bazel test //... || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
 fi
+if [ "$doctor_status" -ne 0 ]; then
+  exit "$doctor_status"
+fi
 exit "$upload_status"
 
 # Or as a one-liner:
-bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; exit "$upload_status"
+bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
 
 # REMOTE EXECUTION (RBE) - add flag to download outputs:
-bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; exit "$upload_status"
+bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
 ```
 
 ```powershell
-# RECOMMENDED: Run tests, then upload payloads (preserves test exit code)
+# RECOMMENDED: Run tests, validate payloads, then upload payloads.
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
+if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 
 # REMOTE EXECUTION (RBE) - add flag to download outputs:
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 bazel run //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
+if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 ```
 
-Always preserve both statuses. Test failures should win, and uploader failures
-must still fail the job when tests passed.
+Always preserve all statuses. Test failures should win, doctor failures should
+block upload success, and uploader failures must still fail the job when tests
+and doctor checks passed.
 
 Credential handling:
 
@@ -72,7 +87,13 @@ Credential handling:
 
 ```bzl
 # In BUILD.bazel at workspace root
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",

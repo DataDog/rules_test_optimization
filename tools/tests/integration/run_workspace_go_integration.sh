@@ -563,23 +563,17 @@ http_archive(
     strip_prefix = "${ARCHIVE_NAME}",
 )
 
-http_archive(
-    name = "io_bazel_rules_go",
-    urls = [${archive_url_bzl}],
-    sha256 = "${ARCHIVE_SHA256}",
-    strip_prefix = "${ARCHIVE_NAME}/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}",
-EOF
-    cat >> "$ws_dir/WORKSPACE" <<EOF
-)
+load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
 
-http_archive(
-    name = "datadog-rules-test-optimization-go",
-    urls = [${archive_url_bzl}],
-    sha256 = "${ARCHIVE_SHA256}",
-    strip_prefix = "${ARCHIVE_NAME}/modules/go",
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "local-archive-fixture",
+    datadog_fetch = "archive",
+    rules_go_fetch = "archive",
+    rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_variant = "${RULES_GO_VARIANT}",
+    rto_archive_url = ${archive_url_bzl},
+    rto_archive_sha256 = "${ARCHIVE_SHA256}",
+    rto_archive_prefix = "${ARCHIVE_NAME}",
 )
 EOF
   fi
