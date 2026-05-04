@@ -144,7 +144,7 @@ local files only; it does not upload, delete, or rewrite payloads.
 | `require_git_metadata` | bool | `True` | Require `git.repository_url`, `git.commit.sha`, and `git.branch` or `git.tag` in synced context data |
 | `require_bazel_metadata` | bool | `True` | Require `bazel_target_metadata.json` next to selected payload outputs |
 | `require_json_payloads` | bool | `True` | Require parseable `.json` payload files and reject raw msgpack-only output |
-| `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"` |
+| `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"`; any present Go payload selection must be `module` or `full_bundle_disabled` |
 | `forbid_dd_git_test_env` | bool | `True` | Fail when workspace `.bazelrc` files pass `DD_GIT_*` through `--test_env`; use `--repo_env` instead |
 
 ## How data is fetched
