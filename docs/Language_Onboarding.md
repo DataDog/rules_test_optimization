@@ -21,6 +21,11 @@ Shared runtime contract for every language:
 - Tests read the synced metadata through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
 - Tests set `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
 - Tests write payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
+- Tests write JSON payload files. Do not introduce runtime proxies or raw
+  msgpack-only handoff paths.
+- Run `//:dd_test_optimization_doctor` after tests to validate JSON payloads,
+  Bazel target metadata, Git metadata, and invalid Go payload selection before
+  upload.
 - The uploader runs later through `bazel run //:dd_upload_payloads`
 - Mixed-runtime uploader wiring must bundle every relevant
   `:test_optimization_context` target and let the uploader choose the matching
@@ -33,14 +38,24 @@ Shared `.bazelrc` forwarding:
 ```text
 common --repo_env=DD_API_KEY
 common --repo_env=DD_SITE
+# Pass DD_GIT_* only through --repo_env. Never forward it as test environment
+# data because that makes Git metadata part of the test action cache key.
 ```
 
 Shared upload command:
 
 ```bash
 bazel test //... || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+if [ "$doctor_status" -ne 0 ]; then
+  exit "$doctor_status"
+fi
+exit "$upload_status"
 ```
 
 ## Go
@@ -81,7 +96,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
 ```
 
 The bootstrap writes `//tools/build:dd_go_test.bzl` and creates
-`//:dd_upload_payloads` when it is missing.
+`//:dd_test_optimization_doctor` plus `//:dd_upload_payloads` when they are
+missing.
 
 `--dd-trace-go-version` is optional. If omitted, the default is
 `v2.9.0-dev.0.20260416093245-194346a71c51`. It accepts a tag, pseudo-version,

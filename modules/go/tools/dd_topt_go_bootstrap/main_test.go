@@ -81,6 +81,78 @@ func TestValidateRulesGoVariantRejectsUnknownVariant(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
+	cfg := config{
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rtoCommit:          "published-sha",
+		datadogFetch:       "git",
+		rulesGoFetch:       "archive",
+		rulesGoRepoName:    "io_bazel_rules_go",
+		rulesGoVariant:     "complete",
+		rtoArchiveURL:      "https://example.test/archive.tar.gz",
+		rtoArchiveSHA256:   strings.Repeat("0", 64),
+		rtoArchivePrefix:   "rules_test_optimization-published-sha",
+		rtoArchiveType:     "tar.gz",
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+	got, err := workspaceSnippet(cfg)
+	if err != nil {
+		t.Fatalf("workspaceSnippet error: %v", err)
+	}
+	for _, want := range []string{
+		`git_repository(`,
+		`name = "datadog-rules-test-optimization"`,
+		`load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")`,
+		`datadog_fetch = "git"`,
+		`rto_commit = "published-sha"`,
+		`rules_go_fetch = "archive"`,
+		`rules_go_variant = "complete"`,
+		`go_orchestrion_tool_repo(`,
+		`dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("workspace snippet missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestWorkspaceSnippetFallsBackToRulesGoCommit(t *testing.T) {
+	cfg := config{
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rulesGoCommit:      "legacy-published-sha",
+		datadogFetch:       "git",
+		rulesGoFetch:       "git",
+		rulesGoRepoName:    "io_bazel_rules_go",
+		rulesGoVariant:     "base",
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+	got, err := workspaceSnippet(cfg)
+	if err != nil {
+		t.Fatalf("workspaceSnippet error: %v", err)
+	}
+	if !strings.Contains(got, `rto_commit = "legacy-published-sha"`) {
+		t.Fatalf("workspace snippet did not fall back to rulesGoCommit:\n%s", got)
+	}
+}
+
+func TestWorkspaceSnippetDoesNotRequireModuleFiles(t *testing.T) {
+	cfg := config{
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rtoCommit:          "published-sha",
+		datadogFetch:       "git",
+		rulesGoFetch:       "git",
+		rulesGoRepoName:    "io_bazel_rules_go",
+		rulesGoVariant:     "base",
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+	if _, err := workspaceSnippet(cfg); err != nil {
+		t.Fatalf("workspaceSnippet should not inspect MODULE.bazel or go.mod: %v", err)
+	}
+}
+
 func TestHydrateManagedRulesGoVariantPreservesCompleteVariant(t *testing.T) {
 	content := `module(name = "example")
 
@@ -1016,6 +1088,7 @@ func TestEnsureGuidedRootBuildCreatesBuildBazel(t *testing.T) {
 	cfg := config{
 		workspaceDir:       dir,
 		syncRepoName:       "test_optimization_data",
+		doctorTargetName:   "dd_test_optimization_doctor",
 		uploaderTargetName: "dd_upload_payloads",
 	}
 	if err := ensureGuidedRootBuild(cfg); err != nil {
@@ -1027,6 +1100,9 @@ func TestEnsureGuidedRootBuildCreatesBuildBazel(t *testing.T) {
 		t.Fatalf("read BUILD.bazel: %v", err)
 	}
 	text := string(content)
+	if !strings.Contains(text, doctorBlockStart) || !strings.Contains(text, `name = "dd_test_optimization_doctor"`) {
+		t.Fatalf("expected managed doctor block in BUILD.bazel:\n%s", text)
+	}
 	if !strings.Contains(text, uploaderBlockStart) || !strings.Contains(text, `name = "dd_upload_payloads"`) {
 		t.Fatalf("expected managed uploader block in BUILD.bazel:\n%s", text)
 	}
@@ -1072,6 +1148,7 @@ func TestEnsureGuidedWorkspaceFilesUsesGoModulePackagePinLabels(t *testing.T) {
 		workspaceDir:       dir,
 		goModuleDir:        goModuleDir,
 		syncRepoName:       "test_optimization_data",
+		doctorTargetName:   "dd_test_optimization_doctor",
 		uploaderTargetName: "dd_upload_payloads",
 	}
 	if err := ensureGuidedWorkspaceFiles(cfg); err != nil {

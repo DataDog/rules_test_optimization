@@ -10,6 +10,22 @@ Guided Go bootstrap accepts:
 |------|---------|-------------|
 | `--dd-trace-go-version` | `v2.9.0-dev.0.20260416093245-194346a71c51` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
 
+WORKSPACE snippet mode is read-only and does not require `MODULE.bazel` or
+`go.mod`:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--print-workspace-snippet` | `false` | Print WORKSPACE-mode repository wiring and exit without modifying files |
+| `--datadog-fetch` | `git` | Fetch mode for `datadog-rules-test-optimization-go`: `git` or `archive` |
+| `--rules-go-fetch` | `git` | Fetch mode for the Orchestrion-enabled `rules_go` fork: `git` or `archive` |
+| `--rules-go-variant` | `base` | Published fork variant: `base` or `complete` |
+| `--rules-go-repo-name` | `io_bazel_rules_go` | Bazel repository name that consumers use for `rules_go` |
+| `--rto-commit` | empty | Published rules_test_optimization commit used in generated WORKSPACE snippets. Required when either fetch mode is `git` |
+| `--rto-archive-url` | empty | Archive URL used when either fetch mode is `archive` |
+| `--rto-archive-sha256` | empty | Archive SHA256 used when either fetch mode is `archive` |
+| `--rto-archive-prefix` | empty | Archive root prefix used when either fetch mode is `archive` |
+| `--rto-archive-type` | `tar.gz` | Archive type passed to `http_archive` |
+
 Manual Orchestrion wiring in `MODULE.bazel` accepts:
 
 | Setting | Default | Description |
@@ -112,6 +128,24 @@ Rule: `dd_payload_uploader(...)`
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
+
+## Doctor rule attributes
+
+Rule: `dd_test_optimization_doctor(...)`
+
+Run this target after `bazel test` and before `dd_payload_uploader`. It checks
+local files only; it does not upload, delete, or rewrite payloads.
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | required | Target name |
+| `data` | label_list | `["@test_optimization_data//:test_optimization_context"]` in examples | Context targets used to validate Git metadata before upload |
+| `expected_targets` | string_list | `[]` | Optional strict list of local Bazel test labels to validate. When empty, the doctor validates discovered Test Optimization output directories and ignores plain non-instrumented test outputs |
+| `require_git_metadata` | bool | `True` | Require `git.repository_url`, `git.commit.sha`, and `git.branch` or `git.tag` in synced context data |
+| `require_bazel_metadata` | bool | `True` | Require `bazel_target_metadata.json` next to selected payload outputs |
+| `require_json_payloads` | bool | `True` | Require parseable `.json` payload files and reject raw msgpack-only output |
+| `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"` |
+| `forbid_dd_git_test_env` | bool | `True` | Fail when workspace `.bazelrc` files pass `DD_GIT_*` through `--test_env`; use `--repo_env` instead |
 
 ## How data is fetched
 

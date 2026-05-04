@@ -302,6 +302,80 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertEqual(0, rc)
 
 
+class TestOptimizationDoctorTests(unittest.TestCase):
+    """Test case group covering TestOptimizationDoctor behaviors."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Load the doctor module once for focused unit tests."""
+        cls.mod = _load_module(
+            "test_optimization_doctor_mod",
+            "tools/core/test_optimization_doctor.py",
+        )
+
+    def test_expected_target_output_mapping(self) -> None:
+        """Validate local Bazel labels map to bazel-testlogs output dirs."""
+        root = Path("/tmp/bazel-testlogs")
+        self.assertEqual(
+            root / "target" / "test.outputs",
+            self.mod._expected_target_output(root, "//:target"),
+        )
+        self.assertEqual(
+            root / "pkg" / "sub" / "target" / "test.outputs",
+            self.mod._expected_target_output(root, "//pkg/sub:target"),
+        )
+
+    def test_expected_target_rejects_external_label(self) -> None:
+        """Validate external labels are rejected before path mapping."""
+        with self.assertRaises(SystemExit):
+            self.mod._expected_target_output(Path("/tmp/bazel-testlogs"), "@repo//pkg:test")
+
+    def test_validate_git_metadata_requires_core_tags(self) -> None:
+        """Validate context.json must contain git metadata used by enrichment."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            context = tmp_path / "context.json"
+            manifest = tmp_path / "manifest.txt"
+            context.write_text(
+                json.dumps({
+                    "git.repository_url": "https://github.com/acme/repo.git",
+                    "git.commit.sha": "abc123",
+                    "git.branch": "main",
+                }),
+                encoding="utf-8",
+            )
+            manifest.write_text(f"test_optimization_data\tctx\t{context}\n", encoding="utf-8")
+            self.mod._validate_git_metadata(manifest)
+
+    def test_validate_outputs_rejects_full_bundle_no_match(self) -> None:
+        """Validate invalid Go payload selection fails before upload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.go.payload_selection": "full_bundle_no_match"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True)
+
+    def test_global_discovery_ignores_plain_bazel_tests(self) -> None:
+        """Validate discovery skips non-instrumented control test outputs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plain = root / "plain" / "go_default_test" / "test.outputs"
+            plain.mkdir(parents=True)
+
+            instrumented = root / "svc" / "go_default_test" / "test.outputs"
+            payload_dir = instrumented / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+
+            self.assertEqual([instrumented], self.mod._discover_candidate_output_dirs(root))
+
+
 class CheckSchemaParserParityTests(unittest.TestCase):
     """Test case group covering CheckSchemaParserParityTests behaviors."""
     @classmethod

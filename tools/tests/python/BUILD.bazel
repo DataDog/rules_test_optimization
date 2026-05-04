@@ -9,6 +9,7 @@ sh_test(
         "//tools/core:schemas/check_schema_parser_parity.py",
         "//tools/core:schemas/sync_agentless_schema.py",
         "//tools/core:test_optimization_sync.bzl",
+        "//tools/core:test_optimization_doctor.py",
         "//tools/core:validate_payload_schema.py",
         "//tools/core:uploader_bash_runtime.sh.tpl",
         "//tools/core:uploader_batch_runtime.bat.tpl",

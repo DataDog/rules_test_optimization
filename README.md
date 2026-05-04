@@ -72,8 +72,10 @@ Use this checklist before your first CI rollout:
      - `test --test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`
 3. Create exactly one uploader target at workspace root:
    - `//:dd_upload_payloads` via `dd_payload_uploader(...)`
-4. Run tests, then uploader, while preserving test exit code.
-5. If using remote execution, add `--remote_download_outputs=all` on test runs so the uploader can discover payload files locally after the test completes.
+4. Optionally create one doctor target at workspace root:
+   - `//:dd_test_optimization_doctor` via `dd_test_optimization_doctor(...)`
+5. Run tests, then doctor, then uploader, while preserving test exit code.
+6. If using remote execution, add `--remote_download_outputs=all` on test runs so the uploader can discover payload files locally after the test completes.
 
 ## Quickstart by scenario
 
@@ -104,6 +106,12 @@ use_repo(test_optimization_sync, "test_optimization_data")
 ```bzl
 # BUILD.bazel (workspace root)
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -113,10 +121,14 @@ dd_payload_uploader(
 
 ```bash
 bazel test //... || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
+fi
+if [ "$doctor_status" -ne 0 ]; then
+  exit "$doctor_status"
 fi
 exit "$upload_status"
 ```
@@ -125,12 +137,16 @@ exit "$upload_status"
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
+if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 ```
 
@@ -190,6 +206,7 @@ in place.
 The bootstrap helper:
 - updates `MODULE.bazel` with a Datadog-managed `rules_go` override back to this repository's clean vendored `third_party/rules_go_orchestrion_base` base module and the `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
 - adds the Datadog-managed single-service Go sync block (`test_optimization_go_extension`)
+- creates a root `dd_test_optimization_doctor` target when missing
 - creates a root `dd_upload_payloads` target when missing
 - creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
 - writes a deterministic `orchestrion.tool.go` that matches the Bazel-side Orchestrion wiring
@@ -628,25 +645,40 @@ test_optimization_sync(
 
 For Go in WORKSPACE mode, keep the core and Go companion as separate external
 repositories and load `dd_topt_go_test` from
-`@datadog-rules-test-optimization-go//:topt_go_test.bzl`. The repository bound
-to `@io_bazel_rules_go` must be an Orchestrion-enabled `rules_go` fork or
-consumer-owned merge that preserves the Orchestrion workspace helper and the
-`//go/private/orchestrion:*` targets used by the companion transition. Add
-`repo_mapping = {"@rules_go": "@io_bazel_rules_go"}` on the Go companion
-repository declaration so the companion resolves that fork consistently.
-Use `third_party/rules_go_orchestrion_base` for normal consumers. Use
-`third_party/rules_go_orchestrion_complete` only when the consumer needs the
-declared extended monorepo compatibility layer. Both variants are complete
-`rules_go` trees and do not require `patches`, `patch_tool`, or a
-consumer-owned patch directory.
-The public WORKSPACE helper also expects the default tool-repo name
-`rules_go_orchestrion_tool`, so consumers should not rename that repository.
+`@datadog-rules-test-optimization-go//:topt_go_test.bzl`. Prefer the public
+WORKSPACE helper so the Go companion and Orchestrion-enabled `rules_go` fork use
+the same commit, repo mapping, and variant:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
+
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_variant = "base",  # or "complete" for extended monorepo compatibility
+)
+```
+
+Use `rules_go_variant = "base"` for normal consumers. Use `complete` only when
+the consumer needs the declared extended monorepo compatibility layer. Both
+variants are complete `rules_go` trees and do not require `patches`,
+`patch_tool`, or a consumer-owned patch directory. The public WORKSPACE helper
+also expects the default tool-repo name `rules_go_orchestrion_tool`, so
+consumers should not rename that repository.
 When Go tests live below the module root, pass the module-root pin files through
 `orchestrion_pin_files` (for example `["//:go.mod", "//:orchestrion.tool.go"]`)
 or inject them from a repo-local wrapper.
 
 Use [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for mirrored `http_archive`, Go toolchain
 setup, uploader wiring, and full WORKSPACE details.
+You can also print a starting WORKSPACE snippet without modifying files:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --print-workspace-snippet \
+  --rto-commit <commit-sha> \
+  --rules-go-variant base
+```
 
 ### Other languages
 
@@ -797,42 +829,62 @@ Telemetry-specific notes:
 ### Basic usage
 
 ```bash
-# RECOMMENDED: Run tests, then upload payloads (preserves test and upload failures)
+# RECOMMENDED: Run tests, validate payloads, then upload payloads.
 bazel test //... || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
+fi
+if [ "$doctor_status" -ne 0 ]; then
+  exit "$doctor_status"
 fi
 exit "$upload_status"
 
 # REMOTE EXECUTION (RBE) - add flag so the uploader can discover outputs locally:
 bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
 fi
+if [ "$doctor_status" -ne 0 ]; then
+  exit "$doctor_status"
+fi
 exit "$upload_status"
 ```
 
 ```powershell
-# RECOMMENDED: Run tests, then upload payloads (preserves test exit code)
+# RECOMMENDED: Run tests, validate payloads, then upload payloads.
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+if ($doctorStatus -ne 0) { exit $doctorStatus }
+exit $uploadStatus
 
 # REMOTE EXECUTION (RBE) - add flag so the uploader can discover outputs locally:
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+if ($doctorStatus -ne 0) { exit $doctorStatus }
+exit $uploadStatus
 ```
 
 **IMPORTANT**: Always preserve the test exit code! Using plain `;` causes CI to report success even when tests fail.
@@ -993,14 +1045,18 @@ dd_topt_go_test(
 `embedsrcs`. When enabled, it changes the default `rundir` to `.` only if you
 did not already set `rundir`. An explicit `rundir` still wins unchanged.
 
-Then run tests and upload:
+Then run tests, validate payloads, and upload:
 
 ```bash
 bazel test //... || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
+fi
+if [ "$doctor_status" -ne 0 ]; then
+  exit "$doctor_status"
 fi
 exit "$upload_status"
 ```
@@ -1009,11 +1065,17 @@ exit "$upload_status"
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+if ($doctorStatus -ne 0) { exit $doctorStatus }
+exit $uploadStatus
 ```
 
 ### If tests use local fixtures
