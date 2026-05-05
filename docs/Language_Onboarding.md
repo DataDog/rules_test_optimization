@@ -109,6 +109,12 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --write-bazelrc
 ```
 
+The default Go module sync mode is `targeted`, so bootstrap does not run
+`go mod tidy` unless you pass `--go-mod-sync=tidy`. In large repositories, pass
+`--go-binary=/path/to/go` when bootstrap must use the same pinned Go SDK as
+Bazel. The path must point to a `go` or `go.exe` executable and must not include
+arguments.
+
 The bootstrap writes `//tools/build:dd_go_test.bzl` and creates
 `//:dd_test_optimization_doctor` plus `//:dd_upload_payloads` when they are
 missing. With `--write-bazelrc`, it also writes the managed

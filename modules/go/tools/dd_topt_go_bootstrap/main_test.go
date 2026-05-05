@@ -650,22 +650,178 @@ func TestWriteOrchestrionToolFileWritesManagedImports(t *testing.T) {
 	}
 }
 
-func TestBootstrapSyncCommandsPinConfiguredOrchestrionVersion(t *testing.T) {
+func TestBootstrapSyncCommandsTargetedModeAvoidsGoModTidy(t *testing.T) {
 	cfg := config{
 		orchestrionVersion: "v1.9.0",
 		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+		goModSync:          "targeted",
 	}
 
 	got := bootstrapSyncCommands(cfg)
-	if len(got) < 2 {
+	if len(got) < 3 {
 		t.Fatalf("bootstrapSyncCommands returned too few commands: %#v", got)
 	}
 	if strings.Join(got[0], " ") != "mod edit -require=github.com/DataDog/orchestrion@v1.9.0" {
 		t.Fatalf("first bootstrap sync command=%q, want orchestrion version pin", strings.Join(got[0], " "))
 	}
-	if strings.Join(got[len(got)-1], " ") != "mod tidy" {
-		t.Fatalf("last bootstrap sync command=%q, want mod tidy", strings.Join(got[len(got)-1], " "))
+	joined := strings.Join(flattenCommands(got), "\n")
+	if strings.Contains(joined, "mod tidy") {
+		t.Fatalf("targeted bootstrap sync must not run go mod tidy:\n%s", joined)
 	}
+	if !strings.Contains(joined, "list -mod=mod -tags=tools github.com/DataDog/orchestrion") {
+		t.Fatalf("targeted bootstrap sync must resolve the Orchestrion tool graph:\n%s", joined)
+	}
+	if !strings.Contains(joined, "list -mod=readonly -tags=tools github.com/DataDog/orchestrion") {
+		t.Fatalf("targeted bootstrap sync must verify readonly module completeness:\n%s", joined)
+	}
+}
+
+func TestBootstrapSyncCommandsDefaultsToTargetedMode(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+
+	joined := strings.Join(flattenCommands(bootstrapSyncCommands(cfg)), "\n")
+	if strings.Contains(joined, "mod tidy") {
+		t.Fatalf("default bootstrap sync must not run go mod tidy:\n%s", joined)
+	}
+	if !strings.Contains(joined, "list -mod=readonly -tags=tools") {
+		t.Fatalf("default bootstrap sync must use targeted readonly verification:\n%s", joined)
+	}
+}
+
+func TestBootstrapSyncCommandsTidyModeKeepsExplicitGoModTidy(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+		goModSync:          "tidy",
+	}
+
+	joined := strings.Join(flattenCommands(bootstrapSyncCommands(cfg)), "\n")
+	if !strings.Contains(joined, "mod tidy") {
+		t.Fatalf("tidy bootstrap sync must keep explicit go mod tidy:\n%s", joined)
+	}
+}
+
+func TestBootstrapSyncCommandsOffModeSkipsGoCommands(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+		goModSync:          "off",
+	}
+
+	if got := bootstrapSyncCommands(cfg); len(got) != 0 {
+		t.Fatalf("off bootstrap sync returned commands: %#v", got)
+	}
+}
+
+func TestValidateGoModSyncModeRejectsUnknownValue(t *testing.T) {
+	if err := validateGoModSyncMode("broad"); err == nil {
+		t.Fatal("expected unknown go module sync mode to fail")
+	}
+}
+
+func TestValidateGoBinaryRejectsShellStyleCommand(t *testing.T) {
+	for _, value := range []string{
+		"go test",
+		" go",
+		"go ",
+		"go\t",
+		"bash",
+	} {
+		if err := validateGoBinary(value); err == nil {
+			t.Fatalf("expected --go-binary=%q to fail validation", value)
+		}
+	}
+}
+
+func TestValidateGoBinaryAcceptsGoExecutableName(t *testing.T) {
+	for _, value := range []string{"go", filepath.Join("custom", "bin", "go"), filepath.Join("custom", "bin", "go.exe")} {
+		if err := validateGoBinary(value); err != nil {
+			t.Fatalf("expected --go-binary=%q to pass validation: %v", value, err)
+		}
+	}
+}
+
+func TestSyncDDTraceGoVersionHonorsCustomGoBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "go-args.log")
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+printf '%s\n' "$*" >> "`+logPath+`"
+exit 0
+`)
+	cfg := config{
+		goBinary:            goPath,
+		goModuleDir:         dir,
+		goModSync:           "targeted",
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		ddTraceGoVersions:   nil,
+		ddTraceGoVersionSet: true,
+	}
+
+	if err := syncDDTraceGoVersion(cfg); err != nil {
+		t.Fatalf("syncDDTraceGoVersion error: %v", err)
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake go log: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "list -mod=readonly -tags=tools") {
+		t.Fatalf("custom go binary did not receive readonly verification command:\n%s", text)
+	}
+}
+
+func TestSyncDDTraceGoVersionReadonlyFailureMentionsTargetedSync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	dir := t.TempDir()
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -mod=readonly -tags=tools"*)
+    echo "readonly module graph is incomplete" >&2
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`)
+	cfg := config{
+		goBinary:            goPath,
+		goModuleDir:         dir,
+		goModSync:           "targeted",
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		ddTraceGoVersionSet: true,
+	}
+
+	err := syncDDTraceGoVersion(cfg)
+	if err == nil {
+		t.Fatal("expected readonly verification failure")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "--go-mod-sync=targeted") {
+		t.Fatalf("expected targeted sync hint in error, got:\n%s", text)
+	}
+	if !strings.Contains(text, "go_repository") {
+		t.Fatalf("expected go_repository refresh hint in error, got:\n%s", text)
+	}
+}
+
+func flattenCommands(commands [][]string) []string {
+	flattened := make([]string, 0, len(commands))
+	for _, command := range commands {
+		flattened = append(flattened, strings.Join(command, " "))
+	}
+	return flattened
 }
 
 func TestEnsureCIVisibilityOrchestrionImport(t *testing.T) {

@@ -178,6 +178,19 @@ branch, or commit SHA. Bootstrap resolves that input to exact tracer versions,
 keeps the local Go module pins on those same versions, and prevents Bazel and
 the Go module from silently drifting apart.
 
+Bootstrap uses `--go-mod-sync=targeted` by default. Targeted sync updates the
+Orchestrion and `dd-trace-go` tool requirements, resolves only the packages
+needed by the generated `orchestrion.tool.go`, and verifies those packages with
+`go list -mod=readonly`. It intentionally does not run `go mod tidy`, so large
+workspaces avoid unrelated module rewrites. Use `--go-mod-sync=tidy` only when
+you explicitly want bootstrap to tidy the whole module, or `--go-mod-sync=off`
+when another repository-owned process manages `go.mod` and `go.sum`.
+
+Bootstrap runs those Go module commands with `go` by default. Use
+`--go-binary=/path/to/go` when the repository must sync with a specific Go SDK,
+for example the same SDK Bazel uses in a monorepo. The value must be a single
+executable path named `go` or `go.exe`; do not include shell arguments.
+
 Guided bootstrap is intentionally for single-service Go workspaces. If the
 workspace already uses conflicting or multi-service sync wiring:
 - `test_optimization_sync_extension`

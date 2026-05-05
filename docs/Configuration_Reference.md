@@ -9,6 +9,8 @@ Guided Go bootstrap accepts:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dd-trace-go-version` | `v2.9.0-dev.0.20260416093245-194346a71c51` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
+| `--go-binary` | `go` | Go binary used for bootstrap module graph synchronization. Set this to a pinned SDK path named `go` or `go.exe` when the repository must match Bazel's Go SDK; do not include shell syntax or arguments |
+| `--go-mod-sync` | `targeted` | Local Go module synchronization strategy: `targeted` updates and verifies only Orchestrion tool packages, `tidy` also runs `go mod tidy`, and `off` skips Go module commands |
 
 WORKSPACE snippet mode is read-only and does not require `MODULE.bazel` or
 `go.mod`:
@@ -41,6 +43,8 @@ Notes:
 
 - The selected version is workspace-wide for Go. There is no per-test override.
 - Bootstrap repins the local Go module to the same effective versions.
+- Bootstrap uses targeted module sync by default and does not run
+  `go mod tidy` unless `--go-mod-sync=tidy` is selected.
 - Bootstrap accepts tags, pseudo-versions, branches, and commit SHAs through
   `--dd-trace-go-version` and resolves them to canonical persisted versions.
 - Manual `orchestrion.from_source(...)` tracer settings must already use
