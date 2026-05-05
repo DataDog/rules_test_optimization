@@ -156,7 +156,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --write-bazelrc
 ```
 
 If the Go module lives below the workspace root:
@@ -167,7 +168,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service go-service \
   --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
-  --go-module-dir path/to/go-module
+  --go-module-dir path/to/go-module \
+  --write-bazelrc
 ```
 
 `--dd-trace-go-version` is optional. If omitted, the workspace uses the default
@@ -187,6 +189,41 @@ use the manual/advanced Go setup path instead.
 If the workspace already has a matching single-service
 `test_optimization_go_extension` plus `use_repo(...)`, guided bootstrap can
 reuse that wiring and continue.
+
+### Go Bazel config
+
+Use `--write-bazelrc` to insert or replace the managed
+`# BEGIN Datadog Test Optimization Bazelrc` block. Use
+`--print-bazelrc-snippet` when you want to review or copy the block manually.
+
+The generated config is named `test-optimization` by default:
+
+```text
+common:test-optimization --repo_env=DD_API_KEY
+common:test-optimization --repo_env=FETCH_SALT
+common:test-optimization --repo_env=DD_SITE
+common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
+common:test-optimization --repo_env=DD_GIT_BRANCH
+common:test-optimization --repo_env=DD_GIT_TAG
+common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
+common:test-optimization --repo_env=DD_PR_NUMBER
+test:test-optimization --remote_download_outputs=all
+```
+
+The full generated block includes all sync metadata inputs from the repository
+rule. It intentionally does not include `--test_env=DD_GIT_*`,
+`--test_env=DD_TEST_OPTIMIZATION_AGENT_URL`, or
+`--test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`. Git metadata belongs to the
+sync metadata fetch through `--repo_env`, and uploader credentials/endpoints are
+read later by `bazel run`.
+
+Run Go onboarding commands with this config:
+
+```bash
+bazel test --config=test-optimization //...
+bazel run --config=test-optimization //:dd_test_optimization_doctor
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+```
 
 For manual Go extension wiring, set `module_path` to the Go module path from
 `go.mod`:
@@ -471,69 +508,69 @@ dd_payload_uploader(
 
 ```text
 # Repository rule (module/repo phase) — affects refetch
-common --repo_env=DD_API_KEY
-common --repo_env=DD_SITE
-common --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional shared direct URL override for sync + uploader agentless path (test/dev)
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS  # Optional sync HTTP connect-timeout override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS         # Optional sync HTTP max-time override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS           # Optional sync HTTP retry-attempt override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS      # Optional sync HTTP retry-delay override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS  # Optional sync execute-timeout buffer override
-common --repo_env=DD_SERVICE
-common --repo_env=DD_ENV
-common --repo_env=DD_GIT_REPOSITORY_URL
-common --repo_env=DD_GIT_BRANCH
-common --repo_env=DD_GIT_TAG
-common --repo_env=DD_GIT_COMMIT_SHA
-common --repo_env=DD_GIT_HEAD_COMMIT
-common --repo_env=DD_GIT_COMMIT_MESSAGE
-common --repo_env=DD_GIT_HEAD_MESSAGE
-common --repo_env=DD_GIT_COMMIT_AUTHOR_NAME
-common --repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL
-common --repo_env=DD_GIT_COMMIT_AUTHOR_DATE
-common --repo_env=DD_GIT_COMMIT_COMMITTER_NAME
-common --repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL
-common --repo_env=DD_GIT_COMMIT_COMMITTER_DATE
-common --repo_env=DD_GIT_HEAD_AUTHOR_NAME
-common --repo_env=DD_GIT_HEAD_AUTHOR_EMAIL
-common --repo_env=DD_GIT_HEAD_AUTHOR_DATE
-common --repo_env=DD_GIT_HEAD_COMMITTER_NAME
-common --repo_env=DD_GIT_HEAD_COMMITTER_EMAIL
-common --repo_env=DD_GIT_HEAD_COMMITTER_DATE
-common --repo_env=DD_GIT_PR_BASE_BRANCH
-common --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
-common --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
-common --repo_env=DD_PR_NUMBER
+common:test-optimization --repo_env=DD_API_KEY
+common:test-optimization --repo_env=FETCH_SALT
+common:test-optimization --repo_env=DD_SITE
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional sync/uploader agentless URL override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS  # Optional sync HTTP connect-timeout override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS         # Optional sync HTTP max-time override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS           # Optional sync HTTP retry-attempt override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS      # Optional sync HTTP retry-delay override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS  # Optional sync execute-timeout buffer override
+common:test-optimization --repo_env=DD_SERVICE
+common:test-optimization --repo_env=DD_ENV
+common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
+common:test-optimization --repo_env=DD_GIT_BRANCH
+common:test-optimization --repo_env=DD_GIT_TAG
+common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMIT
+common:test-optimization --repo_env=DD_GIT_COMMIT_MESSAGE
+common:test-optimization --repo_env=DD_GIT_HEAD_MESSAGE
+common:test-optimization --repo_env=DD_GIT_COMMIT_AUTHOR_NAME
+common:test-optimization --repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL
+common:test-optimization --repo_env=DD_GIT_COMMIT_AUTHOR_DATE
+common:test-optimization --repo_env=DD_GIT_COMMIT_COMMITTER_NAME
+common:test-optimization --repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL
+common:test-optimization --repo_env=DD_GIT_COMMIT_COMMITTER_DATE
+common:test-optimization --repo_env=DD_GIT_HEAD_AUTHOR_NAME
+common:test-optimization --repo_env=DD_GIT_HEAD_AUTHOR_EMAIL
+common:test-optimization --repo_env=DD_GIT_HEAD_AUTHOR_DATE
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMITTER_NAME
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMITTER_EMAIL
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMITTER_DATE
+common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
+common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
+common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
+common:test-optimization --repo_env=DD_PR_NUMBER
+test:test-optimization --remote_download_outputs=all
 # Optional: override detected Go module path for export.bzl
-common --repo_env=GO_MODULE_PATH
+common:test-optimization --repo_env=GO_MODULE_PATH
 # Optional: provide Python module path hint for export.bzl
-common --repo_env=PYTHON_MODULE_PATH
+common:test-optimization --repo_env=PYTHON_MODULE_PATH
 # Optional: provide Java module path hint for export.bzl
-common --repo_env=JAVA_MODULE_PATH
+common:test-optimization --repo_env=JAVA_MODULE_PATH
 # Optional: provide NodeJS module path hint for export.bzl
-common --repo_env=NODEJS_MODULE_PATH
+common:test-optimization --repo_env=NODEJS_MODULE_PATH
 # Optional: provide .NET module path hint for export.bzl
-common --repo_env=DOTNET_MODULE_PATH
+common:test-optimization --repo_env=DOTNET_MODULE_PATH
 # Optional: provide Ruby module path hint for export.bzl
-common --repo_env=RUBY_MODULE_PATH
-# Optional: force refetch once (example)
-# common --repo_env=FETCH_SALT=<timestamp>
+common:test-optimization --repo_env=RUBY_MODULE_PATH
 
 # Uploader (bazel run, pass credentials inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
-#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 # PowerShell equivalent:
 #   # Set once per shell session before first run:
 #   # $env:DD_API_KEY = "<your-api-key>"
 #   # $env:DD_SITE = "datadoghq.com"
-#   bazel run //:dd_upload_payloads
+#   bazel run --config=test-optimization //:dd_upload_payloads
 
 # Tests (runtime)
 # Keep uploader credentials out of test runtime by default.
 # Do not pass DD_GIT_* through --test_env. Git metadata belongs to the
 # repository-rule phase through --repo_env so it cannot invalidate test actions.
-test --test_env=DD_TEST_OPTIMIZATION_AGENT_URL
-test --test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional override for intake base URL (agentless only, test/dev)
+# Do not pass DD_TEST_OPTIMIZATION_AGENT_URL or
+# DD_TEST_OPTIMIZATION_AGENTLESS_URL through --test_env for Go/Orchestrion.
 ```
 
 Security note: keep secret values out of `.bazelrc`. Forward variable names

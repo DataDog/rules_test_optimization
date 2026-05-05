@@ -13,6 +13,8 @@ If Bazel reports that sync requires WORKSPACE support, add
 |---------|--------------|----------------|
 | No files fetched or stale data | `DD_API_KEY` forwarded, `bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>` | Repository rule not fetching data |
 | Uploader says no payload files | tracer file-mode contract + payload files under `bazel-testlogs/*/test.outputs/` | Uploader not finding payloads |
+| Doctor reports msgpack payloads | tracer is not in Bazel JSON file mode | Doctor failures |
+| Doctor reports missing Git or Bazel metadata | sync metadata context or sidecar metadata is absent | Doctor failures |
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
 | Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
@@ -101,6 +103,47 @@ If Bazel reports that sync requires WORKSPACE support, add
 
 4. **For RBE users**: Add `--remote_download_outputs=all` to download test
    outputs locally.
+
+## Doctor failures
+
+**Symptom**: `bazel run --config=test-optimization //:dd_test_optimization_doctor`
+fails before upload.
+
+**Solutions**:
+
+1. **Msgpack payloads**: Go/Orchestrion Bazel mode must write JSON payloads to
+   `TEST_UNDECLARED_OUTPUTS_DIR`. If the doctor finds `.msgpack` or
+   `.msgpack.gz`, verify that the target uses the Go test optimization macro or
+   wrapper and that the configured `dd-trace-go` version includes Bazel JSON
+   file-mode support.
+
+2. **No JSON payloads**: Confirm the test target actually ran with Test
+   Optimization enabled and inspect:
+   ```bash
+   find bazel-testlogs -path '*/test.outputs/payloads/*/*.json' -type f
+   ```
+
+3. **Missing Git metadata**: The sync metadata fetch must see repository URL,
+   commit SHA, and branch or tag. Put `DD_GIT_*` values in `.bazelrc` as
+   `common:test-optimization --repo_env=DD_GIT_<NAME>`, not `--test_env`.
+   The doctor scans versioned `.bazelrc` files for `--test_env=DD_GIT_*`, but
+   it cannot detect a bad `--test_env=DD_GIT_*` flag typed directly on the CLI.
+
+4. **Missing Bazel metadata**: The target should emit
+   `bazel_target_metadata.json` next to payload files. Use the companion macro
+   or generated wrapper instead of invoking the raw language test rule directly.
+
+5. **`full_bundle_no_match`**: The Go macro could not map the test target to a
+   per-module bundle. Prefer `embed = [":lib"]` so the macro can read the same
+   importpath that `rules_go` uses, or set `module_label_override` only when the
+   module label is intentionally known. `module` and `module_override` are valid
+   successful selections; `full_bundle_disabled` is valid when backend module
+   data is disabled.
+
+6. **Expected target output missing**: Run the exact target listed in
+   `expected_targets` before the doctor. With remote execution or remote cache,
+   run tests with `--remote_download_outputs=all` or the doctor will not see
+   `test.outputs` locally.
 
 ## Non-standard bazel-testlogs location
 
@@ -220,8 +263,8 @@ Orchestrion, not as the source of truth for tracer versions.
 
 - Prefer explicit env assignment over shell interpolation in troubleshooting
   commands:
-  - Unix: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads`
-  - PowerShell: set `$env:DD_API_KEY` and `$env:DD_SITE` first, then run `bazel run //:dd_upload_payloads`
+  - Unix: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads`
+  - PowerShell: set `$env:DD_API_KEY` and `$env:DD_SITE` first, then run `bazel run --config=test-optimization //:dd_upload_payloads`
 - Quote paths containing spaces and avoid `eval`-style wrappers.
 - For refetch debugging, use:
   - `bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`

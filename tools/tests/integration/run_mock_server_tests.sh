@@ -428,7 +428,7 @@ REPO_ENVS=(
   --repo_env=DD_GIT_COMMIT_MESSAGE=Test_commit
   --repo_env=DD_GIT_HEAD_MESSAGE=Test_head
   --repo_env=DD_GIT_TAG=v1.0.0
-  # Keep the sync preflight bound to the explicit DD_GIT_* fixture metadata.
+  # Keep the sync metadata fetch bound to the explicit DD_GIT_* fixture metadata.
   --repo_env=GITHUB_SHA=
   --repo_env=GITHUB_EVENT_PATH=
 )
@@ -445,7 +445,7 @@ SYNC_SALT_VALUE="integration-sync-${RANDOM}-$(date +%s)"
   --repo_env=FETCH_SALT="$SYNC_SALT_VALUE" \
   "${REPO_ENVS[@]}"
 
-# Canonical runtime-name preflight for newly supported runtimes.
+# Canonical runtime-name validation for newly supported runtimes.
 for runtime in nodejs dotnet ruby; do
   "$BAZEL" "${BAZEL_FLAGS[@]}" fetch "@test_optimization_data_${runtime}//:test_optimization_files" \
     --repo_env=FETCH_SALT="$SYNC_SALT_VALUE" \
@@ -2263,6 +2263,15 @@ func TestGuidedGoRuntimeWiring(t *testing.T) {
 	if undeclaredDir == "" {
 		t.Fatal("TEST_UNDECLARED_OUTPUTS_DIR not set")
 	}
+	payloadDir := filepath.Join(undeclaredDir, "payloads", "tests")
+	if err := os.MkdirAll(payloadDir, 0o755); err != nil {
+		t.Fatalf("create guided bootstrap payload directory: %v", err)
+	}
+	payloadPath := filepath.Join(payloadDir, "span_events_1.json")
+	if err := os.WriteFile(payloadPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write guided bootstrap JSON payload: %v", err)
+	}
+
 	metadataPath := filepath.Join(undeclaredDir, "bazel_target_metadata.json")
 	metadataContent, err := os.ReadFile(metadataPath)
 	if err != nil {
@@ -2293,6 +2302,7 @@ dd_go_test(
     name = "hello_test",
     srcs = ["main_test.go"],
     embed = [":hello_lib"],
+    module_label_override = "modulea",
     stage_sources = True,
 )
 BUILD_GUIDED_EOF
@@ -2305,7 +2315,8 @@ BUILD_GUIDED_EOF
     --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT" \
     --guided \
     --service "go-service" \
-    --runtime-version "1.2.3"
+    --runtime-version "1.2.3" \
+    --write-bazelrc
 )
 
 if ! grep -q '# BEGIN Datadog Go Guided Setup' "$GUIDED_BOOT_WS/MODULE.bazel"; then
@@ -2332,6 +2343,31 @@ if ! grep -q '# BEGIN Datadog Go Uploader' "$GUIDED_BOOT_WS/BUILD.bazel"; then
   cat "$GUIDED_BOOT_WS/BUILD.bazel" || true
   exit 1
 fi
+if ! grep -q '# BEGIN Datadog Go Doctor' "$GUIDED_BOOT_WS/BUILD.bazel"; then
+  echo "error: guided bootstrap did not create the managed doctor block"
+  cat "$GUIDED_BOOT_WS/BUILD.bazel" || true
+  exit 1
+fi
+if ! grep -q '# BEGIN Datadog Test Optimization Bazelrc' "$GUIDED_BOOT_WS/.bazelrc"; then
+  echo "error: guided bootstrap did not create the managed .bazelrc block"
+  cat "$GUIDED_BOOT_WS/.bazelrc" || true
+  exit 1
+fi
+if grep -q -- '--test_env=DD_GIT_' "$GUIDED_BOOT_WS/.bazelrc"; then
+  echo "error: guided bootstrap .bazelrc must not forward DD_GIT_* through test_env"
+  cat "$GUIDED_BOOT_WS/.bazelrc" || true
+  exit 1
+fi
+if grep -q -- '--test_env=DD_TEST_OPTIMIZATION_AGENT' "$GUIDED_BOOT_WS/.bazelrc"; then
+  echo "error: guided bootstrap .bazelrc must not forward uploader endpoints through test_env"
+  cat "$GUIDED_BOOT_WS/.bazelrc" || true
+  exit 1
+fi
+if ! grep -q -- 'test:test-optimization --remote_download_outputs=all' "$GUIDED_BOOT_WS/.bazelrc"; then
+  echo "error: guided bootstrap .bazelrc did not configure remote_download_outputs"
+  cat "$GUIDED_BOOT_WS/.bazelrc" || true
+  exit 1
+fi
 if [ ! -f "$GUIDED_BOOT_WS/tools/build/BUILD.bazel" ]; then
   echo "error: guided bootstrap did not create tools/build/BUILD.bazel"
   exit 1
@@ -2348,13 +2384,17 @@ fi
 
 (
   cd "$GUIDED_BOOT_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" test //src/go-project:hello_test "${REPO_ENVS[@]}"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization //src/go-project:hello_test "${REPO_ENVS[@]}"
 )
 
 GUIDED_TESTLOGS_DIR="$(
   cd "$GUIDED_BOOT_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" info bazel-testlogs "${REPO_ENVS[@]}"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" info --config=test-optimization bazel-testlogs "${REPO_ENVS[@]}"
 )"
+(
+  cd "$GUIDED_BOOT_WS"
+  TESTLOGS_DIR="$GUIDED_TESTLOGS_DIR/src/go-project" "$BAZEL" "${BAZEL_FLAGS[@]}" run --config=test-optimization //:dd_test_optimization_doctor "${REPO_ENVS[@]}"
+)
 GUIDED_BAZEL_METADATA_PATH="$GUIDED_TESTLOGS_DIR/src/go-project/hello_test/test.outputs/bazel_target_metadata.json"
 if [[ ! -f "$GUIDED_BAZEL_METADATA_PATH" ]]; then
   echo "error: guided bootstrap go test did not emit bazel_target_metadata.json"

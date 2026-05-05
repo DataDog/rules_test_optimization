@@ -33,21 +33,34 @@ Shared runtime contract for every language:
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` remains a legacy explicit override, not
   the recommended mixed-runtime wiring path
 
-Shared `.bazelrc` forwarding:
+Shared `.bazelrc` forwarding. Prefer the generated block from
+`dd_topt_go_bootstrap --print-bazelrc-snippet` or
+`dd_topt_go_bootstrap --write-bazelrc` for Go workspaces:
 
 ```text
-common --repo_env=DD_API_KEY
-common --repo_env=DD_SITE
-# Pass DD_GIT_* only through --repo_env. Never forward it as test environment
-# data because that makes Git metadata part of the test action cache key.
+common:test-optimization --repo_env=DD_API_KEY
+common:test-optimization --repo_env=DD_SITE
+common:test-optimization --repo_env=FETCH_SALT
+common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
+common:test-optimization --repo_env=DD_GIT_BRANCH
+common:test-optimization --repo_env=DD_GIT_TAG
+common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
+common:test-optimization --repo_env=DD_PR_NUMBER
+test:test-optimization --remote_download_outputs=all
 ```
+
+Pass `DD_GIT_*` only through `--repo_env`. Never forward it as test
+environment data because that makes Git metadata part of the test action cache
+key. For Go/Orchestrion, do not put `DD_TEST_OPTIMIZATION_AGENT_URL` or
+`DD_TEST_OPTIMIZATION_AGENTLESS_URL` in `--test_env`; the uploader reads upload
+endpoints at `bazel run` time.
 
 Shared upload command:
 
 ```bash
-bazel test //... || test_status=$?; test_status=${test_status:-0}
-bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
+bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
@@ -92,12 +105,14 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --write-bazelrc
 ```
 
 The bootstrap writes `//tools/build:dd_go_test.bzl` and creates
 `//:dd_test_optimization_doctor` plus `//:dd_upload_payloads` when they are
-missing.
+missing. With `--write-bazelrc`, it also writes the managed
+`test-optimization` config used by the command examples above.
 
 `--dd-trace-go-version` is optional. If omitted, the default is
 `v2.9.0-dev.0.20260416093245-194346a71c51`. It accepts a tag, pseudo-version,

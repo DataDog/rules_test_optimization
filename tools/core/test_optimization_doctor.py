@@ -13,7 +13,13 @@ from typing import Any
 
 
 DD_GIT_TEST_ENV_RE = re.compile(r"--test_env(?:=|\s+)DD_GIT_[A-Z0-9_]*")
-VALID_GO_PAYLOAD_SELECTIONS = {"module", "full_bundle_disabled"}
+VALID_GO_PAYLOAD_SELECTIONS = {
+    "module",
+    "module_override",
+    "full_bundle_disabled",
+    "full_bundle_no_match",
+}
+VALID_GO_PAYLOAD_SELECTIONS_TEXT = ", ".join(sorted(VALID_GO_PAYLOAD_SELECTIONS))
 
 
 def _fail(message: str) -> None:
@@ -162,11 +168,21 @@ def _expected_target_outputs(testlogs_dir: Path, label: str) -> list[Path]:
     """
     target_root = _expected_target_root(testlogs_dir, label)
     if not target_root.exists():
-        _fail(f"expected target output root not found for {label}: {target_root}")
+        _fail(_missing_expected_target_message(label, target_root, "output root"))
     output_dirs = _discover_output_dirs(target_root)
     if not output_dirs:
-        _fail(f"expected target output directory not found for {label}: {target_root}")
+        _fail(_missing_expected_target_message(label, target_root, "test.outputs directory"))
     return output_dirs
+
+
+def _missing_expected_target_message(label: str, target_root: Path, missing_part: str) -> str:
+    """Return an actionable error for expected targets with no local outputs."""
+    return (
+        f"expected target {missing_part} not found for {label}: {target_root}. "
+        "Run this exact test target before running the doctor. If the test ran with "
+        "remote execution or remote cache, rerun it with --remote_download_outputs=all "
+        "so Bazel downloads test.outputs locally."
+    )
 
 
 def _discover_output_dirs(testlogs_dir: Path) -> list[Path]:
@@ -183,7 +199,7 @@ def _discover_candidate_output_dirs(testlogs_dir: Path) -> list[Path]:
     return [
         output_dir
         for output_dir in _discover_output_dirs(testlogs_dir)
-        if _payload_files(output_dir) or _metadata_files(output_dir)
+        if _payload_files(output_dir) or _msgpack_payload_files(output_dir) or _metadata_files(output_dir)
     ]
 
 
@@ -192,6 +208,17 @@ def _payload_files(output_dir: Path) -> list[Path]:
     if not payload_root.exists():
         return []
     return sorted(path for path in payload_root.rglob("*.json") if path.is_file())
+
+
+def _msgpack_payload_files(output_dir: Path) -> list[Path]:
+    """Return raw msgpack payload files emitted under a Bazel test output tree."""
+    payload_root = output_dir / "payloads"
+    if not payload_root.exists():
+        return []
+    files = []
+    for pattern in ("*.msgpack", "*.msgpack.gz"):
+        files.extend(path for path in payload_root.rglob(pattern) if path.is_file())
+    return sorted(files)
 
 
 def _metadata_files(output_dir: Path) -> list[Path]:
@@ -246,15 +273,29 @@ def _validate_bazelrc(workspace: Path) -> None:
                 _fail(f"{path}:{line_number} sets DD_GIT_* with --test_env; use --repo_env instead")
 
 
-def _validate_outputs(output_dirs: list[Path], require_json_payloads: bool, require_bazel_metadata: bool, forbid_full_bundle_no_match: bool) -> None:
+def _validate_outputs(
+    output_dirs: list[Path],
+    require_json_payloads: bool,
+    require_bazel_metadata: bool,
+    forbid_full_bundle_no_match: bool,
+    forbid_msgpack_payloads: bool,
+) -> None:
     payload_count = 0
     metadata_count = 0
     for output_dir in output_dirs:
         payloads = _payload_files(output_dir)
+        msgpack_payloads = _msgpack_payload_files(output_dir)
         metadata = _metadata_files(output_dir)
         payload_count += len(payloads)
         metadata_count += len(metadata)
 
+        if forbid_msgpack_payloads and msgpack_payloads:
+            formatted = ", ".join(str(path) for path in msgpack_payloads)
+            _fail(
+                f"raw msgpack payloads are not supported in Bazel file mode under {output_dir}: "
+                f"{formatted}. Tests must write JSON payloads to TEST_UNDECLARED_OUTPUTS_DIR; "
+                "check the dd-trace-go version and Go/Orchestrion Bazel environment."
+            )
         if require_json_payloads and not payloads:
             _fail(f"missing JSON payloads under {output_dir}")
         for payload in payloads:
@@ -270,7 +311,7 @@ def _validate_outputs(output_dirs: list[Path], require_json_payloads: bool, requ
             if selection is not None and selection not in VALID_GO_PAYLOAD_SELECTIONS:
                 _fail(
                     f"{metadata_file} has unsupported bazel.go.payload_selection={selection!r}; "
-                    "expected 'module' or 'full_bundle_disabled'"
+                    f"expected one of: {VALID_GO_PAYLOAD_SELECTIONS_TEXT}"
                 )
 
     if require_json_payloads and payload_count == 0:
@@ -312,6 +353,7 @@ def main(argv: list[str]) -> int:
         require_json_payloads=config["require_json_payloads"],
         require_bazel_metadata=config["require_bazel_metadata"],
         forbid_full_bundle_no_match=config["forbid_full_bundle_no_match"],
+        forbid_msgpack_payloads=config.get("forbid_msgpack_payloads", True),
     )
     print(f"[dd-test-optimization-doctor] OK: validated {len(output_dirs)} test output directorie(s)")
     return 0
