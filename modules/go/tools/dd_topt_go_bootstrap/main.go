@@ -259,14 +259,6 @@ func run(cfg config) error {
 		cfg.goModuleDir = filepath.Join(workspaceDir, cfg.goModuleDir)
 	}
 	cfg.moduleFile = filepath.Join(workspaceDir, "MODULE.bazel")
-	if cfg.writeBazelrc {
-		if err := writeBazelrcBlock(cfg); err != nil {
-			return err
-		}
-		if !cfg.guided {
-			return nil
-		}
-	}
 
 	if cfg.guided {
 		if strings.TrimSpace(cfg.service) == "" {
@@ -283,6 +275,14 @@ func run(cfg config) error {
 		}
 		if strings.TrimSpace(cfg.uploaderTargetName) == "" {
 			return errors.New("--guided requires a non-empty --uploader-target-name")
+		}
+	}
+	if cfg.writeBazelrc {
+		if err := writeBazelrcBlock(cfg); err != nil {
+			return err
+		}
+		if !cfg.guided {
+			return nil
 		}
 	}
 

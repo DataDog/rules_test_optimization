@@ -263,6 +263,34 @@ func TestWriteBazelrcBlockPreservesUserContent(t *testing.T) {
 	}
 }
 
+func TestRunGuidedWriteBazelrcValidatesBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	err := run(config{
+		workspaceDir:       dir,
+		guided:             true,
+		writeBazelrc:       true,
+		bazelrcPath:        ".bazelrc",
+		bazelrcConfig:      "test-optimization",
+		datadogFetch:       defaultDatadogFetch,
+		rulesGoFetch:       defaultRulesGoFetch,
+		rulesGoVariant:     defaultRulesGoVariant,
+		ddTraceGoVersion:   defaultDDTraceGoVersion,
+		orchestrionVersion: defaultOrchestrionVersion,
+		rulesGoRepoName:    defaultRulesGoRepoName,
+		rulesGoRemote:      defaultRulesGoRemote,
+		syncRepoName:       defaultSyncRepoName,
+		doctorTargetName:   defaultDoctorTargetName,
+		uploaderTargetName: defaultUploaderTargetName,
+		runtimeVersion:     "1.25.0",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--guided requires --service") {
+		t.Fatalf("run error=%v, want missing service validation", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".bazelrc")); !os.IsNotExist(statErr) {
+		t.Fatalf(".bazelrc was written before guided validation, statErr=%v", statErr)
+	}
+}
+
 func TestWriteBazelrcBlockIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config{
