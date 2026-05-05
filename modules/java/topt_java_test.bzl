@@ -70,6 +70,22 @@ def _has_non_empty_value(value):
         return len(value) > 0
     return True
 
+def _concat_label_list_values(left, right):
+    """Concatenate label-list-like macro inputs while preserving `select(...)`."""
+    normalized_left = _normalize_user_data(left)
+    normalized_right = _normalize_user_data(right)
+
+    if normalized_left == None:
+        return normalized_right
+    if normalized_right == None:
+        return normalized_left
+    if normalized_left == []:
+        return normalized_right
+    if normalized_right == []:
+        return normalized_left
+
+    return normalized_left + normalized_right
+
 def dd_topt_java_test(
         name,
         topt_data,
@@ -79,6 +95,7 @@ def dd_topt_java_test(
         module_label_override = None,
         module_identifier = None,
         ci_visibility_enabled = True,
+        stage_sources = False,
         **kwargs):
     """Define a Java test with Datadog Test Optimization support.
 
@@ -95,6 +112,12 @@ def dd_topt_java_test(
         forces ``DD_CIVISIBILITY_ENABLED=true`` on the generated test
         environment so payload-to-files mode works without extra env wiring.
         Set false only when the caller intentionally owns this tracer switch.
+      stage_sources: Optional boolean. When true, the macro stages direct
+        ``srcs`` into runtime runfiles so the tracer can index them and
+        populate ``test.source.file`` / ``test.source.start`` /
+        ``test.source.end`` tags. Defaults to false because Bazel test runfiles
+        do not include ``srcs`` by default and the extra files cost runfiles
+        size; enable per target when source-level metadata is desired.
     """
     if not agent_jar:
         fail_with_prefix("dd_topt_java_test", "agent_jar is required and must be a label pointing to the dd-java-agent JAR")
@@ -103,7 +126,16 @@ def dd_topt_java_test(
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
 
     user_data = kwargs.pop("data", None)
-    data = _append_data_dependencies(user_data, [])
+    data = user_data
+
+    # Stage direct source files only when callers opt in. This gives the Java
+    # tracer a runtime-visible source tree under the runfiles workspace dir so
+    # RepoIndex can resolve `test.source.file` and the bytecode lines resolver
+    # can populate `test.source.start` / `test.source.end`.
+    if stage_sources:
+        data = _concat_label_list_values(data, kwargs.get("srcs"))
+
+    data = _append_data_dependencies(data, [])
 
     sync_repo_name = _svc.get("repo_name")
     if not sync_repo_name:

@@ -291,6 +291,24 @@ CI Visibility is on by
 default — set `ci_visibility_enabled = False` only if your callsite owns
 `DD_CIVISIBILITY_ENABLED`.
 
+If you want the tracer to populate `test.source.file`, `test.source.start`, and
+`test.source.end` tags, opt into source staging:
+
+```bzl
+dd_topt_java_test(
+    name = "pkg_java_test",
+    srcs = ["SampleTest.java"],
+    stage_sources = True,
+    test_class = "com.example.pkg.SampleTest",
+    topt_data = topt_data,
+    agent_jar = "@dd_java_agent//file",
+)
+```
+
+`stage_sources` adds the target's direct `srcs` to runfiles so the tracer's
+repo index can resolve them. Defaults to false because Bazel test runfiles do
+not include `srcs` by default and the extra files cost runfiles size.
+
 ### Bzlmod + NodeJS companion (`dd_topt_nodejs_test`)
 
 ```bzl
