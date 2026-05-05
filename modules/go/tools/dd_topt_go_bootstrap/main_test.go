@@ -346,6 +346,40 @@ test:old --test_env=DD_GIT_BRANCH=main
 	}
 }
 
+func TestWriteBazelrcBlockRejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	err := writeBazelrcBlock(config{
+		workspaceDir:  dir,
+		bazelrcPath:   "../outside.bazelrc",
+		bazelrcConfig: "test-optimization",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--bazelrc-path must stay inside workspace") {
+		t.Fatalf("writeBazelrcBlock error=%v, want workspace-bound path validation", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(dir), "outside.bazelrc")); !os.IsNotExist(statErr) {
+		t.Fatalf("outside .bazelrc was written, statErr=%v", statErr)
+	}
+}
+
+func TestWriteBazelrcBlockAllowsAbsolutePathInsideWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tools", "test-optimization.bazelrc")
+	if err := writeBazelrcBlock(config{
+		workspaceDir:  dir,
+		bazelrcPath:   path,
+		bazelrcConfig: "test-optimization",
+	}); err != nil {
+		t.Fatalf("writeBazelrcBlock error: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read managed bazelrc: %v", err)
+	}
+	if !strings.Contains(string(content), bazelrcBlockStart) {
+		t.Fatalf("expected managed block in absolute workspace path:\n%s", content)
+	}
+}
+
 func TestHydrateManagedRulesGoVariantPreservesCompleteVariant(t *testing.T) {
 	content := `module(name = "example")
 

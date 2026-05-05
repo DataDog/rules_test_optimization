@@ -545,16 +545,13 @@ func bazelrcSnippet(cfg config) (string, error) {
 
 // writeBazelrcBlock inserts or replaces the managed .bazelrc block.
 func writeBazelrcBlock(cfg config) error {
-	if strings.TrimSpace(cfg.bazelrcPath) == "" {
-		return errors.New("--bazelrc-path must be non-empty")
-	}
 	snippet, err := bazelrcSnippet(cfg)
 	if err != nil {
 		return err
 	}
-	path := cfg.bazelrcPath
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(cfg.workspaceDir, path)
+	path, err := resolveBazelrcPath(cfg)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
@@ -575,6 +572,35 @@ func writeBazelrcBlock(cfg config) error {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
+}
+
+// resolveBazelrcPath resolves --bazelrc-path to an absolute path inside the
+// selected workspace so a typo or malicious value cannot write outside it.
+func resolveBazelrcPath(cfg config) (string, error) {
+	if strings.TrimSpace(cfg.bazelrcPath) == "" {
+		return "", errors.New("--bazelrc-path must be non-empty")
+	}
+	workspaceDir, err := filepath.Abs(cfg.workspaceDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace: %w", err)
+	}
+	path := cfg.bazelrcPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workspaceDir, path)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve --bazelrc-path: %w", err)
+	}
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(workspaceDir, path)
+	if err != nil {
+		return "", fmt.Errorf("validate --bazelrc-path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("--bazelrc-path must stay inside workspace %s: %s", workspaceDir, cfg.bazelrcPath)
+	}
+	return path, nil
 }
 
 func workspaceSnippet(cfg config) (string, error) {
