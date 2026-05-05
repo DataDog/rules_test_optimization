@@ -16,6 +16,10 @@ WORKSPACE snippet mode is read-only and does not require `MODULE.bazel` or
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--print-workspace-snippet` | `false` | Print WORKSPACE-mode repository wiring and exit without modifying files |
+| `--print-bazelrc-snippet` | `false` | Print the recommended `.bazelrc` block and exit without modifying files |
+| `--write-bazelrc` | `false` | Insert or replace the managed `.bazelrc` block. With `--guided`, bootstrap also continues the normal guided setup |
+| `--bazelrc-path` | `.bazelrc` | Path to the Bazel rc file updated by `--write-bazelrc` |
+| `--bazelrc-config` | `test-optimization` | Config name used by generated `common:<config>` and `test:<config>` lines |
 | `--datadog-fetch` | `git` | Fetch mode for `datadog-rules-test-optimization-go`: `git` or `archive` |
 | `--rules-go-fetch` | `git` | Fetch mode for the Orchestrion-enabled `rules_go` fork: `git` or `archive` |
 | `--rules-go-variant` | `base` | Published fork variant: `base` or `complete` |
@@ -143,9 +147,20 @@ local files only; it does not upload, delete, or rewrite payloads.
 | `expected_targets` | string_list | `[]` | Optional strict list of local Bazel test labels to validate. When empty, the doctor validates discovered Test Optimization output directories and ignores plain non-instrumented test outputs |
 | `require_git_metadata` | bool | `True` | Require `git.repository_url`, `git.commit.sha`, and `git.branch` or `git.tag` in synced context data |
 | `require_bazel_metadata` | bool | `True` | Require `bazel_target_metadata.json` next to selected payload outputs |
-| `require_json_payloads` | bool | `True` | Require parseable `.json` payload files and reject raw msgpack-only output |
-| `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"`; any present Go payload selection must be `module` or `full_bundle_disabled` |
+| `require_json_payloads` | bool | `True` | Require parseable `.json` payload files |
+| `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"`. Valid selection values are `module`, `module_override`, `full_bundle_disabled`, and `full_bundle_no_match`; the last one is accepted only when this attr is `False` |
+| `forbid_msgpack_payloads` | bool | `True` | Fail when tests emitted `.msgpack` or `.msgpack.gz` payloads instead of Bazel JSON payload files |
 | `forbid_dd_git_test_env` | bool | `True` | Fail when workspace `.bazelrc` files pass `DD_GIT_*` through `--test_env`; use `--repo_env` instead |
+
+Doctor notes:
+
+- The doctor checks local files only. It does not upload, delete, or rewrite
+  payloads.
+- When `expected_targets` is set, each listed test must have run before the
+  doctor. If tests ran remotely, use `--remote_download_outputs=all` so
+  `test.outputs` exists locally.
+- The doctor scans versioned `.bazelrc` files for `--test_env=DD_GIT_*`, but it
+  cannot see ad-hoc `--test_env=DD_GIT_*` flags typed directly on the CLI.
 
 ## How data is fetched
 
@@ -194,6 +209,13 @@ changes can invalidate fetch cache entries as expected.
 `DD_TEST_OPTIMIZATION_AGENTLESS_URL` is the shared direct URL override used by:
 - Sync metadata requests (repository rule phase), and
 - Agentless uploader intake requests (`bazel run //:dd_upload_payloads`).
+
+For Go/Orchestrion Bazel file mode, neither
+`DD_TEST_OPTIMIZATION_AGENTLESS_URL` nor `DD_TEST_OPTIMIZATION_AGENT_URL`
+belongs in the test sandbox. Put `DD_TEST_OPTIMIZATION_AGENTLESS_URL` in
+`--repo_env` only when the sync metadata fetch or uploader needs the override,
+and pass `DD_TEST_OPTIMIZATION_AGENT_URL` only at uploader runtime if you use
+EVP proxy mode.
 
 Note: `FETCH_SALT_TTL` is a convenience variable for this repository's `./bazelw`
 wrapper (not a repository-rule input itself). It periodically derives

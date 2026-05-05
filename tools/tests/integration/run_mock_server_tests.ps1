@@ -419,8 +419,8 @@ try {
     throw "mock server did not start on port $port"
   }
 
-  # Canonical runtime-name preflight for sync extension coverage.
-  $syncWorkspace = Join-Path $tempRoot "sync_preflight_ws"
+  # Canonical runtime-name sync metadata fetch for sync extension coverage.
+  $syncWorkspace = Join-Path $tempRoot "sync_metadata_fetch_ws"
   New-Item -ItemType Directory -Force -Path $syncWorkspace | Out-Null
   $repoRootForModule = $repoRoot.Replace("\", "/")
   $moduleContent = @"
@@ -489,8 +489,8 @@ filegroup(
   [System.IO.File]::WriteAllText((Join-Path $syncWorkspace "MODULE.bazel"), $moduleContent, $utf8NoBom)
   [System.IO.File]::WriteAllText((Join-Path $syncWorkspace "BUILD.bazel"), $buildContent, $utf8NoBom)
 
-  $preflightOutBase = Join-Path $tempRoot "sync_preflight_out"
-  $bazelFlags = @("--output_base=$preflightOutBase")
+  $syncMetadataFetchOutBase = Join-Path $tempRoot "sync_metadata_fetch_out"
+  $bazelFlags = @("--output_base=$syncMetadataFetchOutBase")
   $repoEnvs = @(
     "--repo_env=DD_API_KEY=mock",
     "--repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL=http://127.0.0.1:$port",
@@ -503,7 +503,7 @@ filegroup(
     "--repo_env=DD_GIT_HEAD_MESSAGE=Test_head",
     "--repo_env=DD_GIT_TAG=v1.0.0",
 
-    # Keep the sync preflight bound to the explicit DD_GIT_* fixture metadata.
+    # Keep the sync metadata fetch bound to the explicit DD_GIT_* fixture metadata.
     "--repo_env=GITHUB_SHA=",
     "--repo_env=GITHUB_EVENT_PATH="
   )
@@ -512,12 +512,12 @@ filegroup(
     Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("fetch", "//:all_sync_payloads") + $repoEnvs))
     $syncFetchExitCode = Get-NativeExitCode
     if ($syncFetchExitCode -ne 0) {
-      throw "sync runtime preflight fetch failed with exit code $syncFetchExitCode"
+      throw "sync metadata fetch command failed with exit code $syncFetchExitCode"
     }
     Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("build", "//:all_sync_payloads") + $repoEnvs))
     $syncBuildExitCode = Get-NativeExitCode
     if ($syncBuildExitCode -ne 0) {
-      throw "sync runtime preflight build failed with exit code $syncBuildExitCode"
+      throw "sync metadata fetch build failed with exit code $syncBuildExitCode"
     }
   } finally {
     Pop-Location
@@ -526,7 +526,7 @@ filegroup(
   $cqueryOutput = Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("cquery", "@test_optimization_data//:test_optimization_files", "--output=files") + $repoEnvs))
   $syncCqueryExitCode = Get-NativeExitCode
   if ($syncCqueryExitCode -ne 0) {
-    throw "sync runtime preflight cquery failed with exit code $syncCqueryExitCode"
+    throw "sync metadata fetch cquery failed with exit code $syncCqueryExitCode"
   }
   $actualOutputBase = ""
   $outputBaseOutput = Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("info", "output_base") + $repoEnvs))
@@ -555,7 +555,7 @@ filegroup(
   }
 
   $outputBaseRoots = @(
-    $preflightOutBase,
+    $syncMetadataFetchOutBase,
     $actualOutputBase
   )
   $outputBaseRoots = @(
@@ -685,7 +685,7 @@ filegroup(
     $cquerySample = (@($cqueryOutput) | Select-Object -First 10) -join " | "
     $externalRootsSample = ($externalRoots | Select-Object -First 8) -join ","
     $existingExternalRoots = ($externalRoots | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -First 8) -join ","
-    throw "failed to resolve settings.json path from sync runtime preflight cquery output (requested_output_base=$preflightOutBase, actual_output_base=$actualOutputBase, execution_root=$executionRoot, external_roots=$externalRootsSample, existing_external_roots=$existingExternalRoots, cquery_sample=$cquerySample)"
+    throw "failed to resolve settings.json path from sync metadata fetch cquery output (requested_output_base=$syncMetadataFetchOutBase, actual_output_base=$actualOutputBase, execution_root=$executionRoot, external_roots=$externalRootsSample, existing_external_roots=$existingExternalRoots, cquery_sample=$cquerySample)"
   }
   $toptHttpDir = Split-Path -Parent $settingsPath
   $toptCacheDir = Split-Path -Parent $toptHttpDir
@@ -693,7 +693,7 @@ filegroup(
   $contextPath = Join-Path $toptDir "context.json"
   $telemetryFactsPath = Join-Path $toptDir "telemetry_facts.json"
   if (-not (Test-Path -LiteralPath $contextPath -PathType Leaf)) {
-    throw "missing context.json after sync preflight at $contextPath"
+    throw "missing context.json after sync metadata fetch at $contextPath"
   }
   $contextMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $contextPath -Raw -Encoding UTF8)
   $enforceBazelContextKeys = $contextPath -notlike "*+example_stub_repo_extension*"
@@ -737,29 +737,29 @@ filegroup(
   if ($enforceBazelContextKeys) {
     foreach ($key in @("bazel.rule_name", "bazel.rule_version", "bazel.os", "bazel.arch")) {
       if ([string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $contextMap -Key $key))) {
-        throw "context.json missing Bazel metadata key '$key' after sync preflight"
+        throw "context.json missing Bazel metadata key '$key' after sync metadata fetch"
       }
     }
     foreach ($key in @("test.bazel.rule_name", "test.bazel.rule_version")) {
       if ($null -ne (Get-JsonValue -Object $contextMap -Key $key)) {
-        throw "context.json unexpectedly contains legacy Bazel metadata key '$key' after sync preflight"
+        throw "context.json unexpectedly contains legacy Bazel metadata key '$key' after sync metadata fetch"
       }
     }
     if ((Get-JsonValue -Object $contextMap -Key "bazel.os") -ne (Get-JsonValue -Object $contextMap -Key "os.platform")) {
-      throw "context.json bazel.os must match os.platform after sync preflight"
+      throw "context.json bazel.os must match os.platform after sync metadata fetch"
     }
     if ((Get-JsonValue -Object $contextMap -Key "bazel.arch") -ne (Get-JsonValue -Object $contextMap -Key "os.architecture")) {
-      throw "context.json bazel.arch must match os.architecture after sync preflight"
+      throw "context.json bazel.arch must match os.architecture after sync metadata fetch"
     }
   }
   if (-not (Test-Path -LiteralPath $telemetryFactsPath -PathType Leaf)) {
-    throw "missing telemetry_facts.json after sync preflight at $telemetryFactsPath"
+    throw "missing telemetry_facts.json after sync metadata fetch at $telemetryFactsPath"
   }
   $telemetryFactsManifest = Join-Path $tempRoot "telemetry_facts_manifest.txt"
   [System.IO.File]::WriteAllText($telemetryFactsManifest, "`t$telemetryFactsPath`n", (New-Object System.Text.UTF8Encoding($false)))
   $exportPath = Join-Path (Split-Path -Parent $toptDir) "export.bzl"
   if (-not (Test-Path -LiteralPath $exportPath -PathType Leaf)) {
-    throw "missing export.bzl after sync preflight at $exportPath"
+    throw "missing export.bzl after sync metadata fetch at $exportPath"
   }
   $exportContent = Get-Content -LiteralPath $exportPath -Raw -Encoding UTF8
   foreach ($runtime in @("go", "python", "java", "nodejs", "dotnet", "ruby")) {
@@ -796,7 +796,7 @@ filegroup(
   $nodejsContextPath = ($nodejsContextCandidates | Sort-Object -Unique | Select-Object -First 1)
   if ([string]::IsNullOrWhiteSpace($nodejsContextPath)) {
     $nodejsRootsSample = ($nodejsSearchRoots | Select-Object -First 8) -join ","
-    throw "failed to resolve nodejs context.json path from sync preflight output (search_roots=$nodejsRootsSample)"
+    throw "failed to resolve nodejs context.json path from sync metadata fetch output (search_roots=$nodejsRootsSample)"
   }
 
   $env:TESTLOGS_DIR = Join-Path $tempRoot "bazel-testlogs"

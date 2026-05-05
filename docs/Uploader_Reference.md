@@ -20,9 +20,9 @@ For a quick path, use the upload section in `README.md`.
 
 ```bash
 # RECOMMENDED: Run tests, validate payloads, then upload payloads.
-bazel test //... || test_status=$?; test_status=${test_status:-0}
-bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
+bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
@@ -33,37 +33,37 @@ fi
 exit "$upload_status"
 
 # Or as a one-liner:
-bazel test //... || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
+bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}; bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
 
-# REMOTE EXECUTION (RBE) - add flag to download outputs:
-bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}; bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
+# HERMETIC/REMOTE EXECUTION - keep test outputs downloaded locally:
+bazel test --config=test-optimization --config=hermetic //... || test_status=$?; test_status=${test_status:-0}; bazel run --config=test-optimization --config=hermetic //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
 ```
 
 ```powershell
 # RECOMMENDED: Run tests, validate payloads, then upload payloads.
-bazel test //...
+bazel test --config=test-optimization //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run //:dd_test_optimization_doctor
+bazel run --config=test-optimization //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
-bazel run //:dd_upload_payloads
+bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
 if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 
-# REMOTE EXECUTION (RBE) - add flag to download outputs:
-bazel test //... --remote_download_outputs=all
+# HERMETIC/REMOTE EXECUTION - keep test outputs downloaded locally:
+bazel test --config=test-optimization --config=hermetic //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run //:dd_test_optimization_doctor
+bazel run --config=test-optimization --config=hermetic //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
-bazel run //:dd_upload_payloads
+bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
 if ($doctorStatus -ne 0) { exit $doctorStatus }
@@ -76,8 +76,11 @@ and doctor checks passed.
 
 Credential handling:
 
-- Pass `DD_API_KEY`, `DD_SITE`, and `DD_TEST_OPTIMIZATION_AGENT_URL` at runtime via
-  environment variables only.
+- Pass `DD_API_KEY`, `DD_SITE`, and `DD_TEST_OPTIMIZATION_AGENT_URL` at uploader
+  runtime via environment variables only.
+- Do not pass `DD_TEST_OPTIMIZATION_AGENT_URL`,
+  `DD_TEST_OPTIMIZATION_AGENTLESS_URL`, or `DD_GIT_*` to Go/Orchestrion tests
+  with `--test_env`.
 - Do not hardcode secrets in `BUILD.bazel`, scripts committed to git, or CI
   logs.
 - The generated uploader scripts read env vars directly (no shell `eval`
@@ -144,31 +147,31 @@ dd_payload_uploader(
 
 ```bash
 # Option 1: Agentless mode - Inline (recommended for CI)
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 
 # Option 2: EVP proxy mode
-DD_TEST_OPTIMIZATION_AGENT_URL="http://localhost:8126" bazel run //:dd_upload_payloads
+DD_TEST_OPTIMIZATION_AGENT_URL="http://localhost:8126" bazel run --config=test-optimization //:dd_upload_payloads
 
 # Option 3: Export before run
 export DD_API_KEY="your-api-key"
 export DD_SITE="datadoghq.com"
-bazel run //:dd_upload_payloads
+bazel run --config=test-optimization //:dd_upload_payloads
 ```
 
 ```powershell
 # Option 1: Agentless mode
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
-bazel run //:dd_upload_payloads
+bazel run --config=test-optimization //:dd_upload_payloads
 
 # Option 2: EVP proxy mode
 $env:DD_TEST_OPTIMIZATION_AGENT_URL = "http://localhost:8126"
-bazel run //:dd_upload_payloads
+bazel run --config=test-optimization //:dd_upload_payloads
 
 # Option 3: Set variables before run
 $env:DD_API_KEY = "your-api-key"
 $env:DD_SITE = "datadoghq.com"
-bazel run //:dd_upload_payloads
+bazel run --config=test-optimization //:dd_upload_payloads
 ```
 
 ## Exit codes
@@ -290,7 +293,7 @@ labels by passing the existing `context.json` path directly at uploader runtime:
 DD_API_KEY="$DD_API_KEY" \
 DD_SITE="$DD_SITE" \
 DD_TEST_OPTIMIZATION_CONTEXT_JSON="/abs/path/to/context.json" \
-bazel run //:dd_upload_payloads
+bazel run --config=test-optimization //:dd_upload_payloads
 ```
 
 This override is global for that uploader invocation. In mixed-runtime

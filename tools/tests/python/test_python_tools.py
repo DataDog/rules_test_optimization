@@ -339,6 +339,18 @@ class TestOptimizationDoctorTests(unittest.TestCase):
 
             self.assertEqual([nested], self.mod._expected_target_outputs(testlogs, "//pkg:target"))
 
+    def test_expected_target_outputs_explains_missing_remote_outputs(self) -> None:
+        """Validate expected target failures explain test execution and remote output download requirements."""
+        with tempfile.TemporaryDirectory() as tmp:
+            testlogs = Path(tmp) / "bazel-testlogs"
+            testlogs.mkdir()
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._expected_target_outputs(testlogs, "//pkg:target")
+            self.assertIn("Run this exact test target before running the doctor", stderr.getvalue())
+            self.assertIn("--remote_download_outputs=all", stderr.getvalue())
+
     def test_validate_git_metadata_requires_core_tags(self) -> None:
         """Validate context.json must contain git metadata used by enrichment."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -368,7 +380,20 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaises(SystemExit):
-                self.mod._validate_outputs([output], True, True, True)
+                self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_accepts_full_bundle_no_match_when_allowed(self) -> None:
+        """Validate full_bundle_no_match is a real doctor opt-out for known fallback scenarios."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.go.payload_selection": "full_bundle_no_match"}),
+                encoding="utf-8",
+            )
+            self.mod._validate_outputs([output], True, True, False, True)
 
     def test_validate_outputs_rejects_unknown_payload_selection(self) -> None:
         """Validate Go payload selection is limited to known safe states."""
@@ -382,11 +407,11 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaises(SystemExit):
-                self.mod._validate_outputs([output], True, True, True)
+                self.mod._validate_outputs([output], True, True, True, True)
 
     def test_validate_outputs_accepts_known_payload_selection(self) -> None:
         """Validate known Go payload selection values pass the doctor."""
-        for selection in ["module", "full_bundle_disabled"]:
+        for selection in ["module", "module_override", "full_bundle_disabled"]:
             with self.subTest(selection=selection):
                 with tempfile.TemporaryDirectory() as tmp:
                     output = Path(tmp) / "pkg" / "target" / "test.outputs"
@@ -397,7 +422,43 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                         json.dumps({"bazel.go.payload_selection": selection}),
                         encoding="utf-8",
                     )
-                    self.mod._validate_outputs([output], True, True, True)
+                    self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_rejects_msgpack_payloads(self) -> None:
+        """Validate raw msgpack payload files fail the doctor by default."""
+        for filename in ["span_events_1.msgpack", "span_events_1.msgpack.gz"]:
+            with self.subTest(filename=filename):
+                with tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp) / "pkg" / "target" / "test.outputs"
+                    payload_dir = output / "payloads" / "tests"
+                    payload_dir.mkdir(parents=True)
+                    (payload_dir / filename).write_bytes(b"msgpack")
+                    (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+                    with self.assertRaises(SystemExit):
+                        self.mod._validate_outputs([output], False, True, True, True)
+
+    def test_validate_outputs_rejects_msgpack_payloads_when_json_exists(self) -> None:
+        """Validate raw msgpack files fail even when a test also emitted JSON payloads."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (payload_dir / "span_events_1.msgpack").write_bytes(b"msgpack")
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_keeps_rejecting_invalid_json(self) -> None:
+        """Validate malformed JSON payloads remain a doctor failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True, True)
 
     def test_global_discovery_ignores_plain_bazel_tests(self) -> None:
         """Validate discovery skips non-instrumented control test outputs."""
@@ -412,6 +473,17 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
 
             self.assertEqual([instrumented], self.mod._discover_candidate_output_dirs(root))
+
+    def test_global_discovery_includes_msgpack_only_outputs(self) -> None:
+        """Validate msgpack-only outputs are still discovered so the doctor can reject them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "svc" / "go_default_test" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.msgpack").write_bytes(b"msgpack")
+
+            self.assertEqual([output], self.mod._discover_candidate_output_dirs(root))
 
     def test_bazelrc_validation_ignores_comments(self) -> None:
         """Validate commented DD_GIT test_env examples are not active config."""

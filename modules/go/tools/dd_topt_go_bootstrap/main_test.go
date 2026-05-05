@@ -1,12 +1,35 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// captureStdout runs fn while collecting stdout into buf.
+func captureStdout(buf *strings.Builder, fn func() error) error {
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	os.Stdout = writer
+	runErr := fn()
+	closeErr := writer.Close()
+	os.Stdout = original
+	_, copyErr := io.Copy(buf, reader)
+	reader.Close()
+	if runErr != nil {
+		return runErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return copyErr
+}
 
 func TestInsertAfterModuleDecl(t *testing.T) {
 	input := "module(name = \"example\")\n"
@@ -150,6 +173,148 @@ func TestWorkspaceSnippetDoesNotRequireModuleFiles(t *testing.T) {
 	}
 	if _, err := workspaceSnippet(cfg); err != nil {
 		t.Fatalf("workspaceSnippet should not inspect MODULE.bazel or go.mod: %v", err)
+	}
+}
+
+func TestBazelrcSnippetUsesRepoEnvOnlyForSyncMetadata(t *testing.T) {
+	got, err := bazelrcSnippet(config{bazelrcConfig: "test-optimization"})
+	if err != nil {
+		t.Fatalf("bazelrcSnippet error: %v", err)
+	}
+	for _, want := range []string{
+		bazelrcBlockStart,
+		`common:test-optimization --repo_env=DD_API_KEY`,
+		`common:test-optimization --repo_env=FETCH_SALT`,
+		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`,
+		`common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL`,
+		`common:test-optimization --repo_env=DD_PR_NUMBER`,
+		`test:test-optimization --remote_download_outputs=all`,
+		bazelrcBlockEnd,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bazelrc snippet missing %q:\n%s", want, got)
+		}
+	}
+	for _, key := range bazelrcRepoEnvKeys {
+		want := "common:test-optimization --repo_env=" + key
+		if !strings.Contains(got, want) {
+			t.Fatalf("bazelrc snippet missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		`--test_env=DD_GIT_`,
+		`--test_env=DD_TEST_OPTIMIZATION_AGENT_URL`,
+		`--test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("bazelrc snippet contains forbidden test env %q:\n%s", forbidden, got)
+		}
+	}
+}
+
+func TestRunPrintBazelrcSnippetDoesNotRequireModuleFiles(t *testing.T) {
+	dir := t.TempDir()
+	var buf strings.Builder
+	if err := captureStdout(&buf, func() error {
+		return run(config{
+			workspaceDir:        dir,
+			printBazelrcSnippet: true,
+			bazelrcConfig:       "test-optimization",
+			datadogFetch:        defaultDatadogFetch,
+			rulesGoFetch:        defaultRulesGoFetch,
+			rulesGoVariant:      defaultRulesGoVariant,
+			ddTraceGoVersion:    defaultDDTraceGoVersion,
+			orchestrionVersion:  defaultOrchestrionVersion,
+			rulesGoRepoName:     defaultRulesGoRepoName,
+			rulesGoRemote:       defaultRulesGoRemote,
+			syncRepoName:        defaultSyncRepoName,
+			doctorTargetName:    defaultDoctorTargetName,
+			uploaderTargetName:  defaultUploaderTargetName,
+		})
+	}); err != nil {
+		t.Fatalf("run --print-bazelrc-snippet error: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, `test:test-optimization --remote_download_outputs=all`) {
+		t.Fatalf("expected bazelrc snippet on stdout:\n%s", got)
+	}
+}
+
+func TestWriteBazelrcBlockPreservesUserContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".bazelrc")
+	if err := os.WriteFile(path, []byte("common --announce_rc\n"), 0o644); err != nil {
+		t.Fatalf("write .bazelrc: %v", err)
+	}
+	cfg := config{
+		workspaceDir:  dir,
+		bazelrcPath:   ".bazelrc",
+		bazelrcConfig: "test-optimization",
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("writeBazelrcBlock error: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read .bazelrc: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "common --announce_rc") || !strings.Contains(text, bazelrcBlockStart) {
+		t.Fatalf("expected user content and managed block in .bazelrc:\n%s", text)
+	}
+}
+
+func TestWriteBazelrcBlockIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:  dir,
+		bazelrcPath:   ".bazelrc",
+		bazelrcConfig: "test-optimization",
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("first writeBazelrcBlock error: %v", err)
+	}
+	first, err := os.ReadFile(filepath.Join(dir, ".bazelrc"))
+	if err != nil {
+		t.Fatalf("read first .bazelrc: %v", err)
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("second writeBazelrcBlock error: %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(dir, ".bazelrc"))
+	if err != nil {
+		t.Fatalf("read second .bazelrc: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("expected idempotent .bazelrc write:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestWriteBazelrcBlockReplacesManagedContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".bazelrc")
+	input := `common --announce_rc
+# BEGIN Datadog Test Optimization Bazelrc
+test:old --test_env=DD_GIT_BRANCH=main
+# END Datadog Test Optimization Bazelrc
+`
+	if err := os.WriteFile(path, []byte(input), 0o644); err != nil {
+		t.Fatalf("write .bazelrc: %v", err)
+	}
+	cfg := config{
+		workspaceDir:  dir,
+		bazelrcPath:   ".bazelrc",
+		bazelrcConfig: "test-optimization",
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("writeBazelrcBlock error: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read .bazelrc: %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, "--test_env=DD_GIT_BRANCH") || strings.Count(text, bazelrcBlockStart) != 1 {
+		t.Fatalf("expected old managed block to be replaced:\n%s", text)
 	}
 }
 
@@ -723,7 +888,7 @@ esac
 	}
 }
 
-func TestResolveDDTraceGoVersionQueryRejectsPackagePreflightFailure(t *testing.T) {
+func TestResolveDDTraceGoVersionQueryRejectsPackageValidationFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script based helper test is Unix-only")
 	}
@@ -757,9 +922,9 @@ esac
 
 	_, err := resolveDDTraceGoVersionQuery("deadbeef", goPath, []string{"PATH=" + os.Getenv("PATH")})
 	if err == nil {
-		t.Fatal("expected package preflight failure")
+		t.Fatal("expected package validation failure")
 	}
-	if !strings.Contains(err.Error(), `package preflight failed`) {
+	if !strings.Contains(err.Error(), `package validation failed`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
