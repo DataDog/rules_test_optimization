@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -29,6 +30,7 @@ const (
 	defaultBazelrcPath           = ".bazelrc"
 	defaultBazelrcConfig         = "test-optimization"
 	defaultValidationScriptPath  = "tools/test_optimization/validate_go_pilot.sh"
+	defaultGoRepositoriesFile    = "repositories.bzl"
 	defaultBazelCommand          = "bazel"
 	defaultGoBinary              = "go"
 	defaultGoModSync             = "targeted"
@@ -151,65 +153,74 @@ func (f *stringListFlag) Set(value string) error {
 }
 
 type config struct {
-	workspaceDir           string
-	moduleFile             string
-	goModuleDir            string
-	force                  bool
-	guided                 bool
-	workspaceMode          bool
-	printWorkspaceSnippet  bool
-	printBazelrcSnippet    bool
-	printValidationScript  bool
-	writeBazelrc           bool
-	writeValidationScript  bool
-	writeRootTargets       bool
-	writeOrchestrionFiles  bool
-	writeWrapperTemplate   bool
-	bazelrcPath            string
-	bazelrcConfig          string
-	validationScriptPath   string
-	bazelCommand           string
-	bazelConfig            string
-	goBinary               string
-	goModSync              string
-	goModSyncSet           bool
-	service                string
-	runtimeVersion         string
-	goModulePath           string
-	syncRepoName           string
-	doctorTargetName       string
-	uploaderTargetName     string
-	validationDoctorTarget string
-	validationUploadTarget string
-	controlTargets         []string
-	expectedTargets        []string
-	extraSyncFlags         []string
-	extraTestFlags         []string
-	extraRunFlags          []string
-	largeMonorepo          bool
-	minFreeDiskGB          int
-	shutdownBazelOnExit    bool
-	defaultJobs            int
-	wrapperPackage         string
-	wrapperFile            string
-	plainWrapperName       string
-	optimizedWrapperName   string
-	orchestrionVersion     string
-	ddTraceGoVersion       string
-	ddTraceGoVersions      map[string]string
-	ddTraceGoVersionSet    bool
-	validationDoctorSet    bool
-	validationUploadSet    bool
-	rulesGoRemote          string
-	rulesGoCommit          string
-	datadogFetch           string
-	rulesGoFetch           string
-	rulesGoRepoName        string
-	rtoCommit              string
-	rtoArchiveURL          string
-	rtoArchiveSHA256       string
-	rtoArchivePrefix       string
-	rtoArchiveType         string
+	workspaceDir          string
+	moduleFile            string
+	goModuleDir           string
+	force                 bool
+	guided                bool
+	workspaceMode         bool
+	printWorkspaceSnippet bool
+	printBazelrcSnippet   bool
+	printValidationScript bool
+	writeBazelrc          bool
+	writeValidationScript bool
+	writeRootTargets      bool
+	writeOrchestrionFiles bool
+	writeWrapperTemplate  bool
+	// checkGoRepositories enables WORKSPACE go_repository drift diagnostics.
+	checkGoRepositories bool
+	// printGoRepositoryUpdates prints the expected go_repository version tuple.
+	printGoRepositoryUpdates bool
+	bazelrcPath              string
+	bazelrcConfig            string
+	validationScriptPath     string
+	// goRepositoriesFile is the workspace-relative file inspected for drift.
+	goRepositoriesFile string
+	// goRepositoriesRefreshCommand is an operator-owned command used to refresh
+	// go_repository declarations after targeted Go module sync succeeds.
+	goRepositoriesRefreshCommand string
+	bazelCommand                 string
+	bazelConfig                  string
+	goBinary                     string
+	goModSync                    string
+	goModSyncSet                 bool
+	service                      string
+	runtimeVersion               string
+	goModulePath                 string
+	syncRepoName                 string
+	doctorTargetName             string
+	uploaderTargetName           string
+	validationDoctorTarget       string
+	validationUploadTarget       string
+	controlTargets               []string
+	expectedTargets              []string
+	extraSyncFlags               []string
+	extraTestFlags               []string
+	extraRunFlags                []string
+	largeMonorepo                bool
+	minFreeDiskGB                int
+	shutdownBazelOnExit          bool
+	defaultJobs                  int
+	wrapperPackage               string
+	wrapperFile                  string
+	plainWrapperName             string
+	optimizedWrapperName         string
+	orchestrionVersion           string
+	ddTraceGoVersion             string
+	ddTraceGoVersions            map[string]string
+	ddTraceGoVersionSet          bool
+	validationDoctorSet          bool
+	validationUploadSet          bool
+	rulesGoRemote                string
+	rulesGoCommit                string
+	datadogFetch                 string
+	rulesGoFetch                 string
+	rulesGoRepoName              string
+	rtoCommit                    string
+	rtoArchiveURL                string
+	rtoArchiveSHA256             string
+	rtoArchivePrefix             string
+	rtoArchiveType               string
 	// rulesGoRemoteSet records whether the operator explicitly selected the
 	// rules_go fork remote instead of accepting the inferred/default remote.
 	rulesGoRemoteSet bool
@@ -254,9 +265,13 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.writeRootTargets, "write-root-targets", false, "Insert or replace root BUILD targets for doctor, uploader, and pin file exports")
 	flag.BoolVar(&cfg.writeOrchestrionFiles, "write-orchestrion-files", false, "Write orchestrion.tool.go and orchestrion.yml in the selected Go module directory")
 	flag.BoolVar(&cfg.writeWrapperTemplate, "write-wrapper-template", false, "Write a configurable repo-local Go wrapper template")
+	flag.BoolVar(&cfg.checkGoRepositories, "check-go-repositories", false, "Check checked-in WORKSPACE go_repository declarations for Orchestrion-related module drift")
+	flag.BoolVar(&cfg.printGoRepositoryUpdates, "print-go-repository-updates", false, "Print expected Orchestrion-related go_repository versions while checking repository drift")
 	flag.StringVar(&cfg.bazelrcPath, "bazelrc-path", defaultBazelrcPath, "Path to the .bazelrc file to update when --write-bazelrc is set")
 	flag.StringVar(&cfg.bazelrcConfig, "bazelrc-config", defaultBazelrcConfig, "Bazel config name used by the generated .bazelrc block")
 	flag.StringVar(&cfg.validationScriptPath, "validation-script-path", defaultValidationScriptPath, "Workspace-relative path for --write-validation-script")
+	flag.StringVar(&cfg.goRepositoriesFile, "go-repositories-file", defaultGoRepositoriesFile, "Workspace-relative repositories.bzl file to inspect with --check-go-repositories")
+	flag.StringVar(&cfg.goRepositoriesRefreshCommand, "go-repositories-refresh-command", "", "Repository-owned command to refresh go_repository declarations after successful targeted module sync")
 	flag.StringVar(&cfg.bazelCommand, "bazel-command", defaultBazelCommand, "Bazel command used by the generated validation script")
 	flag.StringVar(&cfg.bazelConfig, "bazel-config", defaultBazelrcConfig, "Bazel config used by the generated validation script")
 	flag.StringVar(&cfg.goBinary, "go-binary", defaultGoBinary, "Go binary used for bootstrap module graph synchronization")
@@ -329,6 +344,9 @@ func parseFlags() config {
 	cfg.extraSyncFlags = []string(extraSyncFlags)
 	cfg.extraTestFlags = []string(extraTestFlags)
 	cfg.extraRunFlags = []string(extraRunFlags)
+	if cfg.printGoRepositoryUpdates {
+		cfg.checkGoRepositories = true
+	}
 	return cfg
 }
 
@@ -356,6 +374,9 @@ func run(cfg config) error {
 		return err
 	}
 	if err := validateGoModSyncMode(cfg.goModSync); err != nil {
+		return err
+	}
+	if err := validateGoRepositoryDiagnosticsConfig(cfg); err != nil {
 		return err
 	}
 	if err := validateBootstrapMode(cfg); err != nil {
@@ -496,10 +517,12 @@ func run(cfg config) error {
 	if err := ensureCIVisibilityOrchestrionImport(cfg); err != nil {
 		return err
 	}
+	targetedSyncSucceeded := false
 	if cfg.goModSync != "off" {
 		if err := syncDDTraceGoVersion(cfg); err != nil {
 			return err
 		}
+		targetedSyncSucceeded = cfg.goModSync == "targeted"
 		if cfg.goModSync == "tidy" {
 			if err := warmOrchestrionModuleCache(cfg); err != nil {
 				return err
@@ -507,6 +530,11 @@ func run(cfg config) error {
 		}
 		if err := verifyResolvedBootstrapModuleVersions(cfg); err != nil {
 			return fmt.Errorf("%w\nbootstrap may have already updated these files: MODULE.bazel, go.mod, go.sum, orchestrion.tool.go%s", err, maybeChangedStarterYML(cfg.goModuleDir))
+		}
+	}
+	if cfg.checkGoRepositories {
+		if err := checkGoRepositories(cfg, targetedSyncSucceeded); err != nil {
+			return err
 		}
 	}
 	if err := writeStarterOrchestrionYML(cfg); err != nil {
@@ -559,8 +587,8 @@ func validateBootstrapMode(cfg config) error {
 			return errors.New("--workspace-mode --print-workspace-snippet requires --runtime-version")
 		}
 	}
-	if !cfg.printWorkspaceSnippet && !cfg.printBazelrcSnippet && !cfg.printValidationScript && !cfg.writeBazelrc && !cfg.writeValidationScript && !cfg.writeRootTargets && !cfg.writeOrchestrionFiles && !cfg.writeWrapperTemplate && !cfg.goModSyncSet {
-		return errors.New("--workspace-mode requires at least one action: --print-workspace-snippet, --print-bazelrc-snippet, --print-validation-script, --write-bazelrc, --write-validation-script, --write-root-targets, --write-orchestrion-files, --write-wrapper-template, or an explicit --go-mod-sync")
+	if !cfg.printWorkspaceSnippet && !cfg.printBazelrcSnippet && !cfg.printValidationScript && !cfg.writeBazelrc && !cfg.writeValidationScript && !cfg.writeRootTargets && !cfg.writeOrchestrionFiles && !cfg.writeWrapperTemplate && !cfg.checkGoRepositories && !cfg.goModSyncSet {
+		return errors.New("--workspace-mode requires at least one action: --print-workspace-snippet, --print-bazelrc-snippet, --print-validation-script, --write-bazelrc, --write-validation-script, --write-root-targets, --write-orchestrion-files, --write-wrapper-template, --check-go-repositories, or an explicit --go-mod-sync")
 	}
 	if cfg.goModSyncSet && cfg.goModSync != "off" && !cfg.writeOrchestrionFiles {
 		return errors.New("--workspace-mode with --go-mod-sync=targeted or tidy requires --write-orchestrion-files so tool imports exist before module sync")
@@ -580,6 +608,7 @@ func validateBootstrapMode(cfg config) error {
 // It never edits WORKSPACE itself; operators can pair it with the printed
 // repository snippet and place that snippet where their monorepo expects it.
 func runWorkspaceMode(cfg config) error {
+	targetedSyncSucceeded := false
 	if cfg.writeBazelrc {
 		if err := writeBazelrcBlock(cfg); err != nil {
 			return err
@@ -618,6 +647,7 @@ func runWorkspaceMode(cfg config) error {
 		if err := syncDDTraceGoVersion(cfg); err != nil {
 			return err
 		}
+		targetedSyncSucceeded = cfg.goModSync == "targeted"
 		if cfg.goModSync == "tidy" {
 			if err := warmOrchestrionModuleCache(cfg); err != nil {
 				return err
@@ -625,6 +655,11 @@ func runWorkspaceMode(cfg config) error {
 		}
 		if err := verifyResolvedBootstrapModuleVersions(cfg); err != nil {
 			return fmt.Errorf("%w\nbootstrap may have already updated these files: go.mod, go.sum, orchestrion.tool.go%s", err, maybeChangedStarterYML(cfg.goModuleDir))
+		}
+	}
+	if cfg.checkGoRepositories {
+		if err := checkGoRepositories(cfg, targetedSyncSucceeded); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -771,6 +806,270 @@ func validateGoModSyncMode(value string) error {
 	default:
 		return fmt.Errorf("--go-mod-sync must be \"targeted\", \"tidy\", or \"off\", got %q", value)
 	}
+}
+
+// validateGoRepositoryDiagnosticsConfig rejects ambiguous diagnostics options
+// before bootstrap has a chance to mutate any workspace files.
+func validateGoRepositoryDiagnosticsConfig(cfg config) error {
+	if !cfg.checkGoRepositories && strings.TrimSpace(cfg.goRepositoriesRefreshCommand) == "" {
+		return nil
+	}
+	if !cfg.checkGoRepositories {
+		return errors.New("--go-repositories-refresh-command requires --check-go-repositories")
+	}
+	if strings.TrimSpace(cfg.goRepositoriesFile) == "" {
+		return errors.New("--go-repositories-file must be non-empty")
+	}
+	if strings.ContainsAny(cfg.goRepositoriesFile, "\x00\r\n") {
+		return fmt.Errorf("--go-repositories-file must not contain control characters, got %q", cfg.goRepositoriesFile)
+	}
+	if command := cfg.goRepositoriesRefreshCommand; command != "" && strings.ContainsAny(command, "\x00\r\n") {
+		return fmt.Errorf("--go-repositories-refresh-command must not contain control characters, got %q", command)
+	}
+	return nil
+}
+
+// goRepositoryDeclaration captures the small go_repository surface bootstrap
+// needs for diagnostics. The checker intentionally does not try to evaluate
+// Starlark; it only reads literal declarations generated by common Gazelle
+// update-repos flows.
+type goRepositoryDeclaration struct {
+	importpath string
+	name       string
+	version    string
+}
+
+// goRepositoryIssue describes one required go_repository declaration that is
+// missing or pinned to a version different from the bootstrap contract.
+type goRepositoryIssue struct {
+	modulePath      string
+	currentVersion  string
+	expectedVersion string
+	missing         bool
+}
+
+// goRepositoryDiagnostics is the complete result of checking one repositories
+// file against the effective Go/Orchestrion bootstrap versions.
+type goRepositoryDiagnostics struct {
+	path     string
+	issues   []goRepositoryIssue
+	expected map[string]string
+}
+
+// ok reports whether every required go_repository declaration is present and
+// pinned to the expected version.
+func (d goRepositoryDiagnostics) ok() bool {
+	return len(d.issues) == 0
+}
+
+// checkGoRepositories verifies checked-in WORKSPACE repository declarations
+// without rewriting them. If the operator provides a refresh command and this
+// bootstrap run already completed targeted module sync, the command is run and
+// the file is rechecked.
+func checkGoRepositories(cfg config, targetedSyncSucceeded bool) error {
+	path, err := resolveWorkspaceRelativeFile(cfg.workspaceDir, cfg.goRepositoriesFile, "--go-repositories-file")
+	if err != nil {
+		return err
+	}
+	diagnostics, err := evaluateGoRepositoriesFile(cfg, path)
+	if err != nil {
+		return err
+	}
+	if cfg.printGoRepositoryUpdates {
+		fmt.Print(renderGoRepositoryUpdateSummary(diagnostics))
+	}
+	if diagnostics.ok() {
+		return nil
+	}
+
+	initialMessage := renderGoRepositoryDiagnostics(diagnostics)
+	refreshCommand := strings.TrimSpace(cfg.goRepositoriesRefreshCommand)
+	if refreshCommand == "" {
+		return errors.New(initialMessage)
+	}
+	if !targetedSyncSucceeded {
+		return fmt.Errorf("%s\n\n%s", initialMessage, "The --go-repositories-refresh-command was not run because it only runs after a successful --go-mod-sync=targeted bootstrap sync.")
+	}
+	if err := runGoRepositoriesRefreshCommand(cfg, refreshCommand); err != nil {
+		return fmt.Errorf("%s\n\nrun --go-repositories-refresh-command %q: %w", initialMessage, refreshCommand, err)
+	}
+	diagnostics, err = evaluateGoRepositoriesFile(cfg, path)
+	if err != nil {
+		return err
+	}
+	if cfg.printGoRepositoryUpdates {
+		fmt.Print(renderGoRepositoryUpdateSummary(diagnostics))
+	}
+	if !diagnostics.ok() {
+		return fmt.Errorf("go_repository declarations are still stale after --go-repositories-refresh-command %q:\n\n%s", refreshCommand, renderGoRepositoryDiagnostics(diagnostics))
+	}
+	return nil
+}
+
+// evaluateGoRepositoriesFile parses one repositories.bzl file and compares it
+// with the exact module versions configured by bootstrap.
+func evaluateGoRepositoriesFile(cfg config, path string) (goRepositoryDiagnostics, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return goRepositoryDiagnostics{}, fmt.Errorf("go_repository file not found at %s; pass --go-repositories-file or disable --check-go-repositories", path)
+		}
+		return goRepositoryDiagnostics{}, fmt.Errorf("read go_repository file %s: %w", path, err)
+	}
+	declarations := parseGoRepositoryDeclarations(string(content))
+	expected := expectedGoRepositoryVersions(cfg)
+	issues := make([]goRepositoryIssue, 0)
+	for _, modulePath := range requiredGoRepositoryImportpaths() {
+		expectedVersion := expected[modulePath]
+		decl, ok := declarations[modulePath]
+		if !ok {
+			issues = append(issues, goRepositoryIssue{
+				modulePath:      modulePath,
+				expectedVersion: expectedVersion,
+				missing:         true,
+			})
+			continue
+		}
+		if decl.version != expectedVersion {
+			issues = append(issues, goRepositoryIssue{
+				modulePath:      modulePath,
+				currentVersion:  decl.version,
+				expectedVersion: expectedVersion,
+			})
+		}
+	}
+	return goRepositoryDiagnostics{
+		path:     path,
+		issues:   issues,
+		expected: expected,
+	}, nil
+}
+
+// parseGoRepositoryDeclarations extracts literal go_repository importpath,
+// name, and version attributes. This intentionally small parser is enough for
+// Gazelle-generated repository files and avoids pretending to execute Starlark.
+func parseGoRepositoryDeclarations(content string) map[string]goRepositoryDeclaration {
+	blockPattern := regexp.MustCompile(`(?s)go_repository\s*\((.*?)\)`)
+	attrPattern := regexp.MustCompile(`(?m)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+	declarations := map[string]goRepositoryDeclaration{}
+	for _, block := range blockPattern.FindAllStringSubmatch(content, -1) {
+		attrs := map[string]string{}
+		for _, match := range attrPattern.FindAllStringSubmatch(block[1], -1) {
+			value := match[2]
+			if value == "" {
+				value = match[3]
+			}
+			attrs[match[1]] = value
+		}
+		importpath := attrs["importpath"]
+		if importpath == "" {
+			continue
+		}
+		if _, exists := declarations[importpath]; exists {
+			continue
+		}
+		declarations[importpath] = goRepositoryDeclaration{
+			importpath: importpath,
+			name:       attrs["name"],
+			version:    attrs["version"],
+		}
+	}
+	return declarations
+}
+
+// expectedGoRepositoryVersions returns the module versions that WORKSPACE
+// go_repository declarations must match for the current bootstrap config.
+func expectedGoRepositoryVersions(cfg config) map[string]string {
+	versions := cfg.effectiveDDTraceGoVersions()
+	expected := make(map[string]string, len(versions)+1)
+	expected["github.com/DataDog/orchestrion"] = cfg.orchestrionVersion
+	for _, modulePath := range ddTraceGoModules {
+		expected[modulePath] = versions[modulePath]
+	}
+	return expected
+}
+
+// requiredGoRepositoryImportpaths keeps diagnostics scoped to modules that the
+// Go/Orchestrion bootstrap owns. Repository-specific modules are intentionally
+// out of scope.
+func requiredGoRepositoryImportpaths() []string {
+	modules := make([]string, 0, len(ddTraceGoModules)+1)
+	modules = append(modules, "github.com/DataDog/orchestrion")
+	modules = append(modules, ddTraceGoModules...)
+	return modules
+}
+
+// renderGoRepositoryDiagnostics builds the actionable error shown when checked
+// in go_repository declarations are missing or stale.
+func renderGoRepositoryDiagnostics(diagnostics goRepositoryDiagnostics) string {
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "go_repository diagnostics failed for %s.\n", diagnostics.path)
+	buf.WriteString("Refresh the checked-in go_repository declarations with your repository-owned update command, or pass --go-repositories-refresh-command after a successful --go-mod-sync=targeted run.\n\n")
+	buf.WriteString("Mismatches:\n")
+	for _, issue := range diagnostics.issues {
+		if issue.missing {
+			fmt.Fprintf(&buf, "- %s is missing; expected version %s\n", issue.modulePath, issue.expectedVersion)
+			continue
+		}
+		current := issue.currentVersion
+		if current == "" {
+			current = "<missing version>"
+		}
+		fmt.Fprintf(&buf, "- %s is %s; expected %s\n", issue.modulePath, current, issue.expectedVersion)
+	}
+	buf.WriteString("\nExpected declarations:\n")
+	for _, modulePath := range requiredGoRepositoryImportpaths() {
+		fmt.Fprintf(&buf, "go_repository(\n    name = %q,\n    importpath = %q,\n    version = %q,\n)\n\n", goRepositoryName(modulePath), modulePath, diagnostics.expected[modulePath])
+	}
+	return strings.TrimRight(buf.String(), "\n")
+}
+
+// renderGoRepositoryUpdateSummary prints the same expected version tuple in a
+// success-friendly format for operators who want to update repositories by hand.
+func renderGoRepositoryUpdateSummary(diagnostics goRepositoryDiagnostics) string {
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "Expected Orchestrion go_repository versions for %s:\n", diagnostics.path)
+	for _, modulePath := range requiredGoRepositoryImportpaths() {
+		fmt.Fprintf(&buf, "- %s -> %s\n", modulePath, diagnostics.expected[modulePath])
+	}
+	if diagnostics.ok() {
+		buf.WriteString("All checked go_repository declarations match the bootstrap configuration.\n")
+	}
+	return buf.String()
+}
+
+// goRepositoryName mirrors Gazelle's common name normalization closely enough
+// for copy/paste diagnostics. Consumers should still run their own refresh
+// command so checksums and repository naming conventions remain repo-owned.
+func goRepositoryName(modulePath string) string {
+	parts := strings.Split(modulePath, "/")
+	if len(parts) > 0 {
+		domainParts := strings.Split(parts[0], ".")
+		for left, right := 0, len(domainParts)-1; left < right; left, right = left+1, right-1 {
+			domainParts[left], domainParts[right] = domainParts[right], domainParts[left]
+		}
+		parts[0] = strings.Join(domainParts, ".")
+	}
+	name := strings.ToLower(strings.Join(parts, "/"))
+	replacer := strings.NewReplacer("/", "_", ".", "_", "-", "_")
+	return replacer.Replace(name)
+}
+
+// runGoRepositoriesRefreshCommand runs the repository-owned update command.
+// The command is explicit operator input, so shell execution is intentional:
+// it supports existing monorepo refresh commands with flags and environment.
+func runGoRepositoriesRefreshCommand(cfg config, command string) error {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/C", command)
+	} else {
+		cmd = exec.Command("sh", "-c", command)
+	}
+	cmd.Dir = cfg.workspaceDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	return cmd.Run()
 }
 
 // validateGoBinary rejects shell-style command strings. Bootstrap executes the

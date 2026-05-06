@@ -41,6 +41,10 @@ local files and managed blocks; it never edits `WORKSPACE` itself:
 | `--rto-archive-sha256` | empty | Archive SHA256 used when either fetch mode is `archive` |
 | `--rto-archive-prefix` | empty | Archive root prefix used when either fetch mode is `archive` |
 | `--rto-archive-type` | `tar.gz` | Archive type passed to `http_archive` |
+| `--check-go-repositories` | `false` | Check checked-in WORKSPACE `go_repository(...)` declarations for the Orchestrion and `dd-trace-go` modules bootstrap owns |
+| `--go-repositories-file` | `repositories.bzl` | Workspace-relative file inspected by `--check-go-repositories` |
+| `--print-go-repository-updates` | `false` | Print the expected versions for the checked Orchestrion-related `go_repository(...)` declarations |
+| `--go-repositories-refresh-command` | empty | Repository-owned command to refresh `go_repository(...)` declarations after a successful `--go-mod-sync=targeted` run; bootstrap rechecks the file after the command |
 
 Validation script generation writes a repository-owned operational helper. It
 does not mutate Bazel rules or force remote output behavior outside the normal
@@ -70,6 +74,16 @@ In WORKSPACE mode, bootstrap does not run Go module commands unless
 safe: operators can generate local files first, review the WORKSPACE snippet,
 then run `--go-mod-sync=targeted` only when they are ready to update `go.mod`
 and `go.sum`.
+
+If the repository keeps checked-in `go_repository(...)` declarations, pair the
+targeted sync with `--check-go-repositories`. Bootstrap does not edit
+`repositories.bzl` directly. It compares only the Orchestrion-related modules it
+owns (`github.com/DataDog/orchestrion`, `github.com/DataDog/dd-trace-go/v2`,
+`github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and
+`github.com/DataDog/dd-trace-go/contrib/log/slog/v2`) and either prints the
+required versions or runs the repository-owned refresh command you provide.
+The refresh command only runs after targeted sync succeeds, so a stale
+`repositories.bzl` cannot mask a broken Go module graph.
 
 Manual Orchestrion wiring in `MODULE.bazel` accepts:
 

@@ -19,6 +19,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
 | Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
+| Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
 | Windows path/policy failures | PowerShell policy + path separators | Windows-specific issues |
 
 ## Repository rule not fetching data
@@ -283,6 +284,57 @@ set of tracer versions while the local Go module still resolves another.
 
 `orchestrion.tool.go` still matters, but as required import/config wiring for
 Orchestrion, not as the source of truth for tracer versions.
+
+## WORKSPACE go_repository drift
+
+**Symptom**: `go.mod` and `go.sum` look correct, but Bazel still resolves an
+older `github.com/DataDog/orchestrion` or `dd-trace-go` module from a checked-in
+`repositories.bzl` file.
+
+**Cause**: WORKSPACE repositories often keep generated `go_repository(...)`
+declarations separate from `go.mod`. Updating the Go module graph is not enough
+if the generated repository file still pins old versions.
+
+**Solutions**:
+
+1. **Run bootstrap diagnostics after targeted sync**:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --workspace-mode \
+     --write-orchestrion-files \
+     --go-mod-sync=targeted \
+     --check-go-repositories \
+     --go-repositories-file repositories.bzl
+   ```
+   The checker compares only the modules bootstrap owns:
+   `github.com/DataDog/orchestrion`, `github.com/DataDog/dd-trace-go/v2`,
+   `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and
+   `github.com/DataDog/dd-trace-go/contrib/log/slog/v2`.
+
+2. **Let your repo-owned refresh command repair the file**:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --workspace-mode \
+     --write-orchestrion-files \
+     --go-mod-sync=targeted \
+     --check-go-repositories \
+     --go-repositories-file repositories.bzl \
+     --go-repositories-refresh-command './tools/update-go-repositories.sh'
+   ```
+   Bootstrap runs the refresh command only after targeted sync succeeds, then
+   validates `repositories.bzl` again. It never edits `repositories.bzl`
+   directly.
+
+3. **Print expected versions for manual updates**:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --workspace-mode \
+     --go-mod-sync=off \
+     --check-go-repositories \
+     --print-go-repository-updates
+   ```
+   This is useful when the repository has a custom Gazelle/update-repos flow
+   that must be run manually or in a separate review step.
 
 ## Large monorepo validation is easy to run incorrectly
 

@@ -244,6 +244,25 @@ WORKSPACE mode does not run Go module commands unless `--go-mod-sync` is passed
 explicitly, so large repos can review generated files before changing
 `go.mod`/`go.sum`.
 
+If the repo also has checked-in `go_repository(...)` declarations, validate
+them immediately after targeted sync:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --write-orchestrion-files \
+  --go-mod-sync=targeted \
+  --check-go-repositories \
+  --go-repositories-file repositories.bzl \
+  --go-repositories-refresh-command './tools/update-go-repositories.sh'
+```
+
+The refresh command is repository-owned. Bootstrap never edits
+`repositories.bzl` directly; it checks the Orchestrion and `dd-trace-go` module
+versions, runs the refresh command only after targeted sync succeeds, and then
+checks the file again. Use `--print-go-repository-updates` when you want the
+expected versions printed for manual repair.
+
 Generate a repeatable validation script when onboarding needs several control
 and instrumented targets:
 

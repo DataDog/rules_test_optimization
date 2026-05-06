@@ -772,6 +772,26 @@ template. By default it also avoids running Go module commands; pass an
 explicit `--go-mod-sync=targeted` when you want bootstrap to repair the local
 Orchestrion tool graph.
 
+If your WORKSPACE repo also checks in Gazelle-style `go_repository(...)`
+declarations, ask bootstrap to validate those pins instead of discovering the
+drift later during Bazel analysis:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --write-orchestrion-files \
+  --go-mod-sync=targeted \
+  --check-go-repositories \
+  --go-repositories-file repositories.bzl \
+  --go-repositories-refresh-command './tools/update-go-repositories.sh'
+```
+
+Bootstrap does not rewrite `repositories.bzl` itself. It checks only the
+Orchestrion-related modules it owns and runs the repository-owned refresh
+command only after targeted Go module sync succeeds. Use
+`--print-go-repository-updates` to print the expected versions without hiding
+the fact that the repo still owns the actual refresh command.
+
 Bootstrap can also generate an operator-owned validation script for large
 repositories. The script repeats the RFC flow without hiding Bazel behavior:
 `sync -> controls -> instrumented tests -> doctor -> optional upload`. Upload is
@@ -1111,6 +1131,11 @@ whole module, and use `--go-mod-sync=off` when another repository-owned command
 will update `go.mod` and `go.sum`. Use `--go-binary=/path/to/go` if the module
 must be synced with a specific Go SDK. The path must point to a `go` or
 `go.exe` executable and must not include arguments.
+
+For WORKSPACE repos with checked-in `go_repository(...)` declarations, add
+`--check-go-repositories` after targeted sync. This catches stale
+`repositories.bzl` pins for `github.com/DataDog/orchestrion` and the three
+`dd-trace-go` modules before Bazel tries to build with mismatched versions.
 
 If you wire Orchestrion manually instead of using bootstrap, you can also set
 the tracer versions directly in `MODULE.bazel`.

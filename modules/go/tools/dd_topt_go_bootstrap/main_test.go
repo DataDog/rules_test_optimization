@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -1762,6 +1763,169 @@ use_repo(orchestrion, "rules_go_orchestrion_tool")
 	}
 	if cfg.ddTraceGoVersions["github.com/DataDog/dd-trace-go/v2"] != "v2.7.0-rc.4" {
 		t.Fatalf("unexpected managed per-module versions: %#v", cfg.ddTraceGoVersions)
+	}
+}
+
+func TestParseGoRepositoryDeclarations(t *testing.T) {
+	content := `
+go_repository(
+    name = "com_github_datadog_orchestrion",
+    importpath = "github.com/DataDog/orchestrion",
+    version = "v1.9.0",
+)
+
+go_repository(
+    name = 'com_github_datadog_dd_trace_go_v2',
+    importpath = 'github.com/DataDog/dd-trace-go/v2',
+    version = 'v2.9.0-dev.0.20260416093245-194346a71c51',
+)
+`
+	got := parseGoRepositoryDeclarations(content)
+	if got["github.com/DataDog/orchestrion"].version != "v1.9.0" {
+		t.Fatalf("unexpected orchestrion declaration: %#v", got)
+	}
+	if got["github.com/DataDog/dd-trace-go/v2"].name != "com_github_datadog_dd_trace_go_v2" {
+		t.Fatalf("unexpected dd-trace-go declaration: %#v", got)
+	}
+}
+
+func TestCheckGoRepositoriesAcceptsMatchingVersions(t *testing.T) {
+	dir := t.TempDir()
+	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{
+		"github.com/DataDog/orchestrion":                     "v1.9.0",
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.9.0-dev.0.20260416093245-194346a71c51",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0-dev.0.20260416093245-194346a71c51",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0-dev.0.20260416093245-194346a71c51",
+	})
+	cfg := goRepositoryDiagnosticsTestConfig(dir)
+	if err := checkGoRepositories(cfg, false); err != nil {
+		t.Fatalf("checkGoRepositories error: %v", err)
+	}
+}
+
+func TestCheckGoRepositoriesRejectsStaleVersionWithActionableMessage(t *testing.T) {
+	dir := t.TempDir()
+	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{
+		"github.com/DataDog/orchestrion":                     "v1.8.0",
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.9.0-dev.0.20260416093245-194346a71c51",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0-dev.0.20260416093245-194346a71c51",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0-dev.0.20260416093245-194346a71c51",
+	})
+	cfg := goRepositoryDiagnosticsTestConfig(dir)
+	err := checkGoRepositories(cfg, false)
+	if err == nil {
+		t.Fatal("expected stale go_repository declaration to fail")
+	}
+	text := err.Error()
+	for _, want := range []string{
+		"github.com/DataDog/orchestrion",
+		"v1.8.0",
+		"v1.9.0",
+		"--go-repositories-refresh-command",
+		"go_repository(",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("diagnostics missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCheckGoRepositoriesRejectsMissingModule(t *testing.T) {
+	dir := t.TempDir()
+	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{
+		"github.com/DataDog/orchestrion": "v1.9.0",
+	})
+	cfg := goRepositoryDiagnosticsTestConfig(dir)
+	err := checkGoRepositories(cfg, false)
+	if err == nil {
+		t.Fatal("expected missing go_repository declarations to fail")
+	}
+	if !strings.Contains(err.Error(), "github.com/DataDog/dd-trace-go/v2 is missing") {
+		t.Fatalf("expected missing module diagnostic, got:\n%s", err)
+	}
+}
+
+func TestCheckGoRepositoriesRefreshHookRepairsStaleFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell refresh command test is Unix-only")
+	}
+	dir := t.TempDir()
+	repositoriesPath := filepath.Join(dir, "repositories.bzl")
+	writeRepositoriesFile(t, repositoriesPath, map[string]string{
+		"github.com/DataDog/orchestrion":                     "v1.8.0",
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.8.0",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0",
+	})
+	refreshPath := filepath.Join(dir, "refresh.sh")
+	if err := os.WriteFile(refreshPath, []byte(`#!/bin/sh
+cat > repositories.bzl <<'EOF'
+go_repository(name = "com_github_datadog_orchestrion", importpath = "github.com/DataDog/orchestrion", version = "v1.9.0")
+go_repository(name = "com_github_datadog_dd_trace_go_v2", importpath = "github.com/DataDog/dd-trace-go/v2", version = "v2.9.0-dev.0.20260416093245-194346a71c51")
+go_repository(name = "com_github_datadog_dd_trace_go_contrib_net_http_v2", importpath = "github.com/DataDog/dd-trace-go/contrib/net/http/v2", version = "v2.9.0-dev.0.20260416093245-194346a71c51")
+go_repository(name = "com_github_datadog_dd_trace_go_contrib_log_slog_v2", importpath = "github.com/DataDog/dd-trace-go/contrib/log/slog/v2", version = "v2.9.0-dev.0.20260416093245-194346a71c51")
+EOF
+`), 0o755); err != nil {
+		t.Fatalf("write refresh hook: %v", err)
+	}
+	cfg := goRepositoryDiagnosticsTestConfig(dir)
+	cfg.goRepositoriesRefreshCommand = "./refresh.sh"
+	if err := checkGoRepositories(cfg, true); err != nil {
+		t.Fatalf("refresh hook should repair stale repositories: %v", err)
+	}
+}
+
+func TestCheckGoRepositoriesDoesNotRunRefreshWithoutTargetedSync(t *testing.T) {
+	dir := t.TempDir()
+	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{
+		"github.com/DataDog/orchestrion": "v1.8.0",
+	})
+	cfg := goRepositoryDiagnosticsTestConfig(dir)
+	cfg.goRepositoriesRefreshCommand = "echo should-not-run > marker"
+	err := checkGoRepositories(cfg, false)
+	if err == nil {
+		t.Fatal("expected stale repositories without targeted sync to fail")
+	}
+	if !strings.Contains(err.Error(), "only runs after a successful --go-mod-sync=targeted") {
+		t.Fatalf("expected targeted sync guard, got:\n%s", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "marker")); !os.IsNotExist(statErr) {
+		t.Fatalf("refresh command should not have run, stat err=%v", statErr)
+	}
+}
+
+func TestGoRepositoryNameUsesGazelleStyleReversedDomain(t *testing.T) {
+	got := goRepositoryName("github.com/DataDog/dd-trace-go/contrib/net/http/v2")
+	want := "com_github_datadog_dd_trace_go_contrib_net_http_v2"
+	if got != want {
+		t.Fatalf("goRepositoryName=%q, want %q", got, want)
+	}
+}
+
+func goRepositoryDiagnosticsTestConfig(dir string) config {
+	return config{
+		workspaceDir:        dir,
+		goRepositoriesFile:  "repositories.bzl",
+		checkGoRepositories: true,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		ddTraceGoVersions:   nil,
+		ddTraceGoVersionSet: true,
+	}
+}
+
+func writeRepositoriesFile(t *testing.T, path string, versions map[string]string) {
+	t.Helper()
+	var buf strings.Builder
+	for _, modulePath := range requiredGoRepositoryImportpaths() {
+		version, ok := versions[modulePath]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&buf, "go_repository(\n    name = %q,\n    importpath = %q,\n    version = %q,\n)\n\n", goRepositoryName(modulePath), modulePath, version)
+	}
+	if err := os.WriteFile(path, []byte(buf.String()), 0o644); err != nil {
+		t.Fatalf("write repositories file: %v", err)
 	}
 }
 
