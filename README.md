@@ -697,10 +697,37 @@ You can also print a starting WORKSPACE snippet without modifying files:
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
   --print-workspace-snippet \
   --rto-commit <commit-sha> \
+  --service my-service \
+  --runtime-version 1.25.0 \
   --rules-go-variant base
 ```
+
+For larger WORKSPACE monorepos, let bootstrap write the generic local files and
+keep only the final WORKSPACE placement as a manual review step:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --service my-service \
+  --runtime-version 1.25.0 \
+  --sync-repo-name test_optimization_data \
+  --rules-go-variant complete \
+  --rules-go-repo-name io_bazel_rules_go \
+  --write-bazelrc \
+  --write-root-targets \
+  --write-orchestrion-files \
+  --write-wrapper-template
+```
+
+WORKSPACE mode does not edit `WORKSPACE`. It writes only Datadog-managed local
+blocks/files such as `.bazelrc`, root doctor/uploader targets,
+`orchestrion.tool.go`, `orchestrion.yml`, and an optional repo-local wrapper
+template. By default it also avoids running Go module commands; pass an
+explicit `--go-mod-sync=targeted` when you want bootstrap to repair the local
+Orchestrion tool graph.
 
 ### Other languages
 
