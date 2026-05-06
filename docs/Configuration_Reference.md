@@ -194,6 +194,8 @@ local files only; it does not upload, delete, or rewrite payloads.
 | `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"`. Valid selection values are `module`, `module_override`, `full_bundle_disabled`, and `full_bundle_no_match`; the last one is accepted only when this attr is `False` |
 | `forbid_msgpack_payloads` | bool | `True` | Fail when tests emitted `.msgpack` or `.msgpack.gz` payloads instead of Bazel JSON payload files |
 | `forbid_dd_git_test_env` | bool | `True` | Fail when workspace `.bazelrc` files pass `DD_GIT_*` through `--test_env`; use `--repo_env` instead |
+| `allowed_payload_selections` | string_list | `[]` | Optional explicit allowlist for `bazel.go.payload_selection`; empty means `module`, `module_override`, and `full_bundle_disabled` are accepted, with `full_bundle_no_match` still rejected by default |
+| `expected_payload_selection_by_target` | string_dict | `{}` | Optional map from local target label to the exact expected `bazel.go.payload_selection` value |
 
 Doctor notes:
 
@@ -204,6 +206,9 @@ Doctor notes:
   `test.outputs` exists locally.
 - The doctor scans versioned `.bazelrc` files for `--test_env=DD_GIT_*`, but it
   cannot see ad-hoc `--test_env=DD_GIT_*` flags typed directly on the CLI.
+- The doctor prints a payload-selection summary so rollout owners can quickly
+  see whether targets used per-module data, module overrides, or a disabled
+  full bundle.
 
 ## How data is fetched
 
@@ -352,6 +357,14 @@ The uploader rule reads these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | Limit payload discovery depth in large trees |
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | Explicit CODEOWNERS path for enrichment |
 | `TESTLOGS_DIR` | Explicit `bazel-testlogs` path for non-standard layouts |
+
+Uploader CLI flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--dry-run` | Enrich and validate discovered payloads without uploading or deleting files |
+| `--validate-enrichment` | In dry-run mode, require key Git and Bazel tags to exist after enrichment |
+| `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, `bazel.package`, and `bazel.go.payload_selection` |
 
 Numeric precision caveat:
 - Keep high-cardinality IDs (for example CI job IDs) as strings when possible.

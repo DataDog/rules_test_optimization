@@ -11,6 +11,8 @@ Operational model:
   2) optional metadata enrichment (context + CODEOWNERS)
   3) upload to agentless or EVP endpoints
   4) cleanup of successfully uploaded files
+- `bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment`
+  exercises the same enrichment path without uploading or deleting payloads.
 
 Why generated scripts:
 - Upload logic needs host-specific tooling (`bash/curl` on Unix,
@@ -886,6 +888,9 @@ Usage:
 
     # After running tests:
     bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
+
+    # Optional local validation before real upload:
+    bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment
 
 Exit codes:
     0 - All payloads uploaded successfully (or no payloads found)

@@ -2720,6 +2720,70 @@ cat > "$BAZEL_TARGET_METADATA_PATH" <<'JSON_EOF'
 }
 JSON_EOF
 
+DRY_RUN_LOG_LINES_BEFORE="$(log_line_count)"
+UPLOADER_DRY_RUN_LOG="$TMP_WS/uploader_dry_run_enrichment.log"
+if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_with_context \
+  "${REPO_ENVS[@]}" -- --dry-run --validate-enrichment --expected-enriched-tag=bazel.go.payload_selection >"$UPLOADER_DRY_RUN_LOG" 2>&1; then
+  echo "error: uploader dry-run enrichment validation failed"
+  cat "$UPLOADER_DRY_RUN_LOG" || true
+  exit 1
+fi
+if ! grep -q "dry-run validated enriched test payload" "$UPLOADER_DRY_RUN_LOG"; then
+  echo "error: uploader dry-run did not validate enriched test payloads"
+  cat "$UPLOADER_DRY_RUN_LOG" || true
+  exit 1
+fi
+if ! grep -q "dry-run done" "$UPLOADER_DRY_RUN_LOG"; then
+  echo "error: uploader dry-run did not finish in dry-run mode"
+  cat "$UPLOADER_DRY_RUN_LOG" || true
+  exit 1
+fi
+DRY_RUN_LOG_LINES_BEFORE="$DRY_RUN_LOG_LINES_BEFORE" "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("DRY_RUN_LOG_LINES_BEFORE", "0") or "0")
+upload_paths = {
+    "/api/v2/citestcycle",
+    "/api/v2/citestcov",
+    "/api/v2/apmtelemetry",
+    "/evp_proxy/v2/api/v2/citestcycle",
+    "/evp_proxy/v2/api/v2/citestcov",
+    "/telemetry/proxy/api/v2/apmtelemetry",
+}
+upload_records = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("path") in upload_paths:
+            upload_records.append(rec)
+
+if upload_records:
+    print("error: uploader dry-run unexpectedly sent upload requests to the mock server")
+    print(json.dumps(upload_records, indent=2, sort_keys=True))
+    sys.exit(1)
+PY
+if [[ ! -f "$CONTEXT_SCENARIO_TESTLOGS_DIR/write_payloads_test/test.outputs/payloads/tests/test1.json" ]]; then
+  echo "error: uploader dry-run deleted the source test payload"
+  cat "$UPLOADER_DRY_RUN_LOG" || true
+  exit 1
+fi
+
 LOG_LINES_BEFORE_BAZEL_SIDECAR="$(log_line_count)"
 UPLOADER_BAZEL_SIDECAR_LOG="$TMP_WS/uploader_bazel_sidecar.log"
 if ! TESTLOGS_DIR="$CONTEXT_SCENARIO_TESTLOGS_DIR" \

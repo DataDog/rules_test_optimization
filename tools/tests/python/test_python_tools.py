@@ -313,6 +313,22 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             "tools/core/test_optimization_doctor.py",
         )
 
+    @staticmethod
+    def _write_doctor_output(root: Path, selection: str, target: str = "//pkg:target") -> Path:
+        """Create a minimal Test Optimization output tree for doctor tests."""
+        output = root / "pkg" / "target" / "test.outputs"
+        payload_dir = output / "payloads" / "tests"
+        payload_dir.mkdir(parents=True)
+        (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+        (output / "bazel_target_metadata.json").write_text(
+            json.dumps({
+                "bazel.target": target,
+                "bazel.go.payload_selection": selection,
+            }),
+            encoding="utf-8",
+        )
+        return output
+
     def test_expected_target_output_mapping(self) -> None:
         """Validate local Bazel labels map to bazel-testlogs output dirs."""
         root = Path("/tmp/bazel-testlogs")
@@ -423,6 +439,54 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                         encoding="utf-8",
                     )
                     self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_returns_payload_selection_summary(self) -> None:
+        """Validate the doctor reports payload-selection counts for operator diagnostics."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module_override")
+
+            summary = self.mod._validate_outputs([output], True, True, True, True)
+
+            self.assertEqual({"module_override": 1}, summary)
+            self.assertEqual("module_override=1", self.mod._format_selection_summary(summary))
+
+    def test_validate_outputs_rejects_selection_outside_allowlist(self) -> None:
+        """Validate explicit allowed_payload_selections narrows accepted states."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "full_bundle_disabled")
+
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs(
+                    [output],
+                    True,
+                    True,
+                    True,
+                    True,
+                    allowed_payload_selections={"module"},
+                )
+
+    def test_validate_outputs_checks_expected_selection_by_target(self) -> None:
+        """Validate target-specific payload-selection expectations catch onboarding drift."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module_override", "//pkg:target")
+
+            self.mod._validate_outputs(
+                [output],
+                True,
+                True,
+                True,
+                True,
+                expected_payload_selection_by_target={"//pkg:target": "module_override"},
+            )
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs(
+                    [output],
+                    True,
+                    True,
+                    True,
+                    True,
+                    expected_payload_selection_by_target={"//pkg:target": "module"},
+                )
 
     def test_validate_outputs_rejects_msgpack_payloads(self) -> None:
         """Validate raw msgpack payload files fail the doctor by default."""
@@ -1050,6 +1114,88 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("raw msgpack test payload is not supported in Bazel file mode", powershell_text)
         self.assertNotIn("Send-PostMsgpack", powershell_text)
         self.assertNotIn("Upload-SingleTest: posting raw msgpack", powershell_text)
+
+    def test_uploader_supports_enrichment_dry_run_without_uploading(self) -> None:
+        """Validate dry-run reuses enrichment while avoiding network upload and cleanup."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--dry-run", bash_text)
+        self.assertIn("--validate-enrichment", bash_text)
+        self.assertIn("--expected-enriched-tag", bash_text)
+        self.assertIn("dry_run_single_test()", bash_text)
+        self.assertIn('enrich_with_context "$file" "$body"', bash_text)
+        self.assertIn("validate_enriched_payload_tags", bash_text)
+        self.assertIn("dry-run kept test payload", bash_text)
+        self.assertIn("if (( AGENTLESS == 1 && DRY_RUN == 0 ))", bash_text)
+
+        self.assertIn("--dry-run", powershell_text)
+        self.assertIn("--validate-enrichment", powershell_text)
+        self.assertIn("--expected-enriched-tag", powershell_text)
+        self.assertIn("function DryRun-SingleTest", powershell_text)
+        self.assertIn("Merge-With-Context $FilePath $body", powershell_text)
+        self.assertIn("Test-EnrichedPayloadTags", powershell_text)
+        self.assertIn("Test-EnrichedPayloadTags logs through the success stream", powershell_text)
+        self.assertIn("DryRun-SingleTest may emit validation diagnostics", powershell_text)
+        self.assertIn("dry-run kept test payload", powershell_text)
+        self.assertIn("if ($Agentless -and -not $script:DryRun)", powershell_text)
+
+    def test_uploader_dry_run_validates_default_enrichment_tags(self) -> None:
+        """Validate dry-run checks the git and Bazel tags needed by downstream upload."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        for tag in [
+            "git.repository_url",
+            "git.commit.sha",
+            "bazel.target",
+            "bazel.package",
+        ]:
+            self.assertIn(tag, bash_text)
+            self.assertIn(tag, powershell_text)
+
+        self.assertIn("missing expected tag(s)", bash_text)
+        self.assertIn("missing expected tag(s)", powershell_text)
+        self.assertIn(
+            "--expected-enriched-tag=bazel.go.payload_selection",
+            _runfile("tools/tests/integration/run_mock_server_tests.sh").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "--expected-enriched-tag=bazel.go.payload_selection",
+            _runfile("tools/tests/integration/run_mock_server_tests.ps1").read_text(encoding="utf-8"),
+        )
+
+    def test_uploader_enriches_span_event_payloads(self) -> None:
+        """Validate Go tracer span events are not excluded from metadata enrichment."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Go/Orchestrion", bash_text)
+        self.assertNotIn('if (.type? == "span") then .', bash_text)
+        self.assertNotIn('select((.type // "") != "span")', bash_text)
+        self.assertIn("events still receive context and Bazel tags before this CODEOWNERS pass", bash_text)
+
+        self.assertIn("Go test payloads can encode CI Visibility test data as span events", powershell_text)
+        self.assertIn("events still receive context and Bazel tags before this CODEOWNERS pass", powershell_text)
+        self.assertNotIn('[string]$eventType -eq "span"', powershell_text)
+
+    def test_uploader_skips_empty_test_payload_placeholders(self) -> None:
+        """Validate empty JSON placeholders are not uploaded as test payloads."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("test_payload_has_events()", bash_text)
+        self.assertIn("skipping test payload with no events", bash_text)
+        self.assertIn("function Test-TestPayloadHasEvents", powershell_text)
+        self.assertIn("skipping test payload with no events", powershell_text)
 
     def test_bash_runtime_prefers_context_override_before_runfiles(self) -> None:
         """Validate bash runtime prefers explicit context override before data files."""

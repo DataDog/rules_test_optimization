@@ -20,6 +20,11 @@ VALID_GO_PAYLOAD_SELECTIONS = {
     "full_bundle_no_match",
 }
 VALID_GO_PAYLOAD_SELECTIONS_TEXT = ", ".join(sorted(VALID_GO_PAYLOAD_SELECTIONS))
+DEFAULT_ALLOWED_GO_PAYLOAD_SELECTIONS = {
+    "module",
+    "module_override",
+    "full_bundle_disabled",
+}
 
 
 def _fail(message: str) -> None:
@@ -279,9 +284,22 @@ def _validate_outputs(
     require_bazel_metadata: bool,
     forbid_full_bundle_no_match: bool,
     forbid_msgpack_payloads: bool,
-) -> None:
+    allowed_payload_selections: set[str] | None = None,
+    expected_payload_selection_by_target: dict[str, str] | None = None,
+    target_by_output_dir: dict[Path, str] | None = None,
+) -> dict[str, int]:
+    """Validate local test.outputs payloads and return payload-selection counts."""
+    allowed_selections = _effective_allowed_payload_selections(
+        allowed_payload_selections,
+        forbid_full_bundle_no_match,
+    )
+    expected_selections = expected_payload_selection_by_target or {}
+    target_lookup = target_by_output_dir or {}
+    _validate_expected_payload_selection_values(expected_selections)
+
     payload_count = 0
     metadata_count = 0
+    selection_summary: dict[str, int] = {}
     for output_dir in output_dirs:
         payloads = _payload_files(output_dir)
         msgpack_payloads = _msgpack_payload_files(output_dir)
@@ -306,18 +324,80 @@ def _validate_outputs(
         for metadata_file in metadata:
             doc = _load_json(metadata_file)
             selection = doc.get("bazel.go.payload_selection")
-            if forbid_full_bundle_no_match and selection == "full_bundle_no_match":
-                _fail(f"{metadata_file} has bazel.go.payload_selection=full_bundle_no_match")
             if selection is not None and selection not in VALID_GO_PAYLOAD_SELECTIONS:
                 _fail(
                     f"{metadata_file} has unsupported bazel.go.payload_selection={selection!r}; "
                     f"expected one of: {VALID_GO_PAYLOAD_SELECTIONS_TEXT}"
                 )
+            if selection is not None and selection not in allowed_selections:
+                _fail(
+                    f"{metadata_file} has bazel.go.payload_selection={selection!r}; "
+                    f"allowed values for this doctor target are: {', '.join(sorted(allowed_selections))}"
+                )
+            if selection is not None:
+                selection_summary[selection] = selection_summary.get(selection, 0) + 1
+
+            target_label = _metadata_target_label(doc, target_lookup.get(output_dir.resolve()))
+            if target_label and target_label in expected_selections:
+                expected = expected_selections[target_label]
+                if selection != expected:
+                    _fail(
+                        f"{metadata_file} has bazel.go.payload_selection={selection!r} for "
+                        f"{target_label}; expected {expected!r}"
+                    )
 
     if require_json_payloads and payload_count == 0:
         _fail("no JSON payload files were found under selected test.outputs directories")
     if require_bazel_metadata and metadata_count == 0:
         _fail("no bazel_target_metadata.json files were found under selected test.outputs directories")
+    return selection_summary
+
+
+def _effective_allowed_payload_selections(
+    configured: set[str] | None,
+    forbid_full_bundle_no_match: bool,
+) -> set[str]:
+    """Return the payload-selection allowlist enforced by the doctor."""
+    allowed = set(configured or DEFAULT_ALLOWED_GO_PAYLOAD_SELECTIONS)
+    invalid = sorted(allowed - VALID_GO_PAYLOAD_SELECTIONS)
+    if invalid:
+        _fail(
+            "allowed_payload_selections contains unsupported value(s): "
+            f"{', '.join(invalid)}; expected one of: {VALID_GO_PAYLOAD_SELECTIONS_TEXT}"
+        )
+    if not configured and not forbid_full_bundle_no_match:
+        allowed.add("full_bundle_no_match")
+    if forbid_full_bundle_no_match and "full_bundle_no_match" in allowed:
+        _fail(
+            "allowed_payload_selections includes full_bundle_no_match while "
+            "forbid_full_bundle_no_match=True"
+        )
+    return allowed
+
+
+def _validate_expected_payload_selection_values(expected_selections: dict[str, str]) -> None:
+    """Validate target-specific payload-selection expectations."""
+    for target, selection in expected_selections.items():
+        if selection not in VALID_GO_PAYLOAD_SELECTIONS:
+            _fail(
+                f"expected_payload_selection_by_target[{target!r}] has unsupported value "
+                f"{selection!r}; expected one of: {VALID_GO_PAYLOAD_SELECTIONS_TEXT}"
+            )
+
+
+def _metadata_target_label(doc: dict[str, Any], fallback: str | None) -> str | None:
+    """Return the Bazel target label recorded in metadata, or the expected-target fallback."""
+    target = doc.get("bazel.target")
+    if isinstance(target, str) and target:
+        return target
+    return fallback
+
+
+def _format_selection_summary(summary: dict[str, int]) -> str:
+    """Format a deterministic payload-selection summary for human-readable doctor output."""
+    if not summary:
+        return "none"
+    return ", ".join(f"{selection}={summary[selection]}" for selection in sorted(summary))
 
 
 def main(argv: list[str]) -> int:
@@ -341,19 +421,32 @@ def main(argv: list[str]) -> int:
     expected_targets = config["expected_targets"]
     if expected_targets:
         output_dirs = []
+        target_by_output_dir = {}
         for label in expected_targets:
-            output_dirs.extend(_expected_target_outputs(testlogs_dir, label))
+            target_output_dirs = _expected_target_outputs(testlogs_dir, label)
+            output_dirs.extend(target_output_dirs)
+            for output_dir in target_output_dirs:
+                target_by_output_dir[output_dir.resolve()] = label
     else:
         output_dirs = _discover_candidate_output_dirs(testlogs_dir)
+        target_by_output_dir = {}
         if not output_dirs:
             _fail(f"no Test Optimization output directories found under {testlogs_dir}")
 
-    _validate_outputs(
+    allowed_payload_selections = set(config.get("allowed_payload_selections") or [])
+    selection_summary = _validate_outputs(
         output_dirs,
         require_json_payloads=config["require_json_payloads"],
         require_bazel_metadata=config["require_bazel_metadata"],
         forbid_full_bundle_no_match=config["forbid_full_bundle_no_match"],
         forbid_msgpack_payloads=config.get("forbid_msgpack_payloads", True),
+        allowed_payload_selections=allowed_payload_selections or None,
+        expected_payload_selection_by_target=config.get("expected_payload_selection_by_target", {}),
+        target_by_output_dir=target_by_output_dir,
+    )
+    print(
+        "[dd-test-optimization-doctor] payload selection summary: "
+        f"{_format_selection_summary(selection_summary)}"
     )
     print(f"[dd-test-optimization-doctor] OK: validated {len(output_dirs)} test output directorie(s)")
     return 0

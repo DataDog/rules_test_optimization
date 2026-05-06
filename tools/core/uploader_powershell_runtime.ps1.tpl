@@ -551,6 +551,66 @@ $script:DebugMode = $Debug
 $script:GzipPayloads = $GzipPayloads
 Dbg "gzip enabled: $GzipPayloads"
 
+$DryRun = $false
+$ValidateEnrichment = $false
+$ExpectedEnrichedTags = New-Object System.Collections.Generic.List[string]
+$DefaultExpectedEnrichedTags = @(
+    "git.repository_url",
+    "git.commit.sha",
+    "bazel.target",
+    "bazel.package"
+)
+
+function Show-Usage {
+    Write-Host "Usage: dd_upload_payloads [--dry-run [--validate-enrichment] [--expected-enriched-tag=TAG ...]]"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  --dry-run                    Enrich and validate payloads without uploading or deleting files."
+    Write-Host "  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment."
+    Write-Host "  --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags."
+}
+
+for ($i = 0; $i -lt $args.Count; $i++) {
+    $arg = [string]$args[$i]
+    if ($arg -eq "--dry-run") {
+        $DryRun = $true
+        continue
+    }
+    if ($arg -eq "--validate-enrichment") {
+        $ValidateEnrichment = $true
+        continue
+    }
+    if ($arg -eq "--expected-enriched-tag") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --expected-enriched-tag requires a tag name"
+            exit 2
+        }
+        $i++
+        $ExpectedEnrichedTags.Add([string]$args[$i]) | Out-Null
+        continue
+    }
+    if ($arg.StartsWith("--expected-enriched-tag=")) {
+        $ExpectedEnrichedTags.Add($arg.Substring("--expected-enriched-tag=".Length)) | Out-Null
+        continue
+    }
+    if ($arg -eq "--help" -or $arg -eq "-h") {
+        Show-Usage
+        exit 0
+    }
+    Log "error: unknown argument: $arg"
+    Show-Usage
+    exit 2
+}
+
+if ($ValidateEnrichment -and -not $DryRun) {
+    Log "error: --validate-enrichment requires --dry-run"
+    exit 2
+}
+$script:DryRun = $DryRun
+$script:ValidateEnrichment = $ValidateEnrichment
+$script:ExpectedEnrichedTags = $ExpectedEnrichedTags
+$script:DefaultExpectedEnrichedTags = $DefaultExpectedEnrichedTags
+
 # Acquire exclusive lock to prevent concurrent uploaders
 # Lock is scoped to workspace to allow parallel uploads in different workspaces
 $WorkspacePath = if ($env:BUILD_WORKSPACE_DIRECTORY) { $env:BUILD_WORKSPACE_DIRECTORY } else { (Get-Location).Path }
@@ -895,7 +955,7 @@ $script:HeaderLangDefault = 'bazel-starlark'
 $script:HeaderLangVersionDefault = 'n/a'
 $script:HeaderLangInterpreterDefault = 'bazel-run'
 $script:HeaderTracerVersionDefault = '__DDTPL_UPLOADER_VERSION__'
-if ($Agentless) {
+if ($Agentless -and -not $script:DryRun) {
   if ([string]::IsNullOrEmpty($env:DD_API_KEY)) {
     Log "error: DD_API_KEY required for agentless uploads"
     Log "hint: pass credentials via environment: `$env:DD_API_KEY=... `$env:DD_SITE=... bazel run //:dd_upload_payloads"
@@ -923,11 +983,15 @@ if ($script:PrimaryContextJson -and (Test-Path -LiteralPath $script:PrimaryConte
 if ($ContextFingerprint) {
   if ($Agentless) {
     # Compare only non-secret fingerprints; never log raw DD_API_KEY.
-    $LocalFp = Get-Fnv1a32Hex $env:DD_API_KEY
-    if ($LocalFp -and ($LocalFp -ne $ContextFingerprint)) {
-      Log "warning: DD_API_KEY mismatch between fetch and uploader"
+    if (-not [string]::IsNullOrEmpty($env:DD_API_KEY)) {
+      $LocalFp = Get-Fnv1a32Hex $env:DD_API_KEY
+      if ($LocalFp -and ($LocalFp -ne $ContextFingerprint)) {
+        Log "warning: DD_API_KEY mismatch between fetch and uploader"
+      } else {
+        Dbg "DD_API_KEY fingerprint match"
+      }
     } else {
-      Dbg "DD_API_KEY fingerprint match"
+      Dbg "DD_API_KEY fingerprint check skipped because DD_API_KEY is unset"
     }
   } else {
     Log "warning: DD_API_KEY fingerprint present but uploader running in EVP mode; check skipped"
@@ -1816,12 +1880,12 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
     }
   }
 
-  # Copy context tags into event meta/metrics, then inject CODEOWNERS.
-  # Span events are intentionally excluded from enrichment.
+  # Copy context tags into every captured test event, then inject CODEOWNERS.
+  # Go test payloads can encode CI Visibility test data as span events, and
+  # those events still need Git and Bazel sidecar tags before upload.
   if ($payload.events) {
     foreach ($evt in $payload.events) {
       $evtType = Get-MapValue $evt 'type'
-      if ($evtType -eq 'span') { continue }
       if (-not (Get-MapValue $evt 'content')) { $evt | Add-Member -NotePropertyName content -NotePropertyValue @{} -Force }
       $evt.content = Ensure-Hashtable $evt.content
       $evt.content.meta = Ensure-Hashtable $evt.content.meta
@@ -1834,6 +1898,10 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
       if ($bazelMetadataObj) {
         Merge-FlatMetadataIntoEvent $evt $bazelMetadataObj
       }
+
+      # CODEOWNERS remains scoped to non-span lifecycle/test events. Span-form Go
+      # events still receive context and Bazel tags before this CODEOWNERS pass.
+      if ($evtType -eq 'span') { continue }
 
       $script:CodeOwnersStats.scanned++
       # Respect upstream/producer-specified ownership tags.
@@ -1967,6 +2035,21 @@ function Get-SortedRawTestMsgpackFiles([string]$DirPath) {
         )
     }
     return $files
+}
+
+# Return true when a JSON test payload has at least one uploadable event. Some
+# tracers can leave empty `{}` placeholder files under payloads/tests; those
+# files are not valid Test Optimization payloads and should not be uploaded.
+function Test-TestPayloadHasEvents([string]$FilePath) {
+    try {
+        $payload = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        # Preserve the existing error path for malformed JSON instead of hiding
+        # it as an empty payload.
+        return [bool]$true
+    }
+    $events = @(Get-MapValue $payload 'events')
+    return [bool]($events.Count -gt 0)
 }
 
 # Detect whether one replay payload is stored in raw msgpack form.
@@ -2730,6 +2813,77 @@ function Upload-SingleTest([string]$FilePath) {
     return [bool]$result
 }
 
+function Get-ExpectedEnrichedTags {
+    if ($script:ExpectedEnrichedTags -and $script:ExpectedEnrichedTags.Count -gt 0) {
+        return @($script:ExpectedEnrichedTags.ToArray())
+    }
+    return @($script:DefaultExpectedEnrichedTags)
+}
+
+function Test-EventHasEnrichedTag($EventObj, [string]$Tag) {
+    if ($null -eq $EventObj -or [string]::IsNullOrEmpty($Tag)) { return [bool]$false }
+    $content = Ensure-Hashtable (Get-MapValue $EventObj 'content')
+    $meta = Ensure-Hashtable (Get-MapValue $content 'meta')
+    if ($meta.Contains($Tag)) { return [bool]$true }
+    $metrics = Ensure-Hashtable (Get-MapValue $content 'metrics')
+    if ($metrics.Contains($Tag)) { return [bool]$true }
+    return [bool]$false
+}
+
+function Test-EnrichedPayloadTags([string]$BodyPath, [string]$SourcePath) {
+    if (-not $script:ValidateEnrichment) { return [bool]$true }
+    $payload = Read-JsonObjectFile $BodyPath "dry-run could not parse enriched test payload '$SourcePath'"
+    if (-not $payload) { return [bool]$false }
+    $events = @(Get-MapValue $payload 'events')
+    $missing = New-Object System.Collections.Generic.List[string]
+    foreach ($tag in @(Get-ExpectedEnrichedTags)) {
+        if ([string]::IsNullOrEmpty($tag)) { continue }
+        $found = $false
+        foreach ($event in $events) {
+            if ($null -eq $event) { continue }
+            if (Test-EventHasEnrichedTag $event $tag) {
+                $found = $true
+                break
+            }
+        }
+        if (-not $found) {
+            $missing.Add([string]$tag) | Out-Null
+        }
+    }
+    if ($missing.Count -gt 0) {
+        Log "error: enriched test payload for '$SourcePath' is missing expected tag(s): $($missing -join ', ')"
+        return [bool]$false
+    }
+    Log "dry-run validated enriched test payload: $SourcePath"
+    return [bool]$true
+}
+
+function DryRun-SingleTest([string]$FilePath) {
+    $body = Join-Path $script:TmpPayloadDir ("test_payload_dry_run_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+    try {
+        Merge-With-Context $FilePath $body
+        Validate-Payload $body
+        $null = Get-CommonHeaders $body
+        if ($script:DebugMode) {
+            Log-StartTimeStats $body
+        }
+        $validationResult = @(Test-EnrichedPayloadTags $body $FilePath)
+        $validated = $false
+        foreach ($item in $validationResult) {
+            if ($item -is [bool]) {
+                $validated = [bool]$item
+            } else {
+                # Test-EnrichedPayloadTags logs through the success stream, so
+                # preserve those operator messages while still returning a bool.
+                Write-Output $item
+            }
+        }
+        return [bool]$validated
+    } finally {
+        Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Upload-SingleCoverage([string]$FilePath) {
     $eventFile = Join-Path $script:TmpPayloadDir ("coverage_event_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     $coverageContentType = Get-CoveragePayloadContentType $FilePath
@@ -2889,6 +3043,33 @@ function Upload-AllTests {
                 $skipped++
                 continue
             }
+            if (-not (Test-TestPayloadHasEvents $f.FullName)) {
+                Log "skipping test payload with no events: $($f.FullName)"
+                $skipped++
+                continue
+            }
+            if ($script:DryRun) {
+                $dryRunResult = @(DryRun-SingleTest $f.FullName)
+                $validated = $false
+                foreach ($item in $dryRunResult) {
+                    if ($item -is [bool]) {
+                        $validated = [bool]$item
+                    } else {
+                        # DryRun-SingleTest may emit validation diagnostics while
+                        # also returning a bool result through the success stream.
+                        Write-Output $item
+                    }
+                }
+                if ($validated) {
+                    Log "dry-run kept test payload: $($f.FullName)"
+                    $total++
+                } else {
+                    Log "warning: failed to dry-run validate $($f.FullName)"
+                    $failed++
+                    $script:UploadFailures++
+                }
+                continue
+            }
             $uploadedResult = @(Upload-SingleTest $f.FullName)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -2906,7 +3087,11 @@ function Upload-AllTests {
             }
         }
     }
-    Log "uploaded $total test payloads"
+    if ($script:DryRun) {
+        Log "dry-run validated $total test payloads"
+    } else {
+        Log "uploaded $total test payloads"
+    }
     if ($failed -gt 0) { Log "warning: $failed test payloads failed to upload" }
     if ($skipped -gt 0) { Dbg "skipped $skipped files (prefix filter)" }
 }
@@ -2923,6 +3108,11 @@ function Upload-AllCoverage {
             if (-not (Test-PrefixFilter $f.FullName "coverage_")) {
                 Dbg "skipping (prefix filter): $($f.FullName)"
                 $skipped++
+                continue
+            }
+            if ($script:DryRun) {
+                Log "dry-run kept coverage payload: $($f.FullName)"
+                $total++
                 continue
             }
             $uploadedResult = @(Upload-SingleCoverage $f.FullName)
@@ -2942,7 +3132,11 @@ function Upload-AllCoverage {
             }
         }
     }
-    Log "uploaded $total coverage payloads"
+    if ($script:DryRun) {
+        Log "dry-run found $total coverage payloads"
+    } else {
+        Log "uploaded $total coverage payloads"
+    }
     if ($failed -gt 0) { Log "warning: $failed coverage payloads failed to upload" }
     if ($skipped -gt 0) { Dbg "skipped $skipped files (prefix filter)" }
 }
@@ -2962,6 +3156,11 @@ function Upload-AllTelemetry {
                 if ($plan -and $plan.ReplaceMap.Contains($f.FullName)) {
                     $bodyPath = [string]$plan.ReplaceMap[$f.FullName]
                     Dbg "telemetry augmentation: using temporary outbound body '$bodyPath' for '$($f.FullName)'"
+                }
+                if ($script:DryRun) {
+                    Log "dry-run kept telemetry payload: $($f.FullName)"
+                    $total++
+                    continue
                 }
                 $uploadedResult = @(Upload-SingleTelemetry $f.FullName $bodyPath)
                 $uploaded = $false
@@ -2985,6 +3184,11 @@ function Upload-AllTelemetry {
                 continue
             }
             Dbg "telemetry augmentation: uploading synthetic body '$($entry.BodyPath)' for anchor '$($entry.AnchorPath)'"
+            if ($script:DryRun) {
+                Log "dry-run validated synthetic telemetry augmentation for: $($entry.AnchorPath)"
+                $total++
+                continue
+            }
             $uploadedResult = @(Upload-SingleTelemetry $entry.AnchorPath $entry.BodyPath)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -3002,7 +3206,11 @@ function Upload-AllTelemetry {
     } finally {
         Remove-TelemetryAugmentationPlanTempFiles $plan
     }
-    Log "uploaded $total telemetry payloads"
+    if ($script:DryRun) {
+        Log "dry-run found $total telemetry payloads"
+    } else {
+        Log "uploaded $total telemetry payloads"
+    }
     if ($failed -gt 0) { Log "warning: $failed telemetry payloads failed to upload" }
 }
 
@@ -3019,7 +3227,11 @@ try {
         Log "done with $($script:UploadFailures) upload failures"
         exit 1
     } else {
-        Log "done"
+        if ($script:DryRun) {
+            Log "dry-run done"
+        } else {
+            Log "done"
+        }
         exit 0
     }
 } finally {

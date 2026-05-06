@@ -15,6 +15,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Uploader says no payload files | tracer file-mode contract + payload files under `bazel-testlogs/*/test.outputs/` | Uploader not finding payloads |
 | Doctor reports msgpack payloads | tracer is not in Bazel JSON file mode | Doctor failures |
 | Doctor reports missing Git or Bazel metadata | sync metadata context or sidecar metadata is absent | Doctor failures |
+| Uploaded tests miss Git or Bazel tags | run uploader dry-run enrichment validation | Uploader enrichment dry-run |
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
 | Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
@@ -144,6 +145,35 @@ fails before upload.
    `expected_targets` before the doctor. With remote execution or remote cache,
    run tests with `--remote_download_outputs=all` or the doctor will not see
    `test.outputs` locally.
+
+## Uploader enrichment dry-run
+
+**Symptom**: Payload files exist, but Datadog UI or JSON inspection suggests the
+uploaded test is missing Git or Bazel tags.
+
+**Explanation**: Raw test payloads on disk are not the final upload body. The
+uploader adds `context.json` and `bazel_target_metadata.json` tags immediately
+before upload.
+
+**Solution**: Run the uploader dry-run after tests and doctor:
+
+```bash
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+```
+
+```powershell
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+```
+
+Dry-run mode does not upload, does not delete payload files, and does not need
+`DD_API_KEY` for agentless mode. By default it requires
+`git.repository_url`, `git.commit.sha`, `bazel.target`, `bazel.package`, and
+`bazel.go.payload_selection` in the enriched test payload. If this fails:
+
+1. Ensure the uploader target has the right `data = ["@...//:test_optimization_context"]`.
+2. Ensure `bazel_target_metadata.json` exists beside the payloads.
+3. Ensure `jq` is available on Linux/macOS when using `--validate-enrichment`.
+4. Use `--expected-enriched-tag=<tag>` for repository-specific required tags.
 
 ## Non-standard bazel-testlogs location
 
