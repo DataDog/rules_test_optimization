@@ -1,12 +1,35 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// captureStdout runs fn while collecting stdout into buf.
+func captureStdout(buf *strings.Builder, fn func() error) error {
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	os.Stdout = writer
+	runErr := fn()
+	closeErr := writer.Close()
+	os.Stdout = original
+	_, copyErr := io.Copy(buf, reader)
+	reader.Close()
+	if runErr != nil {
+		return runErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return copyErr
+}
 
 func TestInsertAfterModuleDecl(t *testing.T) {
 	input := "module(name = \"example\")\n"
@@ -32,7 +55,7 @@ func TestReplaceManagedSectionAppendsWhenMissing(t *testing.T) {
 
 func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.5.0",
+		orchestrionVersion: "v1.9.0",
 		ddTraceGoVersion:   "v2.5.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
@@ -41,7 +64,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `git_override(`) {
 		t.Fatalf("expected rules_go override in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion"`) {
+	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion_base"`) {
 		t.Fatalf("expected vendored rules_go strip_prefix in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `use_extension("@rules_go//go:extensions.bzl", "orchestrion")`) {
@@ -50,7 +73,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `orchestrion.from_source(`) {
 		t.Fatalf("expected orchestrion extension call in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `version = "v1.5.0"`) {
+	if !strings.Contains(got, `version = "v1.9.0"`) {
 		t.Fatalf("expected orchestrion version in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `dd_trace_go_version = "v2.5.0"`) {
@@ -61,9 +84,515 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	}
 }
 
+func TestManagedModuleBlockCanSelectCompleteRulesGoVariant(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.5.0",
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rulesGoCommit:      "deadbeef",
+		rulesGoVariant:     "complete",
+	}
+	got := managedModuleBlock(cfg)
+	if !strings.Contains(got, `strip_prefix = "third_party/rules_go_orchestrion_complete"`) {
+		t.Fatalf("expected complete rules_go variant in managed block:\n%s", got)
+	}
+}
+
+func TestValidateRulesGoVariantRejectsUnknownVariant(t *testing.T) {
+	if err := validateRulesGoVariant("custom"); err == nil {
+		t.Fatal("expected unknown rules_go variant to fail")
+	}
+}
+
+func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
+	cfg := config{
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rtoCommit:          "published-sha",
+		datadogFetch:       "git",
+		rulesGoFetch:       "archive",
+		rulesGoRepoName:    "io_bazel_rules_go",
+		rulesGoVariant:     "complete",
+		rtoArchiveURL:      "https://example.test/archive.tar.gz",
+		rtoArchiveSHA256:   strings.Repeat("0", 64),
+		rtoArchivePrefix:   "rules_test_optimization-published-sha",
+		rtoArchiveType:     "tar.gz",
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+	got, err := workspaceSnippet(cfg)
+	if err != nil {
+		t.Fatalf("workspaceSnippet error: %v", err)
+	}
+	for _, want := range []string{
+		`git_repository(`,
+		`name = "datadog-rules-test-optimization"`,
+		`load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")`,
+		`datadog_fetch = "git"`,
+		`rto_commit = "published-sha"`,
+		`rules_go_fetch = "archive"`,
+		`rules_go_variant = "complete"`,
+		`go_orchestrion_tool_repo(`,
+		`dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("workspace snippet missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestWorkspaceSnippetFallsBackToRulesGoCommit(t *testing.T) {
+	cfg := config{
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rulesGoCommit:      "legacy-published-sha",
+		datadogFetch:       "git",
+		rulesGoFetch:       "git",
+		rulesGoRepoName:    "io_bazel_rules_go",
+		rulesGoVariant:     "base",
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+	got, err := workspaceSnippet(cfg)
+	if err != nil {
+		t.Fatalf("workspaceSnippet error: %v", err)
+	}
+	if !strings.Contains(got, `rto_commit = "legacy-published-sha"`) {
+		t.Fatalf("workspace snippet did not fall back to rulesGoCommit:\n%s", got)
+	}
+}
+
+func TestWorkspaceSnippetDoesNotRequireModuleFiles(t *testing.T) {
+	cfg := config{
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rtoCommit:          "published-sha",
+		datadogFetch:       "git",
+		rulesGoFetch:       "git",
+		rulesGoRepoName:    "io_bazel_rules_go",
+		rulesGoVariant:     "base",
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+	if _, err := workspaceSnippet(cfg); err != nil {
+		t.Fatalf("workspaceSnippet should not inspect MODULE.bazel or go.mod: %v", err)
+	}
+}
+
+func TestWorkspaceModeSnippetIncludesSyncAndCompleteVariant(t *testing.T) {
+	cfg := config{
+		workspaceMode:        true,
+		rulesGoRemote:        "https://github.com/example/repo.git",
+		rtoCommit:            "published-sha",
+		datadogFetch:         "git",
+		rulesGoFetch:         "git",
+		rulesGoRepoName:      "io_bazel_rules_go",
+		rulesGoVariant:       "complete",
+		orchestrionVersion:   "v1.9.0",
+		ddTraceGoVersion:     "v2.9.0-dev.0.20260416093245-194346a71c51",
+		syncRepoName:         "test_optimization_data_worker",
+		service:              "worker",
+		runtimeVersion:       "1.25.9",
+		doctorTargetName:     defaultDoctorTargetName,
+		uploaderTargetName:   defaultUploaderTargetName,
+		plainWrapperName:     defaultPlainWrapperName,
+		optimizedWrapperName: defaultOptimizedWrapperName,
+	}
+	got, err := workspaceSnippet(cfg)
+	if err != nil {
+		t.Fatalf("workspaceSnippet error: %v", err)
+	}
+	for _, want := range []string{
+		`rules_go_variant = "complete"`,
+		`rules_go_repo_name = "io_bazel_rules_go"`,
+		`load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")`,
+		`name = "test_optimization_data_worker"`,
+		`service = "worker"`,
+		`runtime_name = "go"`,
+		`runtime_version = "1.25.9"`,
+		`require_git_metadata = True`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("workspace mode snippet missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "dd-source") {
+		t.Fatalf("workspace mode snippet must stay generic:\n%s", got)
+	}
+}
+
+func TestRunWorkspaceModeWritesSelectedFilesWithoutModuleBazel(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:          dir,
+		goModuleDir:           dir,
+		workspaceMode:         true,
+		writeRootTargets:      true,
+		writeOrchestrionFiles: true,
+		writeWrapperTemplate:  true,
+		writeBazelrc:          true,
+		bazelrcPath:           ".bazelrc",
+		bazelrcConfig:         "test-optimization-worker",
+		syncRepoName:          "test_optimization_data_worker",
+		doctorTargetName:      "dd_test_optimization_doctor",
+		uploaderTargetName:    "dd_upload_payloads",
+		expectedTargets:       []string{"//worker:go_default_test"},
+		wrapperPackage:        "rules/go",
+		wrapperFile:           "dd_topt_go_test.bzl",
+		plainWrapperName:      "dd_go_test",
+		optimizedWrapperName:  "dd_topt_go_test",
+		rulesGoRepoName:       "io_bazel_rules_go",
+		datadogFetch:          defaultDatadogFetch,
+		rulesGoFetch:          defaultRulesGoFetch,
+		rulesGoVariant:        defaultRulesGoVariant,
+		ddTraceGoVersion:      defaultDDTraceGoVersion,
+		orchestrionVersion:    defaultOrchestrionVersion,
+		rulesGoRemote:         defaultRulesGoRemote,
+		goModSync:             defaultGoModSync,
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run workspace mode error: %v", err)
+	}
+	for _, path := range []string{
+		"BUILD.bazel",
+		".bazelrc",
+		"orchestrion.tool.go",
+		"orchestrion.yml",
+		"rules/go/BUILD.bazel",
+		"rules/go/dd_topt_go_test.bzl",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			t.Fatalf("expected %s: %v", path, err)
+		}
+	}
+	rootBuild, err := os.ReadFile(filepath.Join(dir, "BUILD.bazel"))
+	if err != nil {
+		t.Fatalf("read root BUILD.bazel: %v", err)
+	}
+	if !strings.Contains(string(rootBuild), `expected_targets = [`) || !strings.Contains(string(rootBuild), `"//worker:go_default_test"`) {
+		t.Fatalf("expected doctor expected_targets in root BUILD.bazel:\n%s", rootBuild)
+	}
+	wrapper, err := os.ReadFile(filepath.Join(dir, "rules/go/dd_topt_go_test.bzl"))
+	if err != nil {
+		t.Fatalf("read wrapper: %v", err)
+	}
+	wrapperText := string(wrapper)
+	for _, want := range []string{
+		`load("@io_bazel_rules_go//go:def.bzl", _raw_go_test = "go_test")`,
+		`def dd_go_test(name, **kwargs):`,
+		`def dd_topt_go_test(name, **kwargs):`,
+		`load("@test_optimization_data_worker//:export.bzl", "topt_data")`,
+		`orchestrion_pin_files = _ORCHESTRION_PIN_FILES`,
+	} {
+		if !strings.Contains(wrapperText, want) {
+			t.Fatalf("workspace wrapper missing %q:\n%s", want, wrapperText)
+		}
+	}
+	for _, forbidden := range []string{"dd-source", "--test_env=DD_GIT_"} {
+		if strings.Contains(wrapperText, forbidden) {
+			t.Fatalf("workspace wrapper contains forbidden %q:\n%s", forbidden, wrapperText)
+		}
+	}
+}
+
+func TestWorkspaceModeDoesNotRunGoModSyncByDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := run(config{
+		workspaceDir:          dir,
+		workspaceMode:         true,
+		writeOrchestrionFiles: true,
+		datadogFetch:          defaultDatadogFetch,
+		rulesGoFetch:          defaultRulesGoFetch,
+		rulesGoVariant:        defaultRulesGoVariant,
+		ddTraceGoVersion:      defaultDDTraceGoVersion,
+		orchestrionVersion:    defaultOrchestrionVersion,
+		rulesGoRepoName:       defaultRulesGoRepoName,
+		rulesGoRemote:         defaultRulesGoRemote,
+		syncRepoName:          defaultSyncRepoName,
+		doctorTargetName:      defaultDoctorTargetName,
+		uploaderTargetName:    defaultUploaderTargetName,
+		wrapperPackage:        defaultWrapperPackage,
+		wrapperFile:           defaultWorkspaceWrapperFile,
+		plainWrapperName:      defaultPlainWrapperName,
+		optimizedWrapperName:  defaultOptimizedWrapperName,
+		goModSync:             defaultGoModSync,
+	}); err != nil {
+		t.Fatalf("workspace mode should write Orchestrion files without go.mod by default: %v", err)
+	}
+}
+
+func TestEnsureWorkspaceWrapperTemplateIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:         dir,
+		syncRepoName:         "test_optimization_data",
+		wrapperPackage:       "tools/test",
+		wrapperFile:          "go_test_wrappers.bzl",
+		plainWrapperName:     "plain_go_test",
+		optimizedWrapperName: "optimized_go_test",
+		rulesGoRepoName:      "io_bazel_rules_go",
+	}
+	if err := ensureWorkspaceWrapperTemplate(cfg); err != nil {
+		t.Fatalf("first ensureWorkspaceWrapperTemplate error: %v", err)
+	}
+	path := filepath.Join(dir, "tools", "test", "go_test_wrappers.bzl")
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read first wrapper: %v", err)
+	}
+	if err := ensureWorkspaceWrapperTemplate(cfg); err != nil {
+		t.Fatalf("second ensureWorkspaceWrapperTemplate error: %v", err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read second wrapper: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("expected idempotent wrapper template:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestEnsureWorkspaceWrapperTemplateRejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	err := ensureWorkspaceWrapperTemplate(config{
+		workspaceDir:         dir,
+		syncRepoName:         "test_optimization_data",
+		wrapperPackage:       "../outside",
+		wrapperFile:          "dd_topt_go_test.bzl",
+		plainWrapperName:     "dd_go_test",
+		optimizedWrapperName: "dd_topt_go_test",
+		rulesGoRepoName:      "io_bazel_rules_go",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--wrapper-package must stay inside the workspace") {
+		t.Fatalf("ensureWorkspaceWrapperTemplate error=%v, want path traversal rejection", err)
+	}
+}
+
+func TestBazelrcSnippetUsesRepoEnvOnlyForSyncMetadata(t *testing.T) {
+	got, err := bazelrcSnippet(config{bazelrcConfig: "test-optimization"})
+	if err != nil {
+		t.Fatalf("bazelrcSnippet error: %v", err)
+	}
+	for _, want := range []string{
+		bazelrcBlockStart,
+		`common:test-optimization --repo_env=DD_API_KEY`,
+		`common:test-optimization --repo_env=FETCH_SALT`,
+		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`,
+		`common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL`,
+		`common:test-optimization --repo_env=DD_PR_NUMBER`,
+		`test:test-optimization --remote_download_outputs=all`,
+		bazelrcBlockEnd,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bazelrc snippet missing %q:\n%s", want, got)
+		}
+	}
+	for _, key := range bazelrcRepoEnvKeys {
+		want := "common:test-optimization --repo_env=" + key
+		if !strings.Contains(got, want) {
+			t.Fatalf("bazelrc snippet missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		`--test_env=DD_GIT_`,
+		`--test_env=DD_TEST_OPTIMIZATION_AGENT_URL`,
+		`--test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("bazelrc snippet contains forbidden test env %q:\n%s", forbidden, got)
+		}
+	}
+}
+
+func TestRunPrintBazelrcSnippetDoesNotRequireModuleFiles(t *testing.T) {
+	dir := t.TempDir()
+	var buf strings.Builder
+	if err := captureStdout(&buf, func() error {
+		return run(config{
+			workspaceDir:        dir,
+			printBazelrcSnippet: true,
+			bazelrcConfig:       "test-optimization",
+			datadogFetch:        defaultDatadogFetch,
+			rulesGoFetch:        defaultRulesGoFetch,
+			rulesGoVariant:      defaultRulesGoVariant,
+			ddTraceGoVersion:    defaultDDTraceGoVersion,
+			orchestrionVersion:  defaultOrchestrionVersion,
+			rulesGoRepoName:     defaultRulesGoRepoName,
+			rulesGoRemote:       defaultRulesGoRemote,
+			syncRepoName:        defaultSyncRepoName,
+			doctorTargetName:    defaultDoctorTargetName,
+			uploaderTargetName:  defaultUploaderTargetName,
+		})
+	}); err != nil {
+		t.Fatalf("run --print-bazelrc-snippet error: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, `test:test-optimization --remote_download_outputs=all`) {
+		t.Fatalf("expected bazelrc snippet on stdout:\n%s", got)
+	}
+}
+
+func TestWriteBazelrcBlockPreservesUserContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".bazelrc")
+	if err := os.WriteFile(path, []byte("common --announce_rc\n"), 0o644); err != nil {
+		t.Fatalf("write .bazelrc: %v", err)
+	}
+	cfg := config{
+		workspaceDir:  dir,
+		bazelrcPath:   ".bazelrc",
+		bazelrcConfig: "test-optimization",
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("writeBazelrcBlock error: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read .bazelrc: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "common --announce_rc") || !strings.Contains(text, bazelrcBlockStart) {
+		t.Fatalf("expected user content and managed block in .bazelrc:\n%s", text)
+	}
+}
+
+func TestRunGuidedWriteBazelrcValidatesBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	err := run(config{
+		workspaceDir:       dir,
+		guided:             true,
+		writeBazelrc:       true,
+		bazelrcPath:        ".bazelrc",
+		bazelrcConfig:      "test-optimization",
+		datadogFetch:       defaultDatadogFetch,
+		rulesGoFetch:       defaultRulesGoFetch,
+		rulesGoVariant:     defaultRulesGoVariant,
+		ddTraceGoVersion:   defaultDDTraceGoVersion,
+		orchestrionVersion: defaultOrchestrionVersion,
+		rulesGoRepoName:    defaultRulesGoRepoName,
+		rulesGoRemote:      defaultRulesGoRemote,
+		syncRepoName:       defaultSyncRepoName,
+		doctorTargetName:   defaultDoctorTargetName,
+		uploaderTargetName: defaultUploaderTargetName,
+		runtimeVersion:     "1.25.0",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--guided requires --service") {
+		t.Fatalf("run error=%v, want missing service validation", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".bazelrc")); !os.IsNotExist(statErr) {
+		t.Fatalf(".bazelrc was written before guided validation, statErr=%v", statErr)
+	}
+}
+
+func TestWriteBazelrcBlockIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:  dir,
+		bazelrcPath:   ".bazelrc",
+		bazelrcConfig: "test-optimization",
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("first writeBazelrcBlock error: %v", err)
+	}
+	first, err := os.ReadFile(filepath.Join(dir, ".bazelrc"))
+	if err != nil {
+		t.Fatalf("read first .bazelrc: %v", err)
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("second writeBazelrcBlock error: %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(dir, ".bazelrc"))
+	if err != nil {
+		t.Fatalf("read second .bazelrc: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("expected idempotent .bazelrc write:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestWriteBazelrcBlockReplacesManagedContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".bazelrc")
+	input := `common --announce_rc
+# BEGIN Datadog Test Optimization Bazelrc
+test:old --test_env=DD_GIT_BRANCH=main
+# END Datadog Test Optimization Bazelrc
+`
+	if err := os.WriteFile(path, []byte(input), 0o644); err != nil {
+		t.Fatalf("write .bazelrc: %v", err)
+	}
+	cfg := config{
+		workspaceDir:  dir,
+		bazelrcPath:   ".bazelrc",
+		bazelrcConfig: "test-optimization",
+	}
+	if err := writeBazelrcBlock(cfg); err != nil {
+		t.Fatalf("writeBazelrcBlock error: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read .bazelrc: %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, "--test_env=DD_GIT_BRANCH") || strings.Count(text, bazelrcBlockStart) != 1 {
+		t.Fatalf("expected old managed block to be replaced:\n%s", text)
+	}
+}
+
+func TestWriteBazelrcBlockRejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	err := writeBazelrcBlock(config{
+		workspaceDir:  dir,
+		bazelrcPath:   "../outside.bazelrc",
+		bazelrcConfig: "test-optimization",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--bazelrc-path must stay inside workspace") {
+		t.Fatalf("writeBazelrcBlock error=%v, want workspace-bound path validation", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(dir), "outside.bazelrc")); !os.IsNotExist(statErr) {
+		t.Fatalf("outside .bazelrc was written, statErr=%v", statErr)
+	}
+}
+
+func TestWriteBazelrcBlockAllowsAbsolutePathInsideWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tools", "test-optimization.bazelrc")
+	if err := writeBazelrcBlock(config{
+		workspaceDir:  dir,
+		bazelrcPath:   path,
+		bazelrcConfig: "test-optimization",
+	}); err != nil {
+		t.Fatalf("writeBazelrcBlock error: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read managed bazelrc: %v", err)
+	}
+	if !strings.Contains(string(content), bazelrcBlockStart) {
+		t.Fatalf("expected managed block in absolute workspace path:\n%s", content)
+	}
+}
+
+func TestHydrateManagedRulesGoVariantPreservesCompleteVariant(t *testing.T) {
+	content := `module(name = "example")
+
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/example/repo.git",
+    commit = "deadbeef",
+    strip_prefix = "third_party/rules_go_orchestrion_complete",
+)
+# END Datadog Go Orchestrion bootstrap
+`
+	cfg := config{rulesGoVariant: defaultRulesGoVariant}
+	if err := hydrateManagedRulesGoVariant(&cfg, content); err != nil {
+		t.Fatalf("hydrateManagedRulesGoVariant error: %v", err)
+	}
+	if cfg.rulesGoVariant != "complete" {
+		t.Fatalf("rulesGoVariant=%q, want complete", cfg.rulesGoVariant)
+	}
+}
+
 func TestManagedModuleBlockIncludesPerModuleVersions(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.5.0",
+		orchestrionVersion: "v1.9.0",
 		ddTraceGoVersions: map[string]string{
 			"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
 			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -94,7 +623,7 @@ git_override(
 `
 	cfg := config{
 		rulesGoRemote: defaultRulesGoRemote,
-		rulesGoCommit: defaultRulesGoCommit,
+		rulesGoCommit: "deadbeef",
 	}
 	if rulesGoOverrideCompatible(input, cfg) {
 		t.Fatal("expected incompatible rules_go override to be rejected")
@@ -119,6 +648,153 @@ git_override(
 	}
 }
 
+func TestPatchModuleFileInfersRulesGoCommitFromDatadogOverride(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	input := `module(name = "example")
+
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+git_override(
+    module_name = "datadog-rules-test-optimization-go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "published-main-sha",
+    strip_prefix = "modules/go",
+)
+`
+	if err := os.WriteFile(moduleFile, []byte(input), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      defaultRulesGoVariant,
+		rulesGoCommitSet:    false,
+		ddTraceGoVersionSet: true,
+	}
+	if err := patchModuleFile(cfg); err != nil {
+		t.Fatalf("patchModuleFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(moduleFile)
+	if err != nil {
+		t.Fatalf("read MODULE.bazel: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `commit = "published-main-sha"`) {
+		t.Fatalf("expected inferred rules_go commit in managed block:\n%s", text)
+	}
+	if !strings.Contains(text, `strip_prefix = "third_party/rules_go_orchestrion_base"`) {
+		t.Fatalf("expected base variant strip_prefix in managed block:\n%s", text)
+	}
+}
+
+func TestPatchModuleFilePreservesManagedRulesGoCommitOnRerun(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	input := `module(name = "example")
+
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "already-published-sha",
+    strip_prefix = "third_party/rules_go_orchestrion_complete",
+)
+
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.9.0",
+    dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51",
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+# END Datadog Go Orchestrion bootstrap
+`
+	if err := os.WriteFile(moduleFile, []byte(input), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      "complete",
+		ddTraceGoVersionSet: true,
+	}
+	if err := patchModuleFile(cfg); err != nil {
+		t.Fatalf("patchModuleFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(moduleFile)
+	if err != nil {
+		t.Fatalf("read MODULE.bazel: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `commit = "already-published-sha"`) {
+		t.Fatalf("expected existing managed rules_go commit to be preserved:\n%s", text)
+	}
+	if !strings.Contains(text, `strip_prefix = "third_party/rules_go_orchestrion_complete"`) {
+		t.Fatalf("expected existing complete variant to be preserved:\n%s", text)
+	}
+}
+
+func TestPatchModuleFileRequiresRulesGoCommitWhenNoPublishedSourceExists(t *testing.T) {
+	dir := t.TempDir()
+	moduleFile := filepath.Join(dir, "MODULE.bazel")
+	if err := os.WriteFile(moduleFile, []byte("module(name = \"example\")\n"), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+
+	cfg := config{
+		moduleFile:          moduleFile,
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		rulesGoRemote:       defaultRulesGoRemote,
+		rulesGoVariant:      defaultRulesGoVariant,
+		ddTraceGoVersionSet: true,
+	}
+	err := patchModuleFile(cfg)
+	if err == nil {
+		t.Fatal("expected patchModuleFile to require a rules_go commit")
+	}
+	if !strings.Contains(err.Error(), "rules_go fork commit is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadGoModulePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "go.mod")
+	if err := os.WriteFile(path, []byte("// comment\nmodule example.com/service // production module\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	got, err := readGoModulePath(path)
+	if err != nil {
+		t.Fatalf("readGoModulePath error: %v", err)
+	}
+	if got != "example.com/service" {
+		t.Fatalf("readGoModulePath=%q, want example.com/service", got)
+	}
+}
+
+func TestManagedGuidedModuleBlockIncludesModulePath(t *testing.T) {
+	cfg := config{
+		syncRepoName:   "test_optimization_data",
+		service:        "go-service",
+		runtimeVersion: "1.25.0",
+		goModulePath:   "github.com/DataDog/example-service",
+	}
+
+	got := managedGuidedModuleBlock(cfg)
+	if !strings.Contains(got, `module_path = "github.com/DataDog/example-service"`) {
+		t.Fatalf("expected guided block to include explicit module_path:\n%s", got)
+	}
+}
+
 func TestWriteStarterOrchestrionYML(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config{goModuleDir: dir}
@@ -133,6 +809,208 @@ func TestWriteStarterOrchestrionYML(t *testing.T) {
 	if !strings.Contains(string(content), "aspects: []") {
 		t.Fatalf("unexpected orchestrion.yml content:\n%s", string(content))
 	}
+}
+
+func TestWriteOrchestrionToolFileWritesManagedImports(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{goModuleDir: dir}
+	if err := writeOrchestrionToolFile(cfg); err != nil {
+		t.Fatalf("writeOrchestrionToolFile error: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "orchestrion.tool.go"))
+	if err != nil {
+		t.Fatalf("read orchestrion.tool.go: %v", err)
+	}
+	text := string(content)
+	requiredImports := []string{
+		`_ "github.com/DataDog/orchestrion" // integration`,
+		`_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration`,
+		`_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration`,
+		`_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration`,
+	}
+	for _, importLine := range requiredImports {
+		if !strings.Contains(text, importLine) {
+			t.Fatalf("managed orchestrion.tool.go missing %q:\n%s", importLine, text)
+		}
+	}
+	if strings.Contains(text, `github.com/DataDog/dd-trace-go/orchestrion/all/v2`) {
+		t.Fatalf("managed orchestrion.tool.go should not contain orchestrion/all/v2:\n%s", text)
+	}
+}
+
+func TestBootstrapSyncCommandsTargetedModeAvoidsGoModTidy(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+		goModSync:          "targeted",
+	}
+
+	got := bootstrapSyncCommands(cfg)
+	if len(got) < 3 {
+		t.Fatalf("bootstrapSyncCommands returned too few commands: %#v", got)
+	}
+	if strings.Join(got[0], " ") != "mod edit -require=github.com/DataDog/orchestrion@v1.9.0" {
+		t.Fatalf("first bootstrap sync command=%q, want orchestrion version pin", strings.Join(got[0], " "))
+	}
+	joined := strings.Join(flattenCommands(got), "\n")
+	if strings.Contains(joined, "mod tidy") {
+		t.Fatalf("targeted bootstrap sync must not run go mod tidy:\n%s", joined)
+	}
+	if !strings.Contains(joined, "list -mod=mod -tags=tools github.com/DataDog/orchestrion") {
+		t.Fatalf("targeted bootstrap sync must resolve the Orchestrion tool graph:\n%s", joined)
+	}
+	if !strings.Contains(joined, "list -mod=readonly -tags=tools github.com/DataDog/orchestrion") {
+		t.Fatalf("targeted bootstrap sync must verify readonly module completeness:\n%s", joined)
+	}
+}
+
+func TestBootstrapSyncCommandsDefaultsToTargetedMode(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+	}
+
+	joined := strings.Join(flattenCommands(bootstrapSyncCommands(cfg)), "\n")
+	if strings.Contains(joined, "mod tidy") {
+		t.Fatalf("default bootstrap sync must not run go mod tidy:\n%s", joined)
+	}
+	if !strings.Contains(joined, "list -mod=readonly -tags=tools") {
+		t.Fatalf("default bootstrap sync must use targeted readonly verification:\n%s", joined)
+	}
+}
+
+func TestBootstrapSyncCommandsTidyModeKeepsExplicitGoModTidy(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+		goModSync:          "tidy",
+	}
+
+	joined := strings.Join(flattenCommands(bootstrapSyncCommands(cfg)), "\n")
+	if !strings.Contains(joined, "mod tidy") {
+		t.Fatalf("tidy bootstrap sync must keep explicit go mod tidy:\n%s", joined)
+	}
+}
+
+func TestBootstrapSyncCommandsOffModeSkipsGoCommands(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.9.0-dev.0.20260416093245-194346a71c51",
+		goModSync:          "off",
+	}
+
+	if got := bootstrapSyncCommands(cfg); len(got) != 0 {
+		t.Fatalf("off bootstrap sync returned commands: %#v", got)
+	}
+}
+
+func TestValidateGoModSyncModeRejectsUnknownValue(t *testing.T) {
+	if err := validateGoModSyncMode("broad"); err == nil {
+		t.Fatal("expected unknown go module sync mode to fail")
+	}
+}
+
+func TestValidateGoBinaryRejectsShellStyleCommand(t *testing.T) {
+	for _, value := range []string{
+		"go test",
+		" go",
+		"go ",
+		"go\t",
+		"bash",
+	} {
+		if err := validateGoBinary(value); err == nil {
+			t.Fatalf("expected --go-binary=%q to fail validation", value)
+		}
+	}
+}
+
+func TestValidateGoBinaryAcceptsGoExecutableName(t *testing.T) {
+	for _, value := range []string{"go", filepath.Join("custom", "bin", "go"), filepath.Join("custom", "bin", "go.exe")} {
+		if err := validateGoBinary(value); err != nil {
+			t.Fatalf("expected --go-binary=%q to pass validation: %v", value, err)
+		}
+	}
+}
+
+func TestSyncDDTraceGoVersionHonorsCustomGoBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "go-args.log")
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+printf '%s\n' "$*" >> "`+logPath+`"
+exit 0
+`)
+	cfg := config{
+		goBinary:            goPath,
+		goModuleDir:         dir,
+		goModSync:           "targeted",
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		ddTraceGoVersions:   nil,
+		ddTraceGoVersionSet: true,
+	}
+
+	if err := syncDDTraceGoVersion(cfg); err != nil {
+		t.Fatalf("syncDDTraceGoVersion error: %v", err)
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake go log: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "list -mod=readonly -tags=tools") {
+		t.Fatalf("custom go binary did not receive readonly verification command:\n%s", text)
+	}
+}
+
+func TestSyncDDTraceGoVersionReadonlyFailureMentionsTargetedSync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	dir := t.TempDir()
+	goPath := writeFakeGoTool(t, `#!/bin/sh
+case "$*" in
+  *"list -mod=readonly -tags=tools"*)
+    echo "readonly module graph is incomplete" >&2
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`)
+	cfg := config{
+		goBinary:            goPath,
+		goModuleDir:         dir,
+		goModSync:           "targeted",
+		orchestrionVersion:  "v1.9.0",
+		ddTraceGoVersion:    "v2.9.0-dev.0.20260416093245-194346a71c51",
+		ddTraceGoVersionSet: true,
+	}
+
+	err := syncDDTraceGoVersion(cfg)
+	if err == nil {
+		t.Fatal("expected readonly verification failure")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "--go-mod-sync=targeted") {
+		t.Fatalf("expected targeted sync hint in error, got:\n%s", text)
+	}
+	if !strings.Contains(text, "go_repository") {
+		t.Fatalf("expected go_repository refresh hint in error, got:\n%s", text)
+	}
+}
+
+func flattenCommands(commands [][]string) []string {
+	flattened := make([]string, 0, len(commands))
+	for _, command := range commands {
+		flattened = append(flattened, strings.Join(command, " "))
+	}
+	return flattened
 }
 
 func TestEnsureCIVisibilityOrchestrionImport(t *testing.T) {
@@ -417,7 +1295,7 @@ esac
 	}
 }
 
-func TestResolveDDTraceGoVersionQueryRejectsPackagePreflightFailure(t *testing.T) {
+func TestResolveDDTraceGoVersionQueryRejectsPackageValidationFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script based helper test is Unix-only")
 	}
@@ -451,9 +1329,9 @@ esac
 
 	_, err := resolveDDTraceGoVersionQuery("deadbeef", goPath, []string{"PATH=" + os.Getenv("PATH")})
 	if err == nil {
-		t.Fatal("expected package preflight failure")
+		t.Fatal("expected package validation failure")
 	}
-	if !strings.Contains(err.Error(), `package preflight failed`) {
+	if !strings.Contains(err.Error(), `package validation failed`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -578,7 +1456,7 @@ func TestEnsureBootstrapCanManageTracerConfigRejectsManualTracerConfig(t *testin
 	content := `module(name = "example")
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.5.0",
+    version = "v1.9.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -598,12 +1476,12 @@ git_override(
     module_name = "rules_go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "deadbeef",
-    strip_prefix = "third_party/rules_go_orchestrion",
+    strip_prefix = "third_party/rules_go_orchestrion_base",
 )
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.5.0",
+    version = "v1.9.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -782,6 +1660,7 @@ func TestEnsureGuidedRootBuildCreatesBuildBazel(t *testing.T) {
 	cfg := config{
 		workspaceDir:       dir,
 		syncRepoName:       "test_optimization_data",
+		doctorTargetName:   "dd_test_optimization_doctor",
 		uploaderTargetName: "dd_upload_payloads",
 	}
 	if err := ensureGuidedRootBuild(cfg); err != nil {
@@ -793,8 +1672,14 @@ func TestEnsureGuidedRootBuildCreatesBuildBazel(t *testing.T) {
 		t.Fatalf("read BUILD.bazel: %v", err)
 	}
 	text := string(content)
+	if !strings.Contains(text, doctorBlockStart) || !strings.Contains(text, `name = "dd_test_optimization_doctor"`) {
+		t.Fatalf("expected managed doctor block in BUILD.bazel:\n%s", text)
+	}
 	if !strings.Contains(text, uploaderBlockStart) || !strings.Contains(text, `name = "dd_upload_payloads"`) {
 		t.Fatalf("expected managed uploader block in BUILD.bazel:\n%s", text)
+	}
+	if !strings.Contains(text, pinExportsBlockStart) || !strings.Contains(text, `"orchestrion.tool.go"`) || !strings.Contains(text, `"orchestrion.yml"`) {
+		t.Fatalf("expected managed pin-file exports in BUILD.bazel:\n%s", text)
 	}
 }
 
@@ -819,6 +1704,53 @@ func TestEnsureGuidedWrapperCreatesFiles(t *testing.T) {
 	text := string(content)
 	if !strings.Contains(text, wrapperBlockStart) || !strings.Contains(text, `load("@test_optimization_data//:export.bzl", "topt_data")`) {
 		t.Fatalf("expected managed wrapper content:\n%s", text)
+	}
+	if !strings.Contains(text, `orchestrion_pin_files = _ORCHESTRION_PIN_FILES`) || !strings.Contains(text, `"//:orchestrion.tool.go"`) {
+		t.Fatalf("expected wrapper to pass root Orchestrion pin files:\n%s", text)
+	}
+}
+
+func TestEnsureGuidedWorkspaceFilesUsesGoModulePackagePinLabels(t *testing.T) {
+	dir := t.TempDir()
+	goModuleDir := filepath.Join(dir, "services", "worker")
+	if err := os.MkdirAll(goModuleDir, 0o755); err != nil {
+		t.Fatalf("mkdir go module dir: %v", err)
+	}
+	cfg := config{
+		workspaceDir:       dir,
+		goModuleDir:        goModuleDir,
+		syncRepoName:       "test_optimization_data",
+		doctorTargetName:   "dd_test_optimization_doctor",
+		uploaderTargetName: "dd_upload_payloads",
+	}
+	if err := ensureGuidedWorkspaceFiles(cfg); err != nil {
+		t.Fatalf("ensureGuidedWorkspaceFiles error: %v", err)
+	}
+
+	rootBuild, err := os.ReadFile(filepath.Join(dir, "BUILD.bazel"))
+	if err != nil {
+		t.Fatalf("read root BUILD.bazel: %v", err)
+	}
+	if strings.Contains(string(rootBuild), pinExportsBlockStart) {
+		t.Fatalf("root BUILD.bazel should not export non-root Go module pin files:\n%s", string(rootBuild))
+	}
+
+	moduleBuild, err := os.ReadFile(filepath.Join(goModuleDir, "BUILD.bazel"))
+	if err != nil {
+		t.Fatalf("read module BUILD.bazel: %v", err)
+	}
+	if !strings.Contains(string(moduleBuild), pinExportsBlockStart) || !strings.Contains(string(moduleBuild), `"orchestrion.tool.go"`) {
+		t.Fatalf("expected module BUILD.bazel to export Orchestrion pin files:\n%s", string(moduleBuild))
+	}
+
+	wrapperPath := filepath.Join(dir, "tools", "build", "dd_go_test.bzl")
+	wrapperContent, err := os.ReadFile(wrapperPath)
+	if err != nil {
+		t.Fatalf("read dd_go_test.bzl: %v", err)
+	}
+	wrapper := string(wrapperContent)
+	if !strings.Contains(wrapper, `"//services/worker:orchestrion.tool.go"`) || strings.Contains(wrapper, `"//:orchestrion.tool.go"`) {
+		t.Fatalf("expected wrapper to reference Go module package pin labels:\n%s", wrapper)
 	}
 }
 

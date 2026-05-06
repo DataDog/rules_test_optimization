@@ -1,9 +1,13 @@
 # rules_go Orchestrion Probe Measurements
 
+> Scope note: measurements in this document describe the generic base variant
+> under `third_party/rules_go_orchestrion_base`. The complete variant is tracked
+> separately through `third_party/rules_go_orchestrion_variants.json`.
+
 ## Purpose
 
 This note captures the first real timing pass for the vendored
-`third_party/rules_go_orchestrion` fork using the probe instrumentation added
+`third_party/rules_go_orchestrion_base` fork using the probe instrumentation added
 to the builder and Orchestrion extension paths.
 
 Unlike
@@ -613,7 +617,7 @@ Because the synthetic testmain path does not stop at the small fixed Datadog
 root helper set.
 
 The flow in
-[compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
+[compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
 starts from:
 
 - `syntheticTestmainRootPackages`
@@ -694,7 +698,7 @@ Yes.
 
 The code already has most of the right key material through
 `moduleExportRequestKey(...)` in
-[importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go).
+[importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go).
 
 That key already includes:
 
@@ -817,8 +821,8 @@ The second optimization pass should then focus on:
 ## Related References
 
 - [docs/rules_go_orchestrion_performance_analysis.md](./rules_go_orchestrion_performance_analysis.md)
-- [third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go](../third_party/rules_go_orchestrion/go/tools/builders/compilepkg.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/importcfg.go](../third_party/rules_go_orchestrion/go/tools/builders/importcfg.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/stdlib.go](../third_party/rules_go_orchestrion/go/tools/builders/stdlib.go)
-- [third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go](../third_party/rules_go_orchestrion/go/tools/builders/orchestrion.go)
-- [third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion/go/private/orchestrion/extensions.bzl)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go](../third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go)
+- [third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go)
+- [third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl)

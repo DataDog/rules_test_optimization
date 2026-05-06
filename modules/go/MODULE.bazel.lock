@@ -299,7 +299,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "bNtnqMiovUCdZzWRHh45ge2mpZltyETaS2PvYj2H7so=",
+        "bzlTransitiveDigest": "C4tVLGocin+e4RCEZzfEsgY4tXAq1HqutekstS4OKlA=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

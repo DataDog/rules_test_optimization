@@ -676,11 +676,35 @@ if ($env:TESTLOGS_DIR) {
     Dbg "auto-discovered TestlogsDir=$TestlogsDir"
 }
 
+function Resolve-DirectoryPhysicalPath {
+    param([string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($item.LinkType) {
+            try {
+                $target = $item.ResolveLinkTarget($true)
+                if ($target) { return $target.FullName }
+            } catch {
+                Dbg "Resolve-DirectoryPhysicalPath could not resolve link target for '$Path': $($_.Exception.Message)"
+            }
+        }
+        return $item.FullName
+    } catch {
+        return $Path
+    }
+}
+
+# Keep the logical path for messages/context derivation, but walk the physical
+# directory so a workspace bazel-testlogs symlink is handled consistently.
+$TestlogsScanDir = Resolve-DirectoryPhysicalPath $TestlogsDir
+Dbg "using TestlogsScanDir=$TestlogsScanDir"
+
 # Find all test.outputs directories (supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth)
 # Note: -Depth parameter requires PowerShell 7+; on older versions, depth limiting is ignored
 function Find-TestOutputs {
     $params = @{
-        Path = $TestlogsDir
+        Path = $TestlogsScanDir
         Recurse = $true
         Directory = $true
         Filter = "test.outputs"
@@ -724,7 +748,7 @@ function Get-LatestMTimeAll {
         foreach ($subdir in @("payloads/tests", "payloads/coverage", "payloads/telemetry")) {
             $dir = Join-Path $outputsDir.FullName $subdir
             if (-not (Test-Path -LiteralPath $dir)) { continue }
-            $files = Get-ChildItem -Path $dir -Filter "*.json" -File -ErrorAction SilentlyContinue
+            $files = Get-ChildItem -Path $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }
             foreach ($file in $files) {
                 if ($file.LastWriteTime -gt $maxTime) {
                     $maxTime = $file.LastWriteTime
@@ -742,13 +766,13 @@ function Count-PayloadFiles {
         $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
         $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
         if (Test-Path -LiteralPath $testsDir) {
-            $count += @(Get-ChildItem -Path $testsDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+            $count += @(Get-ChildItem -Path $testsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
         }
         if (Test-Path -LiteralPath $covDir) {
-            $count += @(Get-ChildItem -Path $covDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+            $count += @(Get-ChildItem -Path $covDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
         }
         if (Test-Path -LiteralPath $telemetryDir) {
-            $count += @(Get-ChildItem -Path $telemetryDir -Filter "*.json" -File -ErrorAction SilentlyContinue).Count
+            $count += @(Get-ChildItem -Path $telemetryDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
         }
     }
     return $count
@@ -757,7 +781,7 @@ function Count-PayloadFiles {
 # Detect if tests actually ran by looking for test.log or test.xml files
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 function Test-ExecutedTests {
-    $testFiles = Get-ChildItem -Path $TestlogsDir -Recurse -File -Include @("test.log", "test.xml") -ErrorAction SilentlyContinue | Select-Object -First 1
+    $testFiles = Get-ChildItem -Path $TestlogsScanDir -Recurse -File -Include @("test.log", "test.xml") -ErrorAction SilentlyContinue | Select-Object -First 1
     return $null -ne $testFiles
 }
 
@@ -1885,10 +1909,10 @@ function Test-PrefixFilter([string]$FilePath, [string]$ExpectedPrefix) {
     return $basename.StartsWith($ExpectedPrefix)
 }
 
-# Enumerate JSON payload files in deterministic lexicographic order.
+# Enumerate replayable payload files in deterministic lexicographic order.
 function Get-SortedPayloadFiles([string]$DirPath) {
     if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
-    $files = @(Get-ChildItem -Path $DirPath -Filter "*.json" -File -ErrorAction SilentlyContinue)
+    $files = @(Get-ChildItem -Path $DirPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") })
     if ($files.Count -gt 1) {
         [Array]::Sort(
             $files,
@@ -1903,6 +1927,63 @@ function Get-SortedPayloadFiles([string]$DirPath) {
         )
     }
     return $files
+}
+
+# Enumerate Bazel-mode test payload files. Test payloads must stay JSON so the
+# uploader can enrich them with repository and Bazel metadata before upload.
+function Get-SortedTestPayloadFiles([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
+    $files = @(Get-ChildItem -Path $DirPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq ".json" })
+    if ($files.Count -gt 1) {
+        [Array]::Sort(
+            $files,
+            [System.Collections.Generic.Comparer[object]]::Create(
+                [System.Comparison[object]]{
+                    param($left, $right)
+                    $leftName = if ($null -eq $left) { "" } else { [string]$left.Name }
+                    $rightName = if ($null -eq $right) { "" } else { [string]$right.Name }
+                    return [System.StringComparer]::Ordinal.Compare($leftName, $rightName)
+                }
+            )
+        )
+    }
+    return $files
+}
+
+function Get-SortedRawTestMsgpackFiles([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) { return @() }
+    $files = @(Get-ChildItem -Path $DirPath -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq ".msgpack" })
+    if ($files.Count -gt 1) {
+        [Array]::Sort(
+            $files,
+            [System.Collections.Generic.Comparer[object]]::Create(
+                [System.Comparison[object]]{
+                    param($left, $right)
+                    $leftName = if ($null -eq $left) { "" } else { [string]$left.Name }
+                    $rightName = if ($null -eq $right) { "" } else { [string]$right.Name }
+                    return [System.StringComparer]::Ordinal.Compare($leftName, $rightName)
+                }
+            )
+        )
+    }
+    return $files
+}
+
+# Detect whether one replay payload is stored in raw msgpack form.
+function Test-MsgpackPayload([string]$FilePath) {
+    return ([System.StringComparer]::OrdinalIgnoreCase.Compare([System.IO.Path]::GetExtension($FilePath), ".msgpack") -eq 0)
+}
+
+# Select the coverage multipart content type that matches the captured payload.
+function Get-CoveragePayloadContentType([string]$FilePath) {
+    if (Test-MsgpackPayload $FilePath) { return "application/msgpack" }
+    return "application/json"
+}
+
+# Select the coverage multipart filename that matches the captured payload.
+function Get-CoveragePayloadFileName([string]$FilePath) {
+    if (Test-MsgpackPayload $FilePath) { return "filecoveragex.msgpack" }
+    return "filecoveragex.json"
 }
 
 # Delete file unless KeepPayloads is set
@@ -2651,6 +2732,8 @@ function Upload-SingleTest([string]$FilePath) {
 
 function Upload-SingleCoverage([string]$FilePath) {
     $eventFile = Join-Path $script:TmpPayloadDir ("coverage_event_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+    $coverageContentType = Get-CoveragePayloadContentType $FilePath
+    $coverageFileName = Get-CoveragePayloadFileName $FilePath
     # Coverage endpoint expects multipart with an `event` part; a small dummy
     # object is sufficient and matches agentless/EVP server expectations.
     Write-Utf8NoBomFile -Path $eventFile -Content '{"dummy":true}'
@@ -2690,9 +2773,9 @@ function Upload-SingleCoverage([string]$FilePath) {
                 $content.Add($eventContent, 'event', 'fileevent.json')
                 $fs = [System.IO.File]::OpenRead($FilePath)
                 $covContent = New-Object System.Net.Http.StreamContent($fs)
-                $covContent.Headers.ContentType = 'application/json'
-                $content.Add($covContent, 'coveragex', 'filecoveragex.json')
-                Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries; Content-Type=multipart/form-data)"
+                $covContent.Headers.ContentType = $coverageContentType
+                $content.Add($covContent, 'coveragex', $coverageFileName)
+                Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries; Content-Type=multipart/form-data; coveragex=$coverageContentType)"
                 $resp = $client.PostAsync($CovUrl, $content).GetAwaiter().GetResult()
                 if ($resp.IsSuccessStatusCode) {
                     $uploaded = $true
@@ -2794,7 +2877,12 @@ function Upload-AllTests {
     foreach ($outputsDir in $script:TestOutputsCache) {
         $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
         if (-not (Test-Path -LiteralPath $testsDir)) { continue }
-        $files = Get-SortedPayloadFiles $testsDir
+        foreach ($f in @(Get-SortedRawTestMsgpackFiles $testsDir)) {
+            Log "error: raw msgpack test payload is not supported in Bazel file mode: $($f.FullName)"
+            $failed++
+            $script:UploadFailures++
+        }
+        $files = Get-SortedTestPayloadFiles $testsDir
         foreach ($f in $files) {
             if (-not (Test-PrefixFilter $f.FullName "span_events_")) {
                 Dbg "skipping (prefix filter): $($f.FullName)"

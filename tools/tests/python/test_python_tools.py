@@ -302,6 +302,201 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertEqual(0, rc)
 
 
+class TestOptimizationDoctorTests(unittest.TestCase):
+    """Test case group covering TestOptimizationDoctor behaviors."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Load the doctor module once for focused unit tests."""
+        cls.mod = _load_module(
+            "test_optimization_doctor_mod",
+            "tools/core/test_optimization_doctor.py",
+        )
+
+    def test_expected_target_output_mapping(self) -> None:
+        """Validate local Bazel labels map to bazel-testlogs output dirs."""
+        root = Path("/tmp/bazel-testlogs")
+        self.assertEqual(
+            root / "target",
+            self.mod._expected_target_root(root, "//:target"),
+        )
+        self.assertEqual(
+            root / "pkg" / "sub" / "target",
+            self.mod._expected_target_root(root, "//pkg/sub:target"),
+        )
+
+    def test_expected_target_rejects_external_label(self) -> None:
+        """Validate external labels are rejected before path mapping."""
+        with self.assertRaises(SystemExit):
+            self.mod._expected_target_root(Path("/tmp/bazel-testlogs"), "@repo//pkg:test")
+
+    def test_expected_target_outputs_discovers_nested_runs(self) -> None:
+        """Validate expected targets accept retry and shard output layouts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            testlogs = Path(tmp) / "bazel-testlogs"
+            nested = testlogs / "pkg" / "target" / "shard_1_of_2" / "attempt_1" / "test.outputs"
+            nested.mkdir(parents=True)
+
+            self.assertEqual([nested], self.mod._expected_target_outputs(testlogs, "//pkg:target"))
+
+    def test_expected_target_outputs_explains_missing_remote_outputs(self) -> None:
+        """Validate expected target failures explain test execution and remote output download requirements."""
+        with tempfile.TemporaryDirectory() as tmp:
+            testlogs = Path(tmp) / "bazel-testlogs"
+            testlogs.mkdir()
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._expected_target_outputs(testlogs, "//pkg:target")
+            self.assertIn("Run this exact test target before running the doctor", stderr.getvalue())
+            self.assertIn("--remote_download_outputs=all", stderr.getvalue())
+
+    def test_validate_git_metadata_requires_core_tags(self) -> None:
+        """Validate context.json must contain git metadata used by enrichment."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            context = tmp_path / "context.json"
+            manifest = tmp_path / "manifest.txt"
+            context.write_text(
+                json.dumps({
+                    "git.repository_url": "https://github.com/acme/repo.git",
+                    "git.commit.sha": "abc123",
+                    "git.branch": "main",
+                }),
+                encoding="utf-8",
+            )
+            manifest.write_text(f"test_optimization_data\tctx\t{context}\n", encoding="utf-8")
+            self.mod._validate_git_metadata(manifest)
+
+    def test_validate_outputs_rejects_full_bundle_no_match(self) -> None:
+        """Validate invalid Go payload selection fails before upload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.go.payload_selection": "full_bundle_no_match"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_accepts_full_bundle_no_match_when_allowed(self) -> None:
+        """Validate full_bundle_no_match is a real doctor opt-out for known fallback scenarios."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.go.payload_selection": "full_bundle_no_match"}),
+                encoding="utf-8",
+            )
+            self.mod._validate_outputs([output], True, True, False, True)
+
+    def test_validate_outputs_rejects_unknown_payload_selection(self) -> None:
+        """Validate Go payload selection is limited to known safe states."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.go.payload_selection": "unexpected"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_accepts_known_payload_selection(self) -> None:
+        """Validate known Go payload selection values pass the doctor."""
+        for selection in ["module", "module_override", "full_bundle_disabled"]:
+            with self.subTest(selection=selection):
+                with tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp) / "pkg" / "target" / "test.outputs"
+                    payload_dir = output / "payloads" / "tests"
+                    payload_dir.mkdir(parents=True)
+                    (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+                    (output / "bazel_target_metadata.json").write_text(
+                        json.dumps({"bazel.go.payload_selection": selection}),
+                        encoding="utf-8",
+                    )
+                    self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_rejects_msgpack_payloads(self) -> None:
+        """Validate raw msgpack payload files fail the doctor by default."""
+        for filename in ["span_events_1.msgpack", "span_events_1.msgpack.gz"]:
+            with self.subTest(filename=filename):
+                with tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp) / "pkg" / "target" / "test.outputs"
+                    payload_dir = output / "payloads" / "tests"
+                    payload_dir.mkdir(parents=True)
+                    (payload_dir / filename).write_bytes(b"msgpack")
+                    (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+                    with self.assertRaises(SystemExit):
+                        self.mod._validate_outputs([output], False, True, True, True)
+
+    def test_validate_outputs_rejects_msgpack_payloads_when_json_exists(self) -> None:
+        """Validate raw msgpack files fail even when a test also emitted JSON payloads."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            (payload_dir / "span_events_1.msgpack").write_bytes(b"msgpack")
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_validate_outputs_keeps_rejecting_invalid_json(self) -> None:
+        """Validate malformed JSON payloads remain a doctor failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                self.mod._validate_outputs([output], True, True, True, True)
+
+    def test_global_discovery_ignores_plain_bazel_tests(self) -> None:
+        """Validate discovery skips non-instrumented control test outputs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plain = root / "plain" / "go_default_test" / "test.outputs"
+            plain.mkdir(parents=True)
+
+            instrumented = root / "svc" / "go_default_test" / "test.outputs"
+            payload_dir = instrumented / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+
+            self.assertEqual([instrumented], self.mod._discover_candidate_output_dirs(root))
+
+    def test_global_discovery_includes_msgpack_only_outputs(self) -> None:
+        """Validate msgpack-only outputs are still discovered so the doctor can reject them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "svc" / "go_default_test" / "test.outputs"
+            payload_dir = output / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.msgpack").write_bytes(b"msgpack")
+
+            self.assertEqual([output], self.mod._discover_candidate_output_dirs(root))
+
+    def test_bazelrc_validation_ignores_comments(self) -> None:
+        """Validate commented DD_GIT test_env examples are not active config."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / ".bazelrc").write_text(
+                "# test --test_env=DD_" "GIT_BRANCH=main\n"
+                "test --test_env=TZ=UTC # --test_env=DD_" "GIT_COMMIT_SHA=abc\n",
+                encoding="utf-8",
+            )
+            self.mod._validate_bazelrc(workspace)
+
+
 class CheckSchemaParserParityTests(unittest.TestCase):
     """Test case group covering CheckSchemaParserParityTests behaviors."""
     @classmethod
@@ -838,6 +1033,24 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn('log "warning: context enrichment failed for payload:', bash_text)
         self.assertIn('cp "$infile" "$tmpfile"', bash_text)
 
+    def test_uploader_rejects_raw_msgpack_test_payloads(self) -> None:
+        """Validate test uploads keep the Bazel JSON enrichment contract."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("list_sorted_test_payload_files()", bash_text)
+        self.assertIn("list_sorted_raw_test_msgpack_files()", bash_text)
+        self.assertIn("raw msgpack test payload is not supported in Bazel file mode", bash_text)
+        self.assertNotIn("upload_single_test_msgpack", bash_text)
+
+        self.assertIn("function Get-SortedTestPayloadFiles", powershell_text)
+        self.assertIn("function Get-SortedRawTestMsgpackFiles", powershell_text)
+        self.assertIn("raw msgpack test payload is not supported in Bazel file mode", powershell_text)
+        self.assertNotIn("Send-PostMsgpack", powershell_text)
+        self.assertNotIn("Upload-SingleTest: posting raw msgpack", powershell_text)
+
     def test_bash_runtime_prefers_context_override_before_runfiles(self) -> None:
         """Validate bash runtime prefers explicit context override before data files."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
@@ -875,6 +1088,12 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("rc=$?", bash_text)
         self.assertIn('http="${http:-000}"', bash_text)
 
+    def test_bash_runtime_scans_physical_testlogs_path(self) -> None:
+        """Validate bash runtime follows bazel-testlogs symlinks for discovery."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        self.assertIn('TESTLOGS_SCAN_DIR="$(cd "$TESTLOGS_DIR" 2>/dev/null && pwd -P)"', bash_text)
+        self.assertIn('find "$TESTLOGS_SCAN_DIR"', bash_text)
+
     def test_powershell_runtime_temp_and_testlogs_guards(self) -> None:
         """Validate PowerShell runtime temp fallback and TESTLOGS_DIR checks."""
         powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
@@ -884,6 +1103,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("unable to determine a temporary directory (TEMP/GetTempPath)", powershell_text)
         self.assertIn("Test-Path -LiteralPath $env:TESTLOGS_DIR -PathType Container", powershell_text)
         self.assertIn("TESTLOGS_DIR is set but is not a directory", powershell_text)
+        self.assertIn("Resolve-DirectoryPhysicalPath", powershell_text)
+        self.assertIn("Path = $TestlogsScanDir", powershell_text)
 
     def test_powershell_runtime_max_depth_warning(self) -> None:
         """Validate PowerShell runtime emits visible max-depth compatibility warning."""

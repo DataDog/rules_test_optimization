@@ -73,6 +73,7 @@ load(
     _collect_env_from_environ = "collect_env_from_environ",
     _first_env = "first_env",
     _first_env_from_environ = "first_env_from_environ",
+    _normalize_env_data = "normalize_env_data",
     _normalize_ref = "normalize_ref",
     _sanitize_repository_url = "sanitize_repository_url",
     _set_context_tag_from_env = "set_context_tag_from_env",
@@ -475,22 +476,27 @@ def _parse_go_module_path(go_mod_content):
             return rest
     return ""
 
-def _detect_go_module_path(ctx, debug):
+def _detect_go_module_path(ctx, debug, runtime_module_path = ""):
     """Best-effort Go module path detection for export metadata.
 
     Precedence:
     1) `GO_MODULE_PATH` override
-    2) go.mod in known CI workspace directories
-    3) go.mod under git top-level directory
+    2) `runtime_module_path` attr
+    3) go.mod in known CI workspace directories
+    4) go.mod under git top-level directory
     """
 
-    # _detect_go_module_path: best-effort detection of Go module path.
-    # Precedence: GO_MODULE_PATH env > discover go.mod under known workspace envs > git toplevel go.mod
     mod_env = ctx.os.environ.get("GO_MODULE_PATH") or ""
     log_debug(debug, "go", "GO_MODULE_PATH env: %s" % (mod_env or "<unset>"))
     if mod_env:
         log_debug(debug, "go", "Using GO_MODULE_PATH from env")
         return mod_env
+
+    explicit_module_path = (runtime_module_path or "").strip()
+    log_debug(debug, "go", "runtime_module_path attr: %s" % (explicit_module_path or "<unset>"))
+    if explicit_module_path:
+        log_debug(debug, "go", "Using runtime_module_path attr")
+        return explicit_module_path
 
     # Candidate workspace roots
     candidates = []
@@ -515,12 +521,13 @@ def _detect_go_module_path(ctx, debug):
                 log_debug(debug, "go", "Detected module path '%s' from %s" % (mp, go_mod_path))
                 return mp
 
-    # Fallback: try using git to find toplevel go.mod
+    # Fallback: try using git to find toplevel go.mod.
     top = ""
-    if _is_windows(ctx):
-        r = ctx.execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "git rev-parse --show-toplevel"], timeout = 10)
+    workspace_root = str(getattr(ctx, "workspace_root", "") or "")
+    if workspace_root:
+        r = ctx.execute(["git", "-C", workspace_root, "rev-parse", "--show-toplevel"], timeout = 10)
     else:
-        r = ctx.execute(["bash", "-c", "git rev-parse --show-toplevel"], timeout = 10)
+        r = ctx.execute(["git", "rev-parse", "--show-toplevel"], timeout = 10)
     if r.return_code == 0 and r.stdout:
         top = r.stdout.strip()
     log_debug(debug, "go", "git toplevel: %s" % (top or "<unset>"))
@@ -541,13 +548,18 @@ def _runtime_module_path_from_environ(environ, env_key):
     """Return a normalized runtime module path override from environment."""
     return (environ.get(env_key) or "").strip()
 
-def _detect_runtime_module_path_from_env(ctx, debug, runtime_name, env_key):
-    """Return runtime module path override from env for non-Go runtimes."""
+def _detect_runtime_module_path(ctx, debug, runtime_name, env_key, runtime_module_path = ""):
+    """Return explicit runtime module path metadata with env-first precedence."""
     module_path = _runtime_module_path_from_environ(ctx.os.environ, env_key)
     log_debug(debug, runtime_name, "%s env: %s" % (env_key, module_path or "<unset>"))
     if module_path:
         log_debug(debug, runtime_name, "Using %s from env" % env_key)
-    return module_path
+        return module_path
+    explicit_module_path = (runtime_module_path or "").strip()
+    log_debug(debug, runtime_name, "runtime_module_path attr: %s" % (explicit_module_path or "<unset>"))
+    if explicit_module_path:
+        log_debug(debug, runtime_name, "Using runtime_module_path attr")
+    return explicit_module_path
 
 def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_filename, label_map = None):
     """Split one payload JSON map into per-module canonical files."""
@@ -1541,7 +1553,9 @@ sanitize_repository_url_for_tests = _sanitize_repository_url
 apply_dd_git_overrides_for_tests = _apply_dd_git_overrides
 set_context_tag_from_env_for_tests = _set_context_tag_from_env
 parse_go_module_path_for_tests = _parse_go_module_path
+detect_go_module_path_for_tests = _detect_go_module_path
 runtime_module_path_from_environ_for_tests = _runtime_module_path_from_environ
+detect_runtime_module_path_for_tests = _detect_runtime_module_path
 dirname_for_tests = _dirname
 normalize_out_dir_or_fail_for_tests = _normalize_out_dir_or_fail
 render_export_bzl_for_tests = _render_export_bzl
@@ -1604,6 +1618,128 @@ def _git_output_from_workspace(ctx, workspace_path, git_args):
     if result.return_code != 0:
         return ""
     return (result.stdout or "").strip()
+
+def _path_join_for_host(ctx, *parts):
+    """Join path fragments using the repository host's path separator."""
+    sep = "\\" if _is_windows(ctx) else "/"
+    cleaned = []
+    for index, part in enumerate(parts):
+        text = str(part or "")
+        if not text:
+            continue
+        if index == 0:
+            cleaned.append(text.rstrip("/\\"))
+        else:
+            cleaned.append(text.strip("/\\"))
+    return sep.join(cleaned)
+
+def _looks_absolute_path(path):
+    """Return whether a path string is already absolute on Unix or Windows."""
+    if not path:
+        return False
+    if path.startswith("/") or path.startswith("\\\\"):
+        return True
+    return len(path) > 2 and path[1] == ":" and (path[2] == "\\" or path[2] == "/")
+
+def _path_exists(ctx, path):
+    """Best-effort repository_ctx path existence check."""
+    return bool(path) and ctx.path(path).exists
+
+def _watch_path_if_exists(ctx, path):
+    """Watch one concrete path if Bazel and the filesystem expose it."""
+    if not path or not hasattr(ctx, "watch"):
+        return
+    if not _path_exists(ctx, path):
+        return
+    ctx.watch(ctx.path(path))
+
+def _gitdir_from_workspace(ctx, workspace_path):
+    """Resolve the checkout's gitdir and watch concrete files that affect metadata."""
+    dot_git = _path_join_for_host(ctx, workspace_path, ".git")
+    git_dir = dot_git
+    if _path_exists(ctx, dot_git) and not ctx.path(dot_git).is_dir:
+        _watch_path_if_exists(ctx, dot_git)
+        content = ctx.read(ctx.path(dot_git)).strip()
+        prefix = "gitdir:"
+        if content.startswith(prefix):
+            candidate = content[len(prefix):].strip()
+            git_dir = candidate if _looks_absolute_path(candidate) else _path_join_for_host(ctx, workspace_path, candidate)
+
+    head_path = _path_join_for_host(ctx, git_dir, "HEAD")
+    _watch_path_if_exists(ctx, head_path)
+    _watch_path_if_exists(ctx, _path_join_for_host(ctx, git_dir, "config"))
+    _watch_path_if_exists(ctx, _path_join_for_host(ctx, git_dir, "packed-refs"))
+
+    if _path_exists(ctx, head_path):
+        head_content = ctx.read(ctx.path(head_path)).strip()
+        ref_prefix = "ref:"
+        if head_content.startswith(ref_prefix):
+            ref_name = head_content[len(ref_prefix):].strip()
+            _watch_path_if_exists(ctx, _path_join_for_host(ctx, git_dir, ref_name))
+    return git_dir
+
+def _populate_local_git_metadata(ctx, env_data):
+    """Fill missing git metadata from the local workspace checkout.
+
+    The fallback is intentionally conservative: provider metadata and explicit
+    DD_GIT_* overrides remain authoritative, and this helper only fills empty
+    fields before those overrides are applied.
+    """
+    workspace_path = str(getattr(ctx, "workspace_root", "") or "")
+    if not workspace_path:
+        return
+
+    _gitdir_from_workspace(ctx, workspace_path)
+
+    if not env_data.get("repository_url"):
+        remote_url = _git_output_from_workspace(ctx, workspace_path, ["config", "--get", "remote.origin.url"])
+        if remote_url:
+            env_data["repository_url"] = _sanitize_repository_url(remote_url)
+
+    if not env_data.get("sha"):
+        env_data["sha"] = _git_output_from_workspace(ctx, workspace_path, ["rev-parse", "--verify", "HEAD"])
+
+    if not env_data.get("head_sha") and env_data.get("sha"):
+        env_data["head_sha"] = env_data.get("sha")
+
+    if not env_data.get("branch") and not env_data.get("tag"):
+        branch = _git_output_from_workspace(ctx, workspace_path, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+        if branch:
+            env_data["branch"] = _normalize_ref(branch)
+        else:
+            tag = _git_output_from_workspace(ctx, workspace_path, ["describe", "--tags", "--exact-match", "HEAD"])
+            if tag:
+                env_data["tag"] = _normalize_ref(tag)
+
+    _normalize_env_data(env_data)
+    _populate_git_revision_metadata(ctx, env_data, workspace_path, env_data.get("sha") or "", "commit_")
+    _populate_git_revision_metadata(ctx, env_data, workspace_path, env_data.get("head_sha") or "", "head_")
+
+def _missing_required_git_metadata(env_data):
+    """Return missing settings-request metadata fields for strict sync mode."""
+    missing = []
+    if not env_data.get("repository_url"):
+        missing.append("repository_url/DD_GIT_REPOSITORY_URL")
+    if not env_data.get("branch") and not env_data.get("tag"):
+        missing.append("branch_or_tag/DD_GIT_BRANCH or DD_GIT_TAG")
+    if not env_data.get("sha"):
+        missing.append("sha/DD_GIT_COMMIT_SHA")
+    return missing
+
+def _validate_required_git_metadata_or_fail(env_data, require_git_metadata):
+    """Fail early when strict sync mode lacks metadata required by settings."""
+    if not require_git_metadata:
+        return
+    missing = _missing_required_git_metadata(env_data)
+    if not missing:
+        return
+    fail(
+        (
+            "test_optimization_sync(require_git_metadata = True) could not resolve required git metadata before calling Datadog settings: %s. " +
+            "Run from a branch/tag checkout or pass DD_GIT_REPOSITORY_URL, DD_GIT_BRANCH or DD_GIT_TAG, and DD_GIT_COMMIT_SHA via --repo_env."
+        ) %
+        ", ".join(missing),
+    )
 
 def _populate_git_revision_metadata(ctx, env_data, workspace_path, revision, key_prefix):
     """Fill missing message/author/committer fields for one git revision."""
@@ -1676,17 +1812,24 @@ def _populate_missing_git_metadata(ctx, env_data):
 
 def _collect_env(ctx):
     """Collect CI/git/service context into a normalized metadata dict."""
+    environ = ctx.os.environ
     env_data = _collect_env_from_environ(
-        ctx.os.environ,
+        environ,
         getattr(ctx.attr, "service", None),
         _load_github_event_payload(ctx),
+        apply_dd_git = False,
     )
+    _populate_local_git_metadata(ctx, env_data)
+    _apply_dd_git_overrides(env_data, environ)
+    _normalize_env_data(env_data)
     _populate_missing_git_metadata(ctx, env_data)
     return env_data
 
 # Public aliases for tests (helpers defined after the first alias section).
 collect_env_for_tests = _collect_env
 collect_env_from_environ_for_tests = _collect_env_from_environ
+populate_local_git_metadata_for_tests = _populate_local_git_metadata
+missing_required_git_metadata_for_tests = _missing_required_git_metadata
 load_github_event_payload_for_tests = _load_github_event_payload
 build_windows_read_abs_file_command_for_tests = _build_windows_read_abs_file_command
 build_unix_read_abs_file_command_for_tests = _build_unix_read_abs_file_command
@@ -2156,6 +2299,7 @@ def _impl(ctx):
     raw_service = env_data.get("service")
     validated_service = validate_service_name(raw_service, debug)
     env_data["service"] = validated_service
+    _validate_required_git_metadata_or_fail(env_data, ctx.attr.require_git_metadata)
 
     log_debug(debug, "validation", "Env data collected and validated")
 
@@ -2402,17 +2546,53 @@ def _impl(ctx):
     ctx.file(telemetry_facts_file, json.encode(telemetry_facts) + "\n")
 
     # Emit helper runtime metadata for downstream macros.
-    go_module_path = _detect_go_module_path(ctx, debug)
+    runtime_module_path = (ctx.attr.runtime_module_path or "").strip()
+    runtime_name = (ctx.attr.runtime_name or "").strip()
+    go_module_path = _detect_go_module_path(
+        ctx,
+        debug,
+        runtime_module_path if runtime_name == "" or runtime_name == "go" else "",
+    )
     sanitized_go_module_path = sanitize_label_fragment(go_module_path) if go_module_path else ""
-    python_module_path = _detect_runtime_module_path_from_env(ctx, debug, "python", "PYTHON_MODULE_PATH")
+    python_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "python",
+        "PYTHON_MODULE_PATH",
+        runtime_module_path if runtime_name == "python" else "",
+    )
     sanitized_python_module_path = sanitize_label_fragment(python_module_path) if python_module_path else ""
-    java_module_path = _detect_runtime_module_path_from_env(ctx, debug, "java", "JAVA_MODULE_PATH")
+    java_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "java",
+        "JAVA_MODULE_PATH",
+        runtime_module_path if runtime_name == "java" else "",
+    )
     sanitized_java_module_path = sanitize_label_fragment(java_module_path) if java_module_path else ""
-    nodejs_module_path = _detect_runtime_module_path_from_env(ctx, debug, "nodejs", "NODEJS_MODULE_PATH")
+    nodejs_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "nodejs",
+        "NODEJS_MODULE_PATH",
+        runtime_module_path if runtime_name == "nodejs" else "",
+    )
     sanitized_nodejs_module_path = sanitize_label_fragment(nodejs_module_path) if nodejs_module_path else ""
-    dotnet_module_path = _detect_runtime_module_path_from_env(ctx, debug, "dotnet", "DOTNET_MODULE_PATH")
+    dotnet_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "dotnet",
+        "DOTNET_MODULE_PATH",
+        runtime_module_path if runtime_name == "dotnet" else "",
+    )
     sanitized_dotnet_module_path = sanitize_label_fragment(dotnet_module_path) if dotnet_module_path else ""
-    ruby_module_path = _detect_runtime_module_path_from_env(ctx, debug, "ruby", "RUBY_MODULE_PATH")
+    ruby_module_path = _detect_runtime_module_path(
+        ctx,
+        debug,
+        "ruby",
+        "RUBY_MODULE_PATH",
+        runtime_module_path if runtime_name == "ruby" else "",
+    )
     sanitized_ruby_module_path = sanitize_label_fragment(ruby_module_path) if ruby_module_path else ""
 
     # Build a modules index for per-module filegroups (labels are sanitized suffixes)
@@ -2615,6 +2795,7 @@ test_optimization_sync = repository_rule(
         "runtime_name": attr.string(),
         "runtime_version": attr.string(),
         "runtime_arch": attr.string(),
+        "runtime_module_path": attr.string(),
         # Optional HTTP timeout/retry policy overrides.
         # Use -1 to keep default/env behavior.
         "http_connect_timeout_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
@@ -2632,6 +2813,7 @@ test_optimization_sync = repository_rule(
         "known_tests": attr.bool(default = True),
         "test_management": attr.bool(default = True),
         "flaky_tests": attr.bool(default = True),
+        "require_git_metadata": attr.bool(default = False),
         "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
     environ = [
@@ -2729,6 +2911,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 runtime_name = test_optimization_call.runtime_name,
                 runtime_version = test_optimization_call.runtime_version,
                 runtime_arch = test_optimization_call.runtime_arch,
+                runtime_module_path = test_optimization_call.runtime_module_path,
                 http_connect_timeout_seconds = test_optimization_call.http_connect_timeout_seconds,
                 http_max_time_seconds = test_optimization_call.http_max_time_seconds,
                 http_retry_attempts = test_optimization_call.http_retry_attempts,
@@ -2737,6 +2920,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 known_tests = test_optimization_call.known_tests,
                 test_management = test_optimization_call.test_management,
                 flaky_tests = test_optimization_call.flaky_tests,
+                require_git_metadata = test_optimization_call.require_git_metadata,
                 debug = call_debug,
             )
 
@@ -2754,6 +2938,7 @@ test_optimization_sync_extension = module_extension(
             "runtime_name": attr.string(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            "runtime_module_path": attr.string(),
             # Optional HTTP timeout/retry policy overrides.
             # Use -1 to keep default/env behavior.
             "http_connect_timeout_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
@@ -2765,6 +2950,7 @@ test_optimization_sync_extension = module_extension(
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "flaky_tests": attr.bool(default = True),
+            "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),
     },

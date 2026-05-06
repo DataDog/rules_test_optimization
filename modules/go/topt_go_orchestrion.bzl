@@ -64,7 +64,7 @@ if [[ -n "$metadata_basename" && -n "$undeclared_dir" ]]; then
   fi
 fi
 
-exec "$actual" "$@"
+"$actual" "$@"
 """ % (actual_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
 def _windows_wrapper_content(actual_filename):
@@ -87,8 +87,6 @@ if not "%%META_BASENAME%%"=="" if not "%%UNDECLARED_DIR%%"=="" (
 )
 
 "%%ACTUAL%%" %%*
-set "EXITCODE=%%ERRORLEVEL%%"
-exit /b %%EXITCODE%%
 """ % (
         actual_filename.replace("/", "\\"),
         _BAZEL_TARGET_METADATA_OUTPUT,
@@ -104,6 +102,7 @@ def _orch_go_test_impl(ctx):
     # Materialize the raw test binary next to the wrapper so the launcher does
     # not have to guess which configuration-specific execroot path Bazel chose.
     ctx.actions.symlink(output = actual_out, target_file = dep_exe)
+
     ctx.actions.write(
         output = out,
         content = _windows_wrapper_content(actual_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename),
@@ -136,3 +135,4 @@ orch_go_test = rule(
 )
 
 select_wrapper_output_name_for_tests = _select_wrapper_output_name
+windows_wrapper_content_for_tests = _windows_wrapper_content

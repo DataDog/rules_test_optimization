@@ -31,23 +31,46 @@ ARCHIVE_PATH="$TMP_ROOT/${ARCHIVE_NAME}.tar.gz"
 PYTHON="${PYTHON:-python3}"
 GO_BIN="${GO_BIN:-go}"
 BAZEL="${BAZEL:-$REPO_ROOT/bazelw}"
+BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion")}"
+# Keep Bazel's output roots inside the fixture temp tree so each CI step can
+# release downloaded SDKs, extracted repos, and sandbox outputs during cleanup.
+BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev.0.20260409102143-ddd4e03ab47d}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-dev.0.20260416093245-194346a71c51}"
 SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
 OUT_DIR="${OUT_DIR:-custom_topt}"
+HELLO_TEST_TARGET="${HELLO_TEST_TARGET:-//app:hello_test}"
+INTEGRATION_SCENARIO_MODE="${INTEGRATION_SCENARIO_MODE:-full}"
+MEASURE_OUTPUT_PATH="${MEASURE_OUTPUT_PATH:-}"
 ARCHIVE_SHA256=""
 ARCHIVE_URL=""
+RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
+HERMETIC_BUILD_FLAGS=(
+  --spawn_strategy=sandboxed
+  --incompatible_strict_action_env
+  --sandbox_default_allow_network=false
+  --enable_runfiles
+)
+HERMETIC_TEST_FLAGS=(
+  --strategy=TestRunner=sandboxed
+  --modify_execution_info=TestRunner=+block-network
+  --test_env=TZ=UTC
+  --test_env=LANG=C
+  --test_env=LC_ALL=C
+)
 
 cleanup() {
+  USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown >/dev/null 2>&1 || true
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
     return
   fi
+  chmod -R u+w "$TMP_ROOT" 2>/dev/null || true
   rm -rf "$TMP_ROOT"
 }
 trap cleanup EXIT INT TERM HUP
@@ -73,6 +96,15 @@ fi
 require_command "$GO_BIN" "go binary not found (tried '$GO_BIN')"
 require_command tar "tar is required for the WORKSPACE archive fixture"
 
+case "$RULES_GO_VARIANT" in
+  base|complete)
+    ;;
+  *)
+    echo "error: RULES_GO_VARIANT must be 'base' or 'complete', got '$RULES_GO_VARIANT'" >&2
+    exit 1
+    ;;
+esac
+
 bzl_quote() {
   "$PYTHON" - <<'PY' "$1"
 import json
@@ -96,14 +128,91 @@ sha256_file() {
   exit 1
 }
 
+wall_time_ns() {
+  "$PYTHON" - <<'PY'
+import time
+print(time.time_ns())
+PY
+}
+
+module_proxy_size_bytes() {
+  local output_base="$1"
+  "$PYTHON" - <<'PY' "$output_base"
+from pathlib import Path
+import sys
+
+external_root = Path(sys.argv[1]) / "external"
+candidates = sorted(external_root.glob("*rules_go_orchestrion_tool*/module_proxy"))
+if not candidates:
+    print(0)
+    raise SystemExit(0)
+total = 0
+for path in candidates[0].rglob("*"):
+    if path.is_file():
+        total += path.stat().st_size
+print(total)
+PY
+}
+
+write_measure_json() {
+  local elapsed_seconds="$1"
+  local module_proxy_size="$2"
+  local output_path="$3"
+  "$PYTHON" - <<'PY' "$elapsed_seconds" "$module_proxy_size" "$output_path"
+import json
+import sys
+
+payload = {
+    "mode": "workspace",
+    "elapsed_seconds": float(sys.argv[1]),
+    "module_proxy_size_bytes": int(sys.argv[2]),
+}
+with open(sys.argv[3], "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, sort_keys=True)
+    fh.write("\n")
+PY
+}
+
+assert_json_test_payloads() {
+  local ws_dir="$1"
+  local mode="$2"
+  local payload_dir="$ws_dir/bazel-testlogs/app/hello_test/test.outputs/payloads/tests"
+
+  if [[ ! -d "$payload_dir" ]]; then
+    echo "error: $mode did not create test payload directory $payload_dir" >&2
+    exit 1
+  fi
+
+  "$PYTHON" - <<'PY' "$payload_dir" "$mode"
+import json
+from pathlib import Path
+import sys
+
+payload_dir = Path(sys.argv[1])
+mode = sys.argv[2]
+json_files = sorted(payload_dir.glob("*.json"))
+msgpack_files = sorted(payload_dir.glob("*.msgpack"))
+if not json_files:
+    raise SystemExit(f"error: {mode} did not emit JSON test payloads in {payload_dir}")
+if msgpack_files:
+    names = ", ".join(path.name for path in msgpack_files)
+    raise SystemExit(f"error: {mode} emitted raw msgpack test payloads instead of RFC JSON files: {names}")
+for path in json_files:
+    with path.open(encoding="utf-8") as fh:
+        json.load(fh)
+PY
+}
+
 create_fixture_archive() {
   local root_dir="$ARCHIVE_ROOT/$ARCHIVE_NAME"
 
   rm -rf "$ARCHIVE_ROOT"
-  mkdir -p "$root_dir/modules" "$root_dir/third_party"
+  mkdir -p "$root_dir/modules"
+  cp "$REPO_ROOT/MODULE.bazel" "$root_dir/MODULE.bazel"
+  cp "$REPO_ROOT/WORKSPACE" "$root_dir/WORKSPACE"
   cp -R "$REPO_ROOT/tools" "$root_dir/tools"
   cp -R "$REPO_ROOT/modules/go" "$root_dir/modules/go"
-  cp -R "$REPO_ROOT/third_party/rules_go_orchestrion" "$root_dir/third_party/rules_go_orchestrion"
+  cp -R "$REPO_ROOT/third_party" "$root_dir/third_party"
   (
     cd "$ARCHIVE_ROOT"
     tar -czf "$ARCHIVE_PATH" "$ARCHIVE_NAME"
@@ -127,7 +236,8 @@ exports_files([
 EOF
 
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+load("@io_bazel_rules_go//go/private/rules:transition.bzl", "go_reset_target")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
@@ -137,9 +247,21 @@ go_library(
     importpath = "${MODULE_IMPORTPATH}",
 )
 
+go_binary(
+    name = "fixture_tool",
+    srcs = ["fixture_tool.go"],
+    importpath = "${MODULE_IMPORTPATH}/fixture_tool",
+)
+
+go_reset_target(
+    name = "fixture_tool_reset",
+    dep = ":fixture_tool",
+)
+
 dd_topt_go_test(
     name = "hello_test",
     srcs = ["hello_test.go"],
+    data = [":fixture_tool_reset"],
     embed = [":hello_lib"],
     orchestrion_pin_files = [
         "//:go.mod",
@@ -159,6 +281,12 @@ func greeting() string {
 }
 EOF
 
+  cat > "$ws_dir/app/fixture_tool.go" <<'EOF'
+package main
+
+func main() {}
+EOF
+
   cat > "$ws_dir/app/hello_test.go" <<EOF
 package main
 
@@ -175,6 +303,9 @@ const (
 	wantServiceName = "${SERVICE_NAME}"
 	wantModuleLabel = "${MODULE_LABEL}"
 	wantOutDir = "${OUT_DIR}"
+	wantBazelPackage = "//app"
+	wantBazelTarget = "//app:hello_test"
+	wantModuleImportpath = "${MODULE_IMPORTPATH}"
 	wantOrchestrionEnabled = true
 )
 
@@ -219,6 +350,15 @@ func TestGreeting(t *testing.T) {
 func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if got := os.Getenv("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"); got != "true" {
 		t.Fatalf("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = %q, want true", got)
+	}
+	if got := os.Getenv("DD_TRACE_AGENT_URL"); got != "" {
+		t.Fatalf("DD_TRACE_AGENT_URL = %q, want unset so Bazel file mode is not proxied", got)
+	}
+	if got := os.Getenv("DD_CIVISIBILITY_AGENTLESS_ENABLED"); got != "" {
+		t.Fatalf("DD_CIVISIBILITY_AGENTLESS_ENABLED = %q, want unset so Bazel file mode is not proxied", got)
+	}
+	if got := os.Getenv("DD_CIVISIBILITY_AGENTLESS_URL"); got != "" {
+		t.Fatalf("DD_CIVISIBILITY_AGENTLESS_URL = %q, want unset so Bazel file mode is not proxied", got)
 	}
 	if got := os.Getenv("DD_SERVICE"); got != wantServiceName {
 		t.Fatalf("DD_SERVICE = %q, want %s", got, wantServiceName)
@@ -278,11 +418,33 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if err := json.Unmarshal(metadataContent, &metadata); err != nil {
 		t.Fatalf("decode bazel_target_metadata.json: %v", err)
 	}
+	wantMetadataStrings := map[string]string{
+		"bazel.package": wantBazelPackage,
+		"bazel.target": wantBazelTarget,
+		"bazel.test_optimization.repo_name": "test_optimization_data",
+		"bazel.test_optimization.service_name": wantServiceName,
+		"bazel.test_optimization.runtime_name": "go",
+		"bazel.go.importpath": wantModuleImportpath,
+		"bazel.go.importpath_source": "inferred",
+		"bazel.go.payload_selection": "module",
+		"bazel.go.attr.pure": "auto",
+		"bazel.go.attr.race": "auto",
+		"bazel.go.attr.msan": "auto",
+		"bazel.go.attr.linkmode": "auto",
+	}
+	for key, want := range wantMetadataStrings {
+		if got, _ := metadata[key].(string); got != want {
+			t.Fatalf("%s = %v, want %q", key, metadata[key], want)
+		}
+	}
 	if got, _ := metadata["bazel.go.payload_selection"].(string); got != "module" {
 		t.Fatalf("bazel.go.payload_selection = %v, want module", metadata["bazel.go.payload_selection"])
 	}
 	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
 		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
+	}
+	if got, _ := metadata["bazel.go.attr.cgo"].(bool); got {
+		t.Fatalf("bazel.go.attr.cgo = %v, want false", metadata["bazel.go.attr.cgo"])
 	}
 }
 EOF
@@ -299,6 +461,7 @@ require (
 	github.com/DataDog/orchestrion ${ORCHESTRION_VERSION}
 )
 EOF
+  write_orchestrion_go_sum "$ws_dir"
 
   cat > "$ws_dir/orchestrion.tool.go" <<'EOF'
 //go:build tools
@@ -323,6 +486,32 @@ aspects: []
 EOF
 }
 
+# write_orchestrion_go_sum keeps the maintained fixture on a real checked-in
+# style go.sum for the default tracer/tool versions. Only ad hoc version
+# overrides fall back to generating go.sum dynamically.
+write_orchestrion_go_sum() {
+  local ws_dir="$1"
+
+  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0-dev.0.20260416093245-194346a71c51" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
+    cat > "$ws_dir/go.sum" <<'EOF'
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev.0.20260416093245-194346a71c51 h1:03H0QyfGKLE3DXw2WXCmN1+ewZ0zwkCUa/IdaBjTC90=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev.0.20260416093245-194346a71c51/go.mod h1:A1OBuqc+Hvqd5qDd72PcxgGyTG/pOoiOzL26myJBxLM=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev.0.20260416093245-194346a71c51 h1:afxqmyEMasZwKrrfApPpmZrnJTQGryniS24tksEUcCE=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev.0.20260416093245-194346a71c51/go.mod h1:WFpNwr9EAQZj2/EXlpm/b1N5BWVkGUUnNudzK4SICTU=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev.0.20260416093245-194346a71c51 h1:kNNsnqUxZi+6Rac4yFH6fsQGG0km84pSLkfSN6D7Be0=
+github.com/DataDog/dd-trace-go/v2 v2.9.0-dev.0.20260416093245-194346a71c51/go.mod h1:IVkBpsq66Cw/YIRM/Te3pl2F0M9n4zguAB2ReGczWeo=
+github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=
+github.com/DataDog/orchestrion v1.6.0/go.mod h1:CYY2VfaEQVr+gwKSlpUoHBF9JIO4eV3BfSeG0YAQwZE=
+EOF
+    return
+  fi
+
+  (
+    cd "$ws_dir"
+    GOWORK=off "$GO_BIN" mod download all
+  )
+}
+
 write_positive_workspace() {
   local ws_dir="$1"
   local repo_mode="$2"
@@ -332,7 +521,7 @@ write_positive_workspace() {
   local archive_url_bzl
 
   repo_root_bzl="$(bzl_quote "$REPO_ROOT")"
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
+  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}")"
   companion_root_bzl="$(bzl_quote "$REPO_ROOT/modules/go")"
   archive_url_bzl="$(bzl_quote "$ARCHIVE_URL")"
 
@@ -374,21 +563,17 @@ http_archive(
     strip_prefix = "${ARCHIVE_NAME}",
 )
 
-http_archive(
-    name = "io_bazel_rules_go",
-    urls = [${archive_url_bzl}],
-    sha256 = "${ARCHIVE_SHA256}",
-    strip_prefix = "${ARCHIVE_NAME}/third_party/rules_go_orchestrion",
-)
+load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
 
-http_archive(
-    name = "datadog-rules-test-optimization-go",
-    urls = [${archive_url_bzl}],
-    sha256 = "${ARCHIVE_SHA256}",
-    strip_prefix = "${ARCHIVE_NAME}/modules/go",
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "local-archive-fixture",
+    datadog_fetch = "archive",
+    rules_go_fetch = "archive",
+    rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_variant = "${RULES_GO_VARIANT}",
+    rto_archive_url = ${archive_url_bzl},
+    rto_archive_sha256 = "${ARCHIVE_SHA256}",
+    rto_archive_prefix = "${ARCHIVE_NAME}",
 )
 EOF
   fi
@@ -439,7 +624,7 @@ write_invalid_workspace() {
   local scenario="$2"
   local rules_go_fork_bzl
 
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion")"
+  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}")"
 
   cat > "$ws_dir/WORKSPACE" <<EOF
 workspace(name = "workspace_go_invalid_${scenario}")
@@ -493,20 +678,105 @@ run_positive_fixture() {
   mkdir -p "$ws_dir"
   write_positive_workspace "$ws_dir" "$repo_mode"
   write_shared_fixture_sources "$ws_dir"
+  if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
+    run_positive_subscenario "$ws_dir" "hermetic"
+    return
+  fi
+  run_positive_subscenario "$ws_dir" "standard"
+  run_positive_subscenario "$ws_dir" "hermetic"
+}
+
+# run_positive_subscenario executes the positive fixture in standard or hermetic
+# mode. The hermetic lane also validates the declared action graph through
+# aquery instead of relying on runtime effects alone.
+run_positive_subscenario() {
+  local ws_dir="$1"
+  local mode="$2"
+  local -a workspace_flags=(--noenable_bzlmod --enable_workspace)
+
+  if [[ "$mode" == "standard" ]]; then
+    (
+      cd "$ws_dir"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test "${workspace_flags[@]}" "$HELLO_TEST_TARGET"
+    )
+    assert_json_test_payloads "$ws_dir" "$mode"
+    return
+  fi
+
+  if [[ "$mode" != "hermetic" ]]; then
+    echo "error: unsupported workspace-go subscenario mode=$mode" >&2
+    exit 1
+  fi
+
+  local hermetic_root="$ws_dir/.hermetic"
+  local hermetic_home="$hermetic_root/home"
+  local hermetic_xdg="$hermetic_root/xdg-cache"
+  local aquery_output="$hermetic_root/hello_test_aquery.textproto"
+  local output_base=""
+  local start_ns=""
+  local end_ns=""
+  local elapsed_seconds=""
+  local proxy_size_bytes=""
+  mkdir -p "$hermetic_home" "$hermetic_xdg"
+
+  if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
+    (
+      cd "$ws_dir"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+        "${workspace_flags[@]}" \
+        "deps(${HELLO_TEST_TARGET})" \
+        --output=textproto > /dev/null
+    )
+    (
+      cd "$ws_dir"
+      output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${workspace_flags[@]}" output_base)"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
+      start_ns="$(wall_time_ns)"
+      HOME="$hermetic_home" \
+      XDG_CACHE_HOME="$hermetic_xdg" \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+        "${workspace_flags[@]}" \
+        "${HERMETIC_BUILD_FLAGS[@]}" \
+        "${HERMETIC_TEST_FLAGS[@]}" \
+        "$HELLO_TEST_TARGET"
+      end_ns="$(wall_time_ns)"
+      elapsed_seconds="$("$PYTHON" - <<'PY' "$start_ns" "$end_ns"
+import sys
+start_ns = int(sys.argv[1])
+end_ns = int(sys.argv[2])
+print(f"{(end_ns - start_ns) / 1_000_000_000:.6f}")
+PY
+)"
+      proxy_size_bytes="$(module_proxy_size_bytes "$output_base")"
+      write_measure_json "$elapsed_seconds" "$proxy_size_bytes" "$MEASURE_OUTPUT_PATH"
+    )
+    return
+  fi
 
   (
     cd "$ws_dir"
-    GOWORK=off "$GO_BIN" mod download \
-      github.com/DataDog/orchestrion \
-      github.com/DataDog/dd-trace-go/v2 \
-      github.com/DataDog/dd-trace-go/contrib/net/http/v2 \
-      github.com/DataDog/dd-trace-go/contrib/log/slog/v2
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      "${HERMETIC_TEST_FLAGS[@]}" \
+      "$HELLO_TEST_TARGET"
   )
+  assert_json_test_payloads "$ws_dir" "$mode"
 
   (
     cd "$ws_dir"
-    "$BAZEL" test --noenable_bzlmod --enable_workspace //app:hello_test
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      "deps(${HELLO_TEST_TARGET})" \
+      --output=textproto > "$aquery_output"
   )
+
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" "$aquery_output"
 }
 
 run_expected_failure() {
@@ -522,7 +792,7 @@ run_expected_failure() {
   set +e
   (
     cd "$ws_dir"
-    "$BAZEL" query --noenable_bzlmod --enable_workspace //:probe
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query --noenable_bzlmod --enable_workspace //:probe
   ) >"$output_path" 2>&1
   local rc=$?
   set -e
@@ -542,6 +812,20 @@ run_expected_failure() {
 
 mkdir -p "$WORKSPACE_ROOT"
 create_fixture_archive
+
+if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
+  if [[ -z "$MEASURE_OUTPUT_PATH" ]]; then
+    echo "error: MEASURE_OUTPUT_PATH is required when INTEGRATION_SCENARIO_MODE=measure" >&2
+    exit 1
+  fi
+  run_positive_fixture "archive"
+  exit 0
+fi
+
+if [[ "$INTEGRATION_SCENARIO_MODE" != "full" ]]; then
+  echo "error: unsupported INTEGRATION_SCENARIO_MODE=$INTEGRATION_SCENARIO_MODE" >&2
+  exit 1
+fi
 
 run_positive_fixture "local"
 run_positive_fixture "archive"

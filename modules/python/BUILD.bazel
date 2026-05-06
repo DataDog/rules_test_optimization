@@ -1,4 +1,8 @@
-exports_files([
-    "topt_py_test.bzl",
-    "topt_py_infer.bzl",
-], visibility = ["//visibility:public"])
+exports_files(
+    [
+        "run_pytest.py",
+        "topt_py_infer.bzl",
+        "topt_py_test.bzl",
+    ],
+    visibility = ["//visibility:public"],
+)

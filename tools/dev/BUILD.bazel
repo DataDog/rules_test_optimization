@@ -11,4 +11,5 @@ exports_files([
     "orchestrion_stub.bzl",
     "python_bootstrap.bzl",
     "ruby_bootstrap.bzl",
+    "verify_rules_go_variants.py",
 ], visibility = ["//visibility:public"])

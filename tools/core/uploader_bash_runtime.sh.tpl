@@ -700,6 +700,15 @@ else
     dbg "auto-discovered TESTLOGS_DIR=$TESTLOGS_DIR"
 fi
 
+# Keep the logical path for messages/context derivation, but walk the physical
+# directory so a workspace `bazel-testlogs` symlink is handled consistently.
+if TESTLOGS_SCAN_DIR="$(cd "$TESTLOGS_DIR" 2>/dev/null && pwd -P)"; then
+    dbg "using TESTLOGS_SCAN_DIR=$TESTLOGS_SCAN_DIR"
+else
+    log "error: failed to resolve testlogs directory for scanning: $TESTLOGS_DIR"
+    exit 2
+fi
+
 # Find all test.outputs directories
 # Supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth for large testlogs trees
 MAX_DEPTH=${DD_TEST_OPTIMIZATION_MAX_DEPTH:-0}
@@ -710,7 +719,7 @@ find_test_outputs() {
         depth_args=(-maxdepth "$MAX_DEPTH")
         dbg "limiting find depth to $MAX_DEPTH"
     fi
-    find "$TESTLOGS_DIR" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null | LC_ALL=C sort || true
+    find "$TESTLOGS_SCAN_DIR" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null | LC_ALL=C sort || true
 }
 
 # Warn if MAX_DEPTH is set and no test.outputs found (likely depth too shallow)
@@ -742,9 +751,9 @@ latest_mtime_all() {
             [[ -d "$dir" ]] || continue
             local mt
             if [[ "$STAT_FLAVOR" == "bsd" ]]; then
-                mt=$(find "$dir" -type f -name "*.json" -exec stat -f '%m' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
+                mt=$(find "$dir" -type f \( -name "*.json" -o -name "*.msgpack" \) -exec stat -f '%m' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
             else
-                mt=$(find "$dir" -type f -name "*.json" -exec stat -c '%Y' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
+                mt=$(find "$dir" -type f \( -name "*.json" -o -name "*.msgpack" \) -exec stat -c '%Y' {} + 2>/dev/null | sort -nr | head -1 || echo 0)
             fi
             mt=${mt:-0}
             if (( mt > max_mtime )); then
@@ -765,17 +774,17 @@ count_payload_files() {
         local telemetry_dir="$outputs_dir/payloads/telemetry"
         if [[ -d "$tests_dir" ]]; then
             local tests_count
-            tests_count=$(find "$tests_dir" -name "*.json" 2>/dev/null | wc -l)
+            tests_count=$(find "$tests_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
             count=$((count + tests_count))
         fi
         if [[ -d "$cov_dir" ]]; then
             local cov_count
-            cov_count=$(find "$cov_dir" -name "*.json" 2>/dev/null | wc -l)
+            cov_count=$(find "$cov_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
             count=$((count + cov_count))
         fi
         if [[ -d "$telemetry_dir" ]]; then
             local telemetry_count
-            telemetry_count=$(find "$telemetry_dir" -name "*.json" 2>/dev/null | wc -l)
+            telemetry_count=$(find "$telemetry_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
             count=$((count + telemetry_count))
         fi
     done < <(echo "$TEST_OUTPUTS_CACHE")
@@ -789,7 +798,7 @@ dbg "Uploader start time: $start_ts"
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 tests_executed() {
     local found
-    found=$(find "$TESTLOGS_DIR" \( -name "test.log" -o -name "test.xml" \) -type f -print -quit 2>/dev/null)
+    found=$(find "$TESTLOGS_SCAN_DIR" \( -name "test.log" -o -name "test.xml" \) -type f -print -quit 2>/dev/null)
     [[ -n "$found" ]]
 }
 
@@ -2028,10 +2037,49 @@ matches_filter() {
     fi
 }
 
-# List JSON payload files in deterministic lexicographic order.
+# List replayable payload files in deterministic lexicographic order.
 list_sorted_payload_files() {
     local dir="$1"
+    find "$dir" -maxdepth 1 -type f \( -name "*.json" -o -name "*.msgpack" \) -print 2>/dev/null | LC_ALL=C sort
+}
+
+# List Bazel-mode test payload files. The RFC contract requires JSON test
+# payloads so they can be enriched with repository and Bazel metadata before
+# upload; raw msgpack test payloads are rejected separately.
+list_sorted_test_payload_files() {
+    local dir="$1"
     find "$dir" -maxdepth 1 -type f -name "*.json" -print 2>/dev/null | LC_ALL=C sort
+}
+
+list_sorted_raw_test_msgpack_files() {
+    local dir="$1"
+    find "$dir" -maxdepth 1 -type f -name "*.msgpack" -print 2>/dev/null | LC_ALL=C sort
+}
+
+# Detect whether one replay payload is stored in raw msgpack form.
+is_msgpack_payload() {
+    local file="$1"
+    [[ "$file" == *.msgpack ]]
+}
+
+# Select the coverage multipart content type that matches the captured payload.
+coverage_payload_content_type() {
+    local file="$1"
+    if is_msgpack_payload "$file"; then
+        echo "application/msgpack"
+    else
+        echo "application/json"
+    fi
+}
+
+# Select the coverage multipart filename that matches the captured payload.
+coverage_payload_filename() {
+    local file="$1"
+    if is_msgpack_payload "$file"; then
+        echo "filecoveragex.msgpack"
+    else
+        echo "filecoveragex.json"
+    fi
 }
 
 # Delete file unless KEEP_PAYLOADS is set
@@ -2876,6 +2924,7 @@ upload_single_test() {
 # Handle upload single coverage behavior.
 upload_single_coverage() {
     local file="$1"
+    local coverage_content_type coverage_filename
     # Create event.json for multipart
     local eventjson resp http rc
     # Use a temp file for multipart metadata to avoid leaking into runfiles.
@@ -2885,6 +2934,8 @@ upload_single_coverage() {
         return 1
     fi
     echo '{"dummy":true}' > "$eventjson"
+    coverage_content_type="$(coverage_payload_content_type "$file")"
+    coverage_filename="$(coverage_payload_filename "$file")"
     build_common_headers ""
     dbg "upload_single_coverage: posting '$file'"
     resp="$(mktemp "$TMP_PAYLOAD_DIR/coverage_resp.XXXXXX" 2>/dev/null || true)"
@@ -2899,13 +2950,13 @@ upload_single_coverage() {
         if (( AGENTLESS == 0 )); then
             dbg_headers "evp" "${COV_EVP[@]}"
         fi
-        dbg "headers: multipart/form-data (event + coveragex)"
+        dbg "headers: multipart/form-data (event + coveragex=${coverage_content_type})"
     fi
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}"); then
+        -F "coveragex=@${file};type=${coverage_content_type};filename=${coverage_filename}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?
@@ -2914,7 +2965,7 @@ upload_single_coverage() {
       if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" "${COV_EVP[@]}" \
         -F "event=@${eventjson};type=application/json;filename=fileevent.json" \
-        -F "coveragex=@${file};type=application/json;filename=filecoveragex.json" -o "$resp" -w "%{http_code}"); then
+        -F "coveragex=@${file};type=${coverage_content_type};filename=${coverage_filename}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?
@@ -3017,6 +3068,13 @@ upload_all_tests() {
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
+            log "error: raw msgpack test payload is not supported in Bazel file mode: $f"
+            ((++failed))
+            ((++UPLOAD_FAILURES))
+        done < <(list_sorted_raw_test_msgpack_files "$tests_dir")
+
+        while IFS= read -r f; do
+            [[ -f "$f" ]] || continue
             # Skip files not matching prefix filter (when enabled)
             if ! matches_filter "$f" "span_events_"; then
                 dbg "skipping (prefix filter): $f"
@@ -3034,7 +3092,7 @@ upload_all_tests() {
                 ((++failed))
                 ((++UPLOAD_FAILURES))
             fi
-        done < <(list_sorted_payload_files "$tests_dir")
+        done < <(list_sorted_test_payload_files "$tests_dir")
     done < <(echo "$TEST_OUTPUTS_CACHE")
     log "uploaded $total test payloads"
     if (( failed > 0 )); then

@@ -156,7 +156,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --write-bazelrc
 ```
 
 If the Go module lives below the workspace root:
@@ -166,15 +167,29 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d \
-  --go-module-dir path/to/go-module
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --go-module-dir path/to/go-module \
+  --write-bazelrc
 ```
 
 `--dd-trace-go-version` is optional. If omitted, the workspace uses the default
-`v2.9.0-dev.0.20260409102143-ddd4e03ab47d`. It accepts a tag, pseudo-version, branch, or commit SHA. Bootstrap
-resolves that input to exact tracer versions, keeps the local Go module pins on
-those same versions, and prevents Bazel and the Go module from silently
-drifting apart.
+`v2.9.0-dev.0.20260416093245-194346a71c51`. It accepts a tag, pseudo-version,
+branch, or commit SHA. Bootstrap resolves that input to exact tracer versions,
+keeps the local Go module pins on those same versions, and prevents Bazel and
+the Go module from silently drifting apart.
+
+Bootstrap uses `--go-mod-sync=targeted` by default. Targeted sync updates the
+Orchestrion and `dd-trace-go` tool requirements, resolves only the packages
+needed by the generated `orchestrion.tool.go`, and verifies those packages with
+`go list -mod=readonly`. It intentionally does not run `go mod tidy`, so large
+workspaces avoid unrelated module rewrites. Use `--go-mod-sync=tidy` only when
+you explicitly want bootstrap to tidy the whole module, or `--go-mod-sync=off`
+when another repository-owned process manages `go.mod` and `go.sum`.
+
+Bootstrap runs those Go module commands with `go` by default. Use
+`--go-binary=/path/to/go` when the repository must sync with a specific Go SDK,
+for example the same SDK Bazel uses in a monorepo. The value must be a single
+executable path named `go` or `go.exe`; do not include shell arguments.
 
 Guided bootstrap is intentionally for single-service Go workspaces. If the
 workspace already uses conflicting or multi-service sync wiring:
@@ -187,6 +202,97 @@ use the manual/advanced Go setup path instead.
 If the workspace already has a matching single-service
 `test_optimization_go_extension` plus `use_repo(...)`, guided bootstrap can
 reuse that wiring and continue.
+
+For WORKSPACE monorepos, use `--workspace-mode` instead of `--guided`.
+WORKSPACE mode deliberately does not edit `WORKSPACE`; it prints the repository
+wiring for manual placement and writes only local managed files:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --print-workspace-snippet \
+  --service go-service \
+  --runtime-version 1.25.0 \
+  --sync-repo-name test_optimization_data \
+  --rto-commit <commit-sha> \
+  --rules-go-variant complete \
+  --rules-go-repo-name io_bazel_rules_go
+```
+
+After placing the WORKSPACE snippet, generate the safe local scaffolding:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --service go-service \
+  --runtime-version 1.25.0 \
+  --sync-repo-name test_optimization_data \
+  --rules-go-variant complete \
+  --rules-go-repo-name io_bazel_rules_go \
+  --write-bazelrc \
+  --write-root-targets \
+  --write-orchestrion-files \
+  --write-wrapper-template \
+  --expected-target //pkg:go_default_test
+```
+
+The generated wrapper template creates a plain local wrapper and an optimized
+local wrapper. Keep repository-specific scheduling, tags, flaky behavior,
+Docker defaults, and platform constraints in the local policy helper; the
+optimized wrapper owns only `topt_data` and `orchestrion_pin_files`.
+WORKSPACE mode does not run Go module commands unless `--go-mod-sync` is passed
+explicitly, so large repos can review generated files before changing
+`go.mod`/`go.sum`.
+
+### Go Bazel config
+
+Use `--write-bazelrc` to insert or replace the managed
+`# BEGIN Datadog Test Optimization Bazelrc` block. Use
+`--print-bazelrc-snippet` when you want to review or copy the block manually.
+
+The generated config is named `test-optimization` by default:
+
+```text
+common:test-optimization --repo_env=DD_API_KEY
+common:test-optimization --repo_env=FETCH_SALT
+common:test-optimization --repo_env=DD_SITE
+common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
+common:test-optimization --repo_env=DD_GIT_BRANCH
+common:test-optimization --repo_env=DD_GIT_TAG
+common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
+common:test-optimization --repo_env=DD_PR_NUMBER
+test:test-optimization --remote_download_outputs=all
+```
+
+The full generated block includes all sync metadata inputs from the repository
+rule. It intentionally does not include `--test_env=DD_GIT_*`,
+`--test_env=DD_TEST_OPTIMIZATION_AGENT_URL`, or
+`--test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`. Git metadata belongs to the
+sync metadata fetch through `--repo_env`, and uploader credentials/endpoints are
+read later by `bazel run`.
+
+Run Go onboarding commands with this config:
+
+```bash
+bazel test --config=test-optimization //...
+bazel run --config=test-optimization //:dd_test_optimization_doctor
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+```
+
+For manual Go extension wiring, set `module_path` to the Go module path from
+`go.mod`:
+
+```bzl
+go_topt.test_optimization_go(
+    name = "test_optimization_data",
+    service = "go-service",
+    runtime_version = "1.25.0",
+    module_path = "github.com/example/service",
+)
+```
+
+`GO_MODULE_PATH` remains an env override and wins when set, but new workspaces
+should prefer the attr so CI does not need an extra repo-env passthrough.
 
 The generated package-facing API is:
 
@@ -350,7 +456,9 @@ git_repository(
 
 Pin an immutable commit SHA (or internal mirrored archive) for reproducibility.
 
-For WORKSPACE Go usage, pin both repositories at the same revision:
+For WORKSPACE Go usage, declare the core repository first, then use the public
+helper in step 6 to declare the Go companion and the Orchestrion-enabled
+`rules_go` fork at the same revision:
 
 - `datadog-rules-test-optimization` for sync and uploader rules
 - `datadog-rules-test-optimization-go` for `dd_topt_go_test`
@@ -411,11 +519,17 @@ filegroup(
 )
 ```
 
-### 4) Add the uploader target (one per workspace)
+### 4) Add the doctor and uploader targets (one pair per workspace)
 
 ```bzl
 # In root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -427,6 +541,14 @@ dd_payload_uploader(
 Multi-service aggregator variant:
 
 ```bzl
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_service_a",
+        "@test_optimization_data//:test_optimization_context_service_b",
+    ],
+)
+
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
@@ -440,67 +562,69 @@ dd_payload_uploader(
 
 ```text
 # Repository rule (module/repo phase) — affects refetch
-common --repo_env=DD_API_KEY
-common --repo_env=DD_SITE
-common --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional shared direct URL override for sync + uploader agentless path (test/dev)
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS  # Optional sync HTTP connect-timeout override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS         # Optional sync HTTP max-time override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS           # Optional sync HTTP retry-attempt override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS      # Optional sync HTTP retry-delay override
-common --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS  # Optional sync execute-timeout buffer override
-common --repo_env=DD_SERVICE
-common --repo_env=DD_ENV
-common --repo_env=DD_GIT_REPOSITORY_URL
-common --repo_env=DD_GIT_BRANCH
-common --repo_env=DD_GIT_TAG
-common --repo_env=DD_GIT_COMMIT_SHA
-common --repo_env=DD_GIT_HEAD_COMMIT
-common --repo_env=DD_GIT_COMMIT_MESSAGE
-common --repo_env=DD_GIT_HEAD_MESSAGE
-common --repo_env=DD_GIT_COMMIT_AUTHOR_NAME
-common --repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL
-common --repo_env=DD_GIT_COMMIT_AUTHOR_DATE
-common --repo_env=DD_GIT_COMMIT_COMMITTER_NAME
-common --repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL
-common --repo_env=DD_GIT_COMMIT_COMMITTER_DATE
-common --repo_env=DD_GIT_HEAD_AUTHOR_NAME
-common --repo_env=DD_GIT_HEAD_AUTHOR_EMAIL
-common --repo_env=DD_GIT_HEAD_AUTHOR_DATE
-common --repo_env=DD_GIT_HEAD_COMMITTER_NAME
-common --repo_env=DD_GIT_HEAD_COMMITTER_EMAIL
-common --repo_env=DD_GIT_HEAD_COMMITTER_DATE
-common --repo_env=DD_GIT_PR_BASE_BRANCH
-common --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
-common --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
-common --repo_env=DD_PR_NUMBER
+common:test-optimization --repo_env=DD_API_KEY
+common:test-optimization --repo_env=FETCH_SALT
+common:test-optimization --repo_env=DD_SITE
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional sync/uploader agentless URL override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS  # Optional sync HTTP connect-timeout override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS         # Optional sync HTTP max-time override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS           # Optional sync HTTP retry-attempt override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS      # Optional sync HTTP retry-delay override
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS  # Optional sync execute-timeout buffer override
+common:test-optimization --repo_env=DD_SERVICE
+common:test-optimization --repo_env=DD_ENV
+common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
+common:test-optimization --repo_env=DD_GIT_BRANCH
+common:test-optimization --repo_env=DD_GIT_TAG
+common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMIT
+common:test-optimization --repo_env=DD_GIT_COMMIT_MESSAGE
+common:test-optimization --repo_env=DD_GIT_HEAD_MESSAGE
+common:test-optimization --repo_env=DD_GIT_COMMIT_AUTHOR_NAME
+common:test-optimization --repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL
+common:test-optimization --repo_env=DD_GIT_COMMIT_AUTHOR_DATE
+common:test-optimization --repo_env=DD_GIT_COMMIT_COMMITTER_NAME
+common:test-optimization --repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL
+common:test-optimization --repo_env=DD_GIT_COMMIT_COMMITTER_DATE
+common:test-optimization --repo_env=DD_GIT_HEAD_AUTHOR_NAME
+common:test-optimization --repo_env=DD_GIT_HEAD_AUTHOR_EMAIL
+common:test-optimization --repo_env=DD_GIT_HEAD_AUTHOR_DATE
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMITTER_NAME
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMITTER_EMAIL
+common:test-optimization --repo_env=DD_GIT_HEAD_COMMITTER_DATE
+common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
+common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
+common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
+common:test-optimization --repo_env=DD_PR_NUMBER
+test:test-optimization --remote_download_outputs=all
 # Optional: override detected Go module path for export.bzl
-common --repo_env=GO_MODULE_PATH
+common:test-optimization --repo_env=GO_MODULE_PATH
 # Optional: provide Python module path hint for export.bzl
-common --repo_env=PYTHON_MODULE_PATH
+common:test-optimization --repo_env=PYTHON_MODULE_PATH
 # Optional: provide Java module path hint for export.bzl
-common --repo_env=JAVA_MODULE_PATH
+common:test-optimization --repo_env=JAVA_MODULE_PATH
 # Optional: provide NodeJS module path hint for export.bzl
-common --repo_env=NODEJS_MODULE_PATH
+common:test-optimization --repo_env=NODEJS_MODULE_PATH
 # Optional: provide .NET module path hint for export.bzl
-common --repo_env=DOTNET_MODULE_PATH
+common:test-optimization --repo_env=DOTNET_MODULE_PATH
 # Optional: provide Ruby module path hint for export.bzl
-common --repo_env=RUBY_MODULE_PATH
-# Optional: force refetch once (example)
-# common --repo_env=FETCH_SALT=<timestamp>
+common:test-optimization --repo_env=RUBY_MODULE_PATH
 
 # Uploader (bazel run, pass credentials inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
-#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 # PowerShell equivalent:
 #   # Set once per shell session before first run:
 #   # $env:DD_API_KEY = "<your-api-key>"
 #   # $env:DD_SITE = "datadoghq.com"
-#   bazel run //:dd_upload_payloads
+#   bazel run --config=test-optimization //:dd_upload_payloads
 
 # Tests (runtime)
 # Keep uploader credentials out of test runtime by default.
-test --test_env=DD_TEST_OPTIMIZATION_AGENT_URL
-test --test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional override for intake base URL (agentless only, test/dev)
+# Do not pass DD_GIT_* through --test_env. Git metadata belongs to the
+# repository-rule phase through --repo_env so it cannot invalidate test actions.
+# Do not pass DD_TEST_OPTIMIZATION_AGENT_URL or
+# DD_TEST_OPTIMIZATION_AGENTLESS_URL through --test_env for Go/Orchestrion.
 ```
 
 Security note: keep secret values out of `.bazelrc`. Forward variable names
@@ -517,68 +641,55 @@ Repository policy note: this repository intentionally has no root `.bazelrc`.
 Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags
 from `README.md` and `docs/Maintainers.md`.
 
-### 6) Configure Go support in WORKSPACE with the Go companion repository
+### 6) Configure Go support in WORKSPACE with the public helper
 
-This is the lower-level/manual setup path. For Bzlmod single-service Go
-workspaces, prefer guided bootstrap instead.
+For Bzlmod single-service Go workspaces, prefer guided bootstrap instead. For
+WORKSPACE consumers, prefer this helper over hand-written companion and
+`rules_go` declarations. It keeps the Go companion repo mapping and the selected
+Orchestrion-enabled `rules_go` variant consistent.
 
-If your repository already configures an Orchestrion-enabled `rules_go` fork or
-consumer-owned merge, keep that setup and skip to the companion-repo and BUILD
-snippets below.
+The helper assumes the core `datadog-rules-test-optimization` repository has
+already been declared in step 1.
 
-First, add the Go companion repository. For a local checkout:
+Default Git fetch mode:
 
 ```bzl
-load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
 
-local_repository(
-    name = "datadog-rules-test-optimization-go",
-    path = "/absolute/path/to/rules_test_optimization/modules/go",
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_variant = "base",  # or "complete" for extended monorepo compatibility
 )
 ```
 
-For mirrored archives, publish the `modules/go` subtree as the repository root:
+Archive mode for mirrored environments:
 
 ```bzl
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
 
-http_archive(
-    name = "datadog-rules-test-optimization-go",
-    urls = [
-        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
-    ],
-    strip_prefix = "rules_test_optimization-<commit-sha>/modules/go",
-    sha256 = "<go_companion_sha256>",
-    repo_mapping = {
-        "@rules_go": "@io_bazel_rules_go",
-    },
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    datadog_fetch = "archive",
+    rules_go_fetch = "archive",
+    rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_variant = "complete",
+    rto_archive_url = "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
+    rto_archive_sha256 = "<sha256-for-archive>",
+    rto_archive_prefix = "rules_test_optimization-<commit-sha>",
 )
 ```
 
-Then configure an Orchestrion-enabled `rules_go` fork and the public WORKSPACE
-Orchestrion helper. The repository bound to `@io_bazel_rules_go` must be the
-forked, Orchestrion-enabled copy, not an upstream release archive. If you are
-mirroring this repository directly, publish the
-`third_party/rules_go_orchestrion` subtree as the `@io_bazel_rules_go`
-repository root. If you maintain your own merged fork, keep the same public
-files and labels, including `go/orchestrion_workspace.bzl` and the
-`//go/private/orchestrion:*` targets, including the `:enabled` build setting
-that `dd_topt_go_test` flips through its wrapper transition.
+Supported helper combinations are `git/git`, `git/archive`, and
+`archive/archive`. Use `rules_go_variant = "base"` for normal consumers and
+`rules_go_variant = "complete"` for repositories that need the declared extended
+monorepo compatibility layer. The helper never applies `patches`, `patch_tool`,
+or `patch_args`; both variants are complete `rules_go` trees.
+
+Then configure Go, Gazelle, and the Orchestrion tool repository:
 
 ```bzl
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-http_archive(
-    name = "io_bazel_rules_go",
-    urls = [
-        "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
-    ],
-    strip_prefix = "rules_test_optimization-<commit-sha>/third_party/rules_go_orchestrion",
-    sha256 = "<rules_go_sha256>",
-)
 
 http_archive(
     name = "bazel_gazelle",
@@ -610,6 +721,8 @@ Notes for the helper:
 - `dd_trace_go_version` and `dd_trace_go_versions` are mutually exclusive.
 - Keep the default tool-repo name `rules_go_orchestrion_tool`; the current fork
   resolves that name internally.
+- Do not configure `patches`, `patch_tool`, or `patch_args` for this integration;
+  choose the complete variant instead when the base variant is not enough.
 
 Then in your Go package `BUILD.bazel`:
 
@@ -630,6 +743,23 @@ dd_topt_go_test(
     topt_data = topt_data,
 )
 ```
+
+If the tracer needs runtime-visible source files for AST-derived metadata such
+as `test.source.end`, enable source staging explicitly:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    stage_sources = True,
+    topt_data = topt_data,
+)
+```
+
+`stage_sources` stages only the target's direct `srcs` and direct
+`embedsrcs`. When enabled, it changes the default `rundir` to `.` only if the
+caller did not already set `rundir`.
 
 Note: in WORKSPACE mode, Go support uses two repositories:
 

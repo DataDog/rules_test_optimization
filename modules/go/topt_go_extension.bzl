@@ -47,6 +47,7 @@ def _materialize_single_service_repo(call):
         runtime_name = "go",
         runtime_version = call.runtime_version,
         runtime_arch = call.runtime_arch,
+        runtime_module_path = call.module_path,
         http_connect_timeout_seconds = call.http_connect_timeout_seconds,
         http_max_time_seconds = call.http_max_time_seconds,
         http_retry_attempts = call.http_retry_attempts,
@@ -54,6 +55,7 @@ def _materialize_single_service_repo(call):
         http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
         known_tests = call.known_tests,
         test_management = call.test_management,
+        require_git_metadata = call.require_git_metadata,
         debug = call.debug,
     )
 
@@ -70,6 +72,7 @@ def _materialize_multi_service_repos(call):
             runtime_name = "go",
             runtime_version = call.runtime_version,
             runtime_arch = call.runtime_arch,
+            runtime_module_path = call.module_path,
             http_connect_timeout_seconds = call.http_connect_timeout_seconds,
             http_max_time_seconds = call.http_max_time_seconds,
             http_retry_attempts = call.http_retry_attempts,
@@ -77,6 +80,7 @@ def _materialize_multi_service_repos(call):
             http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
             known_tests = call.known_tests,
             test_management = call.test_management,
+            require_git_metadata = call.require_git_metadata,
             debug = call.debug,
         )
 
@@ -119,6 +123,7 @@ test_optimization_go_extension = module_extension(
             "services": attr.string_list(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            "module_path": attr.string(),
             "http_connect_timeout_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
             "http_max_time_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
             "http_retry_attempts": attr.int(default = HTTP_POLICY_ATTR_UNSET),
@@ -126,6 +131,7 @@ test_optimization_go_extension = module_extension(
             "http_execute_timeout_buffer_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
+            "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),
     },

@@ -16,18 +16,36 @@ import (
 const (
 	defaultRulesGoVersion        = "0.60.0"
 	defaultRulesGoRemote         = "https://github.com/DataDog/rules_test_optimization.git"
-	defaultRulesGoCommit         = "16712cc851915317659b932471dcb68af48dd5bb"
-	defaultRulesGoStripPrefix    = "third_party/rules_go_orchestrion"
-	defaultOrchestrionVersion    = "v1.5.0"
-	defaultDDTraceGoVersion      = "v2.9.0-dev.0.20260409102143-ddd4e03ab47d"
+	defaultRulesGoCommit         = ""
+	defaultRulesGoVariant        = "base"
+	defaultDatadogFetch          = "git"
+	defaultRulesGoFetch          = "git"
+	defaultRulesGoRepoName       = "io_bazel_rules_go"
+	defaultOrchestrionVersion    = "v1.9.0"
+	defaultDDTraceGoVersion      = "v2.9.0-dev.0.20260416093245-194346a71c51"
 	defaultSyncRepoName          = "test_optimization_data"
+	defaultDoctorTargetName      = "dd_test_optimization_doctor"
 	defaultUploaderTargetName    = "dd_upload_payloads"
+	defaultBazelrcPath           = ".bazelrc"
+	defaultBazelrcConfig         = "test-optimization"
+	defaultGoBinary              = "go"
+	defaultGoModSync             = "targeted"
+	defaultWrapperPackage        = "tools/build"
+	defaultWorkspaceWrapperFile  = "dd_topt_go_test.bzl"
+	defaultPlainWrapperName      = "dd_go_test"
+	defaultOptimizedWrapperName  = "dd_topt_go_test"
 	managedBlockStart            = "# BEGIN Datadog Go Orchestrion bootstrap"
 	managedBlockEnd              = "# END Datadog Go Orchestrion bootstrap"
+	bazelrcBlockStart            = "# BEGIN Datadog Test Optimization Bazelrc"
+	bazelrcBlockEnd              = "# END Datadog Test Optimization Bazelrc"
 	guidedBlockStart             = "# BEGIN Datadog Go Guided Setup"
 	guidedBlockEnd               = "# END Datadog Go Guided Setup"
+	doctorBlockStart             = "# BEGIN Datadog Go Doctor"
+	doctorBlockEnd               = "# END Datadog Go Doctor"
 	uploaderBlockStart           = "# BEGIN Datadog Go Uploader"
 	uploaderBlockEnd             = "# END Datadog Go Uploader"
+	pinExportsBlockStart         = "# BEGIN Datadog Go Pin Files"
+	pinExportsBlockEnd           = "# END Datadog Go Pin Files"
 	wrapperBlockStart            = "# BEGIN Datadog Go Wrapper"
 	wrapperBlockEnd              = "# END Datadog Go Wrapper"
 	defaultStarterOrchestrionYML = `---
@@ -43,17 +61,28 @@ aspects: []
 	wrapperFileName               = "dd_go_test.bzl"
 )
 
+var orchestrionPinFiles = []string{
+	"go.mod",
+	"go.sum",
+	"orchestrion.tool.go",
+	"orchestrion.yml",
+}
+
 var ddTraceGoModules = []string{
 	"github.com/DataDog/dd-trace-go/v2",
 	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
-var ddTraceGoPreflightPackages = []string{
+var ddTraceGoValidationPackages = []string{
 	"github.com/DataDog/dd-trace-go/v2/orchestrion",
 	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
+
+// orchestrionToolPackages is the minimal package graph bootstrap resolves in
+// targeted mode so Orchestrion can build from a readonly Go module graph.
+var orchestrionToolPackages = append([]string{"github.com/DataDog/orchestrion"}, ddTraceGoValidationPackages...)
 
 var ddTraceGoWarmPackages = []string{
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
@@ -63,22 +92,111 @@ var ddTraceGoWarmPackages = []string{
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
+// bazelrcRepoEnvKeys mirrors the public sync metadata environment contract.
+// The generated .bazelrc passes these values to repository/module resolution,
+// never to test sandboxes.
+var bazelrcRepoEnvKeys = []string{
+	"DD_API_KEY",
+	"FETCH_SALT",
+	"DD_SITE",
+	"DD_TEST_OPTIMIZATION_AGENTLESS_URL",
+	"DD_SERVICE",
+	"DD_ENV",
+	"DD_GIT_REPOSITORY_URL",
+	"DD_GIT_BRANCH",
+	"DD_GIT_TAG",
+	"DD_GIT_COMMIT_SHA",
+	"DD_GIT_HEAD_COMMIT",
+	"DD_GIT_COMMIT_MESSAGE",
+	"DD_GIT_HEAD_MESSAGE",
+	"DD_GIT_COMMIT_AUTHOR_NAME",
+	"DD_GIT_COMMIT_AUTHOR_EMAIL",
+	"DD_GIT_COMMIT_AUTHOR_DATE",
+	"DD_GIT_COMMIT_COMMITTER_NAME",
+	"DD_GIT_COMMIT_COMMITTER_EMAIL",
+	"DD_GIT_COMMIT_COMMITTER_DATE",
+	"DD_GIT_HEAD_AUTHOR_NAME",
+	"DD_GIT_HEAD_AUTHOR_EMAIL",
+	"DD_GIT_HEAD_AUTHOR_DATE",
+	"DD_GIT_HEAD_COMMITTER_NAME",
+	"DD_GIT_HEAD_COMMITTER_EMAIL",
+	"DD_GIT_HEAD_COMMITTER_DATE",
+	"DD_GIT_PR_BASE_BRANCH",
+	"DD_GIT_PR_BASE_BRANCH_SHA",
+	"DD_GIT_PR_BASE_BRANCH_HEAD_SHA",
+	"DD_PR_NUMBER",
+}
+
+// stringListFlag collects repeated string flags while preserving caller order.
+type stringListFlag []string
+
+// String returns the flag value as a comma-separated string for flag package
+// diagnostics.
+func (f *stringListFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+// Set appends one flag value. Empty values are rejected by later validation so
+// diagnostics can mention the flag that consumes the list.
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
 type config struct {
-	workspaceDir        string
-	moduleFile          string
-	goModuleDir         string
-	force               bool
-	guided              bool
-	service             string
-	runtimeVersion      string
-	syncRepoName        string
-	uploaderTargetName  string
-	orchestrionVersion  string
-	ddTraceGoVersion    string
-	ddTraceGoVersions   map[string]string
-	ddTraceGoVersionSet bool
-	rulesGoRemote       string
-	rulesGoCommit       string
+	workspaceDir          string
+	moduleFile            string
+	goModuleDir           string
+	force                 bool
+	guided                bool
+	workspaceMode         bool
+	printWorkspaceSnippet bool
+	printBazelrcSnippet   bool
+	writeBazelrc          bool
+	writeRootTargets      bool
+	writeOrchestrionFiles bool
+	writeWrapperTemplate  bool
+	bazelrcPath           string
+	bazelrcConfig         string
+	goBinary              string
+	goModSync             string
+	goModSyncSet          bool
+	service               string
+	runtimeVersion        string
+	goModulePath          string
+	syncRepoName          string
+	doctorTargetName      string
+	uploaderTargetName    string
+	expectedTargets       []string
+	wrapperPackage        string
+	wrapperFile           string
+	plainWrapperName      string
+	optimizedWrapperName  string
+	orchestrionVersion    string
+	ddTraceGoVersion      string
+	ddTraceGoVersions     map[string]string
+	ddTraceGoVersionSet   bool
+	rulesGoRemote         string
+	rulesGoCommit         string
+	datadogFetch          string
+	rulesGoFetch          string
+	rulesGoRepoName       string
+	rtoCommit             string
+	rtoArchiveURL         string
+	rtoArchiveSHA256      string
+	rtoArchivePrefix      string
+	rtoArchiveType        string
+	// rulesGoRemoteSet records whether the operator explicitly selected the
+	// rules_go fork remote instead of accepting the inferred/default remote.
+	rulesGoRemoteSet bool
+	// rulesGoCommitSet records whether the operator explicitly selected the
+	// rules_go fork commit instead of accepting an inferred commit.
+	rulesGoCommitSet  bool
+	rulesGoVariant    string
+	rulesGoVariantSet bool
 }
 
 func main() {
@@ -97,30 +215,110 @@ func parseFlags() config {
 	}
 
 	cfg := config{}
+	var expectedTargets stringListFlag
 	flag.StringVar(&cfg.workspaceDir, "workspace", workspaceDefault, "Workspace root to update")
 	flag.StringVar(&cfg.goModuleDir, "go-module-dir", "", "Go module directory to pin for Orchestrion (defaults to workspace root)")
 	flag.BoolVar(&cfg.force, "force", false, "Allow overwriting Datadog-managed bootstrap files")
 	flag.BoolVar(&cfg.guided, "guided", false, "Generate Datadog-managed single-service Go onboarding files")
+	flag.BoolVar(&cfg.workspaceMode, "workspace-mode", false, "Enable WORKSPACE-oriented onboarding generation without editing WORKSPACE")
+	flag.BoolVar(&cfg.printWorkspaceSnippet, "print-workspace-snippet", false, "Print WORKSPACE-mode repository wiring and exit without modifying files")
+	flag.BoolVar(&cfg.printBazelrcSnippet, "print-bazelrc-snippet", false, "Print recommended .bazelrc configuration and exit without modifying files")
+	flag.BoolVar(&cfg.writeBazelrc, "write-bazelrc", false, "Insert or replace the Datadog-managed .bazelrc configuration block")
+	flag.BoolVar(&cfg.writeRootTargets, "write-root-targets", false, "Insert or replace root BUILD targets for doctor, uploader, and pin file exports")
+	flag.BoolVar(&cfg.writeOrchestrionFiles, "write-orchestrion-files", false, "Write orchestrion.tool.go and orchestrion.yml in the selected Go module directory")
+	flag.BoolVar(&cfg.writeWrapperTemplate, "write-wrapper-template", false, "Write a configurable repo-local Go wrapper template")
+	flag.StringVar(&cfg.bazelrcPath, "bazelrc-path", defaultBazelrcPath, "Path to the .bazelrc file to update when --write-bazelrc is set")
+	flag.StringVar(&cfg.bazelrcConfig, "bazelrc-config", defaultBazelrcConfig, "Bazel config name used by the generated .bazelrc block")
+	flag.StringVar(&cfg.goBinary, "go-binary", defaultGoBinary, "Go binary used for bootstrap module graph synchronization")
+	flag.StringVar(&cfg.goModSync, "go-mod-sync", defaultGoModSync, "Go module synchronization mode: targeted, tidy, or off")
 	flag.StringVar(&cfg.service, "service", "", "Datadog service name for guided single-service Go setup")
 	flag.StringVar(&cfg.runtimeVersion, "runtime-version", "", "Go runtime version for guided single-service Go setup")
 	flag.StringVar(&cfg.syncRepoName, "sync-repo-name", defaultSyncRepoName, "Repository name generated by guided single-service Go setup")
+	flag.StringVar(&cfg.doctorTargetName, "doctor-target-name", defaultDoctorTargetName, "Root doctor target name generated by guided single-service Go setup")
 	flag.StringVar(&cfg.uploaderTargetName, "uploader-target-name", defaultUploaderTargetName, "Root uploader target name generated by guided single-service Go setup")
+	flag.Var(&expectedTargets, "expected-target", "Local Bazel target the generated doctor should require; may be repeated")
+	flag.StringVar(&cfg.wrapperPackage, "wrapper-package", defaultWrapperPackage, "Workspace-relative Bazel package where --write-wrapper-template writes the wrapper")
+	flag.StringVar(&cfg.wrapperFile, "wrapper-file", defaultWorkspaceWrapperFile, "Wrapper .bzl filename used with --write-wrapper-template")
+	flag.StringVar(&cfg.plainWrapperName, "plain-wrapper-name", defaultPlainWrapperName, "Plain repo-local Go test wrapper name used in the generated wrapper template")
+	flag.StringVar(&cfg.optimizedWrapperName, "optimized-wrapper-name", defaultOptimizedWrapperName, "Optimized repo-local Go test wrapper name used in the generated wrapper template")
 	flag.StringVar(&cfg.orchestrionVersion, "orchestrion-version", defaultOrchestrionVersion, "Orchestrion version to configure")
 	flag.StringVar(&cfg.ddTraceGoVersion, "dd-trace-go-version", defaultDDTraceGoVersion, "dd-trace-go version to pin for Orchestrion-backed instrumentation")
 	flag.StringVar(&cfg.rulesGoRemote, "rules-go-remote", defaultRulesGoRemote, "rules_go fork remote used for Orchestrion support")
-	flag.StringVar(&cfg.rulesGoCommit, "rules-go-commit", defaultRulesGoCommit, "rules_go fork commit used for Orchestrion support")
+	flag.StringVar(&cfg.rulesGoCommit, "rules-go-commit", defaultRulesGoCommit, "rules_go fork commit used for Orchestrion support; inferred from Datadog git_override wiring when omitted")
+	flag.StringVar(&cfg.rulesGoVariant, "rules-go-variant", defaultRulesGoVariant, "rules_go Orchestrion variant to use: base or complete")
+	flag.StringVar(&cfg.datadogFetch, "datadog-fetch", defaultDatadogFetch, "WORKSPACE snippet fetch mode for Datadog companion repositories: git or archive")
+	flag.StringVar(&cfg.rulesGoFetch, "rules-go-fetch", defaultRulesGoFetch, "WORKSPACE snippet fetch mode for rules_go: git or archive")
+	flag.StringVar(&cfg.rulesGoRepoName, "rules-go-repo-name", defaultRulesGoRepoName, "WORKSPACE snippet repository name for the rules_go fork")
+	flag.StringVar(&cfg.rtoCommit, "rto-commit", "", "WORKSPACE snippet commit for Datadog repositories; falls back to --rules-go-commit when omitted")
+	flag.StringVar(&cfg.rtoArchiveURL, "rto-archive-url", "", "WORKSPACE snippet archive URL for archive fetch mode")
+	flag.StringVar(&cfg.rtoArchiveSHA256, "rto-archive-sha256", "", "WORKSPACE snippet archive SHA256 for archive fetch mode")
+	flag.StringVar(&cfg.rtoArchivePrefix, "rto-archive-prefix", "", "WORKSPACE snippet archive root prefix for archive fetch mode")
+	flag.StringVar(&cfg.rtoArchiveType, "rto-archive-type", "tar.gz", "WORKSPACE snippet archive type for archive fetch mode")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "dd-trace-go-version" {
 			cfg.ddTraceGoVersionSet = true
 		}
+		if f.Name == "rules-go-remote" {
+			cfg.rulesGoRemoteSet = true
+		}
+		if f.Name == "rules-go-commit" {
+			cfg.rulesGoCommitSet = true
+		}
+		if f.Name == "rules-go-variant" {
+			cfg.rulesGoVariantSet = true
+		}
+		if f.Name == "go-mod-sync" {
+			cfg.goModSyncSet = true
+		}
 	})
+	cfg.expectedTargets = []string(expectedTargets)
 	return cfg
 }
 
 func run(cfg config) error {
 	if cfg.workspaceDir == "" {
 		return errors.New("workspace directory is required")
+	}
+	if strings.TrimSpace(cfg.goBinary) == "" {
+		cfg.goBinary = defaultGoBinary
+	}
+	if err := validateGoBinary(cfg.goBinary); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.goModSync) == "" {
+		cfg.goModSync = defaultGoModSync
+	}
+	if err := validateRulesGoVariant(cfg.rulesGoVariant); err != nil {
+		return err
+	}
+	if err := validateFetchMode(cfg.datadogFetch, "datadog-fetch"); err != nil {
+		return err
+	}
+	if err := validateFetchMode(cfg.rulesGoFetch, "rules-go-fetch"); err != nil {
+		return err
+	}
+	if err := validateGoModSyncMode(cfg.goModSync); err != nil {
+		return err
+	}
+	if err := validateBootstrapMode(cfg); err != nil {
+		return err
+	}
+	if cfg.printBazelrcSnippet {
+		snippet, err := bazelrcSnippet(cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Print(snippet)
+		return nil
+	}
+	if cfg.printWorkspaceSnippet {
+		snippet, err := workspaceSnippet(cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Print(snippet)
+		return nil
 	}
 	workspaceDir, err := filepath.Abs(cfg.workspaceDir)
 	if err != nil {
@@ -132,6 +330,7 @@ func run(cfg config) error {
 	} else if !filepath.IsAbs(cfg.goModuleDir) {
 		cfg.goModuleDir = filepath.Join(workspaceDir, cfg.goModuleDir)
 	}
+	cfg.goModuleDir = filepath.Clean(cfg.goModuleDir)
 	cfg.moduleFile = filepath.Join(workspaceDir, "MODULE.bazel")
 
 	if cfg.guided {
@@ -144,8 +343,25 @@ func run(cfg config) error {
 		if strings.TrimSpace(cfg.syncRepoName) == "" {
 			return errors.New("--guided requires a non-empty --sync-repo-name")
 		}
+		if strings.TrimSpace(cfg.doctorTargetName) == "" {
+			return errors.New("--guided requires a non-empty --doctor-target-name")
+		}
 		if strings.TrimSpace(cfg.uploaderTargetName) == "" {
 			return errors.New("--guided requires a non-empty --uploader-target-name")
+		}
+	}
+	if cfg.workspaceMode {
+		if err := runWorkspaceMode(cfg); err != nil {
+			return err
+		}
+		return nil
+	}
+	if cfg.writeBazelrc {
+		if err := writeBazelrcBlock(cfg); err != nil {
+			return err
+		}
+		if !cfg.guided {
+			return nil
 		}
 	}
 
@@ -155,6 +371,11 @@ func run(cfg config) error {
 	if err := ensureFileExists(filepath.Join(cfg.goModuleDir, "go.mod"), "go.mod"); err != nil {
 		return err
 	}
+	goModulePath, err := readGoModulePath(filepath.Join(cfg.goModuleDir, "go.mod"))
+	if err != nil {
+		return err
+	}
+	cfg.goModulePath = goModulePath
 
 	moduleContent, err := os.ReadFile(cfg.moduleFile)
 	if err != nil {
@@ -167,6 +388,11 @@ func run(cfg config) error {
 	}
 	if !cfg.ddTraceGoVersionSet {
 		if err := hydrateManagedTracerConfig(&cfg, string(moduleContent)); err != nil {
+			return err
+		}
+	}
+	if !cfg.rulesGoVariantSet {
+		if err := hydrateManagedRulesGoVariant(&cfg, string(moduleContent)); err != nil {
 			return err
 		}
 	}
@@ -188,20 +414,24 @@ func run(cfg config) error {
 			return err
 		}
 	}
-	if err := runOrchestrionPin(cfg); err != nil {
+	if err := writeOrchestrionToolFile(cfg); err != nil {
 		return err
 	}
 	if err := ensureCIVisibilityOrchestrionImport(cfg); err != nil {
 		return err
 	}
-	if err := syncDDTraceGoVersion(cfg); err != nil {
-		return err
-	}
-	if err := warmOrchestrionModuleCache(cfg); err != nil {
-		return err
-	}
-	if err := verifyResolvedDDTraceGoVersion(cfg); err != nil {
-		return fmt.Errorf("%w\nbootstrap may have already updated these files: MODULE.bazel, go.mod, go.sum, orchestrion.tool.go%s", err, maybeChangedStarterYML(cfg.goModuleDir))
+	if cfg.goModSync != "off" {
+		if err := syncDDTraceGoVersion(cfg); err != nil {
+			return err
+		}
+		if cfg.goModSync == "tidy" {
+			if err := warmOrchestrionModuleCache(cfg); err != nil {
+				return err
+			}
+		}
+		if err := verifyResolvedBootstrapModuleVersions(cfg); err != nil {
+			return fmt.Errorf("%w\nbootstrap may have already updated these files: MODULE.bazel, go.mod, go.sum, orchestrion.tool.go%s", err, maybeChangedStarterYML(cfg.goModuleDir))
+		}
 	}
 	if err := writeStarterOrchestrionYML(cfg); err != nil {
 		return err
@@ -231,6 +461,121 @@ func ensureFileExists(path, label string) error {
 	return nil
 }
 
+// validateBootstrapMode rejects flag combinations that would make bootstrap
+// mutate the wrong build system or run an implicit large-repo module sync.
+func validateBootstrapMode(cfg config) error {
+	if cfg.guided && cfg.workspaceMode {
+		return errors.New("--guided and --workspace-mode are mutually exclusive")
+	}
+	if !cfg.workspaceMode {
+		return nil
+	}
+	if cfg.printWorkspaceSnippet || cfg.writeRootTargets || cfg.writeWrapperTemplate {
+		if strings.TrimSpace(cfg.syncRepoName) == "" {
+			return errors.New("--workspace-mode requires a non-empty --sync-repo-name when generating snippets, root targets, or wrappers")
+		}
+	}
+	if cfg.printWorkspaceSnippet {
+		if strings.TrimSpace(cfg.service) == "" {
+			return errors.New("--workspace-mode --print-workspace-snippet requires --service")
+		}
+		if strings.TrimSpace(cfg.runtimeVersion) == "" {
+			return errors.New("--workspace-mode --print-workspace-snippet requires --runtime-version")
+		}
+	}
+	if !cfg.printWorkspaceSnippet && !cfg.printBazelrcSnippet && !cfg.writeBazelrc && !cfg.writeRootTargets && !cfg.writeOrchestrionFiles && !cfg.writeWrapperTemplate && !cfg.goModSyncSet {
+		return errors.New("--workspace-mode requires at least one action: --print-workspace-snippet, --print-bazelrc-snippet, --write-bazelrc, --write-root-targets, --write-orchestrion-files, --write-wrapper-template, or an explicit --go-mod-sync")
+	}
+	if cfg.goModSyncSet && cfg.goModSync != "off" && !cfg.writeOrchestrionFiles {
+		return errors.New("--workspace-mode with --go-mod-sync=targeted or tidy requires --write-orchestrion-files so tool imports exist before module sync")
+	}
+	for _, label := range cfg.expectedTargets {
+		if strings.TrimSpace(label) == "" {
+			return errors.New("--expected-target entries must be non-empty")
+		}
+		if !strings.HasPrefix(label, "//") || !strings.Contains(label, ":") {
+			return fmt.Errorf("--expected-target must be a local label like //pkg:target, got %q", label)
+		}
+	}
+	return nil
+}
+
+// runWorkspaceMode writes only local scaffolding files for WORKSPACE consumers.
+// It never edits WORKSPACE itself; operators can pair it with the printed
+// repository snippet and place that snippet where their monorepo expects it.
+func runWorkspaceMode(cfg config) error {
+	if cfg.writeBazelrc {
+		if err := writeBazelrcBlock(cfg); err != nil {
+			return err
+		}
+	}
+	if cfg.writeRootTargets {
+		if err := ensureGuidedRootBuild(cfg); err != nil {
+			return err
+		}
+	}
+	if cfg.writeOrchestrionFiles {
+		if err := writeWorkspaceOrchestrionToolFile(cfg); err != nil {
+			return err
+		}
+		if err := writeStarterOrchestrionYML(cfg); err != nil {
+			return err
+		}
+		if err := ensureGuidedGoModuleBuild(cfg); err != nil {
+			return err
+		}
+	}
+	if cfg.writeWrapperTemplate {
+		if err := ensureWorkspaceWrapperTemplate(cfg); err != nil {
+			return err
+		}
+	}
+	if cfg.goModSyncSet && cfg.goModSync != "off" {
+		if err := ensureFileExists(filepath.Join(cfg.goModuleDir, "go.mod"), "go.mod"); err != nil {
+			return err
+		}
+		if err := syncDDTraceGoVersion(cfg); err != nil {
+			return err
+		}
+		if cfg.goModSync == "tidy" {
+			if err := warmOrchestrionModuleCache(cfg); err != nil {
+				return err
+			}
+		}
+		if err := verifyResolvedBootstrapModuleVersions(cfg); err != nil {
+			return fmt.Errorf("%w\nbootstrap may have already updated these files: go.mod, go.sum, orchestrion.tool.go%s", err, maybeChangedStarterYML(cfg.goModuleDir))
+		}
+	}
+	return nil
+}
+
+// readGoModulePath returns the module path declared by a go.mod file.
+func readGoModulePath(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read go.mod: %w", err)
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "module ") || strings.HasPrefix(trimmed, "module\t") {
+			modulePath := strings.TrimSpace(strings.TrimPrefix(trimmed, "module"))
+			fields := strings.Fields(modulePath)
+			if len(fields) > 0 {
+				modulePath = fields[0]
+			}
+			modulePath = strings.Trim(modulePath, `"`)
+			if modulePath == "" {
+				return "", fmt.Errorf("go.mod at %s has an empty module path", path)
+			}
+			return modulePath, nil
+		}
+	}
+	return "", fmt.Errorf("go.mod at %s does not declare a module path", path)
+}
+
 func patchModuleFile(cfg config) error {
 	content, err := os.ReadFile(cfg.moduleFile)
 	if err != nil {
@@ -252,11 +597,24 @@ func patchModuleFile(cfg config) error {
 		}
 	}
 
-	if cfg.rulesGoRemote == defaultRulesGoRemote && cfg.rulesGoCommit == defaultRulesGoCommit {
+	if !cfg.rulesGoCommitSet {
+		if remote, commit := inferManagedRulesGoOverride(text); remote != "" && commit != "" {
+			if !cfg.rulesGoRemoteSet {
+				cfg.rulesGoRemote = remote
+			}
+			cfg.rulesGoCommit = commit
+		}
+	}
+
+	if !cfg.rulesGoRemoteSet && !cfg.rulesGoCommitSet && cfg.rulesGoCommit == "" {
 		if remote, commit := inferDatadogRepoOverride(text); remote != "" && commit != "" {
 			cfg.rulesGoRemote = remote
 			cfg.rulesGoCommit = commit
 		}
+	}
+
+	if strings.TrimSpace(cfg.rulesGoCommit) == "" {
+		return errors.New("rules_go fork commit is required; add a git_override for datadog-rules-test-optimization-go/datadog-rules-test-optimization or pass --rules-go-commit explicitly")
 	}
 
 	if !strings.Contains(text, managedBlockStart) && strings.Contains(text, `module_name = "rules_go"`) && !rulesGoOverrideCompatible(text, cfg) {
@@ -305,7 +663,277 @@ orchestrion.from_source(
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, defaultRulesGoStripPrefix, cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd)
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, rulesGoStripPrefix(cfg), cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd)
+}
+
+func validateRulesGoVariant(variant string) error {
+	// Keep the public bootstrap contract explicit: normal consumers use the
+	// generic base variant, while large monorepos can opt into complete.
+	if variant == "base" || variant == "complete" {
+		return nil
+	}
+	return fmt.Errorf("--rules-go-variant must be \"base\" or \"complete\", got %q", variant)
+}
+
+func validateFetchMode(value, flagName string) error {
+	if value == "git" || value == "archive" {
+		return nil
+	}
+	return fmt.Errorf("--%s must be \"git\" or \"archive\", got %q", flagName, value)
+}
+
+// validateGoModSyncMode validates the bootstrap strategy used for go.mod/go.sum.
+func validateGoModSyncMode(value string) error {
+	switch value {
+	case "targeted", "tidy", "off":
+		return nil
+	default:
+		return fmt.Errorf("--go-mod-sync must be \"targeted\", \"tidy\", or \"off\", got %q", value)
+	}
+}
+
+// validateGoBinary rejects shell-style command strings. Bootstrap executes the
+// selected Go binary directly, so this flag must contain only an executable name
+// or path, not arguments or shell syntax.
+func validateGoBinary(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return errors.New("--go-binary cannot be empty")
+	}
+	if trimmed != value {
+		return fmt.Errorf("--go-binary must not contain leading or trailing whitespace: %q", value)
+	}
+	if strings.ContainsAny(trimmed, "\x00\r\n\t") {
+		return fmt.Errorf("--go-binary must not contain control characters: %q", value)
+	}
+	if len(strings.Fields(trimmed)) != 1 {
+		return fmt.Errorf("--go-binary must be a single executable path without arguments: %q", value)
+	}
+	base := filepath.Base(trimmed)
+	if base != "go" && base != "go.exe" {
+		return fmt.Errorf("--go-binary must point to an executable named \"go\" or \"go.exe\", got %q", value)
+	}
+	return nil
+}
+
+// validateBazelrcConfig validates the config suffix used in generated Bazel
+// flags.
+func validateBazelrcConfig(configName string) error {
+	// Bazel config suffixes cannot be empty because every generated command is
+	// documented as --config=<name>.
+	if strings.TrimSpace(configName) == "" {
+		return errors.New("--bazelrc-config must be non-empty")
+	}
+	if strings.ContainsAny(configName, " \t\r\n") {
+		return fmt.Errorf("--bazelrc-config must not contain whitespace, got %q", configName)
+	}
+	return nil
+}
+
+// bazelrcSnippet renders the managed .bazelrc block for Go onboarding.
+func bazelrcSnippet(cfg config) (string, error) {
+	if err := validateBazelrcConfig(cfg.bazelrcConfig); err != nil {
+		return "", err
+	}
+
+	var buf strings.Builder
+	buf.WriteString(bazelrcBlockStart)
+	buf.WriteString("\n")
+	for _, key := range bazelrcRepoEnvKeys {
+		fmt.Fprintf(&buf, "common:%s --repo_env=%s\n", cfg.bazelrcConfig, key)
+	}
+	fmt.Fprintf(&buf, "test:%s --remote_download_outputs=all\n", cfg.bazelrcConfig)
+	buf.WriteString(bazelrcBlockEnd)
+	buf.WriteString("\n")
+	return buf.String(), nil
+}
+
+// writeBazelrcBlock inserts or replaces the managed .bazelrc block.
+func writeBazelrcBlock(cfg config) error {
+	snippet, err := bazelrcSnippet(cfg)
+	if err != nil {
+		return err
+	}
+	path, err := resolveBazelrcPath(cfg)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	text := snippet
+	if len(content) > 0 {
+		text, err = replaceManagedSection(string(content), bazelrcBlockStart, bazelrcBlockEnd, strings.TrimRight(snippet, "\n"))
+		if err != nil {
+			return err
+		}
+		text = strings.TrimRight(text, "\n") + "\n"
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// resolveBazelrcPath resolves --bazelrc-path to an absolute path inside the
+// selected workspace so a typo or malicious value cannot write outside it.
+func resolveBazelrcPath(cfg config) (string, error) {
+	if strings.TrimSpace(cfg.bazelrcPath) == "" {
+		return "", errors.New("--bazelrc-path must be non-empty")
+	}
+	workspaceDir, err := filepath.Abs(cfg.workspaceDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace: %w", err)
+	}
+	path := cfg.bazelrcPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workspaceDir, path)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve --bazelrc-path: %w", err)
+	}
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(workspaceDir, path)
+	if err != nil {
+		return "", fmt.Errorf("validate --bazelrc-path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("--bazelrc-path must stay inside workspace %s: %s", workspaceDir, cfg.bazelrcPath)
+	}
+	return path, nil
+}
+
+func workspaceSnippet(cfg config) (string, error) {
+	if cfg.rulesGoRepoName == "" {
+		return "", errors.New("--rules-go-repo-name must be non-empty")
+	}
+	rtoCommit := cfg.rtoCommit
+	if strings.TrimSpace(rtoCommit) == "" {
+		rtoCommit = cfg.rulesGoCommit
+	}
+	if (cfg.datadogFetch == "git" || cfg.rulesGoFetch == "git") && strings.TrimSpace(rtoCommit) == "" {
+		return "", errors.New("--rto-commit is required when --datadog-fetch or --rules-go-fetch is git")
+	}
+	if cfg.datadogFetch == "archive" || cfg.rulesGoFetch == "archive" {
+		missing := []string{}
+		if cfg.rtoArchiveURL == "" {
+			missing = append(missing, "--rto-archive-url")
+		}
+		if cfg.rtoArchiveSHA256 == "" {
+			missing = append(missing, "--rto-archive-sha256")
+		}
+		if cfg.rtoArchivePrefix == "" {
+			missing = append(missing, "--rto-archive-prefix")
+		}
+		if cfg.rtoArchiveType == "" {
+			missing = append(missing, "--rto-archive-type")
+		}
+		if len(missing) > 0 {
+			return "", fmt.Errorf("archive WORKSPACE snippet mode requires %s", strings.Join(missing, ", "))
+		}
+	}
+
+	var buf strings.Builder
+	buf.WriteString(`# Datadog Test Optimization Go/Orchestrion WORKSPACE wiring.
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+`)
+	if cfg.datadogFetch == "git" {
+		buf.WriteString(fmt.Sprintf(`git_repository(
+    name = "datadog-rules-test-optimization",
+    commit = "%s",
+    remote = "%s",
+)
+
+`, rtoCommit, cfg.rulesGoRemote))
+	} else {
+		buf.WriteString(fmt.Sprintf(`http_archive(
+    name = "datadog-rules-test-optimization",
+    urls = ["%s"],
+    sha256 = "%s",
+    type = "%s",
+    strip_prefix = "%s",
+)
+
+`, cfg.rtoArchiveURL, cfg.rtoArchiveSHA256, cfg.rtoArchiveType, cfg.rtoArchivePrefix))
+	}
+
+	buf.WriteString(fmt.Sprintf(`load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
+
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "%s",
+    rto_remote = "%s",
+    datadog_fetch = "%s",
+    rules_go_fetch = "%s",
+    rules_go_repo_name = "%s",
+    rules_go_variant = "%s",
+`, rtoCommit, cfg.rulesGoRemote, cfg.datadogFetch, cfg.rulesGoFetch, cfg.rulesGoRepoName, cfg.rulesGoVariant))
+	if cfg.datadogFetch == "archive" || cfg.rulesGoFetch == "archive" {
+		buf.WriteString(fmt.Sprintf(`    rto_archive_url = "%s",
+    rto_archive_sha256 = "%s",
+    rto_archive_prefix = "%s",
+    rto_archive_type = "%s",
+`, cfg.rtoArchiveURL, cfg.rtoArchiveSHA256, cfg.rtoArchivePrefix, cfg.rtoArchiveType))
+	}
+	buf.WriteString(")\n\n")
+
+	buf.WriteString(fmt.Sprintf(`load("@%s//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+load("@%s//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
+
+go_rules_dependencies()
+go_register_toolchains(version = "<go-version>")
+go_orchestrion_tool_repo(
+    version = "%s",
+%s
+)
+`, cfg.rulesGoRepoName, cfg.rulesGoRepoName, cfg.orchestrionVersion, workspaceSnippetTracerConfig(cfg)))
+	if cfg.workspaceMode || strings.TrimSpace(cfg.service) != "" || strings.TrimSpace(cfg.runtimeVersion) != "" {
+		buf.WriteString("\n")
+		buf.WriteString(workspaceSyncSnippet(cfg))
+	}
+	return buf.String(), nil
+}
+
+// workspaceSyncSnippet renders the repository-rule call that fetches Test
+// Optimization metadata during WORKSPACE repository resolution.
+func workspaceSyncSnippet(cfg config) string {
+	return fmt.Sprintf(`load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+
+test_optimization_sync(
+    name = "%s",
+    service = "%s",
+    runtime_name = "go",
+    runtime_version = "%s",
+    require_git_metadata = True,
+)
+`, cfg.syncRepoName, cfg.service, cfg.runtimeVersion)
+}
+
+func workspaceSnippetTracerConfig(cfg config) string {
+	if cfg.usesPerModuleTracerConfig() {
+		var buf strings.Builder
+		buf.WriteString("    dd_trace_go_versions = {\n")
+		for _, modulePath := range ddTraceGoModules {
+			buf.WriteString(fmt.Sprintf("        %q: %q,\n", modulePath, cfg.ddTraceGoVersions[modulePath]))
+		}
+		buf.WriteString("    },")
+		return buf.String()
+	}
+	return fmt.Sprintf("    dd_trace_go_version = %q,", cfg.ddTraceGoVersion)
+}
+
+func rulesGoStripPrefix(cfg config) string {
+	variant := cfg.rulesGoVariant
+	if variant == "" {
+		variant = defaultRulesGoVariant
+	}
+	return "third_party/rules_go_orchestrion_" + variant
 }
 
 func managedTracerConfigBlock(cfg config) string {
@@ -322,6 +950,10 @@ func managedTracerConfigBlock(cfg config) string {
 }
 
 func managedGuidedModuleBlock(cfg config) string {
+	modulePathLine := ""
+	if cfg.goModulePath != "" {
+		modulePathLine = fmt.Sprintf("    module_path = %q,\n", cfg.goModulePath)
+	}
 	return fmt.Sprintf(`%s
 datadog_go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
@@ -332,11 +964,11 @@ datadog_go_topt.test_optimization_go(
     name = "%s",
     service = "%s",
     runtime_version = "%s",
-)
+%s)
 
 use_repo(datadog_go_topt, "%s")
 %s
-`, guidedBlockStart, cfg.syncRepoName, cfg.service, cfg.runtimeVersion, cfg.syncRepoName, guidedBlockEnd)
+`, guidedBlockStart, cfg.syncRepoName, cfg.service, cfg.runtimeVersion, modulePathLine, cfg.syncRepoName, guidedBlockEnd)
 }
 
 func insertAfterModuleDecl(content, snippet string) (string, error) {
@@ -381,6 +1013,22 @@ func replaceManagedSection(content, startMarker, endMarker, block string) (strin
 	return buf.String(), nil
 }
 
+// removeManagedSectionIfPresent removes a managed block without creating it
+// when it is absent.
+func removeManagedSectionIfPresent(content, startMarker, endMarker string) (string, error) {
+	start := strings.Index(content, startMarker)
+	end := strings.Index(content, endMarker)
+	switch {
+	case start >= 0 && end >= 0 && end > start:
+		end += len(endMarker)
+		return content[:start] + content[end:], nil
+	case start >= 0 || end >= 0:
+		return "", fmt.Errorf("existing Datadog managed block is malformed: %s / %s", startMarker, endMarker)
+	default:
+		return content, nil
+	}
+}
+
 func inferDatadogRepoOverride(content string) (string, string) {
 	overridePattern := regexp.MustCompile(`(?s)git_override\(\s*module_name\s*=\s*"([^"]+)"(.*?)\n\)`)
 	remotePattern := regexp.MustCompile(`remote\s*=\s*"([^"]+)"`)
@@ -400,6 +1048,38 @@ func inferDatadogRepoOverride(content string) (string, string) {
 		return remoteMatch[1], commitMatch[1]
 	}
 	return "", ""
+}
+
+func inferManagedRulesGoOverride(content string) (string, string) {
+	// Rerunning bootstrap should preserve the published fork commit already
+	// written in the managed rules_go override. This avoids depending on an
+	// embedded commit that may not survive squash-merge publication.
+	start := strings.Index(content, managedBlockStart)
+	end := strings.Index(content, managedBlockEnd)
+	if start < 0 || end < 0 || end <= start {
+		return "", ""
+	}
+	return inferRulesGoOverride(content[start:end])
+}
+
+func inferRulesGoOverride(content string) (string, string) {
+	// Return the remote and commit from an existing rules_go override when the
+	// workspace already owns that wiring.
+	overridePattern := regexp.MustCompile(`(?s)git_override\(\s*module_name\s*=\s*"rules_go"(.*?)\n\)`)
+	remotePattern := regexp.MustCompile(`remote\s*=\s*"([^"]+)"`)
+	commitPattern := regexp.MustCompile(`commit\s*=\s*"([^"]+)"`)
+
+	match := overridePattern.FindStringSubmatch(content)
+	if len(match) < 2 {
+		return "", ""
+	}
+	body := match[1]
+	remoteMatch := remotePattern.FindStringSubmatch(body)
+	commitMatch := commitPattern.FindStringSubmatch(body)
+	if len(remoteMatch) < 2 || len(commitMatch) < 2 {
+		return "", ""
+	}
+	return remoteMatch[1], commitMatch[1]
 }
 
 type goExtensionCall struct {
@@ -541,11 +1221,14 @@ func rulesGoOverrideCompatible(content string, cfg config) bool {
 	if len(remoteMatch) < 2 || len(commitMatch) < 2 || len(stripPrefixMatch) < 2 {
 		return false
 	}
-	return remoteMatch[1] == cfg.rulesGoRemote && commitMatch[1] == cfg.rulesGoCommit && stripPrefixMatch[1] == defaultRulesGoStripPrefix
+	return remoteMatch[1] == cfg.rulesGoRemote && commitMatch[1] == cfg.rulesGoCommit && stripPrefixMatch[1] == rulesGoStripPrefix(cfg)
 }
 
 func ensureGuidedWorkspaceFiles(cfg config) error {
 	if err := ensureGuidedRootBuild(cfg); err != nil {
+		return err
+	}
+	if err := ensureGuidedGoModuleBuild(cfg); err != nil {
 		return err
 	}
 	if err := ensureGuidedWrapper(cfg); err != nil {
@@ -565,6 +1248,15 @@ func ensureGuidedRootBuild(cfg config) error {
 	}
 	text := string(content)
 
+	if !strings.Contains(text, doctorBlockStart) && hasNamedTarget(text, cfg.doctorTargetName) {
+		if !cfg.force {
+			return fmt.Errorf("%s already contains an unmanaged target named %q; rerun with --force or use the manual Go setup path", filepath.Base(buildPath), cfg.doctorTargetName)
+		}
+		text, err = removeNamedTarget(text, cfg.doctorTargetName)
+		if err != nil {
+			return err
+		}
+	}
 	if !strings.Contains(text, uploaderBlockStart) && hasNamedTarget(text, cfg.uploaderTargetName) {
 		if !cfg.force {
 			return fmt.Errorf("%s already contains an unmanaged target named %q; rerun with --force or use the manual Go setup path", filepath.Base(buildPath), cfg.uploaderTargetName)
@@ -575,19 +1267,77 @@ func ensureGuidedRootBuild(cfg config) error {
 		}
 	}
 
+	text, err = ensureLoadStatement(text, `load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")`)
+	if err != nil {
+		return err
+	}
 	text, err = ensureLoadStatement(text, `load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")`)
 	if err != nil {
 		return err
 	}
 
-	block := fmt.Sprintf(`%s
+	doctorBlock := fmt.Sprintf(`%s
+dd_test_optimization_doctor(
+    name = "%s",
+    data = ["@%s//:test_optimization_context"],
+%s)
+%s
+`, doctorBlockStart, cfg.doctorTargetName, cfg.syncRepoName, renderExpectedTargetsAttr(cfg.expectedTargets), doctorBlockEnd)
+	text, err = replaceManagedSection(text, doctorBlockStart, doctorBlockEnd, doctorBlock)
+	if err != nil {
+		return err
+	}
+
+	uploaderBlock := fmt.Sprintf(`%s
 dd_payload_uploader(
     name = "%s",
     data = ["@%s//:test_optimization_context"],
 )
 %s
 `, uploaderBlockStart, cfg.uploaderTargetName, cfg.syncRepoName, uploaderBlockEnd)
-	text, err = replaceManagedSection(text, uploaderBlockStart, uploaderBlockEnd, block)
+	text, err = replaceManagedSection(text, uploaderBlockStart, uploaderBlockEnd, uploaderBlock)
+	if err != nil {
+		return err
+	}
+
+	if sameCleanPath(goModuleDirOrWorkspace(cfg), cfg.workspaceDir) {
+		pinBlock := renderPinExportsBlock()
+		text, err = replaceManagedSection(text, pinExportsBlockStart, pinExportsBlockEnd, pinBlock)
+		if err != nil {
+			return err
+		}
+	} else {
+		text, err = removeManagedSectionIfPresent(text, pinExportsBlockStart, pinExportsBlockEnd)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := os.WriteFile(buildPath, []byte(text), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", buildPath, err)
+	}
+	return nil
+}
+
+// ensureGuidedGoModuleBuild ensures the configured Go module package exports
+// Orchestrion pin files.
+func ensureGuidedGoModuleBuild(cfg config) error {
+	if _, err := goModuleBazelPackage(cfg); err != nil {
+		return err
+	}
+	moduleDir := goModuleDirOrWorkspace(cfg)
+	buildPath, err := selectPackageFile(moduleDir)
+	if err != nil {
+		return err
+	}
+	content, err := os.ReadFile(buildPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", buildPath, err)
+	}
+	text := string(content)
+
+	pinBlock := renderPinExportsBlock()
+	text, err = replaceManagedSection(text, pinExportsBlockStart, pinExportsBlockEnd, pinBlock)
 	if err != nil {
 		return err
 	}
@@ -598,7 +1348,42 @@ dd_payload_uploader(
 	return nil
 }
 
+func renderPinExportsBlock() string {
+	var buf bytes.Buffer
+	buf.WriteString(pinExportsBlockStart)
+	buf.WriteString("\nexports_files([\n")
+	for _, file := range orchestrionPinFiles {
+		fmt.Fprintf(&buf, "    %q,\n", file)
+	}
+	buf.WriteString("])\n")
+	buf.WriteString(pinExportsBlockEnd)
+	buf.WriteString("\n")
+	return buf.String()
+}
+
+// renderExpectedTargetsAttr renders the optional doctor target allowlist. An
+// empty list leaves discovery global so simple repositories do not need to
+// maintain duplicate target lists.
+func renderExpectedTargetsAttr(targets []string) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	buf.WriteString("    expected_targets = [\n")
+	for _, target := range targets {
+		fmt.Fprintf(&buf, "        %q,\n", target)
+	}
+	buf.WriteString("    ],")
+	buf.WriteString("\n")
+	return buf.String()
+}
+
 func ensureGuidedWrapper(cfg config) error {
+	pinLabels, err := orchestrionPinFileLabels(cfg)
+	if err != nil {
+		return err
+	}
+
 	wrapperDir := filepath.Join(cfg.workspaceDir, toolsBuildDir)
 	if err := os.MkdirAll(wrapperDir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", wrapperDir, err)
@@ -630,18 +1415,201 @@ func ensureGuidedWrapper(cfg config) error {
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@%s//:export.bzl", "topt_data")
 
+_ORCHESTRION_PIN_FILES = [
+%s
+]
+
 def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         topt_data = topt_data,
+        orchestrion_pin_files = _ORCHESTRION_PIN_FILES,
         **kwargs
     )
 %s
-`, wrapperBlockStart, cfg.syncRepoName, wrapperBlockEnd)
+`, wrapperBlockStart, cfg.syncRepoName, renderPinLabelLines(pinLabels), wrapperBlockEnd)
 	if err := os.WriteFile(wrapperPath, []byte(wrapperContent), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", wrapperPath, err)
 	}
 	return nil
+}
+
+// ensureWorkspaceWrapperTemplate writes a generic split wrapper template for
+// WORKSPACE monorepos. The template keeps repository policy in one local helper
+// while Datadog-specific attributes stay in the optimized wrapper path.
+func ensureWorkspaceWrapperTemplate(cfg config) error {
+	if strings.TrimSpace(cfg.wrapperPackage) == "" {
+		return errors.New("--wrapper-package must be non-empty")
+	}
+	if strings.TrimSpace(cfg.wrapperFile) == "" {
+		return errors.New("--wrapper-file must be non-empty")
+	}
+	if strings.ContainsAny(cfg.wrapperFile, `/\`) {
+		return fmt.Errorf("--wrapper-file must be a filename, got %q", cfg.wrapperFile)
+	}
+	if strings.TrimSpace(cfg.plainWrapperName) == "" {
+		return errors.New("--plain-wrapper-name must be non-empty")
+	}
+	if strings.TrimSpace(cfg.optimizedWrapperName) == "" {
+		return errors.New("--optimized-wrapper-name must be non-empty")
+	}
+
+	pinLabels, err := orchestrionPinFileLabels(cfg)
+	if err != nil {
+		return err
+	}
+	wrapperDir, err := resolveWorkspaceRelativeDir(cfg.workspaceDir, cfg.wrapperPackage, "--wrapper-package")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(wrapperDir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", wrapperDir, err)
+	}
+	packagePath, err := selectPackageFile(wrapperDir)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(packagePath); os.IsNotExist(err) {
+		if err := os.WriteFile(packagePath, []byte("# Package marker for workspace-local test wrapper macros.\n"), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", packagePath, err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("stat %s: %w", packagePath, err)
+	}
+
+	wrapperPath := filepath.Join(wrapperDir, cfg.wrapperFile)
+	existing, err := os.ReadFile(wrapperPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", wrapperPath, err)
+	}
+	if len(existing) > 0 && (!strings.Contains(string(existing), wrapperBlockStart) || !strings.Contains(string(existing), wrapperBlockEnd)) && !cfg.force {
+		return fmt.Errorf("%s already exists and is not Datadog-managed; rerun with --force or choose a different --wrapper-file", wrapperPath)
+	}
+
+	wrapperContent := workspaceWrapperTemplate(cfg, pinLabels)
+	if err := os.WriteFile(wrapperPath, []byte(wrapperContent), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", wrapperPath, err)
+	}
+	return nil
+}
+
+// workspaceWrapperTemplate renders a repo-local plain/optimized wrapper split.
+// Consumers keep scheduling, tags, flaky handling, and platform policy inside
+// _apply_repo_go_test_policy instead of editing the public Datadog macro.
+func workspaceWrapperTemplate(cfg config, pinLabels []string) string {
+	return fmt.Sprintf(`"""Workspace-local Go test wrappers for Datadog Test Optimization.
+
+Keep repository-specific scheduling, tags, Docker, flaky, and platform policy
+inside _apply_repo_go_test_policy. The optimized wrapper below owns only the
+Datadog Test Optimization attributes.
+"""
+
+%s
+load("@%s//go:def.bzl", _raw_go_test = "go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", _raw_dd_topt_go_test = "dd_topt_go_test")
+load("@%s//:export.bzl", "topt_data")
+
+_ORCHESTRION_PIN_FILES = [
+%s
+]
+
+def _apply_repo_go_test_policy(go_test_macro, name, **kwargs):
+    """Apply repository-local go_test policy before calling the selected macro."""
+    go_test_macro(name = name, **kwargs)
+
+def %s(name, **kwargs):
+    """Run a plain go_test with repository-local policy only."""
+    _apply_repo_go_test_policy(_raw_go_test, name = name, **kwargs)
+
+def %s(name, **kwargs):
+    """Run an Orchestrion-enabled go_test with Datadog Test Optimization."""
+    if "topt_data" in kwargs:
+        fail("%s injects topt_data from @%s; remove the explicit topt_data attr")
+    if "orchestrion_pin_files" in kwargs:
+        fail("%s injects orchestrion_pin_files from the bootstrap-managed pin list")
+    _apply_repo_go_test_policy(
+        _raw_dd_topt_go_test,
+        name = name,
+        topt_data = topt_data,
+        orchestrion_pin_files = _ORCHESTRION_PIN_FILES,
+        **kwargs
+    )
+%s
+`, wrapperBlockStart, cfg.rulesGoRepoName, cfg.syncRepoName, strings.TrimRight(renderPinLabelLines(pinLabels), "\n"), cfg.plainWrapperName, cfg.optimizedWrapperName, cfg.optimizedWrapperName, cfg.syncRepoName, cfg.optimizedWrapperName, wrapperBlockEnd)
+}
+
+// resolveWorkspaceRelativeDir resolves a user-selected directory and rejects
+// traversal outside the workspace root.
+func resolveWorkspaceRelativeDir(workspaceDir, value, flagName string) (string, error) {
+	if filepath.IsAbs(value) {
+		return "", fmt.Errorf("%s must be workspace-relative, got %q", flagName, value)
+	}
+	cleaned := filepath.Clean(value)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s must stay inside the workspace, got %q", flagName, value)
+	}
+	return filepath.Join(workspaceDir, cleaned), nil
+}
+
+// renderPinLabelLines renders Starlark list entries for Orchestrion pin-file
+// labels.
+func renderPinLabelLines(labels []string) string {
+	var buf bytes.Buffer
+	for _, label := range labels {
+		fmt.Fprintf(&buf, "    %q,\n", label)
+	}
+	return buf.String()
+}
+
+// orchestrionPinFileLabels returns Bazel labels for pin files in the
+// configured Go module package.
+func orchestrionPinFileLabels(cfg config) ([]string, error) {
+	pkg, err := goModuleBazelPackage(cfg)
+	if err != nil {
+		return nil, err
+	}
+	labels := make([]string, 0, len(orchestrionPinFiles))
+	for _, file := range orchestrionPinFiles {
+		if pkg == "//" {
+			labels = append(labels, "//:"+file)
+		} else {
+			labels = append(labels, pkg+":"+file)
+		}
+	}
+	return labels, nil
+}
+
+// goModuleBazelPackage returns the Bazel package label for the configured Go
+// module directory.
+func goModuleBazelPackage(cfg config) (string, error) {
+	moduleDir := goModuleDirOrWorkspace(cfg)
+	rel, err := filepath.Rel(cfg.workspaceDir, moduleDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve Go module package: %w", err)
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." {
+		return "//", nil
+	}
+	if filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("go module directory %s must be inside workspace %s", moduleDir, cfg.workspaceDir)
+	}
+	return "//" + filepath.ToSlash(rel), nil
+}
+
+// goModuleDirOrWorkspace returns cfg.goModuleDir, defaulting to the workspace
+// root.
+func goModuleDirOrWorkspace(cfg config) string {
+	if cfg.goModuleDir != "" {
+		return cfg.goModuleDir
+	}
+	return cfg.workspaceDir
+}
+
+// sameCleanPath returns whether two local paths are equal after filepath
+// cleanup.
+func sameCleanPath(left, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
 }
 
 func selectPackageFile(dir string) (string, error) {
@@ -857,6 +1825,27 @@ func hydrateManagedTracerConfig(cfg *config, content string) error {
 	return nil
 }
 
+func hydrateManagedRulesGoVariant(cfg *config, content string) error {
+	// Rerunning the bootstrap should preserve the variant the managed block
+	// already selected. Without this, complete-variant workspaces silently
+	// downgrade to the base variant unless every rerun repeats the flag.
+	start := strings.Index(content, managedBlockStart)
+	end := strings.Index(content, managedBlockEnd)
+	if start < 0 || end < 0 || end <= start {
+		return nil
+	}
+	stripPrefixPattern := regexp.MustCompile(`strip_prefix\s*=\s*"third_party/rules_go_orchestrion_([^"]+)"`)
+	match := stripPrefixPattern.FindStringSubmatch(content[start:end])
+	if len(match) != 2 {
+		return nil
+	}
+	if err := validateRulesGoVariant(match[1]); err != nil {
+		return err
+	}
+	cfg.rulesGoVariant = match[1]
+	return nil
+}
+
 func parseTracerConfigsFromContent(content string) ([]tracerConfig, error) {
 	aliases := map[string]struct{}{}
 	for _, block := range topLevelCallBlocks(content) {
@@ -965,44 +1954,122 @@ func extractBlockName(block string) string {
 	return match[1]
 }
 
-func runOrchestrionPin(cfg config) error {
-	cmd := exec.Command("go", "run", "github.com/DataDog/orchestrion@"+cfg.orchestrionVersion, "pin")
-	cmd.Dir = cfg.goModuleDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = orchestrionBootstrapEnv()
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run orchestrion pin in %s: %w", cfg.goModuleDir, err)
+// writeOrchestrionToolFile writes the managed tools-tagged Orchestrion entrypoint
+// that the bootstrap flow keeps aligned with the Bazel-side Orchestrion wiring.
+// The helper writes this file directly instead of depending on `orchestrion pin`
+// so bootstrap stays deterministic even when upstream pin behavior changes.
+func writeOrchestrionToolFile(cfg config) error {
+	path := filepath.Join(cfg.goModuleDir, "orchestrion.tool.go")
+	if err := os.WriteFile(path, []byte(managedOrchestrionToolFileSource()), 0o644); err != nil {
+		return fmt.Errorf("write orchestrion.tool.go: %w", err)
 	}
 	return nil
 }
 
-func syncDDTraceGoVersion(cfg config) error {
-	commands := make([][]string, 0, len(ddTraceGoModules)+2)
-	versions := cfg.effectiveDDTraceGoVersions()
-	for _, modulePath := range ddTraceGoModules {
-		commands = append(commands, []string{"mod", "edit", "-require=" + modulePath + "@" + versions[modulePath]})
+// writeWorkspaceOrchestrionToolFile protects WORKSPACE users from
+// accidentally replacing a hand-maintained tools file. Existing managed content
+// is idempotent; custom content requires --force.
+func writeWorkspaceOrchestrionToolFile(cfg config) error {
+	path := filepath.Join(cfg.goModuleDir, "orchestrion.tool.go")
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read orchestrion.tool.go: %w", err)
 	}
-	commands = append(commands,
-		[]string{"get", "github.com/DataDog/dd-trace-go/v2/orchestrion@" + versions["github.com/DataDog/dd-trace-go/v2"]},
-		[]string{"mod", "tidy"},
-	)
+	managed := managedOrchestrionToolFileSource()
+	if len(existing) > 0 && string(existing) != managed && !cfg.force {
+		return fmt.Errorf("%s already exists and is not bootstrap-managed; rerun with --force to replace it", path)
+	}
+	return writeOrchestrionToolFile(cfg)
+}
 
-	for _, args := range commands {
-		cmd := exec.Command("go", args...)
+// managedOrchestrionToolFileSource returns the canonical bootstrap-owned
+// Orchestrion tools file. The import set matches the Orchestrion module-proxy
+// seed so bootstrap and Bazel action-time module resolution stay aligned.
+func managedOrchestrionToolFileSource() string {
+	return `//go:build tools
+
+package tools
+
+import (
+	_ "github.com/DataDog/orchestrion" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
+	_ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
+)
+`
+}
+
+func syncDDTraceGoVersion(cfg config) error {
+	goBinary := effectiveGoBinary(cfg)
+	mode := cfg.goModSync
+	if strings.TrimSpace(mode) == "" {
+		mode = defaultGoModSync
+	}
+	for _, args := range bootstrapSyncCommands(cfg) {
+		// no-dd-sa: --go-binary is validated as a single Go executable path,
+		// and exec.Command invokes it directly without a shell.
+		cmd := exec.Command(goBinary, args...)
 		cmd.Dir = cfg.goModuleDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Env = orchestrionBootstrapEnv()
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("run `go %s` in %s: %w", strings.Join(args, " "), cfg.goModuleDir, err)
+			if mode == "targeted" && len(args) >= 3 && args[0] == "list" && args[1] == "-mod=readonly" {
+				return fmt.Errorf("run `%s %s` in %s: %w\nOrchestrion could not resolve its tool module graph with readonly Go modules after targeted sync. Re-run bootstrap with --go-mod-sync=targeted and refresh any checked-in go_repository declarations if this workspace uses WORKSPACE mode", goBinary, strings.Join(args, " "), cfg.goModuleDir, err)
+			}
+			return fmt.Errorf("run `%s %s` in %s: %w", goBinary, strings.Join(args, " "), cfg.goModuleDir, err)
 		}
 	}
 	return nil
 }
 
+// effectiveGoBinary returns the command used for bootstrap Go module work.
+func effectiveGoBinary(cfg config) string {
+	if strings.TrimSpace(cfg.goBinary) != "" {
+		return cfg.goBinary
+	}
+	return defaultGoBinary
+}
+
+// bootstrapSyncCommands returns the exact go command sequence bootstrap uses to
+// pin the workspace module graph. Targeted mode avoids `go mod tidy` so large
+// monorepos do not rewrite unrelated module state while making the Orchestrion
+// tool graph complete for readonly Bazel actions.
+func bootstrapSyncCommands(cfg config) [][]string {
+	commands := make([][]string, 0, len(ddTraceGoModules)+3)
+	versions := cfg.effectiveDDTraceGoVersions()
+	mode := cfg.goModSync
+	if strings.TrimSpace(mode) == "" {
+		mode = defaultGoModSync
+	}
+
+	if mode == "off" {
+		return nil
+	}
+
+	commands = append(commands, []string{"mod", "edit", "-require=github.com/DataDog/orchestrion@" + cfg.orchestrionVersion})
+	for _, modulePath := range ddTraceGoModules {
+		commands = append(commands, []string{"mod", "edit", "-require=" + modulePath + "@" + versions[modulePath]})
+	}
+
+	switch mode {
+	case "targeted":
+		commands = append(commands,
+			append([]string{"list", "-mod=mod", "-tags=tools"}, orchestrionToolPackages...),
+			append([]string{"list", "-mod=readonly", "-tags=tools"}, orchestrionToolPackages...),
+		)
+	case "tidy":
+		commands = append(commands,
+			[]string{"get", "github.com/DataDog/dd-trace-go/v2/orchestrion@" + versions["github.com/DataDog/dd-trace-go/v2"]},
+			[]string{"mod", "tidy"},
+		)
+	}
+
+	return commands
+}
+
 func normalizeDDTraceGoVersion(cfg *config) error {
-	resolvedVersions, err := resolveDDTraceGoVersionQuery(cfg.ddTraceGoVersion, "go", orchestrionBootstrapEnv())
+	resolvedVersions, err := resolveDDTraceGoVersionQuery(cfg.ddTraceGoVersion, effectiveGoBinary(*cfg), orchestrionBootstrapEnv())
 	if err != nil {
 		return err
 	}
@@ -1087,6 +2154,7 @@ func ensureCIVisibilityOrchestrionImport(cfg config) error {
 }
 
 func warmOrchestrionModuleCache(cfg config) error {
+	goBinary := effectiveGoBinary(cfg)
 	commands := make([][]string, 0, len(ddTraceGoModules)+len(ddTraceGoWarmPackages))
 	versions := cfg.effectiveDDTraceGoVersions()
 	for _, modulePath := range ddTraceGoModules {
@@ -1097,13 +2165,15 @@ func warmOrchestrionModuleCache(cfg config) error {
 	}
 
 	for _, args := range commands {
-		cmd := exec.Command("go", args...)
+		// no-dd-sa: --go-binary is validated as a single Go executable path,
+		// and exec.Command invokes it directly without a shell.
+		cmd := exec.Command(goBinary, args...)
 		cmd.Dir = cfg.goModuleDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Env = orchestrionBootstrapEnv()
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("run `go %s` in %s: %w", strings.Join(args, " "), cfg.goModuleDir, err)
+			return fmt.Errorf("run `%s %s` in %s: %w", goBinary, strings.Join(args, " "), cfg.goModuleDir, err)
 		}
 	}
 
@@ -1118,10 +2188,19 @@ type goListModule struct {
 	} `json:"Replace"`
 }
 
-func verifyResolvedDDTraceGoVersion(cfg config) error {
+func verifyResolvedBootstrapModuleVersions(cfg config) error {
+	goBinary := effectiveGoBinary(cfg)
+	orchestrionVersion, err := resolvedModuleVersion(goBinary, cfg.goModuleDir, orchestrionBootstrapEnv(), "github.com/DataDog/orchestrion")
+	if err != nil {
+		return err
+	}
+	if orchestrionVersion != cfg.orchestrionVersion {
+		return fmt.Errorf("resolved orchestrion version mismatch in %s: configured %s, resolved %s", cfg.goModuleDir, cfg.orchestrionVersion, orchestrionVersion)
+	}
+
 	expected := cfg.effectiveDDTraceGoVersions()
 	for _, modulePath := range ddTraceGoModules {
-		resolved, err := resolvedModuleVersion(cfg.goModuleDir, orchestrionBootstrapEnv(), modulePath)
+		resolved, err := resolvedModuleVersion(goBinary, cfg.goModuleDir, orchestrionBootstrapEnv(), modulePath)
 		if err != nil {
 			return err
 		}
@@ -1158,11 +2237,11 @@ func resolveDDTraceGoVersionQuery(query, goExe string, env []string) (map[string
 	}
 
 	if err := os.WriteFile(filepath.Join(neutralModuleDir, "go.mod"), []byte(syntheticDDTraceGoVersionCheckMod(resolvedVersions)), 0o644); err != nil {
-		return nil, fmt.Errorf("write temporary go.mod for dd-trace-go package preflight: %w", err)
+		return nil, fmt.Errorf("write temporary go.mod for dd-trace-go package validation: %w", err)
 	}
-	for _, packagePath := range ddTraceGoPreflightPackages {
+	for _, packagePath := range ddTraceGoValidationPackages {
 		if err := verifyPackageAvailable(goExe, neutralModuleDir, env, packagePath); err != nil {
-			return nil, fmt.Errorf("dd-trace-go query %q package preflight failed for %s: %w", query, packagePath, err)
+			return nil, fmt.Errorf("dd-trace-go query %q package validation failed for %s: %w", query, packagePath, err)
 		}
 	}
 
@@ -1170,6 +2249,8 @@ func resolveDDTraceGoVersionQuery(query, goExe string, env []string) (map[string
 }
 
 func resolveModuleVersionFromQuery(goExe, moduleDir string, env []string, modulePath, query string) (string, error) {
+	// no-dd-sa: callers pass the validated Go executable; modulePath/query are
+	// separate argv entries and are never evaluated by a shell.
 	cmd := exec.Command(goExe, "list", "-m", "-json", modulePath+"@"+query)
 	cmd.Dir = moduleDir
 	cmd.Env = normalizedGoEnv(env)
@@ -1187,13 +2268,15 @@ func resolveModuleVersionFromQuery(goExe, moduleDir string, env []string, module
 	return strings.TrimSpace(module.Version), nil
 }
 
-func resolvedModuleVersion(moduleDir string, env []string, modulePath string) (string, error) {
-	cmd := exec.Command("go", "list", "-mod=mod", "-m", "-json", modulePath)
+func resolvedModuleVersion(goExe, moduleDir string, env []string, modulePath string) (string, error) {
+	// no-dd-sa: callers pass the validated Go executable; modulePath is a
+	// separate argv entry and is never evaluated by a shell.
+	cmd := exec.Command(goExe, "list", "-mod=mod", "-m", "-json", modulePath)
 	cmd.Dir = moduleDir
 	cmd.Env = normalizedGoEnv(env)
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("resolve %s version in %s: %w", modulePath, moduleDir, err)
+		return "", fmt.Errorf("resolve %s version in %s with %s: %w", modulePath, moduleDir, goExe, err)
 	}
 	var module goListModule
 	if err := json.Unmarshal(output, &module); err != nil {
@@ -1212,6 +2295,8 @@ func resolvedModuleVersion(moduleDir string, env []string, modulePath string) (s
 }
 
 func verifyPackageAvailable(goExe, moduleDir string, env []string, packagePath string) error {
+	// no-dd-sa: callers pass the validated Go executable; packagePath is a
+	// separate argv entry and is never evaluated by a shell.
 	cmd := exec.Command(goExe, "list", "-mod=mod", packagePath)
 	cmd.Dir = moduleDir
 	cmd.Env = normalizedGoEnv(env)

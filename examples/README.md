@@ -128,11 +128,11 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
+  --dd-trace-go-version v2.9.0-dev
 ```
 
 `--dd-trace-go-version` is optional. If omitted, bootstrap uses the default
-`v2.9.0-dev.0.20260409102143-ddd4e03ab47d`. It accepts a tag, pseudo-version, branch, or commit SHA. Bootstrap
+`v2.9.0-dev`. It accepts a tag, pseudo-version, branch, or commit SHA. Bootstrap
 resolves that input to exact versions and repins the local Go module to match
 what Bazel will use.
 
@@ -154,6 +154,22 @@ dd_go_test(
 )
 ```
 
+Enable runtime source staging only when the tracer needs to open the source
+file for AST-derived metadata:
+
+```bzl
+dd_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    stage_sources = True,
+)
+```
+
+The wrapper forwards `**kwargs`, so `stage_sources` works the same way as on
+`dd_topt_go_test`. It stages only direct `srcs` and direct `embedsrcs`, and it
+changes the default `rundir` to `.` only when you did not already set one.
+
 BUILD.bazel (Python companion):
 
 ```bzl
@@ -166,9 +182,13 @@ dd_topt_py_test(
     deps = [":pkg_lib"],
     imports = ["example/python/pkg"],
     topt_data = topt_data,
-    py_test_rule = py_test,
 )
 ```
+
+The macro defaults to `@rules_python//python:py_test`. If you omit `main`, it
+uses the bundled pytest entry point and adds `PYTEST_ADDOPTS=--ddtrace` unless
+you already set it or opt out with `--no-ddtrace`. Keep passing `main` only
+when you want a non-pytest runner.
 
 BUILD.bazel (Java companion):
 
@@ -260,12 +280,20 @@ Running tests and uploading payloads:
 # Run tests (preserving exit code) then upload payloads
 bazel test //... || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 
 # RBE users: download outputs so uploader can discover payload files
 bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-exit $test_status
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 ```
 
 ```powershell
@@ -277,19 +305,23 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+exit $uploadStatus
 
 # RBE users: download outputs so uploader can discover payload files
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run //:dd_upload_payloads
-exit $testStatus
+$uploadStatus = $LASTEXITCODE
+if ($testStatus -ne 0) { exit $testStatus }
+exit $uploadStatus
 ```
 
 Notes:
-- The sequence above intentionally preserves the test exit code.
-- Uploader failures are still reported in uploader logs/output; monitor those in CI.
+- The sequence above preserves test failures and also fails on uploader errors
+  when tests passed.
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
 - Windows-friendly wrappers are provided as `examples/*/runtests.ps1` and use
   native PowerShell + Bazel (no Git Bash dependency).
@@ -344,11 +376,11 @@ Bootstrap once after adding the Go module files:
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --go-module-dir src/go-project \
-  --dd-trace-go-version v2.9.0-dev.0.20260409102143-ddd4e03ab47d
+  --dd-trace-go-version v2.9.0-dev
 ```
 
 As in the single-service flow, `--dd-trace-go-version` is optional and defaults
-to `v2.9.0-dev.0.20260409102143-ddd4e03ab47d`. It may resolve to one shared tracer version or to separate exact
+to `v2.9.0-dev`. It may resolve to one shared tracer version or to separate exact
 versions for the traced Go modules when you pass a branch or commit SHA.
 
 This multi-service path stays on the lower-level/manual API. Guided bootstrap is

@@ -97,6 +97,22 @@ def _attr_or_default(value, default):
     """Return a Starlark attr value or a default without forcing truthiness."""
     return default if value == None else value
 
+def _concat_label_list_values(left, right):
+    """Concatenate label-list-like macro inputs while preserving `select(...)`."""
+    normalized_left = _normalize_user_data(left)
+    normalized_right = _normalize_user_data(right)
+
+    if normalized_left == None:
+        return normalized_right
+    if normalized_right == None:
+        return normalized_left
+    if normalized_left == []:
+        return normalized_right
+    if normalized_right == []:
+        return normalized_left
+
+    return normalized_left + normalized_right
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
@@ -108,6 +124,12 @@ def dd_topt_go_test(
         topt_service = None,
         # Auto-select per-module known_tests/test_management group based on Go package import path
         module_label_override = None,
+        # Optional: stage direct test sources in runtime runfiles so dd-trace-go
+        # can open them for AST-derived metadata such as test.source.end.
+        stage_sources = False,
+        # Enable CI Visibility in opt-in Go tests by default so payload-to-files
+        # mode works without extra test_env wiring in consumer repos.
+        ci_visibility_enabled = True,
         # Optional module-root Orchestrion pin file labels for nested packages.
         orchestrion_pin_files = None,
         **kwargs):
@@ -135,6 +157,13 @@ def dd_topt_go_test(
         If sanitization collisions exist, pass the deduped key (for example "go_service_2").
       module_label_override: Optional override for the sanitized module label suffix when the
         automatic detection doesn't match the expected module name.
+      stage_sources: Optional boolean that stages direct `srcs` and `embedsrcs`
+        into runtime runfiles so the tracer can open source files for
+        AST-derived metadata. When enabled, the macro defaults `rundir` to `.`
+        only if the caller did not already set `rundir`.
+      ci_visibility_enabled: Optional boolean. When true, the macro forces
+        `DD_CIVISIBILITY_ENABLED=true` on the generated test environment.
+        Set false only when the caller intentionally owns this tracer switch.
       orchestrion_pin_files: Optional labels for module-root Orchestrion pin
         files such as `//:go.mod` and `//:orchestrion.tool.go`. Use this when
         the BUILD file lives in a nested package below the Go module root.
@@ -175,7 +204,15 @@ def dd_topt_go_test(
     # Use `pop` so caller kwargs forwarded to go_test do not contain stale
     # `data` after we normalize/augment it below.
     user_data = kwargs.pop("data", None)
-    data = _append_data_dependencies(user_data, [])
+    data = user_data
+
+    # Stage direct source files only when callers opt in. This gives the Go
+    # tracer a runtime-visible path it can open for AST-derived source metadata.
+    if stage_sources:
+        data = _concat_label_list_values(data, kwargs.get("srcs"))
+        data = _concat_label_list_values(data, kwargs.get("embedsrcs"))
+
+    data = _append_data_dependencies(data, [])
 
     # Extract hints for importpath detection
     explicit_importpath = kwargs.get("importpath") if "importpath" in kwargs else None
@@ -341,27 +378,30 @@ def dd_topt_go_test(
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
     data = _append_data_dependencies(data, [manifest_label])
+    required_env = {
+        "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
+        # Signal to the library that payloads should be written to files
+        # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
+        "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+        # The Orchestrion wrapper copies this file into test.outputs so the
+        # uploader can enrich payloads with target-specific Bazel metadata.
+        "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
+    }
+    if ci_visibility_enabled:
+        required_env["DD_CIVISIBILITY_ENABLED"] = "true"
     env = _merge_user_env(
         user_env,
-        {
-            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
-            # Signal to the library that payloads should be written to files
-            # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
-            "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
-            # The Orchestrion wrapper copies this file into test.outputs so the
-            # uploader can enrich payloads with target-specific Bazel metadata.
-            "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
-        },
+        required_env,
         macro_name = "dd_topt_go_test",
     )
 
     if go_test_rule == None:
         fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
-    # Use the package directory as the default runtime working directory when
-    # callers do not specify one. This keeps relative fixture paths stable.
+    # Use the repository root when staged sources need repo-relative lookup.
+    # Otherwise keep the package directory default to preserve existing tests.
     if "rundir" not in kwargs:
-        kwargs["rundir"] = native.package_name()
+        kwargs["rundir"] = "." if stage_sources else native.package_name()
 
     raw_name = name + "__raw_go_test"
     user_tags = wrapper_kwargs.get("tags")

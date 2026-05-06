@@ -241,6 +241,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                     runtime_name = call.runtime_name,
                     runtime_version = call.runtime_version,
                     runtime_arch = call.runtime_arch,
+                    runtime_module_path = call.runtime_module_path,
                     # Optional HTTP timeout/retry policy overrides.
                     # Use -1 to keep default/env behavior.
                     http_connect_timeout_seconds = call.http_connect_timeout_seconds,
@@ -251,6 +252,7 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                     known_tests = call.known_tests,
                     test_management = call.test_management,
                     flaky_tests = call.flaky_tests,
+                    require_git_metadata = call.require_git_metadata,
                     debug = call.debug,
                 )
 
@@ -274,6 +276,7 @@ test_optimization_multi_sync_extension = module_extension(
             "runtime_name": attr.string(),
             "runtime_version": attr.string(),
             "runtime_arch": attr.string(),
+            "runtime_module_path": attr.string(),
             # Optional HTTP timeout/retry policy overrides propagated to each
             # per-service sync repo. Use -1 to keep default/env behavior.
             "http_connect_timeout_seconds": attr.int(default = -1),
@@ -285,6 +288,7 @@ test_optimization_multi_sync_extension = module_extension(
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "flaky_tests": attr.bool(default = True),
+            "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),
     },

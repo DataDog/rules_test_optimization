@@ -120,7 +120,7 @@ local_path_override(
 
 local_path_override(
     module_name = "rules_go",
-    path = {json.dumps(str(root / "third_party" / "rules_go_orchestrion"))},
+    path = {json.dumps(str(root / "third_party" / "rules_go_orchestrion_base"))},
 )
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
@@ -418,7 +418,7 @@ def main() -> int:
         "local_overrides": {
             "datadog-rules-test-optimization": str(root),
             "datadog-rules-test-optimization-go": str(root / "modules" / "go"),
-            "rules_go": str(root / "third_party" / "rules_go_orchestrion"),
+            "rules_go": str(root / "third_party" / "rules_go_orchestrion_base"),
         },
         "scenarios": scenarios,
     }

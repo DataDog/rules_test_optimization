@@ -17,7 +17,7 @@ import urllib.request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_METADATA = REPO_ROOT / "third_party" / "rules_go_orchestrion.METADATA.json"
+DEFAULT_METADATA = REPO_ROOT / "third_party" / "rules_go_orchestrion_base.METADATA.json"
 
 
 def load_metadata(path: Path) -> dict:
@@ -35,12 +35,32 @@ def download_upstream_tree(repository: str, commit: str, tempdir: Path) -> Path:
     urllib.request.urlretrieve(tarball_url, tarball_path)
 
     with tarfile.open(tarball_path, "r:gz") as archive:
-        archive.extractall(tempdir, filter = "data")
+        extract_archive_safely(archive, tempdir)
 
     extracted = tempdir / ("rules_go-%s" % commit)
     if not extracted.is_dir():
         raise FileNotFoundError("expected extracted upstream tree at %s" % extracted)
     return extracted
+
+
+def extract_archive_safely(archive: tarfile.TarFile, destination: Path) -> None:
+    """Extract one tar archive with path-traversal checks across Python versions.
+
+    Python 3.12 added the ``filter=`` argument used by the safer tarfile APIs.
+    Repository maintainer workflows still run on older Python releases, so keep
+    equivalent safety checks in a compatible fallback.
+    """
+    destination_root = destination.resolve()
+    for member in archive.getmembers():
+        target_path = (destination / member.name).resolve()
+        if os.path.commonpath([str(destination_root), str(target_path)]) != str(destination_root):
+            raise ValueError("refusing to extract archive member outside destination: %s" % member.name)
+
+    if hasattr(tarfile, "data_filter"):
+        archive.extractall(destination, filter="data")
+        return
+
+    archive.extractall(destination)
 
 
 def compare_trees(upstream_root: Path, fork_root: Path) -> dict[str, list[str]]:
@@ -137,7 +157,7 @@ def print_list(changed: dict[str, list[str]]) -> None:
 
 
 def emit_patch(upstream_root: Path, fork_root: Path) -> int:
-    with tempfile.TemporaryDirectory(prefix="rules_go_patch_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="rules_go_diff_") as tmp:
         patch_root = Path(tmp)
         upstream_view = patch_root / "upstream"
         fork_view = patch_root / "fork"

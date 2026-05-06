@@ -12,11 +12,12 @@ with a lightweight fake executable rule so we can capture what the macro
 forwards at analysis time without compiling Go code.
 """
 
-load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
     "orch_go_test",
     "select_wrapper_output_name_for_tests",
+    "windows_wrapper_content_for_tests",
 )
 load(
     "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
@@ -83,9 +84,11 @@ _go_test_capture_rule = rule(
     attrs = {
         "data": attr.label_list(allow_files = True),
         "embed": attr.label_list(),
+        "embedsrcs": attr.label_list(allow_files = True),
         "env": attr.string_dict(),
         "importpath": attr.string(),
         "rundir": attr.string(),
+        "srcs": attr.label_list(allow_files = True),
     },
     executable = True,
 )
@@ -232,6 +235,61 @@ def go_macro_select_inputs_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_ci_visibility_opt_out_target(name, tags = None):
+    """Target under test for caller-owned CI Visibility enablement."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        ci_visibility_enabled = False,
+        tags = tags,
+    )
+
+def go_macro_stage_sources_target(name, tags = None):
+    """Target under test for source staging with the default repo-root rundir."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        stage_sources = True,
+        data = [":test_macro.bzl"],
+        srcs = [":test_selection_utils.bzl"],
+        embedsrcs = [":test_payloads_selector.bzl"],
+        tags = tags,
+    )
+
+def go_macro_stage_sources_rundir_target(name, tags = None):
+    """Target under test for source staging with an explicit custom rundir."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        stage_sources = True,
+        rundir = "custom/rundir",
+        srcs = [":test_macro.bzl"],
+        embedsrcs = [":test_selection_utils.bzl"],
+        tags = tags,
+    )
+
+def go_macro_stage_sources_select_target(name, tags = None):
+    """Target under test for configurable source staging inputs."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        stage_sources = True,
+        data = select({
+            "//conditions:default": [":test_macro.bzl"],
+        }),
+        srcs = select({
+            "//conditions:default": [":test_selection_utils.bzl"],
+        }),
+        embedsrcs = select({
+            "//conditions:default": [":test_payloads_selector.bzl"],
+        }),
+        tags = tags,
+    )
+
 def go_macro_orchestrion_pin_files_target(name, tags = None):
     """Target under test for explicit module-root Orchestrion pin-file labels."""
     dd_topt_go_test(
@@ -295,8 +353,13 @@ def _go_macro_single_service_wiring_test_impl(ctx):
         captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
     )
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, None, captured.env.get("DD_TRACE_AGENT_URL"))
+    asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_AGENTLESS_ENABLED"))
+    asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_AGENTLESS_URL"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
 
@@ -336,6 +399,7 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(
         env,
         "go_macro_env_none_target_topt_bazel_metadata.json",
@@ -357,6 +421,7 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(
         env,
         "go_macro_select_inputs_target_topt_bazel_metadata.json",
@@ -365,6 +430,56 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
+    return analysistest.end(env)
+
+def _go_macro_ci_visibility_opt_out_wiring_test_impl(ctx):
+    """Assert callers can intentionally own the CI Visibility tracer switch."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    return analysistest.end(env)
+
+def _go_macro_stage_sources_wiring_test_impl(ctx):
+    """Assert source staging adds direct sources and uses repo-root rundir."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_payloads_selector.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, ".", captured.rundir)
+    return analysistest.end(env)
+
+def _go_macro_stage_sources_rundir_wiring_test_impl(ctx):
+    """Assert explicit rundir still wins when source staging is enabled."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_rundir_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_rundir_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, "custom/rundir", captured.rundir)
+    return analysistest.end(env)
+
+def _go_macro_stage_sources_select_wiring_test_impl(ctx):
+    """Assert configurable source staging still preserves selected labels."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_payloads_selector.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_select_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_stage_sources_select_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, ".", captured.rundir)
     return analysistest.end(env)
 
 def _go_macro_orchestrion_pin_files_wiring_test_impl(ctx):
@@ -410,6 +525,10 @@ def _go_macro_public_wrapper_test_impl(ctx):
         run_env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
     )
     asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", run_env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, None, run_env.get("DD_TRACE_AGENT_URL"))
+    asserts.equals(env, None, run_env.get("DD_CIVISIBILITY_AGENTLESS_ENABLED"))
+    asserts.equals(env, None, run_env.get("DD_CIVISIBILITY_AGENTLESS_URL"))
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
@@ -471,12 +590,26 @@ def _wrapper_output_name_windows_test_impl(ctx):
     asserts.equals(env, "hello_test.bat", target[WrapperOutputNameInfo].output_name)
     return analysistest.end(env)
 
+def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
+    """Assert Windows launchers preserve Bazel file mode instead of proxying uploads."""
+    env = unittest.begin(ctx)
+    content = windows_wrapper_content_for_tests("raw.exe")
+    asserts.true(env, "bazel_target_metadata.json" in content)
+    asserts.true(env, '"%ACTUAL%" %*' in content)
+    asserts.false(env, "DD_TRACE_AGENT_URL" in content)
+    asserts.false(env, "DD_CIVISIBILITY_AGENTLESS_ENABLED" in content)
+    asserts.false(env, "DD_CIVISIBILITY_AGENTLESS_URL" in content)
+    asserts.false(env, "CAPTURE_PORT" in content)
+    asserts.false(env, "HELPER" in content)
+    return unittest.end(env)
+
 def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
     """Assert the wrapper target ships the sibling raw executable."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
+    asserts.equals(env, 2, len(files))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
@@ -488,6 +621,7 @@ def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
+    asserts.equals(env, 2, len(files))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target.bat"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
@@ -507,6 +641,18 @@ go_macro_env_none_wiring_test = analysistest.make(
 )
 go_macro_select_inputs_wiring_test = analysistest.make(
     _go_macro_select_inputs_wiring_test_impl,
+)
+go_macro_ci_visibility_opt_out_wiring_test = analysistest.make(
+    _go_macro_ci_visibility_opt_out_wiring_test_impl,
+)
+go_macro_stage_sources_wiring_test = analysistest.make(
+    _go_macro_stage_sources_wiring_test_impl,
+)
+go_macro_stage_sources_rundir_wiring_test = analysistest.make(
+    _go_macro_stage_sources_rundir_wiring_test_impl,
+)
+go_macro_stage_sources_select_wiring_test = analysistest.make(
+    _go_macro_stage_sources_select_wiring_test_impl,
 )
 go_macro_orchestrion_pin_files_wiring_test = analysistest.make(
     _go_macro_orchestrion_pin_files_wiring_test_impl,
@@ -530,6 +676,9 @@ wrapper_output_name_non_windows_test = analysistest.make(
 )
 wrapper_output_name_windows_test = analysistest.make(
     _wrapper_output_name_windows_test_impl,
+)
+windows_wrapper_uses_file_payload_mode_test = unittest.make(
+    _windows_wrapper_uses_file_payload_mode_test_impl,
 )
 orch_wrapper_materialized_actual_non_windows_test = analysistest.make(
     _orch_wrapper_materialized_actual_non_windows_test_impl,

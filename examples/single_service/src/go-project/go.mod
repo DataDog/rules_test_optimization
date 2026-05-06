@@ -3,9 +3,9 @@ module example.com/single-service-go-project
 go 1.25.0
 
 require (
-	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d
-	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d
-	github.com/DataDog/dd-trace-go/v2 v2.9.0-dev.0.20260409102143-ddd4e03ab47d
+	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev
+	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev
+	github.com/DataDog/dd-trace-go/v2 v2.9.0-dev
 	github.com/DataDog/orchestrion v1.6.0
 )
 
