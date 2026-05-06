@@ -1121,13 +1121,17 @@ run_test_target() {
   fi
 }
 
-for target in "${CONTROL_TARGETS[@]}"; do
-  run_test_target "${target}"
-done
+if ((${#CONTROL_TARGETS[@]} > 0)); then
+  for target in "${CONTROL_TARGETS[@]}"; do
+    run_test_target "${target}"
+  done
+fi
 
-for target in "${INSTRUMENTED_TARGETS[@]}"; do
-  run_test_target "${target}"
-done
+if ((${#INSTRUMENTED_TARGETS[@]} > 0)); then
+  for target in "${INSTRUMENTED_TARGETS[@]}"; do
+    run_test_target "${target}"
+  done
+fi
 
 if (( test_status != 0 )); then
   warn "one or more tests failed; skipping doctor and upload"

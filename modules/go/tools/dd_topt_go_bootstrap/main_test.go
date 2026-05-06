@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -555,6 +556,56 @@ func TestRunPrintValidationScriptDoesNotRequireModuleFiles(t *testing.T) {
 	}
 	if got := buf.String(); !strings.Contains(got, `run_step "doctor ${DOCTOR_TARGET}"`) {
 		t.Fatalf("expected validation script on stdout:\n%s", got)
+	}
+}
+
+func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
+	dir := t.TempDir()
+	fakeBazel := filepath.Join(dir, "bazel")
+	logPath := filepath.Join(dir, "bazel.log")
+	if err := os.WriteFile(fakeBazel, []byte("#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$BAZEL_LOG\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake bazel: %v", err)
+	}
+
+	script, err := validationScript(config{
+		printValidationScript:  true,
+		bazelCommand:           fakeBazel,
+		bazelConfig:            "test-optimization",
+		syncRepoName:           defaultSyncRepoName,
+		validationDoctorTarget: "//:dd_test_optimization_doctor",
+		validationUploadTarget: "//:dd_upload_payloads",
+		expectedTargets:        []string{"//pkg:go_default_test"},
+		minFreeDiskGB:          defaultMinFreeDiskGB,
+	})
+	if err != nil {
+		t.Fatalf("validationScript error: %v", err)
+	}
+	scriptPath := filepath.Join(dir, "validate.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write validation script: %v", err)
+	}
+	cmd := exec.Command("bash", scriptPath, "--no-upload")
+	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("validation script failed: %v\n%s", err, output)
+	}
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake bazel log: %v", err)
+	}
+	logText := string(logBytes)
+	for _, want := range []string{
+		"sync --config=test-optimization --repo_env=FETCH_SALT=",
+		"test --config=test-optimization //pkg:go_default_test",
+		"run --config=test-optimization //:dd_test_optimization_doctor",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
+		}
+	}
+	if strings.Contains(logText, "dd_upload_payloads") {
+		t.Fatalf("validation script uploaded without --upload:\n%s", logText)
 	}
 }
 
