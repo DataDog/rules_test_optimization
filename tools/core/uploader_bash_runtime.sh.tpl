@@ -2126,7 +2126,12 @@ test_payload_has_events() {
         return 0
     fi
     local count
-    count=$(jq -r '.events | if type=="array" then length else 0 end' "$file" 2>/dev/null || echo "")
+    if ! count=$(jq -r '.events | if type=="array" then length else 0 end' "$file" 2>/dev/null); then
+        # Malformed JSON must stay on the normal upload path so later payload
+        # validation can report the corrupt file instead of silently treating
+        # it as a harmless empty placeholder.
+        return 0
+    fi
     [[ "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]
 }
 

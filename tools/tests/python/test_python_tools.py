@@ -1193,6 +1193,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         )
 
         self.assertIn("test_payload_has_events()", bash_text)
+        self.assertIn("Malformed JSON must stay on the normal upload path", bash_text)
+        self.assertNotIn("jq -r '.events | if type==\"array\" then length else 0 end' \"$file\" 2>/dev/null || echo \"\"", bash_text)
         self.assertIn("skipping test payload with no events", bash_text)
         self.assertIn("function Test-TestPayloadHasEvents", powershell_text)
         self.assertIn("skipping test payload with no events", powershell_text)
