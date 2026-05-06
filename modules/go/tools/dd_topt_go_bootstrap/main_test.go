@@ -428,6 +428,217 @@ func TestRunPrintBazelrcSnippetDoesNotRequireModuleFiles(t *testing.T) {
 	}
 }
 
+func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
+	got, err := validationScript(config{
+		printValidationScript:  true,
+		bazelCommand:           "bzl",
+		bazelConfig:            "test-optimization-worker-pilot",
+		syncRepoName:           "test_optimization_data_worker",
+		validationDoctorTarget: "//:dd_test_optimization_doctor",
+		validationUploadTarget: "//:dd_upload_payloads",
+		controlTargets:         []string{"//worker/control:go_default_test"},
+		expectedTargets:        []string{"//worker:go_default_test", "//worker:topt_flaky_test"},
+		extraSyncFlags:         []string{"--enable_workspace"},
+		extraTestFlags:         []string{"--noexperimental_use_validation_aspect"},
+		extraRunFlags:          []string{"--remote_cache="},
+		largeMonorepo:          true,
+		minFreeDiskGB:          35,
+		shutdownBazelOnExit:    true,
+		defaultJobs:            1,
+		datadogFetch:           defaultDatadogFetch,
+		rulesGoFetch:           defaultRulesGoFetch,
+		rulesGoVariant:         defaultRulesGoVariant,
+		ddTraceGoVersion:       defaultDDTraceGoVersion,
+		orchestrionVersion:     defaultOrchestrionVersion,
+		rulesGoRepoName:        defaultRulesGoRepoName,
+		rulesGoRemote:          defaultRulesGoRemote,
+		doctorTargetName:       defaultDoctorTargetName,
+		uploaderTargetName:     defaultUploaderTargetName,
+		wrapperPackage:         defaultWrapperPackage,
+		wrapperFile:            defaultWorkspaceWrapperFile,
+		plainWrapperName:       defaultPlainWrapperName,
+		optimizedWrapperName:   defaultOptimizedWrapperName,
+	})
+	if err != nil {
+		t.Fatalf("validationScript error: %v", err)
+	}
+	for _, want := range []string{
+		`BAZEL='bzl'`,
+		`BAZEL_CONFIG='test-optimization-worker-pilot'`,
+		`SYNC_REPO='test_optimization_data_worker'`,
+		`DOCTOR_TARGET='//:dd_test_optimization_doctor'`,
+		`UPLOAD_TARGET='//:dd_upload_payloads'`,
+		`MIN_FREE_DISK_GB=35`,
+		`LARGE_MONOREPO=1`,
+		`SHUTDOWN_BAZEL_ON_EXIT=1`,
+		`'--config=test-optimization-worker-pilot'`,
+		`'--jobs=1'`,
+		`'--enable_workspace'`,
+		`'--noexperimental_use_validation_aspect'`,
+		`'--remote_cache='`,
+		`'//worker/control:go_default_test'`,
+		`'//worker:go_default_test'`,
+		`'//worker:topt_flaky_test'`,
+		`sync -> controls -> instrumented tests -> doctor -> optional upload`,
+		`upload skipped; rerun with --upload`,
+		`${BAZEL}" shutdown`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("validation script missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		`--test_env=DD_GIT_`,
+		`DD_API_KEY=`,
+		`rm -rf`,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("validation script contains forbidden %q:\n%s", forbidden, got)
+		}
+	}
+}
+
+func TestValidationScriptTargetsFollowGuidedTargetNames(t *testing.T) {
+	cfg := config{
+		doctorTargetName:       "custom_doctor",
+		uploaderTargetName:     "custom_upload",
+		validationDoctorTarget: "//:" + defaultDoctorTargetName,
+		validationUploadTarget: "//:" + defaultUploaderTargetName,
+	}
+	normalizeValidationScriptTargets(&cfg)
+	if cfg.validationDoctorTarget != "//:custom_doctor" {
+		t.Fatalf("validationDoctorTarget=%q, want //:custom_doctor", cfg.validationDoctorTarget)
+	}
+	if cfg.validationUploadTarget != "//:custom_upload" {
+		t.Fatalf("validationUploadTarget=%q, want //:custom_upload", cfg.validationUploadTarget)
+	}
+
+	cfg.validationDoctorTarget = "//:explicit_doctor"
+	cfg.validationUploadTarget = "//:explicit_upload"
+	cfg.validationDoctorSet = true
+	cfg.validationUploadSet = true
+	normalizeValidationScriptTargets(&cfg)
+	if cfg.validationDoctorTarget != "//:explicit_doctor" || cfg.validationUploadTarget != "//:explicit_upload" {
+		t.Fatalf("explicit validation labels were not preserved: doctor=%q upload=%q", cfg.validationDoctorTarget, cfg.validationUploadTarget)
+	}
+}
+
+func TestRunPrintValidationScriptDoesNotRequireModuleFiles(t *testing.T) {
+	dir := t.TempDir()
+	var buf strings.Builder
+	if err := captureStdout(&buf, func() error {
+		return run(config{
+			workspaceDir:           dir,
+			printValidationScript:  true,
+			bazelCommand:           "bazel",
+			bazelConfig:            "test-optimization",
+			validationDoctorTarget: "//:dd_test_optimization_doctor",
+			validationUploadTarget: "//:dd_upload_payloads",
+			expectedTargets:        []string{"//pkg:go_default_test"},
+			datadogFetch:           defaultDatadogFetch,
+			rulesGoFetch:           defaultRulesGoFetch,
+			rulesGoVariant:         defaultRulesGoVariant,
+			ddTraceGoVersion:       defaultDDTraceGoVersion,
+			orchestrionVersion:     defaultOrchestrionVersion,
+			rulesGoRepoName:        defaultRulesGoRepoName,
+			rulesGoRemote:          defaultRulesGoRemote,
+			syncRepoName:           defaultSyncRepoName,
+			doctorTargetName:       defaultDoctorTargetName,
+			uploaderTargetName:     defaultUploaderTargetName,
+			wrapperPackage:         defaultWrapperPackage,
+			wrapperFile:            defaultWorkspaceWrapperFile,
+			plainWrapperName:       defaultPlainWrapperName,
+			optimizedWrapperName:   defaultOptimizedWrapperName,
+		})
+	}); err != nil {
+		t.Fatalf("run --print-validation-script error: %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, `run_step "doctor ${DOCTOR_TARGET}"`) {
+		t.Fatalf("expected validation script on stdout:\n%s", got)
+	}
+}
+
+func TestWriteValidationScriptFileIsExecutableAndPreservesUnmanagedFiles(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:           dir,
+		validationScriptPath:   "tools/test_optimization/validate_go_pilot.sh",
+		bazelCommand:           "bazel",
+		bazelConfig:            "test-optimization",
+		syncRepoName:           "test_optimization_data",
+		validationDoctorTarget: "//:dd_test_optimization_doctor",
+		validationUploadTarget: "//:dd_upload_payloads",
+		expectedTargets:        []string{"//pkg:go_default_test"},
+		minFreeDiskGB:          defaultMinFreeDiskGB,
+	}
+	if err := writeValidationScriptFile(cfg); err != nil {
+		t.Fatalf("writeValidationScriptFile error: %v", err)
+	}
+	path := filepath.Join(dir, "tools", "test_optimization", "validate_go_pilot.sh")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat validation script: %v", err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("validation script is not executable: mode=%s", info.Mode())
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read validation script: %v", err)
+	}
+	if err := writeValidationScriptFile(cfg); err != nil {
+		t.Fatalf("second writeValidationScriptFile error: %v", err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read second validation script: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("expected idempotent validation script write")
+	}
+
+	unmanagedPath := filepath.Join(dir, "tools", "test_optimization", "custom.sh")
+	if err := os.WriteFile(unmanagedPath, []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
+		t.Fatalf("write unmanaged script: %v", err)
+	}
+	cfg.validationScriptPath = "tools/test_optimization/custom.sh"
+	if err := writeValidationScriptFile(cfg); err == nil || !strings.Contains(err.Error(), "is not Datadog-managed") {
+		t.Fatalf("writeValidationScriptFile error=%v, want unmanaged-file protection", err)
+	}
+}
+
+func TestValidationScriptRejectsUnsafeValues(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:           dir,
+		printValidationScript:  true,
+		bazelCommand:           "bazel --bad",
+		bazelConfig:            "test-optimization",
+		syncRepoName:           "test_optimization_data",
+		validationDoctorTarget: "//:dd_test_optimization_doctor",
+		validationUploadTarget: "//:dd_upload_payloads",
+		expectedTargets:        []string{"//pkg:go_default_test"},
+		minFreeDiskGB:          defaultMinFreeDiskGB,
+	}
+	if _, err := validationScript(cfg); err == nil || !strings.Contains(err.Error(), "--bazel-command must not contain arguments") {
+		t.Fatalf("validationScript error=%v, want bazel command rejection", err)
+	}
+	cfg.bazelCommand = "bazel"
+	cfg.extraTestFlags = []string{"--test_env=DD_GIT_BRANCH=main"}
+	if _, err := validationScript(cfg); err == nil || !strings.Contains(err.Error(), "must not pass DD_GIT_*") {
+		t.Fatalf("validationScript error=%v, want DD_GIT test env rejection", err)
+	}
+	cfg.extraTestFlags = []string{"--test_env==DD_GIT_BRANCH"}
+	if _, err := validationScript(cfg); err == nil || !strings.Contains(err.Error(), "must not pass DD_GIT_*") {
+		t.Fatalf("validationScript error=%v, want DD_GIT test env unset rejection", err)
+	}
+	cfg.extraTestFlags = nil
+	cfg.validationScriptPath = "../outside.sh"
+	if err := writeValidationScriptFile(cfg); err == nil || !strings.Contains(err.Error(), "--validation-script-path must stay inside workspace") {
+		t.Fatalf("writeValidationScriptFile error=%v, want path traversal rejection", err)
+	}
+}
+
 func TestWriteBazelrcBlockPreservesUserContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".bazelrc")

@@ -42,6 +42,29 @@ local files and managed blocks; it never edits `WORKSPACE` itself:
 | `--rto-archive-prefix` | empty | Archive root prefix used when either fetch mode is `archive` |
 | `--rto-archive-type` | `tar.gz` | Archive type passed to `http_archive` |
 
+Validation script generation writes a repository-owned operational helper. It
+does not mutate Bazel rules or force remote output behavior outside the normal
+`.bazelrc`/CLI contract:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--print-validation-script` | `false` | Print the validation script and exit without modifying files |
+| `--write-validation-script` | `false` | Write the generated validation script |
+| `--validation-script-path` | `tools/test_optimization/validate_go_pilot.sh` | Workspace-relative output path for `--write-validation-script` |
+| `--bazel-command` | `bazel` | Bazel command used by the script, for example `bazel`, `./bazelw`, or `bzl`; do not include arguments |
+| `--bazel-config` | `test-optimization` | Config passed as `--config=<name>` to sync, test, doctor, and upload commands |
+| `--control-target` | repeatable | Plain/control test target run before instrumented targets |
+| `--expected-target` | repeatable | Instrumented target run before doctor; this is also used by generated doctor targets |
+| `--doctor-target` | `//:dd_test_optimization_doctor` | Doctor label run after tests pass |
+| `--upload-target` | `//:dd_upload_payloads` | Uploader label run only when the script receives `--upload` |
+| `--extra-sync-flag` | repeatable | Extra Bazel sync flag |
+| `--extra-test-flag` | repeatable | Extra Bazel test flag; `--test_env=DD_GIT_*` is rejected |
+| `--extra-run-flag` | repeatable | Extra Bazel run flag for doctor/uploader |
+| `--large-monorepo` | `false` | Add disk checks before heavy phases and keep phases serialized |
+| `--min-free-disk-gb` | `25` | Warning threshold used by `--large-monorepo` scripts |
+| `--shutdown-bazel-on-exit` | `false` | Run `<bazel-command> shutdown` when the script exits |
+| `--default-jobs` | `0` | Add `--jobs=<n>` to generated test commands when greater than zero |
+
 In WORKSPACE mode, bootstrap does not run Go module commands unless
 `--go-mod-sync` is explicitly provided. This keeps large monorepo scaffolding
 safe: operators can generate local files first, review the WORKSPACE snippet,
