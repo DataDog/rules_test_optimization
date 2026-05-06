@@ -189,15 +189,19 @@ jobs:
       - name: Test examples
         timeout-minutes: 20
         shell: bash
+        # --enable_runfiles is required on Windows so the dd_topt_java_test
+        # example can resolve -javaagent via $(rootpath); no-op on Linux/macOS.
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             ./bazelw --output_user_root=C:/b test \
+              --enable_runfiles \
+              --test_output=errors \
               -- \
               //examples/... \
               -//examples/single_service/src/go-project/... \
               -//examples/multi_service/src/go-project/...
           else
-            ./bazelw test //examples/...
+            ./bazelw test //examples/... --test_output=errors
           fi
 
       - name: Exercise single-service runtests script (dry-run)

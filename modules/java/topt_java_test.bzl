@@ -11,6 +11,7 @@ load(
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "append_data_dependencies",
+    "append_list_attribute",
     "build_module_labels",
     "merge_optional_env_defaults",
     "merge_user_env",
@@ -26,20 +27,18 @@ load(
     "topt_bazel_metadata",
     "topt_test_wrapper",
 )
+load("@rules_java//java:defs.bzl", _default_java_test = "java_test")
 load("//:topt_java_infer.bzl", "topt_java_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
+_append_list_attribute = append_list_attribute
 _merge_optional_env_defaults = merge_optional_env_defaults
 _merge_user_env = merge_user_env
 
 def _resolve_topt_service_key(service_entries, topt_service):
     return resolve_topt_service_key(service_entries, topt_service, macro_name = "dd_topt_java_test")
-
-def _validate_java_test_rule_or_fail(java_test_rule):
-    if java_test_rule == None:
-        fail_with_prefix("dd_topt_java_test", "you must pass java_test_rule = java_test from native rules")
 
 def _select_service_entry_or_fail(topt_data, topt_service):
     return select_service_entry_or_fail(topt_data, topt_service, macro_name = "dd_topt_java_test")
@@ -48,7 +47,6 @@ def _select_service_entry_or_fail(topt_data, topt_service):
 service_mapping_entries_for_tests = _service_mapping_entries
 resolve_topt_service_key_for_tests = _resolve_topt_service_key
 normalize_user_data_for_tests = _normalize_user_data
-validate_java_test_rule_for_tests = _validate_java_test_rule_or_fail
 select_service_entry_for_tests = _select_service_entry_or_fail
 
 def _build_module_labels(sync_repo_name, labels):
@@ -72,22 +70,72 @@ def _has_non_empty_value(value):
         return len(value) > 0
     return True
 
+def _concat_label_list_values(left, right):
+    """Concatenate label-list-like macro inputs while preserving `select(...)`."""
+    normalized_left = _normalize_user_data(left)
+    normalized_right = _normalize_user_data(right)
+
+    if normalized_left == None:
+        return normalized_right
+    if normalized_right == None:
+        return normalized_left
+    if normalized_left == []:
+        return normalized_right
+    if normalized_right == []:
+        return normalized_left
+
+    return normalized_left + normalized_right
+
 def dd_topt_java_test(
         name,
         topt_data,
-        java_test_rule,
+        agent_jar,
+        java_test_rule = _default_java_test,
         topt_service = None,
         module_label_override = None,
         module_identifier = None,
+        ci_visibility_enabled = True,
+        stage_sources = False,
         **kwargs):
-    """Define a Java test with Datadog Test Optimization support."""
-    _validate_java_test_rule_or_fail(java_test_rule)
+    """Define a Java test with Datadog Test Optimization support.
+
+    Args:
+      agent_jar: Required label pointing to the dd-java-agent JAR. The macro
+        injects ``-javaagent:$(rootpath <label>)`` into ``jvm_flags`` and adds
+        the JAR to ``data`` so it is available at runtime. The customer is
+        responsible for making this label available (e.g. via ``http_file``,
+        ``maven_install``, or a local filegroup).
+      java_test_rule: Optional override for the underlying ``java_test`` rule.
+        Defaults to ``java_test`` from ``@rules_java//java:defs.bzl``. Override
+        only when wrapping a custom test macro (e.g. a junit5 wrapper).
+      ci_visibility_enabled: Optional boolean. When true (default), the macro
+        forces ``DD_CIVISIBILITY_ENABLED=true`` on the generated test
+        environment so payload-to-files mode works without extra env wiring.
+        Set false only when the caller intentionally owns this tracer switch.
+      stage_sources: Optional boolean. When true, the macro stages direct
+        ``srcs`` into runtime runfiles so the tracer can index them and
+        populate ``test.source.file`` / ``test.source.start`` /
+        ``test.source.end`` tags. Defaults to false because Bazel test runfiles
+        do not include ``srcs`` by default and the extra files cost runfiles
+        size; enable per target when source-level metadata is desired.
+    """
+    if not agent_jar:
+        fail_with_prefix("dd_topt_java_test", "agent_jar is required and must be a label pointing to the dd-java-agent JAR")
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
 
     user_data = kwargs.pop("data", None)
-    data = _append_data_dependencies(user_data, [])
+    data = user_data
+
+    # Stage direct source files only when callers opt in. This gives the Java
+    # tracer a runtime-visible source tree under the runfiles workspace dir so
+    # RepoIndex can resolve `test.source.file` and the bytecode lines resolver
+    # can populate `test.source.start` / `test.source.end`.
+    if stage_sources:
+        data = _concat_label_list_values(data, kwargs.get("srcs"))
+
+    data = _append_data_dependencies(data, [])
 
     sync_repo_name = _svc.get("repo_name")
     if not sync_repo_name:
@@ -173,21 +221,32 @@ def dd_topt_java_test(
     manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
     manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
     data = _append_data_dependencies(data, [manifest_label])
+    required_env = {
+        "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
+        "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
+        "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
+    }
+    if ci_visibility_enabled:
+        required_env["DD_CIVISIBILITY_ENABLED"] = "true"
     env = _merge_user_env(
         user_env,
-        {
-            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
-            "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
-            "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
-        },
+        required_env,
         macro_name = "dd_topt_java_test",
     )
+
+    # Inject -javaagent flag pointing at the mandatory agent JAR label.
+    user_jvm_flags = kwargs.pop("jvm_flags", None)
+    agent_flag = "-javaagent:$(rootpath %s)" % agent_jar
+    jvm_flags = _append_list_attribute(user_jvm_flags, [agent_flag])
+    data = _append_data_dependencies(data, [agent_jar])
 
     raw_name = name + "__raw_java_test"
     kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
     kwargs["visibility"] = ["//visibility:private"]
     for key, value in raw_passthrough.items():
         kwargs[key] = value
+
+    kwargs["jvm_flags"] = jvm_flags
 
     java_test_rule(
         name = raw_name,
