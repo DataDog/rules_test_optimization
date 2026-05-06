@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "onboardingpins",
+    srcs = ["pins.go"],
+    importpath = "github.com/DataDog/rules_test_optimization/modules/go/tools/onboardingpins",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "onboardingpins_test",
+    srcs = ["pins_test.go"],
+    embed = [":onboardingpins"],
+)

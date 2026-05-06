@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/DataDog/rules_test_optimization/modules/go/tools/onboardingpins"
 )
 
 // captureStdout runs fn while collecting stdout into buf.
@@ -427,6 +431,116 @@ func TestRunPrintBazelrcSnippetDoesNotRequireModuleFiles(t *testing.T) {
 	}
 	if got := buf.String(); !strings.Contains(got, `test:test-optimization --remote_download_outputs=all`) {
 		t.Fatalf("expected bazelrc snippet on stdout:\n%s", got)
+	}
+}
+
+func TestRunPrintPublishedPinsDoesNotRequireModuleFiles(t *testing.T) {
+	dir, commit := publishedPinsTestRepo(t)
+	var buf strings.Builder
+	if err := captureStdout(&buf, func() error {
+		return run(config{
+			workspaceDir:                dir,
+			printPublishedPins:          true,
+			rtoCommit:                   commit,
+			datadogFetch:                defaultDatadogFetch,
+			rulesGoFetch:                defaultRulesGoFetch,
+			rulesGoVariant:              "complete",
+			publishedPinsArchiveFetcher: staticArchiveFetcher("archive bytes"),
+		})
+	}); err != nil {
+		t.Fatalf("run --print-published-pins error: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{
+		`RTO_COMMIT="` + commit + `"`,
+		`RTO_ARCHIVE_URL="https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/` + commit + `"`,
+		`RULES_GO_VARIANT="complete"`,
+		`DD_TRACE_GO_VERSION="` + onboardingpins.DefaultDDTraceGoVersion + `"`,
+		`ORCHESTRION_VERSION="` + onboardingpins.DefaultOrchestrionVersion + `"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("published pins missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunPrintOnboardingSummaryUsesCurrentCommit(t *testing.T) {
+	dir, commit := publishedPinsTestRepo(t)
+	staleCommit := strings.Repeat("b", 40)
+	var buf strings.Builder
+	if err := captureStdout(&buf, func() error {
+		return run(config{
+			workspaceDir:                dir,
+			printOnboardingSummary:      true,
+			rtoCommit:                   commit,
+			datadogFetch:                defaultDatadogFetch,
+			rulesGoFetch:                defaultRulesGoFetch,
+			rulesGoVariant:              "base",
+			publishedPinsArchiveFetcher: staticArchiveFetcher("archive bytes"),
+		})
+	}); err != nil {
+		t.Fatalf("run --print-onboarding-summary error: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, commit) {
+		t.Fatalf("summary missing current commit:\n%s", got)
+	}
+	if strings.Contains(got, staleCommit) {
+		t.Fatalf("summary contains stale commit %s:\n%s", staleCommit, got)
+	}
+}
+
+func TestWriteOnboardingSummaryPreservesUnmanagedFile(t *testing.T) {
+	dir, commit := publishedPinsTestRepo(t)
+	path := filepath.Join(dir, "TEST_OPTIMIZATION_GUIDE.md")
+	if err := os.WriteFile(path, []byte("# Existing guide\n"), 0o644); err != nil {
+		t.Fatalf("write unmanaged guide: %v", err)
+	}
+	err := run(config{
+		workspaceDir:                dir,
+		writeOnboardingSummary:      "TEST_OPTIMIZATION_GUIDE.md",
+		rtoCommit:                   commit,
+		datadogFetch:                defaultDatadogFetch,
+		rulesGoFetch:                defaultRulesGoFetch,
+		rulesGoVariant:              "complete",
+		publishedPinsArchiveFetcher: staticArchiveFetcher("archive bytes"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "is not Datadog-managed") {
+		t.Fatalf("run --write-onboarding-summary error=%v, want unmanaged file rejection", err)
+	}
+}
+
+func TestWriteOnboardingSummaryIsIdempotent(t *testing.T) {
+	dir, commit := publishedPinsTestRepo(t)
+	cfg := config{
+		workspaceDir:                dir,
+		writeOnboardingSummary:      "TEST_OPTIMIZATION_GUIDE.md",
+		rtoCommit:                   commit,
+		datadogFetch:                defaultDatadogFetch,
+		rulesGoFetch:                defaultRulesGoFetch,
+		rulesGoVariant:              "complete",
+		publishedPinsArchiveFetcher: staticArchiveFetcher("archive bytes"),
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("first run --write-onboarding-summary error: %v", err)
+	}
+	path := filepath.Join(dir, "TEST_OPTIMIZATION_GUIDE.md")
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read first guide: %v", err)
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("second run --write-onboarding-summary error: %v", err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read second guide: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("summary write should be idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	if !strings.Contains(string(second), commit) {
+		t.Fatalf("summary missing current commit:\n%s", second)
 	}
 }
 
@@ -2216,5 +2330,43 @@ func TestEnsureGuidedWrapperRejectsUnmanagedFileWithoutForce(t *testing.T) {
 	}
 	if err := ensureGuidedWrapper(cfg); err == nil {
 		t.Fatal("expected unmanaged wrapper file to fail without force")
+	}
+}
+
+func publishedPinsTestRepo(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, variant := range []string{"base", "complete"} {
+		if err := os.MkdirAll(filepath.Join(dir, "third_party", "rules_go_orchestrion_"+variant), 0o755); err != nil {
+			t.Fatalf("create variant dir: %v", err)
+		}
+	}
+	runGitCommand(t, dir, "init", ".")
+	runGitCommand(t, dir, "config", "user.email", "test@example.com")
+	runGitCommand(t, dir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("main\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGitCommand(t, dir, "add", ".")
+	runGitCommand(t, dir, "commit", "-m", "main")
+	commit := strings.TrimSpace(runGitCommand(t, dir, "rev-parse", "HEAD"))
+	runGitCommand(t, dir, "update-ref", "refs/remotes/origin/main", commit)
+	return dir, commit
+}
+
+func runGitCommand(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func staticArchiveFetcher(body string) onboardingpins.ArchiveFetcher {
+	return func(context.Context, string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBufferString(body)), nil
 	}
 }

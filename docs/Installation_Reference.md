@@ -81,6 +81,48 @@ For mirrored/archive installs, also pin and verify archive `sha256` values (see
 "Archive mirror installation" below) so the fetched source is integrity-checked
 in CI and local builds.
 
+### Generate published Go pins
+
+Before copying Go/Orchestrion pins into a consumer repository, generate them
+from a squash-merged commit that is already reachable from `origin/main`.
+
+From a `rules_test_optimization` checkout:
+
+```bash
+./bazelw run //tools/dev:print_go_onboarding_pins -- \
+  --commit "$(git rev-parse origin/main)" \
+  --variant complete \
+  --verify-main-reachable
+```
+
+The command prints the full tuple used by WORKSPACE archive mode:
+`RTO_COMMIT`, `RTO_REMOTE`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
+`RTO_ARCHIVE_PREFIX`, `RTO_ARCHIVE_TYPE`, `RULES_GO_VARIANT`,
+`RULES_GO_STRIP_PREFIX`, `DD_TRACE_GO_VERSION`, and
+`ORCHESTRION_VERSION`.
+
+From a consumer that already has the Go companion available, the bootstrap can
+print the same tuple or write a checked-in Markdown summary:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --print-published-pins \
+  --rto-commit <published-origin-main-sha> \
+  --rules-go-variant complete
+
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
+  --rto-commit <published-origin-main-sha> \
+  --rules-go-variant complete
+```
+
+The bootstrap summary command does not inspect `MODULE.bazel` or `go.mod`; it
+validates that the commit is a full SHA, hashes the published archive, and
+writes a Datadog-managed Markdown file. If you run it from a checkout that has
+the `rules_test_optimization` Git history, add `--verify-main-reachable` for
+the same `origin/main` reachability check as the dev helper. Existing unmanaged
+files are preserved unless `--force` is passed.
+
 ### Option B: local development overrides
 
 ```bzl

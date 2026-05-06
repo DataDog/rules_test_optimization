@@ -77,6 +77,47 @@ Use this checklist before your first CI rollout:
    test config so the doctor and uploader can discover payload files locally
    after the test completes.
 
+## Published Go onboarding pins
+
+When a repository consumes this project from GitHub, pin a commit that is
+already reachable from `origin/main`. Do not publish snippets that point at a
+feature-branch commit: those commits can disappear after squash merge and break
+consumer resolution.
+
+Maintainers can generate the full WORKSPACE/archive tuple from this checkout:
+
+```bash
+./bazelw run //tools/dev:print_go_onboarding_pins -- \
+  --commit "$(git rev-parse origin/main)" \
+  --variant complete \
+  --verify-main-reachable
+```
+
+The helper verifies the selected rules_go variant exists, verifies the commit is
+reachable from `origin/main`, downloads the real GitHub codeload archive, and
+prints `RTO_COMMIT`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
+`RTO_ARCHIVE_PREFIX`, the selected variant, the default `dd-trace-go` version,
+and the default Orchestrion version.
+
+Consumers using the Go bootstrap can print the same tuple or write a
+repository-local summary:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --print-published-pins \
+  --rto-commit <published-origin-main-sha> \
+  --rules-go-variant complete
+
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
+  --rto-commit <published-origin-main-sha> \
+  --rules-go-variant complete
+```
+
+If the bootstrap runs from a checkout that has this repository's Git history,
+add `--verify-main-reachable` to enforce the same `origin/main` reachability
+check as the dev helper.
+
 ## Quickstart by scenario
 
 ### Bzlmod + core only (any language)

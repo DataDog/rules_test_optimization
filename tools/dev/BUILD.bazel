@@ -1,3 +1,5 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
 exports_files([
     "benchmark_go_orchestrion_perf.py",
     "check_bazelversion_sync.py",
@@ -13,3 +15,17 @@ exports_files([
     "ruby_bootstrap.bzl",
     "verify_rules_go_variants.py",
 ], visibility = ["//visibility:public"])
+
+go_library(
+    name = "print_go_onboarding_pins_lib",
+    srcs = ["print_go_onboarding_pins.go"],
+    importpath = "github.com/DataDog/rules_test_optimization/tools/dev/print_go_onboarding_pins",
+    visibility = ["//visibility:private"],
+    deps = ["//modules/go/tools/onboardingpins"],
+)
+
+go_binary(
+    name = "print_go_onboarding_pins",
+    embed = [":print_go_onboarding_pins_lib"],
+    visibility = ["//visibility:public"],
+)
