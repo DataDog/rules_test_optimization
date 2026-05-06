@@ -227,13 +227,25 @@ module version.
    ```
    Bootstrap accepts tags, pseudo-versions, branches, and commit SHAs. It
    rewrites the workspace to the exact resolved versions that Go actually uses.
+   By default it uses targeted module sync, not `go mod tidy`.
 
-2. **If you wire Orchestrion manually**, make sure both places match:
+2. **If targeted sync reports readonly module errors**, rerun bootstrap with
+   explicit targeted sync and the same Go SDK your repository expects:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --go-mod-sync=targeted \
+     --go-binary /path/to/go
+   ```
+   If the workspace uses checked-in `go_repository` declarations, refresh those
+   declarations after `go.mod` or `go.sum` changes so Bazel and the Go module
+   graph agree.
+
+3. **If you wire Orchestrion manually**, make sure both places match:
    - `orchestrion.from_source(..., dd_trace_go_version = "<version>")`
    - or `orchestrion.from_source(..., dd_trace_go_versions = {...})`
    - the effective local module graph resolved from `go.mod` and `go.sum`
 
-3. **If you omitted the version entirely**, remember the default is
+4. **If you omitted the version entirely**, remember the default is
    `v2.9.0-dev.0.20260416093245-194346a71c51`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one

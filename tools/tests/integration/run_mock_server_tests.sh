@@ -1815,9 +1815,10 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
   exit 0
 fi
 
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
+if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=readonly" ]; }; then
   for arg in "$@"; do
     case "$arg" in
+      github.com/DataDog/orchestrion|\
       github.com/DataDog/dd-trace-go/v2/orchestrion|\
       github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
       github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
@@ -2131,12 +2132,13 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
   exit 0
 fi
 
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ]; then
+if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=readonly" ]; }; then
   # The guided bootstrap path passes extra flags such as -tags=tools before the
   # package arguments. Scan the full argv instead of assuming the first package
   # is always the third argument.
   for arg in "$@"; do
     case "$arg" in
+      github.com/DataDog/orchestrion|\
       github.com/DataDog/dd-trace-go/v2/orchestrion|\
       github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
       github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\

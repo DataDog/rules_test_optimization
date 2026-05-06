@@ -212,15 +212,27 @@ The bootstrap helper:
 - creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
 - writes a deterministic `orchestrion.tool.go` that matches the Bazel-side Orchestrion wiring
 - repins `dd-trace-go` and the Orchestrion-managed Go helper packages to the resolved tracer versions
-- writes `orchestrion.tool.go`
 - writes a starter `orchestrion.yml` when missing
 - writes either `dd_trace_go_version` or `dd_trace_go_versions` into the managed `MODULE.bazel` block, depending on whether the traced Go modules resolve to one shared version or different exact versions
+- keeps Bazel's injected tracer versions and the local Go module pins aligned, and the build fails fast if they drift apart
+
+By default, bootstrap uses `--go-mod-sync=targeted`. That mode updates only the
+Orchestrion and `dd-trace-go` tool requirements, resolves the exact packages
+needed by `orchestrion.tool.go`, and verifies the result with
+`go list -mod=readonly`. It does not run `go mod tidy`, which keeps large
+repositories from rewriting unrelated module state. Use `--go-mod-sync=tidy`
+when you explicitly want the broad tidy behavior, or `--go-mod-sync=off` when
+you only want bootstrap to write managed Bazel/Orchestrion files.
+
+Bootstrap runs module-sync commands with `go` by default. Pass
+`--go-binary=/path/to/go` when the workspace must use a pinned Go SDK, such as
+the same SDK Bazel uses in a monorepo. The value must be a single executable
+path named `go` or `go.exe`; do not include shell arguments.
 
 By default, `dd_topt_go_test` also sets `DD_SERVICE` from the selected sync
 metadata service name. If you already set `DD_SERVICE` in the test target's
 `env`, the macro preserves your explicit value. If you pass `env = select(...)`,
 the macro leaves that configurable env unchanged in this release.
-- keeps Bazel's injected tracer versions and the local Go module pins aligned, and the build fails fast if they drift apart
 
 The generated `.bazelrc` block is managed between
 `# BEGIN Datadog Test Optimization Bazelrc` and
@@ -975,6 +987,13 @@ otherwise the default is `v2.9.0-dev.0.20260416093245-194346a71c51`.
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
 ```
+
+The bootstrap's default module-sync mode is `targeted`, which avoids a broad
+`go mod tidy`. Use `--go-mod-sync=tidy` only when you want bootstrap to tidy the
+whole module, and use `--go-mod-sync=off` when another repository-owned command
+will update `go.mod` and `go.sum`. Use `--go-binary=/path/to/go` if the module
+must be synced with a specific Go SDK. The path must point to a `go` or
+`go.exe` executable and must not include arguments.
 
 If you wire Orchestrion manually instead of using bootstrap, you can also set
 the tracer versions directly in `MODULE.bazel`.
