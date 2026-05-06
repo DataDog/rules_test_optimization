@@ -173,6 +173,14 @@ keep the default tool-repo name `rules_go_orchestrion_tool`. When Go tests live
 below the module root, pass the module-root pin files through
 `orchestrion_pin_files` or inject them from a repo-local wrapper.
 
+For WORKSPACE monorepos, prefer bootstrap `--workspace-mode` to generate the
+generic local scaffolding. It can write the root doctor/uploader targets,
+`.bazelrc` block, Orchestrion pin files, and a split wrapper template while
+leaving `WORKSPACE` placement under repository control. The generated wrapper
+template keeps repo-specific policy in a local helper and exposes separate
+plain and optimized wrapper functions, so large repositories do not have to
+rediscover that split during onboarding.
+
 ### Multi-service
 
 Use the Go extension. This path is Go-only and materializes every configured

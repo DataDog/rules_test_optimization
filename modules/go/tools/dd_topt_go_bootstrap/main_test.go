@@ -176,6 +176,195 @@ func TestWorkspaceSnippetDoesNotRequireModuleFiles(t *testing.T) {
 	}
 }
 
+func TestWorkspaceModeSnippetIncludesSyncAndCompleteVariant(t *testing.T) {
+	cfg := config{
+		workspaceMode:        true,
+		rulesGoRemote:        "https://github.com/example/repo.git",
+		rtoCommit:            "published-sha",
+		datadogFetch:         "git",
+		rulesGoFetch:         "git",
+		rulesGoRepoName:      "io_bazel_rules_go",
+		rulesGoVariant:       "complete",
+		orchestrionVersion:   "v1.9.0",
+		ddTraceGoVersion:     "v2.9.0-dev.0.20260416093245-194346a71c51",
+		syncRepoName:         "test_optimization_data_worker",
+		service:              "worker",
+		runtimeVersion:       "1.25.9",
+		doctorTargetName:     defaultDoctorTargetName,
+		uploaderTargetName:   defaultUploaderTargetName,
+		plainWrapperName:     defaultPlainWrapperName,
+		optimizedWrapperName: defaultOptimizedWrapperName,
+	}
+	got, err := workspaceSnippet(cfg)
+	if err != nil {
+		t.Fatalf("workspaceSnippet error: %v", err)
+	}
+	for _, want := range []string{
+		`rules_go_variant = "complete"`,
+		`rules_go_repo_name = "io_bazel_rules_go"`,
+		`load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")`,
+		`name = "test_optimization_data_worker"`,
+		`service = "worker"`,
+		`runtime_name = "go"`,
+		`runtime_version = "1.25.9"`,
+		`require_git_metadata = True`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("workspace mode snippet missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "dd-source") {
+		t.Fatalf("workspace mode snippet must stay generic:\n%s", got)
+	}
+}
+
+func TestRunWorkspaceModeWritesSelectedFilesWithoutModuleBazel(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:          dir,
+		goModuleDir:           dir,
+		workspaceMode:         true,
+		writeRootTargets:      true,
+		writeOrchestrionFiles: true,
+		writeWrapperTemplate:  true,
+		writeBazelrc:          true,
+		bazelrcPath:           ".bazelrc",
+		bazelrcConfig:         "test-optimization-worker",
+		syncRepoName:          "test_optimization_data_worker",
+		doctorTargetName:      "dd_test_optimization_doctor",
+		uploaderTargetName:    "dd_upload_payloads",
+		expectedTargets:       []string{"//worker:go_default_test"},
+		wrapperPackage:        "rules/go",
+		wrapperFile:           "dd_topt_go_test.bzl",
+		plainWrapperName:      "dd_go_test",
+		optimizedWrapperName:  "dd_topt_go_test",
+		rulesGoRepoName:       "io_bazel_rules_go",
+		datadogFetch:          defaultDatadogFetch,
+		rulesGoFetch:          defaultRulesGoFetch,
+		rulesGoVariant:        defaultRulesGoVariant,
+		ddTraceGoVersion:      defaultDDTraceGoVersion,
+		orchestrionVersion:    defaultOrchestrionVersion,
+		rulesGoRemote:         defaultRulesGoRemote,
+		goModSync:             defaultGoModSync,
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run workspace mode error: %v", err)
+	}
+	for _, path := range []string{
+		"BUILD.bazel",
+		".bazelrc",
+		"orchestrion.tool.go",
+		"orchestrion.yml",
+		"rules/go/BUILD.bazel",
+		"rules/go/dd_topt_go_test.bzl",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+			t.Fatalf("expected %s: %v", path, err)
+		}
+	}
+	rootBuild, err := os.ReadFile(filepath.Join(dir, "BUILD.bazel"))
+	if err != nil {
+		t.Fatalf("read root BUILD.bazel: %v", err)
+	}
+	if !strings.Contains(string(rootBuild), `expected_targets = [`) || !strings.Contains(string(rootBuild), `"//worker:go_default_test"`) {
+		t.Fatalf("expected doctor expected_targets in root BUILD.bazel:\n%s", rootBuild)
+	}
+	wrapper, err := os.ReadFile(filepath.Join(dir, "rules/go/dd_topt_go_test.bzl"))
+	if err != nil {
+		t.Fatalf("read wrapper: %v", err)
+	}
+	wrapperText := string(wrapper)
+	for _, want := range []string{
+		`load("@io_bazel_rules_go//go:def.bzl", _raw_go_test = "go_test")`,
+		`def dd_go_test(name, **kwargs):`,
+		`def dd_topt_go_test(name, **kwargs):`,
+		`load("@test_optimization_data_worker//:export.bzl", "topt_data")`,
+		`orchestrion_pin_files = _ORCHESTRION_PIN_FILES`,
+	} {
+		if !strings.Contains(wrapperText, want) {
+			t.Fatalf("workspace wrapper missing %q:\n%s", want, wrapperText)
+		}
+	}
+	for _, forbidden := range []string{"dd-source", "--test_env=DD_GIT_"} {
+		if strings.Contains(wrapperText, forbidden) {
+			t.Fatalf("workspace wrapper contains forbidden %q:\n%s", forbidden, wrapperText)
+		}
+	}
+}
+
+func TestWorkspaceModeDoesNotRunGoModSyncByDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := run(config{
+		workspaceDir:          dir,
+		workspaceMode:         true,
+		writeOrchestrionFiles: true,
+		datadogFetch:          defaultDatadogFetch,
+		rulesGoFetch:          defaultRulesGoFetch,
+		rulesGoVariant:        defaultRulesGoVariant,
+		ddTraceGoVersion:      defaultDDTraceGoVersion,
+		orchestrionVersion:    defaultOrchestrionVersion,
+		rulesGoRepoName:       defaultRulesGoRepoName,
+		rulesGoRemote:         defaultRulesGoRemote,
+		syncRepoName:          defaultSyncRepoName,
+		doctorTargetName:      defaultDoctorTargetName,
+		uploaderTargetName:    defaultUploaderTargetName,
+		wrapperPackage:        defaultWrapperPackage,
+		wrapperFile:           defaultWorkspaceWrapperFile,
+		plainWrapperName:      defaultPlainWrapperName,
+		optimizedWrapperName:  defaultOptimizedWrapperName,
+		goModSync:             defaultGoModSync,
+	}); err != nil {
+		t.Fatalf("workspace mode should write Orchestrion files without go.mod by default: %v", err)
+	}
+}
+
+func TestEnsureWorkspaceWrapperTemplateIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config{
+		workspaceDir:         dir,
+		syncRepoName:         "test_optimization_data",
+		wrapperPackage:       "tools/test",
+		wrapperFile:          "go_test_wrappers.bzl",
+		plainWrapperName:     "plain_go_test",
+		optimizedWrapperName: "optimized_go_test",
+		rulesGoRepoName:      "io_bazel_rules_go",
+	}
+	if err := ensureWorkspaceWrapperTemplate(cfg); err != nil {
+		t.Fatalf("first ensureWorkspaceWrapperTemplate error: %v", err)
+	}
+	path := filepath.Join(dir, "tools", "test", "go_test_wrappers.bzl")
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read first wrapper: %v", err)
+	}
+	if err := ensureWorkspaceWrapperTemplate(cfg); err != nil {
+		t.Fatalf("second ensureWorkspaceWrapperTemplate error: %v", err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read second wrapper: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("expected idempotent wrapper template:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+func TestEnsureWorkspaceWrapperTemplateRejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	err := ensureWorkspaceWrapperTemplate(config{
+		workspaceDir:         dir,
+		syncRepoName:         "test_optimization_data",
+		wrapperPackage:       "../outside",
+		wrapperFile:          "dd_topt_go_test.bzl",
+		plainWrapperName:     "dd_go_test",
+		optimizedWrapperName: "dd_topt_go_test",
+		rulesGoRepoName:      "io_bazel_rules_go",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--wrapper-package must stay inside the workspace") {
+		t.Fatalf("ensureWorkspaceWrapperTemplate error=%v, want path traversal rejection", err)
+	}
+}
+
 func TestBazelrcSnippetUsesRepoEnvOnlyForSyncMetadata(t *testing.T) {
 	got, err := bazelrcSnippet(config{bazelrcConfig: "test-optimization"})
 	if err != nil {

@@ -203,6 +203,47 @@ If the workspace already has a matching single-service
 `test_optimization_go_extension` plus `use_repo(...)`, guided bootstrap can
 reuse that wiring and continue.
 
+For WORKSPACE monorepos, use `--workspace-mode` instead of `--guided`.
+WORKSPACE mode deliberately does not edit `WORKSPACE`; it prints the repository
+wiring for manual placement and writes only local managed files:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --print-workspace-snippet \
+  --service go-service \
+  --runtime-version 1.25.0 \
+  --sync-repo-name test_optimization_data \
+  --rto-commit <commit-sha> \
+  --rules-go-variant complete \
+  --rules-go-repo-name io_bazel_rules_go
+```
+
+After placing the WORKSPACE snippet, generate the safe local scaffolding:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --service go-service \
+  --runtime-version 1.25.0 \
+  --sync-repo-name test_optimization_data \
+  --rules-go-variant complete \
+  --rules-go-repo-name io_bazel_rules_go \
+  --write-bazelrc \
+  --write-root-targets \
+  --write-orchestrion-files \
+  --write-wrapper-template \
+  --expected-target //pkg:go_default_test
+```
+
+The generated wrapper template creates a plain local wrapper and an optimized
+local wrapper. Keep repository-specific scheduling, tags, flaky behavior,
+Docker defaults, and platform constraints in the local policy helper; the
+optimized wrapper owns only `topt_data` and `orchestrion_pin_files`.
+WORKSPACE mode does not run Go module commands unless `--go-mod-sync` is passed
+explicitly, so large repos can review generated files before changing
+`go.mod`/`go.sum`.
+
 ### Go Bazel config
 
 Use `--write-bazelrc` to insert or replace the managed
