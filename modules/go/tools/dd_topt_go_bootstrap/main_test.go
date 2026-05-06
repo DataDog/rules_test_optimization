@@ -1789,6 +1789,26 @@ go_repository(
 	}
 }
 
+func TestParseGoRepositoryDeclarationsIgnoresCommentedBlocks(t *testing.T) {
+	content := `
+# go_repository(
+#     name = "com_github_datadog_orchestrion",
+#     importpath = "github.com/DataDog/orchestrion",
+#     version = "v9.9.9",
+# )
+
+go_repository(
+    name = "com_github_datadog_orchestrion",
+    importpath = "github.com/DataDog/orchestrion",  # active declaration
+    version = "v1.9.0",
+)
+`
+	got := parseGoRepositoryDeclarations(content)
+	if got["github.com/DataDog/orchestrion"].version != "v1.9.0" {
+		t.Fatalf("commented declaration should be ignored: %#v", got)
+	}
+}
+
 func TestCheckGoRepositoriesAcceptsMatchingVersions(t *testing.T) {
 	dir := t.TempDir()
 	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{

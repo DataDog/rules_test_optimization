@@ -949,6 +949,7 @@ func evaluateGoRepositoriesFile(cfg config, path string) (goRepositoryDiagnostic
 // name, and version attributes. This intentionally small parser is enough for
 // Gazelle-generated repository files and avoids pretending to execute Starlark.
 func parseGoRepositoryDeclarations(content string) map[string]goRepositoryDeclaration {
+	content = stripStarlarkLineComments(content)
 	blockPattern := regexp.MustCompile(`(?s)go_repository\s*\((.*?)\)`)
 	attrPattern := regexp.MustCompile(`(?m)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 	declarations := map[string]goRepositoryDeclaration{}
@@ -975,6 +976,43 @@ func parseGoRepositoryDeclarations(content string) map[string]goRepositoryDeclar
 		}
 	}
 	return declarations
+}
+
+// stripStarlarkLineComments removes comments before the lightweight
+// go_repository parser runs. It keeps hash characters inside quoted strings so
+// unusual but valid attribute values do not change meaning.
+func stripStarlarkLineComments(content string) string {
+	var buf strings.Builder
+	for _, line := range strings.SplitAfter(content, "\n") {
+		inSingleQuote := false
+		inDoubleQuote := false
+		escaped := false
+		for _, ch := range line {
+			if ch == '\n' {
+				buf.WriteRune(ch)
+				break
+			}
+			if ch == '#' && !inSingleQuote && !inDoubleQuote {
+				if strings.HasSuffix(line, "\n") {
+					buf.WriteRune('\n')
+				}
+				break
+			}
+			if ch == '\'' && !inDoubleQuote && !escaped {
+				inSingleQuote = !inSingleQuote
+			}
+			if ch == '"' && !inSingleQuote && !escaped {
+				inDoubleQuote = !inDoubleQuote
+			}
+			buf.WriteRune(ch)
+			if ch == '\\' && !escaped {
+				escaped = true
+			} else {
+				escaped = false
+			}
+		}
+	}
+	return buf.String()
 }
 
 // expectedGoRepositoryVersions returns the module versions that WORKSPACE
