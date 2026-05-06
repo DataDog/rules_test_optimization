@@ -244,6 +244,29 @@ WORKSPACE mode does not run Go module commands unless `--go-mod-sync` is passed
 explicitly, so large repos can review generated files before changing
 `go.mod`/`go.sum`.
 
+Generate a repeatable validation script when onboarding needs several control
+and instrumented targets:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --write-validation-script \
+  --validation-script-path tools/test_optimization/validate_go_pilot.sh \
+  --bazel-command bazel \
+  --bazel-config test-optimization \
+  --sync-repo-name test_optimization_data \
+  --control-target //pkg/plain:go_default_test \
+  --expected-target //pkg:go_default_test \
+  --large-monorepo \
+  --min-free-disk-gb 25 \
+  --shutdown-bazel-on-exit
+```
+
+The generated script runs `sync -> controls -> instrumented tests -> doctor`.
+It uploads only when called with `--upload`; the default is `--no-upload`. It
+does not delete caches, print secrets, use BES/BEP, proxy payloads, or pass
+`DD_GIT_*` through `--test_env`.
+
 ### Go Bazel config
 
 Use `--write-bazelrc` to insert or replace the managed

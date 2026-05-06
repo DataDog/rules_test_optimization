@@ -324,3 +324,15 @@ tests. Custom wrappers for other languages should set the same contract:
 2. Use a single uploader target per workspace (no concurrent uploaders)
 3. Tests must run locally, or use `--remote_download_outputs=all`
 4. Run uploader on the same machine/workspace where tests executed
+
+For Go onboarding, the bootstrap validation script follows the same rule. It
+runs upload only when the operator passes `--upload`:
+
+```bash
+./tools/test_optimization/validate_go_pilot.sh --no-upload
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+  ./tools/test_optimization/validate_go_pilot.sh --upload
+```
+
+The script does not print secrets and does not pass uploader credentials to the
+test sandbox. Credentials are read by the uploader process at `bazel run` time.

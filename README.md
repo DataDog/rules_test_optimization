@@ -729,6 +729,29 @@ template. By default it also avoids running Go module commands; pass an
 explicit `--go-mod-sync=targeted` when you want bootstrap to repair the local
 Orchestrion tool graph.
 
+Bootstrap can also generate an operator-owned validation script for large
+repositories. The script repeats the RFC flow without hiding Bazel behavior:
+`sync -> controls -> instrumented tests -> doctor -> optional upload`. Upload is
+disabled unless the operator passes `--upload`.
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --print-validation-script \
+  --bazel-command bazel \
+  --bazel-config test-optimization \
+  --sync-repo-name test_optimization_data \
+  --control-target //pkg/plain:go_default_test \
+  --expected-target //pkg:go_default_test
+```
+
+Use `--write-validation-script` to create
+`tools/test_optimization/validate_go_pilot.sh`. For large monorepos, add
+`--large-monorepo --min-free-disk-gb=25 --shutdown-bazel-on-exit` so the script
+prints disk warnings before each heavy phase and shuts down Bazel when it exits.
+The script never deletes caches and never passes `DD_GIT_*` through
+`--test_env`.
+
 ### Other languages
 
 Use the core-only path above, or mirror the companion pattern used by

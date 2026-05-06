@@ -254,6 +254,43 @@ set of tracer versions while the local Go module still resolves another.
 `orchestrion.tool.go` still matters, but as required import/config wiring for
 Orchestrion, not as the source of truth for tracer versions.
 
+## Large monorepo validation is easy to run incorrectly
+
+**Symptom**: onboarding works in small fixtures but large WORKSPACE repos need a
+long command sequence, local controls, disk checks, and an explicit upload step.
+
+**Solutions**:
+
+1. Generate a local validation script instead of hand-copying commands:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --workspace-mode \
+     --write-validation-script \
+     --bazel-command bzl \
+     --bazel-config test-optimization \
+     --sync-repo-name test_optimization_data \
+     --control-target //pkg/plain:go_default_test \
+     --expected-target //pkg:go_default_test \
+     --large-monorepo \
+     --shutdown-bazel-on-exit
+   ```
+
+2. Run without upload first:
+   ```bash
+   ./tools/test_optimization/validate_go_pilot.sh --no-upload
+   ```
+
+3. Upload only after tests and doctor pass:
+   ```bash
+   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+     ./tools/test_optimization/validate_go_pilot.sh --upload
+   ```
+
+The generated script never deletes caches. In `--large-monorepo` mode it warns
+when free disk drops below `--min-free-disk-gb`, runs phases serially, and can
+shut down Bazel on exit. It still depends on the normal Bazel config for
+`--remote_download_outputs=all`; no rule can force that client-side behavior.
+
 ## Windows-specific issues
 
 **Symptom**: PowerShell errors or path issues.
