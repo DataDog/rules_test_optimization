@@ -16,9 +16,11 @@ load(
     "clone_payload_with_detached_attributes_for_tests",
     "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
+    "collect_flaky_tests_modules_for_tests",
     "collect_known_tests_modules_for_tests",
     "collect_test_management_modules_for_tests",
     "compute_dd_api_base_for_tests",
+    "count_flaky_tests_response_tests_for_tests",
     "count_known_tests_response_tests_for_tests",
     "count_test_management_response_tests_for_tests",
     "decode_json_object_or_fail_for_tests",
@@ -50,6 +52,7 @@ load(
     "runtime_module_path_from_environ_for_tests",
     "sanitize_repository_url_for_tests",
     "set_context_tag_from_env_for_tests",
+    "split_flaky_tests_by_module_for_tests",
 )
 load(
     "//tools/tests:example_stub_repo.bzl",
@@ -1632,6 +1635,10 @@ def _sync_success_metric_tags_parity_test(ctx):
     append_telemetry_distribution_for_tests(facts, "test_management_tests.request_ms", 20)
     append_telemetry_distribution_for_tests(facts, "test_management_tests.response_bytes", 96)
     append_telemetry_distribution_for_tests(facts, "test_management_tests.response_tests", 2)
+    append_telemetry_count_for_tests(facts, "flaky_tests.request")
+    append_telemetry_distribution_for_tests(facts, "flaky_tests.request_ms", 18)
+    append_telemetry_distribution_for_tests(facts, "flaky_tests.response_bytes", 64)
+    append_telemetry_distribution_for_tests(facts, "flaky_tests.response_tests", 5)
 
     count_tags = {}
     for metric in facts.get("counts"):
@@ -1644,6 +1651,7 @@ def _sync_success_metric_tags_parity_test(ctx):
     asserts.equals(env, ["test_management_enabled:true"], count_tags.get("git_requests.settings_response"))
     asserts.equals(env, [], count_tags.get("known_tests.request"))
     asserts.equals(env, [], count_tags.get("test_management_tests.request"))
+    asserts.equals(env, [], count_tags.get("flaky_tests.request"))
 
     asserts.equals(env, [], distribution_tags.get("git_requests.settings_ms"))
     asserts.equals(env, [], distribution_tags.get("known_tests.request_ms"))
@@ -1652,6 +1660,9 @@ def _sync_success_metric_tags_parity_test(ctx):
     asserts.equals(env, [], distribution_tags.get("test_management_tests.request_ms"))
     asserts.equals(env, [], distribution_tags.get("test_management_tests.response_bytes"))
     asserts.equals(env, [], distribution_tags.get("test_management_tests.response_tests"))
+    asserts.equals(env, [], distribution_tags.get("flaky_tests.request_ms"))
+    asserts.equals(env, [], distribution_tags.get("flaky_tests.response_bytes"))
+    asserts.equals(env, [], distribution_tags.get("flaky_tests.response_tests"))
     return unittest.end(env)
 
 def _telemetry_response_counts_test(ctx):
@@ -1691,6 +1702,176 @@ def _telemetry_response_counts_test(ctx):
     asserts.equals(env, 2, count_test_management_response_tests_for_tests(test_management))
     return unittest.end(env)
 
+def _count_flaky_tests_response_tests_test(ctx):
+    """Validate response test counter for flaky-tests array-based payload."""
+    env = unittest.begin(ctx)
+
+    # Normal array-based response
+    flaky = {
+        "data": [
+            {"attributes": {"name": "t1", "suite": "s1", "configurations": {"test": {"bundle": "mod"}}}},
+            {"attributes": {"name": "t2", "suite": "s1", "configurations": {"test": {"bundle": "mod"}}}},
+            {"attributes": {"name": "t3", "suite": "s2", "configurations": {"test": {"bundle": "mod2"}}}},
+        ],
+    }
+    asserts.equals(env, 3, count_flaky_tests_response_tests_for_tests(flaky))
+
+    # Empty array
+    asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({"data": []}))
+
+    # data is not an array (unexpected shape)
+    asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({"data": {"attributes": {}}}))
+
+    # Missing data key
+    asserts.equals(env, 0, count_flaky_tests_response_tests_for_tests({}))
+    return unittest.end(env)
+
+def _split_flaky_tests_by_module_test(ctx):
+    """Validate raw per-module flaky split preserves envelope and filters data."""
+    env = unittest.begin(ctx)
+
+    # Build a fake ctx that supports path/read/file for the raw splitter
+    written = {}
+
+    def _fake_path(p):
+        return p
+
+    def _fake_read(p):
+        return written.get(p, "")
+
+    def _fake_file(p, content):
+        written[p] = content
+
+    def _noop_execute(_args, **_kwargs):
+        return struct(return_code = 0, stdout = "", stderr = "")
+
+    fake_ctx = struct(
+        path = _fake_path,
+        read = _fake_read,
+        file = _fake_file,
+        execute = _noop_execute,
+        os = struct(name = "linux", environ = {}),
+    )
+
+    # Seed the source file with a raw response containing extra top-level keys
+    raw = {
+        "data": [
+            {"id": "1", "type": "flaky_test", "attributes": {"name": "test_a", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
+            {"id": "2", "type": "flaky_test", "attributes": {"name": "test_b", "suite": "suite_one", "configurations": {"test": {"bundle": "module_a"}}}},
+            {"id": "3", "type": "flaky_test", "attributes": {"name": "test_c", "suite": "suite_two", "configurations": {"test": {"bundle": "module_b"}}}},
+            {"not_an_entry": True},
+            {"id": "4", "type": "flaky_test", "attributes": {"name": "test_d", "suite": "suite_three"}},
+        ],
+        "meta": {"request_id": "abc123"},
+    }
+    written["flaky_tests.json"] = json.encode(raw)
+
+    specs = split_flaky_tests_by_module_for_tests(fake_ctx, "flaky_tests.json", False)
+
+    # Two modules should be produced
+    asserts.equals(env, 2, len(specs))
+    asserts.equals(env, "module_a", specs[0]["module"])
+    asserts.equals(env, "module_b", specs[1]["module"])
+
+    # Verify per-module file for module_a preserves envelope and filters data
+    mod_a_content = written.get(specs[0]["file"], "")
+    mod_a_obj = json.decode(mod_a_content.strip())
+    asserts.equals(env, "abc123", mod_a_obj["meta"]["request_id"])
+    asserts.equals(env, 2, len(mod_a_obj["data"]))
+    asserts.equals(env, "1", mod_a_obj["data"][0]["id"])
+    asserts.equals(env, "2", mod_a_obj["data"][1]["id"])
+
+    # Verify per-module file for module_b
+    mod_b_content = written.get(specs[1]["file"], "")
+    mod_b_obj = json.decode(mod_b_content.strip())
+    asserts.equals(env, "abc123", mod_b_obj["meta"]["request_id"])
+    asserts.equals(env, 1, len(mod_b_obj["data"]))
+    asserts.equals(env, "3", mod_b_obj["data"][0]["id"])
+
+    # Empty data array -> no specs
+    written["empty.json"] = json.encode({"data": []})
+    empty_specs = split_flaky_tests_by_module_for_tests(fake_ctx, "empty.json", False)
+    asserts.equals(env, 0, len(empty_specs))
+
+    # data is not an array -> no specs
+    written["bad.json"] = json.encode({"data": "not-an-array"})
+    bad_specs = split_flaky_tests_by_module_for_tests(fake_ctx, "bad.json", False)
+    asserts.equals(env, 0, len(bad_specs))
+
+    return unittest.end(env)
+
+def _collect_flaky_tests_modules_defensive_shape_test(ctx):
+    """Validate flaky-tests module collection from raw array response."""
+    env = unittest.begin(ctx)
+    fake_ctx = _fake_read_ctx({
+        # Normal raw response with valid entries
+        "flaky_tests.json": json.encode({
+            "data": [
+                {"attributes": {"name": "t1", "suite": "s1", "configurations": {"test": {"bundle": "module_a"}}}},
+                {"attributes": {"name": "t2", "suite": "s1", "configurations": {"test": {"bundle": "module_b"}}}},
+                # Malformed entry (no attributes) - should be ignored
+                {"not_valid": True},
+                # Entry with missing configurations - should be ignored
+                {"attributes": {"name": "t3", "suite": "s2"}},
+                # Entry with empty bundle - should be ignored
+                {"attributes": {"name": "t4", "suite": "s3", "configurations": {"test": {"bundle": ""}}}},
+            ],
+        }),
+        # Empty data array
+        "flaky_tests_empty.json": json.encode({
+            "data": [],
+        }),
+        # data is not an array (object shape)
+        "flaky_tests_bad_data.json": json.encode({
+            "data": {"attributes": {}},
+        }),
+        # Missing data key entirely
+        "flaky_tests_no_data.json": json.encode({
+            "meta": {"request_id": "abc"},
+        }),
+    })
+    asserts.equals(
+        env,
+        ["module_a", "module_b"],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_empty.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_bad_data.json"),
+    )
+    asserts.equals(
+        env,
+        [],
+        collect_flaky_tests_modules_for_tests(fake_ctx, "flaky_tests_no_data.json"),
+    )
+    return unittest.end(env)
+
+def _module_label_map_flaky_modules_test(ctx):
+    """Validate _build_module_label_map includes flaky_modules in the union."""
+    env = unittest.begin(ctx)
+
+    # flaky_modules adds new modules to the map
+    label_map = build_module_label_map_for_tests(["mod_a"], ["mod_b"], ["mod_c"])
+    asserts.equals(env, 3, len(label_map))
+    asserts.true(env, label_map.get("mod_a") != None)
+    asserts.true(env, label_map.get("mod_b") != None)
+    asserts.true(env, label_map.get("mod_c") != None)
+
+    # Duplicate modules across all three lists are deduplicated
+    label_map2 = build_module_label_map_for_tests(["mod_a"], ["mod_a"], ["mod_a"])
+    asserts.equals(env, 1, len(label_map2))
+
+    # flaky_modules=None preserves backward compat
+    label_map3 = build_module_label_map_for_tests(["mod_a"], ["mod_b"])
+    asserts.equals(env, 2, len(label_map3))
+    return unittest.end(env)
+
 def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
     """Validate module runfiles helper returns raw payload files for the selector."""
     env = unittest.begin(ctx)
@@ -1698,6 +1879,7 @@ def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
     asserts.true(env, "files = [ctx.file.settings, ctx.file.manifest]" in default_content)
     asserts.true(env, "files.append(kt)" in default_content)
     asserts.true(env, "files.append(tm)" in default_content)
+    asserts.true(env, "files.append(ft)" in default_content)
     asserts.true(env, "DefaultInfo(files = depset(files), runfiles = ctx.runfiles(files = files))" in default_content)
 
     custom_content = render_module_runfiles_bzl_for_tests("custom_repo", "custom_topt")
@@ -1982,6 +2164,7 @@ dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
 collect_known_tests_modules_defensive_shape_test = unittest.make(_collect_known_tests_modules_defensive_shape_test)
 collect_test_management_modules_defensive_shape_test = unittest.make(_collect_test_management_modules_defensive_shape_test)
+collect_flaky_tests_modules_defensive_shape_test = unittest.make(_collect_flaky_tests_modules_defensive_shape_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 export_bzl_escaping_test = unittest.make(_export_bzl_escaping_test)
 fnv1a_symbol_distinguishes_common_symbols_test = unittest.make(_fnv1a_symbol_distinguishes_common_symbols_test)
@@ -2001,6 +2184,9 @@ build_context_tags_test = unittest.make(_build_context_tags_test)
 settings_response_tags_test = unittest.make(_settings_response_tags_test)
 sync_success_metric_tags_parity_test = unittest.make(_sync_success_metric_tags_parity_test)
 telemetry_response_counts_test = unittest.make(_telemetry_response_counts_test)
+count_flaky_tests_response_tests_test = unittest.make(_count_flaky_tests_response_tests_test)
+split_flaky_tests_by_module_test = unittest.make(_split_flaky_tests_by_module_test)
+module_label_map_flaky_modules_test = unittest.make(_module_label_map_flaky_modules_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 render_module_runfiles_bzl_escaping_test = unittest.make(_render_module_runfiles_bzl_escaping_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)

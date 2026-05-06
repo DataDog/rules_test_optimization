@@ -12,6 +12,9 @@ This file defines:
   `known_tests_enabled = true`, writing `known_tests_file`. If disabled, an
   empty JSON stub for known tests is still written so downstream consumers
   can always depend on the declared outputs.
+- An optional request to the Flaky Tests API when the settings say
+  `flaky_test_retries_enabled = true`, writing `flaky_tests_file`. The raw
+  backend response is persisted as-is; per-module files are derived afterward.
 
 Repository-rule execution model:
 - This code runs during Bazel repository/module resolution, not test runtime.
@@ -22,7 +25,7 @@ Repository-rule execution model:
 High-level data flow:
 1) Resolve env/context metadata (CI + Git + runtime hints)
 2) Fetch settings JSON
-3) Optionally fetch known-tests and test-management JSON
+3) Optionally fetch known-tests, test-management, and flaky-tests JSON
 4) Split module payloads into stable per-module bundles
 5) Generate BUILD/export/context/manifest outputs for consumers
 
@@ -45,7 +48,7 @@ Troubleshooting guidance for maintainers:
 # - Go/rules metadata helpers: `_detect_go_module_path`, `_build_context_tags`
 # - HTTP helpers: `_http_request`, `_http_post_json`
 # - API calls: `_perform_dd_settings_request`, `_perform_dd_known_tests_request`,
-#              `_perform_dd_test_management_tests_request`
+#              `_perform_dd_test_management_tests_request`, `_perform_dd_flaky_tests_request`
 # - Repository entrypoint: `_impl`
 
 load(
@@ -658,6 +661,97 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         label_map = label_map,
     )
 
+def _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = None):
+    """Split raw flaky-tests payload into one file per module.
+
+    Unlike known_tests/test_management which use `_split_json_payload_by_module`
+    for their `data.attributes.<key>` object payloads, the flaky-tests endpoint
+    returns `data` as a flat array. This splitter:
+    - decodes the original raw response from flaky_tests.json
+    - groups entries by `entry.attributes.configurations.test.bundle`
+    - ignores malformed entries
+    - clones the full response envelope (preserving all top-level keys)
+    - replaces only `new_obj["data"]` with each module's filtered entries
+    - preserves original entry order within each module's data array
+    - writes per-module files to `module_<label>/flaky_tests.json`
+    """
+    specs = []
+    src_path = ctx.path(flaky_tests_file)
+    content = ctx.read(src_path)
+    if not content or not content.strip():
+        return specs
+
+    obj = _decode_json_object_or_fail(content, flaky_tests_file)
+    data_arr = obj.get("data")
+    if type(data_arr) != type([]):
+        return specs
+
+    # Group entries by module, preserving original order within each group
+    module_entries = {}
+    module_order = []
+    for entry in data_arr:
+        if not _is_dict(entry):
+            continue
+        attrs = entry.get("attributes")
+        if not _is_dict(attrs):
+            continue
+        configs = attrs.get("configurations")
+        if not _is_dict(configs):
+            continue
+        test_config = configs.get("test")
+        if not _is_dict(test_config):
+            continue
+        bundle = test_config.get("bundle") or ""
+        if not bundle:
+            continue
+        if bundle not in module_entries:
+            module_entries[bundle] = []
+            module_order.append(bundle)
+        module_entries[bundle].append(entry)
+
+    if not module_entries:
+        return specs
+
+    base_dir = _dirname(flaky_tests_file)
+
+    # Deterministic module ordering
+    module_names = sorted(module_order)
+
+    # Compute sanitized labels (use provided mapping or generate fresh)
+    if label_map:
+        deduped_labels = [label_map.get(m) or sanitize_label_fragment(m) for m in module_names]
+    else:
+        raw_labels = [sanitize_label_fragment(m) for m in module_names]
+        deduped_labels = dedup_keys(raw_labels)
+
+    for i in range(len(module_names)):
+        module_name = module_names[i]
+        label = deduped_labels[i]
+        entries = module_entries[module_name]
+
+        per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
+        out_file = per_module_dir + "/flaky_tests.json"
+
+        # Clone full response envelope and replace only `data` with filtered entries
+        new_obj = _clone_json_like(obj)
+        new_obj["data"] = entries
+
+        _ensure_parent_directory(ctx, out_file, debug)
+        ctx.file(out_file, json.encode(new_obj) + "\n")
+        log_debug(
+            debug,
+            "module",
+            "Wrote per-module flaky_tests.json file '%s' for module '%s'" % (out_file, module_name),
+        )
+
+        specs.append({
+            "module": module_name,
+            "label": label,
+            "file": out_file,
+        })
+
+    return specs
+
 def _detect_os_info(ctx, debug):
     """Detect host OS platform/version/arch for request configuration tags."""
 
@@ -961,6 +1055,55 @@ def _count_test_management_response_tests(test_management_obj):
             total += len(tests_obj)
     return total
 
+def _count_flaky_tests_response_tests(flaky_tests_obj):
+    """Count the total tests returned by the flaky-tests response.
+
+    The flaky tests endpoint returns `data` as an array of test entries,
+    unlike the nested-object format of known_tests/test_management.
+    """
+    data_arr = flaky_tests_obj.get("data")
+    if type(data_arr) == type([]):
+        return len(data_arr)
+    return 0
+
+def _collect_flaky_tests_modules(ctx, flaky_tests_file):
+    """Return sorted unique module names present in the raw flaky_tests payload.
+
+    The raw flaky-tests endpoint returns `data` as an array of entries.
+    Each entry's module is at `entry.attributes.configurations.test.bundle`.
+    Malformed entries (missing attributes, configurations, test, or bundle)
+    are silently ignored.
+    """
+    ft_path = ctx.path(flaky_tests_file)
+    content = ctx.read(ft_path)
+    if not content or not content.strip():
+        return []
+    obj = _decode_json_object_or_fail(content, flaky_tests_file)
+    data_arr = obj.get("data")
+    if type(data_arr) != type([]):
+        return []
+    seen = {}
+    modules = []
+    for entry in data_arr:
+        if not _is_dict(entry):
+            continue
+        attrs = entry.get("attributes")
+        if not _is_dict(attrs):
+            continue
+        configs = attrs.get("configurations")
+        if not _is_dict(configs):
+            continue
+        test_config = configs.get("test")
+        if not _is_dict(test_config):
+            continue
+        bundle = test_config.get("bundle") or ""
+        if not bundle:
+            continue
+        if not seen.get(bundle):
+            seen[bundle] = True
+            modules.append(bundle)
+    return sorted(modules)
+
 def _collect_known_tests_modules(ctx, known_tests_file):
     """Return sorted module names present in known_tests payload."""
 
@@ -1013,8 +1156,8 @@ def _collect_test_management_modules(ctx, test_management_file):
             modules.append(k)
     return sorted(modules)
 
-def _build_module_label_map(known_modules, test_management_modules):
-    """Build stable deduplicated module->label mapping across both features."""
+def _build_module_label_map(known_modules, test_management_modules, flaky_modules = None):
+    """Build stable deduplicated module->label mapping across all features."""
 
     # _build_module_label_map: build a stable module->label mapping across the union.
     # This prevents cross-feature label collisions when modules sanitize to the same label.
@@ -1025,6 +1168,10 @@ def _build_module_label_map(known_modules, test_management_modules):
             seen[m] = True
             all_modules.append(m)
     for m in (test_management_modules or []):
+        if not seen.get(m):
+            seen[m] = True
+            all_modules.append(m)
+    for m in (flaky_modules or []):
         if not seen.get(m):
             seen[m] = True
             all_modules.append(m)
@@ -1118,6 +1265,9 @@ def _render_module_runfiles_bzl(repo_name, manifest_root):
         "    tm = getattr(ctx.file, \"test_management\", None)\n" +
         "    if tm:\n" +
         "        files.append(tm)\n" +
+        "    ft = getattr(ctx.file, \"flaky_tests\", None)\n" +
+        "    if ft:\n" +
+        "        files.append(ft)\n" +
         "    return DefaultInfo(files = depset(files), runfiles = ctx.runfiles(files = files))\n" +
         "\n" +
         "topt_module_files = rule(\n" +
@@ -1127,6 +1277,7 @@ def _render_module_runfiles_bzl(repo_name, manifest_root):
         "        \"manifest\": attr.label(allow_single_file = True, mandatory = True),\n" +
         "        \"known_tests\": attr.label(allow_single_file = True),\n" +
         "        \"test_management\": attr.label(allow_single_file = True),\n" +
+        "        \"flaky_tests\": attr.label(allow_single_file = True),\n" +
         "    },\n" +
         ")\n"
     )
@@ -1429,6 +1580,9 @@ append_telemetry_distribution_for_tests = _append_telemetry_distribution
 build_settings_response_tags_for_tests = _build_settings_response_tags
 count_known_tests_response_tests_for_tests = _count_known_tests_response_tests
 count_test_management_response_tests_for_tests = _count_test_management_response_tests
+count_flaky_tests_response_tests_for_tests = _count_flaky_tests_response_tests
+collect_flaky_tests_modules_for_tests = _collect_flaky_tests_modules
+split_flaky_tests_by_module_for_tests = _split_flaky_tests_by_module
 
 # ##########################################################################
 # CI environment detection
@@ -2015,6 +2169,61 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_manag
         http_policy = http_policy,
     )
 
+def _perform_dd_flaky_tests_request(ctx, api_key, env_data, flaky_tests_file, debug, osinfo = None, http_policy = None):
+    """Build and execute CI Visibility flaky-tests request."""
+
+    # _perform_dd_flaky_tests_request: build and send the Flaky Tests request.
+    # - Writes the JSON response body to `flaky_tests_file`.
+    # - Returns structured response metadata for telemetry reconstruction.
+    # Datadog Flaky Tests endpoint
+    # Path: api/v2/ci/libraries/tests/flaky
+    # Type: flaky_test_from_libraries_params
+    base = _resolve_dd_api_base(env_data, debug)
+    url = "%s/%s" % (base, "api/v2/ci/libraries/tests/flaky")
+
+    # Same attributes as known tests request
+    service = env_data.get("service")
+    environment = env_data.get("environment")
+    repository_url = env_data.get("repository_url")
+
+    # Configurations is a JSON object, decode it to embed properly
+    # Keep this decode explicit to avoid double-encoding nested JSON payloads.
+    configurations_json = _build_configurations_json(ctx, debug, osinfo = osinfo)
+    configurations = json.decode(configurations_json)
+
+    # Build request payload using json.encode for proper escaping
+    payload = {
+        "data": {
+            "id": "1",
+            "type": "flaky_test_from_libraries_params",
+            "attributes": {
+                "service": service,
+                "env": environment,
+                "repository_url": repository_url,
+                "configurations": configurations,
+            },
+        },
+    }
+    body = json.encode(payload)
+
+    # Log the request body for debugging when enabled
+    log_debug(debug, "http", "FlakyTests request body: %s" % body)
+
+    headers = {
+        "DD-API-KEY": api_key,
+    }
+
+    return _http_post_json(
+        ctx,
+        url,
+        headers,
+        body,
+        "flaky_tests.request.json",
+        flaky_tests_file,
+        debug,
+        http_policy = http_policy,
+    )
+
 # ##########################################################################
 # Repository rule implementation
 # ##########################################################################
@@ -2032,9 +2241,11 @@ def _impl(ctx):
     # 1) Validate required env and log cache-busting inputs for traceability
     # 2) Ensure parent directories exist for declared outputs
     # 3) POST Settings and write `settings_file`
-    # 4) Parse settings to read data.attributes.known_tests_enabled
-    # 5) If enabled, POST Known Tests and write `known_tests_file` (known_tests.json); else write an empty stub
-    # 6) Emit a BUILD file exporting both outputs
+    # 4) Parse settings to read data.attributes.known_tests_enabled,
+    #    test_management.enabled, and flaky_test_retries_enabled
+    # 5) If enabled, POST Known Tests / Test Management / Flaky Tests and
+    #    write respective files; else write empty stubs
+    # 6) Emit a BUILD file exporting all outputs
     #
     # Implementation notes for maintainers:
     # - Keep this function mostly orchestration; move reusable logic into
@@ -2068,12 +2279,14 @@ def _impl(ctx):
     settings_file = "%s/%s" % (out_dir, "cache/http/settings.json")
     known_tests_file = "%s/%s" % (out_dir, "cache/http/known_tests.json")
     test_management_file = "%s/%s" % (out_dir, "cache/http/test_management.json")
+    flaky_tests_file = "%s/%s" % (out_dir, "cache/http/flaky_tests.json")
     manifest_file = "%s/%s" % (out_dir, "manifest.txt")
     context_file = "%s/%s" % (out_dir, "context.json")
     telemetry_facts_file = "%s/%s" % (out_dir, "telemetry_facts.json")
     _ensure_parent_directory(ctx, settings_file, debug)
     _ensure_parent_directory(ctx, known_tests_file, debug)
     _ensure_parent_directory(ctx, test_management_file, debug)
+    _ensure_parent_directory(ctx, flaky_tests_file, debug)
     _ensure_parent_directory(ctx, manifest_file, debug)
     _ensure_parent_directory(ctx, context_file, debug)
     _ensure_parent_directory(ctx, telemetry_facts_file, debug)
@@ -2132,6 +2345,9 @@ def _impl(ctx):
 
     log_debug(debug, "settings", "test_management.enabled parsed as: %s" % test_management_enabled)
 
+    flaky_tests_enabled = (attrs_obj.get("flaky_test_retries_enabled") == True)
+    log_debug(debug, "settings", "flaky_test_retries_enabled parsed as: %s" % flaky_tests_enabled)
+
     # ------------------------------------------------------------------
     # Kill-switch overrides
     # ------------------------------------------------------------------
@@ -2178,6 +2394,20 @@ def _impl(ctx):
         # Mirror settings API shape: `test_management` is nested object.
         tm_mut["enabled"] = False
         attrs_obj["test_management"] = tm_mut
+
+    if hasattr(ctx.attr, "flaky_tests") and ctx.attr.flaky_tests == False:
+        flaky_tests_enabled = False
+        if not _is_dict(settings_obj.get("data")):
+            settings_obj["data"] = {"attributes": {}}
+            data_obj = settings_obj["data"]
+            attrs_obj = data_obj["attributes"]
+        elif ("attributes" not in settings_obj["data"]) or (not _is_dict(settings_obj["data"].get("attributes"))):
+            data_obj["attributes"] = {}
+            attrs_obj = data_obj["attributes"]
+
+        # Persist explicit disablement so downstream consumers relying on
+        # settings.json (instead of rule attrs) see the same effective state.
+        attrs_obj["flaky_test_retries_enabled"] = False
 
     # Persist the possibly-updated settings back to disk so that the
     # overridden disablement is reflected to later phases.
@@ -2267,17 +2497,47 @@ def _impl(ctx):
     # Always add test_management.json to exports (either real data or stub)
     exports.append(test_management_file)
 
+    module_specs_flaky = []
+    if flaky_tests_enabled:
+        ctx.report_progress("test_optimization_sync: downloading flaky tests")
+        flaky_tests_result = _perform_dd_flaky_tests_request(
+            ctx,
+            api_key,
+            env_data,
+            flaky_tests_file,
+            debug,
+            osinfo = osinfo,
+            http_policy = http_policy,
+        )
+        ctx.report_progress("test_optimization_sync: flaky tests complete")
+        flaky_tests_raw = _decode_json_object_or_fail(ctx.read(ctx.path(flaky_tests_file)), flaky_tests_file)
+        _append_telemetry_count(telemetry_facts, "flaky_tests.request")
+        _append_telemetry_distribution(telemetry_facts, "flaky_tests.request_ms", flaky_tests_result.get("duration_ms", 0))
+        _append_telemetry_distribution(telemetry_facts, "flaky_tests.response_bytes", flaky_tests_result.get("response_bytes", 0))
+        _append_telemetry_distribution(telemetry_facts, "flaky_tests.response_tests", _count_flaky_tests_response_tests(flaky_tests_raw))
+
+    else:
+        log_debug(debug, "flaky_tests", "flaky_test_retries_enabled is false; writing empty flaky tests file")
+
+        # Minimal valid JSON stub in the raw endpoint shape (data is an array).
+        ctx.file(flaky_tests_file, '{"data": []}\n')
+
+    # Always add flaky_tests.json to exports (either real data or stub)
+    exports.append(flaky_tests_file)
+
     # ------------------------------------------------------------------
     # Phase 4: Derive per-module splits and context metadata.
     # ------------------------------------------------------------------
     # Build unified module label mapping to avoid cross-feature collisions
     known_modules = _collect_known_tests_modules(ctx, known_tests_file)
     tm_modules = _collect_test_management_modules(ctx, test_management_file)
-    label_map = _build_module_label_map(known_modules, tm_modules)
+    flaky_modules = _collect_flaky_tests_modules(ctx, flaky_tests_file)
+    label_map = _build_module_label_map(known_modules, tm_modules, flaky_modules)
 
-    # Split known tests and test management by module into dedicated files
+    # Split known tests, test management, and flaky tests by module into dedicated files
     module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = label_map)
     module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug, label_map = label_map)
+    module_specs_flaky = _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = label_map)
 
     # Build and write context.json (non-secret metadata) under `out_dir`
     # so all manifest-relative payload files share a single root.
@@ -2433,7 +2693,7 @@ def _impl(ctx):
     )
 
     # Append one filegroup per module so consumers can depend on individual modules
-    if module_specs_known or module_specs_tm:
+    if module_specs_known or module_specs_tm or module_specs_flaky:
         labels_for_modules = labels
         if not labels_for_modules:
             # Fallback: derive labels from specs if mapping is unavailable
@@ -2451,6 +2711,11 @@ def _impl(ctx):
                 if not label_seen.get(lab):
                     label_seen[lab] = True
                     labels_for_modules.append(lab)
+            for s in module_specs_flaky:
+                lab = s["label"]
+                if not label_seen.get(lab):
+                    label_seen[lab] = True
+                    labels_for_modules.append(lab)
             labels_for_modules = sorted(labels_for_modules)
 
         # Map module labels to their per-module files
@@ -2460,9 +2725,12 @@ def _impl(ctx):
         tm_by_label = {}
         for s in module_specs_tm:
             tm_by_label[s["label"]] = s["file"]
+        flaky_by_label = {}
+        for s in module_specs_flaky:
+            flaky_by_label[s["label"]] = s["file"]
 
         # Ensure per-module stubs exist for the missing side so consumers always
-        # see both canonical filenames in the per-module runfiles
+        # see all canonical filenames in the per-module runfiles
         for lab in labels_for_modules:
             if not known_by_label.get(lab):
                 per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
@@ -2476,18 +2744,26 @@ def _impl(ctx):
                 _ensure_parent_directory(ctx, tfile, debug)
                 ctx.file(tfile, '{"data": {"attributes": {"modules": {}}}}\n')
                 tm_by_label[lab] = tfile
+            if not flaky_by_label.get(lab):
+                per_dir = ("%s/%s" % (out_dir, ("module_%s" % lab)))
+                ffile = per_dir + "/flaky_tests.json"
+                _ensure_parent_directory(ctx, ffile, debug)
+                ctx.file(ffile, '{"data": []}\n')
+                flaky_by_label[lab] = ffile
 
         for lab in labels_for_modules:
             # Emit a dedicated target per module so macro consumers can select
             # narrow runfiles while preserving canonical filenames via symlinks.
             known_tests_file = known_by_label.get(lab)
             test_management_file = tm_by_label.get(lab)
+            flaky_tests_file = flaky_by_label.get(lab)
             build_content += ("\ntopt_module_files(\n" +
                               ('    name = "module_%s",\n' % lab) +
                               ("    settings = %s,\n" % _bzl_string_literal(settings_file)) +
                               ("    manifest = %s,\n" % _bzl_string_literal(manifest_file)) +
                               (("    known_tests = %s,\n" % _bzl_string_literal(known_tests_file)) if known_tests_file else "") +
                               (("    test_management = %s,\n" % _bzl_string_literal(test_management_file)) if test_management_file else "") +
+                              (("    flaky_tests = %s,\n" % _bzl_string_literal(flaky_tests_file)) if flaky_tests_file else "") +
                               '    visibility = ["//visibility:public"],\n' +
                               ")\n")
     log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)
@@ -2532,8 +2808,11 @@ test_optimization_sync = repository_rule(
         #               settings.data.attributes.known_tests_enabled=false in the settings file.
         # - test_management: when False, do not request Test Management Tests and write a minimal stub; also set
         #                    settings.data.attributes.test_management.enabled=false in the settings file.
+        # - flaky_tests: when False, do not request Flaky Tests and write a minimal stub; also set
+        #                settings.data.attributes.flaky_test_retries_enabled=false in the settings file.
         "known_tests": attr.bool(default = True),
         "test_management": attr.bool(default = True),
+        "flaky_tests": attr.bool(default = True),
         "require_git_metadata": attr.bool(default = False),
         "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
@@ -2640,6 +2919,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 http_execute_timeout_buffer_seconds = test_optimization_call.http_execute_timeout_buffer_seconds,
                 known_tests = test_optimization_call.known_tests,
                 test_management = test_optimization_call.test_management,
+                flaky_tests = test_optimization_call.flaky_tests,
                 require_git_metadata = test_optimization_call.require_git_metadata,
                 debug = call_debug,
             )
@@ -2669,6 +2949,7 @@ test_optimization_sync_extension = module_extension(
             # Optional kill-switches (default True keeps server behavior; False disables feature locally)
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
+            "flaky_tests": attr.bool(default = True),
             "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),

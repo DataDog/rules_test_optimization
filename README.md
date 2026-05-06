@@ -844,6 +844,7 @@ The extension performs these HTTP POST transactions (via host HTTP tooling: curl
 - Settings: always executed. Parses feature flags from response.
 - Known Tests: executed only when `known_tests_enabled: true` in Settings.
 - Test Management Tests: executed only when `test_management.enabled: true` in Settings.
+- Flaky Tests: executed only when `flaky_test_retries_enabled: true` in Settings. The raw backend response is persisted under `cache/http/flaky_tests.json` and then split into per-module `flaky_tests.json` files.
 
 All outputs are written under a configurable directory (default: `.testoptimization`) and are grouped under a single filegroup target. The exact manifest path is exported via `topt_data["manifest_path"]`.
 
@@ -857,8 +858,9 @@ Given an external repository name `<repo_name>` created by the extension, the ge
   - `manifest.txt` (Payload manifest; version marker for change tracking, currently `version=1`)
   - `cache/http/known_tests.json` (Known Tests API response or minimal stub)
   - `cache/http/test_management.json` (Test Management Tests API response or minimal stub)
+  - `cache/http/flaky_tests.json` (Flaky Tests API raw response or minimal stub `{"data": []}`)
   - `context.json` (Non-secret CI/Git/OS/runtime tags)
-  - Per-module Known Tests/Test Management (via filegroups): each module has a target exposing canonical runfiles under `<manifest_dir>/cache/http/` with `known_tests.json` and `test_management.json`, scoped to that module. Physical files are stored under `<out_dir>/module_<sanitized>/known_tests.json` and `<out_dir>/module_<sanitized>/test_management.json` (default `<out_dir>` is `.testoptimization`).
+  - Per-module Known Tests/Test Management/Flaky Tests (via filegroups): each module has a target exposing canonical runfiles under `<manifest_dir>/cache/http/` with `known_tests.json`, `test_management.json`, and `flaky_tests.json`, scoped to that module. Physical files are stored under `<out_dir>/module_<sanitized>/` (default `<out_dir>` is `.testoptimization`).
 
 Reference settings with a single label:
 
@@ -868,16 +870,18 @@ Reference settings with a single label:
 
 ### Per-module files and labels
 
-When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public target per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`:
+When Known Tests are enabled, the combined response `data.attributes.tests` is a map keyed by module name. For convenience and performance, the sync rule automatically splits this response into per-module files and creates one public target per module. The same splitting is performed for Test Management tests (`test_management.json`), keyed by module under `data.attributes.modules`. Flaky Tests (`flaky_tests.json`) are also split per module by grouping the raw `data` array entries by `entry.attributes.configurations.test.bundle`:
 
 - Each module target exposes canonical runfiles (stable names, regardless of `out_dir`):
   - `<manifest_dir>/cache/http/known_tests.json` (module-scoped; same shape as combined)
   - `<manifest_dir>/cache/http/test_management.json` (module-scoped; same shape as combined)
+  - `<manifest_dir>/cache/http/flaky_tests.json` (module-scoped; raw envelope with filtered `data` array)
 - Each module also becomes a public target: `:module_<sanitized_module>` that includes:
   - `<manifest_dir>/cache/http/settings.json`
   - `<manifest_dir>/manifest.txt`
   - `<manifest_dir>/cache/http/known_tests.json` (always present; stub when empty)
   - `<manifest_dir>/cache/http/test_management.json` (always present; stub when empty)
+  - `<manifest_dir>/cache/http/flaky_tests.json` (always present; stub `{"data": []}` when empty)
 - These per-module files are not bundled into `:test_optimization_files`
 
 Sanitization rules for `<sanitized_module>` (file paths and target labels):

@@ -142,6 +142,14 @@ This feature depends on a JSON list of flaky tests and their statuses (e.g. disa
 * Any status update invalidates the cache for affected test rules.  
 * Per‑module files again help narrow invalidations. Unlike TIA, Test Management provides clear value even with occasional cache churn.
 
+### Flaky Test Retries (known flakes)
+
+Separate from Flaky Test Management, this feature returns a list of tests that have been observed as flaky and are eligible for automatic retries by the tracer. It uses the dedicated `api/v2/ci/libraries/tests/flaky` endpoint.
+
+* Gated by `flaky_test_retries_enabled` in the Settings response.
+* The raw backend response (with `data` as an array of test entries) is persisted as-is under `cache/http/flaky_tests.json`, then split into per-module files by grouping entries on `entry.attributes.configurations.test.bundle`.
+* Tracer-side behavior such as "retry only known flakes" (`DD_CIVISIBILITY_FLAKY_RETRY_ONLY_KNOWN_FLAKES`) is decided at test runtime and is independent of whether this endpoint is fetched.
+
 ## Multi‑service aggregation
 
 Some repositories host multiple logical services. The multi‑service module extension instantiates one sync per service and creates an aggregator repository that exposes per‑service labels:
