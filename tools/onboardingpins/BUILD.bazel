@@ -1,0 +1,5 @@
+alias(
+    name = "onboardingpins",
+    actual = "//modules/go/tools/onboardingpins:onboardingpins",
+    visibility = ["//visibility:public"],
+)

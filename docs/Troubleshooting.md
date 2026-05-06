@@ -20,6 +20,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
 | Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
 | Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
+| WORKSPACE archive pins fail after a PR was squash-merged | generated pins commit reachability and archive SHA | Published Go pins |
 | Windows path/policy failures | PowerShell policy + path separators | Windows-specific issues |
 
 ## Repository rule not fetching data
@@ -71,6 +72,51 @@ If Bazel reports that sync requires WORKSPACE support, add
        name = "test_optimization_data",
        debug = True,  # Verbose logging
    )
+   ```
+
+## Published Go pins
+
+**Symptom**: A consumer cannot fetch the published Go/Orchestrion archive, or a
+pin that worked during review stops working after a squash merge.
+
+**Cause**: The consumer was given a feature-branch commit, a stale archive hash,
+or a tuple that was not generated from the real GitHub codeload archive.
+
+**Solutions**:
+
+1. **Regenerate pins from `origin/main`** in this repository:
+   ```bash
+   ./bazelw run //tools/dev:print_go_onboarding_pins -- \
+     --commit "$(git rev-parse origin/main)" \
+     --variant complete \
+     --verify-main-reachable
+   ```
+
+2. **If you are in a consumer repo**, use the bootstrap helper with the
+   squash-merged commit:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --print-published-pins \
+     --rto-commit <published-origin-main-sha> \
+     --rules-go-variant complete
+   ```
+
+3. **Keep the generated tuple together**. If `RTO_COMMIT`,
+   `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`, and `RTO_ARCHIVE_PREFIX` come from
+   different commits, archive mode will fail or fetch the wrong source.
+
+4. **Authenticate private archive downloads**. The helper uses `GITHUB_TOKEN`,
+   `GH_TOKEN`, or `gh auth token` when available. If codeload returns `404` for
+   a commit you can see in GitHub, refresh local GitHub CLI authentication or
+   set one of those token variables before regenerating pins.
+
+5. **Use the generated summary for handoff** when a monorepo needs a permanent
+   local guide:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
+     --rto-commit <published-origin-main-sha> \
+     --rules-go-variant complete
    ```
 
 ## Uploader not finding payloads

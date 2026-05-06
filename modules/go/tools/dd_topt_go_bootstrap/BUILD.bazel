@@ -5,6 +5,7 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/DataDog/rules_test_optimization/modules/go/tools/dd_topt_go_bootstrap",
     visibility = ["//visibility:public"],
+    deps = ["//tools/onboardingpins"],
 )
 
 go_test(
