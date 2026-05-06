@@ -97,7 +97,8 @@ The helper verifies the selected rules_go variant exists, verifies the commit is
 reachable from `origin/main`, downloads the real GitHub codeload archive, and
 prints `RTO_COMMIT`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
 `RTO_ARCHIVE_PREFIX`, the selected variant, the default `dd-trace-go` version,
-and the default Orchestrion version.
+and the default Orchestrion version. Published GitHub pins use `tar.gz`; other
+archive types must be mirrored and documented outside this helper.
 
 Consumers using the Go bootstrap can print the same tuple or write a
 repository-local summary:

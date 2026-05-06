@@ -70,6 +70,17 @@ func TestArchiveSHA256HashesArchiveBytes(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsNonTarArchiveType(t *testing.T) {
+	_, err := Resolve(context.Background(), Options{
+		Commit:       strings.Repeat("a", 40),
+		ArchiveType:  "zip",
+		FetchArchive: archiveFromString("archive"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `--archive-type must be "tar.gz"`) {
+		t.Fatalf("Resolve error=%v, want archive type rejection", err)
+	}
+}
+
 func TestResolveReturnsPublishedTuple(t *testing.T) {
 	dir := variantWorkspace(t)
 	runGit(t, dir, "init", ".")

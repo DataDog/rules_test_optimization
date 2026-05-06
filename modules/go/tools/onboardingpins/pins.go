@@ -96,6 +96,9 @@ func Resolve(ctx context.Context, opts Options) (Pins, error) {
 	if err := validateVariant(opts.Variant); err != nil {
 		return Pins{}, err
 	}
+	if opts.ArchiveType != DefaultArchiveType {
+		return Pins{}, fmt.Errorf("--archive-type must be %q for published GitHub codeload pins, got %q", DefaultArchiveType, opts.ArchiveType)
+	}
 	if opts.ValidateVariantDir {
 		if err := validateVariantDir(opts.WorkspaceDir, opts.Variant); err != nil {
 			return Pins{}, err

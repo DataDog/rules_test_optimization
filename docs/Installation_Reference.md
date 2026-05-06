@@ -99,7 +99,8 @@ The command prints the full tuple used by WORKSPACE archive mode:
 `RTO_COMMIT`, `RTO_REMOTE`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
 `RTO_ARCHIVE_PREFIX`, `RTO_ARCHIVE_TYPE`, `RULES_GO_VARIANT`,
 `RULES_GO_STRIP_PREFIX`, `DD_TRACE_GO_VERSION`, and
-`ORCHESTRION_VERSION`.
+`ORCHESTRION_VERSION`. Published GitHub codeload pins are `tar.gz`; use a
+separate repository-owned mirror process for any other archive format.
 
 From a consumer that already has the Go companion available, the bootstrap can
 print the same tuple or write a checked-in Markdown summary:
