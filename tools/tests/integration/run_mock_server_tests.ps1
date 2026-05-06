@@ -836,15 +836,43 @@ filegroup(
   "bazel.target": "//src/nodejs-project:hello_test",
   "bazel.test_optimization.repo_name": "test_optimization_data_nodejs",
   "bazel.test_optimization.service_name": "mock-service-nodejs",
-  "bazel.test_optimization.runtime_name": "nodejs"
+  "bazel.test_optimization.runtime_name": "nodejs",
+  "bazel.go.payload_selection": "module"
 }
 '@ | Set-Content -LiteralPath (Join-Path $multiContextOutputs "bazel_target_metadata.json") -Encoding UTF8
 
   Render-UploaderTemplate -TemplatePath $psTemplate -OutputPath $renderedUploader -ContextManifestPath $multiContextManifest -ContextJsonPath $contextPath -TelemetryFactsManifestPath $telemetryFactsManifest
 
+  $env:TESTLOGS_DIR = $multiContextTestlogsDir
+  Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
+  $env:DD_SITE = "datadoghq.com"
+  $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TEST_OPTIMIZATION_AGENT_URL -ErrorAction SilentlyContinue
+  $dryRunTranscript = Join-Path $tempRoot "multi_context_dry_run.transcript.txt"
+  $dryRunStart = @(Read-JsonLog -Path $mockLog).Count
+  $dryRunArgs = @()
+  if ($ForwardArgs) { $dryRunArgs += $ForwardArgs }
+  $dryRunArgs += @("--dry-run", "--validate-enrichment", "--expected-enriched-tag=bazel.go.payload_selection")
+  $dryRunExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $dryRunArgs -TranscriptPath $dryRunTranscript
+  if ($dryRunExitCode -ne 0) {
+    throw "multi-context uploader dry-run failed with exit code $dryRunExitCode`n$(Get-Content -LiteralPath $dryRunTranscript -Raw -ErrorAction SilentlyContinue)"
+  }
+  $dryRunOutput = Get-Content -LiteralPath $dryRunTranscript -Raw -Encoding UTF8
+  if (-not $dryRunOutput.Contains("dry-run validated enriched test payload")) {
+    throw "multi-context uploader dry-run did not validate enriched test payloads"
+  }
+  if (-not $dryRunOutput.Contains("dry-run done")) {
+    throw "multi-context uploader dry-run did not finish in dry-run mode"
+  }
+  if (@(Read-NewLogEntries -Path $mockLog -StartIndex $dryRunStart).Count -ne 0) {
+    throw "multi-context uploader dry-run unexpectedly sent requests to the mock server"
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $multiContextOutputs "payloads/tests/span_events_windows.json") -PathType Leaf)) {
+    throw "multi-context uploader dry-run deleted the source test payload"
+  }
+
   $multiContextTranscript = Join-Path $tempRoot "multi_context.transcript.txt"
   $multiContextStart = @(Read-JsonLog -Path $mockLog).Count
-  $env:TESTLOGS_DIR = $multiContextTestlogsDir
   $env:DD_API_KEY = [string]::new("0", 32)
   $env:DD_SITE = "datadoghq.com"
   $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"

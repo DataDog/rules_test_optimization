@@ -495,6 +495,65 @@ RUNTIME_ID=$(generate_uuid)
 # Reuse one uploader-local session fallback for telemetry files that do not
 # carry a runtime_id in their raw body.
 TELEMETRY_SESSION_FALLBACK=$(generate_uuid)
+DRY_RUN=0
+VALIDATE_ENRICHMENT=0
+EXPECTED_ENRICHED_TAGS=()
+DEFAULT_EXPECTED_ENRICHED_TAGS=(
+    "git.repository_url"
+    "git.commit.sha"
+    "bazel.target"
+    "bazel.package"
+)
+
+print_usage() {
+    cat <<'EOF'
+Usage: dd_upload_payloads [--dry-run [--validate-enrichment] [--expected-enriched-tag=TAG ...]]
+
+Options:
+  --dry-run                    Enrich and validate payloads without uploading or deleting files.
+  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment.
+  --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags.
+EOF
+}
+
+while (($# > 0)); do
+    case "$1" in
+        --dry-run)
+            DRY_RUN=1
+            shift
+            ;;
+        --validate-enrichment)
+            VALIDATE_ENRICHMENT=1
+            shift
+            ;;
+        --expected-enriched-tag)
+            if (($# < 2)); then
+                log "error: --expected-enriched-tag requires a tag name"
+                exit 2
+            fi
+            EXPECTED_ENRICHED_TAGS+=("$2")
+            shift 2
+            ;;
+        --expected-enriched-tag=*)
+            EXPECTED_ENRICHED_TAGS+=("${1#--expected-enriched-tag=}")
+            shift
+            ;;
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
+        *)
+            log "error: unknown argument: $1"
+            print_usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if (( VALIDATE_ENRICHMENT == 1 && DRY_RUN == 0 )); then
+    log "error: --validate-enrichment requires --dry-run"
+    exit 2
+fi
 
 # Validate numeric environment variables
 validate_numeric "QUIESCENT_SEC" "$QUIESCENT_SEC"
@@ -915,7 +974,7 @@ HEADER_LANG_DEFAULT="bazel-starlark"
 HEADER_LANG_VERSION_DEFAULT="n/a"
 HEADER_LANG_INTERPRETER_DEFAULT="bazel-run"
 HEADER_TRACER_VERSION_DEFAULT="__DDTPL_UPLOADER_VERSION__"
-if (( AGENTLESS == 1 )); then
+if (( AGENTLESS == 1 && DRY_RUN == 0 )); then
   if [[ -z "${DD_API_KEY:-}" ]]; then
     log "error: DD_API_KEY required for agentless uploads"
     log "hint: pass credentials via environment: DD_API_KEY=... DD_SITE=... bazel run //:dd_upload_payloads"
@@ -1681,7 +1740,8 @@ inject_codeowners_tags() {
 
   for ((idx = 0; idx < events_len; idx++)); do
     event_type=$(jq -r --argjson idx "$idx" '.events[$idx].type // ""' "$payload_file" 2>/dev/null || true)
-    # Spans are intentionally not enriched with CODEOWNERS metadata.
+    # CODEOWNERS remains scoped to non-span lifecycle/test events. Span-form Go
+    # events still receive context and Bazel tags before this CODEOWNERS pass.
     [[ "$event_type" == "span" ]] && continue
     ((++CO_EVENTS_SCANNED))
 
@@ -1786,11 +1846,15 @@ fi
 if [[ -n "$API_KEY_FINGERPRINT" ]]; then
   if (( AGENTLESS == 1 )); then
     # Compare fetch-time and upload-time credentials without exposing raw keys.
-    local_fp=$(fnv1a_32 "$DD_API_KEY")
-    if [[ -n "$local_fp" && "$local_fp" != "$API_KEY_FINGERPRINT" ]]; then
-      log "warning: DD_API_KEY mismatch between fetch and uploader"
+    if [[ -n "${DD_API_KEY:-}" ]]; then
+      local_fp=$(fnv1a_32 "$DD_API_KEY")
+      if [[ -n "$local_fp" && "$local_fp" != "$API_KEY_FINGERPRINT" ]]; then
+        log "warning: DD_API_KEY mismatch between fetch and uploader"
+      else
+        dbg "DD_API_KEY fingerprint match"
+      fi
     else
-      dbg "DD_API_KEY fingerprint match"
+      dbg "DD_API_KEY fingerprint check skipped because DD_API_KEY is unset"
     fi
   else
     # EVP mode does not require DD_API_KEY for upload requests.
@@ -1875,6 +1939,9 @@ select_context_json_for_payload() {
   echo "$matched_context"
 }
 
+# Merge flat sidecar metadata into every captured test event. Go/Orchestrion
+# payloads can encode CI Visibility test data as span events, and those events
+# still need Git and Bazel tags before upload.
 merge_flat_metadata_file() {
   local infile="$1"
   local outfile="$2"
@@ -1883,23 +1950,18 @@ merge_flat_metadata_file() {
     def extra_obj: ($extra[0] | if type=="object" then . else {} end);
     (if .events then
         .events |= map(
-          if (.type? == "span") then .
-          else
-            (
-              .content = (.content // {})
-              | .content.meta = (if (.content.meta|type) == "object" then .content.meta else {} end)
-              | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
-              | reduce (extra_obj | to_entries[]) as $e (.;
-                  if ($e.value|type) == "number" then
-                    .content.metrics[$e.key] = $e.value
-                  elif ($e.value|type) == "string" then
-                    .content.meta[$e.key] = $e.value
-                  else
-                    .content.meta[$e.key] = ($e.value|tostring)
-                  end
-                )
+          .content = (.content // {})
+          | .content.meta = (if (.content.meta|type) == "object" then .content.meta else {} end)
+          | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
+          | reduce (extra_obj | to_entries[]) as $e (.;
+              if ($e.value|type) == "number" then
+                .content.metrics[$e.key] = $e.value
+              elif ($e.value|type) == "string" then
+                .content.meta[$e.key] = $e.value
+              else
+                .content.meta[$e.key] = ($e.value|tostring)
+              end
             )
-          end
         )
       else .
       end)
@@ -1933,6 +1995,8 @@ enrich_with_context() {
     echo '{}' > "$ctx_file"
     cleanup_ctx=1
   fi
+  # Context metadata is also event-level because Datadog Test Optimization uses
+  # event tags, not only top-level payload metadata, for search and setup checks.
   if ! jq --slurpfile ctx "$ctx_file"     --arg runtime_id "$RUNTIME_ID"     --arg rules_version "$RULES_VERSION"     --arg language_fallback "bazel" '
     def ctx_val($k): $ctx[0][$k];
     def ctx_str($k): (ctx_val($k) | if type=="string" and length>0 then . else null end);
@@ -1959,23 +2023,18 @@ enrich_with_context() {
       )
     | (if .events then
         .events |= map(
-          if (.type? == "span") then .
-          else
-            (
-              .content = (.content // {})
-              | .content.meta = (if (.content.meta|type) == "object" then .content.meta else {} end)
-              | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
-              | reduce (ctx_filtered | to_entries[]) as $e (.;
-                  if ($e.value|type) == "number" then
-                    .content.metrics[$e.key] = $e.value
-                  elif ($e.value|type) == "string" then
-                    .content.meta[$e.key] = $e.value
-                  else
-                    .content.meta[$e.key] = ($e.value|tostring)
-                  end
-                )
+          .content = (.content // {})
+          | .content.meta = (if (.content.meta|type) == "object" then .content.meta else {} end)
+          | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
+          | reduce (ctx_filtered | to_entries[]) as $e (.;
+              if ($e.value|type) == "number" then
+                .content.metrics[$e.key] = $e.value
+              elif ($e.value|type) == "string" then
+                .content.meta[$e.key] = $e.value
+              else
+                .content.meta[$e.key] = ($e.value|tostring)
+              end
             )
-          end
         )
       else .
       end)
@@ -2054,6 +2113,26 @@ list_sorted_test_payload_files() {
 list_sorted_raw_test_msgpack_files() {
     local dir="$1"
     find "$dir" -maxdepth 1 -type f -name "*.msgpack" -print 2>/dev/null | LC_ALL=C sort
+}
+
+# Return true when a JSON test payload has at least one uploadable event. Some
+# tracers can leave empty `{}` placeholder files in Bazel test outputs; those
+# files are not valid Test Optimization payloads and should not be uploaded.
+test_payload_has_events() {
+    local file="$1"
+    if (( JQ_AVAILABLE == 0 )); then
+        # Without jq, preserve the historical upload path instead of guessing
+        # from raw text.
+        return 0
+    fi
+    local count
+    if ! count=$(jq -r '.events | if type=="array" then length else 0 end' "$file" 2>/dev/null); then
+        # Malformed JSON must stay on the normal upload path so later payload
+        # validation can report the corrupt file instead of silently treating
+        # it as a harmless empty placeholder.
+        return 0
+    fi
+    [[ "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]
 }
 
 # Detect whether one replay payload is stored in raw msgpack form.
@@ -2830,6 +2909,67 @@ PY
 # Track upload failures globally
 UPLOAD_FAILURES=0
 
+expected_enriched_tags() {
+    if (( ${#EXPECTED_ENRICHED_TAGS[@]} > 0 )); then
+        printf '%s\n' "${EXPECTED_ENRICHED_TAGS[@]}"
+    else
+        printf '%s\n' "${DEFAULT_EXPECTED_ENRICHED_TAGS[@]}"
+    fi
+}
+
+validate_enriched_payload_tags() {
+    local body="$1"
+    local source_file="$2"
+    local tag missing=()
+    if (( VALIDATE_ENRICHMENT == 0 )); then
+        return 0
+    fi
+    if (( JQ_AVAILABLE == 0 )); then
+        log "error: --validate-enrichment requires jq so the uploader can inspect enriched JSON payloads"
+        return 1
+    fi
+
+    while IFS= read -r tag; do
+        [[ -n "$tag" ]] || continue
+        if ! jq -e --arg tag "$tag" '
+          def has_expected_tag($event):
+            (($event.content.meta // {}) | has($tag)) or (($event.content.metrics // {}) | has($tag));
+          [(.events // [])[] | select(has_expected_tag(.))] | length > 0
+        ' "$body" >/dev/null 2>&1; then
+            missing+=("$tag")
+        fi
+    done < <(expected_enriched_tags)
+
+    if (( ${#missing[@]} > 0 )); then
+        log "error: enriched test payload for '$source_file' is missing expected tag(s): ${missing[*]}"
+        return 1
+    fi
+    log "dry-run validated enriched test payload: $source_file"
+    return 0
+}
+
+dry_run_single_test() {
+    local file="$1"
+    local body
+    body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload_dry_run.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+        dbg "dry_run_single_test: failed to create temp file"
+        return 1
+    fi
+    enrich_with_context "$file" "$body"
+    validate_payload "$body"
+    build_common_headers "$body"
+    if [[ "$DEBUG" == "1" ]]; then
+        log_start_time_stats "$body"
+    fi
+    if ! validate_enriched_payload_tags "$body" "$file"; then
+        rm -f "$body" 2>/dev/null || true
+        return 1
+    fi
+    rm -f "$body" 2>/dev/null || true
+    return 0
+}
+
 # Handle upload single test behavior.
 upload_single_test() {
     local file="$1"
@@ -3081,6 +3221,22 @@ upload_all_tests() {
                 ((++skipped))
                 continue
             fi
+            if ! test_payload_has_events "$f"; then
+                log "skipping test payload with no events: $f"
+                ((++skipped))
+                continue
+            fi
+            if (( DRY_RUN == 1 )); then
+                if dry_run_single_test "$f"; then
+                    log "dry-run kept test payload: $f"
+                    ((++total))
+                else
+                    log "warning: failed to dry-run validate $f"
+                    ((++failed))
+                    ((++UPLOAD_FAILURES))
+                fi
+                continue
+            fi
             if upload_single_test "$f"; then
                 log "uploaded test payload: $f"
                 cleanup_file "$f"
@@ -3094,7 +3250,11 @@ upload_all_tests() {
             fi
         done < <(list_sorted_test_payload_files "$tests_dir")
     done < <(echo "$TEST_OUTPUTS_CACHE")
-    log "uploaded $total test payloads"
+    if (( DRY_RUN == 1 )); then
+        log "dry-run validated $total test payloads"
+    else
+        log "uploaded $total test payloads"
+    fi
     if (( failed > 0 )); then
         log "warning: $failed test payloads failed to upload"
     fi
@@ -3122,6 +3282,11 @@ upload_all_coverage() {
                 ((++skipped))
                 continue
             fi
+            if (( DRY_RUN == 1 )); then
+                log "dry-run kept coverage payload: $f"
+                ((++total))
+                continue
+            fi
             if upload_single_coverage "$f"; then
                 log "uploaded coverage payload: $f"
                 cleanup_file "$f"
@@ -3135,7 +3300,11 @@ upload_all_coverage() {
             fi
         done < <(list_sorted_payload_files "$cov_dir")
     done < <(echo "$TEST_OUTPUTS_CACHE")
-    log "uploaded $total coverage payloads"
+    if (( DRY_RUN == 1 )); then
+        log "dry-run found $total coverage payloads"
+    else
+        log "uploaded $total coverage payloads"
+    fi
     if (( failed > 0 )); then
         log "warning: $failed coverage payloads failed to upload"
     fi
@@ -3166,6 +3335,11 @@ upload_all_telemetry() {
             if [[ -n "$replacement_body" ]]; then
                 dbg "telemetry augmentation: using temporary outbound body '$replacement_body' for '$f'"
             fi
+            if (( DRY_RUN == 1 )); then
+                log "dry-run kept telemetry payload: $f"
+                ((++total))
+                continue
+            fi
             if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
                 cleanup_file "$f"
@@ -3182,6 +3356,11 @@ upload_all_telemetry() {
         while IFS=$'\t' read -r mode anchor_path synthetic_body; do
             [[ "$mode" == "synthetic" ]] || continue
             [[ -n "$synthetic_body" && -f "$synthetic_body" ]] || continue
+            if (( DRY_RUN == 1 )); then
+                log "dry-run validated synthetic telemetry augmentation for: $anchor_path"
+                ((++total))
+                continue
+            fi
             if upload_single_telemetry "$anchor_path" "$synthetic_body"; then
                 log "uploaded telemetry payload: $anchor_path"
                 ((++total))
@@ -3194,7 +3373,11 @@ upload_all_telemetry() {
     fi
 
     cleanup_telemetry_augmentation_plan "$plan_file"
-    log "uploaded $total telemetry payloads"
+    if (( DRY_RUN == 1 )); then
+        log "dry-run found $total telemetry payloads"
+    else
+        log "uploaded $total telemetry payloads"
+    fi
     if (( failed > 0 )); then
         log "warning: $failed telemetry payloads failed to upload"
     fi
@@ -3211,6 +3394,10 @@ if (( UPLOAD_FAILURES > 0 )); then
     exit 1
 else
     # Zero means either complete success or intentional no-op path above.
-    log "done"
+    if (( DRY_RUN == 1 )); then
+        log "dry-run done"
+    else
+        log "done"
+    fi
     exit 0
 fi

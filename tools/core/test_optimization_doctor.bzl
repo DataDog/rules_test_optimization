@@ -20,6 +20,10 @@ def _json_string_list(values):
     """Render a list of strings as JSON."""
     return json.encode(values)
 
+def _json_string_dict(values):
+    """Render a string-to-string dictionary as JSON."""
+    return json.encode(values)
+
 def _validate_expected_targets(expected_targets):
     """Validate expected target labels while still at analysis time."""
     for label in expected_targets:
@@ -52,7 +56,9 @@ def _doctor_impl(ctx):
             '  "require_json_payloads": %s,' % _json_bool(ctx.attr.require_json_payloads),
             '  "forbid_full_bundle_no_match": %s,' % _json_bool(ctx.attr.forbid_full_bundle_no_match),
             '  "forbid_msgpack_payloads": %s,' % _json_bool(ctx.attr.forbid_msgpack_payloads),
-            '  "forbid_dd_git_test_env": %s' % _json_bool(ctx.attr.forbid_dd_git_test_env),
+            '  "forbid_dd_git_test_env": %s,' % _json_bool(ctx.attr.forbid_dd_git_test_env),
+            '  "allowed_payload_selections": %s,' % _json_string_list(ctx.attr.allowed_payload_selections),
+            '  "expected_payload_selection_by_target": %s' % _json_string_dict(ctx.attr.expected_payload_selection_by_target),
             "}",
             "",
         ]),
@@ -303,6 +309,8 @@ dd_test_optimization_doctor = rule(
         "forbid_full_bundle_no_match": attr.bool(default = True, doc = "Fail if Go payload selection fell back to full_bundle_no_match."),
         "forbid_msgpack_payloads": attr.bool(default = True, doc = "Fail if tests emitted raw msgpack payloads instead of Bazel JSON payload files."),
         "forbid_dd_git_test_env": attr.bool(default = True, doc = "Fail when .bazelrc injects DD_GIT_* into test environments."),
+        "allowed_payload_selections": attr.string_list(default = [], doc = "Optional explicit allowlist for bazel.go.payload_selection values."),
+        "expected_payload_selection_by_target": attr.string_dict(default = {}, doc = "Optional map of local target labels to their expected bazel.go.payload_selection value."),
         "_runtime": attr.label(default = "//tools/core:test_optimization_doctor.py", allow_single_file = True),
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },

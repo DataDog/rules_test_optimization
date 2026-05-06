@@ -561,6 +561,13 @@ dd_payload_uploader(
 )
 ```
 
+After tests and doctor pass, you can validate the exact enriched outbound test
+payload without uploading or deleting files:
+
+```bash
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+```
+
 Multi-service aggregator variant:
 
 ```bzl

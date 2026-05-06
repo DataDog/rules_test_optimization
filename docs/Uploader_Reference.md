@@ -12,8 +12,10 @@ For a quick path, use the upload section in `README.md`.
    `bazel-testlogs/<package>/<target>/test.outputs/`
 3. After tests complete, run the doctor via `bazel run` to validate local
    payloads and metadata before upload
-4. Then run the uploader via `bazel run`
-5. The uploader discovers all `test.outputs/` directories, waits for
+4. Optionally run the uploader in dry-run enrichment mode to validate the exact
+   outbound body without uploading or deleting files
+5. Then run the uploader via `bazel run`
+6. The uploader discovers all `test.outputs/` directories, waits for
    quiescence, uploads, and deletes files
 
 ## Basic usage
@@ -22,6 +24,7 @@ For a quick path, use the upload section in `README.md`.
 # RECOMMENDED: Run tests, validate payloads, then upload payloads.
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
@@ -29,6 +32,9 @@ if [ "$test_status" -ne 0 ]; then
 fi
 if [ "$doctor_status" -ne 0 ]; then
   exit "$doctor_status"
+fi
+if [ "$dry_run_status" -ne 0 ]; then
+  exit "$dry_run_status"
 fi
 exit "$upload_status"
 
@@ -47,6 +53,9 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
@@ -54,6 +63,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
 if ($doctorStatus -ne 0) { exit $doctorStatus }
+if ($dryRunStatus -ne 0) { exit $dryRunStatus }
 exit $uploadStatus
 
 # HERMETIC/REMOTE EXECUTION - keep test outputs downloaded locally:
@@ -73,6 +83,23 @@ exit $uploadStatus
 Always preserve all statuses. Test failures should win, doctor failures should
 block upload success, and uploader failures must still fail the job when tests
 and doctor checks passed.
+
+Dry-run enrichment validation:
+
+- `bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment` performs
+  the same test-payload enrichment path used by real uploads.
+- Dry-run mode does not upload data, does not require `DD_API_KEY` in
+  agentless mode, and does not delete payload files.
+- Raw files under `bazel-testlogs` are not expected to contain every final tag.
+  The dry-run validates the enriched outbound body after merging `context.json`
+  and `bazel_target_metadata.json`.
+- Empty JSON placeholders such as `{}` under `payloads/tests/` are skipped.
+  They have no uploadable `events[]` and are not valid Test Optimization test
+  payloads.
+- Default required enriched tags are `git.repository_url`, `git.commit.sha`,
+  `bazel.target`, and `bazel.package`. Use repeatable
+  `--expected-enriched-tag=<tag>` flags to validate additional runtime-specific
+  tags such as `bazel.go.payload_selection` during Go/Orchestrion rollouts.
 
 Credential handling:
 
@@ -252,7 +279,9 @@ payload discovery/quiescence before proceeding.
   4. if multiple bundled contexts exist and no match is found, skip only the `context.json` merge for that payload and continue uploading
   5. if no bundled context resolves, upload without context enrichment
 - When a `context.json` file is available, the uploader enriches each test
-  payload by merging all non-null keys from `context.json` into `metadata.*`.
+  payload by merging all non-null keys from `context.json` into each event's
+  `content.meta` or `content.metrics`, and it also normalizes top-level
+  `metadata.*` runtime tags.
 - Bazel sidecar metadata from `bazel_target_metadata.json` is merged separately.
   If a multi-context payload has no repo match, those Bazel sidecar tags remain
   and only the `context.json` merge is skipped.
@@ -265,11 +294,13 @@ payload discovery/quiescence before proceeding.
   do not use it as the normal mixed-runtime wiring path.
 - Bazel metadata is included as stable tags:
   `bazel.rule_name`, `bazel.rule_version`, `bazel.os`, and `bazel.arch`.
-- When enrichment is active, those Bazel keys are merged into test payload
-  `metadata.*` alongside the existing CI, Git, OS, and runtime tags.
-- `test`, `test_suite_end`, `test_module_end`, and `test_session_end` events
-  may also be enriched with `test.codeowners` when source resolution and owner
-  lookup succeed and the field is not already present.
+- When enrichment is active, those Bazel keys are merged into each test event
+  alongside the existing CI, Git, OS, and runtime tags. This includes Go tracer
+  payloads that encode CI Visibility data as `span` events; those events still
+  need the same Git and Bazel tags before upload.
+- CODEOWNERS enrichment remains limited to non-span CI Visibility lifecycle and
+  test events. Go span-form events still receive Git, context, and Bazel tags,
+  but not `test.codeowners`.
 - CODEOWNERS lookup order:
   - `<ci.workspace_path>/CODEOWNERS`
   - `<ci.workspace_path>/.github/CODEOWNERS`

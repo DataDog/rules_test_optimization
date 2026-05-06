@@ -26,6 +26,9 @@ Shared runtime contract for every language:
 - Run `//:dd_test_optimization_doctor` after tests to validate JSON payloads,
   Bazel target metadata, Git metadata, and invalid Go payload selection before
   upload.
+- Run uploader dry-run enrichment validation when rolling out a new repository
+  or debugging missing tags: it validates the final enriched body without
+  uploading or deleting local payload files.
 - The uploader runs later through `bazel run //:dd_upload_payloads`
 - Mixed-runtime uploader wiring must bundle every relevant
   `:test_optimization_context` target and let the uploader choose the matching
@@ -60,6 +63,7 @@ Shared upload command:
 ```bash
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
@@ -67,6 +71,9 @@ if [ "$test_status" -ne 0 ]; then
 fi
 if [ "$doctor_status" -ne 0 ]; then
   exit "$doctor_status"
+fi
+if [ "$dry_run_status" -ne 0 ]; then
+  exit "$dry_run_status"
 fi
 exit "$upload_status"
 ```

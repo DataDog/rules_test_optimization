@@ -69,7 +69,10 @@ Use this checklist before your first CI rollout:
    - `//:dd_upload_payloads` via `dd_payload_uploader(...)`
 4. Create one doctor target at workspace root:
    - `//:dd_test_optimization_doctor` via `dd_test_optimization_doctor(...)`
-5. Run tests, then doctor, then uploader, while preserving test exit code.
+5. Run tests, then doctor, then uploader, while preserving test exit code. When
+   you want to validate enrichment without sending data, run
+   `bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment`
+   between doctor and the real upload.
 6. If using remote execution, keep `--remote_download_outputs=all` in the
    test config so the doctor and uploader can discover payload files locally
    after the test completes.
@@ -119,6 +122,7 @@ dd_payload_uploader(
 ```bash
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
@@ -126,6 +130,9 @@ if [ "$test_status" -ne 0 ]; then
 fi
 if [ "$doctor_status" -ne 0 ]; then
   exit "$doctor_status"
+fi
+if [ "$dry_run_status" -ne 0 ]; then
+  exit "$dry_run_status"
 fi
 exit "$upload_status"
 ```
@@ -137,6 +144,9 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
@@ -144,6 +154,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
 if ($doctorStatus -ne 0) { exit $doctorStatus }
+if ($dryRunStatus -ne 0) { exit $dryRunStatus }
 exit $uploadStatus
 ```
 
@@ -1010,6 +1021,26 @@ exit $uploadStatus
    Do not use it as the normal mixed-runtime wiring path; mixed-runtime
    workspaces should pass every relevant `:test_optimization_context` target in
    uploader `data` and let the uploader select per payload.
+
+### Enrichment dry-run
+
+Payload files written by tests are intentionally raw Bazel outputs. They do not
+need to contain every Git, Bazel, CODEOWNERS, or runtime tag before upload. The
+uploader enriches test payloads at `bazel run` time using `context.json` plus
+`bazel_target_metadata.json`.
+
+Use dry-run mode when you want to prove that the final outbound body would be
+properly enriched without uploading data or deleting local payload files:
+
+```bash
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+```
+
+By default this validates that the enriched test payload has
+`git.repository_url`, `git.commit.sha`, `bazel.target`, `bazel.package`, and
+`bazel.go.payload_selection`. Add repeatable
+`--expected-enriched-tag=<tag-name>` arguments when a repository needs extra
+tags validated before upload.
 
 ### Full uploader reference
 
