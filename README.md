@@ -22,7 +22,9 @@ Pick the path that matches your repository:
 
 ## Documentation map
 
-Use this map to pick the right document instead of guessing from filenames:
+Use this map to pick the right document instead of guessing from filenames.
+Repository behavior is source-of-truth in this repo's code/tests; external docs
+are informative and may lag temporarily.
 
 - [`README.md`](README.md): fast onboarding, first-run checklist, and scenario
   quickstarts.
@@ -1533,16 +1535,6 @@ Fast checks before diving deep:
 - Enable debug logging on sync/uploader rules for richer diagnostics
 - If needed, file an issue with sanitized logs:
   - open an issue in the repository issue tracker
-
-## Reference links
-
-- Per-language onboarding guide: [`docs/Language_Onboarding.md`](docs/Language_Onboarding.md)
-- Maintainer/contributor workflows: [`docs/Maintainers.md`](docs/Maintainers.md)
-- Full installation reference: [`docs/Installation_Reference.md`](docs/Installation_Reference.md)
-- Full troubleshooting playbook: [`docs/Troubleshooting.md`](docs/Troubleshooting.md)
-- Configuration and fetch behavior reference: [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md)
-- Uploader runtime reference: [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md)
-- External-link provenance note: repository behavior is source-of-truth in this repo's code/tests; external docs are informative and may lag temporarily.
 
 ## Tips
 
