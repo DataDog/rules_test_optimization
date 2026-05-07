@@ -3,13 +3,14 @@ load("@test_optimization_data//:export.bzl", "topt_data")
 
 java_library(
     name = "hello_lib",
-    srcs = ["Hello.java"],
+    srcs = ["com/example/topt/Hello.java"],
 )
 
 dd_topt_java_test(
     name = "hello_test",
-    srcs = ["HelloTest.java"],
+    srcs = ["com/example/topt/HelloTest.java"],
     agent_jar = "@dd_java_agent//file",
+    stage_sources = True,
     test_class = "com.example.topt.HelloTest",
     topt_data = topt_data,
     deps = [":hello_lib"],
