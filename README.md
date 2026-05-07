@@ -48,6 +48,9 @@ Use this map to pick the right document instead of guessing from filenames:
   PR checklist, and release runbook.
 - [`examples/README.md`](examples/README.md): copy/paste snippets tied to the
   buildable example workspaces.
+- [`tools/agent-skills/go-test-optimization-onboarding/SKILL.md`](tools/agent-skills/go-test-optimization-onboarding/SKILL.md):
+  neutral Codex-compatible agent workflow for instrumenting Go WORKSPACE and
+  Bzlmod consumers with Test Optimization.
 - [`docs/internal_monorepo_go_rollout_plan.md`](docs/internal_monorepo_go_rollout_plan.md):
   operator checklist for large WORKSPACE Go pilot rollouts.
 - [`docs/go_orchestrion_bazel_deep_dive.md`](docs/go_orchestrion_bazel_deep_dive.md):
