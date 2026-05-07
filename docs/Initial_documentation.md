@@ -166,6 +166,10 @@ Some repositories host multiple logical services. The multi‑service module ext
 - `@test_optimization_data//:module_<sanitized_service>_<sanitized_module>` (for example `:module_go_service_core`)  
 
 It also exports a mapping so macros can select a service by key without consumers having to hardcode repo aliases.
+For workspace-level doctor and uploader targets, pass each generated per-service
+repository's `:test_optimization_context` target directly. That preserves the
+source sync repository key used to match payload metadata back to the correct
+context file.
 
 ## Runtime uploads and hermetic tests
 
