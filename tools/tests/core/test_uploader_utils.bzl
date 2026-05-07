@@ -7,6 +7,7 @@ load(
     "build_codeowners_lookup_order_for_tests",
     "compile_codeowners_regex_for_tests",
     "context_manifest_content_for_tests",
+    "context_repo_key_from_label_text_or_none_for_tests",
     "first_ascii_whitespace_index_for_tests",
     "glob_to_regex_for_tests",
     "is_gitlab_section_header_line_for_tests",
@@ -65,6 +66,37 @@ def _apparent_repo_key_parsing_test(ctx):
     return unittest.end(env)
 
 apparent_repo_key_parsing_test = unittest.make(_apparent_repo_key_parsing_test)
+
+def _context_repo_key_parsing_test(ctx):
+    """Validate direct and aggregate context labels map to runtime repo keys."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "test_optimization_data",
+        context_repo_key_from_label_text_or_none_for_tests(
+            "@test_optimization_data//:test_optimization_context",
+            "test_optimization_context",
+        ),
+    )
+    asserts.equals(
+        env,
+        "test_optimization_data_go_service_a",
+        context_repo_key_from_label_text_or_none_for_tests(
+            "@test_optimization_data//:test_optimization_context_go_service_a",
+            "test_optimization_context_go_service_a",
+        ),
+    )
+    asserts.equals(
+        env,
+        None,
+        context_repo_key_from_label_text_or_none_for_tests(
+            "@test_optimization_data//:test_optimization_files_go_service_a",
+            "test_optimization_files_go_service_a",
+        ),
+    )
+    return unittest.end(env)
+
+context_repo_key_parsing_test = unittest.make(_context_repo_key_parsing_test)
 
 def _legacy_context_direct_file_fallback_test_impl(ctx):
     """Validate a direct context.json file still enables single-context upload."""

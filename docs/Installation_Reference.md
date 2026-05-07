@@ -639,16 +639,16 @@ Multi-service aggregator variant:
 dd_test_optimization_doctor(
     name = "dd_test_optimization_doctor",
     data = [
-        "@test_optimization_data_service_a//:test_optimization_context",
-        "@test_optimization_data_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_service_a",
+        "@test_optimization_data//:test_optimization_context_service_b",
     ],
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data_service_a//:test_optimization_context",
-        "@test_optimization_data_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_service_a",
+        "@test_optimization_data//:test_optimization_context_service_b",
     ],
 )
 ```

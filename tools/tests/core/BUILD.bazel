@@ -122,11 +122,11 @@ load(
     "sanitize_repository_url_test",
     "set_context_tag_from_env_test",
     "settings_response_tags_test",
+    "split_flaky_tests_by_module_test",
     "sync_environment_keys_allowlist_test",
     "sync_success_metric_tags_parity_test",
     "telemetry_facts_document_test",
     "telemetry_response_counts_test",
-    "split_flaky_tests_by_module_test",
 )
 load(
     "//tools/tests/core:test_topt_macro_utils.bzl",
@@ -155,6 +155,7 @@ load(
     "codeowners_section_header_classification_test",
     "codeowners_section_header_powershell_parity_test",
     "context_manifest_content_test",
+    "context_repo_key_parsing_test",
     "legacy_context_capture_rule",
     "legacy_context_direct_file_fallback_test",
     "legacy_context_filegroup_fallback_test",
@@ -1078,6 +1079,12 @@ context_manifest_content_test(
     timeout = "short",
 )
 
+context_repo_key_parsing_test(
+    name = "context_repo_key_parsing_test",
+    size = "small",
+    timeout = "short",
+)
+
 manifest_trim_and_bom_helpers_test(
     name = "manifest_trim_and_bom_helpers_test",
     size = "small",
@@ -1131,12 +1138,11 @@ test_suite(
         ":collect_test_management_modules_defensive_shape_test",
         ":complete_git_archive_specs_test",
         ":compute_repo_names_test",
-        ":count_flaky_tests_response_tests_test",
-        ":split_flaky_tests_by_module_test",
         ":compute_service_keys_dedups_collisions_test",
         ":compute_service_keys_edge_cases_test",
         ":contains_parent_segment_test",
         ":context_manifest_content_test",
+        ":count_flaky_tests_response_tests_test",
         ":custom_rules_go_repo_name_test",
         ":dd_site_invalid_failure_test",
         ":dd_site_normalization_test",
@@ -1213,6 +1219,7 @@ test_suite(
         ":sanitize_label_fragment_test",
         ":sanitize_repository_url_test",
         ":set_context_tag_from_env_test",
+        ":split_flaky_tests_by_module_test",
         ":strip_workspace_prefix_powershell_windows_test",
         ":validate_api_key_carriage_return_failure_test",
         ":validate_api_key_control_chars_failure_test",

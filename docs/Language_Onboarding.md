@@ -419,16 +419,16 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 dd_test_optimization_doctor(
     name = "dd_test_optimization_doctor",
     data = [
-        "@test_optimization_data_go_service_a//:test_optimization_context",
-        "@test_optimization_data_go_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_go_service_a",
+        "@test_optimization_data//:test_optimization_context_go_service_b",
     ],
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data_go_service_a//:test_optimization_context",
-        "@test_optimization_data_go_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_go_service_a",
+        "@test_optimization_data//:test_optimization_context_go_service_b",
     ],
 )
 ```
@@ -576,16 +576,16 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 dd_test_optimization_doctor(
     name = "dd_test_optimization_doctor",
     data = [
-        "@test_optimization_data_py_service_a//:test_optimization_context",
-        "@test_optimization_data_py_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_py_service_a",
+        "@test_optimization_data//:test_optimization_context_py_service_b",
     ],
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data_py_service_a//:test_optimization_context",
-        "@test_optimization_data_py_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_py_service_a",
+        "@test_optimization_data//:test_optimization_context_py_service_b",
     ],
 )
 ```
@@ -740,16 +740,16 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 dd_test_optimization_doctor(
     name = "dd_test_optimization_doctor",
     data = [
-        "@test_optimization_data_java_service_a//:test_optimization_context",
-        "@test_optimization_data_java_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_java_service_a",
+        "@test_optimization_data//:test_optimization_context_java_service_b",
     ],
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data_java_service_a//:test_optimization_context",
-        "@test_optimization_data_java_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_java_service_a",
+        "@test_optimization_data//:test_optimization_context_java_service_b",
     ],
 )
 ```
@@ -900,16 +900,16 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 dd_test_optimization_doctor(
     name = "dd_test_optimization_doctor",
     data = [
-        "@test_optimization_data_nodejs_service_a//:test_optimization_context",
-        "@test_optimization_data_nodejs_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_nodejs_service_a",
+        "@test_optimization_data//:test_optimization_context_nodejs_service_b",
     ],
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data_nodejs_service_a//:test_optimization_context",
-        "@test_optimization_data_nodejs_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_nodejs_service_a",
+        "@test_optimization_data//:test_optimization_context_nodejs_service_b",
     ],
 )
 ```
@@ -1084,16 +1084,16 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 dd_test_optimization_doctor(
     name = "dd_test_optimization_doctor",
     data = [
-        "@test_optimization_data_dotnet_service_a//:test_optimization_context",
-        "@test_optimization_data_dotnet_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_dotnet_service_a",
+        "@test_optimization_data//:test_optimization_context_dotnet_service_b",
     ],
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data_dotnet_service_a//:test_optimization_context",
-        "@test_optimization_data_dotnet_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_dotnet_service_a",
+        "@test_optimization_data//:test_optimization_context_dotnet_service_b",
     ],
 )
 ```
@@ -1248,16 +1248,16 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bz
 dd_test_optimization_doctor(
     name = "dd_test_optimization_doctor",
     data = [
-        "@test_optimization_data_ruby_service_a//:test_optimization_context",
-        "@test_optimization_data_ruby_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_ruby_service_a",
+        "@test_optimization_data//:test_optimization_context_ruby_service_b",
     ],
 )
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
-        "@test_optimization_data_ruby_service_a//:test_optimization_context",
-        "@test_optimization_data_ruby_service_b//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_context_ruby_service_a",
+        "@test_optimization_data//:test_optimization_context_ruby_service_b",
     ],
 )
 ```

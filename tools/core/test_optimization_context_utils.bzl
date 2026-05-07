@@ -36,6 +36,35 @@ def apparent_repo_key_or_fail(label, failure_owner):
     """Return the apparent external repo name from the attribute label text."""
     return apparent_repo_key_from_label_text_or_fail(str(label), label, failure_owner)
 
+def context_repo_key_from_label_text_or_none(label_text, label_name, failure_owner):
+    """Return the sync repo key for supported context targets.
+
+    Single-service sync repos expose `:test_optimization_context` directly, so
+    the repo key is the apparent repo name. Multi-service aggregate repos expose
+    service-qualified aliases named `:test_optimization_context_<service_key>`;
+    those aliases point at generated repos named `<aggregate_repo>_<service_key>`.
+    Returning that derived key preserves the runtime mapping used by payload
+    metadata without forcing consumers to depend on per-service repos directly.
+    """
+    if label_name == "test_optimization_context":
+        return apparent_repo_key_from_label_text_or_fail(label_text, label_text, failure_owner)
+
+    prefix = "test_optimization_context_"
+    if label_name.startswith(prefix):
+        service_key = label_name[len(prefix):]
+        if not service_key:
+            fail_with_prefix(failure_owner, "context alias %s must include a non-empty service key" % label_text)
+        return "%s_%s" % (
+            apparent_repo_key_from_label_text_or_fail(label_text, label_text, failure_owner),
+            service_key,
+        )
+
+    return None
+
+def context_repo_key_or_none(label, failure_owner):
+    """Return the sync repo key for a supported context target label."""
+    return context_repo_key_from_label_text_or_none(str(label), label.name, failure_owner)
+
 def legacy_single_context_entry_or_fail(data_files, failure_owner):
     """Return a single fallback entry for legacy direct context.json inputs.
 
@@ -56,7 +85,7 @@ def legacy_single_context_entry_or_fail(data_files, failure_owner):
     if len(raw_context_files) > 1:
         fail_with_prefix(
             failure_owner,
-            "bundled multiple context.json files without explicit :test_optimization_context targets; pass those targets directly in data = [...] for multi-context selection",
+            "bundled multiple context.json files without explicit context targets; pass :test_optimization_context targets or service-qualified :test_optimization_context_<service> aliases directly in data = [...] for multi-context selection",
         )
 
     context_file = raw_context_files.values()[0]
@@ -74,7 +103,8 @@ def context_manifest_entries_or_fail(data_targets, data_files, failure_owner):
     """
     entries = {}
     for dep in data_targets:
-        if dep.label.name != "test_optimization_context":
+        repo_key = context_repo_key_or_none(dep.label, failure_owner)
+        if repo_key == None:
             continue
         context_files = []
         for f in dep[DefaultInfo].files.to_list():
@@ -83,7 +113,6 @@ def context_manifest_entries_or_fail(data_targets, data_files, failure_owner):
         if len(context_files) != 1:
             fail_with_prefix(failure_owner, "expected exactly one context.json from %s, found %d" % (dep.label, len(context_files)))
         context_file = context_files[0]
-        repo_key = apparent_repo_key_or_fail(dep.label, failure_owner)
         if repo_key in entries:
             fail_with_prefix(failure_owner, "duplicate bundled context repo name '%s'" % repo_key)
         entries[repo_key] = (context_file.short_path, context_file.path)
