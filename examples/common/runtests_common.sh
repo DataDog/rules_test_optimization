@@ -9,6 +9,9 @@ run_example_runtests() {
   local script_dir="$1"
   local bazelw
   local test_status=0
+  local doctor_status=0
+  local dry_run_status=0
+  local upload_status=0
   bazelw="${script_dir}/../../bazelw"
 
   cd "$script_dir"
@@ -28,12 +31,30 @@ run_example_runtests() {
   echo "--- hermetic run"
   run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic || test_status=$?
 
-  echo "--- uploading payloads"
-  # Requires DD_API_KEY and DD_SITE environment variables.
-  if ! DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run //:dd_upload_payloads; then
-    echo "warning: payload upload failed; preserving test exit code (${test_status})." >&2
+  echo "--- validating payloads"
+  run_cmd "${bazelw}" run //:dd_test_optimization_doctor || doctor_status=$?
+  if [[ "$doctor_status" -ne 0 ]]; then
+    if [[ "$test_status" -ne 0 ]]; then
+      return "$test_status"
+    fi
+    return "$doctor_status"
   fi
 
-  # Preserve the test exit code even if uploads fail.
-  return "$test_status"
+  echo "--- validating upload enrichment"
+  run_cmd "${bazelw}" run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
+  if [[ "$dry_run_status" -ne 0 ]]; then
+    if [[ "$test_status" -ne 0 ]]; then
+      return "$test_status"
+    fi
+    return "$dry_run_status"
+  fi
+
+  echo "--- uploading payloads"
+  # Requires DD_API_KEY and DD_SITE environment variables.
+  DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run //:dd_upload_payloads || upload_status=$?
+
+  if [[ "$test_status" -ne 0 ]]; then
+    return "$test_status"
+  fi
+  return "$upload_status"
 }

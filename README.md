@@ -20,6 +20,51 @@ Pick the path that matches your repository:
 - **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled
 - **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
 
+## Documentation map
+
+Use this map to pick the right document instead of guessing from filenames:
+
+- [`README.md`](README.md): fast onboarding, first-run checklist, and scenario
+  quickstarts.
+- [`docs/Language_Onboarding.md`](docs/Language_Onboarding.md):
+  language-by-language recipes, including Go/Orchestrion and large WORKSPACE
+  monorepos.
+- [`docs/Installation_Reference.md`](docs/Installation_Reference.md): complete
+  installation reference for Bzlmod, WORKSPACE, bootstrap flags, archive pins,
+  and generated Bazel config.
+- [`docs/Configuration_Reference.md`](docs/Configuration_Reference.md):
+  authoritative attributes, flags, and environment variable tables.
+- [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md): doctor, dry-run
+  enrichment, uploader behavior, credentials, endpoints, and upload modes.
+- [`docs/Troubleshooting.md`](docs/Troubleshooting.md): operational debugging
+  for sync, payload discovery, doctor failures, enrichment, Git/Bazel metadata,
+  and Go tracer drift.
+- [`docs/Initial_documentation.md`](docs/Initial_documentation.md): current
+  architecture overview and data-flow diagrams.
+- [`docs/RFC.md`](docs/RFC.md): historical design rationale and trade-offs.
+- [`docs/Maintainers.md`](docs/Maintainers.md): maintainer workflows,
+  companion-module patterns, CI policy, and release notes.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): contributor validation matrix, CI lanes,
+  PR checklist, and release runbook.
+- [`examples/README.md`](examples/README.md): copy/paste snippets tied to the
+  buildable example workspaces.
+- [`docs/internal_monorepo_go_rollout_plan.md`](docs/internal_monorepo_go_rollout_plan.md):
+  operator checklist for large WORKSPACE Go pilot rollouts.
+- [`docs/go_orchestrion_bazel_deep_dive.md`](docs/go_orchestrion_bazel_deep_dive.md):
+  maintainer deep dive for the Go + Orchestrion Bazel pipeline.
+- [`docs/go_orchestrion_maintainer_state.md`](docs/go_orchestrion_maintainer_state.md):
+  current Go/Orchestrion maintainer state, kept optimizations, reverted
+  experiments, and next performance directions.
+- [`docs/rules_go_variant_selection_plan.md`](docs/rules_go_variant_selection_plan.md)
+  and [`docs/rules_go_variant_maintenance_guide.md`](docs/rules_go_variant_maintenance_guide.md):
+  how to choose and maintain `rules_go_orchestrion_base` vs
+  `rules_go_orchestrion_complete`.
+- [`docs/rules_go_orchestrion_performance_analysis.md`](docs/rules_go_orchestrion_performance_analysis.md)
+  and [`docs/rules_go_orchestrion_probe_measurements.md`](docs/rules_go_orchestrion_probe_measurements.md):
+  performance analysis and measured probe history for the vendored Go fork.
+- [`SECURITY.md`](SECURITY.md): vulnerability reporting and disclosure policy.
+- [`CHANGELOG.md`](CHANGELOG.md): release notes and unreleased changes.
+
 ## Maintainer note on the vendored rules_go split
 
 The repository now publishes the Go integration as two complete `rules_go`
@@ -164,17 +209,19 @@ dd_payload_uploader(
 ```bash
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
 bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
-fi
-if [ "$doctor_status" -ne 0 ]; then
-  exit "$doctor_status"
-fi
-if [ "$dry_run_status" -ne 0 ]; then
-  exit "$dry_run_status"
 fi
 exit "$upload_status"
 ```
@@ -186,17 +233,23 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
 bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
 $dryRunStatus = $LASTEXITCODE
 if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
-if ($doctorStatus -ne 0) { exit $doctorStatus }
-if ($dryRunStatus -ne 0) { exit $dryRunStatus }
 exit $uploadStatus
 ```
 
@@ -713,11 +766,21 @@ Then load the matching export in each runtime-specific wrapper or BUILD file:
 - Go targets use `@test_optimization_data_go//:export.bzl`
 - Ruby targets use `@test_optimization_data_ruby//:export.bzl`
 
-Root uploader wiring in a mixed-runtime workspace must bundle every matching
-context target so the uploader can pick the correct `context.json` per payload:
+Root doctor/uploader wiring in a mixed-runtime workspace must bundle every
+matching context target so validation and upload enrichment use the correct
+`context.json` per payload:
 
 ```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data_go//:test_optimization_context",
+        "@test_optimization_data_ruby//:test_optimization_context",
+    ],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -1015,26 +1078,38 @@ Telemetry-specific notes:
 # RECOMMENDED: Run tests, validate payloads, then upload payloads.
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
-fi
-if [ "$doctor_status" -ne 0 ]; then
-  exit "$doctor_status"
 fi
 exit "$upload_status"
 
 # HERMETIC/REMOTE EXECUTION - keep --config=test-optimization on test and doctor.
 bazel test --config=test-optimization --config=hermetic //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization --config=hermetic //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
-fi
-if [ "$doctor_status" -ne 0 ]; then
-  exit "$doctor_status"
 fi
 exit "$upload_status"
 ```
@@ -1047,13 +1122,23 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
-if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 
 # HERMETIC/REMOTE EXECUTION - keep --config=test-optimization on test and doctor.
@@ -1063,14 +1148,27 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization --config=hermetic //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
-if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 ```
 
-**IMPORTANT**: Always preserve the test exit code! Using plain `;` causes CI to report success even when tests fail.
+**IMPORTANT**: Always preserve the test exit code. Upload failed-test payloads
+when doctor and dry-run enrichment pass, but do not run the real upload after a
+doctor or dry-run failure. Using plain `;` causes CI to report success even when
+tests fail.
 
 ### Important runtime requirements
 
@@ -1188,7 +1286,7 @@ Shared-version form:
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.7.0-rc.4",
+    dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
@@ -1200,9 +1298,9 @@ orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
     dd_trace_go_versions = {
-        "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
-        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
-        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+        "github.com/DataDog/dd-trace-go/v2": "v2.9.0-dev.0.20260416093245-194346a71c51",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0-dev.0.20260416093245-194346a71c51",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0-dev.0.20260416093245-194346a71c51",
     },
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
@@ -1265,13 +1363,19 @@ Then run tests, validate payloads, and upload:
 ```bash
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
-fi
-if [ "$doctor_status" -ne 0 ]; then
-  exit "$doctor_status"
 fi
 exit "$upload_status"
 ```
@@ -1283,13 +1387,23 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
-if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 ```
 

@@ -128,13 +128,13 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51
 ```
 
 `--dd-trace-go-version` is optional. If omitted, bootstrap uses the default
-`v2.9.0-dev`. It accepts a tag, pseudo-version, branch, or commit SHA. Bootstrap
-resolves that input to exact versions and repins the local Go module to match
-what Bazel will use.
+`v2.9.0-dev.0.20260416093245-194346a71c51`. It accepts a tag,
+pseudo-version, branch, or commit SHA. Bootstrap resolves that input to exact
+versions and repins the local Go module to match what Bazel will use.
 
 BUILD.bazel (generated wrapper path, inference via embed):
 
@@ -259,10 +259,16 @@ dd_topt_ruby_test(
 )
 ```
 
-Root BUILD.bazel (ONE uploader per workspace):
+Root BUILD.bazel (one doctor and one uploader per workspace):
 
 ```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -274,11 +280,21 @@ Use the single-context form above only for single-runtime workspaces. Mixed-
 runtime workspaces must add one `:test_optimization_context` label per
 runtime/service repo so uploader enrichment stays aligned with each payload.
 
-Running tests and uploading payloads:
+Running tests, validating payloads, and uploading payloads:
 
 ```bash
-# Run tests (preserving exit code) then upload payloads
+# Run tests, doctor, enrichment dry-run, then upload payloads.
 bazel test //... || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
+bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
@@ -288,6 +304,16 @@ exit "$upload_status"
 
 # RBE users: download outputs so uploader can discover payload files
 bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
+bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
@@ -297,10 +323,24 @@ exit "$upload_status"
 ```
 
 ```powershell
-# Run tests (preserving exit code) then upload payloads
+# Run tests, doctor, enrichment dry-run, then upload payloads.
 bazel test //...
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
+bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
@@ -313,6 +353,20 @@ exit $uploadStatus
 bazel test //... --remote_download_outputs=all
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
+bazel run //:dd_test_optimization_doctor
+$doctorStatus = $LASTEXITCODE
+if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
+bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 bazel run //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
@@ -320,8 +374,9 @@ exit $uploadStatus
 ```
 
 Notes:
-- The sequence above preserves test failures and also fails on uploader errors
-  when tests passed.
+- The sequence above preserves test failures, blocks upload success when doctor
+  or dry-run enrichment fails, and still fails on uploader errors when the
+  earlier steps passed.
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
 - Windows-friendly wrappers are provided as `examples/*/runtests.ps1` and use
   native PowerShell + Bazel (no Git Bash dependency).
@@ -376,7 +431,7 @@ Bootstrap once after adding the Go module files:
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --go-module-dir src/go-project \
-  --dd-trace-go-version v2.9.0-dev
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51
 ```
 
 As in the single-service flow, `--dd-trace-go-version` is optional and defaults
@@ -488,10 +543,19 @@ filegroup(
 )
 ```
 
-Root BUILD.bazel uploader (multi-service):
+Root BUILD.bazel doctor/uploader (multi-service):
 
 ```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+  name = "dd_test_optimization_doctor",
+  data = [
+    "@test_optimization_data//:test_optimization_context_go_service_a",
+    "@test_optimization_data//:test_optimization_context_go_service_b",
+  ],
+)
 
 dd_payload_uploader(
   name = "dd_upload_payloads",

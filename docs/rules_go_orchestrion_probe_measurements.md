@@ -70,8 +70,7 @@ Measured result:
   - critical path: `81.32s`
   - `extensions.orchestrion_build_total`: `3.532s`
 
-Runtime validation also confirmed that the current branch still behaves
-correctly:
+Runtime validation also confirmed that the measured branch behaved correctly:
 
 - tracer startup logs were present
 - CI Visibility initialized

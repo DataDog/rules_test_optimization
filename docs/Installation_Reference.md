@@ -361,8 +361,11 @@ Run Go onboarding commands with this config:
 ```bash
 bazel test --config=test-optimization //...
 bazel run --config=test-optimization //:dd_test_optimization_doctor
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 ```
+
+Do not run the real uploader if the doctor or dry-run enrichment step fails.
 
 For manual Go extension wiring, set `module_path` to the Go module path from
 `go.mod`:

@@ -3,10 +3,11 @@
 This repository ships Bazel integrations that fetch Datadog Test Optimization metadata at module/repo resolution and reliably upload test/coverage payloads from hermetic builds.
 
 ## Project Overview
-The solution separates concerns into three phases:
+The solution separates concerns into four phases:
 1. **Fetch phase (module/repo resolution)**: repository rule fetches metadata from Datadog APIs.
 2. **Execute phase (test runtime)**: tests run hermetically, consume pre-fetched metadata via runfiles, and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
-3. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //:dd_upload_payloads`) discovers and uploads payloads from `bazel-testlogs/<target>/test.outputs/`.
+3. **Validation phase (post-test)**: a dedicated doctor target (`bazel run //:dd_test_optimization_doctor`) validates local JSON payloads, Bazel metadata, Git metadata, and invalid payload-selection states.
+4. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //:dd_upload_payloads`) enriches and uploads payloads from `bazel-testlogs/<target>/test.outputs/`.
 
 ## Documentation
 - User-facing onboarding and command flow: see `README.md` (use its `Reference links` section for deep references).
@@ -76,8 +77,20 @@ The sync rule creates `@test_optimization_data//` containing:
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
   ./bazelw test //... || test_status=$?; test_status=${test_status:-0}
+  ./bazelw run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+  if [ "$doctor_status" -ne 0 ]; then
+    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+    exit "$doctor_status"
+  fi
+  ./bazelw run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+  if [ "$dry_run_status" -ne 0 ]; then
+    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+    exit "$dry_run_status"
+  fi
   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //:dd_upload_payloads
-  exit $test_status
+  upload_status=$?
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$upload_status"
   ```
 - Force refetch of test optimization data:
   ```bash
@@ -130,15 +143,23 @@ The sync rule creates `@test_optimization_data//` containing:
 - In consumer workspaces, prefer `./bazelw test //...` when package layout permits.
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
-- In consumer workspaces, use `./bazelw run //:dd_upload_payloads` after tests complete to upload payloads.
+- In consumer workspaces, run `./bazelw run //:dd_test_optimization_doctor`
+  after tests complete, then run `./bazelw run //:dd_upload_payloads -- --dry-run --validate-enrichment`, then upload with `./bazelw run //:dd_upload_payloads`.
+  Do not run the real upload if doctor or dry-run enrichment validation fails.
 - For Go, use `dd_topt_go_test` to set up the test with correct environment variables.
-- Create ONE uploader target per workspace at the root BUILD.bazel.
+- Create ONE doctor target and ONE uploader target per workspace at the root BUILD.bazel.
 
 ## Consumer Tips (bzlmod)
 - In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)` and `bazel_dep("datadog-rules-test-optimization-go", ...)`, then `use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
-- In root `BUILD.bazel`: create the workspace-level uploader:
+- In root `BUILD.bazel`: create the workspace-level doctor and uploader:
   ```bzl
+  load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
   load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+  dd_test_optimization_doctor(
+      name = "dd_test_optimization_doctor",
+      data = ["@test_optimization_data//:test_optimization_context"],
+  )
 
   dd_payload_uploader(
       name = "dd_upload_payloads",
