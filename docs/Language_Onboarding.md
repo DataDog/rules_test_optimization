@@ -237,7 +237,7 @@ datadog_go_test_optimization_workspace_repositories(
     rto_archive_prefix = "rules_test_optimization-<rules-test-optimization-commit>",
 )
 
-load("@<existing_rules_go_repo_name>//go:deps.bzl", "go_orchestrion_tool_repo")
+load("@<existing_rules_go_repo_name>//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
 
 go_orchestrion_tool_repo(
     version = "v1.9.0",
