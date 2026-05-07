@@ -115,11 +115,8 @@ The kept design now does this:
 - let the instrumented target binary load the tracer version pinned by the
   target workspace
 
-That is why the runtime validation still showed:
-
-- `Datadog Tracer v2.7.0-dev.1`
-
-even after the tool-side `go.mod` rewriting was removed.
+That is why runtime validation must show the target workspace's configured
+Datadog tracer version, even after tool-side `go.mod` rewriting was removed.
 
 ## Kept Performance Changes
 
@@ -335,11 +332,12 @@ Measured with:
 - `DD_CIVISIBILITY_ENABLED=1`
 - a fresh test execution
 
-What was verified:
+What must be verified:
 
 - tracer startup logs are present
 - CI Visibility initializes
-- the test binary reports `Datadog Tracer v2.7.0-dev.1`
+- the test binary reports the target workspace's configured Datadog tracer
+  version
 - a payload JSON file is written under `test.outputs/payloads/tests`
 
 This validation is part of the baseline, not optional extra checking.

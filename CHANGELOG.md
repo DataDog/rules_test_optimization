@@ -8,6 +8,9 @@ versioning.
 ## [Unreleased]
 
 ### Changed
+- Refreshed documentation around the supported `test -> doctor -> dry-run
+  enrichment -> upload` flow, large WORKSPACE Go onboarding, and current
+  Orchestrion tracer pins.
 - Hardened git repository URL handling by stripping URL userinfo before
   forwarding metadata.
 - Improved sync schema parser fallback behavior to try Ruby after any PyYAML

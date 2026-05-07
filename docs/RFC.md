@@ -3,13 +3,13 @@
 Author: Tony Redondo
 Date: Feb 18, 2026  
 Status: Implemented (v1)
-> Last reviewed: 2026-02-25
+> Last reviewed: 2026-05-07
 
 This document outlines a proposed method for integrating Datadog Test Optimization with Bazel. The approach involves using a module extension and repository rule to gather metadata during module/repository resolution, and a runtime uploader to transmit test and coverage data back to the backend. The document details the rationale behind this design, current behaviors, limitations, and a strategy for widespread adoption across various services and programming languages.
 
 Note: this RFC is primarily design rationale and historical context. For
-current implementation details and operational guidance, use `README.md` and
-`docs/Initial_documentation.md`.
+current implementation details and operational guidance, use `README.md`,
+`docs/Initial_documentation.md`, and `docs/Language_Onboarding.md`.
 
 ## Bazel 101
 
@@ -103,8 +103,9 @@ We propose standardizing this approach across Bazel‑based services as the supp
 4) Upload payloads from a dedicated workspace-level uploader (normal rule, not test) via `bazel run` after tests complete, enriching with non‑secret context, supporting both agentless and EVP proxy modes.  
 5) Provide thin language macros that compose these pieces for a smooth developer experience.
 
-The POC for this proposal can be found in this repository.   
-There is also a private companion repository used to validate these POC rules in real consumer scenarios. 
+The implemented rules, companions, examples, and consumer-style validation
+fixtures now live in this repository and the public sibling fixture repository
+used by CI.
 
 ### Design Overview
 
@@ -131,7 +132,10 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 
   - A single workspace-level uploader target (normal rule, not test) runs via `bazel run` after tests complete.
   - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`), and deletes successfully uploaded files.
-  - Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status`
+  - Usage: run `bazel test`, then `//:dd_test_optimization_doctor`, then
+    `//:dd_upload_payloads -- --dry-run --validate-enrichment`, then the real
+    `//:dd_upload_payloads` target. Preserve the test exit code, but do not run
+    the real upload if doctor or dry-run enrichment validation fails.
 
 
 - [Multi‑service monorepos](../tools/core/test_optimization_multi_sync.bzl):  
@@ -231,7 +235,21 @@ Runtime Uploader
 - Since `bazel run` executes locally with full host access, no sandbox workarounds are needed. The uploader runs after all tests complete, discovering payloads that Bazel collected from `TEST_UNDECLARED_OUTPUTS_DIR`.
 - Recommended invocation preserves test exit code:
   ```bash
-  bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
+  bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
+  bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+  if [ "$doctor_status" -ne 0 ]; then
+    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+    exit "$doctor_status"
+  fi
+  bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+  if [ "$dry_run_status" -ne 0 ]; then
+    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+    exit "$dry_run_status"
+  fi
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+  upload_status=$?
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$upload_status"
   ```
 
 Language Macros
@@ -252,7 +270,11 @@ Language Macros
 
 Security Considerations
 
-- Secrets are passed via `--repo_env`/`--test_env` and not written to disk. The repo rule’s HTTP calls rely on `DD_API_KEY` at fetch time; the uploader uses either `DD_API_KEY` or `DD_TEST_OPTIMIZATION_AGENT_URL` at upload time (`bazel run` step).  
+- Secrets are not written to disk. The repo rule’s HTTP calls rely on
+  `DD_API_KEY` forwarded through `--repo_env` at fetch time; the uploader uses
+  either `DD_API_KEY` or `DD_TEST_OPTIMIZATION_AGENT_URL` at upload time
+  (`bazel run` step). Git metadata overrides also belong in `--repo_env`, not
+  `--test_env`, so they do not become test action cache keys.
 - `context.json` contains only non‑secret metadata and is safe to include as runfiles.  
 - Consumers should configure sandboxing and network blocking for tests (`--config=hermetic`, `--sandbox_default_allow_network=false`) and make only the payload directory writable.
 

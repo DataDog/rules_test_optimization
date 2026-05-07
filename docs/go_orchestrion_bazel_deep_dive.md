@@ -94,7 +94,7 @@ post-processing step. This section sets the correct model: Bazel, vendored
 flowchart TD
     A[MODULE.bazel] --> B[Go companion extension]
     A --> C[dd_topt_go_bootstrap]
-    C --> D[MODULE.bazel patching]
+    C --> D[Bzlmod MODULE.bazel patching or WORKSPACE local scaffolding]
     C --> E[orchestrion pin files]
     D --> F[vendored rules_go fork]
     F --> G[rules_go Orchestrion extension]
@@ -158,7 +158,8 @@ The bootstrap binary is the one-time workspace mutation step.
 Implementation:
 - [main.go](../modules/go/tools/dd_topt_go_bootstrap/main.go)
 
-Bootstrap does five things that matter for the current architecture:
+In guided Bzlmod mode, bootstrap does five things that matter for the current
+architecture:
 
 1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.60.0")`
 2. Writes a managed `git_override` for `rules_go` pointing back to this repo
@@ -181,6 +182,13 @@ It aligns:
 - the vendored `rules_go` fork
 - the selected `dd-trace-go` version used by Bazel injection
 - the pinned Go module files that Orchestrion expects
+
+In WORKSPACE mode, bootstrap deliberately does not edit `WORKSPACE`. It prints
+repository wiring for review and can write only repository-local scaffolding:
+the managed `.bazelrc` block, root doctor/uploader targets, Orchestrion pin
+files, wrapper template, and validation script. Large WORKSPACE monorepos keep
+their repository placement and local wrapper policy under owner review while
+still using the same Orchestrion-enabled `rules_go` variants.
 
 If no tracer setting is present, the default is still
 `v2.9.0-dev.0.20260416093245-194346a71c51`. Bootstrap keeps the local Go module

@@ -51,6 +51,7 @@ load(
     "//tools/core:test_optimization_context_utils.bzl",
     _context_manifest_content = "context_manifest_content",
     _context_manifest_entries_or_fail_shared = "context_manifest_entries_or_fail",
+    _context_repo_key_from_label_text_or_none_shared = "context_repo_key_from_label_text_or_none",
     _legacy_single_context_entry_or_fail_shared = "legacy_single_context_entry_or_fail",
     _shared_apparent_repo_key_from_label_text_or_fail = "apparent_repo_key_from_label_text_or_fail",
 )
@@ -185,11 +186,16 @@ def _apparent_repo_key_from_label_text_or_fail(label_text, owner):
     """Return the apparent external repo name from external label text."""
     return _shared_apparent_repo_key_from_label_text_or_fail(label_text, owner, "test_optimization_uploader")
 
+def _context_repo_key_from_label_text_or_none_for_tests(label_text, label_name):
+    """Return the sync repo key for uploader-supported context target labels."""
+    return _context_repo_key_from_label_text_or_none_shared(label_text, label_name, "test_optimization_uploader")
+
 def _apparent_repo_key_or_fail(label):
     """Return the apparent external repo name from the attribute label text."""
     return _apparent_repo_key_from_label_text_or_fail(str(label), label)
 
 apparent_repo_key_from_label_text_or_fail_for_tests = _apparent_repo_key_from_label_text_or_fail
+context_repo_key_from_label_text_or_none_for_tests = _context_repo_key_from_label_text_or_none_for_tests
 
 def _legacy_single_context_entry_or_fail(data_files):
     """Return a single fallback entry for legacy direct context.json inputs.

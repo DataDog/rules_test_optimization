@@ -48,14 +48,26 @@ function Invoke-ExampleRunTests {
     $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic")
     if ($rc -ne 0) { $testStatus = $rc }
 
+    Write-Output "--- validating payloads"
+    $doctorStatus = Invoke-RunCmd -Command $bazelCmd -Args @("run", "//:dd_test_optimization_doctor")
+    if ($doctorStatus -ne 0) {
+      if ($testStatus -ne 0) { exit $testStatus }
+      exit $doctorStatus
+    }
+
+    Write-Output "--- validating upload enrichment"
+    $dryRunStatus = Invoke-RunCmd -Command $bazelCmd -Args @("run", "//:dd_upload_payloads", "--", "--dry-run", "--validate-enrichment")
+    if ($dryRunStatus -ne 0) {
+      if ($testStatus -ne 0) { exit $testStatus }
+      exit $dryRunStatus
+    }
+
     Write-Output "--- uploading payloads"
     if (-not $env:DD_SITE) { $env:DD_SITE = "datadoghq.com" }
     $uploadRc = Invoke-RunCmd -Command $bazelCmd -Args @("run", "//:dd_upload_payloads")
-    if ($uploadRc -ne 0) {
-      Write-Warning "payload upload failed; preserving test exit code ($testStatus)."
-    }
 
-    exit $testStatus
+    if ($testStatus -ne 0) { exit $testStatus }
+    exit $uploadRc
   } finally {
     Pop-Location
   }

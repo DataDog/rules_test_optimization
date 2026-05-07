@@ -63,17 +63,19 @@ Shared upload command:
 ```bash
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
 bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
-fi
-if [ "$doctor_status" -ne 0 ]; then
-  exit "$doctor_status"
-fi
-if [ "$dry_run_status" -ne 0 ]; then
-  exit "$dry_run_status"
 fi
 exit "$upload_status"
 ```
@@ -188,6 +190,164 @@ template keeps repo-specific policy in a local helper and exposes separate
 plain and optimized wrapper functions, so large repositories do not have to
 rediscover that split during onboarding.
 
+### Large WORKSPACE monorepos
+
+Use this flow when the repository already has substantial `WORKSPACE` wiring,
+custom Go wrappers, checked-in Gazelle output, or a non-default `rules_go`
+repository name. The goal is to add Test Optimization without replacing the
+repository's existing build policy.
+
+Start by identifying the existing Go shape:
+
+- The Bazel repository name used for `rules_go`, for example
+  `io_bazel_rules_go`.
+- The Go module path that owns the pilot tests.
+- The Go SDK version used by the repository.
+- The smallest set of runtime test targets that should emit payloads.
+- Any plain or build-only control targets that should keep using the existing
+  wrapper path.
+
+Wire the public WORKSPACE helper instead of copying patch directories or
+declaring `patches = [...]`. Use `rules_go_variant = "base"` for normal
+repositories. Use `rules_go_variant = "complete"` only when the repository
+needs the declared extended monorepo compatibility variant.
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "datadog-rules-test-optimization",
+    commit = "<rules-test-optimization-commit>",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+)
+
+load(
+    "@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl",
+    "datadog_go_test_optimization_workspace_repositories",
+)
+
+datadog_go_test_optimization_workspace_repositories(
+    rto_commit = "<rules-test-optimization-commit>",
+    datadog_fetch = "git",
+    rules_go_repo_name = "<existing_rules_go_repo_name>",
+    rules_go_fetch = "archive",
+    rules_go_variant = "complete",
+    rto_archive_url = "https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/<rules-test-optimization-commit>",
+    rto_archive_sha256 = "<sha256-for-that-archive>",
+    rto_archive_prefix = "rules_test_optimization-<rules-test-optimization-commit>",
+)
+
+load("@<existing_rules_go_repo_name>//go:deps.bzl", "go_orchestrion_tool_repo")
+
+go_orchestrion_tool_repo(
+    version = "v1.9.0",
+    dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51",
+)
+
+load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync",
+)
+
+test_optimization_sync(
+    name = "test_optimization_data",
+    service = "<datadog-service-name>",
+    runtime_name = "go",
+    runtime_version = "<go-sdk-version>",
+    runtime_module_path = "<go-module-path>",
+    require_git_metadata = True,
+)
+```
+
+If the environment can fetch Git repositories reliably, use
+`rules_go_fetch = "git"` and omit the archive attributes. If the environment
+mirrors or blocks GitHub codeload archives, publish the same commit to a mirror
+controlled by the consuming organization and point `rto_archive_url` at that
+mirror.
+
+`runtime_module_path` is preferred for checked-in configuration because it makes
+module selection explicit and does not depend on operator shell state. If the
+module path must stay environment-specific during local experiments, pass
+`GO_MODULE_PATH` with `--repo_env` instead of `--test_env`.
+
+Use bootstrap to write the local pieces that are safe to generate, but keep
+`WORKSPACE` placement under repository review:
+
+```bash
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --workspace-mode \
+  --service "<datadog-service-name>" \
+  --runtime-version "<go-sdk-version>" \
+  --rules-go-repo-name "<existing_rules_go_repo_name>" \
+  --rules-go-variant complete \
+  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --write-bazelrc \
+  --write-root-targets \
+  --write-orchestrion-files \
+  --write-wrapper-template \
+  --write-validation-script \
+  --check-go-repositories \
+  --large-monorepo \
+  --shutdown-bazel-on-exit \
+  --default-jobs=1 \
+  --expected-target "//path/to/runtime/package:go_default_test" \
+  --control-target "//path/to/plain/control:go_default_test"
+```
+
+Use `--expected-target` only for targets that run instrumented test code and
+therefore emit JSON payloads. Do not list `.build_test`, compile-only, or other
+build-only controls as expected runtime targets; keep those under
+`--control-target` or run them separately before the doctor.
+
+The generated wrapper template should be adapted to the repository's existing
+wrapper layer. Keep scheduling, tags, flaky policy, Docker defaults,
+platform constraints, and other repository-specific behavior in the local
+helper. The optimized wrapper should call `dd_topt_go_test`, pass
+`topt_data`, and always provide module-root pin files:
+
+```bzl
+orchestrion_pin_files = [
+    "//:go.mod",
+    "//:go.sum",
+    "//:orchestrion.tool.go",
+    "//:orchestrion.yml",
+]
+```
+
+Export the pin files from the root package if the repository's package layout
+requires that for cross-package labels. Keep the plain wrapper path available
+for controls and for tests that are not part of the rollout yet.
+
+If the repository has checked-in `go_repository` declarations, run bootstrap
+with `--check-go-repositories` and then use the repository-owned refresh command
+to add or update the Orchestrion and tracer dependencies. Do not hand-edit large
+generated dependency files unless that is already the repository's documented
+maintenance path.
+
+Validate in this order:
+
+1. Run `bazel sync --config=test-optimization --only=test_optimization_data`
+   with a fresh `FETCH_SALT` when metadata should be refetched.
+2. Run plain and build-only controls first.
+3. Run the instrumented targets in small batches, serially if disk or cache
+   pressure is high.
+4. Run `bazel run --config=test-optimization //:dd_test_optimization_doctor`.
+5. Run
+   `bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment`.
+6. Run the real uploader with `DD_API_KEY` and `DD_SITE` in the command
+   environment, not in the test sandbox.
+
+For remote execution or remote cache setups, keep
+`test:test-optimization --remote_download_outputs=all` in the active `.bazelrc`
+config. Without local undeclared outputs, the doctor and uploader cannot inspect
+or enrich the payloads after `bazel test`.
+
+If the doctor reports missing Git metadata, missing Bazel metadata,
+`full_bundle_no_match`, or msgpack payloads, fix the sync, wrapper, tracer, or
+uploader configuration. Do not work around those failures by adding `DD_GIT_*`
+or upload endpoints to `--test_env`; that would make sandbox test actions
+non-hermetic and can invalidate Bazel cache keys.
+
 ### Multi-service
 
 Use the Go extension. This path is Go-only and materializes every configured
@@ -253,7 +413,16 @@ dd_topt_go_test(
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_go_service_a",
+        "@test_optimization_data//:test_optimization_context_go_service_b",
+    ],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -302,7 +471,13 @@ use_repo(topt, "test_optimization_data")
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -395,7 +570,16 @@ dd_topt_py_test(
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_py_service_a",
+        "@test_optimization_data//:test_optimization_context_py_service_b",
+    ],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -452,7 +636,13 @@ http_file(
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -544,7 +734,16 @@ dd_topt_java_test(
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_java_service_a",
+        "@test_optimization_data//:test_optimization_context_java_service_b",
+    ],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -600,7 +799,13 @@ use_repo(topt, "test_optimization_data")
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -689,7 +894,16 @@ dd_topt_nodejs_test(
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_nodejs_service_a",
+        "@test_optimization_data//:test_optimization_context_nodejs_service_b",
+    ],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -767,7 +981,13 @@ use_repo(topt, "test_optimization_data")
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -858,7 +1078,16 @@ dd_topt_dotnet_test(
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_dotnet_service_a",
+        "@test_optimization_data//:test_optimization_context_dotnet_service_b",
+    ],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -916,7 +1145,13 @@ use_repo(topt, "test_optimization_data")
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
@@ -1007,7 +1242,16 @@ dd_topt_ruby_test(
 
 ```bzl
 # root BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_ruby_service_a",
+        "@test_optimization_data//:test_optimization_context_ruby_service_b",
+    ],
+)
 
 dd_payload_uploader(
     name = "dd_upload_payloads",

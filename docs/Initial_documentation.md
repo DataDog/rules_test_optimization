@@ -3,11 +3,15 @@
 This document explains the current implementation architecture in this
 repository. For installation and day-to-day usage, start with `README.md`.
 
-> Last reviewed: 2026-02-25
+> Last reviewed: 2026-05-07
 
 ## Approach Overview
 
-The integration uses a Bazel module extension and repository rule to fetch Datadog Test Optimization metadata during module/repo resolution, and a workspace-level uploader (via `bazel run`) to ship payloads from hermetic test runs.
+The integration uses a Bazel module extension and repository rule to fetch
+Datadog Test Optimization metadata during module/repo resolution, a
+workspace-level doctor (via `bazel run`) to validate local outputs after tests,
+and a workspace-level uploader (via `bazel run`) to ship payloads from hermetic
+test runs.
 
 The steps are:
 
@@ -25,13 +29,16 @@ The steps are:
 2. **Test instrumentation**:
    Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (for example through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
 
-3. **Payload reporting**:
-   A single workspace-level uploader runs via `bazel run` after tests complete, discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`).
+3. **Payload validation and reporting**:
+   A single workspace-level doctor runs via `bazel run` after tests complete and validates local JSON payloads, Bazel target metadata, Git metadata, and invalid Go payload-selection states. A single workspace-level uploader then discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`).
    In mixed-runtime workspaces, the uploader can bundle multiple `context.json`
    files and select the matching one per payload using sibling
    `bazel_target_metadata.json` repo metadata instead of reusing one global
    context for the entire workspace.
-   Usage: `bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; exit "$upload_status"`
+   Usage: run `bazel test`, then `//:dd_test_optimization_doctor`, then
+   `//:dd_upload_payloads -- --dry-run --validate-enrichment`, then the real
+   `//:dd_upload_payloads` target. Preserve the test exit code, but do not run
+   the real upload if doctor or dry-run enrichment validation fails.
 
 4. **Language macros (optional)**:
    Thin wrappers (for Go/Python/Java/NodeJS/.NET/Ruby) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
@@ -159,16 +166,20 @@ Some repositories host multiple logical services. The multi‑service module ext
 - `@test_optimization_data//:module_<sanitized_service>_<sanitized_module>` (for example `:module_go_service_core`)  
 
 It also exports a mapping so macros can select a service by key without consumers having to hardcode repo aliases.
+Workspace-level doctor and uploader targets can consume the service-qualified
+context aliases; the shared context helper maps those aliases back to the
+generated per-service sync repository keys used by payload metadata.
 
 ## Runtime uploads and hermetic tests
 
-Tests remain hermetic with network blocked. They write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. A single workspace-level uploader (via `bazel run`) then:
+Tests remain hermetic with network blocked. They write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. A single workspace-level doctor validates those local outputs before upload. A single workspace-level uploader (via `bazel run`) then:
 
 - Discovers all `test.outputs/` directories in `bazel-testlogs/`,
 - Waits for filesystem quiescence,
 - Enriches test payloads with `context.json` when present,
 - When multiple bundled contexts are present, matches them per payload using
   `bazel.test_optimization.repo_name` from sibling `bazel_target_metadata.json`,
+- Can dry-run the enrichment path without uploading or deleting files,
 - Uploads to Datadog using either `DD_API_KEY`/`DD_SITE` (agentless) or `DD_TEST_OPTIMIZATION_AGENT_URL` (EVP proxy),
 - Deletes successfully uploaded payloads.
 
@@ -213,9 +224,13 @@ flowchart TD
     T1 -->|write to TEST_UNDECLARED_OUTPUTS_DIR| P1
   end
 
-  %% Upload step: bazel run after tests
-  subgraph U[Upload via bazel run]
+  %% Validate/upload steps: bazel run after tests
+  subgraph U[Validate and upload via bazel run]
+    U0[Doctor rule]
     U1[Uploader rule]
+    U0 -->|validate| P1
+    U0 -->|validate context| A3
+    U0 --> U1
     U1 -->|enrich with| A3
     U1 -->|upload tests| G1{Agentless?\n DD_API_KEY}
     U1 -->|upload coverage| G1
@@ -255,8 +270,9 @@ Test Execution (Hermetic)
   [tests (instrumented)] --read runfiles--> synced JSONs
                          --write payloads--> TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage} (-> bazel-testlogs/.../test.outputs/)
 
-Upload (via bazel run)
-  [uploader rule] --enrich--> context.json
+Validate and upload (via bazel run)
+  [doctor rule] --validate--> payload JSON, bazel_target_metadata.json, context.json
+  [uploader rule] --dry-run enrichment or upload--> context.json
        |-- agentless (DD_API_KEY, DD_SITE) --> citestcycle/citestcov intake
        |-- EVP proxy (DD_TEST_OPTIMIZATION_AGENT_URL) -> /evp_proxy/... endpoints
 
@@ -269,4 +285,11 @@ Optional: Multi-service aggregator
 
 ## Summary
 
-The repository extension approach enables Bazel support for Test Optimization in a hermetic, cache‑friendly way. Metadata is fetched once during module/repo resolution, exposed as filegroups, and consumed by tests via runfiles. Per‑module outputs limit cache impact to relevant targets. Runtime uploads happen via a workspace-level uploader (`bazel run`), preserving hermetic execution for tests. Settings and Test Management remain valuable even with occasional invalidations; Known Tests and any future TIA integration should be opt‑in to avoid disrupting established Bazel workflows.
+The repository extension approach enables Bazel support for Test Optimization in
+a hermetic, cache-friendly way. Metadata is fetched once during module/repo
+resolution, exposed as filegroups, and consumed by tests via runfiles.
+Per-module outputs limit cache impact to relevant targets. Post-test validation
+and runtime uploads happen through workspace-level `bazel run` targets,
+preserving hermetic execution for tests. Settings and Test Management remain
+valuable even with occasional invalidations; Known Tests and any future TIA
+integration should be opt-in to avoid disrupting established Bazel workflows.

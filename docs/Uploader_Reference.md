@@ -24,25 +24,40 @@ For a quick path, use the upload section in `README.md`.
 # RECOMMENDED: Run tests, validate payloads, then upload payloads.
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
 bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
 bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
 fi
-if [ "$doctor_status" -ne 0 ]; then
-  exit "$doctor_status"
-fi
-if [ "$dry_run_status" -ne 0 ]; then
-  exit "$dry_run_status"
-fi
 exit "$upload_status"
 
-# Or as a one-liner:
-bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}; bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
-
 # HERMETIC/REMOTE EXECUTION - keep test outputs downloaded locally:
-bazel test --config=test-optimization --config=hermetic //... || test_status=$?; test_status=${test_status:-0}; bazel run --config=test-optimization --config=hermetic //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads; upload_status=$?; if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi; if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi; exit "$upload_status"
+bazel test --config=test-optimization --config=hermetic //... || test_status=$?; test_status=${test_status:-0}
+bazel run --config=test-optimization --config=hermetic //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+if [ "$doctor_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$doctor_status"
+fi
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+if [ "$dry_run_status" -ne 0 ]; then
+  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+  exit "$dry_run_status"
+fi
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+upload_status=$?
+if [ "$test_status" -ne 0 ]; then
+  exit "$test_status"
+fi
+exit "$upload_status"
 ```
 
 ```powershell
@@ -53,17 +68,23 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
 bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
 $dryRunStatus = $LASTEXITCODE
 if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
 bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
-if ($doctorStatus -ne 0) { exit $doctorStatus }
-if ($dryRunStatus -ne 0) { exit $dryRunStatus }
 exit $uploadStatus
 
 # HERMETIC/REMOTE EXECUTION - keep test outputs downloaded locally:
@@ -73,16 +94,26 @@ if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run --config=test-optimization --config=hermetic //:dd_test_optimization_doctor
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
+if ($doctorStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $doctorStatus
+}
+bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+$dryRunStatus = $LASTEXITCODE
+if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
+if ($dryRunStatus -ne 0) {
+  if ($testStatus -ne 0) { exit $testStatus }
+  exit $dryRunStatus
+}
 bazel run --config=test-optimization //:dd_upload_payloads
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
-if ($doctorStatus -ne 0) { exit $doctorStatus }
 exit $uploadStatus
 ```
 
 Always preserve all statuses. Test failures should win, doctor failures should
-block upload success, and uploader failures must still fail the job when tests
-and doctor checks passed.
+stop the real upload while still preserving an earlier test failure, and
+uploader failures must still fail the job when tests and validations passed.
 
 Dry-run enrichment validation:
 
@@ -113,7 +144,7 @@ Credential handling:
 - The generated uploader scripts read env vars directly (no shell `eval`
   expansion of credential values).
 
-## Add the uploader target
+## Add the doctor and uploader targets
 
 ```bzl
 # In BUILD.bazel at workspace root
@@ -138,9 +169,17 @@ dd_payload_uploader(
 )
 ```
 
-Multi-service aggregator variant (include each service context):
+Multi-service aggregator variant (include each service context in both targets):
 
 ```bzl
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data//:test_optimization_context_service_a",
+        "@test_optimization_data//:test_optimization_context_service_b",
+    ],
+)
+
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
@@ -153,6 +192,15 @@ dd_payload_uploader(
 Mixed-runtime variant (include one context target per runtime or runtime/service repo):
 
 ```bzl
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = [
+        "@test_optimization_data_go//:test_optimization_context",
+        "@test_optimization_data_python//:test_optimization_context",
+        "@test_optimization_data_java//:test_optimization_context",
+    ],
+)
+
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = [
