@@ -18,6 +18,18 @@ ToptPyMacroCaptureInfo = provider(
     },
 )
 
+ToptPyMacroExtendedCaptureInfo = provider(
+    doc = "Extended capture including main and srcs for consumer_runner tests.",
+    fields = {
+        "data_labels": "Forwarded data dependency labels.",
+        "env": "Forwarded environment map.",
+        "imports": "Forwarded imports attribute.",
+        "main_basename": "Basename of main file, or empty if not set.",
+        "srcs_basenames": "Basenames of srcs files.",
+        "dd_requirements": "Custom dd_requirements attr if present.",
+    },
+)
+
 def _py_test_capture_impl(ctx):
     out = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
@@ -46,6 +58,75 @@ _py_test_capture_rule = rule(
         "importpath": attr.string(),
         "main": attr.label(allow_single_file = True),
         "module_path": attr.string(),
+        "srcs": attr.label_list(allow_files = True),
+    },
+    executable = True,
+)
+
+# Rule that models a consumer wrapper prohibiting imports and main.
+# Has NO imports or main attrs — if the macro tries to pass them, Bazel errors.
+def _py_test_forbid_imports_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
+    return [
+        DefaultInfo(
+            files = depset([out]),
+            runfiles = ctx.runfiles(files = [out]),
+            executable = out,
+        ),
+        RunEnvironmentInfo(environment = dict(ctx.attr.env)),
+        ToptPyMacroCaptureInfo(
+            data_labels = [str(dep.label) for dep in ctx.attr.data],
+            env = dict(ctx.attr.env),
+            imports = [],
+            importpath = "",
+        ),
+    ]
+
+_py_test_forbid_imports_rule = rule(
+    implementation = _py_test_forbid_imports_impl,
+    attrs = {
+        "data": attr.label_list(allow_files = True),
+        "deps": attr.label_list(),
+        "env": attr.string_dict(),
+        "srcs": attr.label_list(allow_files = True),
+    },
+    executable = True,
+)
+
+# Extended capture rule that also records main and srcs, plus custom attrs.
+def _py_test_extended_capture_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
+    main_basename = ""
+    if ctx.file.main:
+        main_basename = ctx.file.main.basename
+    return [
+        DefaultInfo(
+            files = depset([out]),
+            runfiles = ctx.runfiles(files = [out]),
+            executable = out,
+        ),
+        RunEnvironmentInfo(environment = dict(ctx.attr.env)),
+        ToptPyMacroExtendedCaptureInfo(
+            data_labels = [str(dep.label) for dep in ctx.attr.data],
+            env = dict(ctx.attr.env),
+            imports = list(ctx.attr.imports),
+            main_basename = main_basename,
+            srcs_basenames = [f.basename for f in ctx.files.srcs],
+            dd_requirements = list(ctx.attr.dd_requirements),
+        ),
+    ]
+
+_py_test_extended_capture_rule = rule(
+    implementation = _py_test_extended_capture_impl,
+    attrs = {
+        "data": attr.label_list(allow_files = True),
+        "dd_requirements": attr.string_list(),
+        "deps": attr.label_list(),
+        "env": attr.string_dict(),
+        "imports": attr.string_list(),
+        "main": attr.label(allow_single_file = True),
         "srcs": attr.label_list(allow_files = True),
     },
     executable = True,
@@ -169,6 +250,199 @@ def py_macro_select_inputs_target(name, tags = None):
         }),
         tags = tags,
     )
+
+# -- consumer_runner test targets --
+
+def py_macro_consumer_runner_target(name, tags = None):
+    """consumer_runner with forbid-imports rule: proves no imports/main forwarded."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        py_test_rule = _py_test_forbid_imports_rule,
+        runner_mode = "consumer_runner",
+        module_identifier = "example.python.pkg",
+        tags = tags,
+    )
+
+def py_macro_consumer_runner_with_capture_target(name, tags = None):
+    """consumer_runner with capture rule: proves env/data wiring without imports synthesis."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        py_test_rule = _py_test_capture_rule,
+        runner_mode = "consumer_runner",
+        module_identifier = "example.python.pkg",
+        tags = tags,
+    )
+
+def py_macro_consumer_runner_explicit_imports_target(name, tags = None):
+    """consumer_runner with explicit imports: proves user imports are forwarded."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        py_test_rule = _py_test_capture_rule,
+        runner_mode = "consumer_runner",
+        imports = ["my/import"],
+        module_identifier = "example.python.pkg",
+        tags = tags,
+    )
+
+def py_macro_consumer_runner_with_main_target(name, tags = None):
+    """consumer_runner with main but no py_test_rule: uses default rule with explicit main."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        runner_mode = "consumer_runner",
+        main = "test_macro.bzl",
+        srcs = [":test_macro.bzl"],
+        module_identifier = "example.python.pkg",
+        tags = tags,
+    )
+
+def py_macro_consumer_runner_custom_attrs_target(name, tags = None):
+    """consumer_runner with custom wrapper attrs: proves dd_requirements passes through."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        py_test_rule = _py_test_extended_capture_rule,
+        runner_mode = "consumer_runner",
+        dd_requirements = ["pytest", "ddtrace"],
+        module_identifier = "example.python.pkg",
+        tags = tags,
+    )
+
+def _py_macro_consumer_runner_no_rule_no_main_target_impl(_ctx):
+    dd_topt_py_test(
+        name = "should_not_be_created",
+        topt_data = _single_service_topt_data(),
+        runner_mode = "consumer_runner",
+    )
+    return []
+
+py_macro_consumer_runner_no_rule_no_main_target_rule = rule(
+    implementation = _py_macro_consumer_runner_no_rule_no_main_target_impl,
+)
+
+def _py_macro_invalid_runner_mode_target_impl(_ctx):
+    dd_topt_py_test(
+        name = "should_not_be_created",
+        topt_data = _single_service_topt_data(),
+        runner_mode = "bogus",
+    )
+    return []
+
+py_macro_invalid_runner_mode_target_rule = rule(
+    implementation = _py_macro_invalid_runner_mode_target_impl,
+)
+
+# -- consumer_runner test implementations --
+
+def _py_macro_consumer_runner_wiring_test_impl(ctx):
+    """Verify consumer_runner forbid-imports rule succeeds (no imports/main forwarded)."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptPyMacroCaptureInfo]
+
+    # Test Optimization wiring is present.
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
+    asserts.true(env, manifest_env != None)
+    asserts.true(env, "rlocationpath" in manifest_env)
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "py_macro_consumer_runner_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
+    asserts.equals(env, "py-service", captured.env.get("DD_SERVICE"))
+
+    # PYTEST_ADDOPTS is still injected.
+    asserts.equals(env, "--ddtrace", captured.env.get("PYTEST_ADDOPTS"))
+
+    # imports is empty (rule has no imports attr, so provider returns []).
+    asserts.equals(env, [], captured.imports)
+    return analysistest.end(env)
+
+def _py_macro_consumer_runner_capture_test_impl(ctx):
+    """Verify consumer_runner with capture rule: imports not synthesized."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptPyMacroCaptureInfo]
+
+    # Test Optimization env is present.
+    asserts.true(env, captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE") != None)
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(
+        env,
+        "py_macro_consumer_runner_with_capture_target_topt_bazel_metadata.json",
+        captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
+    )
+    asserts.equals(env, "--ddtrace", captured.env.get("PYTEST_ADDOPTS"))
+
+    # Data has selector and manifest.
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_with_capture_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+
+    # imports is empty — not synthesized from package path.
+    asserts.equals(env, [], captured.imports)
+    return analysistest.end(env)
+
+def _py_macro_consumer_runner_explicit_imports_test_impl(ctx):
+    """Verify consumer_runner forwards user-provided imports."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptPyMacroCaptureInfo]
+    asserts.equals(env, ["my/import"], captured.imports)
+    return analysistest.end(env)
+
+def _py_macro_consumer_runner_custom_attrs_test_impl(ctx):
+    """Verify consumer_runner passes custom wrapper attrs through."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptPyMacroExtendedCaptureInfo]
+    asserts.equals(env, ["pytest", "ddtrace"], captured.dd_requirements)
+
+    # run_pytest.py should NOT be in srcs.
+    for basename in captured.srcs_basenames:
+        asserts.true(env, basename != "run_pytest.py", msg = "run_pytest.py should not be injected in consumer_runner")
+
+    # main should not be set (empty basename).
+    asserts.equals(env, "", captured.main_basename)
+    return analysistest.end(env)
+
+def _py_macro_consumer_runner_no_rule_no_main_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "requires either py_test_rule or main")
+    return analysistest.end(env)
+
+def _py_macro_invalid_runner_mode_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "runner_mode must be one of")
+    return analysistest.end(env)
+
+py_macro_consumer_runner_wiring_test = analysistest.make(
+    _py_macro_consumer_runner_wiring_test_impl,
+)
+py_macro_consumer_runner_capture_test = analysistest.make(
+    _py_macro_consumer_runner_capture_test_impl,
+)
+py_macro_consumer_runner_explicit_imports_test = analysistest.make(
+    _py_macro_consumer_runner_explicit_imports_test_impl,
+)
+py_macro_consumer_runner_custom_attrs_test = analysistest.make(
+    _py_macro_consumer_runner_custom_attrs_test_impl,
+)
+py_macro_consumer_runner_no_rule_no_main_failure_test = analysistest.make(
+    _py_macro_consumer_runner_no_rule_no_main_failure_test_impl,
+    expect_failure = True,
+)
+py_macro_invalid_runner_mode_failure_test = analysistest.make(
+    _py_macro_invalid_runner_mode_failure_test_impl,
+    expect_failure = True,
+)
+
+# -- existing test implementations --
 
 def _py_macro_single_service_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)

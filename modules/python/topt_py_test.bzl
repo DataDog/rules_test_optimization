@@ -31,6 +31,13 @@ load("//:topt_py_infer.bzl", "topt_py_payloads_selector")
 
 _RUN_PYTEST = Label("//:run_pytest.py")
 
+_RUNNER_MODE_MANAGED_PYTEST = "managed_pytest"
+_RUNNER_MODE_CONSUMER_RUNNER = "consumer_runner"
+_VALID_RUNNER_MODES = [
+    _RUNNER_MODE_MANAGED_PYTEST,
+    _RUNNER_MODE_CONSUMER_RUNNER,
+]
+
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
@@ -77,8 +84,33 @@ def dd_topt_py_test(
         topt_service = None,
         module_label_override = None,
         module_identifier = None,
+        runner_mode = "managed_pytest",
         **kwargs):
-    """Define a Python test with Datadog Test Optimization support."""
+    """Define a Python test with Datadog Test Optimization support.
+
+    Args:
+        name: Target name.
+        topt_data: Test Optimization sync data dict or mapping.
+        py_test_rule: Custom py_test rule implementation. Defaults to rules_python py_test.
+        topt_service: Service key for multi-service mappings.
+        module_label_override: Override for the sanitized module label name.
+        module_identifier: Explicit module identifier for per-module payload selection.
+        runner_mode: How the test is executed. One of:
+            - "managed_pytest" (default): injects run_pytest.py, controls main, synthesizes
+              imports and args. Best for repos without a custom Python test wrapper.
+            - "consumer_runner": does NOT inject run_pytest.py, does NOT set main or imports
+              unless the caller passes them explicitly. Delegates test execution to the
+              consumer's py_test_rule. Requires either py_test_rule or main to be set.
+              Best for monorepos with an internal Python test wrapper.
+        **kwargs: Forwarded to the underlying py_test_rule.
+    """
+    if runner_mode not in _VALID_RUNNER_MODES:
+        fail_with_prefix(
+            "dd_topt_py_test",
+            "runner_mode must be one of: %s" % ", ".join(_VALID_RUNNER_MODES),
+        )
+
+    py_test_rule_was_explicit = py_test_rule != None
     if py_test_rule == None:
         py_test_rule = _default_py_test
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
@@ -103,12 +135,21 @@ def dd_topt_py_test(
     user_srcs = kwargs.pop("srcs", None)
     user_main = kwargs.pop("main", None)
 
+    if runner_mode == _RUNNER_MODE_CONSUMER_RUNNER:
+        if not py_test_rule_was_explicit and user_main == None:
+            fail_with_prefix(
+                "dd_topt_py_test",
+                "runner_mode = \"consumer_runner\" requires either py_test_rule or main. " +
+                "Use runner_mode = \"managed_pytest\" for the built-in pytest runner, " +
+                "or pass your repository's Python test wrapper via py_test_rule.",
+            )
+
     # args is a wrapper-only attr; split_test_wrapper_kwargs already moved it to wrapper_kwargs.
     user_args = wrapper_kwargs.pop("args", None)
 
-    imports_candidates = kwargs.pop("imports", None)
-    if imports_candidates == None:
-        imports_candidates = []
+    user_imports = kwargs.pop("imports", None)
+    user_imports_was_explicit = user_imports != None
+    imports_candidates = user_imports if user_imports != None else []
     importpath_candidate = kwargs.get("importpath") if "importpath" in kwargs else None
     module_path_candidate = kwargs.get("module_path") if "module_path" in kwargs else None
     attribute_candidates = []
@@ -204,33 +245,43 @@ def dd_topt_py_test(
         macro_name = "dd_topt_py_test",
     )
 
-    if user_main == None:
-        # No custom runner: inject the bundled run_pytest.py into srcs and set it as main.
-        srcs = _append_data_dependencies(user_srcs, [_RUN_PYTEST])
-        main = _RUN_PYTEST
+    if runner_mode == _RUNNER_MODE_MANAGED_PYTEST:
+        if user_main == None:
+            # No custom runner: inject the bundled run_pytest.py into srcs and set it as main.
+            srcs = _append_data_dependencies(user_srcs, [_RUN_PYTEST])
+            main = _RUN_PYTEST
 
-        # Default args to the package path for pytest test-file discovery.
-        # args goes on the wrapper (which forwards them to the raw test via "$@").
-        if user_args != None:
-            wrapper_kwargs["args"] = user_args
-        elif pkg_path:
-            wrapper_kwargs["args"] = [pkg_path]
+            # Default args to the package path for pytest test-file discovery.
+            # args goes on the wrapper (which forwards them to the raw test via "$@").
+            if user_args != None:
+                wrapper_kwargs["args"] = user_args
+            elif pkg_path:
+                wrapper_kwargs["args"] = [pkg_path]
+            else:
+                wrapper_kwargs["args"] = []
         else:
-            wrapper_kwargs["args"] = []
+            # Caller supplied their own runner: leave srcs and args alone.
+            srcs = _append_data_dependencies(user_srcs, [])
+            main = user_main
+            if user_args != None:
+                wrapper_kwargs["args"] = user_args
+
+        # Default imports to the package path for correct module resolution.
+        if user_imports_was_explicit:
+            imports_for_test = imports_candidates
+        elif pkg_path:
+            imports_for_test = [pkg_path]
+        else:
+            imports_for_test = []
     else:
-        # Caller supplied their own runner: leave srcs and args alone.
+        # consumer_runner: delegate execution to the consumer's wrapper.
         srcs = _append_data_dependencies(user_srcs, [])
-        main = user_main
+        main = user_main  # None if not passed by user.
         if user_args != None:
             wrapper_kwargs["args"] = user_args
 
-    # Default imports to the package path for correct module resolution.
-    if imports_candidates:
-        imports_for_test = imports_candidates
-    elif pkg_path:
-        imports_for_test = [pkg_path]
-    else:
-        imports_for_test = []
+        # Only forward imports if the user explicitly passed them.
+        imports_for_test = imports_candidates if user_imports_was_explicit else None
 
     raw_name = name + "__raw_python_test"
     kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
@@ -238,16 +289,17 @@ def dd_topt_py_test(
     for key, value in raw_passthrough.items():
         kwargs[key] = value
 
-    py_test_rule(
-        name = raw_name,
-        srcs = srcs,
-        main = main,
-        imports = imports_for_test,
-        data = data,
-        env = env,
-        deps = user_deps,
-        **kwargs
-    )
+    kwargs["name"] = raw_name
+    kwargs["srcs"] = srcs
+    kwargs["data"] = data
+    kwargs["env"] = env
+    kwargs["deps"] = deps_labels
+    if main != None:
+        kwargs["main"] = main
+    if imports_for_test != None:
+        kwargs["imports"] = imports_for_test
+
+    py_test_rule(**kwargs)
 
     topt_test_wrapper(
         name = name,
