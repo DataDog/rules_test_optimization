@@ -29,6 +29,10 @@ def _render_stub_telemetry_facts(service_name):
         ', "counts": [], "distributions": []}\n'
     )
 
+def _stub_manifest_content():
+    """Render manifest.txt content matching the real sync repository contract."""
+    return "version=1\n"
+
 def _render_stub_module_runfiles_bzl(repo_name, manifest_root):
     """Render the helper rule used by module_<label> targets in the stub repo.
 
@@ -168,6 +172,7 @@ def _render_stub_build(
 # Public alias for tests.
 render_stub_build_for_tests = _render_stub_build
 bzl_string_literal_for_tests = _bzl_string_literal
+stub_manifest_content_for_tests = _stub_manifest_content
 render_stub_telemetry_facts_for_tests = _render_stub_telemetry_facts
 render_stub_export_for_tests = _render_stub_export
 
@@ -182,7 +187,7 @@ def _example_stub_repo_impl(ctx):
     context = "%s/context.json" % out_dir
     telemetry_facts = "%s/telemetry_facts.json" % out_dir
 
-    ctx.file(manifest, manifest + "\n")
+    ctx.file(manifest, _stub_manifest_content())
     ctx.file(settings, "{}\n")
     ctx.file(known_tests, '{"data": {"attributes": {"tests": {}}}}\n')
     ctx.file(test_management, '{"data": {"attributes": {"modules": {}}}}\n')

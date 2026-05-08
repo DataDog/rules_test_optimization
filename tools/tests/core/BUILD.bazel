@@ -74,6 +74,7 @@ load(
     "example_stub_export_manifest_path_test",
     "example_stub_export_string_escaping_test",
     "example_stub_includes_manifest_in_files_test",
+    "example_stub_manifest_content_matches_sync_contract_test",
     "example_stub_module_targets_test",
     "example_stub_service_keys_targets_test",
     "example_stub_telemetry_facts_service_name_test",
@@ -553,6 +554,12 @@ clone_payload_with_nested_structure_test(
 
 example_stub_includes_manifest_in_files_test(
     name = "example_stub_includes_manifest_in_files_test",
+    size = "small",
+    timeout = "short",
+)
+
+example_stub_manifest_content_matches_sync_contract_test(
+    name = "example_stub_manifest_content_matches_sync_contract_test",
     size = "small",
     timeout = "short",
 )
@@ -1158,6 +1165,7 @@ test_suite(
         ":example_stub_export_manifest_path_test",
         ":example_stub_export_string_escaping_test",
         ":example_stub_includes_manifest_in_files_test",
+        ":example_stub_manifest_content_matches_sync_contract_test",
         ":example_stub_module_targets_test",
         ":example_stub_service_keys_targets_test",
         ":example_stub_telemetry_facts_service_name_test",
