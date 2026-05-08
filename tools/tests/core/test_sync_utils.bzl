@@ -60,6 +60,7 @@ load(
     "render_stub_build_for_tests",
     "render_stub_export_for_tests",
     "render_stub_telemetry_facts_for_tests",
+    "stub_manifest_content_for_tests",
 )
 
 def _contains_stripped_line(lines, expected):
@@ -1422,6 +1423,12 @@ def _example_stub_includes_manifest_in_files_test(ctx):
     asserts.true(env, telemetry_facts in context_group_block)
     return unittest.end(env)
 
+def _example_stub_manifest_content_matches_sync_contract_test(ctx):
+    """Ensure the stub manifest stays compatible with real sync output."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, "version=1\n", stub_manifest_content_for_tests())
+    return unittest.end(env)
+
 def _example_stub_service_keys_targets_test(ctx):
     """Validate service-suffixed filegroups are emitted for service keys."""
     env = unittest.begin(ctx)
@@ -2171,6 +2178,7 @@ fnv1a_symbol_distinguishes_common_symbols_test = unittest.make(_fnv1a_symbol_dis
 clone_payload_with_detached_attributes_test = unittest.make(_clone_payload_with_detached_attributes_test)
 clone_payload_with_nested_structure_test = unittest.make(_clone_payload_with_nested_structure_test)
 example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_includes_manifest_in_files_test)
+example_stub_manifest_content_matches_sync_contract_test = unittest.make(_example_stub_manifest_content_matches_sync_contract_test)
 example_stub_service_keys_targets_test = unittest.make(_example_stub_service_keys_targets_test)
 example_stub_module_targets_test = unittest.make(_example_stub_module_targets_test)
 example_stub_custom_out_dir_test = unittest.make(_example_stub_custom_out_dir_test)

@@ -173,13 +173,18 @@ changes the default `rundir` to `.` only when you did not already set one.
 BUILD.bazel (Python companion):
 
 ```bzl
+load("@python_deps//:requirements.bzl", "requirement")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
 dd_topt_py_test(
     name = "pkg_py_test",
-    srcs = ["test_*.py"],
-    deps = [":pkg_lib"],
+    srcs = glob(["test_*.py"]),
+    deps = [
+        ":pkg_lib",
+        requirement("ddtrace"),
+        requirement("pytest"),
+    ],
     imports = ["example/python/pkg"],
     topt_data = topt_data,
 )
@@ -187,8 +192,10 @@ dd_topt_py_test(
 
 The macro defaults to `@rules_python//python:py_test`. If you omit `main`, it
 uses the bundled pytest entry point and adds `PYTEST_ADDOPTS=--ddtrace` unless
-you already set it or opt out with `--no-ddtrace`. Keep passing `main` only
-when you want a non-pytest runner.
+you already set it or opt out with `--no-ddtrace`. The target still needs
+`pytest` and `ddtrace` in its normal Python deps. Keep passing `main` only when
+you want a non-pytest runner, and activate the Python tracer from that custom
+runner.
 
 BUILD.bazel (Java companion):
 
