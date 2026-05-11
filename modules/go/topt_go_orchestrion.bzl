@@ -1,7 +1,5 @@
 """Internal Orchestrion wrapper rule for Go tests."""
 
-load("//:topt_go_infer.bzl", "ToptGoBazelMetadataInfo")
-
 _BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
 
 def _orch_transition_impl(_settings, _attr):
@@ -44,14 +42,13 @@ def _wrapped_actual_output_name(label_name, executable_basename):
     """Return the wrapper-owned sibling executable name used at test runtime."""
     return label_name + "__wrapped_" + executable_basename
 
-def _unix_wrapper_content(actual_filename, wrapper_metadata_filename):
+def _unix_wrapper_content(actual_filename):
     """Render the Unix launcher used by the Orchestrion wrapper target."""
     return """#!/usr/bin/env bash
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 actual="$script_dir/%s"
-wrapper_metadata_source="$script_dir/%s"
 metadata_basename="${DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME:-}"
 undeclared_dir="${TEST_UNDECLARED_OUTPUTS_DIR:-}"
 
@@ -61,25 +58,21 @@ if [[ ! -x "$actual" ]]; then
 fi
 
 if [[ -n "$metadata_basename" && -n "$undeclared_dir" ]]; then
-  metadata_source="$wrapper_metadata_source"
-  if [[ ! -f "$metadata_source" ]]; then
-    metadata_source="$script_dir/$metadata_basename"
-  fi
+  metadata_source="$script_dir/$metadata_basename"
   if [[ -f "$metadata_source" ]]; then
     cp "$metadata_source" "$undeclared_dir/%s"
   fi
 fi
 
 "$actual" "$@"
-""" % (actual_filename, wrapper_metadata_filename, _BAZEL_TARGET_METADATA_OUTPUT)
+""" % (actual_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_filename, metadata_runfile, wrapper_metadata_filename):
+def _windows_wrapper_content(actual_filename, metadata_runfile):
     """Render the Windows launcher used by the Orchestrion wrapper target."""
     return """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
 set "ACTUAL=%%SCRIPT_DIR%%%s"
-set "WRAPPER_META=%%SCRIPT_DIR%%%s"
 set "META_RLOC=%s"
 set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
 set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
@@ -91,13 +84,8 @@ if not exist "%%ACTUAL%%" (
 
 if "%%META_BASENAME%%"=="" goto :skip_metadata_copy
 if "%%UNDECLARED_DIR%%"=="" goto :skip_metadata_copy
-if exist "%%WRAPPER_META%%" (
-  set "META_SOURCE=%%WRAPPER_META%%"
-  goto :copy_metadata
-)
 call :resolve_metadata "%%META_RLOC%%"
 if not defined META_SOURCE set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
-:copy_metadata
 if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
 :skip_metadata_copy
 
@@ -170,51 +158,34 @@ if not "%%RUNFILES_MANIFEST_FILE%%"=="" if exist "%%RUNFILES_MANIFEST_FILE%%" (
 goto :eof
 """ % (
         actual_filename.replace("/", "\\"),
-        wrapper_metadata_filename.replace("/", "\\"),
         metadata_runfile.replace("\\", "/"),
         _BAZEL_TARGET_METADATA_OUTPUT,
     )
 
-def _metadata_content(target):
-    """Return metadata JSON content from the metadata target when available."""
-    if ToptGoBazelMetadataInfo in target:
-        return target[ToptGoBazelMetadataInfo].content
-    return None
-
 def _orch_go_test_impl(ctx):
     dep_exe, dep_runfiles = _dep_exec_and_runfiles(ctx.attr.actual)
-    metadata_target = _first_target(ctx.attr.metadata)
-    metadata_content = _metadata_content(metadata_target)
     dep_run_environment = _dep_run_environment_info(ctx.attr.actual)
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
     actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
-    metadata_out = ctx.actions.declare_file(ctx.label.name + "__topt_bazel_metadata.json", sibling = out)
 
     # Materialize the raw test binary next to the wrapper so the launcher does
     # not have to guess which configuration-specific execroot path Bazel chose.
     ctx.actions.symlink(output = actual_out, target_file = dep_exe)
 
-    # Materialize a wrapper-owned metadata sidecar next to the launcher. Windows
-    # test execution does not reliably expand runfiles for generated sidecars,
-    # while wrapper-owned outputs are available from the launcher directory.
-    if metadata_content != None:
-        ctx.actions.write(output = metadata_out, content = metadata_content)
-    else:
-        ctx.actions.symlink(output = metadata_out, target_file = ctx.file.metadata)
-
     ctx.actions.write(
         output = out,
-        content = _windows_wrapper_content(actual_out.basename, ctx.file.metadata.short_path, metadata_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename, metadata_out.basename),
+        content = _windows_wrapper_content(actual_out.basename, ctx.file.metadata.short_path) if is_windows else _unix_wrapper_content(actual_out.basename),
         is_executable = True,
     )
 
-    # Keep metadata both as a wrapper-owned output and a runfile. Windows uses
-    # the output next to the launcher; Unix keeps the same fast sibling path and
-    # retains runfiles fallback for compatibility with manifest-only execution.
+    # Keep metadata both as a target file and a runfile. Windows test actions
+    # materialize target files next to the launcher more reliably than
+    # manifest-only runfiles, which lets the wrapper copy the sidecar before
+    # the Go binary starts writing JSON payloads.
     providers = [DefaultInfo(
-        files = depset([out, actual_out, metadata_out]),
-        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, metadata_out, ctx.file.metadata])),
+        files = depset([out, actual_out, ctx.file.metadata]),
+        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, ctx.file.metadata])),
         executable = out,
     )]
     if dep_run_environment:
