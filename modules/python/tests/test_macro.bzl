@@ -4,9 +4,11 @@ load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load(
     "@datadog-rules-test-optimization-python//:topt_py_test.bzl",
     "dd_topt_py_test",
+    "is_default_py_test_rule_for_tests",
     "resolve_topt_service_key_for_tests",
     "select_service_entry_for_tests",
 )
+load("@rules_python//python:py_test.bzl", _default_py_test = "py_test")
 
 ToptPyMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_py_test to py_test_rule.",
@@ -293,8 +295,8 @@ def py_macro_consumer_runner_with_main_target(name, tags = None):
         name = name,
         topt_data = _single_service_topt_data(),
         runner_mode = "consumer_runner",
-        main = "test_macro.bzl",
-        srcs = [":test_macro.bzl"],
+        main = "consumer_runner_main.py",
+        srcs = ["consumer_runner_main.py"],
         module_identifier = "example.python.pkg",
         tags = tags,
     )
@@ -321,6 +323,30 @@ def _py_macro_consumer_runner_no_rule_no_main_target_impl(_ctx):
 
 py_macro_consumer_runner_no_rule_no_main_target_rule = rule(
     implementation = _py_macro_consumer_runner_no_rule_no_main_target_impl,
+)
+
+def _py_macro_consumer_runner_default_rule_no_main_target_impl(_ctx):
+    dd_topt_py_test(
+        name = "should_not_be_created",
+        topt_data = _single_service_topt_data(),
+        py_test_rule = _default_py_test,
+        runner_mode = "consumer_runner",
+    )
+    return []
+
+py_macro_consumer_runner_default_rule_no_main_target_rule = rule(
+    implementation = _py_macro_consumer_runner_default_rule_no_main_target_impl,
+)
+
+def _py_macro_default_rule_detection_target_impl(_ctx):
+    if not is_default_py_test_rule_for_tests(_default_py_test):
+        fail("rules_python py_test should be recognized as the default py_test rule")
+    if is_default_py_test_rule_for_tests(_py_test_capture_rule):
+        fail("custom Python test rules must not be treated as the default py_test rule")
+    return []
+
+py_macro_default_rule_detection_target_rule = rule(
+    implementation = _py_macro_default_rule_detection_target_impl,
 )
 
 def _py_macro_invalid_runner_mode_target_impl(_ctx):
@@ -413,12 +439,26 @@ def _py_macro_consumer_runner_custom_attrs_test_impl(ctx):
 
 def _py_macro_consumer_runner_no_rule_no_main_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "requires either py_test_rule or main")
+    asserts.expect_failure(env, "requires a consumer-owned Python test runner")
+    return analysistest.end(env)
+
+def _py_macro_consumer_runner_default_rule_no_main_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "requires a consumer-owned Python test runner")
+    asserts.expect_failure(env, "Pass your repository's Python test wrapper via py_test_rule")
+    return analysistest.end(env)
+
+def _py_macro_consumer_runner_default_rule_with_main_test_impl(ctx):
+    env = analysistest.begin(ctx)
     return analysistest.end(env)
 
 def _py_macro_invalid_runner_mode_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "runner_mode must be one of")
+    return analysistest.end(env)
+
+def _py_macro_default_rule_detection_test_impl(ctx):
+    env = analysistest.begin(ctx)
     return analysistest.end(env)
 
 py_macro_consumer_runner_wiring_test = analysistest.make(
@@ -437,9 +477,19 @@ py_macro_consumer_runner_no_rule_no_main_failure_test = analysistest.make(
     _py_macro_consumer_runner_no_rule_no_main_failure_test_impl,
     expect_failure = True,
 )
+py_macro_consumer_runner_default_rule_no_main_failure_test = analysistest.make(
+    _py_macro_consumer_runner_default_rule_no_main_failure_test_impl,
+    expect_failure = True,
+)
+py_macro_consumer_runner_default_rule_with_main_test = analysistest.make(
+    _py_macro_consumer_runner_default_rule_with_main_test_impl,
+)
 py_macro_invalid_runner_mode_failure_test = analysistest.make(
     _py_macro_invalid_runner_mode_failure_test_impl,
     expect_failure = True,
+)
+py_macro_default_rule_detection_test = analysistest.make(
+    _py_macro_default_rule_detection_test_impl,
 )
 
 # -- existing test implementations --

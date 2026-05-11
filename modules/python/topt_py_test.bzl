@@ -69,6 +69,7 @@ def _build_python_fallback_identifier(package_path, runtime_info):
     return pkg_dotted
 
 def _has_non_empty_value(value):
+    """Return True when a macro input is present and materially non-empty."""
     if value == None:
         return False
     if type(value) == type(""):
@@ -76,6 +77,30 @@ def _has_non_empty_value(value):
     if type(value) == type([]) or type(value) == type(()):
         return len(value) > 0
     return True
+
+def _is_default_py_test_rule(py_test_rule):
+    """Return True when a py_test_rule value is the rules_python base py_test macro."""
+    return py_test_rule == _default_py_test
+
+# Test-only alias used by analysis tests; consumers should not call it.
+is_default_py_test_rule_for_tests = _is_default_py_test_rule
+
+def _validate_consumer_runner_inputs(py_test_rule, main):
+    """Validate that consumer_runner has an actual consumer-owned test runner.
+
+    In consumer_runner mode this macro deliberately does not inject run_pytest.py
+    or synthesize a main file. Using the base rules_python py_test without main
+    would let Bazel execute an implicit script entrypoint instead of a known
+    pytest runner, which can create false-positive onboarding results.
+    """
+    if _is_default_py_test_rule(py_test_rule) and main == None:
+        fail_with_prefix(
+            "dd_topt_py_test",
+            "runner_mode = \"consumer_runner\" requires a consumer-owned Python test runner. " +
+            "Pass your repository's Python test wrapper via py_test_rule, pass an explicit main " +
+            "that executes pytest with ddtrace enabled, or use runner_mode = \"managed_pytest\" " +
+            "for the built-in pytest runner.",
+        )
 
 def dd_topt_py_test(
         name,
@@ -100,7 +125,8 @@ def dd_topt_py_test(
               imports and args. Best for repos without a custom Python test wrapper.
             - "consumer_runner": does NOT inject run_pytest.py, does NOT set main or imports
               unless the caller passes them explicitly. Delegates test execution to the
-              consumer's py_test_rule. Requires either py_test_rule or main to be set.
+              consumer's py_test_rule. Requires either a custom py_test_rule or an
+              explicit main that runs pytest with ddtrace enabled.
               Best for monorepos with an internal Python test wrapper.
         **kwargs: Forwarded to the underlying py_test_rule.
     """
@@ -110,7 +136,6 @@ def dd_topt_py_test(
             "runner_mode must be one of: %s" % ", ".join(_VALID_RUNNER_MODES),
         )
 
-    py_test_rule_was_explicit = py_test_rule != None
     if py_test_rule == None:
         py_test_rule = _default_py_test
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
@@ -136,13 +161,7 @@ def dd_topt_py_test(
     user_main = kwargs.pop("main", None)
 
     if runner_mode == _RUNNER_MODE_CONSUMER_RUNNER:
-        if not py_test_rule_was_explicit and user_main == None:
-            fail_with_prefix(
-                "dd_topt_py_test",
-                "runner_mode = \"consumer_runner\" requires either py_test_rule or main. " +
-                "Use runner_mode = \"managed_pytest\" for the built-in pytest runner, " +
-                "or pass your repository's Python test wrapper via py_test_rule.",
-            )
+        _validate_consumer_runner_inputs(py_test_rule, user_main)
 
     # args is a wrapper-only attr; split_test_wrapper_kwargs already moved it to wrapper_kwargs.
     user_args = wrapper_kwargs.pop("args", None)
