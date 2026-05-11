@@ -422,6 +422,5 @@ def dd_topt_go_test(
     orch_go_test(
         name = name,
         actual = ":" + raw_name,
-        metadata = ":" + metadata_name,
         **wrapper_kwargs
     )
