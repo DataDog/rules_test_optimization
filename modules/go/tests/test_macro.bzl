@@ -599,6 +599,8 @@ def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     asserts.true(env, "bazel_target_metadata.json" in content)
     asserts.true(env, 'set "META_RLOC=modules/go/tests/test_macro.bzl"' in content)
     asserts.true(env, 'call :resolve_metadata "%META_RLOC%"' in content)
+    asserts.true(env, 'if not "%RUNFILES_DIR%"=="" if exist "%RUNFILES_DIR%\\MANIFEST"' in content)
+    asserts.true(env, 'if exist "%~f0.runfiles\\MANIFEST"' in content)
     asserts.true(env, ":skip_metadata_copy" in content)
     asserts.true(env, '"%ACTUAL%" %*' in content)
     asserts.false(env, "DD_TRACE_AGENT_URL" in content)

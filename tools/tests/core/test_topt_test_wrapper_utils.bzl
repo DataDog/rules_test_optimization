@@ -20,6 +20,8 @@ def _windows_wrapper_uses_runfiles_resolution_test(ctx):
     asserts.true(env, 'call :resolve_metadata "%META_RLOC%"' in content)
     asserts.true(env, ":skip_metadata_copy" in content)
     asserts.true(env, 'if not "%RUNFILES_DIR%"=="" if exist "%RUNFILES_DIR%\\%CAND_PATH%"' in content)
+    asserts.true(env, 'if not "%RUNFILES_DIR%"=="" if exist "%RUNFILES_DIR%\\MANIFEST"' in content)
+    asserts.true(env, 'if exist "%~f0.runfiles\\MANIFEST"' in content)
     asserts.true(env, 'if not "%RUNFILES_MANIFEST_FILE%"=="" if exist "%RUNFILES_MANIFEST_FILE%"' in content)
     asserts.true(env, 'call :try_runfile "_main/%INPUT%"' in content)
     asserts.true(env, 'call :try_metadata "_main/%INPUT%"' in content)

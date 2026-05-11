@@ -124,9 +124,27 @@ if not "%%RUNFILES_DIR%%"=="" if exist "%%RUNFILES_DIR%%\\%%CAND_PATH%%" (
   goto :eof
 )
 
+if not "%%RUNFILES_DIR%%"=="" if exist "%%RUNFILES_DIR%%\\MANIFEST" (
+  for /f "usebackq tokens=1,* delims= " %%%%A in ("%%RUNFILES_DIR%%\\MANIFEST") do (
+    if "%%%%A"=="%%CAND%%" (
+      set "META_SOURCE=%%%%B"
+      goto :eof
+    )
+  )
+)
+
 if exist "%%~f0.runfiles\\%%CAND_PATH%%" (
   set "META_SOURCE=%%~f0.runfiles\\%%CAND_PATH%%"
   goto :eof
+)
+
+if exist "%%~f0.runfiles\\MANIFEST" (
+  for /f "usebackq tokens=1,* delims= " %%%%A in ("%%~f0.runfiles\\MANIFEST") do (
+    if "%%%%A"=="%%CAND%%" (
+      set "META_SOURCE=%%%%B"
+      goto :eof
+    )
+  )
 )
 
 if not "%%RUNFILES_MANIFEST_FILE%%"=="" if exist "%%RUNFILES_MANIFEST_FILE%%" (
