@@ -24,10 +24,8 @@ func moduleProxyFileURL(path string) (string, error) {
 }
 
 // moduleProxyFileURLFromBase resolves relative module proxy roots against the
-// nearest ancestor that contains the staged Bazel path. Orchestrion toolexec
-// subprocesses may start inside a package directory under the Go SDK, so simply
-// joining the relative proxy path to the current directory can point at a
-// nonexistent nested path instead of the execroot.
+// builder's initial working directory so later orchestrion chdir calls do not
+// retarget GOPROXY into the package module root.
 func moduleProxyFileURLFromBase(path, baseDir string) (string, error) {
 	cleanedPath := strings.TrimSpace(path)
 	if cleanedPath == "" {
@@ -37,11 +35,11 @@ func moduleProxyFileURLFromBase(path, baseDir string) (string, error) {
 		return "file:///" + strings.ReplaceAll(cleanedPath, "\\", "/"), nil
 	}
 	if !filepath.IsAbs(cleanedPath) {
-		resolvedPath, err := resolveRelativeModuleProxyRoot(cleanedPath, baseDir)
-		if err != nil {
-			return "", err
+		resolvedBaseDir := strings.TrimSpace(baseDir)
+		if resolvedBaseDir == "" {
+			return "", fmt.Errorf("module proxy path %s has no base dir", cleanedPath)
 		}
-		cleanedPath = resolvedPath
+		cleanedPath = filepath.Join(resolvedBaseDir, cleanedPath)
 	}
 	absolutePath, err := filepath.Abs(cleanedPath)
 	if err != nil {
@@ -52,36 +50,6 @@ func moduleProxyFileURLFromBase(path, baseDir string) (string, error) {
 		slashPath = "/" + slashPath
 	}
 	return "file://" + slashPath, nil
-}
-
-// resolveRelativeModuleProxyRoot searches baseDir and its ancestors for a
-// staged relative module-proxy path. If the path does not exist yet, it falls
-// back to baseDir/path so existing tests and non-sandbox callers keep their
-// deterministic URL behavior.
-func resolveRelativeModuleProxyRoot(path, baseDir string) (string, error) {
-	resolvedBaseDir := strings.TrimSpace(baseDir)
-	if resolvedBaseDir == "" {
-		return "", fmt.Errorf("module proxy path %s has no base dir", path)
-	}
-	absoluteBaseDir, err := filepath.Abs(resolvedBaseDir)
-	if err != nil {
-		return "", fmt.Errorf("absolutize module proxy base dir %s: %w", resolvedBaseDir, err)
-	}
-	fallback := filepath.Join(absoluteBaseDir, path)
-	for dir := absoluteBaseDir; ; dir = filepath.Dir(dir) {
-		candidate := filepath.Join(dir, path)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		} else if err != nil && !os.IsNotExist(err) {
-			return "", fmt.Errorf("stat module proxy candidate %s: %w", candidate, err)
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-	}
-	return fallback, nil
 }
 
 // normalizeGoModuleResolutionEnv applies the Go module-resolution defaults used
