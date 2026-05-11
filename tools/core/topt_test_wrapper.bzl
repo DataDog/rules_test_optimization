@@ -65,12 +65,13 @@ fi
 exec "$actual" "$@"
 """ % (actual_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_runfile):
+def _windows_wrapper_content(actual_runfile, metadata_runfile):
     """Render the Windows launcher used by wrapped non-Go test targets."""
     return """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
 set "ACTUAL_RLOC=%s"
+set "META_RLOC=%s"
 set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
 set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
 
@@ -80,10 +81,12 @@ if not defined ACTUAL (
   exit /b 1
 )
 
-if not "%%META_BASENAME%%"=="" if not "%%UNDECLARED_DIR%%"=="" (
-  set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
-  if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
-)
+if "%%META_BASENAME%%"=="" goto :skip_metadata_copy
+if "%%UNDECLARED_DIR%%"=="" goto :skip_metadata_copy
+call :resolve_metadata "%%META_RLOC%%"
+if not defined META_SOURCE set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
+if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
+:skip_metadata_copy
 
 rem rules_dotnet uses batch launchers on Windows, which must be invoked via
 rem CALL so control returns here and Bazel sees the real exit code.
@@ -145,8 +148,55 @@ if not "%%RUNFILES_MANIFEST_FILE%%"=="" if exist "%%RUNFILES_MANIFEST_FILE%%" (
   )
 )
 goto :eof
+
+:resolve_metadata
+set "META_SOURCE="
+set "INPUT=%%~1"
+if "%%INPUT%%"=="" goto :eof
+call :try_metadata "%%INPUT%%"
+if defined META_SOURCE goto :eof
+
+if /I "%%INPUT:~0,9%%"=="external/" (
+  set "ALT=%%INPUT:~9%%"
+  call :try_metadata "%%ALT%%"
+  if defined META_SOURCE goto :eof
+) else (
+  call :try_metadata "external/%%INPUT%%"
+  if defined META_SOURCE goto :eof
+)
+
+if /I not "%%INPUT:~0,6%%"=="_main/" (
+  call :try_metadata "_main/%%INPUT%%"
+)
+goto :eof
+
+:try_metadata
+set "CAND=%%~1"
+if "%%CAND%%"=="" goto :eof
+set "CAND_PATH=%%CAND:/=\\%%"
+
+if not "%%RUNFILES_DIR%%"=="" if exist "%%RUNFILES_DIR%%\\%%CAND_PATH%%" (
+  set "META_SOURCE=%%RUNFILES_DIR%%\\%%CAND_PATH%%"
+  goto :eof
+)
+
+if exist "%%~f0.runfiles\\%%CAND_PATH%%" (
+  set "META_SOURCE=%%~f0.runfiles\\%%CAND_PATH%%"
+  goto :eof
+)
+
+if not "%%RUNFILES_MANIFEST_FILE%%"=="" if exist "%%RUNFILES_MANIFEST_FILE%%" (
+  for /f "usebackq tokens=1,* delims= " %%%%A in ("%%RUNFILES_MANIFEST_FILE%%") do (
+    if "%%%%A"=="%%CAND%%" (
+      set "META_SOURCE=%%%%B"
+      goto :eof
+    )
+  )
+)
+goto :eof
 """ % (
         actual_runfile.replace("\\", "/"),
+        metadata_runfile.replace("\\", "/"),
         _BAZEL_TARGET_METADATA_OUTPUT,
     )
 
@@ -176,7 +226,7 @@ def _topt_test_wrapper_impl(ctx):
         # Windows Python launchers require the executable basename to stay
         # aligned with their sibling zip file, while Unix launchers need a
         # wrapper-owned runfiles sibling to avoid execroot path guessing.
-        content = _windows_wrapper_content(actual_filename) if is_windows else _unix_wrapper_content(actual_filename),
+        content = _windows_wrapper_content(actual_filename, ctx.file.metadata.short_path) if is_windows else _unix_wrapper_content(actual_filename),
         is_executable = True,
     )
 

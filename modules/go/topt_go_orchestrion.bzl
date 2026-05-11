@@ -81,10 +81,11 @@ if not exist "%%ACTUAL%%" (
   exit /b 1
 )
 
-if not "%%META_BASENAME%%"=="" if not "%%UNDECLARED_DIR%%"=="" (
-  set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
-  if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
-)
+if "%%META_BASENAME%%"=="" goto :skip_metadata_copy
+if "%%UNDECLARED_DIR%%"=="" goto :skip_metadata_copy
+set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
+if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
+:skip_metadata_copy
 
 "%%ACTUAL%%" %%*
 """ % (

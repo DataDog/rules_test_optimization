@@ -595,6 +595,7 @@ def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     env = unittest.begin(ctx)
     content = windows_wrapper_content_for_tests("raw.exe")
     asserts.true(env, "bazel_target_metadata.json" in content)
+    asserts.true(env, ":skip_metadata_copy" in content)
     asserts.true(env, '"%ACTUAL%" %*' in content)
     asserts.false(env, "DD_TRACE_AGENT_URL" in content)
     asserts.false(env, "DD_CIVISIBILITY_AGENTLESS_ENABLED" in content)
