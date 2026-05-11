@@ -313,6 +313,7 @@ def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
     orch_go_test(
         name = name,
         actual = ":" + name + "_actual",
+        metadata = ":test_macro.bzl",
         tags = tags,
     )
 
@@ -327,6 +328,7 @@ def orch_wrapper_materialized_actual_windows_target(name, tags = None):
     orch_go_test(
         name = name,
         actual = ":" + name + "_actual",
+        metadata = ":test_macro.bzl",
         tags = tags,
     )
 
@@ -593,8 +595,10 @@ def _wrapper_output_name_windows_test_impl(ctx):
 def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     """Assert Windows launchers preserve Bazel file mode instead of proxying uploads."""
     env = unittest.begin(ctx)
-    content = windows_wrapper_content_for_tests("raw.exe")
+    content = windows_wrapper_content_for_tests("raw.exe", "modules/go/tests/test_macro.bzl")
     asserts.true(env, "bazel_target_metadata.json" in content)
+    asserts.true(env, 'set "META_RLOC=modules/go/tests/test_macro.bzl"' in content)
+    asserts.true(env, 'call :resolve_metadata "%META_RLOC%"' in content)
     asserts.true(env, ":skip_metadata_copy" in content)
     asserts.true(env, '"%ACTUAL%" %*' in content)
     asserts.false(env, "DD_TRACE_AGENT_URL" in content)
@@ -614,6 +618,7 @@ def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(runfiles, "test_macro.bzl"))
     return analysistest.end(env)
 
 def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
@@ -626,6 +631,7 @@ def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target.bat"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(runfiles, "test_macro.bzl"))
     return analysistest.end(env)
 
 go_macro_single_service_wiring_test = analysistest.make(

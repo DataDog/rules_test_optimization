@@ -67,12 +67,13 @@ fi
 "$actual" "$@"
 """ % (actual_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_filename):
+def _windows_wrapper_content(actual_filename, metadata_runfile):
     """Render the Windows launcher used by the Orchestrion wrapper target."""
     return """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
 set "ACTUAL=%%SCRIPT_DIR%%%s"
+set "META_RLOC=%s"
 set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
 set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
 
@@ -83,13 +84,63 @@ if not exist "%%ACTUAL%%" (
 
 if "%%META_BASENAME%%"=="" goto :skip_metadata_copy
 if "%%UNDECLARED_DIR%%"=="" goto :skip_metadata_copy
-set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
+call :resolve_metadata "%%META_RLOC%%"
+if not defined META_SOURCE set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
 if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
 :skip_metadata_copy
 
 "%%ACTUAL%%" %%*
+
+exit /b %%ERRORLEVEL%%
+
+:resolve_metadata
+set "META_SOURCE="
+set "INPUT=%%~1"
+if "%%INPUT%%"=="" goto :eof
+call :try_metadata "%%INPUT%%"
+if defined META_SOURCE goto :eof
+
+if /I "%%INPUT:~0,9%%"=="external/" (
+  set "ALT=%%INPUT:~9%%"
+  call :try_metadata "%%ALT%%"
+  if defined META_SOURCE goto :eof
+) else (
+  call :try_metadata "external/%%INPUT%%"
+  if defined META_SOURCE goto :eof
+)
+
+if /I not "%%INPUT:~0,6%%"=="_main/" (
+  call :try_metadata "_main/%%INPUT%%"
+)
+goto :eof
+
+:try_metadata
+set "CAND=%%~1"
+if "%%CAND%%"=="" goto :eof
+set "CAND_PATH=%%CAND:/=\\%%"
+
+if not "%%RUNFILES_DIR%%"=="" if exist "%%RUNFILES_DIR%%\\%%CAND_PATH%%" (
+  set "META_SOURCE=%%RUNFILES_DIR%%\\%%CAND_PATH%%"
+  goto :eof
+)
+
+if exist "%%~f0.runfiles\\%%CAND_PATH%%" (
+  set "META_SOURCE=%%~f0.runfiles\\%%CAND_PATH%%"
+  goto :eof
+)
+
+if not "%%RUNFILES_MANIFEST_FILE%%"=="" if exist "%%RUNFILES_MANIFEST_FILE%%" (
+  for /f "usebackq tokens=1,* delims= " %%%%A in ("%%RUNFILES_MANIFEST_FILE%%") do (
+    if "%%%%A"=="%%CAND%%" (
+      set "META_SOURCE=%%%%B"
+      goto :eof
+    )
+  )
+)
+goto :eof
 """ % (
         actual_filename.replace("/", "\\"),
+        metadata_runfile.replace("\\", "/"),
         _BAZEL_TARGET_METADATA_OUTPUT,
     )
 
@@ -106,12 +157,12 @@ def _orch_go_test_impl(ctx):
 
     ctx.actions.write(
         output = out,
-        content = _windows_wrapper_content(actual_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename),
+        content = _windows_wrapper_content(actual_out.basename, ctx.file.metadata.short_path) if is_windows else _unix_wrapper_content(actual_out.basename),
         is_executable = True,
     )
     providers = [DefaultInfo(
         files = depset([out, actual_out]),
-        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out])),
+        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, ctx.file.metadata])),
         executable = out,
     )]
     if dep_run_environment:
@@ -126,6 +177,11 @@ orch_go_test = rule(
             executable = True,
             cfg = orch_transition,
             doc = "The underlying raw go_test target built with Orchestrion enabled.",
+        ),
+        "metadata": attr.label(
+            mandatory = True,
+            allow_single_file = True,
+            doc = "The Bazel metadata sidecar copied into test.outputs before execution.",
         ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
