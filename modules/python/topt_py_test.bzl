@@ -11,6 +11,7 @@ load(
 load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "append_data_dependencies",
+    "append_list_attribute",
     "build_module_labels",
     "merge_optional_env_defaults",
     "merge_user_env",
@@ -41,6 +42,7 @@ _VALID_RUNNER_MODES = [
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
+_append_list_attribute = append_list_attribute
 _merge_optional_env_defaults = merge_optional_env_defaults
 _merge_user_env = merge_user_env
 
@@ -85,7 +87,15 @@ def _is_default_py_test_rule(py_test_rule):
 # Test-only alias used by analysis tests; consumers should not call it.
 is_default_py_test_rule_for_tests = _is_default_py_test_rule
 
-def _validate_consumer_runner_inputs(py_test_rule, main):
+def _validate_runner_mode(runner_mode):
+    """Validate the Python runner mode requested by dd_topt_py_test."""
+    if runner_mode not in _VALID_RUNNER_MODES:
+        fail_with_prefix(
+            "dd_topt_py_test",
+            "runner_mode must be one of: %s" % ", ".join(_VALID_RUNNER_MODES),
+        )
+
+def _validate_consumer_runner_inputs(py_test_rule_was_explicit, py_test_rule_is_default, main):
     """Validate that consumer_runner has an actual consumer-owned test runner.
 
     In consumer_runner mode this macro deliberately does not inject run_pytest.py
@@ -93,7 +103,7 @@ def _validate_consumer_runner_inputs(py_test_rule, main):
     would let Bazel execute an implicit script entrypoint instead of a known
     pytest runner, which can create false-positive onboarding results.
     """
-    if _is_default_py_test_rule(py_test_rule) and main == None:
+    if main == None and (not py_test_rule_was_explicit or py_test_rule_is_default):
         fail_with_prefix(
             "dd_topt_py_test",
             "runner_mode = \"consumer_runner\" requires a consumer-owned Python test runner. " +
@@ -101,6 +111,10 @@ def _validate_consumer_runner_inputs(py_test_rule, main):
             "that executes pytest with ddtrace enabled, or use runner_mode = \"managed_pytest\" " +
             "for the built-in pytest runner.",
         )
+
+# Public aliases for unit tests.
+validate_runner_mode_for_tests = _validate_runner_mode
+validate_consumer_runner_inputs_for_tests = _validate_consumer_runner_inputs
 
 def dd_topt_py_test(
         name,
@@ -130,14 +144,12 @@ def dd_topt_py_test(
               Best for monorepos with an internal Python test wrapper.
         **kwargs: Forwarded to the underlying py_test_rule.
     """
-    if runner_mode not in _VALID_RUNNER_MODES:
-        fail_with_prefix(
-            "dd_topt_py_test",
-            "runner_mode must be one of: %s" % ", ".join(_VALID_RUNNER_MODES),
-        )
+    _validate_runner_mode(runner_mode)
 
+    py_test_rule_was_explicit = py_test_rule != None
     if py_test_rule == None:
         py_test_rule = _default_py_test
+    py_test_rule_is_default = _is_default_py_test_rule(py_test_rule)
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
@@ -161,13 +173,13 @@ def dd_topt_py_test(
     user_main = kwargs.pop("main", None)
 
     if runner_mode == _RUNNER_MODE_CONSUMER_RUNNER:
-        _validate_consumer_runner_inputs(py_test_rule, user_main)
+        _validate_consumer_runner_inputs(py_test_rule_was_explicit, py_test_rule_is_default, user_main)
 
     # args is a wrapper-only attr; split_test_wrapper_kwargs already moved it to wrapper_kwargs.
     user_args = wrapper_kwargs.pop("args", None)
 
+    user_imports_was_explicit = "imports" in kwargs
     user_imports = kwargs.pop("imports", None)
-    user_imports_was_explicit = user_imports != None
     imports_candidates = user_imports if user_imports != None else []
     importpath_candidate = kwargs.get("importpath") if "importpath" in kwargs else None
     module_path_candidate = kwargs.get("module_path") if "module_path" in kwargs else None
@@ -245,7 +257,7 @@ def dd_topt_py_test(
             {"PYTEST_ADDOPTS": "--ddtrace"},
             macro_name = "dd_topt_py_test",
         )
-    elif type(_existing_pytest_addopts) == type("") and "--no-ddtrace" not in _existing_pytest_addopts.split():
+    elif type(_existing_pytest_addopts) == type("") and "--no-ddtrace" not in _existing_pytest_addopts.split(" "):
         user_env = dict(user_env)
         user_env["PYTEST_ADDOPTS"] = _existing_pytest_addopts + " --ddtrace"
 
@@ -303,22 +315,23 @@ def dd_topt_py_test(
         imports_for_test = imports_candidates if user_imports_was_explicit else None
 
     raw_name = name + "__raw_python_test"
-    kwargs["tags"] = (wrapper_kwargs.get("tags") or []) + ["manual"]
-    kwargs["visibility"] = ["//visibility:private"]
+    raw_kwargs = dict(kwargs)
+    raw_kwargs["tags"] = _append_list_attribute(wrapper_kwargs.get("tags"), ["manual"])
+    raw_kwargs["visibility"] = ["//visibility:private"]
     for key, value in raw_passthrough.items():
-        kwargs[key] = value
+        raw_kwargs[key] = value
 
-    kwargs["name"] = raw_name
-    kwargs["srcs"] = srcs
-    kwargs["data"] = data
-    kwargs["env"] = env
-    kwargs["deps"] = deps_labels
+    raw_kwargs["name"] = raw_name
+    raw_kwargs["srcs"] = srcs
+    raw_kwargs["data"] = data
+    raw_kwargs["env"] = env
+    raw_kwargs["deps"] = deps_labels
     if main != None:
-        kwargs["main"] = main
+        raw_kwargs["main"] = main
     if imports_for_test != None:
-        kwargs["imports"] = imports_for_test
+        raw_kwargs["imports"] = imports_for_test
 
-    py_test_rule(**kwargs)
+    py_test_rule(**raw_kwargs)
 
     topt_test_wrapper(
         name = name,

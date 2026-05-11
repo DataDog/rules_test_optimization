@@ -197,6 +197,12 @@ you already set it or opt out with `--no-ddtrace`. The target still needs
 you want a non-pytest runner, and activate the Python tracer from that custom
 runner.
 
+Repositories with an internal Python test wrapper should use
+`runner_mode = "consumer_runner"` and pass that wrapper through `py_test_rule`.
+In that mode the Datadog macro does not inject `run_pytest.py`, does not set
+`main`, and does not synthesize `imports`. Prefer `module_identifier` for
+payload selection so onboarding does not depend on import-path mutation.
+
 BUILD.bazel (Java companion):
 
 ```bzl

@@ -6,11 +6,21 @@ load(
     "py_macro_consumer_runner_default_rule_no_main_failure_test",
     "py_macro_consumer_runner_default_rule_no_main_target_rule",
     "py_macro_consumer_runner_default_rule_with_main_test",
+    "py_macro_consumer_runner_empty_imports_target",
+    "py_macro_consumer_runner_empty_imports_test",
     "py_macro_consumer_runner_explicit_imports_target",
     "py_macro_consumer_runner_explicit_imports_test",
+    "py_macro_consumer_runner_kwargs_target",
+    "py_macro_consumer_runner_kwargs_test",
+    "py_macro_consumer_runner_no_ddtrace_target",
+    "py_macro_consumer_runner_no_ddtrace_test",
     "py_macro_consumer_runner_no_rule_no_main_failure_test",
     "py_macro_consumer_runner_no_rule_no_main_target_rule",
+    "py_macro_consumer_runner_select_env_target",
+    "py_macro_consumer_runner_select_env_test",
     "py_macro_consumer_runner_target",
+    "py_macro_consumer_runner_validation_helpers_target_rule",
+    "py_macro_consumer_runner_validation_helpers_test",
     "py_macro_consumer_runner_wiring_test",
     "py_macro_consumer_runner_with_capture_target",
     "py_macro_consumer_runner_with_main_target",
@@ -22,6 +32,8 @@ load(
     "py_macro_explicit_service_wiring_test",
     "py_macro_invalid_runner_mode_failure_test",
     "py_macro_invalid_runner_mode_target_rule",
+    "py_macro_managed_pytest_kwargs_target",
+    "py_macro_managed_pytest_kwargs_test",
     "py_macro_multi_service_target",
     "py_macro_multi_service_wiring_test",
     "py_macro_public_wrapper_test",
@@ -289,6 +301,59 @@ py_macro_consumer_runner_custom_attrs_test(
     target_under_test = ":py_macro_consumer_runner_custom_attrs_target__raw_python_test",
 )
 
+py_macro_consumer_runner_kwargs_target(
+    name = "py_macro_consumer_runner_kwargs_target",
+    tags = [
+        "consumer_tag",
+        "manual",
+    ],
+)
+
+py_macro_consumer_runner_kwargs_test(
+    name = "py_macro_consumer_runner_kwargs_test",
+    target_under_test = ":py_macro_consumer_runner_kwargs_target__raw_python_test",
+)
+
+py_macro_consumer_runner_empty_imports_target(
+    name = "py_macro_consumer_runner_empty_imports_target",
+    tags = ["manual"],
+)
+
+py_macro_consumer_runner_empty_imports_test(
+    name = "py_macro_consumer_runner_empty_imports_test",
+    target_under_test = ":py_macro_consumer_runner_empty_imports_target__raw_python_test",
+)
+
+py_macro_consumer_runner_no_ddtrace_target(
+    name = "py_macro_consumer_runner_no_ddtrace_target",
+    tags = ["manual"],
+)
+
+py_macro_consumer_runner_no_ddtrace_test(
+    name = "py_macro_consumer_runner_no_ddtrace_test",
+    target_under_test = ":py_macro_consumer_runner_no_ddtrace_target__raw_python_test",
+)
+
+py_macro_consumer_runner_select_env_target(
+    name = "py_macro_consumer_runner_select_env_target",
+    tags = ["manual"],
+)
+
+py_macro_consumer_runner_select_env_test(
+    name = "py_macro_consumer_runner_select_env_test",
+    target_under_test = ":py_macro_consumer_runner_select_env_target__raw_python_test",
+)
+
+py_macro_managed_pytest_kwargs_target(
+    name = "py_macro_managed_pytest_kwargs_target",
+    tags = ["manual"],
+)
+
+py_macro_managed_pytest_kwargs_test(
+    name = "py_macro_managed_pytest_kwargs_test",
+    target_under_test = ":py_macro_managed_pytest_kwargs_target__raw_python_test",
+)
+
 py_macro_consumer_runner_no_rule_no_main_target_rule(
     name = "py_macro_consumer_runner_no_rule_no_main_target",
     tags = ["manual"],
@@ -317,6 +382,16 @@ py_macro_default_rule_detection_target_rule(
 py_macro_default_rule_detection_test(
     name = "py_macro_default_rule_detection_test",
     target_under_test = ":py_macro_default_rule_detection_target",
+)
+
+py_macro_consumer_runner_validation_helpers_target_rule(
+    name = "py_macro_consumer_runner_validation_helpers_target",
+    tags = ["manual"],
+)
+
+py_macro_consumer_runner_validation_helpers_test(
+    name = "py_macro_consumer_runner_validation_helpers_test",
+    target_under_test = ":py_macro_consumer_runner_validation_helpers_target",
 )
 
 py_macro_invalid_runner_mode_target_rule(
@@ -481,13 +556,19 @@ test_suite(
         ":py_macro_consumer_runner_custom_attrs_test",
         ":py_macro_consumer_runner_default_rule_no_main_failure_test",
         ":py_macro_consumer_runner_default_rule_with_main_test",
+        ":py_macro_consumer_runner_empty_imports_test",
         ":py_macro_consumer_runner_explicit_imports_test",
+        ":py_macro_consumer_runner_kwargs_test",
+        ":py_macro_consumer_runner_no_ddtrace_test",
         ":py_macro_consumer_runner_no_rule_no_main_failure_test",
+        ":py_macro_consumer_runner_select_env_test",
+        ":py_macro_consumer_runner_validation_helpers_test",
         ":py_macro_consumer_runner_wiring_test",
         ":py_macro_default_rule_detection_test",
         ":py_macro_env_none_wiring_test",
         ":py_macro_explicit_service_wiring_test",
         ":py_macro_invalid_runner_mode_failure_test",
+        ":py_macro_managed_pytest_kwargs_test",
         ":py_macro_multi_service_wiring_test",
         ":py_macro_select_inputs_wiring_test",
         ":py_macro_single_service_wiring_test",
