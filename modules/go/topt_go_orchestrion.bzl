@@ -178,6 +178,7 @@ def _orch_go_test_impl(ctx):
         content = _windows_wrapper_content(actual_out.basename, ctx.file.metadata.short_path) if is_windows else _unix_wrapper_content(actual_out.basename),
         is_executable = True,
     )
+
     # Keep metadata both as a target file and a runfile. Windows test actions
     # materialize target files next to the launcher more reliably than
     # manifest-only runfiles, which lets the wrapper copy the sidecar before
