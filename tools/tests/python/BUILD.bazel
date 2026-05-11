@@ -2,47 +2,48 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 sh_test(
     name = "python_tools_test",
+    size = "small",
+    timeout = "short",
     srcs = ["run_python_tools_test.sh"],
     data = [
         "test_python_tools.py",
         "test_rules_go_variant_tools.py",
         "//tools/core:schemas/check_schema_parser_parity.py",
         "//tools/core:schemas/sync_agentless_schema.py",
-        "//tools/core:test_optimization_sync.bzl",
+        "//tools/core:test_optimization_doctor.bzl",
         "//tools/core:test_optimization_doctor.py",
-        "//tools/core:validate_payload_schema.py",
+        "//tools/core:test_optimization_sync.bzl",
         "//tools/core:uploader_bash_runtime.sh.tpl",
         "//tools/core:uploader_batch_runtime.bat.tpl",
         "//tools/core:uploader_powershell_runtime.ps1.tpl",
+        "//tools/core:validate_payload_schema.py",
         "//tools/dev:check_bazelversion_sync.py",
         "//tools/dev:check_module_versions.py",
         "//tools/dev:lint_uploader_templates.py",
         "//tools/dev:verify_rules_go_variants.py",
         "//tools/tests:integration/mock_dd_server.py",
     ],
-    size = "small",
-    timeout = "short",
 )
 
 sh_test(
     name = "bazelw_wrapper_test",
+    size = "small",
+    timeout = "short",
     srcs = ["run_bazelw_wrapper_test.sh"],
     data = [
         "//:.bazelversion",
         "//:bazelw",
     ],
-    size = "small",
     target_compatible_with = select({
         "@platforms//os:windows": ["@platforms//:incompatible"],
         "//conditions:default": [],
     }),
-    timeout = "short",
 )
 
 test_suite(
     name = "tests",
     tests = [
-        ":python_tools_test",
         ":bazelw_wrapper_test",
+        ":python_tools_test",
     ],
 )

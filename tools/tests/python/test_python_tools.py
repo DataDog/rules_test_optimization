@@ -561,6 +561,19 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             self.mod._validate_bazelrc(workspace)
 
 
+class TestOptimizationDoctorLauncherTests(unittest.TestCase):
+    """Test case group covering generated doctor launchers."""
+
+    def test_windows_launcher_resolves_powershell_next_to_batch(self) -> None:
+        """Validate the Windows launcher resolves the generated PowerShell script next to the batch file."""
+        doctor_rule = _runfile("tools/core/test_optimization_doctor.bzl").read_text(encoding="utf-8")
+
+        self.assertIn('set "SCRIPT_DIR=%%~dp0"', doctor_rule)
+        self.assertIn('-File "%%SCRIPT_DIR%%%s"', doctor_rule)
+        self.assertIn("% ps_file.basename", doctor_rule)
+        self.assertNotIn("% ps_file.path,\n    )\n\n    is_windows", doctor_rule)
+
+
 class CheckSchemaParserParityTests(unittest.TestCase):
     """Test case group covering CheckSchemaParserParityTests behaviors."""
     @classmethod

@@ -287,9 +287,11 @@ exit $LASTEXITCODE
         output = bat_file,
         is_executable = True,
         content = """@echo off
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s"
+setlocal
+set "SCRIPT_DIR=%%~dp0"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%%SCRIPT_DIR%%%s"
 exit /b %%ERRORLEVEL%%
-""" % ps_file.path,
+""" % ps_file.basename,
     )
 
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
