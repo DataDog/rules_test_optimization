@@ -218,17 +218,20 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 				_ = os.Unsetenv("GO111MODULE")
 			}
 		}()
+		// Orchestrion loads tool imports before compiling the stdlib. Normalize
+		// module resolution for every Orchestrion stdlib build so discovered
+		// source dirs and synthetic source dirs both use the staged offline proxy.
+		envWithCache, err := ensureGoModuleCacheEnv(os.Environ(), goenv.verbose)
+		if err != nil {
+			return fmt.Errorf("stdlib: ensure go module cache env: %w", err)
+		}
+		for _, entry := range envWithCache {
+			parts := strings.SplitN(entry, "=", 2)
+			if len(parts) == 2 {
+				_ = os.Setenv(parts[0], parts[1])
+			}
+		}
 		if len(orchestrionSrcDirs) == 0 {
-			envWithCache, err := ensureGoModuleCacheEnv(os.Environ(), goenv.verbose)
-			if err != nil {
-				return fmt.Errorf("stdlib: ensure go module cache env: %w", err)
-			}
-			for _, entry := range envWithCache {
-				parts := strings.SplitN(entry, "=", 2)
-				if len(parts) == 2 {
-					_ = os.Setenv(parts[0], parts[1])
-				}
-			}
 			syntheticDownloads := [][]string{
 				{"mod", "download", "github.com/DataDog/orchestrion"},
 				{"mod", "download", "github.com/DataDog/dd-trace-go/v2"},
