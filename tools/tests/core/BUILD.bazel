@@ -41,6 +41,22 @@ load(
     "render_multi_aggregate_bzl_mismatch_target_rule",
 )
 load(
+    "//tools/tests/core:test_python_workspace_repositories_utils.bzl",
+    "python_archive_specs_test",
+    "python_custom_rules_python_repo_name_test",
+    "python_existing_repo_failure_test",
+    "python_existing_repo_target_rule",
+    "python_git_specs_test",
+    "python_invalid_fetch_mode_failure_test",
+    "python_invalid_fetch_mode_target_rule",
+    "python_missing_archive_failure_test",
+    "python_missing_archive_target_rule",
+    "python_missing_git_commit_failure_test",
+    "python_missing_git_commit_target_rule",
+    "python_missing_rules_python_repo_failure_test",
+    "python_missing_rules_python_repo_target_rule",
+)
+load(
     "//tools/tests/core:test_sync_utils.bzl",
     "apply_dd_git_overrides_test",
     "apply_github_event_payload_defensive_test",
@@ -217,6 +233,31 @@ existing_repo_target_rule(
     tags = ["manual"],
 )
 
+python_invalid_fetch_mode_target_rule(
+    name = "python_invalid_fetch_mode_target",
+    tags = ["manual"],
+)
+
+python_missing_git_commit_target_rule(
+    name = "python_missing_git_commit_target",
+    tags = ["manual"],
+)
+
+python_missing_archive_target_rule(
+    name = "python_missing_archive_target",
+    tags = ["manual"],
+)
+
+python_existing_repo_target_rule(
+    name = "python_existing_repo_target",
+    tags = ["manual"],
+)
+
+python_missing_rules_python_repo_target_rule(
+    name = "python_missing_rules_python_repo_target",
+    tags = ["manual"],
+)
+
 # Starlark unit tests for core helpers (sync, uploader, common utils).
 dd_site_normalization_test(
     name = "dd_site_normalization_test",
@@ -271,6 +312,24 @@ custom_rules_go_repo_name_test(
     timeout = "short",
 )
 
+python_git_specs_test(
+    name = "python_git_specs_test",
+    size = "small",
+    timeout = "short",
+)
+
+python_archive_specs_test(
+    name = "python_archive_specs_test",
+    size = "small",
+    timeout = "short",
+)
+
+python_custom_rules_python_repo_name_test(
+    name = "python_custom_rules_python_repo_name_test",
+    size = "small",
+    timeout = "short",
+)
+
 invalid_variant_failure_test(
     name = "invalid_variant_failure_test",
     target_under_test = ":invalid_variant_target",
@@ -284,6 +343,31 @@ missing_archive_failure_test(
 existing_repo_failure_test(
     name = "existing_repo_failure_test",
     target_under_test = ":existing_repo_target",
+)
+
+python_invalid_fetch_mode_failure_test(
+    name = "python_invalid_fetch_mode_failure_test",
+    target_under_test = ":python_invalid_fetch_mode_target",
+)
+
+python_missing_git_commit_failure_test(
+    name = "python_missing_git_commit_failure_test",
+    target_under_test = ":python_missing_git_commit_target",
+)
+
+python_missing_archive_failure_test(
+    name = "python_missing_archive_failure_test",
+    target_under_test = ":python_missing_archive_target",
+)
+
+python_existing_repo_failure_test(
+    name = "python_existing_repo_failure_test",
+    target_under_test = ":python_existing_repo_target",
+)
+
+python_missing_rules_python_repo_failure_test(
+    name = "python_missing_rules_python_repo_failure_test",
+    target_under_test = ":python_missing_rules_python_repo_target",
 )
 
 legacy_context_direct_file_fallback_test(

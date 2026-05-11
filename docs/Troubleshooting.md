@@ -170,6 +170,10 @@ fails before upload.
    ```bash
    find bazel-testlogs -path '*/test.outputs/payloads/*/*.json' -type f
    ```
+   For Python WORKSPACE consumers, confirm the target loads `dd_topt_py_test`
+   from `@datadog-rules-test-optimization-python//:topt_py_test.bzl` and that
+   the companion repository was declared with
+   `datadog_python_test_optimization_workspace_repositories(...)`.
    For Python `runner_mode = "consumer_runner"`, also verify that the
    consumer-owned wrapper really executes pytest, propagates the `env` passed
    by `dd_topt_py_test`, and keeps `PYTEST_ADDOPTS=--ddtrace` unless it
@@ -192,6 +196,15 @@ fails before upload.
    target with `RunEnvironmentInfo` preserved from the raw `py_test`; otherwise
    the public metadata wrapper can run but the actual pytest process may miss
    the required `DD_TEST_OPTIMIZATION_*` environment.
+
+   In WORKSPACE mode, also verify that the Python helper maps the companion's
+   internal `@rules_python` dependency to the consumer repository name:
+   ```bzl
+   datadog_python_test_optimization_workspace_repositories(
+       rto_commit = "<commit-sha>",
+       rules_python_repo_name = "rules_python",  # or the consumer's custom name
+   )
+   ```
 
 5. **`full_bundle_no_match`**: The Go macro could not map the test target to a
    per-module bundle. Prefer `embed = [":lib"]` so the macro can read the same

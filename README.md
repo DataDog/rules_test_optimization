@@ -17,7 +17,7 @@ Pick the path that matches your repository:
 - **Bzlmod + .NET companion:** `dd_topt_dotnet_test` macro with analysis-time selection
 - **Bzlmod + Ruby companion:** `dd_topt_ruby_test` macro with analysis-time selection
 - **Bzlmod + multi-service monorepo:** one sync extension, per-service labels/exports
-- **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled
+- **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled, including Go and Python companion helpers
 - **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
 
 ## Documentation map
@@ -53,6 +53,9 @@ are informative and may lag temporarily.
 - [`tools/agent-skills/go-test-optimization-onboarding/SKILL.md`](tools/agent-skills/go-test-optimization-onboarding/SKILL.md):
   neutral Codex-compatible agent workflow for instrumenting Go WORKSPACE and
   Bzlmod consumers with Test Optimization.
+- [`tools/agent-skills/python-test-optimization-onboarding/SKILL.md`](tools/agent-skills/python-test-optimization-onboarding/SKILL.md):
+  neutral Codex-compatible agent workflow for instrumenting Python WORKSPACE
+  and Bzlmod consumers with Test Optimization.
 - [`docs/internal_monorepo_go_rollout_plan.md`](docs/internal_monorepo_go_rollout_plan.md):
   operator checklist for large WORKSPACE Go pilot rollouts.
 - [`docs/go_orchestrion_bazel_deep_dive.md`](docs/go_orchestrion_bazel_deep_dive.md):
@@ -876,6 +879,24 @@ consumers should not rename that repository.
 When Go tests live below the module root, pass the module-root pin files through
 `orchestrion_pin_files` (for example `["//:go.mod", "//:orchestrion.tool.go"]`)
 or inject them from a repo-local wrapper.
+
+For Python in WORKSPACE mode, declare `rules_python` and the core repository
+first, then use the public Python helper to declare only the Python companion:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/python:workspace_repositories.bzl", "datadog_python_test_optimization_workspace_repositories")
+
+datadog_python_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_python_repo_name = "rules_python",
+)
+```
+
+The Python helper deliberately does not declare Python toolchains, `pip_parse`,
+`pytest`, `ddtrace`, or lockfiles. Keep those dependencies in the consumer
+repository's existing `rules_python` setup, then load
+`dd_topt_py_test` from
+`@datadog-rules-test-optimization-python//:topt_py_test.bzl`.
 
 Use [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for mirrored `http_archive`, Go toolchain
 setup, uploader wiring, and full WORKSPACE details.
