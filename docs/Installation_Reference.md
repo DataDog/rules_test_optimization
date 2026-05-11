@@ -552,7 +552,7 @@ git_repository(
 Pin an immutable commit SHA (or internal mirrored archive) for reproducibility.
 
 For WORKSPACE Go usage, declare the core repository first, then use the public
-helper in step 6 to declare the Go companion and the Orchestrion-enabled
+helper in step 7 to declare the Go companion and the Orchestrion-enabled
 `rules_go` fork at the same revision:
 
 - `datadog-rules-test-optimization` for sync and uploader rules
@@ -560,6 +560,18 @@ helper in step 6 to declare the Go companion and the Orchestrion-enabled
 
 Load the Go macro from `@datadog-rules-test-optimization-go//:topt_go_test.bzl`,
 not from the root repository.
+
+For WORKSPACE Python usage, declare the core repository and `rules_python`
+first, then use the public helper in step 6 to declare the Python companion at
+the same Datadog revision:
+
+- `datadog-rules-test-optimization` for sync and uploader rules
+- `rules_python` for Python toolchains, `py_test`, and `pip_parse`
+- `datadog-rules-test-optimization-python` for `dd_topt_py_test`
+
+Load the Python macro from
+`@datadog-rules-test-optimization-python//:topt_py_test.bzl`, not from the root
+repository.
 
 ### Archive mirror installation
 
@@ -743,7 +755,143 @@ Repository policy note: this repository intentionally has no root `.bazelrc`.
 Consumer repos should keep their own `.bazelrc` and follow CI-maintainer flags
 from `README.md` and `docs/Maintainers.md`.
 
-### 6) Configure Go support in WORKSPACE with the public helper
+### 6) Configure Python support in WORKSPACE with the public helper
+
+Python WORKSPACE onboarding keeps ownership of Python toolchains and Python
+dependencies in the consumer repository. The Datadog helper declares only the
+Python companion repository and maps its internal `@rules_python` dependency to
+the repository name the consumer already uses.
+
+Declare `rules_python` with the version and mirror policy approved by the
+consumer repository. For a direct public pin:
+
+```bzl
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "rules_python",
+    sha256 = "f609f341d6e9090b981b3f45324d05a819fd7a5a56434f849c761971ce2c47da",
+    strip_prefix = "rules_python-1.7.0",
+    urls = ["https://github.com/bazel-contrib/rules_python/releases/download/1.7.0/rules_python-1.7.0.tar.gz"],
+)
+```
+
+Then declare the Datadog Python companion:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/python:workspace_repositories.bzl", "datadog_python_test_optimization_workspace_repositories")
+
+datadog_python_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_python_repo_name = "rules_python",
+)
+```
+
+Archive mode for mirrored Datadog repositories:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/python:workspace_repositories.bzl", "datadog_python_test_optimization_workspace_repositories")
+
+datadog_python_test_optimization_workspace_repositories(
+    rto_commit = "",
+    datadog_fetch = "archive",
+    rules_python_repo_name = "rules_python",
+    rto_archive_url = "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
+    rto_archive_sha256 = "<sha256-for-archive>",
+    rto_archive_prefix = "rules_test_optimization-<commit-sha>",
+)
+```
+
+Next configure Python toolchains and Python package dependencies through the
+consumer's normal `rules_python` flow:
+
+```bzl
+load("@rules_python//python:repositories.bzl", "py_repositories", "python_register_toolchains")
+
+py_repositories()
+
+python_register_toolchains(
+    name = "python_3_12",
+    python_version = "3.12",
+)
+
+load("@rules_python//python:pip.bzl", "pip_parse")
+
+pip_parse(
+    name = "python_deps",
+    python_interpreter_target = "@python_3_12_host//:python",
+    requirements_lock = "//:requirements_lock.txt",
+)
+
+load("@python_deps//:requirements.bzl", "install_deps")
+
+install_deps()
+```
+
+Your lockfile should include `pytest` and `ddtrace` because Python dependency
+ownership remains with the consumer repository. The helper does not declare
+`pytest`, `ddtrace`, `pip_parse`, toolchains, or lockfiles.
+
+Update the sync repository for Python metadata:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+
+test_optimization_sync(
+    name = "test_optimization_data",
+    service = "py-service",
+    runtime_name = "python",
+    runtime_version = "3.12",
+)
+```
+
+Then in package BUILD files, use either managed pytest mode:
+
+```bzl
+load("@python_deps//:requirements.bzl", "requirement")
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_py_test(
+    name = "pkg_py_test",
+    srcs = glob(["test_*.py"]),
+    deps = [
+        requirement("ddtrace"),
+        requirement("pytest"),
+    ],
+    imports = ["example/python/pkg"],
+    topt_data = topt_data,
+)
+```
+
+or consumer-runner mode when the repository already owns a pytest wrapper:
+
+```bzl
+load("@python_deps//:requirements.bzl", "requirement")
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+load("//tools/build:py_test.bzl", "repo_py_test")
+
+dd_topt_py_test(
+    name = "pkg_py_test",
+    py_test_rule = repo_py_test,
+    runner_mode = "consumer_runner",
+    module_identifier = "example.python.pkg",
+    srcs = glob(["test_*.py"]),
+    deps = [
+        requirement("ddtrace"),
+        requirement("pytest"),
+    ],
+    topt_data = topt_data,
+)
+```
+
+In `consumer_runner` mode, the repository-owned wrapper must preserve the
+environment passed by `dd_topt_py_test` and must actually execute pytest with
+the ddtrace plugin enabled. Do not set `main` to a test file just to satisfy
+Bazel; that can produce a false-green target that never runs pytest.
+
+### 7) Configure Go support in WORKSPACE with the public helper
 
 For Bzlmod single-service Go workspaces, prefer guided bootstrap instead. For
 WORKSPACE consumers, prefer this helper over hand-written companion and

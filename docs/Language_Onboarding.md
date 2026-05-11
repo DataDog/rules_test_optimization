@@ -549,6 +549,108 @@ without an explicit `main`; that shape can execute a Python file directly and
 does not prove pytest or ddtrace ran. Prefer `module_identifier` for selection
 in this mode so the integration does not depend on Python import-path mutation.
 
+### WORKSPACE single-service
+
+WORKSPACE Python onboarding uses the same runtime contract as Bzlmod: sync
+metadata is fetched during repository resolution, tests write JSON payloads to
+`TEST_UNDECLARED_OUTPUTS_DIR`, the doctor validates local outputs, and the
+uploader runs after the doctor. The difference is dependency wiring. The
+consumer declares the core repository and `rules_python`, then uses the public
+Python helper to declare only the Datadog Python companion.
+
+```bzl
+# WORKSPACE
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+git_repository(
+    name = "datadog-rules-test-optimization",
+    commit = "<commit-sha>",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+)
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "rules_python",
+    sha256 = "f609f341d6e9090b981b3f45324d05a819fd7a5a56434f849c761971ce2c47da",
+    strip_prefix = "rules_python-1.7.0",
+    urls = ["https://github.com/bazel-contrib/rules_python/releases/download/1.7.0/rules_python-1.7.0.tar.gz"],
+)
+
+load("@datadog-rules-test-optimization//tools/python:workspace_repositories.bzl", "datadog_python_test_optimization_workspace_repositories")
+
+datadog_python_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_python_repo_name = "rules_python",
+)
+```
+
+The helper does not declare Python toolchains, `pip_parse`, `pytest`,
+`ddtrace`, or lockfiles. Keep those under the consumer repository's existing
+Python dependency process:
+
+```bzl
+load("@rules_python//python:repositories.bzl", "py_repositories", "python_register_toolchains")
+
+py_repositories()
+
+python_register_toolchains(
+    name = "python_3_12",
+    python_version = "3.12",
+)
+
+load("@rules_python//python:pip.bzl", "pip_parse")
+
+pip_parse(
+    name = "python_deps",
+    python_interpreter_target = "@python_3_12_host//:python",
+    requirements_lock = "//:requirements_lock.txt",
+)
+
+load("@python_deps//:requirements.bzl", "install_deps")
+
+install_deps()
+```
+
+Instantiate sync as a repository rule and set Python runtime metadata:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+
+test_optimization_sync(
+    name = "test_optimization_data",
+    service = "py-service",
+    runtime_name = "python",
+    runtime_version = "3.12",
+)
+```
+
+In BUILD files, load `dd_topt_py_test` from the Python companion repository:
+
+```bzl
+load("@python_deps//:requirements.bzl", "requirement")
+load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+dd_topt_py_test(
+    name = "pkg_py_test",
+    srcs = glob(["test_*.py"]),
+    imports = ["example/python/pkg"],
+    deps = [
+        requirement("ddtrace"),
+        requirement("pytest"),
+    ],
+    topt_data = topt_data,
+)
+```
+
+For large repositories with existing pytest wrappers, switch only the runtime
+test target to `runner_mode = "consumer_runner"` and keep repository-specific
+scheduling, Docker, tags, and flaky policy in the local wrapper. The wrapper
+must preserve the environment supplied by `dd_topt_py_test`; otherwise the test
+process may miss `TEST_UNDECLARED_OUTPUTS_DIR`, metadata paths, or
+`PYTEST_ADDOPTS=--ddtrace`.
+
 ### Multi-service
 
 Use the core multi-sync extension. All services in one call share the same
