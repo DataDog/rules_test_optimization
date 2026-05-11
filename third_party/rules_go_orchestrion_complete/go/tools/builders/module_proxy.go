@@ -23,36 +23,18 @@ func moduleProxyFileURL(path string) (string, error) {
 	return moduleProxyFileURLFromBase(path, moduleProxyResolutionBaseDir)
 }
 
-// moduleProxyRootPath resolves a configured module proxy root to the stable
-// filesystem path that should be inherited by all Orchestrion subprocesses.
-func moduleProxyRootPath(path string) (string, error) {
-	return moduleProxyRootPathFromBase(path, moduleProxyResolutionBaseDir)
-}
-
 // moduleProxyFileURLFromBase resolves relative module proxy roots against the
 // nearest ancestor that contains the staged Bazel path. Orchestrion toolexec
 // subprocesses may start inside a package directory under the Go SDK, so simply
 // joining the relative proxy path to the current directory can point at a
 // nonexistent nested path instead of the execroot.
 func moduleProxyFileURLFromBase(path, baseDir string) (string, error) {
-	resolvedPath, err := moduleProxyRootPathFromBase(path, baseDir)
-	if err != nil {
-		return "", err
-	}
-	return moduleProxyFileURLForResolvedPath(resolvedPath), nil
-}
-
-// moduleProxyRootPathFromBase resolves relative module proxy roots against the
-// nearest ancestor that contains the staged Bazel path. The returned path is
-// suitable for re-exporting in RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT so child
-// tools do not need to repeat relative-path discovery from their own workdirs.
-func moduleProxyRootPathFromBase(path, baseDir string) (string, error) {
 	cleanedPath := strings.TrimSpace(path)
 	if cleanedPath == "" {
 		return "", fmt.Errorf("module proxy path is empty")
 	}
 	if isWindowsAbsolutePath(cleanedPath) {
-		return cleanedPath, nil
+		return "file:///" + strings.ReplaceAll(cleanedPath, "\\", "/"), nil
 	}
 	if !filepath.IsAbs(cleanedPath) {
 		resolvedPath, err := resolveRelativeModuleProxyRoot(cleanedPath, baseDir)
@@ -65,20 +47,11 @@ func moduleProxyRootPathFromBase(path, baseDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("absolutize module proxy path %s: %w", cleanedPath, err)
 	}
-	return absolutePath, nil
-}
-
-// moduleProxyFileURLForResolvedPath formats a resolved proxy root as the
-// file:// URL syntax accepted by GOPROXY.
-func moduleProxyFileURLForResolvedPath(path string) string {
-	if isWindowsAbsolutePath(path) {
-		return "file:///" + strings.ReplaceAll(path, "\\", "/")
-	}
-	slashPath := filepath.ToSlash(path)
+	slashPath := filepath.ToSlash(absolutePath)
 	if !strings.HasPrefix(slashPath, "/") {
 		slashPath = "/" + slashPath
 	}
-	return "file://" + slashPath
+	return "file://" + slashPath, nil
 }
 
 // resolveRelativeModuleProxyRoot searches baseDir and its ancestors for a
@@ -119,12 +92,10 @@ func normalizeGoModuleResolutionEnv(env []string) ([]string, error) {
 
 	moduleProxyRoot := strings.TrimSpace(getEnv(env, rulesGoOrchestrionModuleProxyRootEnvVar))
 	if moduleProxyRoot != "" {
-		resolvedProxyRoot, err := moduleProxyRootPath(moduleProxyRoot)
+		proxyURL, err := moduleProxyFileURL(moduleProxyRoot)
 		if err != nil {
 			return nil, err
 		}
-		proxyURL := moduleProxyFileURLForResolvedPath(resolvedProxyRoot)
-		env = setEnv(env, rulesGoOrchestrionModuleProxyRootEnvVar, resolvedProxyRoot)
 		env = setEnv(env, "GOPROXY", proxyURL)
 		env = setEnv(env, "GOSUMDB", "off")
 		env = setEnv(env, "GOPRIVATE", "")

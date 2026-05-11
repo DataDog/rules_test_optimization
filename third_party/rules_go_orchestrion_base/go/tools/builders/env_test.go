@@ -91,10 +91,6 @@ func TestNormalizeGoModuleResolutionEnvUsesInitialWorkingDirForRelativeProxyRoot
 	if envMap["GOPROXY"] != wantProxy {
 		t.Fatalf("GOPROXY=%q, want %q", envMap["GOPROXY"], wantProxy)
 	}
-	wantRoot := filepath.Join(baseDir, relativeProxyRoot)
-	if envMap[rulesGoOrchestrionModuleProxyRootEnvVar] != wantRoot {
-		t.Fatalf("%s=%q, want %q", rulesGoOrchestrionModuleProxyRootEnvVar, envMap[rulesGoOrchestrionModuleProxyRootEnvVar], wantRoot)
-	}
 }
 
 func TestModuleProxyFileURLFromBaseFindsProxyFromNestedExecrootDir(t *testing.T) {
@@ -119,40 +115,6 @@ func TestModuleProxyFileURLFromBaseFindsProxyFromNestedExecrootDir(t *testing.T)
 	}
 }
 
-func TestNormalizeGoModuleResolutionEnvReexportsResolvedProxyRoot(t *testing.T) {
-	execroot := t.TempDir()
-	relativeProxyRoot := filepath.Join("external", "rules_go_orchestrion_tool", "module_proxy")
-	proxyRoot := filepath.Join(execroot, relativeProxyRoot)
-	if err := os.MkdirAll(proxyRoot, 0o755); err != nil {
-		t.Fatalf("mkdir proxyRoot: %v", err)
-	}
-	nestedBaseDir := filepath.Join(execroot, "external", "rules_go++go_sdk+go_default_sdk", "src", "runtime")
-	if err := os.MkdirAll(nestedBaseDir, 0o755); err != nil {
-		t.Fatalf("mkdir nestedBaseDir: %v", err)
-	}
-
-	previousBaseDir := moduleProxyResolutionBaseDir
-	moduleProxyResolutionBaseDir = nestedBaseDir
-	defer func() {
-		moduleProxyResolutionBaseDir = previousBaseDir
-	}()
-
-	env, err := normalizeGoModuleResolutionEnv([]string{
-		rulesGoOrchestrionModuleProxyRootEnvVar + "=" + relativeProxyRoot,
-	})
-	if err != nil {
-		t.Fatalf("normalizeGoModuleResolutionEnv error: %v", err)
-	}
-	envMap := envSliceToMap(env)
-	if got := envMap[rulesGoOrchestrionModuleProxyRootEnvVar]; got != proxyRoot {
-		t.Fatalf("%s=%q, want %q", rulesGoOrchestrionModuleProxyRootEnvVar, got, proxyRoot)
-	}
-	wantProxy := "file://" + filepath.ToSlash(proxyRoot)
-	if got := envMap["GOPROXY"]; got != wantProxy {
-		t.Fatalf("GOPROXY=%q, want %q", got, wantProxy)
-	}
-}
-
 func TestNormalizeGoModuleResolutionEnvWithModuleProxy(t *testing.T) {
 	proxyRoot := filepath.Join(t.TempDir(), "module_proxy")
 	env, err := normalizeGoModuleResolutionEnv([]string{
@@ -170,9 +132,6 @@ func TestNormalizeGoModuleResolutionEnvWithModuleProxy(t *testing.T) {
 	}
 	if envMap["GOPROXY"] != wantProxy {
 		t.Fatalf("GOPROXY=%q, want %q", envMap["GOPROXY"], wantProxy)
-	}
-	if envMap[rulesGoOrchestrionModuleProxyRootEnvVar] != proxyRoot {
-		t.Fatalf("%s=%q, want %q", rulesGoOrchestrionModuleProxyRootEnvVar, envMap[rulesGoOrchestrionModuleProxyRootEnvVar], proxyRoot)
 	}
 	if envMap["GOSUMDB"] != "off" {
 		t.Fatalf("GOSUMDB=%q, want off", envMap["GOSUMDB"])
