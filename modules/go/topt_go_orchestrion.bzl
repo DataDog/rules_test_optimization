@@ -73,14 +73,13 @@ fi
 "$actual" "$@"
 """ % (actual_filename, wrapper_metadata_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_filename, metadata_runfile, wrapper_metadata_filename, wrapper_metadata_runfile):
+def _windows_wrapper_content(actual_filename, metadata_runfile, wrapper_metadata_filename):
     """Render the Windows launcher used by the Orchestrion wrapper target."""
     return """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
 set "ACTUAL=%%SCRIPT_DIR%%%s"
 set "WRAPPER_META=%%SCRIPT_DIR%%%s"
-set "WRAPPER_META_RLOC=%s"
 set "META_RLOC=%s"
 set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
 set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
@@ -96,8 +95,6 @@ if exist "%%WRAPPER_META%%" (
   set "META_SOURCE=%%WRAPPER_META%%"
   goto :copy_metadata
 )
-call :resolve_metadata "%%WRAPPER_META_RLOC%%"
-if defined META_SOURCE goto :copy_metadata
 call :resolve_metadata "%%META_RLOC%%"
 if not defined META_SOURCE set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
 :copy_metadata
@@ -174,7 +171,6 @@ goto :eof
 """ % (
         actual_filename.replace("/", "\\"),
         wrapper_metadata_filename.replace("/", "\\"),
-        wrapper_metadata_runfile.replace("\\", "/"),
         metadata_runfile.replace("\\", "/"),
         _BAZEL_TARGET_METADATA_OUTPUT,
     )
@@ -209,13 +205,12 @@ def _orch_go_test_impl(ctx):
 
     ctx.actions.write(
         output = out,
-        content = _windows_wrapper_content(actual_out.basename, ctx.file.metadata.short_path, metadata_out.basename, metadata_out.short_path) if is_windows else _unix_wrapper_content(actual_out.basename, metadata_out.basename),
+        content = _windows_wrapper_content(actual_out.basename, ctx.file.metadata.short_path, metadata_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename, metadata_out.basename),
         is_executable = True,
     )
 
     # Keep metadata both as a wrapper-owned output and a runfile. Windows uses
-    # the output next to the launcher when Bazel materializes it there and falls
-    # back to runfiles otherwise. Unix keeps the same fast sibling path and
+    # the output next to the launcher; Unix keeps the same fast sibling path and
     # retains runfiles fallback for compatibility with manifest-only execution.
     providers = [DefaultInfo(
         files = depset([out, actual_out, metadata_out]),

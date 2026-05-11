@@ -596,11 +596,9 @@ def _wrapper_output_name_windows_test_impl(ctx):
 def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     """Assert Windows launchers preserve Bazel file mode instead of proxying uploads."""
     env = unittest.begin(ctx)
-    content = windows_wrapper_content_for_tests("raw.exe", "modules/go/tests/test_macro.bzl", "wrapper_metadata.json", "modules/go/tests/wrapper_metadata.json")
+    content = windows_wrapper_content_for_tests("raw.exe", "modules/go/tests/test_macro.bzl", "wrapper_metadata.json")
     asserts.true(env, "bazel_target_metadata.json" in content)
     asserts.true(env, 'set "WRAPPER_META=%SCRIPT_DIR%wrapper_metadata.json"' in content)
-    asserts.true(env, 'set "WRAPPER_META_RLOC=modules/go/tests/wrapper_metadata.json"' in content)
-    asserts.true(env, 'call :resolve_metadata "%WRAPPER_META_RLOC%"' in content)
     asserts.true(env, 'set "META_RLOC=modules/go/tests/test_macro.bzl"' in content)
     asserts.true(env, 'call :resolve_metadata "%META_RLOC%"' in content)
     asserts.true(env, 'if not "%RUNFILES_DIR%"=="" if exist "%RUNFILES_DIR%\\MANIFEST"' in content)
