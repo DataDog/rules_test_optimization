@@ -208,6 +208,20 @@ function Resolve-Runfile([string[]]$RawPaths) {
     (Join-Path $PSScriptRoot "$scriptBase.runfiles"),
     (Join-Path $PSScriptRoot "$scriptBase.bat.runfiles")
   )
+  # Bazel on Windows commonly exposes runfiles through a manifest next to the
+  # generated executable rather than through RUNFILES_MANIFEST_FILE. The doctor
+  # target is a generated .bat that dispatches to this .ps1 file, so check both
+  # the PowerShell and batch launcher manifest names.
+  $manifestCandidates = New-Object System.Collections.Generic.List[string]
+  if ($env:RUNFILES_MANIFEST_FILE) {
+    $manifestCandidates.Add($env:RUNFILES_MANIFEST_FILE)
+  }
+  $manifestCandidates.Add("$PSCommandPath.runfiles_manifest")
+  $manifestCandidates.Add((Join-Path $PSScriptRoot "$scriptBase.runfiles_manifest"))
+  $manifestCandidates.Add((Join-Path $PSScriptRoot "$scriptBase.bat.runfiles_manifest"))
+  foreach ($runfilesDir in $runfilesDirs) {
+    $manifestCandidates.Add((Join-Path $runfilesDir "MANIFEST"))
+  }
 
   foreach ($raw in $RawPaths) {
     foreach ($candidate in Get-RunfileCandidates $raw) {
@@ -248,8 +262,11 @@ function Resolve-Runfile([string[]]$RawPaths) {
     }
   }
 
-  if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path -LiteralPath $env:RUNFILES_MANIFEST_FILE -PathType Leaf)) {
-    foreach ($line in Get-Content -LiteralPath $env:RUNFILES_MANIFEST_FILE -Encoding UTF8) {
+  foreach ($manifestPath in $manifestCandidates) {
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+      continue
+    }
+    foreach ($line in Get-Content -LiteralPath $manifestPath -Encoding UTF8) {
       $lineNorm = $line
       if ($lineNorm.Length -gt 0 -and [int][char]$lineNorm[0] -eq 0xFEFF) {
         $lineNorm = $lineNorm.Substring(1)

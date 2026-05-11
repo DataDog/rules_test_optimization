@@ -573,6 +573,9 @@ class TestOptimizationDoctorLauncherTests(unittest.TestCase):
         self.assertIn("% ps_file.basename", doctor_rule)
         self.assertIn('$candidates.Add("_main/$stripped")', doctor_rule)
         self.assertIn(".EndsWith(\"/$candidate\", [System.StringComparison]::Ordinal)", doctor_rule)
+        self.assertIn("$scriptBase.bat.runfiles_manifest", doctor_rule)
+        self.assertIn('Join-Path $runfilesDir "MANIFEST"', doctor_rule)
+        self.assertNotIn("RUNFILES_MANIFEST_FILE -and (Test-Path", doctor_rule)
         self.assertNotIn("% ps_file.path,\n    )\n\n    is_windows", doctor_rule)
 
 
