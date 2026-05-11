@@ -656,7 +656,11 @@ def _py_macro_managed_pytest_kwargs_test_impl(ctx):
     asserts.true(env, captured.saw_imports)
     asserts.true(env, captured.saw_main)
     asserts.true(env, captured.saw_run_pytest)
-    asserts.equals(env, ["modules/python/tests"], captured.imports)
+    asserts.true(
+        env,
+        captured.imports == ["modules/python/tests"] or captured.imports == ["tests"],
+        msg = "managed_pytest should import the declaring package in both root and companion-module workspaces",
+    )
     return analysistest.end(env)
 
 def _py_macro_consumer_runner_no_rule_no_main_failure_test_impl(ctx):
