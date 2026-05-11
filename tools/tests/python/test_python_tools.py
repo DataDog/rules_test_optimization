@@ -571,6 +571,8 @@ class TestOptimizationDoctorLauncherTests(unittest.TestCase):
         self.assertIn('set "SCRIPT_DIR=%%~dp0"', doctor_rule)
         self.assertIn('-File "%%SCRIPT_DIR%%%s"', doctor_rule)
         self.assertIn("% ps_file.basename", doctor_rule)
+        self.assertIn('$candidates.Add("_main/$stripped")', doctor_rule)
+        self.assertIn(".EndsWith(\"/$candidate\", [System.StringComparison]::Ordinal)", doctor_rule)
         self.assertNotIn("% ps_file.path,\n    )\n\n    is_windows", doctor_rule)
 
 
