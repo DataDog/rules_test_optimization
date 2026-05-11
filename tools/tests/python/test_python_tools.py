@@ -579,6 +579,36 @@ class TestOptimizationDoctorLauncherTests(unittest.TestCase):
         self.assertNotIn("% ps_file.path,\n    )\n\n    is_windows", doctor_rule)
 
 
+class TestOptimizationDoctorRuntimeTests(unittest.TestCase):
+    """Test case group covering the doctor Python runtime."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Load the doctor runtime once for runtime helper tests."""
+        cls.mod = _load_module(
+            "test_optimization_doctor_runtime_mod",
+            "tools/core/test_optimization_doctor.py",
+        )
+
+    def test_context_manifest_falls_back_to_config_sibling(self) -> None:
+        """Validate context manifest resolution when Windows omits runfiles env vars."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "dd_test_optimization_doctor.config.json"
+            manifest_path = Path(tmp) / "dd_test_optimization_doctor.context_manifest"
+            manifest_path.write_text(
+                "test_optimization_data\tcontext.json\texternal/repo/context.json\n",
+                encoding="utf-8",
+            )
+            config = {
+                "context_manifest_path": "bazel-out/x64_windows-fastbuild/bin/dd_test_optimization_doctor.context_manifest",
+                "context_manifest_short_path": "dd_test_optimization_doctor.context_manifest",
+            }
+
+            resolved = self.mod._resolve_configured_context_manifest(config, config_path)
+
+            self.assertEqual(manifest_path.resolve(), resolved)
+
+
 class CheckSchemaParserParityTests(unittest.TestCase):
     """Test case group covering CheckSchemaParserParityTests behaviors."""
     @classmethod

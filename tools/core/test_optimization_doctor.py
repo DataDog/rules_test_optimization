@@ -245,6 +245,32 @@ def _load_contexts(context_manifest: Path) -> list[tuple[str, Path]]:
     return contexts
 
 
+def _resolve_configured_context_manifest(config: dict[str, Any], config_path: Path) -> Path:
+    """Resolve the context manifest path recorded in a generated doctor config.
+
+    On Windows, `bazel run` may execute the generated launcher without runfiles
+    environment variables. The generated config and context manifest are sibling
+    files in Bazel's output tree, so the sibling fallback keeps the doctor
+    usable even when Bazel does not provide RUNFILES_MANIFEST_FILE.
+    """
+    raw_paths = [
+        config["context_manifest_path"],
+        config.get("context_manifest_short_path", ""),
+    ]
+    resolved = _resolve_runfile_path(raw_paths)
+    if resolved.is_file():
+        return resolved
+
+    for raw in raw_paths:
+        if not raw:
+            continue
+        sibling = config_path.parent / Path(raw).name
+        if sibling.is_file():
+            return sibling.resolve()
+
+    return resolved
+
+
 def _validate_git_metadata(context_manifest: Path) -> None:
     contexts = _load_contexts(context_manifest)
     if not contexts:
@@ -405,17 +431,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--config", required=True)
     args = parser.parse_args(argv)
 
-    config = _load_json(Path(args.config))
+    config_path = Path(args.config).resolve()
+    config = _load_json(config_path)
     workspace = _workspace_root()
     testlogs_dir = _resolve_testlogs_dir(workspace)
 
     if config["forbid_dd_git_test_env"]:
         _validate_bazelrc(workspace)
     if config["require_git_metadata"]:
-        context_manifest = _resolve_runfile_path([
-            config["context_manifest_path"],
-            config.get("context_manifest_short_path", ""),
-        ])
+        context_manifest = _resolve_configured_context_manifest(config, config_path)
         _validate_git_metadata(context_manifest)
 
     expected_targets = config["expected_targets"]
