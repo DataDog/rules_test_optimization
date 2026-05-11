@@ -93,6 +93,28 @@ func TestNormalizeGoModuleResolutionEnvUsesInitialWorkingDirForRelativeProxyRoot
 	}
 }
 
+func TestModuleProxyFileURLFromBaseFindsProxyFromNestedExecrootDir(t *testing.T) {
+	execroot := t.TempDir()
+	relativeProxyRoot := filepath.Join("external", "rules_go_orchestrion_tool", "module_proxy")
+	proxyRoot := filepath.Join(execroot, relativeProxyRoot)
+	if err := os.MkdirAll(proxyRoot, 0o755); err != nil {
+		t.Fatalf("mkdir proxyRoot: %v", err)
+	}
+	nestedBaseDir := filepath.Join(execroot, "external", "rules_go++go_sdk+go_default_sdk", "src", "runtime")
+	if err := os.MkdirAll(nestedBaseDir, 0o755); err != nil {
+		t.Fatalf("mkdir nestedBaseDir: %v", err)
+	}
+
+	got, err := moduleProxyFileURLFromBase(relativeProxyRoot, nestedBaseDir)
+	if err != nil {
+		t.Fatalf("moduleProxyFileURLFromBase error: %v", err)
+	}
+	want := "file://" + filepath.ToSlash(proxyRoot)
+	if got != want {
+		t.Fatalf("moduleProxyFileURLFromBase=%q, want %q", got, want)
+	}
+}
+
 func TestNormalizeGoModuleResolutionEnvWithModuleProxy(t *testing.T) {
 	proxyRoot := filepath.Join(t.TempDir(), "module_proxy")
 	env, err := normalizeGoModuleResolutionEnv([]string{
