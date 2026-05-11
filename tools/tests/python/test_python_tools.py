@@ -561,6 +561,102 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             self.mod._validate_bazelrc(workspace)
 
 
+class TestOptimizationDoctorLauncherTests(unittest.TestCase):
+    """Test case group covering generated doctor launchers."""
+
+    def test_windows_launcher_resolves_powershell_next_to_batch(self) -> None:
+        """Validate the Windows launcher resolves the generated PowerShell script next to the batch file."""
+        doctor_rule = _runfile("tools/core/test_optimization_doctor.bzl").read_text(encoding="utf-8")
+
+        self.assertIn('set "SCRIPT_DIR=%%~dp0"', doctor_rule)
+        self.assertIn('-File "%%SCRIPT_DIR%%%s"', doctor_rule)
+        self.assertIn("% ps_file.basename", doctor_rule)
+        self.assertIn('$candidates.Add("_main/$stripped")', doctor_rule)
+        self.assertIn(".EndsWith(\"/$candidate\", [System.StringComparison]::Ordinal)", doctor_rule)
+        self.assertIn("$scriptBase.bat.runfiles_manifest", doctor_rule)
+        self.assertIn('Join-Path $runfilesDir "MANIFEST"', doctor_rule)
+        self.assertNotIn("RUNFILES_MANIFEST_FILE -and (Test-Path", doctor_rule)
+        self.assertNotIn("% ps_file.path,\n    )\n\n    is_windows", doctor_rule)
+
+
+class TestOptimizationDoctorRuntimeTests(unittest.TestCase):
+    """Test case group covering the doctor Python runtime."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Load the doctor runtime once for runtime helper tests."""
+        cls.mod = _load_module(
+            "test_optimization_doctor_runtime_mod",
+            "tools/core/test_optimization_doctor.py",
+        )
+
+    def test_context_manifest_falls_back_to_config_sibling(self) -> None:
+        """Validate context manifest resolution when Windows omits runfiles env vars."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "dd_test_optimization_doctor.config.json"
+            manifest_path = Path(tmp) / "dd_test_optimization_doctor.context_manifest"
+            manifest_path.write_text(
+                "test_optimization_data\tcontext.json\texternal/repo/context.json\n",
+                encoding="utf-8",
+            )
+            config = {
+                "context_manifest_path": "bazel-out/x64_windows-fastbuild/bin/dd_test_optimization_doctor.context_manifest",
+                "context_manifest_short_path": "dd_test_optimization_doctor.context_manifest",
+            }
+
+            resolved = self.mod._resolve_configured_context_manifest(config, config_path)
+
+            self.assertEqual(manifest_path.resolve(), resolved)
+
+    def test_runfile_candidates_normalize_windows_artifact_paths(self) -> None:
+        """Validate Windows-style artifact paths resolve to Bazel runfile variants."""
+        candidates = self.mod._runfile_candidate_strings(r"external\repo\.testoptimization\context.json")
+
+        self.assertIn("external/repo/.testoptimization/context.json", candidates)
+        self.assertIn("repo/.testoptimization/context.json", candidates)
+
+    def test_runfile_resolution_uses_execroot_for_external_artifacts(self) -> None:
+        """Validate execroot-relative context paths resolve without runfiles env vars."""
+        with tempfile.TemporaryDirectory() as tmp:
+            execroot = Path(tmp) / "execroot" / "_main"
+            context_path = execroot / "external" / "repo" / ".testoptimization" / "context.json"
+            context_path.parent.mkdir(parents=True)
+            context_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {self.mod.DOCTOR_EXECROOT_ENV: str(execroot)}, clear=False):
+                resolved = self.mod._resolve_runfile_path(
+                    [r"external\repo\.testoptimization\context.json"],
+                )
+
+            self.assertEqual(context_path.resolve(), resolved)
+
+    def test_runfile_resolution_uses_execroot_for_short_external_artifacts(self) -> None:
+        """Validate short external context paths resolve through the execroot external directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            execroot = Path(tmp) / "execroot" / "_main"
+            context_path = execroot / "external" / "repo" / ".testoptimization" / "context.json"
+            context_path.parent.mkdir(parents=True)
+            context_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {self.mod.DOCTOR_EXECROOT_ENV: str(execroot)}, clear=False):
+                resolved = self.mod._resolve_runfile_path(
+                    [r"..\repo\.testoptimization\context.json"],
+                )
+
+            self.assertEqual(context_path.resolve(), resolved)
+
+    def test_infer_bazel_execroot_from_generated_config(self) -> None:
+        """Validate execroot inference from a generated Bazel config path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            execroot = Path(tmp) / "execroot" / "_main"
+            (execroot / "external").mkdir(parents=True)
+            config_path = execroot / "bazel-out" / "x64_windows-fastbuild" / "bin" / "doctor.config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text("{}", encoding="utf-8")
+
+            self.assertEqual(execroot.resolve(), self.mod._infer_bazel_execroot(config_path))
+
+
 class CheckSchemaParserParityTests(unittest.TestCase):
     """Test case group covering CheckSchemaParserParityTests behaviors."""
     @classmethod

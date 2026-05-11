@@ -170,6 +170,13 @@ fails before upload.
    ```bash
    find bazel-testlogs -path '*/test.outputs/payloads/*/*.json' -type f
    ```
+   For Python `runner_mode = "consumer_runner"`, also verify that the
+   consumer-owned wrapper really executes pytest, propagates the `env` passed
+   by `dd_topt_py_test`, and keeps `PYTEST_ADDOPTS=--ddtrace` unless it
+   intentionally sets `--no-ddtrace`. If `env` is a `select(...)`, the macro
+   cannot add `PYTEST_ADDOPTS` inside each branch; include `--ddtrace` in every
+   relevant selected environment. The target must also depend on `ddtrace` and
+   `pytest`.
 
 3. **Missing Git metadata**: The sync metadata fetch must see repository URL,
    commit SHA, and branch or tag. Put `DD_GIT_*` values in `.bazelrc` as
@@ -180,6 +187,11 @@ fails before upload.
 4. **Missing Bazel metadata**: The target should emit
    `bazel_target_metadata.json` next to payload files. Use the companion macro
    or generated wrapper instead of invoking the raw language test rule directly.
+
+   For Python consumer-owned wrappers, the wrapper must expose an executable
+   target with `RunEnvironmentInfo` preserved from the raw `py_test`; otherwise
+   the public metadata wrapper can run but the actual pytest process may miss
+   the required `DD_TEST_OPTIMIZATION_*` environment.
 
 5. **`full_bundle_no_match`**: The Go macro could not map the test target to a
    per-module bundle. Prefer `embed = [":lib"]` so the macro can read the same

@@ -394,6 +394,13 @@ load("//tools/build:dd_go_test.bzl", "dd_go_test")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
 ```
 
+Use the default `runner_mode = "managed_pytest"` when the Datadog macro should
+own pytest execution. Use `runner_mode = "consumer_runner"` when a repository
+already has a Python test wrapper and must keep control of `main`, `imports`,
+and internal test policy. In `consumer_runner` mode, pass a custom
+`py_test_rule` or an explicit `main` that runs pytest with ddtrace enabled, and
+prefer `module_identifier` for payload selection.
+
 ### Java companion module
 
 ```bzl

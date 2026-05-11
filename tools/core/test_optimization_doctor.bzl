@@ -175,19 +175,25 @@ $RunfilesWorkspace = "%s"
 
 function Get-RunfileCandidates([string]$Raw) {
   $candidates = New-Object System.Collections.Generic.List[string]
-  $candidates.Add($Raw)
+  $normalized = $Raw.Replace([char]92, [char]47)
+  if ($normalized.StartsWith("./")) {
+    $normalized = $normalized.Substring(2)
+  }
+  $candidates.Add($normalized)
 
-  $stripped = $Raw
+  $stripped = $normalized
   while ($stripped.StartsWith("../")) {
     $stripped = $stripped.Substring(3)
     $candidates.Add($stripped)
   }
 
-  if ($Raw.StartsWith("external/")) {
-    $candidates.Add($Raw.Substring(9))
-  }
   if ($stripped.StartsWith("external/")) {
     $candidates.Add($stripped.Substring(9))
+  } else {
+    $candidates.Add("external/$stripped")
+  }
+  if (-not $stripped.StartsWith("_main/")) {
+    $candidates.Add("_main/$stripped")
   }
 
   return $candidates
@@ -195,7 +201,27 @@ function Get-RunfileCandidates([string]$Raw) {
 
 function Resolve-Runfile([string[]]$RawPaths) {
   $allCandidates = New-Object System.Collections.Generic.List[string]
-  $scriptRunfiles = "$PSCommandPath.runfiles"
+  $scriptBase = [System.IO.Path]::GetFileNameWithoutExtension($PSCommandPath)
+  $runfilesDirs = @(
+    "$PSCommandPath.runfiles",
+    "$PSScriptRoot.runfiles",
+    (Join-Path $PSScriptRoot "$scriptBase.runfiles"),
+    (Join-Path $PSScriptRoot "$scriptBase.bat.runfiles")
+  )
+  # Bazel on Windows commonly exposes runfiles through a manifest next to the
+  # generated executable rather than through RUNFILES_MANIFEST_FILE. The doctor
+  # target is a generated .bat that dispatches to this .ps1 file, so check both
+  # the PowerShell and batch launcher manifest names.
+  $manifestCandidates = New-Object System.Collections.Generic.List[string]
+  if ($env:RUNFILES_MANIFEST_FILE) {
+    $manifestCandidates.Add($env:RUNFILES_MANIFEST_FILE)
+  }
+  $manifestCandidates.Add("$PSCommandPath.runfiles_manifest")
+  $manifestCandidates.Add((Join-Path $PSScriptRoot "$scriptBase.runfiles_manifest"))
+  $manifestCandidates.Add((Join-Path $PSScriptRoot "$scriptBase.bat.runfiles_manifest"))
+  foreach ($runfilesDir in $runfilesDirs) {
+    $manifestCandidates.Add((Join-Path $runfilesDir "MANIFEST"))
+  }
 
   foreach ($raw in $RawPaths) {
     foreach ($candidate in Get-RunfileCandidates $raw) {
@@ -219,30 +245,46 @@ function Resolve-Runfile([string[]]$RawPaths) {
           }
         }
       }
-      if (Test-Path -LiteralPath $scriptRunfiles -PathType Container) {
-        $path = Join-Path $scriptRunfiles $candidate
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-          return (Resolve-Path -LiteralPath $path).Path
-        }
-        if ($RunfilesWorkspace) {
-          $workspacePath = Join-Path (Join-Path $scriptRunfiles $RunfilesWorkspace) $candidate
-          if (Test-Path -LiteralPath $workspacePath -PathType Leaf) {
-            return (Resolve-Path -LiteralPath $workspacePath).Path
+      foreach ($runfilesDir in $runfilesDirs) {
+        if (Test-Path -LiteralPath $runfilesDir -PathType Container) {
+          $path = Join-Path $runfilesDir $candidate
+          if (Test-Path -LiteralPath $path -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $path).Path
+          }
+          if ($RunfilesWorkspace) {
+            $workspacePath = Join-Path (Join-Path $runfilesDir $RunfilesWorkspace) $candidate
+            if (Test-Path -LiteralPath $workspacePath -PathType Leaf) {
+              return (Resolve-Path -LiteralPath $workspacePath).Path
+            }
           }
         }
       }
     }
   }
 
-  if ($env:RUNFILES_MANIFEST_FILE -and (Test-Path -LiteralPath $env:RUNFILES_MANIFEST_FILE -PathType Leaf)) {
-    foreach ($line in Get-Content -LiteralPath $env:RUNFILES_MANIFEST_FILE) {
-      $parts = $line -split " ", 2
+  foreach ($manifestPath in $manifestCandidates) {
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+      continue
+    }
+    foreach ($line in Get-Content -LiteralPath $manifestPath -Encoding UTF8) {
+      $lineNorm = $line
+      if ($lineNorm.Length -gt 0 -and [int][char]$lineNorm[0] -eq 0xFEFF) {
+        $lineNorm = $lineNorm.Substring(1)
+      }
+      $parts = $lineNorm -split " ", 2
       if ($parts.Length -ne 2) {
         continue
       }
       foreach ($candidate in $allCandidates) {
         if ($parts[0] -eq $candidate -or ($RunfilesWorkspace -and $parts[0] -eq "$RunfilesWorkspace/$candidate")) {
-          return $parts[1]
+          if (Test-Path -LiteralPath $parts[1] -PathType Leaf) {
+            return $parts[1]
+          }
+        }
+        if ($parts[0].EndsWith("/$candidate", [System.StringComparison]::Ordinal) -or $parts[0].EndsWith("\\$candidate", [System.StringComparison]::Ordinal)) {
+          if (Test-Path -LiteralPath $parts[1] -PathType Leaf) {
+            return $parts[1]
+          }
         }
       }
     }
@@ -287,9 +329,11 @@ exit $LASTEXITCODE
         output = bat_file,
         is_executable = True,
         content = """@echo off
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s"
+setlocal
+set "SCRIPT_DIR=%%~dp0"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%%SCRIPT_DIR%%%s"
 exit /b %%ERRORLEVEL%%
-""" % ps_file.path,
+""" % ps_file.basename,
     )
 
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])

@@ -25,6 +25,7 @@ DEFAULT_ALLOWED_GO_PAYLOAD_SELECTIONS = {
     "module_override",
     "full_bundle_disabled",
 }
+DOCTOR_EXECROOT_ENV = "DD_TEST_OPTIMIZATION_DOCTOR_EXECROOT"
 
 
 def _fail(message: str) -> None:
@@ -54,6 +55,7 @@ def _runfile_candidate_strings(raw: str) -> list[str]:
     paths. The doctor accepts all of those forms so WORKSPACE and Bzlmod
     consumers do not need different target definitions.
     """
+    raw = raw.replace("\\", "/")
     candidates = [raw]
     stripped = raw
     while stripped.startswith("../"):
@@ -77,6 +79,56 @@ def _runfiles_roots() -> list[Path]:
             roots.append(parent)
             break
     return list(dict.fromkeys(root.resolve() for root in roots if root.exists()))
+
+
+def _infer_bazel_execroot(anchor: Path) -> Path | None:
+    """Infer the Bazel execroot from a generated output path.
+
+    Windows `bazel run` can launch the doctor without runfiles environment
+    variables, while generated config files still live below
+    `<output_base>/execroot/<workspace>/bazel-out/...`. Walking upward from the
+    config path lets the doctor resolve execroot-relative artifact paths such
+    as `external/<repo>/.testoptimization/context.json`.
+    """
+    start = anchor if anchor.is_dir() else anchor.parent
+    for candidate in [start, *start.parents]:
+        if (candidate / "external").exists() and (candidate / "bazel-out").exists():
+            return candidate.resolve()
+        if candidate.parent.name == "execroot" and (candidate / "external").exists():
+            return candidate.resolve()
+    return None
+
+
+def _execroot_roots() -> list[Path]:
+    """Return Bazel execroot candidates for resolving artifact-relative paths."""
+    roots: list[Path] = []
+    configured = os.environ.get(DOCTOR_EXECROOT_ENV)
+    if configured:
+        roots.append(Path(configured))
+
+    cwd = Path.cwd().resolve()
+    roots.append(cwd)
+    for candidate in [cwd, *cwd.parents]:
+        if (candidate / "external").exists() and (candidate / "bazel-out").exists():
+            roots.append(candidate)
+        elif candidate.parent.name == "execroot" and (candidate / "external").exists():
+            roots.append(candidate)
+
+    return list(dict.fromkeys(root.resolve() for root in roots if root.exists()))
+
+
+def _resolve_execroot_relative_path(candidates: list[str]) -> Path | None:
+    """Resolve a path recorded relative to Bazel's execroot."""
+    for root in _execroot_roots():
+        for candidate in candidates:
+            path = root / candidate
+            if path.is_file():
+                return path.resolve()
+            if not candidate.startswith("external/"):
+                external_path = root / "external" / candidate
+                if external_path.is_file():
+                    return external_path.resolve()
+    return None
 
 
 def _lookup_manifest_runfile(candidates: list[str], workspace: str) -> Path | None:
@@ -110,6 +162,10 @@ def _resolve_runfile_path(raw_paths: list[str]) -> Path:
         path = Path(candidate)
         if path.is_file():
             return path.resolve()
+
+    execroot_match = _resolve_execroot_relative_path(candidates)
+    if execroot_match is not None:
+        return execroot_match
 
     roots = _runfiles_roots()
     for root in roots:
@@ -243,6 +299,32 @@ def _load_contexts(context_manifest: Path) -> list[tuple[str, Path]]:
         repo_key, short_path, direct_path = parts
         contexts.append((repo_key, _resolve_runfile_path([direct_path, short_path])))
     return contexts
+
+
+def _resolve_configured_context_manifest(config: dict[str, Any], config_path: Path) -> Path:
+    """Resolve the context manifest path recorded in a generated doctor config.
+
+    On Windows, `bazel run` may execute the generated launcher without runfiles
+    environment variables. The generated config and context manifest are sibling
+    files in Bazel's output tree, so the sibling fallback keeps the doctor
+    usable even when Bazel does not provide RUNFILES_MANIFEST_FILE.
+    """
+    raw_paths = [
+        config["context_manifest_path"],
+        config.get("context_manifest_short_path", ""),
+    ]
+    resolved = _resolve_runfile_path(raw_paths)
+    if resolved.is_file():
+        return resolved
+
+    for raw in raw_paths:
+        if not raw:
+            continue
+        sibling = config_path.parent / Path(raw).name
+        if sibling.is_file():
+            return sibling.resolve()
+
+    return resolved
 
 
 def _validate_git_metadata(context_manifest: Path) -> None:
@@ -405,17 +487,19 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--config", required=True)
     args = parser.parse_args(argv)
 
-    config = _load_json(Path(args.config))
+    config_path = Path(args.config).resolve()
+    config = _load_json(config_path)
+    execroot = _infer_bazel_execroot(config_path)
+    if execroot is not None and not os.environ.get(DOCTOR_EXECROOT_ENV):
+        os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
+
     workspace = _workspace_root()
     testlogs_dir = _resolve_testlogs_dir(workspace)
 
     if config["forbid_dd_git_test_env"]:
         _validate_bazelrc(workspace)
     if config["require_git_metadata"]:
-        context_manifest = _resolve_runfile_path([
-            config["context_manifest_path"],
-            config.get("context_manifest_short_path", ""),
-        ])
+        context_manifest = _resolve_configured_context_manifest(config, config_path)
         _validate_git_metadata(context_manifest)
 
     expected_targets = config["expected_targets"]
