@@ -1,3 +1,11 @@
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
 # Uploader Reference
 
 This page is the full runtime/upload reference for `dd_payload_uploader`.

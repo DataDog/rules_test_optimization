@@ -1,3 +1,9 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
 """Dev-only stub repo for rules_go Orchestrion integration."""
 
 def _orchestrion_stub_repo_impl(ctx):

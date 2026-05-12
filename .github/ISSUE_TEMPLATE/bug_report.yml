@@ -1,0 +1,59 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+name: Bug report
+description: Report a reproducible problem in the Bazel Test Optimization rules.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please include enough detail for a maintainer to reproduce it.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and the behavior you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include the smallest commands, BUILD/MODULE snippets, and target labels that reproduce the issue.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: bazel-version
+    attributes:
+      label: Bazel version
+      placeholder: "8.5.1"
+    validations:
+      required: true
+  - type: input
+    id: module-version
+    attributes:
+      label: rules_test_optimization version or commit
+      placeholder: "1.0.0 or commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, runtime version, language companion module, and any relevant sandbox or remote execution settings.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant logs after removing secrets and credentials.
+      render: text
+    validations:
+      required: false

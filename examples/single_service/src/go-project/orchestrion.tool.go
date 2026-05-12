@@ -1,3 +1,9 @@
+// Unless explicitly stated otherwise all files in this repository are licensed under
+// the Apache 2.0 License.
+//
+// This product includes software developed at Datadog
+// (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
 // This file was created by `orchestrion pin`, and is used to ensure the
 // `go.mod` file contains the necessary entries to ensure repeatable builds when
 // using `orchestrion`. It is also used to set up which integrations are enabled.

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
 """Verify module version alignment for core + companion modules.
 
 This guard is intentionally lightweight so it can run in CI and local pre-release

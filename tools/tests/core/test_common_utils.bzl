@@ -1,3 +1,9 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
 # Unit tests for common_utils helpers (sanitization, deduping, validation).
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "is_list", "is_string", "log_debug", "log_info", "missing_api_key_message_for_tests", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")

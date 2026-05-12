@@ -1,3 +1,9 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
 """Dev-only module extension providing a local example data repository.
 
 This exists so `bazel build //examples/...` can analyze from this repository's

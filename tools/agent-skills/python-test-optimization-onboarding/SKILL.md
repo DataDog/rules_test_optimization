@@ -3,6 +3,15 @@ name: datadog-python-test-optimization-onboarding
 description: Use when instrumenting a Bazel Python repository or monorepo with Datadog Test Optimization. Applies to Bzlmod and WORKSPACE consumers, managed pytest targets, repository-owned pytest wrappers, consumer_runner mode, doctor/uploader validation, and RFC-safe setup that avoids payload proxies, DD_GIT_* test environment variables, and missing remote outputs.
 ---
 
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
+
 # Datadog Python Test Optimization Onboarding
 
 Use this skill when you need to instrument a Bazel Python repository with

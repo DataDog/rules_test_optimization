@@ -1,3 +1,11 @@
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
 # Datadog Test Optimization Bazel Module Extension
 
 This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.

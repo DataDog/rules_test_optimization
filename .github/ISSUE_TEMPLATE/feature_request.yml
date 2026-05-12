@@ -1,0 +1,48 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+name: Feature request
+description: Suggest an improvement to the Bazel Test Optimization rules.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the workflow or limitation this request would address.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you want and any API or configuration shape you expect.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Core sync/uploader
+        - Go companion
+        - Python companion
+        - Java companion
+        - NodeJS companion
+        - .NET companion
+        - Ruby companion
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, links, or constraints that would help maintainers evaluate the request.
+    validations:
+      required: false
