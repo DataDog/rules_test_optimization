@@ -12,7 +12,7 @@ require (
 	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev
 	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev
 	github.com/DataDog/dd-trace-go/v2 v2.9.0-dev
-	github.com/DataDog/orchestrion v1.6.0
+	github.com/DataDog/orchestrion v1.10.0
 )
 
 require (
@@ -37,7 +37,7 @@ require (
 	github.com/DataDog/go-tuf v1.1.1-0.5.2 // indirect
 	github.com/DataDog/sketches-go v1.4.8 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/antithesishq/antithesis-sdk-go v0.6.0-default-no-op // indirect
+	github.com/antithesishq/antithesis-sdk-go v0.7.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/blakesmith/ar v0.0.0-20190502131153-809d4375e1fb // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -46,9 +46,9 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0 // indirect
 	github.com/charmbracelet/x/ansi v0.10.2 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.13 // indirect
-	github.com/charmbracelet/x/term v0.2.1 // indirect
+	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/cihub/seelog v0.0.0-20170130134532-f561c5e57575 // indirect
-	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/dave/dst v0.27.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -56,20 +56,20 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/goccy/go-yaml v1.18.0 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/go-version v1.8.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.4 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/linkdata/deadlock v0.5.5 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260216142805-b3301c5f2a88 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.19 // indirect
-	github.com/minio/highwayhash v1.0.4-0.20251030100505-070ab1a87a76 // indirect
+	github.com/mattn/go-runewidth v0.0.21 // indirect
+	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/minio/simdjson-go v0.4.5 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
