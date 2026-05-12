@@ -9,6 +9,7 @@ exports_files([
     "test_optimization_context_utils.bzl",
     "test_optimization_doctor.bzl",
     "test_optimization_doctor.py",
+    "test_optimization_targets.bzl",
     "test_optimization_uploader.bzl",
     "topt_test_wrapper.bzl",
     "topt_macro_utils.bzl",

@@ -240,8 +240,10 @@ def _missing_expected_target_message(label: str, target_root: Path, missing_part
     """Return an actionable error for expected targets with no local outputs."""
     return (
         f"expected target {missing_part} not found for {label}: {target_root}. "
-        "Run this exact test target before running the doctor. If the test ran with "
-        "remote execution or remote cache, rerun it with --remote_download_outputs=all "
+        "Run this exact instrumented test target before running the doctor. "
+        "Do not list build-only, wrapper-only, or analysis-only targets in "
+        "expected_targets. If tests ran with remote execution or remote cache, "
+        "rerun them with --remote_download_outputs=all "
         "so Bazel downloads test.outputs locally."
     )
 

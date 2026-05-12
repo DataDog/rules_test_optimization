@@ -14,6 +14,10 @@ Collect these facts first:
 - Service name and Python runtime version for sync metadata.
 - Runtime test targets that should emit payloads.
 - Build-only controls that should not be listed as expected payload targets.
+- Whether fetching this rules repository needs SSH git or authenticated archive
+  access.
+- A lightweight package for doctor/uploader targets, usually
+  `//tools/test_optimization` in monorepos.
 
 ## Dependency Wiring
 
@@ -28,6 +32,20 @@ git_repository(
     remote = "https://github.com/DataDog/rules_test_optimization.git",
 )
 ```
+
+For private/internal repositories, prefer SSH git fetch unless the Bazel
+environment has authenticated archive access:
+
+```bzl
+git_repository(
+    name = "datadog-rules-test-optimization",
+    commit = "<published-main-commit>",
+    remote = "ssh://git@github.com/DataDog/rules_test_optimization.git",
+)
+```
+
+An unauthenticated codeload archive can return `404` for a private repository
+even when the commit exists.
 
 Declare `rules_python` using the consumer repository's normal mirror policy. A
 direct public pin for rules_python 1.7.0 looks like this:
@@ -116,20 +134,17 @@ test_optimization_sync(
 )
 ```
 
-Add one root doctor and uploader:
+Add one logical doctor/uploader pair. Prefer a lightweight package in monorepos:
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
+    expected_targets = [
+        "//path/to:python_test",
+    ],
 )
 ```
 
@@ -178,3 +193,23 @@ dd_topt_py_test(
 
 The wrapper must preserve the `env` passed by `dd_topt_py_test` and must run
 pytest with the ddtrace plugin enabled.
+
+## Snippet Generator
+
+After the Python companion is available, the published bootstrap can print the
+same shape without modifying files:
+
+```bash
+bazel run @datadog-rules-test-optimization-python//tools/dd_topt_py_bootstrap:dd_topt_py_bootstrap -- \
+  --mode=workspace \
+  --service=<datadog-service> \
+  --runtime-version=3.12 \
+  --runtime-module-path=example.python.pkg \
+  --rto-commit=<published-main-commit> \
+  --private-repo-fetch=ssh-git \
+  --bazel-command=bazel
+```
+
+The generator does not add `FETCH_SALT` to normal snippets. Use
+`--print-refresh-snippet` only when you intentionally want a separate metadata
+refresh command.

@@ -339,7 +339,6 @@ The generated config is named `test-optimization` by default:
 
 ```text
 common:test-optimization --repo_env=DD_API_KEY
-common:test-optimization --repo_env=FETCH_SALT
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
 common:test-optimization --repo_env=DD_GIT_BRANCH
@@ -355,6 +354,10 @@ rule. It intentionally does not include `--test_env=DD_GIT_*`,
 `--test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`. Git metadata belongs to the
 sync metadata fetch through `--repo_env`, and uploader credentials/endpoints are
 read later by `bazel run`.
+
+`FETCH_SALT` is intentionally not part of the generated default config. Use it
+only in a separate force-refresh `bazel sync --only=<repo>` command when you
+deliberately want fresh backend metadata.
 
 Run Go onboarding commands with this config:
 
@@ -400,6 +403,24 @@ already has a Python test wrapper and must keep control of `main`, `imports`,
 and internal test policy. In `consumer_runner` mode, pass a custom
 `py_test_rule` or an explicit `main` that runs pytest with ddtrace enabled, and
 prefer `module_identifier` for payload selection.
+
+Python consumers can generate copy/paste onboarding snippets from the companion
+without running tests or changing lockfiles:
+
+```bash
+bazel run @datadog-rules-test-optimization-python//tools/dd_topt_py_bootstrap:dd_topt_py_bootstrap -- \
+  --mode=workspace \
+  --service py-service \
+  --runtime-version 3.12 \
+  --runtime-module-path example.python.pkg \
+  --rto-commit <commit-sha> \
+  --bazel-command bazel
+```
+
+Add `--write-bazelrc` or `--write-targets` only when you want the tool to
+insert managed blocks. The normal generated flow does not include
+`FETCH_SALT`; use `--print-refresh-snippet` only for an explicit one-off
+metadata refresh.
 
 ### Java companion module
 
@@ -677,7 +698,6 @@ dd_payload_uploader(
 ```text
 # Repository rule (module/repo phase) — affects refetch
 common:test-optimization --repo_env=DD_API_KEY
-common:test-optimization --repo_env=FETCH_SALT
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional sync/uploader agentless URL override
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS  # Optional sync HTTP connect-timeout override
@@ -787,6 +807,21 @@ datadog_python_test_optimization_workspace_repositories(
 )
 ```
 
+Internal/private consumers should use SSH git fetch when anonymous archives are
+not available:
+
+```bzl
+git_repository(
+    name = "datadog-rules-test-optimization",
+    commit = "<commit-sha>",
+    remote = "ssh://git@github.com/DataDog/rules_test_optimization.git",
+)
+```
+
+If you use archive mode for a private repository, Bazel must have
+authentication configured for that archive URL. A `404` from codeload usually
+means missing auth rather than a missing commit.
+
 Archive mode for mirrored Datadog repositories:
 
 ```bzl
@@ -890,6 +925,25 @@ In `consumer_runner` mode, the repository-owned wrapper must preserve the
 environment passed by `dd_topt_py_test` and must actually execute pytest with
 the ddtrace plugin enabled. Do not set `main` to a test file just to satisfy
 Bazel; that can produce a false-green target that never runs pytest.
+
+For monorepos, put doctor/uploader in a lightweight package:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
+
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
+    expected_targets = [
+        "//python/pkg:pkg_py_test",
+    ],
+)
+```
+
+Run package-local labels such as
+`//tools/test_optimization:dd_test_optimization_doctor` and
+`//tools/test_optimization:dd_upload_payloads`. Root labels are still valid for
+small repositories.
 
 ### 7) Configure Go support in WORKSPACE with the public helper
 

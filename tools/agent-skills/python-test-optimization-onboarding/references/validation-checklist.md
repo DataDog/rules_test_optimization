@@ -38,7 +38,14 @@ For WORKSPACE consumers, also confirm:
 
 ## Sync
 
-Force a fresh metadata fetch:
+Normal sync should not use `FETCH_SALT`:
+
+```bash
+bazel sync --config=test-optimization --only=test_optimization_data
+```
+
+Force a fresh metadata fetch only when debugging stale backend data or when an
+operator explicitly asks for a refresh:
 
 ```bash
 bazel sync --config=test-optimization \
@@ -62,14 +69,14 @@ Preserve test failure priority:
 bazel test --config=test-optimization //path/to:python_test || test_status=$?
 test_status=${test_status:-0}
 
-bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor || doctor_status=$?
 doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$doctor_status"
 fi
 
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
 dry_run_status=${dry_run_status:-0}
 if [ "$dry_run_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -77,7 +84,7 @@ if [ "$dry_run_status" -ne 0 ]; then
 fi
 
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  bazel run --config=test-optimization //:dd_upload_payloads
+  bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
 upload_status=$?
 
 if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi

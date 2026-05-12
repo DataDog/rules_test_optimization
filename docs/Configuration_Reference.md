@@ -224,6 +224,93 @@ Doctor notes:
   see whether targets used per-module data, module overrides, or a disabled
   full bundle.
 
+## Doctor/uploader convenience macro
+
+Macro: `dd_test_optimization_targets(...)`
+
+Load from:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
+```
+
+Use this helper when a consumer workspace wants the standard doctor/uploader
+pair without repeating context wiring. The macro can live in any package. In
+large monorepos, prefer a lightweight package such as
+`//tools/test_optimization` so running doctor or uploader does not analyze the
+workspace root package.
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | `"test_optimization"` | Logical helper name used for diagnostics; no target with this name is created |
+| `sync_repo_name` | string | `"test_optimization_data"` | Repository exposing `:test_optimization_context` |
+| `doctor_name` | string | `"dd_test_optimization_doctor"` | Generated doctor target name |
+| `uploader_name` | string | `"dd_upload_payloads"` | Generated uploader target name |
+| `expected_targets` | string_list | `[]` | Strict labels passed to the doctor. List only instrumented runtime test targets that emit payloads |
+| `context_data` | label_list or `None` | `["@<sync_repo>//:test_optimization_context"]` | Explicit context data labels when the default sync repo label is not enough |
+| `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, or `expected_targets` |
+| `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name` or `data` |
+
+Example:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data_python",
+    expected_targets = [
+        "//app:service_py_test",
+    ],
+    uploader_kwargs = {
+        "max_wait_sec": 30,
+        "quiescent_sec": 1,
+    },
+)
+```
+
+## Python snippet generator
+
+Tool:
+`@datadog-rules-test-optimization-python//tools/dd_topt_py_bootstrap:dd_topt_py_bootstrap`
+
+The Python bootstrap is a snippet generator. It does not call Datadog APIs,
+does not execute tests, does not modify Python lockfiles, and does not declare
+`pytest` or `ddtrace` for the consumer. By default it prints all normal
+onboarding snippets for the selected mode. It writes files only when
+`--write-bazelrc` or `--write-targets` is passed.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | required | `workspace` or `bzlmod` |
+| `--service` | required | Datadog service name used by sync metadata fetch |
+| `--runtime-version` | required | Python runtime version, for example `3.12` |
+| `--runtime-module-path` | required | Python module identifier used for runtime metadata |
+| `--sync-repo-name` | `test_optimization_data` | Sync repository name used in generated labels |
+| `--rto-commit` | empty | Published commit SHA used for git fetch snippets |
+| `--rto-remote` | GitHub HTTPS remote | Rules repository remote for public git snippets |
+| `--datadog-fetch` | `git` | `git` or `archive` |
+| `--private-repo-fetch` | `none` | `none`, `ssh-git`, or `authenticated-archive` |
+| `--rto-archive-url` / `--rto-archive-sha256` / `--rto-archive-prefix` | empty | Required for archive fetch modes |
+| `--rules-python-repo-name` | `rules_python` | Existing consumer repository name for `rules_python` |
+| `--test-optimization-package` | `tools/test_optimization` | Package used by generated doctor/uploader commands |
+| `--doctor-name` | `dd_test_optimization_doctor` | Doctor target name |
+| `--uploader-name` | `dd_upload_payloads` | Uploader target name |
+| `--bazelrc-config` | `test-optimization` | Config name used in `.bazelrc` and commands |
+| `--expected-target` | repeatable | Labels that the doctor must validate; use only payload-emitting test targets |
+| `--test-target` | repeatable | Labels used by generated `bazel test` commands; defaults to expected targets when omitted |
+| `--runner-mode` | `managed_pytest` | `managed_pytest` or `consumer_runner` |
+| `--py-test-rule-load-label` / `--py-test-rule-symbol` | empty | Consumer wrapper load used only for `consumer_runner` snippets |
+| `--bazel-command` | `bazel` | Command printed in generated examples, such as `bzl` or `./bazelw` |
+| `--print-workspace-snippet`, `--print-bzlmod-snippet`, `--print-bazelrc-snippet`, `--print-targets-snippet`, `--print-test-snippet`, `--print-command-snippet` | `false` | Print only the selected snippet groups |
+| `--print-refresh-snippet` | `false` | Print the separate force-refresh `bazel sync ... --repo_env=FETCH_SALT="$(date +%s)"` command |
+| `--write-bazelrc` / `--bazelrc-path` | `false` / `.bazelrc` | Insert or replace the managed `.bazelrc` block |
+| `--write-targets` / `--targets-build-path` | `false` / `tools/test_optimization/BUILD.bazel` | Insert or replace the managed doctor/uploader block |
+
+Generated `.bazelrc` blocks use `common:<config> --repo_env=...` for sync
+metadata and `test:<config> --remote_download_outputs=all` for local output
+availability. They do not include `FETCH_SALT`, `DD_GIT_*` test env,
+`DD_API_KEY` test env, upload endpoint test env, or
+`DD_CIVISIBILITY_AGENTLESS_ENABLED`.
+
 ## How data is fetched
 
 The sync rule executes HTTP requests with timeouts/retries to:

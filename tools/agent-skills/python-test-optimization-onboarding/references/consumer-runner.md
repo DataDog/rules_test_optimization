@@ -26,6 +26,8 @@ The repository-owned wrapper must:
 - Enable the ddtrace pytest plugin, normally with `PYTEST_ADDOPTS=--ddtrace`.
 - Include `ddtrace` and `pytest` in the test dependencies.
 - Keep the executable target compatible with Bazel runfiles.
+- If `env` is configurable with `select(...)`, ensure every relevant branch
+  preserves the Datadog environment and enables the ddtrace pytest plugin.
 
 Recommended target shape:
 

@@ -58,6 +58,25 @@ Check ordering:
 The Python helper only declares `datadog-rules-test-optimization-python`; it is
 not a replacement for the consumer's Python dependency setup.
 
+If fetching `datadog-rules-test-optimization` returns `404` in an internal or
+private repository, confirm auth before changing the rule wiring. Prefer
+`ssh://git@github.com/DataDog/rules_test_optimization.git` for internal git
+fetches, or use an authenticated archive setup supported by the consumer's
+Bazel environment. Do not commit local archive paths as a CI workaround.
+
+## Monorepo Analysis Looks Unrelated
+
+If tests already produced JSON payloads but doctor/uploader analysis downloads
+unrelated toolchains or loads unrelated packages, the issue may be cold
+monorepo state or target placement, not payload generation. Move the logical
+doctor/uploader pair to a lightweight package such as `//tools/test_optimization`
+and run those package-local labels before changing instrumentation.
+
+If metadata refetches repeatedly, check whether `.bazelrc` or scripts set
+`FETCH_SALT` by default. It should appear only in an explicit
+`bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` force-refresh
+command.
+
 ## Remote Outputs Missing
 
 If tests use remote execution or remote cache, add:

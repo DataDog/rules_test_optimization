@@ -1,0 +1,19 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
+
+py_binary(
+    name = "dd_topt_py_bootstrap",
+    srcs = ["main.py"],
+    main = "main.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "bootstrap_test",
+    srcs = [
+        "main.py",
+        "main_test.py",
+    ],
+    data = [":dd_topt_py_bootstrap"],
+    main = "main_test.py",
+)
