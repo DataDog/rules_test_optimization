@@ -5,4 +5,4 @@
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
 pytest>=9.0.3
-ddtrace==4.8.0rc3
+ddtrace==4.9.0rc1
