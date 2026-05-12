@@ -1,3 +1,11 @@
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
 # rules_go Orchestrion Probe Measurements
 
 > Scope note: measurements in this document describe the generic base variant

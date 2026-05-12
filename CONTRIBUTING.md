@@ -1,3 +1,11 @@
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
 # Contributing
 
 ## Development Workflow
@@ -166,6 +174,7 @@
   error diagnostics remain actionable.
 - [ ] Ran split-aware validation commands relevant to changed files.
 - [ ] Updated docs/snippets for any load-path, module, or API changes.
+- [ ] Updated `LICENSE-3rdparty.csv` for dependency or vendored-code changes.
 - [ ] Confirmed no stale references to removed legacy paths (for example
   `//tools/go:*`, replaced by `modules/go/...` targets).
 - [ ] Reviewed timeout metadata when adding new slow tests (`--test_verbose_timeout_warnings`).

@@ -1,3 +1,11 @@
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
 # Examples
 
 This folder shows concise usage patterns for single-service and multi-service setups. These snippets are meant to be copied into your repo; in this repository we also keep them buildable (`//examples/...`) as a regression guard.

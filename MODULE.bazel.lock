@@ -197,7 +197,7 @@
   "moduleExtensions": {
     "//tools/dev:dotnet_bootstrap.bzl%dotnet_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "UZ5o5gtN81W/070W2AH26lBrCh6I4P+V3/fYafhhXvk=",
+        "bzlTransitiveDigest": "UPeW5Tc9bGVY170mvXNHX3/Hod9plUSKN+ZWFasuDF8=",
         "usagesDigest": "UOlpbSoGQXMV17tKyXzJ/GfjgprW15JFu/7Jg8SBdzI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -221,7 +221,7 @@
     },
     "//tools/dev:go_bootstrap.bzl%go_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "QjORLoxbWsyD/GInzL3KeEOtm+LNVdIu+96yapX7ZGY=",
+        "bzlTransitiveDigest": "hKApWFDD6wQhS26gyQpQNBE1Cc+J7WtqTgCDLAx6oRM=",
         "usagesDigest": "I49nlLmxFAi9sxg6Rt6fFb2QozkvTD1YIVSV5M8BXhM=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -245,7 +245,7 @@
     },
     "//tools/dev:java_bootstrap.bzl%java_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "kirU/QQikoUYgwvCWiLk8+/rT1zH8xy4LkQwlLSkRD8=",
+        "bzlTransitiveDigest": "y9kgju33Pes77Wm7i6LxtqHJeQgUNhyTlZTlLVpyqnw=",
         "usagesDigest": "YTAY9SvZJOqL7lipKcOnc1epOB4gxpuAVQxKZyP29X0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -269,7 +269,7 @@
     },
     "//tools/dev:nodejs_bootstrap.bzl%nodejs_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "KItln5lC8U0MM9Ak5A9/ryui5giIMKFVAlcW3uffOao=",
+        "bzlTransitiveDigest": "YelvV8D1FHQwD5h5oBWQpKIK+vrFBUPEZeH6vSQXac0=",
         "usagesDigest": "pJ1g9RHlRKd14BYEjOHr65fL8hwip0To9tG9s/vHU5s=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -293,7 +293,7 @@
     },
     "//tools/dev:python_bootstrap.bzl%python_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "XnQca7NkR0JO0TpYVkYaNyRZ/qlK8dXTVNWJbYQCOWE=",
+        "bzlTransitiveDigest": "1HA/1MUgyYx5SYrKhSpQl/qH3hv/G4odAsLv4LXMQ5E=",
         "usagesDigest": "QQYQfNORW/ZYBR1sLD/rleldX8GsEGHSzeU4OgJ6u14=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -317,7 +317,7 @@
     },
     "//tools/dev:ruby_bootstrap.bzl%ruby_bootstrap_extension": {
       "general": {
-        "bzlTransitiveDigest": "BFJ83bCCsIyngyPtdDAMFLiDCdX5Xs3FI+P/vQYBzCk=",
+        "bzlTransitiveDigest": "ig/oJWWSi66NeqxG+UD065TtHW9MD06FkUwE+BZkFcE=",
         "usagesDigest": "iBs4N63oWfvf9oaoOsfj13ZBAgZdAwBOYQ+ix5cDW6U=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -341,7 +341,7 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "0v7WNnIjEfmqoGzDkZ6iaGbx0xfglkx9oSuQDSL+q0U=",
+        "bzlTransitiveDigest": "PhlJfM2VqlLze1MCy7XLUQq4IkWVbdx+6GHU9hp2Tvk=",
         "usagesDigest": "hbyg0fRneQMmF97jXWRY+GFcq8y/n1fJA31mNooQGng=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

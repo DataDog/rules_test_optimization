@@ -3,6 +3,15 @@ name: datadog-go-test-optimization-onboarding
 description: Use when instrumenting a Bazel Go repository or monorepo with Datadog Test Optimization and Orchestrion. Applies to WORKSPACE and Bzlmod consumers, large monorepos with local Go wrappers, doctor/uploader validation, and RFC-safe setup that avoids patches, payload proxies, DD_GIT_* test environment variables, and missing remote outputs.
 ---
 
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
+
 # Datadog Go Test Optimization Onboarding
 
 Use this skill when you need to instrument a Bazel Go repository with Datadog
