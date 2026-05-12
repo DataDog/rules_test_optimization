@@ -212,34 +212,39 @@ def render_workspace_snippet(args: argparse.Namespace) -> str:
     private_note = ""
     if args.private_repo_fetch == "authenticated-archive":
         private_note = (
-            "\n# Internal/private archives need Bazel-compatible authentication "
+            "# Internal/private archives need Bazel-compatible authentication "
             "(.netrc or an equivalent token flow). Unauthenticated codeload URLs "
-            "can return 404 even when the commit exists.\n"
+            "can return 404 even when the commit exists."
         )
 
-    return dedent(
-        f"""
-        {repo_block}
-        {private_note}
-        # Declare rules_python, its toolchains, pip_parse, pytest, and ddtrace
-        # using your repository's normal Python dependency policy before tests run.
-        load("@datadog-rules-test-optimization//tools/python:workspace_repositories.bzl", "datadog_python_test_optimization_workspace_repositories")
-
-        datadog_python_test_optimization_workspace_repositories(
-        {chr(10).join(companion_kwargs)}
-        )
-
-        load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
-
-        test_optimization_sync(
-            name = {_quote(args.sync_repo_name)},
-            service = {_quote(args.service)},
-            runtime_name = "python",
-            runtime_version = {_quote(args.runtime_version)},
-            runtime_module_path = {_quote(args.runtime_module_path)},
-        )
-        """
-    ).strip() + "\n"
+    parts = [
+        repo_block,
+    ]
+    if private_note:
+        parts.extend(["", private_note])
+    parts.extend(
+        [
+            "",
+            "# Declare rules_python, its toolchains, pip_parse, pytest, and ddtrace",
+            "# using your repository's normal Python dependency policy before tests run.",
+            'load("@datadog-rules-test-optimization//tools/python:workspace_repositories.bzl", "datadog_python_test_optimization_workspace_repositories")',
+            "",
+            "datadog_python_test_optimization_workspace_repositories(",
+            *companion_kwargs,
+            ")",
+            "",
+            'load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")',
+            "",
+            "test_optimization_sync(",
+            f"    name = {_quote(args.sync_repo_name)},",
+            f"    service = {_quote(args.service)},",
+            '    runtime_name = "python",',
+            f"    runtime_version = {_quote(args.runtime_version)},",
+            f"    runtime_module_path = {_quote(args.runtime_module_path)},",
+            ")",
+        ]
+    )
+    return "\n".join(parts) + "\n"
 
 
 def render_bzlmod_snippet(args: argparse.Namespace) -> str:
@@ -268,63 +273,63 @@ def render_bzlmod_snippet(args: argparse.Namespace) -> str:
             archive_override(
                 module_name = "datadog-rules-test-optimization",
                 urls = [{_quote(args.rto_archive_url)}],
-                integrity = "",  # Replace with your repository's preferred integrity pin.
+                sha256 = {_quote(args.rto_archive_sha256)},
                 strip_prefix = {_quote(args.rto_archive_prefix)},
             )
             archive_override(
                 module_name = "datadog-rules-test-optimization-python",
                 urls = [{_quote(args.rto_archive_url)}],
-                integrity = "",  # Replace with your repository's preferred integrity pin.
+                sha256 = {_quote(args.rto_archive_sha256)},
                 strip_prefix = {_quote(args.rto_archive_prefix + "/modules/python")},
             )
             """
         ).strip()
 
-    return dedent(
-        f"""
-        bazel_dep(name = "datadog-rules-test-optimization", version = {_quote(DEFAULT_RULES_VERSION)})
-        bazel_dep(name = "datadog-rules-test-optimization-python", version = {_quote(DEFAULT_RULES_VERSION)})
-
-        {override}
-
-        test_optimization_sync = use_extension(
-            "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
-            "test_optimization_sync_extension",
-        )
-        test_optimization_sync.test_optimization_sync(
-            name = {_quote(args.sync_repo_name)},
-            service = {_quote(args.service)},
-            runtime_name = "python",
-            runtime_version = {_quote(args.runtime_version)},
-            runtime_module_path = {_quote(args.runtime_module_path)},
-        )
-        use_repo(test_optimization_sync, {_quote(args.sync_repo_name)})
-        """
-    ).strip() + "\n"
+    return "\n".join(
+        [
+            f"bazel_dep(name = \"datadog-rules-test-optimization\", version = {_quote(DEFAULT_RULES_VERSION)})",
+            f"bazel_dep(name = \"datadog-rules-test-optimization-python\", version = {_quote(DEFAULT_RULES_VERSION)})",
+            "",
+            override,
+            "",
+            "test_optimization_sync = use_extension(",
+            '    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",',
+            '    "test_optimization_sync_extension",',
+            ")",
+            "test_optimization_sync.test_optimization_sync(",
+            f"    name = {_quote(args.sync_repo_name)},",
+            f"    service = {_quote(args.service)},",
+            '    runtime_name = "python",',
+            f"    runtime_version = {_quote(args.runtime_version)},",
+            f"    runtime_module_path = {_quote(args.runtime_module_path)},",
+            ")",
+            f"use_repo(test_optimization_sync, {_quote(args.sync_repo_name)})",
+        ]
+    ) + "\n"
 
 
 def render_targets_snippet(args: argparse.Namespace) -> str:
     """Render doctor/uploader target wiring for a lightweight package."""
     expected_targets = _target_list(args.expected_target)
-    expected_comment = ""
+    lines = [
+        'load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")',
+        "",
+        "dd_test_optimization_targets(",
+        '    name = "test_optimization",',
+        f"    sync_repo_name = {_quote(args.sync_repo_name)},",
+        f"    doctor_name = {_quote(args.doctor_name)},",
+        f"    uploader_name = {_quote(args.uploader_name)},",
+    ]
     if not args.expected_target:
-        expected_comment = (
-            "    # Add only instrumented test targets that emit payloads. Do not list\n"
-            "    # build-only, wrapper-only, or analysis-only targets here.\n"
+        lines.extend(
+            [
+                "    # Add only instrumented test targets that emit payloads. Do not list",
+                "    # build-only, wrapper-only, or analysis-only targets here.",
+            ]
         )
-    return dedent(
-        f"""
-        load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
-
-        dd_test_optimization_targets(
-            name = "test_optimization",
-            sync_repo_name = {_quote(args.sync_repo_name)},
-            doctor_name = {_quote(args.doctor_name)},
-            uploader_name = {_quote(args.uploader_name)},
-        {expected_comment}    expected_targets = {expected_targets},
-        )
-        """
-    ).strip() + "\n"
+    lines.append(f"    expected_targets = {expected_targets},")
+    lines.append(")")
+    return "\n".join(lines) + "\n"
 
 
 def render_test_snippet(args: argparse.Namespace) -> str:
@@ -393,11 +398,29 @@ def render_command_snippet(args: argparse.Namespace) -> str:
     label_prefix = f"//{args.test_optimization_package}" if args.test_optimization_package else "//"
     return dedent(
         f"""
-        {comment}{args.bazel_command} sync --config={args.bazelrc_config} --only={args.sync_repo_name}
-        {args.bazel_command} test --config={args.bazelrc_config} {target_args}
-        {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.doctor_name}
-        {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.uploader_name} -- --dry-run --validate-enrichment
-        DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.uploader_name}
+        {comment}test_status=0
+        doctor_status=0
+        dry_run_status=0
+        upload_status=0
+
+        {args.bazel_command} sync --config={args.bazelrc_config} --only={args.sync_repo_name}
+        {args.bazel_command} test --config={args.bazelrc_config} {target_args} || test_status=$?
+
+        {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.doctor_name} || doctor_status=$?
+        if [ "$doctor_status" -ne 0 ]; then
+          if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+          exit "$doctor_status"
+        fi
+
+        {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.uploader_name} -- --dry-run --validate-enrichment || dry_run_status=$?
+        if [ "$dry_run_status" -ne 0 ]; then
+          if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+          exit "$dry_run_status"
+        fi
+
+        DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.uploader_name} || upload_status=$?
+        if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+        exit "$upload_status"
         """
     ).strip() + "\n"
 

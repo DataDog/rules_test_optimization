@@ -39,6 +39,7 @@ class BootstrapSnippetTest(unittest.TestCase):
         snippet = main.render_workspace_snippet(args)
         self.assertIn("datadog_python_test_optimization_workspace_repositories", snippet)
         self.assertIn("test_optimization_sync", snippet)
+        self.assertNotRegex(snippet, r"(?m)^        (load|# Declare|datadog_python_test_optimization_workspace_repositories|test_optimization_sync)")
 
     def test_bzlmod_snippet_contains_bazel_dep(self) -> None:
         """Bzlmod output keeps the module dependency shape visible."""
@@ -47,6 +48,21 @@ class BootstrapSnippetTest(unittest.TestCase):
         snippet = main.render_bzlmod_snippet(args)
         self.assertIn('bazel_dep(name = "datadog-rules-test-optimization"', snippet)
         self.assertIn('bazel_dep(name = "datadog-rules-test-optimization-python"', snippet)
+        self.assertNotRegex(snippet, r"(?m)^        (bazel_dep|archive_override|git_override|test_optimization_sync|use_repo)")
+
+    def test_bzlmod_archive_snippet_emits_sha256_pin(self) -> None:
+        """Bzlmod archive output preserves the checksum supplied by the user."""
+        args = _args(
+            "--mode=bzlmod",
+            "--datadog-fetch=archive",
+            "--rto-archive-url=https://example.invalid/rules.tar.gz",
+            "--rto-archive-sha256=abc123",
+            "--rto-archive-prefix=rules_test_optimization-abc123",
+        )
+        main._validate_args(args)
+        snippet = main.render_bzlmod_snippet(args)
+        self.assertEqual(2, snippet.count('sha256 = "abc123"'))
+        self.assertNotIn('integrity = ""', snippet)
 
     def test_private_ssh_mode_uses_ssh_remote(self) -> None:
         """Private SSH mode avoids unauthenticated archive fetches."""
@@ -107,6 +123,19 @@ class BootstrapSnippetTest(unittest.TestCase):
         self.assertIn("./bazelw test --config=test-optimization //app:explicit", snippet)
         self.assertNotIn("//app:expected", snippet)
 
+    def test_command_snippet_gates_real_upload_on_validation(self) -> None:
+        """Generated commands do not run the real upload after validation failures."""
+        args = _args("--expected-target=//app:expected")
+        snippet = main.render_command_snippet(args)
+        self.assertIn("doctor_status=0", snippet)
+        self.assertIn('if [ "$doctor_status" -ne 0 ]; then', snippet)
+        self.assertIn("dry_run_status=0", snippet)
+        self.assertIn('if [ "$dry_run_status" -ne 0 ]; then', snippet)
+        self.assertLess(
+            snippet.index("--dry-run --validate-enrichment || dry_run_status=$?"),
+            snippet.index('DD_API_KEY="$DD_API_KEY"'),
+        )
+
     def test_command_snippet_falls_back_to_expected_targets(self) -> None:
         """Expected targets are reused for commands when test targets are omitted."""
         args = _args("--expected-target=//app:expected")
@@ -118,6 +147,16 @@ class BootstrapSnippetTest(unittest.TestCase):
         snippet = main.render_targets_snippet(args)
         self.assertIn("dd_test_optimization_targets", snippet)
         self.assertIn("//app:test", snippet)
+        self.assertTrue(snippet.startswith("load("))
+        self.assertIn('    expected_targets = [\n        "//app:test",\n    ],', snippet)
+
+    def test_target_snippet_without_expected_targets_is_validly_indented(self) -> None:
+        """Placeholder target output stays valid Starlark indentation."""
+        args = _args()
+        snippet = main.render_targets_snippet(args)
+        self.assertTrue(snippet.startswith("load("))
+        self.assertIn("    # Add only instrumented test targets", snippet)
+        self.assertIn("    expected_targets = [],", snippet)
 
     def test_managed_pytest_snippet_lists_consumer_dependencies(self) -> None:
         """Managed pytest examples remind consumers to provide pytest and ddtrace."""
