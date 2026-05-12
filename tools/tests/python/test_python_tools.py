@@ -364,7 +364,9 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             stderr = io.StringIO()
             with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
                 self.mod._expected_target_outputs(testlogs, "//pkg:target")
-            self.assertIn("Run this exact test target before running the doctor", stderr.getvalue())
+            self.assertIn("Run this exact instrumented test target before running the doctor", stderr.getvalue())
+            self.assertIn("build-only", stderr.getvalue())
+            self.assertIn("wrapper-only", stderr.getvalue())
             self.assertIn("--remote_download_outputs=all", stderr.getvalue())
 
     def test_validate_git_metadata_requires_core_tags(self) -> None:

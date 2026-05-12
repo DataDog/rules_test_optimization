@@ -35,9 +35,14 @@ Keep the RFC contract intact:
    - What Python version and toolchain does Bazel use?
    - Which repository owns Python dependencies and lockfiles?
    - Does the repository already have a pytest wrapper macro?
+   - Which lightweight package should own the logical doctor/uploader pair
+     (for example `//tools/test_optimization`)?
+   - Does fetching this rules repository require SSH git or authenticated
+     archive access?
    - Which runtime test targets should emit payloads?
    - Which build-only or analysis-only targets should not be expected to emit
      payloads?
+   - Is `FETCH_SALT` absent from the normal test, doctor, and uploader flow?
 2. Read this repository's current docs when details are needed:
    - `README.md` for quickstart and current command flow.
    - `docs/Language_Onboarding.md` for language-specific Python guidance.
@@ -64,11 +69,15 @@ Every successful Python onboarding should end with these pieces:
   runner.
 - `consumer_runner` mode is used when the repository must keep an existing
   pytest wrapper, custom launcher, or import policy.
-- The root package has exactly one `dd_test_optimization_doctor` target.
-- The root package has exactly one `dd_upload_payloads` target.
+- The workspace has exactly one logical doctor/uploader pair. In monorepos,
+  place it in a lightweight package such as `//tools/test_optimization`; root
+  labels are still fine for small repositories.
 - `.bazelrc` or CLI commands provide sync metadata with `--repo_env`.
 - Test commands use a named config such as `--config=test-optimization`.
 - Remote-output-sensitive test configs include `--remote_download_outputs=all`.
+- `FETCH_SALT` is used only for a separate, explicit
+  `bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
+  as part of normal test, doctor, or uploader commands.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
@@ -99,4 +108,8 @@ Stop and escalate instead of guessing when:
 - The doctor reports missing Bazel metadata.
 - The only available fix would put `DD_GIT_*`, credentials, or upload endpoints
   into the test sandbox.
+- The only tried doctor/uploader placement is the root package in a large
+  monorepo and no lightweight package placement has been attempted.
+- A private repository fetch returns `404` and SSH/authenticated archive mode
+  has not been confirmed.
 - Validation requires secrets that are not already available in the environment.

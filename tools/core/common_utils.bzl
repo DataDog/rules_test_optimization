@@ -39,6 +39,36 @@ UPLOADER_VERSION = "2.0.0"
 LABEL_FRAGMENT_ALLOWED_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
 API_KEY_CONTROL_CHARS = "\n\r\t"
 
+_MISSING_API_KEY_MESSAGE = """
+test_optimization: DD_API_KEY is not set.
+
+Datadog Test Optimization uses DD_API_KEY during the sync metadata fetch.
+In Bazel, repository/module resolution can run during:
+  - bazel sync
+  - bazel test
+  - bazel run //...:dd_test_optimization_doctor
+  - bazel run //...:dd_upload_payloads (uploader)
+
+Recommended .bazelrc configuration:
+  common:test-optimization --repo_env=DD_API_KEY
+  common:test-optimization --repo_env=DD_SITE
+
+You can also pass the repository environment explicitly:
+  bazel run --config=test-optimization --repo_env=DD_API_KEY --repo_env=DD_SITE //tools/test_optimization:dd_upload_payloads
+
+Do not pass DD_API_KEY with --test_env; tests must not receive upload or sync
+credentials in their sandbox.
+
+To obtain an API key:
+1. Log in to Datadog
+2. Navigate to Organization Settings > API Keys
+3. Create a new API key or use an existing one
+"""
+
+def missing_api_key_message_for_tests():
+    """Return the missing API-key diagnostic for unit tests."""
+    return _MISSING_API_KEY_MESSAGE
+
 def log_info(message):
     """Print user-facing progress messages."""
     print("test_optimization: %s" % message)
@@ -193,22 +223,7 @@ def validate_api_key(api_key):
       Normalized API key value
     """
     if not api_key:
-        fail("""
-test_optimization: DD_API_KEY is not set.
-
-Datadog Test Optimization requires an API key for authentication.
-
-To fix this, add to your .bazelrc:
-  common --repo_env=DD_API_KEY
-
-Or export it in your shell:
-  export DD_API_KEY=your-key-here
-
-To obtain an API key:
-1. Log in to Datadog
-2. Navigate to Organization Settings > API Keys
-3. Create a new API key or use an existing one
-""")
+        fail(_MISSING_API_KEY_MESSAGE)
 
     trimmed = api_key.strip()
     if not trimmed:

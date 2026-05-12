@@ -11,7 +11,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 
 | Symptom | First checks | Likely section |
 |---------|--------------|----------------|
-| No files fetched or stale data | `DD_API_KEY` forwarded, `bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>` | Repository rule not fetching data |
+| No files fetched or stale data | `DD_API_KEY` forwarded with `--repo_env`; use `FETCH_SALT` only for an explicit force-refresh sync | Repository rule not fetching data |
 | Uploader says no payload files | tracer file-mode contract + payload files under `bazel-testlogs/*/test.outputs/` | Uploader not finding payloads |
 | Doctor reports msgpack payloads | tracer is not in Bazel JSON file mode | Doctor failures |
 | Doctor reports missing Git or Bazel metadata | sync metadata context or sidecar metadata is absent | Doctor failures |
@@ -21,6 +21,8 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
 | Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
 | WORKSPACE archive pins fail after a PR was squash-merged | generated pins commit reachability and archive SHA | Published Go pins |
+| Private/internal WORKSPACE fetch returns 404 | SSH git or authenticated archive access | Private repository fetch |
+| Bazel downloads unrelated toolchains or analyzes unrelated packages | cold monorepo state or root-package doctor/uploader placement | Monorepo analysis cost |
 | Windows path/policy failures | PowerShell policy + path separators | Windows-specific issues |
 
 ## Repository rule not fetching data
@@ -44,13 +46,16 @@ If Bazel reports that sync requires WORKSPACE support, add
    common --repo_env=DD_API_KEY
    ```
 
-2. **Force refetch** with a cache-busting salt:
+2. **Force refetch only when intentional** with a cache-busting salt:
    ```bash
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>
+   bazel sync --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"
    ```
    ```powershell
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>
+   bazel sync --only=<repo_name> --repo_env=FETCH_SALT="$(Get-Date -UFormat %s)"
    ```
+   Do not put `FETCH_SALT` in `.bazelrc`, `bazel test`, doctor, or uploader
+   commands. It deliberately breaks the repository-rule cache key and should be
+   used only when you want fresh backend metadata.
 
 3. **Check repository cache** to see if the rule ran:
    ```bash
@@ -118,6 +123,64 @@ or a tuple that was not generated from the real GitHub codeload archive.
      --rto-commit <published-origin-main-sha> \
      --rules-go-variant complete
    ```
+
+## Private repository fetch
+
+**Symptom**: A WORKSPACE consumer gets `404` when fetching the rules archive or
+companion archive from a private/internal repository.
+
+**Cause**: Anonymous codeload archive URLs can return `404` for private
+repositories even when the commit exists and the user can see it in GitHub.
+
+**Solutions**:
+
+1. Prefer SSH git fetch for internal Datadog consumers:
+   ```bzl
+   git_repository(
+       name = "datadog-rules-test-optimization",
+       commit = "<commit-sha>",
+       remote = "ssh://git@github.com/DataDog/rules_test_optimization.git",
+   )
+   ```
+
+2. Use archive fetch only when Bazel has compatible authentication, for
+   example `.netrc` or another repository-approved token mechanism.
+
+3. Do not commit local archive paths or local checkouts as a workaround for CI.
+   Use local paths only for temporary local validation.
+
+## Monorepo analysis cost
+
+**Symptom**: Tests already produced payload files, but running doctor or
+uploader appears slow because Bazel downloads unrelated toolchains or analyzes
+unrelated packages.
+
+**Cause**: Some cost is normal cold-cache monorepo behavior. Another common
+cause is placing doctor/uploader in the workspace root package, which can load
+global root `BUILD.bazel` wiring unrelated to Test Optimization.
+
+**Solutions**:
+
+1. Move the logical doctor/uploader pair to a lightweight package:
+   ```bzl
+   # tools/test_optimization/BUILD.bazel
+   load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
+
+   dd_test_optimization_targets(
+       name = "test_optimization",
+       sync_repo_name = "test_optimization_data",
+       expected_targets = ["//app:service_py_test"],
+   )
+   ```
+
+2. Run package-local labels:
+   ```bash
+   bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
+   bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment
+   ```
+
+3. If Bazel repeatedly refetches Test Optimization metadata, check whether a
+   script or `.bazelrc` is setting `FETCH_SALT` by default.
 
 ## Uploader not finding payloads
 

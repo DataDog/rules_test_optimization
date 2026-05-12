@@ -47,22 +47,20 @@ topt.test_optimization_sync(
 use_repo(topt, "test_optimization_data")
 ```
 
-## Root Targets
+## Doctor And Uploader Targets
 
-Add one doctor and one uploader at the workspace root:
+Add one logical doctor/uploader pair. In monorepos, prefer a lightweight package
+such as `//tools/test_optimization`; root labels are still fine for small repos:
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
+    expected_targets = [
+        "//path/to:python_test",
+    ],
 )
 ```
 

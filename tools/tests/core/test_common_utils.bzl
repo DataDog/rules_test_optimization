@@ -1,6 +1,6 @@
 # Unit tests for common_utils helpers (sanitization, deduping, validation).
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "is_list", "is_string", "log_debug", "log_info", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
+load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "is_list", "is_string", "log_debug", "log_info", "missing_api_key_message_for_tests", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
 
 def _sanitize_label_fragment_test(ctx):
     """Validate label sanitization rules and fallback behavior."""
@@ -60,6 +60,18 @@ def _validate_api_key_normalization_test(ctx):
     asserts.equals(env, "abcd1234", validate_api_key(" abcd1234 "))
     asserts.equals(env, "abc%def", validate_api_key(" abc%def "))
     asserts.equals(env, "abc_def-123", validate_api_key(" abc_def-123 "))
+    return unittest.end(env)
+
+def _missing_api_key_message_test(ctx):
+    """Validate missing API-key guidance is sync-focused and sandbox-safe."""
+    env = unittest.begin(ctx)
+    message = missing_api_key_message_for_tests()
+    asserts.true(env, message.find("sync metadata fetch") >= 0)
+    asserts.true(env, message.find("bazel run") >= 0)
+    asserts.true(env, message.find("doctor") >= 0)
+    asserts.true(env, message.find("uploader") >= 0)
+    asserts.true(env, message.find("--repo_env=DD_API_KEY") >= 0)
+    asserts.equals(env, -1, message.find("--test_env=DD_API_KEY"))
     return unittest.end(env)
 
 def _log_helpers_and_is_dict_test(ctx):
@@ -199,6 +211,7 @@ validate_service_name_test = unittest.make(_validate_service_name_test)
 validate_runtime_version_test = unittest.make(_validate_runtime_version_test)
 validate_runtime_name_test = unittest.make(_validate_runtime_name_test)
 validate_api_key_normalization_test = unittest.make(_validate_api_key_normalization_test)
+missing_api_key_message_test = unittest.make(_missing_api_key_message_test)
 log_helpers_and_is_dict_test = unittest.make(_log_helpers_and_is_dict_test)
 validate_api_key_missing_failure_test = analysistest.make(
     _validate_api_key_missing_failure_test_impl,

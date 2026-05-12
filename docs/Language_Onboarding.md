@@ -23,13 +23,17 @@ Shared runtime contract for every language:
 - Tests write payloads under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
 - Tests write JSON payload files. Do not introduce runtime proxies or raw
   msgpack-only handoff paths.
-- Run `//:dd_test_optimization_doctor` after tests to validate JSON payloads,
+- Run the workspace's doctor target after tests to validate JSON payloads,
   Bazel target metadata, Git metadata, and invalid Go payload selection before
-  upload.
+  upload. Small repos often use `//:dd_test_optimization_doctor`; large
+  monorepos should prefer a lightweight package such as
+  `//tools/test_optimization:dd_test_optimization_doctor`.
 - Run uploader dry-run enrichment validation when rolling out a new repository
   or debugging missing tags: it validates the final enriched body without
   uploading or deleting local payload files.
-- The uploader runs later through `bazel run //:dd_upload_payloads`
+- The uploader runs later through `bazel run`. Small repos often use
+  `//:dd_upload_payloads`; large monorepos should prefer a lightweight package
+  such as `//tools/test_optimization:dd_upload_payloads`.
 - Mixed-runtime uploader wiring must bundle every relevant
   `:test_optimization_context` target and let the uploader choose the matching
   `context.json` per payload
@@ -43,7 +47,6 @@ Shared `.bazelrc` forwarding. Prefer the generated block from
 ```text
 common:test-optimization --repo_env=DD_API_KEY
 common:test-optimization --repo_env=DD_SITE
-common:test-optimization --repo_env=FETCH_SALT
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
 common:test-optimization --repo_env=DD_GIT_BRANCH
 common:test-optimization --repo_env=DD_GIT_TAG
@@ -58,21 +61,27 @@ key. For Go/Orchestrion, do not put `DD_TEST_OPTIMIZATION_AGENT_URL` or
 `DD_TEST_OPTIMIZATION_AGENTLESS_URL` in `--test_env`; the uploader reads upload
 endpoints at `bazel run` time.
 
+`FETCH_SALT` is not part of the normal flow. Use it only in a separate
+force-refresh command such as
+`bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"`
+when you intentionally need fresh backend metadata; do not add it to normal
+test, doctor, or uploader commands.
+
 Shared upload command:
 
 ```bash
 bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
-bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$doctor_status"
 fi
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
 if [ "$dry_run_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$dry_run_status"
 fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
@@ -470,20 +479,22 @@ use_repo(topt, "test_optimization_data")
 ```
 
 ```bzl
-# root BUILD.bazel
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+# tools/test_optimization/BUILD.bazel
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
+    expected_targets = [
+        "//python/pkg:pkg_py_test",
+    ],
 )
 ```
+
+This package-local target placement is the recommended Python shape for
+monorepos because it avoids loading unrelated root-package wiring when running
+the doctor or uploader. Root-package targets remain valid for small
+repositories.
 
 ```bzl
 # package BUILD.bazel
@@ -585,6 +596,22 @@ datadog_python_test_optimization_workspace_repositories(
 )
 ```
 
+For internal/private repositories, prefer SSH git fetch unless the Bazel
+environment has authenticated archive access:
+
+```bzl
+git_repository(
+    name = "datadog-rules-test-optimization",
+    commit = "<commit-sha>",
+    remote = "ssh://git@github.com/DataDog/rules_test_optimization.git",
+)
+```
+
+If you use `http_archive` for a private repository, ensure Bazel has compatible
+authentication such as `.netrc` or a repository-approved token mechanism. A
+`404` from an unauthenticated codeload archive usually means missing auth, not
+that the commit does not exist.
+
 The helper does not declare Python toolchains, `pip_parse`, `pytest`,
 `ddtrace`, or lockfiles. Keep those under the consumer repository's existing
 Python dependency process:
@@ -650,6 +677,24 @@ scheduling, Docker, tags, and flaky policy in the local wrapper. The wrapper
 must preserve the environment supplied by `dd_topt_py_test`; otherwise the test
 process may miss `TEST_UNDECLARED_OUTPUTS_DIR`, metadata paths, or
 `PYTEST_ADDOPTS=--ddtrace`.
+
+The Python companion can print or write the standard onboarding snippets:
+
+```bash
+bazel run @datadog-rules-test-optimization-python//tools/dd_topt_py_bootstrap:dd_topt_py_bootstrap -- \
+  --mode=workspace \
+  --service py-service \
+  --runtime-version 3.12 \
+  --runtime-module-path example.python.pkg \
+  --rto-commit <commit-sha> \
+  --private-repo-fetch ssh-git \
+  --bazel-command bazel
+```
+
+The default output excludes `FETCH_SALT`. If you intentionally need fresh
+metadata, print the separate force-refresh command with
+`--print-refresh-snippet`, run that sync command once, then return to the normal
+test, doctor, dry-run, and upload flow without `FETCH_SALT`.
 
 ### Multi-service
 

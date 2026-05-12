@@ -2,6 +2,7 @@ load(
     "//tools/tests/core:test_common_utils.bzl",
     "dedup_keys_test",
     "log_helpers_and_is_dict_test",
+    "missing_api_key_message_test",
     "sanitize_label_fragment_test",
     "validate_api_key_carriage_return_failure_test",
     "validate_api_key_carriage_return_target_rule",
@@ -146,6 +147,22 @@ load(
     "telemetry_response_counts_test",
 )
 load(
+    "//tools/tests/core:test_test_optimization_targets_utils.bzl",
+    "default_context_data_test",
+    "doctor_controlled_attr_failure_test",
+    "doctor_controlled_attr_target_rule",
+    "doctor_kwargs_test",
+    "duplicate_names_failure_test",
+    "duplicate_names_target_rule",
+    "empty_name_failure_test",
+    "empty_name_target_rule",
+    "expected_targets_test",
+    "explicit_context_data_test",
+    "uploader_controlled_attr_failure_test",
+    "uploader_controlled_attr_target_rule",
+    "uploader_kwargs_test",
+)
+load(
     "//tools/tests/core:test_topt_macro_utils.bzl",
     "merge_optional_env_defaults_ignores_empty_defaults_test",
     "merge_optional_env_defaults_injects_missing_key_test",
@@ -255,6 +272,26 @@ python_existing_repo_target_rule(
 
 python_missing_rules_python_repo_target_rule(
     name = "python_missing_rules_python_repo_target",
+    tags = ["manual"],
+)
+
+empty_name_target_rule(
+    name = "empty_name_target",
+    tags = ["manual"],
+)
+
+duplicate_names_target_rule(
+    name = "duplicate_names_target",
+    tags = ["manual"],
+)
+
+doctor_controlled_attr_target_rule(
+    name = "doctor_controlled_attr_target",
+    tags = ["manual"],
+)
+
+uploader_controlled_attr_target_rule(
+    name = "uploader_controlled_attr_target",
     tags = ["manual"],
 )
 
@@ -368,6 +405,56 @@ python_existing_repo_failure_test(
 python_missing_rules_python_repo_failure_test(
     name = "python_missing_rules_python_repo_failure_test",
     target_under_test = ":python_missing_rules_python_repo_target",
+)
+
+default_context_data_test(
+    name = "default_context_data_test",
+    size = "small",
+    timeout = "short",
+)
+
+explicit_context_data_test(
+    name = "explicit_context_data_test",
+    size = "small",
+    timeout = "short",
+)
+
+expected_targets_test(
+    name = "expected_targets_test",
+    size = "small",
+    timeout = "short",
+)
+
+doctor_kwargs_test(
+    name = "doctor_kwargs_test",
+    size = "small",
+    timeout = "short",
+)
+
+uploader_kwargs_test(
+    name = "uploader_kwargs_test",
+    size = "small",
+    timeout = "short",
+)
+
+empty_name_failure_test(
+    name = "empty_name_failure_test",
+    target_under_test = ":empty_name_target",
+)
+
+duplicate_names_failure_test(
+    name = "duplicate_names_failure_test",
+    target_under_test = ":duplicate_names_target",
+)
+
+doctor_controlled_attr_failure_test(
+    name = "doctor_controlled_attr_failure_test",
+    target_under_test = ":doctor_controlled_attr_target",
+)
+
+uploader_controlled_attr_failure_test(
+    name = "uploader_controlled_attr_failure_test",
+    target_under_test = ":uploader_controlled_attr_target",
 )
 
 legacy_context_direct_file_fallback_test(
@@ -710,6 +797,12 @@ validate_service_name_test(
 
 validate_api_key_normalization_test(
     name = "validate_api_key_normalization_test",
+    size = "small",
+    timeout = "short",
+)
+
+missing_api_key_message_test(
+    name = "missing_api_key_message_test",
     size = "small",
     timeout = "short",
 )
@@ -1244,7 +1337,12 @@ test_suite(
         ":decode_json_object_non_json_failure_test",
         ":decode_json_object_valid_test",
         ":dedup_keys_test",
+        ":default_context_data_test",
         ":dirname_test",
+        ":doctor_controlled_attr_failure_test",
+        ":doctor_kwargs_test",
+        ":duplicate_names_failure_test",
+        ":empty_name_failure_test",
         ":example_stub_custom_out_dir_test",
         ":example_stub_export_manifest_path_test",
         ":example_stub_export_string_escaping_test",
@@ -1254,6 +1352,8 @@ test_suite(
         ":example_stub_service_keys_targets_test",
         ":example_stub_telemetry_facts_service_name_test",
         ":existing_repo_failure_test",
+        ":expected_targets_test",
+        ":explicit_context_data_test",
         ":export_bzl_escaping_test",
         ":export_bzl_manifest_path_test",
         ":first_env_ctx_test",
@@ -1272,6 +1372,7 @@ test_suite(
         ":merge_optional_env_defaults_none_env_test",
         ":merge_optional_env_defaults_preserves_explicit_value_test",
         ":merge_optional_env_defaults_select_passthrough_test",
+        ":missing_api_key_message_test",
         ":missing_archive_failure_test",
         ":module_label_map_collision_test",
         ":module_label_map_empty_inputs_test",
@@ -1313,6 +1414,8 @@ test_suite(
         ":set_context_tag_from_env_test",
         ":split_flaky_tests_by_module_test",
         ":strip_workspace_prefix_powershell_windows_test",
+        ":uploader_controlled_attr_failure_test",
+        ":uploader_kwargs_test",
         ":validate_api_key_carriage_return_failure_test",
         ":validate_api_key_control_chars_failure_test",
         ":validate_api_key_missing_failure_test",

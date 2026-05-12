@@ -35,10 +35,14 @@ The steps are:
    files and select the matching one per payload using sibling
    `bazel_target_metadata.json` repo metadata instead of reusing one global
    context for the entire workspace.
-   Usage: run `bazel test`, then `//:dd_test_optimization_doctor`, then
-   `//:dd_upload_payloads -- --dry-run --validate-enrichment`, then the real
-   `//:dd_upload_payloads` target. Preserve the test exit code, but do not run
-   the real upload if doctor or dry-run enrichment validation fails.
+   The doctor and uploader are workspace-level logical operations, but their
+   Bazel targets do not have to live in the root package. Small repositories
+   can use root labels; large monorepos should use a lightweight package such
+   as `//tools/test_optimization`.
+   Usage: run `bazel test`, then the doctor target, then the uploader with
+   `--dry-run --validate-enrichment`, then the real uploader target. Preserve
+   the test exit code, but do not run the real upload if doctor or dry-run
+   enrichment validation fails.
 
 4. **Language macros (optional)**:
    Thin wrappers (for Go/Python/Java/NodeJS/.NET/Ruby) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.

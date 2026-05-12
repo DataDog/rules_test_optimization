@@ -556,7 +556,8 @@ filegroup(
 )
 ```
 
-Root BUILD.bazel doctor/uploader (multi-service):
+Doctor/uploader package (multi-service). Simple examples may put these in the
+root package, but large monorepos should prefer a lightweight package:
 
 ```bzl
 load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
@@ -581,6 +582,6 @@ dd_payload_uploader(
 
 Mixed-runtime example rule:
 - keep one sync repo per runtime/service
-- keep one uploader at the workspace root
+- keep one logical uploader for the workspace; package-local placement is fine
 - add every matching context target to uploader `data`
 - do not use `DD_TEST_OPTIMIZATION_CONTEXT_JSON` as the normal mixed-runtime path
