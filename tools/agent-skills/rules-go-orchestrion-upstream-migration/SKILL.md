@@ -1,0 +1,144 @@
+---
+name: datadog-rules-go-orchestrion-upstream-migration
+description: Use when porting this repository's vendored Orchestrion-enabled rules_go fork from its current upstream base to another upstream rules_go tag or commit. Applies to base and complete variants, metadata regeneration, variant-drift checks, smoke validation, and migration PR preparation.
+---
+
+<!--
+Unless explicitly stated otherwise all files in this repository are licensed under
+the Apache 2.0 License.
+
+This product includes software developed at Datadog
+(https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+-->
+
+
+# Datadog rules_go Orchestrion Upstream Migration
+
+Use this skill when you need to move the vendored Orchestrion-enabled
+`rules_go` fork in this repository from the currently pinned upstream
+`rules_go` base to another upstream tag or commit.
+
+This skill is intentionally repository-local: it is stored as a
+Codex-compatible skill, but any agent can read it as a normal implementation
+guide.
+
+## Non-Negotiable Contract
+
+Preserve the maintained fork contract:
+
+- Migrate `third_party/rules_go_orchestrion_base` first.
+- Treat `base` as the clean, generic Orchestrion integration.
+- Treat `complete` as `base` plus declared historical monorepo compatibility
+  differences.
+- Do not silently add, remove, or change `complete`-only behavior.
+- Every intentional `base` versus `complete` difference must be declared in
+  `third_party/rules_go_orchestrion_variants.json`.
+- Do not reintroduce consumer-owned `rules_go` patch bundles.
+- Do not edit generated `*.CHANGED_FILES.md` reports by hand.
+- Do not update `*.METADATA.json` to a new upstream tag or commit until the
+  vendored tree actually reflects that upstream base plus the Datadog delta.
+- Do not call the migration complete until variant verification, changed-file
+  regeneration, and relevant smoke or integration validation have run.
+
+## First Actions
+
+1. Confirm the requested target upstream:
+   - exact upstream `rules_go` tag or commit
+   - whether the work is exploratory or intended for a pull request
+   - whether only `base` is needed now or both `base` and `complete` must be
+     publishable
+2. Inspect the current repository state before editing:
+   - `git status --short`
+   - `third_party/rules_go_orchestrion_base.METADATA.json`
+   - `third_party/rules_go_orchestrion_complete.METADATA.json`
+   - `third_party/rules_go_orchestrion_base.CHANGED_FILES.md`
+   - `third_party/rules_go_orchestrion_complete.CHANGED_FILES.md`
+   - `third_party/rules_go_orchestrion_variants.json`
+3. Read the maintainer docs that define the current fork model:
+   - `docs/rules_go_variant_selection_plan.md`
+   - `docs/rules_go_variant_maintenance_guide.md`
+   - `docs/go_orchestrion_maintainer_state.md`
+   - `docs/go_orchestrion_bazel_deep_dive.md`
+   - `CONTRIBUTING.md`
+4. Produce the current full patch before changing the fork:
+   - `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --patch`
+   - `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --patch`
+
+## Implementation Path
+
+- **Migration workflow:** follow [migration-workflow.md](references/migration-workflow.md).
+- **Validation:** follow [validation-checklist.md](references/validation-checklist.md).
+- **Troubleshooting:** follow [troubleshooting.md](references/troubleshooting.md).
+
+## Sensitive Surfaces
+
+Expect conflicts or semantic drift around these paths first:
+
+- `go/orchestrion_workspace.bzl`
+- `go/private/orchestrion/*`
+- `go/private/context.bzl`
+- `go/private/actions/compilepkg.bzl`
+- `go/private/actions/stdlib.bzl`
+- `go/private/actions/link.bzl`
+- `go/private/actions/archive.bzl`
+- `go/private/rules/library.bzl`
+- `go/private/rules/test.bzl`
+- `go/private/rules/stdlib.bzl`
+- `go/private/rules/transition.bzl`
+- `go/tools/builders/builder.go`
+- `go/tools/builders/compilepkg.go`
+- `go/tools/builders/env.go`
+- `go/tools/builders/env_orchestrion.go`
+- `go/tools/builders/importcfg.go`
+- `go/tools/builders/link.go`
+- `go/tools/builders/module_proxy.go`
+- `go/tools/builders/orchestrion*.go`
+- `go/tools/builders/stdlib.go`
+- `go/tools/builders/tool_version.go`
+
+Pay special attention to:
+
+- Orchestrion `toolexec` wiring
+- synthetic `testmain` handling
+- stdlib weaving and stdlib archive/cache persistence
+- offline module proxy inputs
+- `dd_trace_go_versions.json`
+- tool-version validation
+- Bzlmod and WORKSPACE extension entrypoints
+- Bazel transitions that must preserve Orchestrion settings
+
+## Done Criteria
+
+A migration is done only when all of these are true:
+
+- `base` points at the requested upstream base plus the Datadog Orchestrion
+  integration.
+- `complete` contains the same generic Orchestrion behavior plus only declared
+  compatibility differences.
+- Both `*.METADATA.json` files name the new upstream repository, commit, and
+  tag when a tag exists.
+- Both `*.CHANGED_FILES.md` reports were regenerated by
+  `tools/dev/diff_rules_go_fork.py`.
+- `python3 tools/dev/verify_rules_go_variants.py` passes.
+- The selected validation lanes in
+  [validation-checklist.md](references/validation-checklist.md) pass, or every
+  skipped lane has a concrete reason.
+- Any fixture or consumer validation that was required for the changed surface
+  has passed.
+- The final report names the target upstream, changed-path counts, validation
+  results, and any remaining external blockers.
+
+## Stop Conditions
+
+Stop and escalate instead of guessing when:
+
+- The requested target upstream tag or commit is ambiguous.
+- Upstream `rules_go` changed a build pipeline surface enough that the
+  Orchestrion behavior cannot be mapped without a design decision.
+- `base` needs behavior that appears specific to one Datadog monorepo consumer.
+- A new `complete`-only difference is needed but the reason is unclear.
+- Smoke validation passes but runtime validation shows no CI Visibility startup
+  or no payload files.
+- The only available fix requires consumer-owned patch bundles.
+- Required validation needs credentials or environment state that is not
+  available locally.
