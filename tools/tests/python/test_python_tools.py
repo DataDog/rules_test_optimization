@@ -568,6 +568,26 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             )
             self.mod._validate_bazelrc(workspace)
 
+    def test_bazelrc_validation_rejects_upload_credentials_in_test_env(self) -> None:
+        """Validate upload credentials and endpoints are not forwarded to tests."""
+        forbidden = [
+            "DD_GIT_BRANCH",
+            "DD_API_KEY",
+            "DD_SITE",
+            "DD_TEST_OPTIMIZATION_AGENT_URL",
+            "DD_TEST_OPTIMIZATION_AGENTLESS_URL",
+        ]
+        for env_name in forbidden:
+            with self.subTest(env_name=env_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    workspace = Path(tmp)
+                    (workspace / ".bazelrc").write_text(
+                        f"test:test-optimization --test_env={env_name}\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(SystemExit):
+                        self.mod._validate_bazelrc(workspace)
+
 
 class TestOptimizationDoctorLauncherTests(unittest.TestCase):
     """Test case group covering generated doctor launchers."""

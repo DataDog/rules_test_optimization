@@ -215,7 +215,7 @@ local files only; it does not upload, delete, or rewrite payloads.
 | `require_json_payloads` | bool | `True` | Require parseable `.json` payload files |
 | `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"`. Valid selection values are `module`, `module_override`, `full_bundle_disabled`, and `full_bundle_no_match`; the last one is accepted only when this attr is `False` |
 | `forbid_msgpack_payloads` | bool | `True` | Fail when tests emitted `.msgpack` or `.msgpack.gz` payloads instead of Bazel JSON payload files |
-| `forbid_dd_git_test_env` | bool | `True` | Fail when workspace `.bazelrc` files pass `DD_GIT_*` through `--test_env`; use `--repo_env` instead |
+| `forbid_dd_git_test_env` | bool | `True` | Fail when workspace `.bazelrc` files pass sync metadata, upload credentials, or upload endpoints through `--test_env`; use `--repo_env` for sync metadata and pass credentials only to the uploader runtime |
 | `allowed_payload_selections` | string_list | `[]` | Optional explicit allowlist for `bazel.go.payload_selection`; empty means `module`, `module_override`, and `full_bundle_disabled` are accepted, with `full_bundle_no_match` still rejected by default |
 | `expected_payload_selection_by_target` | string_dict | `{}` | Optional map from local target label to the exact expected `bazel.go.payload_selection` value |
 
