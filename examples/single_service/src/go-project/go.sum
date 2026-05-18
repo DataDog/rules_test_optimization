@@ -32,8 +32,8 @@ github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-rc.2 h1:yK4ZuP8ZlX25JN
 github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-rc.2/go.mod h1:DKz8vnMfTfi9rUUQ5Mzl1Gypl4yIgHNYt+RCXZGAX8k=
 github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-rc.2 h1:C5LUnGTUVZBfUOnqElROZfAQ/vS0Efap3WEwdeg+imE=
 github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-rc.2/go.mod h1:nlDaIbj9d4ZR5V/RKtzkj5Sr0iSmMY8uYnEOyJDA5XA=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-rc.2 h1:gSkZbKLPQzeON4TOqy6Cjo9N5zwpij2YJnypSQy+Bdg=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-rc.2/go.mod h1:ZFJoP0mJs9DJcUteQYmNApyDb6duhUTZBPlpvA1itF8=
+github.com/DataDog/dd-trace-go/v2 v2.10.0-dev h1:0LxYRQsX18wNqV3VWUQMfTWQsCjxQNpKb+s12JkG4+A=
+github.com/DataDog/dd-trace-go/v2 v2.10.0-dev/go.mod h1:IVkBpsq66Cw/YIRM/Te3pl2F0M9n4zguAB2ReGczWeo=
 github.com/DataDog/go-libddwaf/v4 v4.9.0 h1:a788e37iuH7sR9uIYHkulvTnp2FkXTiZ3yY/kuaHgZE=
 github.com/DataDog/go-libddwaf/v4 v4.9.0/go.mod h1:/AZqP6zw3qGJK5mLrA0PkfK3UQDk1zCI2fUNCt4xftE=
 github.com/DataDog/go-runtime-metrics-internal v0.0.4-0.20260217080614-b0f4edc38a6d h1:cH9Bm0tJ8FEQbA4FRi0iRm7Zr/5Lata/Or31c+Dth0E=
