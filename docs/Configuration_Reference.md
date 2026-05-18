@@ -16,7 +16,7 @@ Guided Go bootstrap accepts:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dd-trace-go-version` | `v2.9.0-dev.0.20260416093245-194346a71c51` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
+| `--dd-trace-go-version` | `v2.9.0-rc.2` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
 | `--go-binary` | `go` | Go binary used for bootstrap module graph synchronization. Set this to a pinned SDK path named `go` or `go.exe` when the repository must match Bazel's Go SDK; do not include shell syntax or arguments |
 | `--go-mod-sync` | `targeted` | Local Go module synchronization strategy: `targeted` updates and verifies only Orchestrion tool packages, `tidy` also runs `go mod tidy`, and `off` skips Go module commands |
 
@@ -97,7 +97,7 @@ Manual Orchestrion wiring in `MODULE.bazel` accepts:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.9.0-dev.0.20260416093245-194346a71c51` | Shared canonical tracer version that Bazel validates against the target Go module and uses for synthetic fallback paths |
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.9.0-rc.2` | Shared canonical tracer version that Bazel validates against the target Go module and uses for synthetic fallback paths |
 | `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact canonical per-module tracer versions that Bazel validates against the target Go module for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
 
 Notes:

@@ -419,7 +419,7 @@ module version.
    - the effective local module graph resolved from `go.mod` and `go.sum`
 
 4. **If you omitted the version entirely**, remember the default is
-   `v2.9.0-dev.0.20260416093245-194346a71c51`.
+   `v2.9.0-rc.2`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one
 set of tracer versions while the local Go module still resolves another.

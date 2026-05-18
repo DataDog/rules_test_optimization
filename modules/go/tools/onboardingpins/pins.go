@@ -28,7 +28,7 @@ const (
 	// DefaultArchiveType is the archive type used by GitHub codeload tarballs.
 	DefaultArchiveType = "tar.gz"
 	// DefaultDDTraceGoVersion is the Go tracer version that supports the Bazel JSON payload contract.
-	DefaultDDTraceGoVersion = "v2.9.0-dev.0.20260416093245-194346a71c51"
+	DefaultDDTraceGoVersion = "v2.9.0-rc.2"
 	// DefaultOrchestrionVersion is the Orchestrion version validated by the Go onboarding fixtures.
 	DefaultOrchestrionVersion = "v1.9.0"
 	// DefaultMainRef is the remote ref that published pins must be reachable from.

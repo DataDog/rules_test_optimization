@@ -83,7 +83,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --runtime-version "<go-sdk-version>" \
   --rules-go-repo-name "<existing_rules_go_repo_name>" \
   --rules-go-variant complete \
-  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --dd-trace-go-version v2.9.0-rc.2 \
   --write-bazelrc \
   --write-root-targets \
   --write-orchestrion-files \
