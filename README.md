@@ -536,6 +536,8 @@ callers do not need to pass `java_test_rule`. Override it only when wrapping a
 custom test macro (e.g. a junit5 wrapper). The macro requires `agent_jar` so
 the dd-java-agent is wired into `-javaagent` and emits payloads; source the
 JAR with `http_file`/`maven_install`/a local filegroup.
+The macro injects the Java agent to take care of tracer instrumentation, so
+callers do not need to add their own `-javaagent` flag.
 
 On Windows, add `build --enable_runfiles` to your `.bazelrc`. The macro injects
 `-javaagent:$(rootpath <agent_jar>)`, which only resolves when runfiles are
