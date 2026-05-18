@@ -358,7 +358,7 @@ dd_test_optimization_doctor = rule(
         "require_json_payloads": attr.bool(default = True, doc = "Require parseable JSON payload files."),
         "forbid_full_bundle_no_match": attr.bool(default = True, doc = "Fail if Go payload selection fell back to full_bundle_no_match."),
         "forbid_msgpack_payloads": attr.bool(default = True, doc = "Fail if tests emitted raw msgpack payloads instead of Bazel JSON payload files."),
-        "forbid_dd_git_test_env": attr.bool(default = True, doc = "Fail when .bazelrc injects DD_GIT_* into test environments."),
+        "forbid_dd_git_test_env": attr.bool(default = True, doc = "Fail when .bazelrc injects sync metadata, upload credentials, or upload endpoints into test environments."),
         "allowed_payload_selections": attr.string_list(default = [], doc = "Optional explicit allowlist for bazel.go.payload_selection values."),
         "expected_payload_selection_by_target": attr.string_dict(default = {}, doc = "Optional map of local target labels to their expected bazel.go.payload_selection value."),
         "_runtime": attr.label(default = "//tools/core:test_optimization_doctor.py", allow_single_file = True),

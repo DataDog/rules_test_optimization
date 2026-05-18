@@ -18,7 +18,10 @@ import sys
 from typing import Any
 
 
-DD_GIT_TEST_ENV_RE = re.compile(r"--test_env(?:=|\s+)DD_GIT_[A-Z0-9_]*")
+FORBIDDEN_TEST_ENV_RE = re.compile(
+    r"--test_env(?:=|\s+)"
+    r"(DD_GIT_[A-Z0-9_]*|DD_API_KEY|DD_SITE|DD_TEST_OPTIMIZATION_AGENT_URL|DD_TEST_OPTIMIZATION_AGENTLESS_URL)"
+)
 VALID_GO_PAYLOAD_SELECTIONS = {
     "module",
     "module_override",
@@ -364,8 +367,12 @@ def _validate_bazelrc(workspace: Path) -> None:
         text = path.read_text(encoding="utf-8", errors="replace")
         for line_number, line in enumerate(text.splitlines(), start=1):
             active_line = line.split("#", 1)[0]
-            if DD_GIT_TEST_ENV_RE.search(active_line):
-                _fail(f"{path}:{line_number} sets DD_GIT_* with --test_env; use --repo_env instead")
+            match = FORBIDDEN_TEST_ENV_RE.search(active_line)
+            if match:
+                _fail(
+                    f"{path}:{line_number} sets {match.group(1)} with --test_env; "
+                    "use --repo_env for sync metadata and pass upload credentials only to the uploader runtime"
+                )
 
 
 def _validate_outputs(

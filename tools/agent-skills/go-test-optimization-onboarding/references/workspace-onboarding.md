@@ -303,6 +303,12 @@ Update `go.mod` and `go.sum` using the repository's normal Go module workflow
 so the final test binary can resolve the packages injected by Orchestrion. Keep
 the dd-trace-go version coherent with `go_orchestrion_tool_repo`.
 
+For large monorepos where root-level tool imports would churn the main module,
+do not add a root `orchestrion.tool.go` only for Test Optimization. Keep the
+Orchestrion tool version in Bazel, then use package-local pin files or a
+repo-local wrapper that passes `orchestrion_pin_files = []` when that matches
+the repository's Go module policy.
+
 ## Bazel Config
 
 Add a named config and use it consistently for sync, test, doctor, and upload:
@@ -407,6 +413,11 @@ Prefer this split:
 - The wrapper rejects explicit per-target `topt_data` and
   `orchestrion_pin_files` overrides when those values must stay consistent
   across the repository.
+
+Only the Test Optimization wrapper should load
+`@test_optimization_data//:export.bzl`. Keep that load out of shared policy
+helpers and plain wrappers; otherwise non-instrumented BUILD files can force the
+sync repository to resolve even when they do not use a companion test rule.
 
 The wrapper should always pass stable Orchestrion pin files when tests are not
 at the repo root:

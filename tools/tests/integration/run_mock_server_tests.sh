@@ -422,6 +422,26 @@ BAZEL="$REPO_ROOT/bazelw"
 OUT_BASE="$TMP_WS/.bazel_out"
 BAZEL_FLAGS=(--output_base="$OUT_BASE")
 
+# ---------------------------------------------------------------------------
+# Scenario: declaring sync repos is lazy until a target actually consumes them.
+# ---------------------------------------------------------------------------
+# Large monorepos may declare Test Optimization once near workspace setup while
+# only instrumenting a small pilot target set. Plain targets that do not load or
+# depend on @test_optimization_data must keep working without sync credentials.
+env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test
+
+SYNC_LAZINESS_LOG="$TMP_WS/sync_laziness_requires_api_key.log"
+if env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" build //:dd_upload_payloads_with_context >"$SYNC_LAZINESS_LOG" 2>&1; then
+  echo "error: target consuming @test_optimization_data succeeded without DD_API_KEY"
+  cat "$SYNC_LAZINESS_LOG" || true
+  exit 1
+fi
+if ! grep -q "DD_API_KEY is not set" "$SYNC_LAZINESS_LOG"; then
+  echo "error: target consuming @test_optimization_data failed for an unexpected reason"
+  cat "$SYNC_LAZINESS_LOG" || true
+  exit 1
+fi
+
 # Provide deterministic repo metadata for fixtures + payload enrichment.
 REPO_ENVS=(
   --repo_env=DD_API_KEY=mock

@@ -694,7 +694,13 @@ If your workspace always uses the same synced repo (`@test_optimization_data`)
 and the same underlying test rule symbols, create thin local wrappers so
 package BUILD files do not repeat `topt_data` and `*_test_rule`.
 
-Single-service wrapper pattern (Go example):
+Keep plain wrappers and Test Optimization wrappers separate. A wrapper that is
+loaded by non-instrumented BUILD files must not load
+`@test_optimization_data//:export.bzl`, because the load itself consumes the
+sync repository. Put the `@test_optimization_data` load only in the wrapper used
+by instrumented targets.
+
+Single-service wrapper pattern for a simple Go workspace:
 
 ```bzl
 # tools/build/dd_go_test.bzl
@@ -945,6 +951,10 @@ consumers should not rename that repository.
 When Go tests live below the module root, pass the module-root pin files through
 `orchestrion_pin_files` (for example `["//:go.mod", "//:orchestrion.tool.go"]`)
 or inject them from a repo-local wrapper.
+For large monorepos where root-level tool imports would churn or invalidate the
+main Go module, keep Orchestrion tool wiring in Bazel and use a repo-local
+wrapper with package-local pin files or `orchestrion_pin_files = []`; do not add
+a root `orchestrion.tool.go` just to satisfy the wrapper pattern.
 
 For Python in WORKSPACE mode, declare `rules_python` and the core repository
 first, then use the public Python helper to declare only the Python companion:
