@@ -581,7 +581,7 @@ git_repository(
 Pin an immutable commit SHA (or internal mirrored archive) for reproducibility.
 
 For WORKSPACE Go usage, declare the core repository first, then use the public
-helper in step 7 to declare the Go companion and the Orchestrion-enabled
+helper in step 8 to declare the Go companion and the Orchestrion-enabled
 `rules_go` fork at the same revision:
 
 - `datadog-rules-test-optimization` for sync and uploader rules
@@ -600,6 +600,18 @@ the same Datadog revision:
 
 Load the Python macro from
 `@datadog-rules-test-optimization-python//:topt_py_test.bzl`, not from the root
+repository.
+
+For WORKSPACE Java usage, declare the core repository and `rules_java` first,
+then use the public helper in step 7 to declare the Java companion at the same
+Datadog revision:
+
+- `datadog-rules-test-optimization` for sync and uploader rules
+- `rules_java` for Java rules and toolchains
+- `datadog-rules-test-optimization-java` for `dd_topt_java_test`
+
+Load the Java macro from
+`@datadog-rules-test-optimization-java//:topt_java_test.bzl`, not from the root
 repository.
 
 ### Archive mirror installation
@@ -953,7 +965,59 @@ Run package-local labels such as
 `//tools/test_optimization:dd_upload_payloads`. Root labels are still valid for
 small repositories.
 
-### 7) Configure Go support in WORKSPACE with the public helper
+### 7) Configure Java support in WORKSPACE with the public helper
+
+Java WORKSPACE onboarding keeps ownership of Java rules, Java toolchains, test
+framework dependencies, and the dd-java-agent artifact in the consumer
+repository. The Datadog helper declares only the Java companion repository and
+maps its internal `@rules_java` dependency to the repository name the consumer
+already uses.
+
+Declare `rules_java` with the version and mirror policy approved by the
+consumer repository. Then declare the Datadog Java companion:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/java:workspace_repositories.bzl", "datadog_java_test_optimization_workspace_repositories")
+
+datadog_java_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_java_repo_name = "rules_java",
+)
+```
+
+Internal/private consumers should use SSH git fetch when anonymous archives are
+not available:
+
+```bzl
+git_repository(
+    name = "datadog-rules-test-optimization",
+    commit = "<commit-sha>",
+    remote = "ssh://git@github.com/DataDog/rules_test_optimization.git",
+)
+```
+
+Archive mode for mirrored Datadog repositories:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/java:workspace_repositories.bzl", "datadog_java_test_optimization_workspace_repositories")
+
+datadog_java_test_optimization_workspace_repositories(
+    rto_commit = "",
+    datadog_fetch = "archive",
+    rules_java_repo_name = "rules_java",
+    rto_archive_url = "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
+    rto_archive_sha256 = "<sha256-for-archive>",
+    rto_archive_prefix = "rules_test_optimization-<commit-sha>",
+)
+```
+
+After the companion is available, load the macro from the Java companion repo:
+
+```bzl
+load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
+```
+
+### 8) Configure Go support in WORKSPACE with the public helper
 
 For Bzlmod single-service Go workspaces, prefer guided bootstrap instead. For
 WORKSPACE consumers, prefer this helper over hand-written companion and
