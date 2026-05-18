@@ -9,9 +9,9 @@ module example.com/single-service-go-project
 go 1.25.0
 
 require (
-	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-dev
-	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-dev
-	github.com/DataDog/dd-trace-go/v2 v2.9.0-dev
+	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-rc.2
+	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-rc.2
+	github.com/DataDog/dd-trace-go/v2 v2.9.0-rc.2
 	github.com/DataDog/orchestrion v1.10.0
 )
 
@@ -61,7 +61,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/go-version v1.8.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/linkdata/deadlock v0.5.5 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect

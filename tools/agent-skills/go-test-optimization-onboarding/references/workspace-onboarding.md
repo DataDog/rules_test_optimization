@@ -224,7 +224,7 @@ load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_re
 load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 
 go_orchestrion_tool_repo(
-    dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51",
+    dd_trace_go_version = "v2.9.0-rc.2",
     version = "v1.9.0",
 )
 

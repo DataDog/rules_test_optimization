@@ -36,6 +36,8 @@ versioning.
   gofmt checks, and fixture JSON validation.
 - Added release automation workflow (`.github/workflows/release.yml`) to codify
   release runbook validation.
+- Updated the default Go tracer pin for Bazel/Orchestrion onboarding from the
+  previous pseudo-version to `v2.9.0-rc.2`.
 
 ## [1.0.0] - 2026-02-19
 

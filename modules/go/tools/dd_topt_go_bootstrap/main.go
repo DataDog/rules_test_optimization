@@ -32,7 +32,7 @@ const (
 	defaultRulesGoFetch          = "git"
 	defaultRulesGoRepoName       = "io_bazel_rules_go"
 	defaultOrchestrionVersion    = "v1.9.0"
-	defaultDDTraceGoVersion      = "v2.9.0-dev.0.20260416093245-194346a71c51"
+	defaultDDTraceGoVersion      = "v2.9.0-rc.2"
 	defaultSyncRepoName          = "test_optimization_data"
 	defaultDoctorTargetName      = "dd_test_optimization_doctor"
 	defaultUploaderTargetName    = "dd_upload_payloads"

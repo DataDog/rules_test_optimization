@@ -56,7 +56,7 @@ git_override(
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51",
+    dd_trace_go_version = "v2.9.0-rc.2",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```

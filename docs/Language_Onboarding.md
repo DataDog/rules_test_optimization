@@ -131,7 +131,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --dd-trace-go-version v2.9.0-rc.2 \
   --write-bazelrc
 ```
 
@@ -147,7 +147,7 @@ missing. With `--write-bazelrc`, it also writes the managed
 `test-optimization` config used by the command examples above.
 
 `--dd-trace-go-version` is optional. If omitted, the default is
-`v2.9.0-dev.0.20260416093245-194346a71c51`. It accepts a tag, pseudo-version,
+`v2.9.0-rc.2`. It accepts a tag, pseudo-version,
 branch, or commit SHA. Bootstrap resolves that input to the exact tracer
 versions Bazel will use, repins the local Go module to match, and later builds
 fail fast if the workspace setting and local pins no longer match.
@@ -258,7 +258,7 @@ load("@<existing_rules_go_repo_name>//go:orchestrion_workspace.bzl", "go_orchest
 
 go_orchestrion_tool_repo(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0-dev.0.20260416093245-194346a71c51",
+    dd_trace_go_version = "v2.9.0-rc.2",
 )
 
 load(
@@ -297,7 +297,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --runtime-version "<go-sdk-version>" \
   --rules-go-repo-name "<existing_rules_go_repo_name>" \
   --rules-go-variant complete \
-  --dd-trace-go-version v2.9.0-dev.0.20260416093245-194346a71c51 \
+  --dd-trace-go-version v2.9.0-rc.2 \
   --write-bazelrc \
   --write-root-targets \
   --write-orchestrion-files \

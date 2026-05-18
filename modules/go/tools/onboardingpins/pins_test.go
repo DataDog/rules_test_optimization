@@ -297,6 +297,6 @@ func ExampleFormatShell() {
 	// RTO_ARCHIVE_TYPE="tar.gz"
 	// RULES_GO_VARIANT="complete"
 	// RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_complete"
-	// DD_TRACE_GO_VERSION="v2.9.0-dev.0.20260416093245-194346a71c51"
+	// DD_TRACE_GO_VERSION="v2.9.0-rc.2"
 	// ORCHESTRION_VERSION="v1.9.0"
 }

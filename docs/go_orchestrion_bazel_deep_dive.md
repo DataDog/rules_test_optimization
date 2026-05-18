@@ -199,7 +199,7 @@ their repository placement and local wrapper policy under owner review while
 still using the same Orchestrion-enabled `rules_go` variants.
 
 If no tracer setting is present, the default is still
-`v2.9.0-dev.0.20260416093245-194346a71c51`. Bootstrap keeps the local Go module
+`v2.9.0-rc.2`. Bootstrap keeps the local Go module
 on the same effective versions, and the Bazel build now fails fast if the
 workspace setting and the local Go module pins drift apart.
 
