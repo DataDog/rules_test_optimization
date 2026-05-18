@@ -25,7 +25,7 @@ Pick the path that matches your repository:
 - **Bzlmod + .NET companion:** `dd_topt_dotnet_test` macro with analysis-time selection
 - **Bzlmod + Ruby companion:** `dd_topt_ruby_test` macro with analysis-time selection
 - **Bzlmod + multi-service monorepo:** one sync extension, per-service labels/exports
-- **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled, including Go and Python companion helpers
+- **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled, including Go, Python, and Java companion helpers
 - **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
 
 ## Documentation map
@@ -539,6 +539,8 @@ callers do not need to pass `java_test_rule`. Override it only when wrapping a
 custom test macro (e.g. a junit5 wrapper). The macro requires `agent_jar` so
 the dd-java-agent is wired into `-javaagent` and emits payloads; source the
 JAR with `http_file`/`maven_install`/a local filegroup.
+The macro injects the Java agent to take care of tracer instrumentation, so
+callers do not need to add their own `-javaagent` flag.
 
 On Windows, add `build --enable_runfiles` to your `.bazelrc`. The macro injects
 `-javaagent:$(rootpath <agent_jar>)`, which only resolves when runfiles are
@@ -976,6 +978,23 @@ The Python helper deliberately does not declare Python toolchains, `pip_parse`,
 repository's existing `rules_python` setup, then load
 `dd_topt_py_test` from
 `@datadog-rules-test-optimization-python//:topt_py_test.bzl`.
+
+For Java in WORKSPACE mode, declare `rules_java` and the core repository first,
+then use the public Java helper to declare only the Java companion:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/java:workspace_repositories.bzl", "datadog_java_test_optimization_workspace_repositories")
+
+datadog_java_test_optimization_workspace_repositories(
+    rto_commit = "<commit-sha>",
+    rules_java_repo_name = "rules_java",
+)
+```
+
+The Java helper deliberately does not declare Java toolchains, test framework
+dependencies, or the dd-java-agent artifact. Keep those dependencies in the
+consumer repository's existing Java setup, then load `dd_topt_java_test` from
+`@datadog-rules-test-optimization-java//:topt_java_test.bzl`.
 
 Use [`docs/Installation_Reference.md`](docs/Installation_Reference.md) for mirrored `http_archive`, Go toolchain
 setup, uploader wiring, and full WORKSPACE details.

@@ -36,6 +36,24 @@ load(
     "contains_parent_segment_test",
 )
 load(
+    "//tools/tests/core:test_java_workspace_repositories_utils.bzl",
+    "java_archive_specs_test",
+    "java_custom_repo_names_test",
+    "java_existing_repo_failure_test",
+    "java_existing_repo_target_rule",
+    "java_git_specs_test",
+    "java_invalid_fetch_mode_failure_test",
+    "java_invalid_fetch_mode_target_rule",
+    "java_missing_archive_failure_test",
+    "java_missing_archive_target_rule",
+    "java_missing_core_repo_failure_test",
+    "java_missing_core_repo_target_rule",
+    "java_missing_git_commit_failure_test",
+    "java_missing_git_commit_target_rule",
+    "java_missing_rules_java_repo_failure_test",
+    "java_missing_rules_java_repo_target_rule",
+)
+load(
     "//tools/tests/core:test_multi_sync_utils.bzl",
     "compute_repo_names_test",
     "compute_service_keys_dedups_collisions_test",
@@ -281,6 +299,36 @@ python_missing_rules_python_repo_target_rule(
     tags = ["manual"],
 )
 
+java_invalid_fetch_mode_target_rule(
+    name = "java_invalid_fetch_mode_target",
+    tags = ["manual"],
+)
+
+java_missing_git_commit_target_rule(
+    name = "java_missing_git_commit_target",
+    tags = ["manual"],
+)
+
+java_missing_archive_target_rule(
+    name = "java_missing_archive_target",
+    tags = ["manual"],
+)
+
+java_existing_repo_target_rule(
+    name = "java_existing_repo_target",
+    tags = ["manual"],
+)
+
+java_missing_core_repo_target_rule(
+    name = "java_missing_core_repo_target",
+    tags = ["manual"],
+)
+
+java_missing_rules_java_repo_target_rule(
+    name = "java_missing_rules_java_repo_target",
+    tags = ["manual"],
+)
+
 empty_name_target_rule(
     name = "empty_name_target",
     tags = ["manual"],
@@ -373,6 +421,24 @@ python_custom_rules_python_repo_name_test(
     timeout = "short",
 )
 
+java_git_specs_test(
+    name = "java_git_specs_test",
+    size = "small",
+    timeout = "short",
+)
+
+java_archive_specs_test(
+    name = "java_archive_specs_test",
+    size = "small",
+    timeout = "short",
+)
+
+java_custom_repo_names_test(
+    name = "java_custom_repo_names_test",
+    size = "small",
+    timeout = "short",
+)
+
 invalid_variant_failure_test(
     name = "invalid_variant_failure_test",
     target_under_test = ":invalid_variant_target",
@@ -411,6 +477,36 @@ python_existing_repo_failure_test(
 python_missing_rules_python_repo_failure_test(
     name = "python_missing_rules_python_repo_failure_test",
     target_under_test = ":python_missing_rules_python_repo_target",
+)
+
+java_invalid_fetch_mode_failure_test(
+    name = "java_invalid_fetch_mode_failure_test",
+    target_under_test = ":java_invalid_fetch_mode_target",
+)
+
+java_missing_git_commit_failure_test(
+    name = "java_missing_git_commit_failure_test",
+    target_under_test = ":java_missing_git_commit_target",
+)
+
+java_missing_archive_failure_test(
+    name = "java_missing_archive_failure_test",
+    target_under_test = ":java_missing_archive_target",
+)
+
+java_existing_repo_failure_test(
+    name = "java_existing_repo_failure_test",
+    target_under_test = ":java_existing_repo_target",
+)
+
+java_missing_core_repo_failure_test(
+    name = "java_missing_core_repo_failure_test",
+    target_under_test = ":java_missing_core_repo_target",
+)
+
+java_missing_rules_java_repo_failure_test(
+    name = "java_missing_rules_java_repo_failure_test",
+    target_under_test = ":java_missing_rules_java_repo_target",
 )
 
 default_context_data_test(
