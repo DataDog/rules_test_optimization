@@ -46,8 +46,7 @@ def _wrapped_actual_output_path(label_name, executable_basename):
     """Return the wrapper-owned sibling executable path used on Unix.
 
     The basename is kept equal to the wrapped executable's basename so that
-    test runners which derive metadata from ``$0`` / SELF_LOCATION (e.g. the
-    JUnit5 runner that infers the test jar from the launcher basename) still
+    test runners which derive metadata from ``$0`` / SELF_LOCATION still
     see the underlying raw target's name. The file is placed inside a
     ``<label>__topt_wrap/`` subdirectory to avoid colliding with the raw
     target's executable, which Bazel publishes in the same package.
