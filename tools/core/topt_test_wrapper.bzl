@@ -42,9 +42,16 @@ def _select_wrapper_output_name(label_name, executable_basename, is_windows):
         return label_name + ".bat"
     return label_name
 
-def _wrapped_actual_output_name(label_name, executable_basename):
-    """Return the wrapper-owned sibling executable name used on Unix."""
-    return label_name + "__wrapped_" + executable_basename
+def _wrapped_actual_output_path(label_name, executable_basename):
+    """Return the wrapper-owned sibling executable path used on Unix.
+
+    The basename is kept equal to the wrapped executable's basename so that
+    test runners which derive metadata from ``$0`` / SELF_LOCATION still
+    see the underlying raw target's name. The file is placed inside a
+    ``<label>__topt_wrap/`` subdirectory to avoid colliding with the raw
+    target's executable, which Bazel publishes in the same package.
+    """
+    return label_name + "__topt_wrap/" + executable_basename
 
 def _unix_wrapper_content(actual_filename):
     """Render the Unix launcher used by wrapped non-Go test targets."""
@@ -254,12 +261,15 @@ def _topt_test_wrapper_impl(ctx):
     if is_windows:
         actual_filename = dep_exe.short_path
     else:
-        actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
+        actual_out_path = _wrapped_actual_output_path(ctx.label.name, dep_exe.basename)
+        actual_out = ctx.actions.declare_file(actual_out_path)
 
         # Materialize the raw executable inside the wrapper runfiles tree so
         # Unix launchers can execute a stable sibling path from TEST_SRCDIR.
+        # The sibling lives in a subdir so its basename can match the wrapped
+        # executable's; the launcher resolves it relative to its own dirname.
         ctx.actions.symlink(output = actual_out, target_file = dep_exe)
-        actual_filename = actual_out.basename
+        actual_filename = actual_out_path
         actual_files.append(actual_out)
         wrapper_runfiles = wrapper_runfiles.merge(ctx.runfiles(files = [actual_out]))
 

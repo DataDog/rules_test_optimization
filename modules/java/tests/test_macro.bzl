@@ -316,7 +316,7 @@ def _java_macro_public_wrapper_test_impl(ctx):
         env,
         _has_file_basename(
             files,
-            "java_macro_single_service_target__wrapped_java_macro_single_service_target__raw_java_test.sh",
+            "java_macro_single_service_target__raw_java_test.sh",
         ),
     )
     run_env = target[RunEnvironmentInfo].environment

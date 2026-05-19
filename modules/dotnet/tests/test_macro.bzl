@@ -298,7 +298,7 @@ def _dotnet_macro_public_wrapper_test_impl(ctx):
         env,
         _has_file_basename(
             files,
-            "dotnet_macro_single_service_target__wrapped_dotnet_macro_single_service_target__raw_dotnet_test.sh",
+            "dotnet_macro_single_service_target__raw_dotnet_test.sh",
         ),
     )
     run_env = target[RunEnvironmentInfo].environment

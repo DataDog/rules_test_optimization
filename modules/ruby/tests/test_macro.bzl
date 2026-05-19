@@ -298,7 +298,7 @@ def _ruby_macro_public_wrapper_test_impl(ctx):
         env,
         _has_file_basename(
             files,
-            "ruby_macro_single_service_target__wrapped_ruby_macro_single_service_target__raw_ruby_test.sh",
+            "ruby_macro_single_service_target__raw_ruby_test.sh",
         ),
     )
     run_env = target[RunEnvironmentInfo].environment
