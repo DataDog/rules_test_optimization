@@ -140,7 +140,7 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "dFUVkr3fc2rSZUXMcZ6hz8feugJAct/i3eVZAnbk7Ck=",
+        "bzlTransitiveDigest": "zC3aEdxLSUhPV6iwgCNk7hQr+1eO+rAQ5znCfGieX3g=",
         "usagesDigest": "8+UVmqdhqtmEmW3r9vMffABIBlZnL2Mwd3je/6nAzu8=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

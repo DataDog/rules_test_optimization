@@ -298,7 +298,7 @@ def _nodejs_macro_public_wrapper_test_impl(ctx):
         env,
         _has_file_basename(
             files,
-            "nodejs_macro_single_service_target__wrapped_nodejs_macro_single_service_target__raw_nodejs_test.sh",
+            "nodejs_macro_single_service_target__raw_nodejs_test.sh",
         ),
     )
     run_env = target[RunEnvironmentInfo].environment

@@ -851,7 +851,7 @@ def _py_macro_public_wrapper_test_impl(ctx):
         env,
         _has_file_basename(
             files,
-            "py_macro_single_service_target__wrapped_py_macro_single_service_target__raw_python_test.sh",
+            "py_macro_single_service_target__raw_python_test.sh",
         ),
     )
     run_env = target[RunEnvironmentInfo].environment
