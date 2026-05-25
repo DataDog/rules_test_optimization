@@ -15,6 +15,13 @@ versioning.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-25
+
+### Added
+- Java companion now ships a WORKSPACE repository helper for non-bzlmod
+  consumers.
+- Java onboarding documentation skill to guide new Java consumers.
+
 ### Changed
 - Refreshed documentation around the supported `test -> doctor -> dry-run
   enrichment -> upload` flow, large WORKSPACE Go onboarding, and current
@@ -38,6 +45,14 @@ versioning.
   release runbook validation.
 - Updated the default Go tracer pin for Bazel/Orchestrion onboarding from the
   previous pseudo-version to `v2.9.0-rc.2`.
+- `UPLOADER_VERSION` now tracks `RULES_VERSION` so both move together in
+  future releases.
+
+### Fixed
+- Core: preserve the raw executable basename in the Unix wrapper symlink so
+  argv[0]-sensitive test binaries observe the expected name.
+- Java: corrected the `testonly` selector so Java test targets are recognized
+  consistently.
 
 ## [1.0.0] - 2026-02-19
 
