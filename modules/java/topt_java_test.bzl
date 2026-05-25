@@ -130,6 +130,8 @@ def dd_topt_java_test(
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
+    wrapper_kwargs.setdefault("testonly", True)
+    raw_passthrough.setdefault("testonly", True)
 
     user_data = kwargs.pop("data", None)
     data = user_data
@@ -191,6 +193,7 @@ def dd_topt_java_test(
     topt_java_payloads_selector(
         name = selector_name,
         deps = deps_labels,
+        testonly = True,
         test_class = test_class,
         attribute_candidates = attribute_candidates,
         explicit_identifier = module_identifier or "",
