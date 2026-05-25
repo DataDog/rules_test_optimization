@@ -24,12 +24,13 @@ The solution separates concerns into four phases:
 - Problem statement & proposal: see `docs/RFC.md` for background rationale and trade-offs (historical context).
 - Usage snippets: see `examples/README.md` for copy/paste single-service and multi-service examples.
 - Agent workflow for Go consumer onboarding: see `tools/agent-skills/go-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Go instrumentation, validation, and troubleshooting.
+- Agent workflow for Java consumer onboarding: see `tools/agent-skills/java-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Java instrumentation, validation, and troubleshooting.
 - Agent workflow for rules_go upstream migrations: see `tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md` for the neutral Codex-compatible skill that guides agents through porting the vendored Orchestrion-enabled `rules_go` fork to a new upstream tag or commit.
 - Cross-repository integration fixture: see the sibling repository `../rules_test_optimization_tests` and its `README.md` for the consumer-style validation flow that must stay green after changes here.
   - For local validation of unpublished changes from this repo, switch that fixture repo from its pinned `git_override(...)` entries to the commented `local_path_override(...)` entries in `../rules_test_optimization_tests/MODULE.bazel` so Bazel resolves this checkout instead of GitHub.
 - Go fork maintenance details: see `third_party/rules_go_orchestrion_base.METADATA.json`, `third_party/rules_go_orchestrion_complete.METADATA.json`, `third_party/rules_go_orchestrion_variants.json`, and `tools/dev/diff_rules_go_fork.py`.
 
-Agents: start with `README.md` for current operational behavior, then `CONTRIBUTING.md` for the maintained validation workflow. When instrumenting a Go consumer repository, load `tools/agent-skills/go-test-optimization-onboarding/SKILL.md` before editing that consumer. Use the overview and RFC when you need architecture details or design rationale/trade-off context.
+Agents: start with `README.md` for current operational behavior, then `CONTRIBUTING.md` for the maintained validation workflow. When instrumenting a Go consumer repository, load `tools/agent-skills/go-test-optimization-onboarding/SKILL.md` before editing that consumer. When instrumenting a Java consumer repository, load `tools/agent-skills/java-test-optimization-onboarding/SKILL.md` before editing that consumer. Use the overview and RFC when you need architecture details or design rationale/trade-off context.
 
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources plus developer and agent support files:
@@ -40,6 +41,7 @@ Agents: start with `README.md` for current operational behavior, then `CONTRIBUT
   - `dev/*_bootstrap.bzl` — dev-only bootstrap extensions wiring the local Go, Python, Java, NodeJS, .NET, and Ruby companion repos from this workspace root.
   - `dev/diff_rules_go_fork.py` — maintainer utility that regenerates the delta report for the vendored `rules_go` fork.
   - `agent-skills/go-test-optimization-onboarding/` — neutral agent skill for instrumenting Go consumer repositories with Test Optimization.
+  - `agent-skills/java-test-optimization-onboarding/` — neutral agent skill for instrumenting Java consumer repositories with Test Optimization.
   - `agent-skills/rules-go-orchestrion-upstream-migration/` — neutral agent skill for porting the vendored Orchestrion-enabled `rules_go` fork to a new upstream version.
 - `modules/go/` — Go companion module sources:
   - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.

@@ -64,6 +64,9 @@ are informative and may lag temporarily.
 - [`tools/agent-skills/python-test-optimization-onboarding/SKILL.md`](tools/agent-skills/python-test-optimization-onboarding/SKILL.md):
   neutral Codex-compatible agent workflow for instrumenting Python WORKSPACE
   and Bzlmod consumers with Test Optimization.
+- [`tools/agent-skills/java-test-optimization-onboarding/SKILL.md`](tools/agent-skills/java-test-optimization-onboarding/SKILL.md):
+  neutral Codex-compatible agent workflow for instrumenting Java WORKSPACE and
+  Bzlmod consumers with Test Optimization.
 - [`tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md`](tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md):
   neutral Codex-compatible agent workflow for porting the vendored
   Orchestrion-enabled `rules_go` fork to a new upstream tag or commit.
