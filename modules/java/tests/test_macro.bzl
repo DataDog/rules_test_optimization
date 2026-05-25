@@ -62,6 +62,13 @@ _java_test_capture_rule = rule(
     executable = True,
 )
 
+def _testonly_dep_impl(_ctx):
+    return []
+
+_testonly_dep = rule(
+    implementation = _testonly_dep_impl,
+)
+
 def _has_fragment(items, fragment):
     for item in items:
         if fragment in item:
@@ -197,6 +204,21 @@ def java_macro_ci_visibility_disabled_target(name, tags = None):
         tags = tags,
     )
 
+def java_macro_testonly_dep_target(name, tags = None):
+    _testonly_dep(
+        name = name + "_dep",
+        testonly = True,
+    )
+    dd_topt_java_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        java_test_rule = _java_test_capture_rule,
+        agent_jar = _FIXTURE_AGENT_JAR,
+        deps = [":" + name + "_dep"],
+        test_class = "com.example.tests.TestonlyDepTest",
+        tags = tags,
+    )
+
 def _java_macro_single_service_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -271,6 +293,13 @@ def _java_macro_ci_visibility_disabled_test_impl(ctx):
     captured = target[ToptJavaMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    return analysistest.end(env)
+
+def _java_macro_testonly_selector_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    asserts.true(env, len(files) > 0, "expected selector to provide payload files")
     return analysistest.end(env)
 
 def _java_macro_select_inputs_wiring_test_impl(ctx):
@@ -466,4 +495,7 @@ java_macro_agent_jar_with_user_flags_test = analysistest.make(
 )
 java_macro_ci_visibility_disabled_test = analysistest.make(
     _java_macro_ci_visibility_disabled_test_impl,
+)
+java_macro_testonly_selector_test = analysistest.make(
+    _java_macro_testonly_selector_test_impl,
 )
