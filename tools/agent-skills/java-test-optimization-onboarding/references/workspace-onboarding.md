@@ -150,6 +150,7 @@ dd_topt_java_test(
     srcs = ["SampleTest.java"],
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.SampleTest",
+    stage_sources = True,
     topt_data = topt_data,
     agent_jar = "//tools/test_optimization:dd_java_agent",
 )
@@ -168,6 +169,7 @@ dd_topt_java_test(
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.SampleTest",
     java_test_rule = repo_java_test,
+    stage_sources = True,
     topt_data = topt_data,
     agent_jar = "//tools/test_optimization:dd_java_agent",
 )
@@ -178,5 +180,8 @@ visibility passed by `dd_topt_java_test`, and must execute a real Java test
 process. Keep repository-specific feature flags, scheduling, flaky-test policy,
 or framework selection in the wrapper layer.
 
-Enable `stage_sources = True` only when you intentionally want source location
-tags and accept the extra runfiles cost.
+Keep `stage_sources = True` in the onboarding path unless the repository has a
+specific reason to opt out. It stages the target's direct `srcs` into test
+runfiles so the Java tracer can populate `test.source.file`,
+`test.source.start`, and `test.source.end`; without it, tests can still pass and
+upload payloads while source location metadata is silently absent.
