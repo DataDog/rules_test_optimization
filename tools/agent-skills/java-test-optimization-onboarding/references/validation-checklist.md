@@ -122,6 +122,9 @@ After tests:
 - JSON payload files exist under `bazel-testlogs`.
 - `bazel_target_metadata.json` exists for instrumented runtime tests.
 - The raw Java test is wrapped by a Test Optimization executable target.
+- Java tests set `stage_sources = True` directly or through their repo-local
+  wrapper, unless the repository explicitly accepts missing source location
+  tags.
 - The doctor passes.
 - Dry-run enrichment passes.
 - Real upload sends data only after local validation succeeds.

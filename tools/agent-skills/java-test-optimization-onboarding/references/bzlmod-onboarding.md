@@ -87,6 +87,7 @@ dd_topt_java_test(
     srcs = ["SampleTest.java"],
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.SampleTest",
+    stage_sources = True,
     topt_data = topt_data,
     agent_jar = "//tools/test_optimization:dd_java_agent",
 )
@@ -106,6 +107,7 @@ dd_topt_java_test(
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.SampleTest",
     java_test_rule = repo_java_test,
+    stage_sources = True,
     topt_data = topt_data,
     agent_jar = "//tools/test_optimization:dd_java_agent",
 )
@@ -114,3 +116,9 @@ dd_topt_java_test(
 The macro requires `agent_jar`, injects `-javaagent`, and owns the manifest and
 payload-in-files environment variables. Do not duplicate that wiring in the
 consumer test target.
+
+Keep `stage_sources = True` in the onboarding path unless the repository has a
+specific reason to opt out. It stages the target's direct `srcs` into test
+runfiles so the Java tracer can populate `test.source.file`,
+`test.source.start`, and `test.source.end`; without it, tests can still pass and
+upload payloads while source location metadata is silently absent.

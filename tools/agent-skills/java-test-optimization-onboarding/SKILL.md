@@ -79,6 +79,10 @@ Every successful Java onboarding should end with these pieces:
 - Existing repository wrapper policy stays in the consumer repository; the
   Datadog macro wraps the raw Java test rule or wrapper rule and injects the
   Java agent plus Test Optimization runtime files.
+- Java onboarding explicitly sets `stage_sources = True` in the direct
+  `dd_topt_java_test` call or in the repo-local wrapper's call into
+  `dd_topt_java_test`, unless the repository intentionally opts out after
+  accepting that source location tags may be missing.
 - The workspace has exactly one logical doctor/uploader pair. In monorepos,
   place it in a lightweight package such as `//tools/test_optimization`; root
   labels are still fine for small repositories.
