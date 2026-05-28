@@ -82,18 +82,6 @@ var syntheticTestmainRootPackagesTestOptimization = []syntheticTestmainRootPacka
 		alias:       "example.com/__orchestrion/tracer",
 		packagePath: "github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
 	},
-	{
-		alias:       "example.com/__orchestrion/http",
-		packagePath: "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
-	},
-	{
-		alias:       "example.com/__orchestrion/httpinternal",
-		packagePath: "github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
-	},
-	{
-		alias:       "example.com/__orchestrion/slog",
-		packagePath: "github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
-	},
 }
 
 var syntheticTestmainSourceCompiledPackagesGeneral = map[string]bool{
@@ -113,9 +101,6 @@ var syntheticTestmainSourceCompiledPackagesTestOptimization = map[string]bool{
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage": true,
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations":                    true,
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer":                                        true,
-	"github.com/DataDog/dd-trace-go/contrib/net/http/v2":                                      true,
-	"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion":                 true,
-	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2":                                      true,
 }
 
 func syntheticTestmainRootPackagesForMode(mode string) []syntheticTestmainRootPackage {

@@ -122,9 +122,6 @@ var orchestrionLinkClosurePackagesTestOptimization = []string{
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage",
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
-	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
-	"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
-	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
 var orchestrionLinkStdlibRoots = []string{

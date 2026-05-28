@@ -220,7 +220,12 @@ func TestSyntheticTestmainHelperCacheKeysIncludeMode(t *testing.T) {
 }
 
 func TestSyntheticTestmainModeSpecificClosures(t *testing.T) {
-	for _, pkg := range []string{"github.com/DataDog/dd-trace-go/v2/profiler"} {
+	for _, pkg := range []string{
+		"github.com/DataDog/dd-trace-go/v2/profiler",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+	} {
 		if !containsRootPackage(syntheticTestmainRootPackagesForMode(orchestrionModeGeneral), pkg) {
 			t.Fatalf("general synthetic testmain roots missing %s", pkg)
 		}
@@ -233,21 +238,30 @@ func TestSyntheticTestmainModeSpecificClosures(t *testing.T) {
 		if containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeTestOptimization), pkg) {
 			t.Fatalf("test_optimization link closure should exclude %s", pkg)
 		}
+		if isSyntheticTestmainSourceCompileCandidate(pkg, orchestrionModeTestOptimization) {
+			t.Fatalf("test_optimization source-compiled closure should exclude %s", pkg)
+		}
 	}
 	for _, pkg := range []string{
-		"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
-		"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
-		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+		"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+		"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations",
+		"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
 	} {
 		if !containsRootPackage(syntheticTestmainRootPackagesForMode(orchestrionModeTestOptimization), pkg) {
-			t.Fatalf("test_optimization synthetic testmain roots missing stdlib helper %s", pkg)
-		}
-		if !containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeTestOptimization), pkg) {
-			t.Fatalf("test_optimization link closure missing stdlib helper %s", pkg)
+			t.Fatalf("test_optimization synthetic testmain roots missing CI Visibility helper %s", pkg)
 		}
 	}
-	if !isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion", orchestrionModeTestOptimization) {
-		t.Fatal("test_optimization should source-compile stdlib helper packages referenced by the woven stdlib")
+	for _, pkg := range []string{
+		"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+		"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage",
+		"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	} {
+		if !containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeTestOptimization), pkg) {
+			t.Fatalf("test_optimization link closure missing CI Visibility helper %s", pkg)
+		}
+		if !isSyntheticTestmainSourceCompileCandidate(pkg, orchestrionModeTestOptimization) {
+			t.Fatalf("test_optimization source-compiled closure missing CI Visibility helper %s", pkg)
+		}
 	}
 	if containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeTestOptimization), "github.com/DataDog/dd-trace-go/v2/internal") {
 		t.Fatal("test_optimization link closure should not override dd-trace-go internal packagefiles from the compile manifest")
