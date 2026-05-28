@@ -177,6 +177,124 @@ func TestSyntheticTestmainHelperDecisionCacheKeyIgnoresSdkExecrootPath(t *testin
 	}
 }
 
+func TestSyntheticTestmainHelperCacheKeysIncludeMode(t *testing.T) {
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.7.3"}}`))
+	sdk := filepath.Join(t.TempDir(), "sdk")
+	if err := os.MkdirAll(filepath.Join(sdk, "src", "internal", "buildcfg"), 0o755); err != nil {
+		t.Fatalf("mkdir sdk tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sdk, "VERSION"), []byte("go1.24.0\n"), 0o644); err != nil {
+		t.Fatalf("write VERSION: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sdk, "src", "internal", "buildcfg", "zbootstrap.go"), []byte("package buildcfg\n"), 0o644); err != nil {
+		t.Fatalf("write zbootstrap.go: %v", err)
+	}
+
+	generalParts, err := syntheticTestmainHelperCacheKeyParts(&env{sdk: sdk, orchestrionMode: orchestrionModeGeneral})
+	if err != nil {
+		t.Fatalf("syntheticTestmainHelperCacheKeyParts general error: %v", err)
+	}
+	testOptParts, err := syntheticTestmainHelperCacheKeyParts(&env{sdk: sdk, orchestrionMode: orchestrionModeTestOptimization})
+	if err != nil {
+		t.Fatalf("syntheticTestmainHelperCacheKeyParts test_optimization error: %v", err)
+	}
+	if reflect.DeepEqual(generalParts, testOptParts) {
+		t.Fatalf("helper cache key parts should differ by mode: %v", generalParts)
+	}
+	if !hasKeyPart(generalParts, "orchestrion_mode=general") || !hasKeyPart(testOptParts, "orchestrion_mode=test_optimization") {
+		t.Fatalf("helper cache key parts missing mode: general=%v test_optimization=%v", generalParts, testOptParts)
+	}
+	if !hasKeyPart(generalParts, "helper_export_cache="+helperExportCacheABIVersion) ||
+		!hasKeyPart(testOptParts, "helper_export_cache="+helperExportCacheABIVersion) {
+		t.Fatalf("helper cache key parts missing helper export cache ABI: general=%v test_optimization=%v", generalParts, testOptParts)
+	}
+
+	decisionParts, err := syntheticTestmainHelperDecisionCacheKeyParts(&env{sdk: sdk, orchestrionMode: orchestrionModeTestOptimization})
+	if err != nil {
+		t.Fatalf("syntheticTestmainHelperDecisionCacheKeyParts error: %v", err)
+	}
+	if !hasKeyPart(decisionParts, "orchestrion_mode=test_optimization") {
+		t.Fatalf("helper decision cache key parts missing mode: %v", decisionParts)
+	}
+}
+
+func TestSyntheticTestmainModeSpecificClosures(t *testing.T) {
+	for _, pkg := range []string{"github.com/DataDog/dd-trace-go/v2/profiler"} {
+		if !containsRootPackage(syntheticTestmainRootPackagesForMode(orchestrionModeGeneral), pkg) {
+			t.Fatalf("general synthetic testmain roots missing %s", pkg)
+		}
+		if containsRootPackage(syntheticTestmainRootPackagesForMode(orchestrionModeTestOptimization), pkg) {
+			t.Fatalf("test_optimization synthetic testmain roots should exclude %s", pkg)
+		}
+		if !containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeGeneral), pkg) {
+			t.Fatalf("general link closure missing %s", pkg)
+		}
+		if containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeTestOptimization), pkg) {
+			t.Fatalf("test_optimization link closure should exclude %s", pkg)
+		}
+	}
+	for _, pkg := range []string{
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+	} {
+		if !containsRootPackage(syntheticTestmainRootPackagesForMode(orchestrionModeTestOptimization), pkg) {
+			t.Fatalf("test_optimization synthetic testmain roots missing stdlib helper %s", pkg)
+		}
+		if !containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeTestOptimization), pkg) {
+			t.Fatalf("test_optimization link closure missing stdlib helper %s", pkg)
+		}
+	}
+	if !isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion", orchestrionModeTestOptimization) {
+		t.Fatal("test_optimization should source-compile stdlib helper packages referenced by the woven stdlib")
+	}
+	if containsExactString(orchestrionLinkClosurePackagesForMode(orchestrionModeTestOptimization), "github.com/DataDog/dd-trace-go/v2/internal") {
+		t.Fatal("test_optimization link closure should not override dd-trace-go internal packagefiles from the compile manifest")
+	}
+}
+
+func TestShouldRunOrchestrionForStdlibPackageTestOptimization(t *testing.T) {
+	if !shouldRunOrchestrionForStdlibPackage("testing", orchestrionModeTestOptimization) {
+		t.Fatal("test_optimization should weave the standard testing package")
+	}
+	for _, pkg := range []string{"log/slog", "net/http", "os"} {
+		if shouldRunOrchestrionForStdlibPackage(pkg, orchestrionModeTestOptimization) {
+			t.Fatalf("test_optimization should not weave stdlib package %s", pkg)
+		}
+	}
+	if !shouldRunOrchestrionForStdlibPackage("net/http", orchestrionModeGeneral) {
+		t.Fatal("general mode should keep generic stdlib weaving enabled")
+	}
+}
+
+func hasKeyPart(parts []string, want string) bool {
+	for _, part := range parts {
+		if part == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRootPackage(roots []syntheticTestmainRootPackage, want string) bool {
+	for _, root := range roots {
+		if root.packagePath == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExactString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestSeedSyntheticTestmainModuleFilesIgnoresSourceModule verifies that
 // synthetic testmain helpers do not inherit the consumer module graph. The
 // helper graph must stay aligned with the offline Orchestrion tool proxy.
@@ -195,7 +313,7 @@ func TestSeedSyntheticTestmainModuleFilesIgnoresSourceModule(t *testing.T) {
 		}
 	}
 
-	usedSourceModule, err := seedSyntheticTestmainModuleFiles(sourceDir, syntheticDir, "v1.6.0", defaultDDTraceGoVersions())
+	usedSourceModule, err := seedSyntheticTestmainModuleFiles(sourceDir, syntheticDir, "v1.6.0", defaultDDTraceGoVersions(), orchestrionModeGeneral)
 	if err != nil {
 		t.Fatalf("seedSyntheticTestmainModuleFiles error: %v", err)
 	}
@@ -207,7 +325,7 @@ func TestSeedSyntheticTestmainModuleFilesIgnoresSourceModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seeded go.mod: %v", err)
 	}
-	want := syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions())
+	want := syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions(), orchestrionModeGeneral)
 	if string(goMod) != want {
 		t.Fatalf("seeded go.mod = %q, want %q", string(goMod), want)
 	}
@@ -219,7 +337,7 @@ func TestSeedSyntheticTestmainModuleFilesIgnoresSourceModule(t *testing.T) {
 func TestSeedSyntheticTestmainModuleFilesFallsBack(t *testing.T) {
 	syntheticDir := t.TempDir()
 
-	usedSourceModule, err := seedSyntheticTestmainModuleFiles("", syntheticDir, "v1.6.0", defaultDDTraceGoVersions())
+	usedSourceModule, err := seedSyntheticTestmainModuleFiles("", syntheticDir, "v1.6.0", defaultDDTraceGoVersions(), orchestrionModeGeneral)
 	if err != nil {
 		t.Fatalf("seedSyntheticTestmainModuleFiles error: %v", err)
 	}
@@ -231,7 +349,7 @@ func TestSeedSyntheticTestmainModuleFilesFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fallback go.mod: %v", err)
 	}
-	want := syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions())
+	want := syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions(), orchestrionModeGeneral)
 	if string(goMod) != want {
 		t.Fatalf("fallback go.mod = %q, want %q", string(goMod), want)
 	}
@@ -430,13 +548,13 @@ func TestLoadModulePackageMetadataBatchSkipsBrokenTransitiveDeps(t *testing.T) {
 }
 
 func TestIsSyntheticTestmainSourceCompileCandidate(t *testing.T) {
-	if !isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/dd-trace-go/v2/internal/orchestrion") {
+	if !isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/dd-trace-go/v2/internal/orchestrion", orchestrionModeGeneral) {
 		t.Fatal("dd-trace-go internal package should be source-compile eligible")
 	}
-	if !isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion") {
+	if !isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion", orchestrionModeGeneral) {
 		t.Fatal("contrib helper package should be source-compile eligible")
 	}
-	if isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/datadog-agent/pkg/obfuscate") {
+	if isSyntheticTestmainSourceCompileCandidate("github.com/DataDog/datadog-agent/pkg/obfuscate", orchestrionModeGeneral) {
 		t.Fatal("external split module must stay on the export path")
 	}
 }
@@ -470,6 +588,77 @@ func TestPackageNeedsSyntheticSourceCompileIncludesExternalStdlibUsers(t *testin
 	}
 	if !got {
 		t.Fatal("external package importing log/slog should be source-compiled")
+	}
+}
+
+// TestPackageNeedsSyntheticSourceCompileTestOptimizationIncludesExternalStdlibUsers
+// verifies that Test Optimization source-compiles helper dependencies that
+// import stdlib packages participating in the synthetic helper graph. These
+// packages are not customer code, and compiling them from source keeps helper
+// fingerprints aligned with the final Bazel link.
+func TestPackageNeedsSyntheticSourceCompileTestOptimizationIncludesExternalStdlibUsers(t *testing.T) {
+	metaCache := map[string]*modulePackageMetadata{
+		"example.com/helper/parent": {
+			Dir:        "/tmp/parent",
+			ImportPath: "example.com/helper/parent",
+			GoFiles:    []string{"parent.go"},
+			Imports:    []string{"example.com/helper/external"},
+		},
+		"example.com/helper/external": {
+			Dir:        "/tmp/external",
+			ImportPath: "example.com/helper/external",
+			GoFiles:    []string{"external.go"},
+			Imports:    []string{"log/slog"},
+		},
+	}
+	decisions := map[string]bool{}
+
+	got, err := packageNeedsSyntheticSourceCompile(
+		&env{orchestrionMode: orchestrionModeTestOptimization},
+		"",
+		"",
+		"example.com/helper/parent",
+		map[string]bool{},
+		decisions,
+		metaCache,
+		map[string]bool{},
+	)
+	if err != nil {
+		t.Fatalf("packageNeedsSyntheticSourceCompile error: %v", err)
+	}
+	if !got {
+		t.Fatal("test_optimization should source-compile the parent of an external stdlib user")
+	}
+	if !decisions["example.com/helper/external"] {
+		t.Fatalf("expected external dependency decision to be true, got %v", decisions["example.com/helper/external"])
+	}
+}
+
+func TestPackageNeedsSyntheticSourceCompileTestOptimizationIncludesDatadogStdlibUsers(t *testing.T) {
+	metaCache := map[string]*modulePackageMetadata{
+		"github.com/DataDog/dd-trace-go/v2/internal/env": {
+			Dir:        "/tmp/internal/env",
+			ImportPath: "github.com/DataDog/dd-trace-go/v2/internal/env",
+			GoFiles:    []string{"env.go"},
+			Imports:    []string{"testing"},
+		},
+	}
+
+	got, err := packageNeedsSyntheticSourceCompile(
+		&env{orchestrionMode: orchestrionModeTestOptimization},
+		"",
+		"",
+		"github.com/DataDog/dd-trace-go/v2/internal/env",
+		map[string]bool{},
+		map[string]bool{},
+		metaCache,
+		map[string]bool{},
+	)
+	if err != nil {
+		t.Fatalf("packageNeedsSyntheticSourceCompile error: %v", err)
+	}
+	if !got {
+		t.Fatal("test_optimization should source-compile Datadog helper packages that import woven stdlib")
 	}
 }
 

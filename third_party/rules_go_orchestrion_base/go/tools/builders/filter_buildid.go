@@ -66,10 +66,19 @@ func orchestrionFilterBuildID(args []string) error {
 	orchestrion := args[0]
 	toolArgs := args[1:]
 	workdir := ""
-	if len(toolArgs) > 0 && strings.HasPrefix(toolArgs[0], "--workdir=") {
-		workdir = strings.TrimPrefix(toolArgs[0], "--workdir=")
+	orchestrionMode := orchestrionModeGeneral
+	for len(toolArgs) > 0 {
+		switch {
+		case strings.HasPrefix(toolArgs[0], "--workdir="):
+			workdir = strings.TrimPrefix(toolArgs[0], "--workdir=")
+		case strings.HasPrefix(toolArgs[0], "--mode="):
+			orchestrionMode = strings.TrimPrefix(toolArgs[0], "--mode=")
+		default:
+			goto parsedWrapperArgs
+		}
 		toolArgs = toolArgs[1:]
 	}
+parsedWrapperArgs:
 	if workdir == "" {
 		workdir = strings.TrimSpace(os.Getenv("RULES_GO_ORCHESTRION_WORKDIR"))
 	}
@@ -92,6 +101,9 @@ func orchestrionFilterBuildID(args []string) error {
 			_ = os.Setenv("TOOLEXEC_IMPORTPATH", pkg)
 		}
 	}
+	if !shouldRunOrchestrionForStdlibPackage(strings.TrimSpace(os.Getenv("TOOLEXEC_IMPORTPATH")), orchestrionMode) {
+		return execToolexecArgs(newArgs)
+	}
 	orchestrionArgs := []string{orchestrion}
 	logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
 	if logLevel != "" {
@@ -104,6 +116,26 @@ func orchestrionFilterBuildID(args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func shouldRunOrchestrionForStdlibPackage(pkg string, mode string) bool {
+	if effectiveOrchestrionMode(mode) != orchestrionModeTestOptimization {
+		return true
+	}
+	return pkg == "testing"
+}
+
+func execToolexecArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+	return syscall.Exec(args[0], args, os.Environ())
 }
 
 func packageFromCompileArgs(args []string) string {

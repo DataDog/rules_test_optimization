@@ -18,14 +18,14 @@ const (
 	// files plus selected toolchain metadata, so code-only changes would
 	// otherwise keep restoring stale synthetic go.mod state.
 	syntheticModuleCacheABIVersion = "v4"
-	helperDecisionCacheABIVersion  = "v3"
-	helperExportCacheABIVersion    = "v3"
-	helperArchiveCacheABIVersion   = "v9"
+	helperDecisionCacheABIVersion  = "v6"
+	helperExportCacheABIVersion    = "v5"
+	helperArchiveCacheABIVersion   = "v12"
 	// Bump the helper source-set version whenever the synthetic testmain source
 	// compile closure changes. The helper decision and archive caches both key
-	// off this value, so widening the recursive source-compile set must force a
-	// rebuild instead of reusing bundles prepared for the older closure.
-	helperSourceSetVersion = "v3"
+	// off this value, so closure changes must force a rebuild instead of reusing
+	// bundles prepared for the older package selection.
+	helperSourceSetVersion = "v6"
 
 	orchestrionPersistentCacheDirName = "rules-go-orchestrion"
 

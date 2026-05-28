@@ -116,7 +116,7 @@ func TestSyntheticOrchestrionGoModUsesConfiguredVersions(t *testing.T) {
 		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
 		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
 	}
-	got := syntheticOrchestrionGoMod("v1.6.0", versions)
+	got := syntheticOrchestrionGoMod("v1.6.0", versions, orchestrionModeGeneral)
 	if !strings.Contains(got, "github.com/DataDog/orchestrion v1.6.0") {
 		t.Fatalf("syntheticOrchestrionGoMod missing orchestrion tool version:\n%s", got)
 	}
@@ -128,6 +128,40 @@ func TestSyntheticOrchestrionGoModUsesConfiguredVersions(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("syntheticOrchestrionGoMod missing configured version %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestSyntheticOrchestrionGoModUsesOnlyRootTracerModuleInTestOptimizationMode(t *testing.T) {
+	versions := map[string]string{
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
+	}
+	got := syntheticOrchestrionGoMod("v1.6.0", versions, orchestrionModeTestOptimization)
+	want := "github.com/DataDog/dd-trace-go/v2 v2.7.0-rc.4"
+	if !strings.Contains(got, want) {
+		t.Fatalf("syntheticOrchestrionGoMod missing root tracer module %q:\n%s", want, got)
+	}
+	for _, modulePath := range []string{
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+	} {
+		if strings.Contains(got, modulePath) {
+			t.Fatalf("syntheticOrchestrionGoMod unexpectedly kept generic contrib module %q:\n%s", modulePath, got)
+		}
+	}
+}
+
+func TestDDTraceGoModulesForMode(t *testing.T) {
+	if got := ddTraceGoModulesForMode(orchestrionModeGeneral); len(got) != 3 {
+		t.Fatalf("general mode module count = %d, want 3", len(got))
+	}
+	got := ddTraceGoModulesForMode(orchestrionModeTestOptimization)
+	if len(got) != 1 {
+		t.Fatalf("test_optimization module count = %d, want 1", len(got))
+	}
+	if got[0] != "github.com/DataDog/dd-trace-go/v2" {
+		t.Fatalf("test_optimization modules = %#v, want root tracer module only", got)
 	}
 }
 
@@ -244,10 +278,10 @@ func TestValidateResolvedDDTraceGoVersionUsesCache(t *testing.T) {
 		"GOPATH=" + filepath.Join(t.TempDir(), "gopath"),
 		"GO_COUNTER_FILE=" + counterPath,
 	}
-	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false); err != nil {
+	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false, orchestrionModeGeneral); err != nil {
 		t.Fatalf("first validateResolvedDDTraceGoVersion error: %v", err)
 	}
-	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false); err != nil {
+	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false, orchestrionModeGeneral); err != nil {
 		t.Fatalf("second validateResolvedDDTraceGoVersion error: %v", err)
 	}
 	if got := readCounterFile(t, counterPath); got != 1 {
@@ -280,13 +314,13 @@ func TestValidateResolvedDDTraceGoVersionInvalidatesWhenGoModChanges(t *testing.
 		"GOPATH=" + filepath.Join(t.TempDir(), "gopath"),
 		"GO_COUNTER_FILE=" + counterPath,
 	}
-	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false); err != nil {
+	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false, orchestrionModeGeneral); err != nil {
 		t.Fatalf("first validateResolvedDDTraceGoVersion error: %v", err)
 	}
 	if err := os.WriteFile(goModPath, []byte("module example.com/changed\n\ngo 1.21\n"), 0o644); err != nil {
 		t.Fatalf("rewrite go.mod: %v", err)
 	}
-	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false); err != nil {
+	if err := validateResolvedDDTraceGoVersion(goPath, moduleDir, env, false, orchestrionModeGeneral); err != nil {
 		t.Fatalf("second validateResolvedDDTraceGoVersion error: %v", err)
 	}
 	if got := readCounterFile(t, counterPath); got != 2 {

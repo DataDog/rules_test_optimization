@@ -33,14 +33,19 @@ load(
     "//go/private:rpath.bzl",
     "rpath",
 )
+load("//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
 _ORCHESTRION_PROBE_ENV_VARS = (
     "RULES_GO_ORCHESTRION_PROBE",
     "RULES_GO_ORCHESTRION_PROBE_FILE",
 )
+_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _format_archive(d):
     return "{}={}={}".format(d.label, d.importmap, d.file.path)
+
+def _dirname(file):
+    return file.dirname
 
 def _orchestrion_action_env(
         go,
@@ -60,6 +65,23 @@ def _orchestrion_action_env(
     if orchestrion_tool_version_file:
         env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
+
+def _orchestrion_data_inputs(go):
+    if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return go._ctx.files.data if hasattr(go._ctx.files, "data") else []
+
+    allowed_pin_files = {
+        "go.mod": True,
+        "go.sum": True,
+        "orchestrion.yml": True,
+    }
+    files = []
+    for dep in getattr(go._ctx.attr, "data", []):
+        if OrchestrionPinFilesInfo in dep:
+            for file in dep[OrchestrionPinFilesInfo].files.to_list():
+                if file.basename in allowed_pin_files:
+                    files.append(file)
+    return files
 
 def emit_link(
         go,
@@ -223,6 +245,7 @@ def emit_link(
     # Add orchestrion for toolexec instrumentation if enabled
     if go.orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
+        builder_args.add("-orchestrion_mode", getattr(go, "orchestrion_mode", "general"))
         inputs_direct.append(go.orchestrion)
         if orchestrion_trace_version_file:
             inputs_direct.append(orchestrion_trace_version_file)
@@ -243,8 +266,16 @@ def emit_link(
         # Stage rule data files for the link builder too so it can reuse the
         # same pinned module files seen during compile (for example go.mod,
         # go.sum, orchestrion.tool.go, orchestrion.yml).
-        if hasattr(go._ctx.files, "data"):
-            inputs_direct.extend(go._ctx.files.data)
+        orchestrion_data_inputs = _orchestrion_data_inputs(go)
+        if orchestrion_data_inputs:
+            builder_args.add_all(
+                orchestrion_data_inputs,
+                map_each = _dirname,
+                before_each = "-orchsrc",
+                uniquify = True,
+                expand_directories = False,
+            )
+            inputs_direct.extend(orchestrion_data_inputs)
     inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
 
     go.actions.run(

@@ -60,6 +60,29 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Path to the aquery --output=textproto file to validate.",
     )
+    parser.add_argument(
+        "--expected-orchestrion-mode",
+        choices=("general", "test_optimization"),
+        default="general",
+        help="Expected Orchestrion mode on Orchestrion-enabled actions.",
+    )
+    parser.add_argument(
+        "--required-test-optimization-pin-file",
+        action="append",
+        help=(
+            "Pin-file basename that every non-stdlib Orchestrion action must "
+            "declare in test_optimization mode. Repeat for fixture-specific "
+            "pins such as orchestrion.yml."
+        ),
+    )
+    parser.add_argument(
+        "--require-plain-compile-in-test-optimization",
+        action="store_true",
+        help=(
+            "Require non-Orchestrion customer and external test compile actions "
+            "in test_optimization mode."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -246,6 +269,11 @@ def _contains_path_suffix(paths: list[str], suffix: str) -> bool:
     return any(path.replace("\\", "/").endswith(normalized_suffix) for path in paths)
 
 
+def _contains_path_fragment(paths: list[str], fragment: str) -> bool:
+    normalized_fragment = fragment.replace("\\", "/")
+    return any(normalized_fragment in path.replace("\\", "/") for path in paths)
+
+
 def _contains_module_proxy_payload(paths: list[str]) -> bool:
     for path in paths:
         normalized = path.replace("\\", "/")
@@ -263,19 +291,56 @@ def _uses_orchestrion(action: Action) -> bool:
     return "-orchestrion" in action.arguments
 
 
+def _argument_value(arguments: list[str], flag: str) -> str | None:
+    for idx, argument in enumerate(arguments):
+        if argument == flag and idx + 1 < len(arguments):
+            return arguments[idx + 1]
+        if argument.startswith(flag + "="):
+            return argument.split("=", 1)[1]
+    return None
+
+
+def _action_importpath(action: Action) -> str:
+    return _argument_value(action.arguments, "-importpath") or ""
+
+
+def _action_output(action: Action) -> str:
+    return _argument_value(action.arguments, "-out") or _argument_value(action.arguments, "-o") or ""
+
+
 def _is_fixture_go_tool_action(action: Action) -> bool:
     """Return whether an action belongs to the fixture Go tool transition proof."""
 
     return any("fixture_tool" in arg for arg in action.arguments)
 
 
+def _is_rules_go_internal_compile_action(action: Action) -> bool:
+    """Return whether a compile action belongs to rules_go's own helper binaries."""
+
+    importpath = _action_importpath(action)
+    if importpath.startswith("github.com/bazelbuild/rules_go/go/tools/"):
+        return True
+    output = _action_output(action).replace("\\", "/")
+    return "/external/rules_go+/go/tools/" in output
+
+
 def _assert_expected_action(
     action: Action,
     inputs: list[str],
     require_proxy: bool,
+    expected_orchestrion_mode: str,
+    required_test_optimization_pin_files: list[str],
 ) -> None:
     env = action.environment
     if require_proxy:
+        actual_mode = _argument_value(action.arguments, "-orchestrion_mode")
+        _require(
+            actual_mode == expected_orchestrion_mode,
+            (
+                f"{action.mnemonic} is missing -orchestrion_mode {expected_orchestrion_mode} "
+                f"(got {actual_mode!r}, importpath={_action_importpath(action)!r}, output={_action_output(action)!r})"
+            ),
+        )
         _require(
             "RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT" in env,
             f"{action.mnemonic} is missing RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT",
@@ -304,6 +369,29 @@ def _assert_expected_action(
             all("sum.golang.org" not in value for value in env.values()),
             f"{action.mnemonic} still references sum.golang.org in its action environment",
         )
+        if expected_orchestrion_mode == "test_optimization":
+            if action.mnemonic != "GoStdlib":
+                for suffix in required_test_optimization_pin_files:
+                    _require(
+                        _contains_path_suffix(inputs, suffix),
+                        f"{action.mnemonic} in test_optimization mode is missing pin-file input {suffix}",
+                    )
+            _require(
+                not _contains_path_suffix(inputs, "orchestrion.tool.go"),
+                f"{action.mnemonic} in test_optimization mode should use the synthetic Test Optimization tool pin",
+            )
+            forbidden_runtime_fragments = [
+                ".testoptimization/manifest.txt",
+                "settings.json",
+                "known_tests.json",
+                "test_management.json",
+                "_topt_bazel_metadata.json",
+            ]
+            for fragment in forbidden_runtime_fragments:
+                _require(
+                    not _contains_path_fragment(inputs, fragment),
+                    f"{action.mnemonic} in test_optimization mode unexpectedly declared runtime data input {fragment}",
+                )
         return
 
     forbidden_env = {
@@ -331,6 +419,7 @@ def _assert_expected_action(
 
 def main() -> int:
     args = parse_args()
+    required_test_optimization_pin_files = args.required_test_optimization_pin_file or ["go.mod"]
     text = args.aquery_textproto.read_text(encoding="utf-8")
 
     path_fragments: dict[int, PathFragment] = {}
@@ -363,19 +452,48 @@ def main() -> int:
 
     orchestrion_actions = []
     orchestrion_stdlib_actions = []
+    non_orchestrion_fixture_compile_actions = []
+    non_orchestrion_external_test_compile_actions = []
+    saw_plain_hello_external_test_compile = False
     fixture_go_tool_actions = []
     for action in compile_actions + stdlib_actions + link_actions:
+        inputs = _action_inputs(action, artifacts, dep_sets, path_fragments)
+        if (
+            args.expected_orchestrion_mode == "test_optimization"
+            and _is_rules_go_internal_compile_action(action)
+        ):
+            continue
         if _is_fixture_go_tool_action(action):
             fixture_go_tool_actions.append(action)
         require_proxy = _uses_orchestrion(action)
+        if (
+            args.expected_orchestrion_mode == "test_optimization"
+            and action.mnemonic == "GoCompilePkgExternal"
+            and require_proxy
+            and not _is_fixture_go_tool_action(action)
+        ):
+            _require(False, "test_optimization mode unexpectedly passed -orchestrion to GoCompilePkgExternal")
+        if (
+            args.expected_orchestrion_mode == "test_optimization"
+            and action.mnemonic in {"GoCompilePkg", "GoCompilePkgExternal"}
+            and not require_proxy
+            and not _is_fixture_go_tool_action(action)
+        ):
+            non_orchestrion_fixture_compile_actions.append(action)
+            if action.mnemonic == "GoCompilePkgExternal":
+                non_orchestrion_external_test_compile_actions.append(action)
+                if _contains_path_suffix(inputs, "app/hello_external_test.go"):
+                    saw_plain_hello_external_test_compile = True
         if require_proxy:
             orchestrion_actions.append(action)
             if action.mnemonic == "GoStdlib":
                 orchestrion_stdlib_actions.append(action)
         _assert_expected_action(
             action,
-            _action_inputs(action, artifacts, dep_sets, path_fragments),
+            inputs,
             require_proxy=require_proxy,
+            expected_orchestrion_mode=args.expected_orchestrion_mode,
+            required_test_optimization_pin_files=required_test_optimization_pin_files,
         )
 
     _require(
@@ -386,24 +504,46 @@ def main() -> int:
         orchestrion_stdlib_actions,
         "aquery did not contain any Orchestrion-enabled GoStdlib actions",
     )
+    if args.expected_orchestrion_mode == "test_optimization" and args.require_plain_compile_in_test_optimization:
+        _require(
+            non_orchestrion_fixture_compile_actions,
+            "test_optimization mode did not leave any fixture compile actions on the plain rules_go path",
+        )
+        _require(
+            non_orchestrion_external_test_compile_actions,
+            "test_optimization mode did not leave any external _test compile actions on the plain rules_go path",
+        )
+        _require(
+            saw_plain_hello_external_test_compile,
+            "test_optimization mode did not leave app/hello_external_test.go on the plain GoCompilePkgExternal path",
+        )
     _require(
         fixture_go_tool_actions,
         "aquery did not contain the fixture Go tool transition actions",
     )
 
-    for action in fixture_go_tool_actions:
-        _require(
-            not _uses_orchestrion(action),
-            f"{action.mnemonic} for fixture Go tool unexpectedly inherited Orchestrion",
-        )
+    if args.expected_orchestrion_mode == "test_optimization":
+        for action in fixture_go_tool_actions:
+            _require(
+                not _uses_orchestrion(action),
+                f"{action.mnemonic} for fixture Go tool unexpectedly inherited Orchestrion",
+            )
+            _assert_expected_action(
+                action,
+                _action_inputs(action, artifacts, dep_sets, path_fragments),
+                require_proxy=False,
+                expected_orchestrion_mode=args.expected_orchestrion_mode,
+                required_test_optimization_pin_files=required_test_optimization_pin_files,
+            )
+
+    for action in stdlib_list_actions:
         _assert_expected_action(
             action,
             _action_inputs(action, artifacts, dep_sets, path_fragments),
             require_proxy=False,
+            expected_orchestrion_mode=args.expected_orchestrion_mode,
+            required_test_optimization_pin_files=required_test_optimization_pin_files,
         )
-
-    for action in stdlib_list_actions:
-        _assert_expected_action(action, _action_inputs(action, artifacts, dep_sets, path_fragments), require_proxy=False)
 
     print("aquery offline-proxy wiring check passed")
     return 0

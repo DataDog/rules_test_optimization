@@ -19,10 +19,10 @@ import (
 	"os"
 )
 
-// syntheticOrchestrionToolGo materializes the minimal tools package that pins
-// orchestrion and the dd-trace-go integrations required by the synthetic module
-// workflows in both the stdlib and GOPATH builders.
-const syntheticOrchestrionToolGo = `//go:build tools
+// syntheticOrchestrionToolGoGeneral materializes the generic tools package that
+// pins Orchestrion and every dd-trace-go integration required by generic
+// Orchestrion workflows.
+const syntheticOrchestrionToolGoGeneral = `//go:build tools
 
 package tools
 
@@ -33,6 +33,31 @@ import (
 	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"
 )
 `
+
+// syntheticOrchestrionToolGoTestOptimization keeps the action-time synthetic
+// module scoped to CI Visibility packages needed by dd_topt_go_test.
+const syntheticOrchestrionToolGoTestOptimization = `//go:build tools
+
+package tools
+
+import (
+	_ "github.com/DataDog/orchestrion"
+	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"
+)
+`
+
+// syntheticOrchestrionToolGo preserves the historical generic synthetic module
+// content for existing tests and generic Orchestrion callers.
+const syntheticOrchestrionToolGo = syntheticOrchestrionToolGoGeneral
+
+// syntheticOrchestrionToolGoForMode returns the synthetic module pin file for
+// the selected Orchestrion mode.
+func syntheticOrchestrionToolGoForMode(mode string) string {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return syntheticOrchestrionToolGoTestOptimization
+	}
+	return syntheticOrchestrionToolGoGeneral
+}
 
 // copyArchiveFile copies generated archive and cache artifacts without
 // preserving the original file mode or link relationship.

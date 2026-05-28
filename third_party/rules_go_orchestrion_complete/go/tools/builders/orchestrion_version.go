@@ -23,6 +23,17 @@ var ddTraceGoModules = []string{
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
+var ddTraceGoModulesTestOptimization = []string{
+	"github.com/DataDog/dd-trace-go/v2",
+}
+
+func ddTraceGoModulesForMode(orchestrionMode string) []string {
+	if effectiveOrchestrionMode(orchestrionMode) == orchestrionModeTestOptimization {
+		return ddTraceGoModulesTestOptimization
+	}
+	return ddTraceGoModules
+}
+
 type goListModule struct {
 	Path    string `json:"Path"`
 	Version string `json:"Version"`
@@ -223,13 +234,14 @@ func resolveModuleVersionsFromModule(goExe, moduleDir string, env []string, modu
 	return versions, nil
 }
 
-func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, verbose bool) error {
+func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, verbose bool, orchestrionMode string) error {
 	configured, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return err
 	}
 	moduleDir = abs(moduleDir)
-	cacheKey, err := validationCacheKey(goExe, moduleDir, env, configured)
+	modules := ddTraceGoModulesForMode(orchestrionMode)
+	cacheKey, err := validationCacheKey(goExe, moduleDir, env, configured, orchestrionMode)
 	if err != nil {
 		return err
 	}
@@ -258,11 +270,11 @@ func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, ver
 		return nil
 	}
 
-	resolved, err := resolveModuleVersionsFromModule(goExe, moduleDir, env, ddTraceGoModules)
+	resolved, err := resolveModuleVersionsFromModule(goExe, moduleDir, env, modules)
 	if err != nil {
 		return err
 	}
-	for _, modulePath := range ddTraceGoModules {
+	for _, modulePath := range modules {
 		if verbose {
 			fmt.Fprintf(os.Stderr, "orchestrion: configured dd-trace-go version=%s resolved=%s module=%s moduleDir=%s\n", configured[modulePath], resolved[modulePath], modulePath, moduleDir)
 		}
@@ -292,12 +304,17 @@ func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, ver
 	return nil
 }
 
-func validationCacheKey(goExe, moduleDir string, env []string, configured map[string]string) (string, error) {
+func validationCacheKey(goExe, moduleDir string, env []string, configured map[string]string, orchestrionMode string) (string, error) {
+	goToolIdentity, err := goSDKCacheIdentity(filepath.Dir(filepath.Dir(abs(goExe))))
+	if err != nil {
+		return "", err
+	}
 	fileParts := []string{
 		"module_root=" + abs(moduleDir),
 		"configured_versions=" + ddTraceVersionsDigest(configured),
-		"go_tool=" + abs(goExe),
+		"go_tool_identity=" + goToolIdentity,
 		"orchestrion=" + orchestrionToolVersionIdentity(),
+		"orchestrion_mode=" + effectiveOrchestrionMode(orchestrionMode),
 		"target=" + goTargetIdentity(env),
 		"validation_cache=" + validationCacheABIVersion,
 	}
@@ -313,18 +330,20 @@ func validationCacheKey(goExe, moduleDir string, env []string, configured map[st
 
 // syntheticOrchestrionGoMod renders the synthetic module used by the builders
 // when they need a temporary module root for Orchestrion-managed operations.
-func syntheticOrchestrionGoMod(orchestrionVersion string, versions map[string]string) string {
-	return fmt.Sprintf(`module bazel_orchestrion_temp
+func syntheticOrchestrionGoMod(orchestrionVersion string, versions map[string]string, orchestrionMode string) string {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf(`module bazel_orchestrion_temp
 
 go %s
 
 require (
 	github.com/DataDog/orchestrion %s
-	github.com/DataDog/dd-trace-go/v2 %s
-	github.com/DataDog/dd-trace-go/contrib/net/http/v2 %s
-	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 %s
-)
-`, orchestrionSyntheticGoModVersion, orchestrionVersion, versions["github.com/DataDog/dd-trace-go/v2"], versions["github.com/DataDog/dd-trace-go/contrib/net/http/v2"], versions["github.com/DataDog/dd-trace-go/contrib/log/slog/v2"])
+`, orchestrionSyntheticGoModVersion, orchestrionVersion))
+	for _, modulePath := range ddTraceGoModulesForMode(orchestrionMode) {
+		builder.WriteString(fmt.Sprintf("\t%s %s\n", modulePath, versions[modulePath]))
+	}
+	builder.WriteString(")\n")
+	return builder.String()
 }
 
 func containsString(values []string, target string) bool {

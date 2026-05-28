@@ -22,14 +22,17 @@ load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
     "orch_go_test",
+    "orch_transition_impl_for_tests",
     "select_wrapper_output_name_for_tests",
     "windows_wrapper_content_for_tests",
 )
 load(
     "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "dd_topt_go_test",
+    "has_package_local_go_mod_for_tests",
     "resolve_topt_service_key_for_tests",
 )
+load("@rules_go//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
 ToptGoMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_go_test to the underlying go_test rule.",
@@ -309,6 +312,18 @@ def go_macro_orchestrion_pin_files_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_test_optimization_mode_target(name, tags = None):
+    """Target under test for opt-in Test Optimization Orchestrion mode."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        data = [":test_macro.bzl"],
+        experimental_orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [":test_selection_utils.bzl"],
+        tags = tags,
+    )
+
 def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
     """Target under test for non-Windows sibling executable materialization."""
     fake_executable_rule(
@@ -489,14 +504,41 @@ def _go_macro_stage_sources_select_wiring_test_impl(ctx):
     return analysistest.end(env)
 
 def _go_macro_orchestrion_pin_files_wiring_test_impl(ctx):
-    """Assert explicit Orchestrion pin-file labels are forwarded to data."""
+    """Assert explicit Orchestrion pin files are forwarded through the provider target."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_topt_payloads"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_orchestrion_pin_files"))
+    asserts.false(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.false(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    return analysistest.end(env)
+
+def _go_macro_orchestrion_pin_files_provider_test_impl(ctx):
+    """Assert the hidden pin-files target carries only Orchestrion pin files."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    pin_files = target[OrchestrionPinFilesInfo].files.to_list()
+    asserts.equals(env, 2, len(pin_files))
+    asserts.true(env, _has_file_basename(pin_files, "test_macro.bzl"))
+    asserts.true(env, _has_file_basename(pin_files, "test_selection_utils.bzl"))
+    return analysistest.end(env)
+
+def _go_macro_test_optimization_mode_wiring_test_impl(ctx):
+    """Assert opt-in mode preserves raw test runtime data and env wiring."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_test_optimization_mode_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_test_optimization_mode_target_topt_bazel_metadata"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_test_optimization_mode_target_orchestrion_pin_files"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, "$(rlocationpath @test_optimization_data//:.testoptimization/manifest.txt)", captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE"))
+    asserts.equals(env, "go_macro_test_optimization_mode_target_topt_bazel_metadata.json", captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"))
+    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     return analysistest.end(env)
 
 def _go_macro_explicit_service_wiring_test_impl(ctx):
@@ -609,6 +651,22 @@ def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     asserts.false(env, "HELPER" in content)
     return unittest.end(env)
 
+def _has_package_local_go_mod_test_impl(ctx):
+    """Assert auto-discovered pin-file validation requires the module file."""
+    env = unittest.begin(ctx)
+    asserts.true(env, has_package_local_go_mod_for_tests(["go.mod", "go.sum"]))
+    asserts.false(env, has_package_local_go_mod_for_tests(["go.sum", "orchestrion.yml"]))
+    asserts.false(env, has_package_local_go_mod_for_tests([]))
+    return unittest.end(env)
+
+def _orch_transition_forwards_mode_test_impl(ctx):
+    """Assert the wrapper transition enables Orchestrion and forwards the mode."""
+    env = unittest.begin(ctx)
+    result = orch_transition_impl_for_tests(None, struct(orchestrion_mode = "test_optimization"))
+    asserts.equals(env, True, result["@rules_go//go/private/orchestrion:enabled"])
+    asserts.equals(env, "test_optimization", result["@rules_go//go/private/orchestrion:mode"])
+    return unittest.end(env)
+
 def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
     """Assert the wrapper target ships the sibling raw executable."""
     env = analysistest.begin(ctx)
@@ -663,6 +721,12 @@ go_macro_stage_sources_select_wiring_test = analysistest.make(
 go_macro_orchestrion_pin_files_wiring_test = analysistest.make(
     _go_macro_orchestrion_pin_files_wiring_test_impl,
 )
+go_macro_orchestrion_pin_files_provider_test = analysistest.make(
+    _go_macro_orchestrion_pin_files_provider_test_impl,
+)
+go_macro_test_optimization_mode_wiring_test = analysistest.make(
+    _go_macro_test_optimization_mode_wiring_test_impl,
+)
 go_macro_explicit_service_wiring_test = analysistest.make(
     _go_macro_explicit_service_wiring_test_impl,
 )
@@ -685,6 +749,12 @@ wrapper_output_name_windows_test = analysistest.make(
 )
 windows_wrapper_uses_file_payload_mode_test = unittest.make(
     _windows_wrapper_uses_file_payload_mode_test_impl,
+)
+has_package_local_go_mod_test = unittest.make(
+    _has_package_local_go_mod_test_impl,
+)
+orch_transition_forwards_mode_test = unittest.make(
+    _orch_transition_forwards_mode_test_impl,
 )
 orch_wrapper_materialized_actual_non_windows_test = analysistest.make(
     _orch_wrapper_materialized_actual_non_windows_test_impl,

@@ -208,7 +208,15 @@ func isGoCommandSpace(value byte) bool {
 func normalizeGoActionCacheEnv(env []string) ([]string, error) {
 	goPath := strings.TrimSpace(getEnv(env, "GOPATH"))
 	if goPath == "" {
-		goPath = filepath.Join(os.TempDir(), orchestrionSharedCacheDirName, "gopath")
+		cacheNamespace := "default"
+		if moduleProxyRoot := strings.TrimSpace(getEnv(env, rulesGoOrchestrionModuleProxyRootEnvVar)); moduleProxyRoot != "" {
+			proxyURL, err := moduleProxyFileURL(moduleProxyRoot)
+			if err != nil {
+				return nil, err
+			}
+			cacheNamespace = "proxy-" + stableDigestParts(proxyURL)[:16]
+		}
+		goPath = filepath.Join(os.TempDir(), orchestrionSharedCacheDirName, cacheNamespace, "gopath")
 	}
 
 	goModCache := strings.TrimSpace(getEnv(env, "GOMODCACHE"))

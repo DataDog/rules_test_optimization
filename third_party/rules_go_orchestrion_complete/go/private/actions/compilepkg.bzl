@@ -18,11 +18,13 @@ load(
     "link_mode_arg",
 )
 load("//go/private/actions:utils.bzl", "quote_opts")
+load("//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
 _ORCHESTRION_PROBE_ENV_VARS = (
     "RULES_GO_ORCHESTRION_PROBE",
     "RULES_GO_ORCHESTRION_PROBE_FILE",
 )
+_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _archive(v):
     importpaths = [v.data.importpath]
@@ -54,6 +56,9 @@ def _embedlookupdir_arg(src):
         root_relative = root_relative[1:]
     return root_relative
 
+def _dirname(file):
+    return file.dirname
+
 def _orchestrion_action_env(
         go,
         base_env,
@@ -72,6 +77,35 @@ def _orchestrion_action_env(
     if orchestrion_tool_version_file:
         env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
+
+def _orchestrion_data_inputs(go):
+    if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return go._ctx.files.data if hasattr(go._ctx.files, "data") else []
+
+    allowed_pin_files = {
+        "go.mod": True,
+        "go.sum": True,
+        "orchestrion.yml": True,
+    }
+    files = []
+    for dep in getattr(go._ctx.attr, "data", []):
+        if OrchestrionPinFilesInfo in dep:
+            for file in dep[OrchestrionPinFilesInfo].files.to_list():
+                if file.basename in allowed_pin_files:
+                    files.append(file)
+    return files
+
+def _orchestrion_enabled_for_compile(go, testfilter, out_synthetic_testmain_manifest):
+    if not go.orchestrion:
+        return False
+    if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return True
+
+    # In Test Optimization mode, ordinary package compiles and external _test
+    # archives keep the same action shape as plain rules_go. Synthetic testmain
+    # still needs the Orchestrion context so CI Visibility helper packagefiles
+    # and the testmain packagefile manifest are produced.
+    return out_synthetic_testmain_manifest != None
 
 def emit_compilepkg(
         go,
@@ -195,9 +229,10 @@ def emit_compilepkg(
 
     # cgo and the linker action don't support path mapping yet
     # TODO: Remove the second condition after https://github.com/bazelbuild/bazel/pull/21921.
-    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
-    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if go.orchestrion else None
-    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if go.orchestrion else None
+    compile_orchestrion = _orchestrion_enabled_for_compile(go, testfilter, out_synthetic_testmain_manifest)
+    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if compile_orchestrion else None
+    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if compile_orchestrion else None
+    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if compile_orchestrion else None
     if cgo or "local" in go._ctx.attr.tags:
         # cgo doesn't support path mapping yet
         env = _orchestrion_action_env(
@@ -244,8 +279,9 @@ def emit_compilepkg(
         inputs_direct.append(go.mode.pgoprofile)
 
     # Add orchestrion for toolexec instrumentation if enabled
-    if go.orchestrion:
+    if compile_orchestrion:
         compile_args.add("-orchestrion", go.orchestrion)
+        compile_args.add("-orchestrion_mode", getattr(go, "orchestrion_mode", "general"))
         inputs_direct.append(go.orchestrion)
         if orchestrion_trace_version_file:
             inputs_direct.append(orchestrion_trace_version_file)
@@ -267,8 +303,16 @@ def emit_compilepkg(
         # Stage rule data files for the builder so it can copy module pin files
         # (for example go.mod, go.sum, orchestrion.tool.go, orchestrion.yml)
         # into the temporary module it creates for Orchestrion instrumentation.
-        if hasattr(go._ctx.files, "data"):
-            inputs_direct.extend(go._ctx.files.data)
+        orchestrion_data_inputs = _orchestrion_data_inputs(go)
+        if orchestrion_data_inputs:
+            compile_args.add_all(
+                orchestrion_data_inputs,
+                map_each = _dirname,
+                before_each = "-orchsrc",
+                uniquify = True,
+                expand_directories = False,
+            )
+            inputs_direct.extend(orchestrion_data_inputs)
 
     go.actions.run(
         inputs = depset(inputs_direct, transitive = inputs_transitive),

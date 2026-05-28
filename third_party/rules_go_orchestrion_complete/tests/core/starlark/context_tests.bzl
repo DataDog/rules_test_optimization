@@ -1,5 +1,5 @@
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//go/private:context.bzl", "matches_scope")
+load("//go/private:context.bzl", "matches_scope", "validate_orchestrion_mode_for_tests")
 
 def _matches_scope_test(ctx):
     env = unittest.begin(ctx)
@@ -40,9 +40,20 @@ def _matches_scope_test(ctx):
 
 matches_scope_test = unittest.make(_matches_scope_test)
 
+def _validate_orchestrion_mode_test(ctx):
+    env = unittest.begin(ctx)
+
+    asserts.equals(env, "general", validate_orchestrion_mode_for_tests("general"))
+    asserts.equals(env, "test_optimization", validate_orchestrion_mode_for_tests("test_optimization"))
+
+    return unittest.end(env)
+
+validate_orchestrion_mode_test = unittest.make(_validate_orchestrion_mode_test)
+
 def context_test_suite():
     """Creates the test targets and test suite for context.bzl tests."""
     unittest.suite(
         "context_tests",
         matches_scope_test,
+        validate_orchestrion_mode_test,
     )

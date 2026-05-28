@@ -133,6 +133,13 @@ _LINKER_OPTIONS_DENYLIST = {
     "-pie": None,  # See https://github.com/bazelbuild/rules_go/issues/3691.
 }
 
+_ORCHESTRION_MODE_GENERAL = "general"
+_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
+_ORCHESTRION_MODES = {
+    _ORCHESTRION_MODE_GENERAL: None,
+    _ORCHESTRION_MODE_TEST_OPTIMIZATION: None,
+}
+
 _UNSUPPORTED_FEATURES = [
     # These toolchain features require special rule support and will thus break
     # with CGo.
@@ -165,6 +172,13 @@ def _filter_options(options, denylist):
         if option not in denylist and
            not any([option.startswith(p) for p in prefix_patterns])
     ]
+
+def _validate_orchestrion_mode(mode):
+    if mode not in _ORCHESTRION_MODES:
+        fail("invalid Orchestrion mode %r; expected one of %s" % (mode, ", ".join(sorted(_ORCHESTRION_MODES.keys()))))
+    return mode
+
+validate_orchestrion_mode_for_tests = _validate_orchestrion_mode
 
 def _child_name(go, path, ext, name):
     if not name:
@@ -549,6 +563,7 @@ def go_context(
     orchestrion_module_proxy_files = depset()
     orchestrion_module_proxy_root_marker = None
     orchestrion_tool_version_file = None
+    orchestrion_mode = _ORCHESTRION_MODE_GENERAL
 
     if go_context_data == None:
         if hasattr(attr, "_go_context_data"):
@@ -571,8 +586,11 @@ def go_context(
         orchestrion_module_proxy_files = getattr(go_context_info, "orchestrion_module_proxy_files", depset())
         orchestrion_module_proxy_root_marker = getattr(go_context_info, "orchestrion_module_proxy_root_marker", None)
         orchestrion_tool_version_file = getattr(go_context_info, "orchestrion_tool_version_file", None)
+        orchestrion_mode = _validate_orchestrion_mode(getattr(go_context_info, "orchestrion_mode", _ORCHESTRION_MODE_GENERAL))
     elif getattr(attr, "_orchestrion_enabled", None) and getattr(attr, "_orchestrion_tool_binary", None):
         if attr._orchestrion_enabled[BuildSettingInfo].value:
+            if getattr(attr, "_orchestrion_mode", None):
+                orchestrion_mode = _validate_orchestrion_mode(attr._orchestrion_mode[BuildSettingInfo].value)
             orchestrion_files = attr._orchestrion_tool_binary.files.to_list()
             if orchestrion_files:
                 orchestrion = orchestrion_files[0]
@@ -737,6 +755,7 @@ def go_context(
         orchestrion_module_proxy_files = orchestrion_module_proxy_files,
         orchestrion_module_proxy_root_marker = orchestrion_module_proxy_root_marker,
         orchestrion_tool_version_file = orchestrion_tool_version_file,
+        orchestrion_mode = orchestrion_mode,
         coverage_enabled = ctx.configuration.coverage_enabled,
         coverage_instrumented = ctx.coverage_instrumented(),
         export_stdlib = go_config_info.export_stdlib,
@@ -781,6 +800,7 @@ def _go_context_data_impl(ctx):
     orchestrion_module_proxy_files = depset()
     orchestrion_module_proxy_root_marker = None
     orchestrion_tool_version_file = None
+    orchestrion_mode = _validate_orchestrion_mode(ctx.attr._orchestrion_mode[BuildSettingInfo].value)
     if orchestrion_enabled:
         orchestrion_files = ctx.attr._orchestrion_tool_binary.files.to_list()
         if orchestrion_files:
@@ -805,6 +825,7 @@ def _go_context_data_impl(ctx):
             orchestrion_module_proxy_files = orchestrion_module_proxy_files,
             orchestrion_module_proxy_root_marker = orchestrion_module_proxy_root_marker,
             orchestrion_tool_version_file = orchestrion_tool_version_file,
+            orchestrion_mode = orchestrion_mode,
         ),
         ctx.attr.stdlib[GoStdLib],
         ctx.attr.go_config[GoConfigInfo],
@@ -839,6 +860,10 @@ go_context_data = rule(
         ),
         "_orchestrion_enabled": attr.label(
             default = "//go/private/orchestrion:enabled",
+            providers = [BuildSettingInfo],
+        ),
+        "_orchestrion_mode": attr.label(
+            default = "//go/private/orchestrion:mode",
             providers = [BuildSettingInfo],
         ),
         "_orchestrion_tool_binary": attr.label(

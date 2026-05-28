@@ -118,6 +118,15 @@ var orchestrionLinkClosurePackages = []string{
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
+var orchestrionLinkClosurePackagesTestOptimization = []string{
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage",
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+	"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion",
+	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+}
+
 var orchestrionLinkStdlibRoots = []string{
 	"flag",
 	"log",
@@ -127,7 +136,30 @@ var orchestrionLinkStdlibRoots = []string{
 	"os/exec",
 }
 
-func collectOrchestrionLinkClosurePackages(archives []archive) []string {
+var orchestrionLinkStdlibRootsTestOptimization = []string{
+	"flag",
+	"log",
+	"log/slog",
+	"net/http",
+	"os",
+	"os/exec",
+}
+
+func orchestrionLinkClosurePackagesForMode(mode string) []string {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return orchestrionLinkClosurePackagesTestOptimization
+	}
+	return orchestrionLinkClosurePackages
+}
+
+func orchestrionLinkStdlibRootsForMode(mode string) []string {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return orchestrionLinkStdlibRootsTestOptimization
+	}
+	return orchestrionLinkStdlibRoots
+}
+
+func collectOrchestrionLinkClosurePackages(archives []archive, orchestrionMode string) []string {
 	seen := map[string]bool{
 		"testing":                   true,
 		"testing/internal/testdeps": true,
@@ -151,7 +183,7 @@ func collectOrchestrionLinkClosurePackages(archives []archive) []string {
 	for _, archive := range archives {
 		add(archive.packagePath)
 	}
-	for _, pkg := range orchestrionLinkClosurePackages {
+	for _, pkg := range orchestrionLinkClosurePackagesForMode(orchestrionMode) {
 		add(pkg)
 	}
 	return packages
@@ -209,6 +241,7 @@ func link(args []string) (err error) {
 	builderArgs, toolArgs := splitArgs(args)
 	stamps := multiFlag{}
 	xdefs := multiFlag{}
+	orchestrionSrcDirs := multiFlag{}
 	archives := archiveMultiFlag{}
 	flags := flag.NewFlagSet("link", flag.ExitOnError)
 	goenv := envFlags(flags)
@@ -216,6 +249,8 @@ func link(args []string) (err error) {
 	packagePath := flags.String("p", "", "Package path of the main archive.")
 	outFile := flags.String("o", "", "Path to output file.")
 	orchestrion := flags.String("orchestrion", "", "Path to orchestrion binary")
+	orchestrionModeFlag := flags.String("orchestrion_mode", orchestrionModeGeneral, "Orchestrion integration mode")
+	flags.Var(&orchestrionSrcDirs, "orchsrc", "source directory that may contain Orchestrion pin files")
 	flags.Var(&archives, "arc", "Label, package path, and file name of a dependency, separated by '='")
 	packageList := flags.String("package_list", "", "The file containing the list of standard library packages")
 	buildmode := flags.String("buildmode", "", "Build mode used.")
@@ -230,6 +265,11 @@ func link(args []string) (err error) {
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
 	}
+	orchestrionMode, err := validateOrchestrionMode(*orchestrionModeFlag)
+	if err != nil {
+		return err
+	}
+	goenv.orchestrionMode = orchestrionMode
 	// On Windows, take the absolute path of the output file and main file.
 	// This is needed on Windows because the relative path is frequently too long.
 	// os.Open on Windows converts absolute paths to some other path format with
@@ -507,8 +547,11 @@ func link(args []string) (err error) {
 		for _, archive := range archives {
 			addSrcDir(filepath.Dir(archive.file))
 		}
+		for _, dir := range orchestrionSrcDirs {
+			addSrcDir(dir)
+		}
 		workDirSpan := beginProbe("link.enter_orchestrion_workdir")
-		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose, orchestrionMode)
 		workDirSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("link: %w", err)
@@ -516,7 +559,7 @@ func link(args []string) (err error) {
 		defer restoreOrchWorkDir()
 		if linkOrchestrion != "" {
 			goModSpan := beginProbe("link.ensure_go_mod_exists")
-			cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose)
+			cleanupGoMod, err := ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose, orchestrionMode)
 			goModSpan.End(err)
 			if err != nil {
 				return fmt.Errorf("link: %w", err)
@@ -553,7 +596,7 @@ func link(args []string) (err error) {
 				// closure only when link itself is orchestrion-enabled; plain synthetic
 				// links must reuse the compile-time manifest only.
 				modulePkgSpan := beginProbe("link.append_missing_module_packagefiles")
-				err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, ".")
+				err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackagesForMode(orchestrionMode), linkOrchestrion, ".")
 				modulePkgSpan.End(err)
 				if err != nil {
 					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
@@ -562,14 +605,18 @@ func link(args []string) (err error) {
 		}
 		if goenv.stdlibCache != "" {
 			rewriteSpan := beginProbe("link.rewrite_importcfg_from_current_stdlib_entries")
-			err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv)
+			err := rewriteImportcfgForSyntheticTestmainStdlib(importcfgName, goenv)
 			rewriteSpan.End(err)
 			if err != nil {
 				return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
 			}
 		} else {
-			closurePackages := collectOrchestrionLinkClosurePackages(archives)
-			rewriteSpan := beginProbe("link.rewrite_importcfg_for_cache_stdlib_closures", newProbeField("closure_count", strconv.Itoa(len(closurePackages))))
+			closurePackages := collectOrchestrionLinkClosurePackages(archives, orchestrionMode)
+			rewriteSpan := beginProbe(
+				"link.rewrite_importcfg_for_cache_stdlib_closures",
+				newProbeField("orchestrion_mode", orchestrionMode),
+				newProbeField("closure_count", strconv.Itoa(len(closurePackages))),
+			)
 			err := rewriteImportcfgForCacheStdlibClosures(importcfgName, goenv, closurePackages)
 			rewriteSpan.End(err)
 			if err != nil {
@@ -585,14 +632,18 @@ func link(args []string) (err error) {
 				goRootPath = os.Getenv("GOROOT")
 			}
 			jobserverSpan := beginProbe("link.start_jobserver")
-			jobserver, err = startOrchestrionJobserver(linkOrchestrion, sdkPath, goRootPath, goenv.verbose)
+			jobserver, err = startOrchestrionJobserver(linkOrchestrion, sdkPath, goRootPath, goenv.verbose, orchestrionMode)
 			jobserverSpan.End(err)
 			if err != nil {
 				return fmt.Errorf("link: failed to start orchestrion jobserver: %w", err)
 			}
 			defer jobserver.cleanup()
 		}
-		runSpan := beginProbe("link.run_command", newProbeField("import_path", orchImportPath))
+		runSpan := beginProbe(
+			"link.run_command",
+			newProbeField("import_path", orchImportPath),
+			newProbeField("orchestrion_mode", orchestrionMode),
+		)
 		if err := goenv.runCommandWithJobserver(goargs, jobserver, orchImportPath); err != nil {
 			runSpan.End(err)
 			return err
@@ -623,13 +674,16 @@ func link(args []string) (err error) {
 			for _, archive := range archives {
 				addSrcDir(filepath.Dir(archive.packagePath))
 			}
-			restoreOrchWorkDir, err = enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+			for _, dir := range orchestrionSrcDirs {
+				addSrcDir(dir)
+			}
+			restoreOrchWorkDir, err = enterOrchestrionWorkDir(srcDirs, goenv.verbose, orchestrionMode)
 			if err != nil {
 				return fmt.Errorf("link: %w", err)
 			}
 			defer restoreOrchWorkDir()
 			if linkOrchestrion != "" {
-				cleanupGoMod, err = ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose)
+				cleanupGoMod, err = ensureGoModExists(srcDirs, goenv.sdk, goenv.verbose, orchestrionMode)
 				if err != nil {
 					return fmt.Errorf("link: %w", err)
 				}
@@ -649,12 +703,12 @@ func link(args []string) (err error) {
 				return fmt.Errorf("link: apply synthetic testmain packagefile manifest: %w", err)
 			}
 			if linkOrchestrion != "" {
-				if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackages, linkOrchestrion, "."); err != nil {
+				if err := appendMissingModulePackagefiles(importcfgName, goenv, orchestrionLinkClosurePackagesForMode(orchestrionMode), linkOrchestrion, "."); err != nil {
 					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
 				}
 			}
 			if goenv.stdlibCache != "" {
-				if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgName, goenv); err != nil {
+				if err := rewriteImportcfgForSyntheticTestmainStdlib(importcfgName, goenv); err != nil {
 					return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
 				}
 			}

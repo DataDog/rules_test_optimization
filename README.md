@@ -1501,6 +1501,34 @@ dd_topt_go_test(
 `dd_topt_go_test` enables CI Visibility and payload-to-files mode by default,
 so opt-in Go tests emit payload files without extra `--test_env` settings.
 
+### Standard `testing` Orchestrion mode
+
+`dd_topt_go_test` also accepts:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    experimental_orchestrion_mode = "test_optimization",
+    orchestrion_pin_files = [
+        "//:go.mod",
+        "//:go.sum",
+        "//:orchestrion.tool.go",
+        "//:orchestrion.yml",
+    ],
+    topt_data = topt_data,
+)
+```
+
+In this mode, the Go fork keeps the standard-library `testing` path,
+synthetic `testmain` helper packagefiles, importcfg rewrites, and final link
+support needed for Test Optimization payloads. Customer package compiles and
+external `_test` package compiles stay on the normal rules_go compile path.
+
+This mode is for standard Go `testing` support. Automatic `testify/suite`
+instrumentation is not supported in `test_optimization` mode.
+
 If the tracer needs runtime-visible source files for AST-derived metadata such
 as `test.source.end`, enable source staging explicitly:
 

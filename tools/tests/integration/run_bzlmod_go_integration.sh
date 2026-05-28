@@ -41,6 +41,7 @@ BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion"
 BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-rc.2}"
 SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
@@ -266,7 +267,10 @@ go_reset_target(
 
 dd_topt_go_test(
     name = "hello_test",
-    srcs = ["hello_test.go"],
+    srcs = [
+        "hello_external_test.go",
+        "hello_test.go",
+    ],
     data = [":fixture_tool_reset"],
     embed = [":hello_lib"],
     orchestrion_pin_files = [
@@ -275,6 +279,7 @@ dd_topt_go_test(
         "//:orchestrion.tool.go",
         "//:orchestrion.yml",
     ],
+    experimental_orchestrion_mode = "${ORCHESTRION_MODE}",
     topt_data = topt_data,
 )
 EOF
@@ -291,6 +296,14 @@ EOF
 package main
 
 func main() {}
+EOF
+
+  cat > "$ws_dir/app/hello_external_test.go" <<'EOF'
+package main_test
+
+import "testing"
+
+func TestExternalPackageArchive(t *testing.T) {}
 EOF
 
   cat > "$ws_dir/app/hello_test.go" <<EOF
@@ -313,6 +326,7 @@ const (
 	wantBazelTarget = "//app:hello_test"
 	wantModuleImportpath = "${MODULE_IMPORTPATH}"
 	wantOrchestrionEnabled = true
+	wantOrchestrionMode = "${ORCHESTRION_MODE}"
 )
 
 func resolveRlocation(p string) (string, bool) {
@@ -448,6 +462,9 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 	}
 	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
 		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
+	}
+	if got, _ := metadata["bazel.go.orchestrion.mode"].(string); got != wantOrchestrionMode {
+		t.Fatalf("bazel.go.orchestrion.mode = %v, want %q", metadata["bazel.go.orchestrion.mode"], wantOrchestrionMode)
 	}
 	if got, _ := metadata["bazel.go.attr.cgo"].(bool); got {
 		t.Fatalf("bazel.go.attr.cgo = %v, want false", metadata["bazel.go.attr.cgo"])
@@ -691,7 +708,12 @@ PY
       --output=textproto > "$aquery_output"
   )
 
-  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" "$aquery_output"
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
+    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
+    --required-test-optimization-pin-file go.mod \
+    --required-test-optimization-pin-file orchestrion.yml \
+    --require-plain-compile-in-test-optimization \
+    "$aquery_output"
 }
 
 mkdir -p "$WORKSPACE_ROOT"

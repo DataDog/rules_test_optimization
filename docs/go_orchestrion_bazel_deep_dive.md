@@ -264,6 +264,7 @@ sets:
 
 ```bzl
 "@rules_go//go/private/orchestrion:enabled": True
+"@rules_go//go/private/orchestrion:mode": "general" or "test_optimization"
 ```
 
 The wrapper then symlinks the executable produced by the raw target and returns
@@ -472,6 +473,12 @@ At compile time, the builder:
 4. Filters sources and applies cgo/coverage/nogo handling as usual
 5. Invokes the Go compiler through Orchestrion when enabled
 
+In `test_optimization` mode, package compile is deliberately narrower:
+customer packages and external `_test` packages do not receive Orchestrion
+toolexec. The synthetic `testmain` compile still receives Orchestrion context
+so it can produce the Datadog helper packagefile manifest consumed by final
+link.
+
 The key Orchestrion-specific compile responsibilities are:
 
 - module/cache preparation
@@ -615,6 +622,12 @@ For synthetic test links it:
 3. Reuses the compile-time Datadog helper root
 4. Completes the broader Datadog closure from that same root when link itself is
    still Orchestrion-enabled
+
+In `test_optimization` mode, customer package compiles remain plain and the
+helper closure is reduced around the standard Go `testing` path. The current
+correctness-first implementation still carries the HTTP and slog Datadog contrib
+helpers because the woven stdlib can reference those helper symbols; profiler and
+automatic `testify/suite` support are outside this mode.
 
 That is the core consistency rule of the current implementation:
 

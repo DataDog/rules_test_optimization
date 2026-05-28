@@ -61,6 +61,10 @@ The important model is:
 - Orchestrion is not a post-processing step
 - the vendored fork makes Orchestrion part of the normal compile, stdlib, and
   link path
+- `test_optimization` mode is the narrower standard Go `testing` path:
+  customer packages and external `_test` packages compile normally, while
+  stdlib `testing`, synthetic `testmain`, helper packagefiles, importcfg, and
+  link support stay coherent
 
 ## Why The Fork Exists
 

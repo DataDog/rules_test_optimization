@@ -41,6 +41,7 @@ func stdlib(args []string) (err error) {
 	out := flags.String("out", "", "Path to output go root")
 	cacheOut := flags.String("cacheout", "", "Path to output Go build cache directory")
 	orchestrion := flags.String("orchestrion", "", "Path to orchestrion binary for toolexec instrumentation")
+	orchestrionModeFlag := flags.String("orchestrion_mode", orchestrionModeGeneral, "Orchestrion integration mode")
 	var orchestrionSrcDirs multiFlag
 	flags.Var(&orchestrionSrcDirs, "orchsrc", "source directories that may contain orchestrion pin files")
 	race := flags.Bool("race", false, "Build in race mode")
@@ -58,6 +59,11 @@ func stdlib(args []string) (err error) {
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
 	}
+	orchestrionMode, err := validateOrchestrionMode(*orchestrionModeFlag)
+	if err != nil {
+		return err
+	}
+	goenv.orchestrionMode = orchestrionMode
 	if *orchestrion != "" {
 		*orchestrion = abs(*orchestrion)
 	}
@@ -178,14 +184,14 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			}
 		}
 		workDirSpan := beginProbe("stdlib.enter_orchestrion_workdir")
-		restoreOrchWorkDir, err := enterOrchestrionWorkDir(orchestrionSrcDirs, goenv.verbose)
+		restoreOrchWorkDir, err := enterOrchestrionWorkDir(orchestrionSrcDirs, goenv.verbose, orchestrionMode)
 		workDirSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
 		}
 		defer restoreOrchWorkDir()
 		goModSpan := beginProbe("stdlib.ensure_go_mod_exists")
-		cleanupGoMod, err := ensureGoModExists(orchestrionSrcDirs, goenv.sdk, goenv.verbose)
+		cleanupGoMod, err := ensureGoModExists(orchestrionSrcDirs, goenv.sdk, goenv.verbose, orchestrionMode)
 		goModSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
@@ -199,7 +205,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		}
 		defer cleanupGoModModulePath()
 		toolGoSpan := beginProbe("stdlib.ensure_synthetic_orchestrion_tool_go")
-		cleanupSyntheticToolGo, err := ensureSyntheticOrchestrionToolGo(goenv.verbose)
+		cleanupSyntheticToolGo, err := ensureSyntheticOrchestrionToolGo(goenv.verbose, orchestrionMode)
 		toolGoSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: %w", err)
@@ -263,6 +269,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 			_ = os.Setenv("RULES_GO_ORCHESTRION_WORKDIR", cwd)
 		}
 		toolexec = quotePathIfNeeded(abs(os.Args[0])) + " orchestrionfilterbuildid " + quotePathIfNeeded(*orchestrion)
+		toolexec += " " + quotePathIfNeeded("--mode="+orchestrionMode)
 		if stdlibWorkDir != "" {
 			toolexec += " " + quotePathIfNeeded("--workdir="+stdlibWorkDir)
 		}
@@ -316,20 +323,20 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	if *orchestrion != "" {
 		sdkPath := abs(goenv.sdk)
 		jobserverSpan := beginProbe("stdlib.start_jobserver")
-		jobserver, err := startOrchestrionJobserver(*orchestrion, sdkPath, output, goenv.verbose)
+		jobserver, err := startOrchestrionJobserver(*orchestrion, sdkPath, output, goenv.verbose, orchestrionMode)
 		jobserverSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("stdlib: failed to start orchestrion jobserver: %w", err)
 		}
 		defer jobserver.cleanup()
-		runSpan := beginProbe("stdlib.run_install")
+		runSpan := beginProbe("stdlib.run_install", newProbeField("orchestrion_mode", orchestrionMode))
 		if err := goenv.runCommandWithJobserver(installArgs, jobserver, ""); err != nil {
 			runSpan.End(err)
 			return err
 		}
 		runSpan.End(nil)
 		persistSpan := beginProbe("stdlib.persist_orchestrion_stdlib_exports")
-		if err := persistOrchestrionStdlibExports(goenv, append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRoots...), goenv.verbose); err != nil {
+		if err := persistOrchestrionStdlibExports(goenv, append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRootsForMode(orchestrionMode)...), goenv.verbose); err != nil {
 			persistSpan.End(err)
 			return fmt.Errorf("stdlib: persist orchestrion stdlib exports: %w", err)
 		}
@@ -440,7 +447,8 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 	// just copied into the persistent export root. Sync only the cache-local
 	// closure that later compile/link paths actually request from the stdlib
 	// cache, rather than rewriting every persisted archive back into cache paths.
-	if err := syncPersistedOrchestrionExportsToCache(goenv, persistedExports, packages, verbose); err != nil {
+	cachePackages := stdlibSeedPackagesForMode(persistedExports, goenv.orchestrionMode, packages)
+	if err := syncPersistedOrchestrionExportsToCache(goenv, persistedExports, cachePackages, verbose); err != nil {
 		return fmt.Errorf("sync persisted stdlib archives into cache exports: %w", err)
 	}
 	return nil
@@ -556,7 +564,7 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 	return nil
 }
 
-func ensureSyntheticOrchestrionToolGo(verbose bool) (func(), error) {
+func ensureSyntheticOrchestrionToolGo(verbose bool, orchestrionMode string) (func(), error) {
 	const toolFile = "orchestrion.tool.go"
 	if _, err := os.Stat(toolFile); err == nil {
 		if verbose {
@@ -568,12 +576,13 @@ func ensureSyntheticOrchestrionToolGo(verbose bool) (func(), error) {
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("stat %s: %w", toolFile, err)
 	}
-	if err := os.WriteFile(toolFile, []byte(syntheticOrchestrionToolGo), 0o644); err != nil {
+	toolSource := syntheticOrchestrionToolGoForMode(orchestrionMode)
+	if err := os.WriteFile(toolFile, []byte(toolSource), 0o644); err != nil {
 		return nil, fmt.Errorf("write %s: %w", toolFile, err)
 	}
 	if verbose {
 		fmt.Fprintf(os.Stderr, "stdlib: created synthetic %s\n", toolFile)
-		fmt.Fprintf(os.Stderr, "stdlib: synthetic %s contents begin\n%s\nstdlib: synthetic %s contents end\n", toolFile, syntheticOrchestrionToolGo, toolFile)
+		fmt.Fprintf(os.Stderr, "stdlib: synthetic %s contents begin\n%s\nstdlib: synthetic %s contents end\n", toolFile, toolSource, toolFile)
 	}
 	return func() {
 		_ = os.Remove(toolFile)

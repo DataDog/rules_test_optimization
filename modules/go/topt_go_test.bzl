@@ -68,6 +68,7 @@ load(
     _is_dict = "is_dict",
 )
 load("@rules_go//go:def.bzl", "go_test")
+load("@rules_go//go/private/orchestrion:pin_files.bzl", _orchestrion_pin_files = "orchestrion_pin_files")
 load("//:topt_go_infer.bzl", "topt_go_bazel_metadata", "topt_go_payloads_selector")
 load("//:topt_go_orchestrion.bzl", "orch_go_test")
 
@@ -98,10 +99,22 @@ _ORCHESTRION_PIN_FILES = [
     "orchestrion.tool.go",
     "orchestrion.yml",
 ]
+_ORCHESTRION_MODE_GENERAL = "general"
+_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
+_ORCHESTRION_MODES = {
+    _ORCHESTRION_MODE_GENERAL: None,
+    _ORCHESTRION_MODE_TEST_OPTIMIZATION: None,
+}
 
 def _attr_or_default(value, default):
     """Return a Starlark attr value or a default without forcing truthiness."""
     return default if value == None else value
+
+def _has_package_local_go_mod(package_local_orchestrion_pin_files):
+    """Return whether auto-discovered package-local pin files include go.mod."""
+    return "go.mod" in package_local_orchestrion_pin_files
+
+has_package_local_go_mod_for_tests = _has_package_local_go_mod
 
 def _concat_label_list_values(left, right):
     """Concatenate label-list-like macro inputs while preserving `select(...)`."""
@@ -138,6 +151,8 @@ def dd_topt_go_test(
         ci_visibility_enabled = True,
         # Optional module-root Orchestrion pin file labels for nested packages.
         orchestrion_pin_files = None,
+        # Experimental Orchestrion mode used by the Datadog rules_go fork.
+        experimental_orchestrion_mode = _ORCHESTRION_MODE_GENERAL,
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
@@ -171,8 +186,17 @@ def dd_topt_go_test(
         `DD_CIVISIBILITY_ENABLED=true` on the generated test environment.
         Set false only when the caller intentionally owns this tracer switch.
       orchestrion_pin_files: Optional labels for module-root Orchestrion pin
-        files such as `//:go.mod` and `//:orchestrion.tool.go`. Use this when
-        the BUILD file lives in a nested package below the Go module root.
+        files such as `//:go.mod`, `//:go.sum`, `//:orchestrion.tool.go`, and
+        `//:orchestrion.yml`. Use this when the BUILD file lives in a nested
+        package below the Go module root. In `test_optimization` mode, explicit
+        labels are required unless the BUILD package itself contains `go.mod`;
+        the optimized action graph keeps only the effective pin inputs while
+        preserving normal runtime data for the test.
+      experimental_orchestrion_mode: Experimental Orchestrion mode. Defaults
+        to `general`, which preserves the current behavior. Set to
+        `test_optimization` to use the standard Go `testing` Test Optimization
+        path: stdlib/`testing` instrumentation, synthetic testmain helper
+        wiring, and plain customer/external `_test` package compiles.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
@@ -182,6 +206,8 @@ def dd_topt_go_test(
     # Validate required topt_data early so failures surface at loading time.
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
+    if experimental_orchestrion_mode not in _ORCHESTRION_MODES:
+        fail_with_prefix("dd_topt_go_test", "experimental_orchestrion_mode must be one of %s" % ", ".join(sorted(_ORCHESTRION_MODES.keys())))
 
     # Support both shapes:
     # 1) Single-service dict with keys: repo_name, labels, set, runtimes
@@ -331,6 +357,7 @@ def dd_topt_go_test(
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override or "",
+        orchestrion_mode = experimental_orchestrion_mode,
         bazel_package = "//%s" % pkg_path if pkg_path else "//",
         bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
         repo_name = sync_repo_name,
@@ -355,23 +382,56 @@ def dd_topt_go_test(
         ":" + metadata_name,
     ])
 
-    # Stage package-local Orchestrion pin files as hidden data inputs when the
-    # caller keeps them next to the BUILD file that defines the test target.
-    # They remain runtime-inert for the test itself, but the vendored rules_go
-    # builder uses them to materialize the temporary module that Orchestrion
-    # expects during compile-time instrumentation.
-    package_local_orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
-    if package_local_orchestrion_pin_files:
-        data = _append_data_dependencies(data, package_local_orchestrion_pin_files)
-
     # Nested Go packages often keep the authoritative Orchestrion pin files at
     # the module root. Callers can pass those labels explicitly so the builder's
     # upward directory scan can still find the pinned module/config state.
     explicit_orchestrion_pin_files = _normalize_user_data(orchestrion_pin_files)
     if type(explicit_orchestrion_pin_files) == "select":
         fail_with_prefix("dd_topt_go_test", "orchestrion_pin_files does not support select(...) values")
+
+    # Stage package-local Orchestrion pin files as hidden data inputs when the
+    # caller keeps them next to the BUILD file that defines the test target.
+    # The provider target lets the optimized mode keep only these pin files in
+    # compile/link action inputs while preserving the same runtime data surface
+    # for the raw go_test target.
+    orchestrion_pin_inputs = []
+    package_local_orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
+    if package_local_orchestrion_pin_files:
+        orchestrion_pin_inputs.extend(package_local_orchestrion_pin_files)
     if explicit_orchestrion_pin_files:
-        data = _append_data_dependencies(data, explicit_orchestrion_pin_files)
+        orchestrion_pin_inputs.extend(explicit_orchestrion_pin_files)
+
+    if (
+        experimental_orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
+        not explicit_orchestrion_pin_files and
+        not _has_package_local_go_mod(package_local_orchestrion_pin_files)
+    ):
+        fail_with_prefix(
+            "dd_topt_go_test",
+            (
+                "experimental_orchestrion_mode = \"test_optimization\" requires a package-local " +
+                "go.mod or explicit orchestrion_pin_files pointing at the Go module root " +
+                "(for example //:go.mod, //:go.sum, //:orchestrion.tool.go, and //:orchestrion.yml)"
+            ),
+        )
+
+    if experimental_orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and not orchestrion_pin_inputs:
+        fail_with_prefix(
+            "dd_topt_go_test",
+            (
+                "experimental_orchestrion_mode = \"test_optimization\" requires package-local " +
+                "Orchestrion pin files or explicit orchestrion_pin_files so compile/link actions " +
+                "can track the module state"
+            ),
+        )
+
+    if orchestrion_pin_inputs:
+        orchestrion_pin_target_name = name + "_orchestrion_pin_files"
+        _orchestrion_pin_files(
+            name = orchestrion_pin_target_name,
+            srcs = orchestrion_pin_inputs,
+        )
+        data = _append_data_dependencies(data, [":" + orchestrion_pin_target_name])
 
     # Add manifest file reference for deriving the working directory.
     # Keep this dynamic via export metadata so custom out_dir values continue
@@ -428,5 +488,6 @@ def dd_topt_go_test(
     orch_go_test(
         name = name,
         actual = ":" + raw_name,
+        orchestrion_mode = experimental_orchestrion_mode,
         **wrapper_kwargs
     )

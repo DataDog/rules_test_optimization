@@ -71,6 +71,71 @@ func TestRewriteImportcfgFromCurrentStdlibEntriesIgnoresPlainCache(t *testing.T)
 	}
 }
 
+func TestRewriteImportcfgFromCurrentStdlibEntriesUsesPersistedMissingExports(t *testing.T) {
+	tempDir := t.TempDir()
+	importcfgPath := filepath.Join(tempDir, "importcfg")
+	original := strings.Join([]string{
+		"packagefile net/http=/bazel-out/stdlib/pkg/net/http.a",
+		"packagefile net/url=/bazel-out/stdlib/pkg/net/url.a",
+		"packagefile os=/bazel-out/stdlib/pkg/os.a",
+		"",
+	}, "\n")
+	if err := os.WriteFile(importcfgPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write importcfg: %v", err)
+	}
+
+	goroot := filepath.Join(tempDir, "goroot")
+	installSuffix := "darwin_arm64"
+	persistedRoot := filepath.Join(goroot, "pkg", orchestrionStdlibExportDirName, installSuffix)
+	for _, pkg := range []string{"net/http", "net/url"} {
+		archivePath := filepath.Join(persistedRoot, filepath.FromSlash(pkg)+".a")
+		if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+			t.Fatalf("mkdir persisted archive: %v", err)
+		}
+		if err := os.WriteFile(archivePath, []byte(pkg), 0o644); err != nil {
+			t.Fatalf("write persisted archive: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(persistedRoot, orchestrionStdlibExportManifestName), []byte("net/http=net/http.a\nnet/url=net/url.a\n"), 0o644); err != nil {
+		t.Fatalf("write persisted manifest: %v", err)
+	}
+
+	cacheDir := filepath.Join(tempDir, "cache")
+	cacheOSArchive := filepath.Join(cacheDir, "os-cache.a")
+	if err := os.MkdirAll(filepath.Dir(cacheOSArchive), 0o755); err != nil {
+		t.Fatalf("mkdir cache archive: %v", err)
+	}
+	if err := os.WriteFile(cacheOSArchive, []byte("os"), 0o644); err != nil {
+		t.Fatalf("write cache archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, orchestrionStdlibCacheManifestName), []byte("os=os-cache.a\n"), 0o644); err != nil {
+		t.Fatalf("write cache manifest: %v", err)
+	}
+
+	goenv := &env{
+		goroot:        goroot,
+		installSuffix: installSuffix,
+		stdlibCache:   cacheDir,
+	}
+	if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv); err != nil {
+		t.Fatalf("rewrite importcfg: %v", err)
+	}
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		t.Fatalf("read importcfg: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"packagefile net/http=" + filepath.Join(persistedRoot, "net/http.a"),
+		"packagefile net/url=" + filepath.Join(persistedRoot, "net/url.a"),
+		"packagefile os=" + cacheOSArchive,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rewritten importcfg missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 	moduleDir := t.TempDir()
 	for _, name := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {
@@ -96,7 +161,7 @@ func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 		t.Fatalf("write manifest v1: %v", err)
 	}
 
-	goenv := &env{stdlibCache: cacheDir}
+	goenv := &env{stdlibCache: cacheDir, orchestrionMode: orchestrionModeGeneral}
 	keyV1, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
 	if err != nil {
 		t.Fatalf("moduleExportRequestKey v1 error: %v", err)
@@ -185,12 +250,28 @@ func TestModuleExportRequestKeyIncludesLogSlogStdlibCacheState(t *testing.T) {
 		t.Fatalf("write manifest v2: %v", err)
 	}
 
-	keyV2, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"github.com/DataDog/go-runtime-metrics-internal/pkg/runtimemetrics"})
+	keyV2, _, err := moduleExportRequestKey(moduleDir, goenv, []string{"github.com/DataDog/dd-trace-go/v2"})
 	if err != nil {
 		t.Fatalf("moduleExportRequestKey v2 error: %v", err)
 	}
 	if keyV1 == keyV2 {
 		t.Fatalf("moduleExportRequestKey ignored log/slog stdlib cache change: %q", keyV1)
+	}
+
+	testOptEnv := &env{stdlibCache: cacheDir, orchestrionMode: orchestrionModeTestOptimization}
+	keyTestOptV2, _, err := moduleExportRequestKey(moduleDir, testOptEnv, []string{"github.com/DataDog/dd-trace-go/v2"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey test_optimization v2 error: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, []byte(manifestV1), 0o644); err != nil {
+		t.Fatalf("restore manifest v1: %v", err)
+	}
+	keyTestOptV1, _, err := moduleExportRequestKey(moduleDir, testOptEnv, []string{"github.com/DataDog/dd-trace-go/v2"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey test_optimization v1 error: %v", err)
+	}
+	if keyTestOptV1 == keyTestOptV2 {
+		t.Fatalf("test_optimization key ignored log/slog stdlib cache change: %q", keyTestOptV1)
 	}
 }
 
@@ -206,7 +287,7 @@ func TestModuleExportRequestKeyIgnoresSyntheticTempDir(t *testing.T) {
 			t.Fatalf("mkdir module dir: %v", err)
 		}
 		for name, content := range map[string]string{
-			"go.mod":              syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions()),
+			"go.mod":              syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions(), orchestrionModeGeneral),
 			"orchestrion.tool.go": syntheticOrchestrionToolGo,
 			"orchestrion.yml":     "injectors: []\n",
 		} {
@@ -240,7 +321,7 @@ func TestModuleExportRequestKeyIgnoresSyntheticGoModGoSumDrift(t *testing.T) {
 		if err := os.MkdirAll(moduleDir, 0o755); err != nil {
 			t.Fatalf("mkdir module dir: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions())+"\n// temp drift\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(syntheticOrchestrionGoMod("v1.6.0", defaultDDTraceGoVersions(), orchestrionModeGeneral)+"\n// temp drift\n"), 0o644); err != nil {
 			t.Fatalf("write go.mod: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(moduleDir, "orchestrion.tool.go"), []byte(syntheticOrchestrionToolGo), 0o644); err != nil {
@@ -295,6 +376,33 @@ func TestModuleExportRequestKeyIncludesNormalizedPackageSet(t *testing.T) {
 	}
 	if keyA == keyC {
 		t.Fatalf("moduleExportRequestKey ignored package set: %q", keyA)
+	}
+}
+
+func TestModuleExportRequestKeyIncludesMode(t *testing.T) {
+	moduleDir := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":              "module example.com/test\n",
+		"orchestrion.tool.go": syntheticOrchestrionToolGo,
+		"orchestrion.yml":     "injectors: []\n",
+	} {
+		if err := os.WriteFile(filepath.Join(moduleDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	keyGeneral, partsGeneral, err := moduleExportRequestKey(moduleDir, &env{orchestrionMode: orchestrionModeGeneral}, []string{"a/pkg"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey general error: %v", err)
+	}
+	keyTestOpt, partsTestOpt, err := moduleExportRequestKey(moduleDir, &env{orchestrionMode: orchestrionModeTestOptimization}, []string{"a/pkg"})
+	if err != nil {
+		t.Fatalf("moduleExportRequestKey test_optimization error: %v", err)
+	}
+	if keyGeneral == keyTestOpt {
+		t.Fatalf("module export request key should differ by mode: %q", keyGeneral)
+	}
+	if !containsString(partsGeneral, "orchestrion_mode=general") || !containsString(partsTestOpt, "orchestrion_mode=test_optimization") {
+		t.Fatalf("module export request key parts missing mode: general=%v test_optimization=%v", partsGeneral, partsTestOpt)
 	}
 }
 
@@ -428,5 +536,76 @@ func TestSeedWovenStdlibCacheNoopWhenAlreadyReady(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Fatalf("seedWovenStdlibCache rewrote ready archive: before=%q after=%q", string(before), string(after))
+	}
+}
+
+func TestStdlibSeedPackagesForModeUsesRequestedFallbackInTestOptimization(t *testing.T) {
+	sourceExports := map[string]string{
+		"encoding/json": "/cache/encoding-json.a",
+		"log/slog":      "/cache/log-slog.a",
+		"testing":       "/cache/testing.a",
+	}
+
+	general := stdlibSeedPackagesForMode(sourceExports, orchestrionModeGeneral, []string{"testing", "missing"})
+	if got, want := strings.Join(general, ","), "testing"; got != want {
+		t.Fatalf("general seed packages = %q, want %q", got, want)
+	}
+
+	testOptimization := stdlibSeedPackagesForMode(sourceExports, orchestrionModeTestOptimization, []string{"testing"})
+	if got, want := strings.Join(testOptimization, ","), "testing"; got != want {
+		t.Fatalf("test_optimization seed packages = %q, want %q", got, want)
+	}
+}
+
+func TestRewriteImportcfgForSyntheticTestmainStdlibTestOptimizationSkipsUnneededStdlib(t *testing.T) {
+	tempDir := t.TempDir()
+	importcfgPath := filepath.Join(tempDir, "importcfg")
+	originalEncodingJSON := "/bazel-out/stdlib/pkg/encoding/json.a"
+	original := strings.Join([]string{
+		"packagefile encoding/json=" + originalEncodingJSON,
+		"packagefile testing=/bazel-out/stdlib/pkg/testing.a",
+		"",
+	}, "\n")
+	if err := os.WriteFile(importcfgPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write importcfg: %v", err)
+	}
+
+	cacheDir := filepath.Join(tempDir, "cache")
+	cacheEncodingJSON := filepath.Join(cacheDir, "encoding-json-cache.a")
+	cacheTesting := filepath.Join(cacheDir, "testing-cache.a")
+	for _, path := range []string{cacheEncodingJSON, cacheTesting} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir cache archive: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0o644); err != nil {
+			t.Fatalf("write cache archive: %v", err)
+		}
+	}
+	manifest := strings.Join([]string{
+		"encoding/json=" + filepath.Base(cacheEncodingJSON),
+		"testing=" + filepath.Base(cacheTesting),
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(cacheDir, orchestrionStdlibCacheManifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write cache manifest: %v", err)
+	}
+
+	goenv := &env{
+		orchestrionMode: orchestrionModeTestOptimization,
+		stdlibCache:     cacheDir,
+	}
+	if err := rewriteImportcfgForSyntheticTestmainStdlib(importcfgPath, goenv); err != nil {
+		t.Fatalf("rewrite importcfg: %v", err)
+	}
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		t.Fatalf("read importcfg: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "packagefile encoding/json="+originalEncodingJSON) {
+		t.Fatalf("test_optimization rewrote unneeded encoding/json packagefile:\n%s", got)
+	}
+	if !strings.Contains(got, "packagefile testing="+cacheTesting) {
+		t.Fatalf("test_optimization did not rewrite testing packagefile:\n%s", got)
 	}
 }

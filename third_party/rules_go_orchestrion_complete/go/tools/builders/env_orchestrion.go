@@ -42,7 +42,7 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 		goRootPath = os.Getenv("GOROOT")
 	}
 	cmd := e.newBufferedCommand(args, buf)
-	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose)
+	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose, e.orchestrionMode)
 	if err != nil && jobserver != nil && isOrchestrionJobserverConnectionFailure(buf.String()) {
 		if e.verbose {
 			os.Stderr.Write(relativizePaths(buf.Bytes()))
@@ -50,7 +50,7 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 		fmt.Fprintln(os.Stderr, "orchestrion: jobserver connection failed; retrying command without jobserver")
 		buf.Reset()
 		cmd = e.newBufferedCommand(args, buf)
-		err = executeCommandWithJobserver(cmd, nil, importPath, e.sdk, goRootPath, e.verbose)
+		err = executeCommandWithJobserver(cmd, nil, importPath, e.sdk, goRootPath, e.verbose, e.orchestrionMode)
 	}
 	span.End(err)
 	os.Stderr.Write(relativizePaths(buf.Bytes()))

@@ -126,6 +126,19 @@ Notes:
 - If the workspace setting and the effective local Go module versions differ,
   the build fails instead of mixing versions.
 
+## Go Test Optimization Orchestrion mode
+
+`dd_topt_go_test(...)` accepts `experimental_orchestrion_mode`:
+
+| Value | Description |
+|-------|-------------|
+| `general` | Default. Preserves the generic Orchestrion behavior for the transitioned raw `go_test` |
+| `test_optimization` | Standard Go `testing` Test Optimization mode. Keeps stdlib/`testing`, synthetic `testmain`, helper packagefiles, importcfg, and link support, while leaving customer package compiles and external `_test` package compiles on the plain rules_go path |
+
+`test_optimization` mode requires package-local pin files or explicit
+`orchestrion_pin_files` pointing at the Go module root. It intentionally does
+not support automatic `testify/suite` instrumentation.
+
 ## Sync extension attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`

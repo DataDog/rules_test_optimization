@@ -37,6 +37,12 @@ var orchestrionInstrumentedStdlibPackages = []string{
 	"net/http",
 }
 
+var orchestrionInstrumentedStdlibPackagesTestOptimization = []string{
+	"log",
+	"log/slog",
+	"net/http",
+}
+
 var orchestrionCacheStdlibPackages = []string{
 	"flag",
 	"fmt",
@@ -49,6 +55,34 @@ var orchestrionCacheStdlibPackages = []string{
 	"testing",
 	"testing/internal/testdeps",
 	"io/ioutil",
+}
+
+var orchestrionCacheStdlibPackagesTestOptimization = []string{
+	"flag",
+	"fmt",
+	"log",
+	"log/slog",
+	"net/http",
+	"os",
+	"os/exec",
+	"runtime",
+	"testing",
+	"testing/internal/testdeps",
+	"io/ioutil",
+}
+
+func orchestrionInstrumentedStdlibPackagesForMode(mode string) []string {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return orchestrionInstrumentedStdlibPackagesTestOptimization
+	}
+	return orchestrionInstrumentedStdlibPackages
+}
+
+func orchestrionCacheStdlibPackagesForMode(mode string) []string {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return orchestrionCacheStdlibPackagesTestOptimization
+	}
+	return orchestrionCacheStdlibPackages
 }
 
 const orchestrionStdlibExportManifestName = "exports.txt"
@@ -420,7 +454,7 @@ func rewriteImportcfgForOrchestrionStdlib(importcfgPath string, goenv *env) erro
 	goenv.goroot = abs(goenv.goroot)
 	goenv.sdk = abs(goenv.sdk)
 
-	exports, err := resolveBazelStdlibPkgArchives(goenv, orchestrionInstrumentedStdlibPackages)
+	exports, err := resolveBazelStdlibPkgArchives(goenv, orchestrionInstrumentedStdlibPackagesForMode(goenv.orchestrionMode))
 	if err != nil {
 		return err
 	}
@@ -923,6 +957,7 @@ func moduleExportRequestKey(moduleDir string, goenv *env, packages []string) (st
 	parts := []string{
 		"helper_export_cache=" + helperExportCacheABIVersion,
 		"orchestrion=" + orchestrionToolVersionIdentity(),
+		"orchestrion_mode=" + effectiveOrchestrionMode(goenv.orchestrionMode),
 		"sdk=" + sdkIdentity,
 		"installsuffix=" + goenv.installSuffix,
 	}
@@ -942,9 +977,9 @@ func moduleExportRequestKey(moduleDir string, goenv *env, packages []string) (st
 		}
 		parts = append(parts,
 			"configured_versions="+ddTraceVersionsDigest(configuredVersions),
-			"go.mod="+shortDigest([]byte(syntheticOrchestrionGoMod(orchestrionVersion, configuredVersions))),
+			"go.mod="+shortDigest([]byte(syntheticOrchestrionGoMod(orchestrionVersion, configuredVersions, goenv.orchestrionMode))),
 			"go.sum=synthetic",
-			"orchestrion.tool.go="+shortDigest([]byte(syntheticOrchestrionToolGo)),
+			"orchestrion.tool.go="+shortDigest([]byte(syntheticOrchestrionToolGoForMode(goenv.orchestrionMode))),
 			"orchestrion.yml=missing",
 		)
 	} else {
@@ -971,10 +1006,18 @@ func currentWovenStdlibCacheKey(goenv *env) (string, error) {
 	if goenv == nil || goenv.stdlibCache == "" {
 		return "default", nil
 	}
-	exports, err := readStdlibCacheManifest(goenv.stdlibCache, []string{"testing", "runtime", "fmt", "flag", "log"})
+	exports, err := readAllStdlibCacheManifest(goenv.stdlibCache)
 	if err != nil {
 		return "", err
 	}
+	if exports == nil {
+		exports = map[string]string{}
+	}
+	persisted, err := readPersistedOrchestrionStdlibExports(goenv)
+	if err != nil {
+		return "", err
+	}
+	mergeStdlibExports(exports, persisted)
 	if len(exports) == 0 {
 		return "default", nil
 	}
@@ -1042,17 +1085,7 @@ func seedWovenStdlibCache(goenv *env, cacheRoot string) error {
 	if len(sourceExports) == 0 {
 		return nil
 	}
-	needed := make(map[string]bool, len(orchestrionCacheStdlibPackages))
-	for _, pkg := range orchestrionCacheStdlibPackages {
-		needed[pkg] = true
-	}
-	packages := make([]string, 0, len(needed))
-	for pkg := range needed {
-		if _, ok := sourceExports[pkg]; ok {
-			packages = append(packages, pkg)
-		}
-	}
-	sort.Strings(packages)
+	packages := stdlibSeedPackagesForMode(sourceExports, goenv.orchestrionMode, orchestrionCacheStdlibPackagesForMode(goenv.orchestrionMode))
 	if len(packages) == 0 {
 		return nil
 	}
@@ -1099,6 +1132,27 @@ func seedWovenStdlibCache(goenv *env, cacheRoot string) error {
 		return fmt.Errorf("write seeded stdlib cache manifest at %s: %w", manifestPath, err)
 	}
 	return nil
+}
+
+func stdlibSeedPackagesForMode(sourceExports map[string]string, _ string, fallback []string) []string {
+	if len(sourceExports) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(sourceExports))
+	packages := make([]string, 0, len(sourceExports))
+	add := func(pkg string) {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" || seen[pkg] || strings.TrimSpace(sourceExports[pkg]) == "" {
+			return
+		}
+		seen[pkg] = true
+		packages = append(packages, pkg)
+	}
+	for _, pkg := range fallback {
+		add(pkg)
+	}
+	sort.Strings(packages)
+	return packages
 }
 
 func seededStdlibCacheReady(cacheRoot string, packages []string) bool {
@@ -1532,15 +1586,15 @@ func rewriteImportcfgForDefaultCacheStdlibExports(importcfgPath string, goenv *e
 	var exports map[string]string
 	if goenv.stdlibCache != "" {
 		// Bazel passes a stdlib cache directory for both plain and Orchestrion
-		// stdlib builds. Only the Orchestrion cache has a manifest that maps
-		// packages to safe archive paths; the plain cache is an action output and
-		// must not be reused as a writable GOCACHE by downstream actions.
-		exports, err = readStdlibCacheManifest(goenv.stdlibCache, orchestrionCacheStdlibPackages)
+		// stdlib builds. Helper source packages can import arbitrary stdlib
+		// packages through their transitive module dependencies, so use the full
+		// manifest instead of a fixed Orchestrion-focused subset.
+		exports, err = readAllStdlibCacheManifest(goenv.stdlibCache)
 		if err != nil {
 			return err
 		}
 	} else {
-		exports, err = resolveCacheStdlibExports(goenv, orchestrionCacheStdlibPackages)
+		exports, err = resolveCacheStdlibExports(goenv, orchestrionCacheStdlibPackagesForMode(goenv.orchestrionMode))
 		if err != nil {
 			return err
 		}
@@ -1592,7 +1646,35 @@ func rewriteImportcfgForCacheStdlibClosures(importcfgPath string, goenv *env, pa
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
 }
 
-func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) (err error) {
+func rewriteImportcfgForSyntheticTestmainStdlib(importcfgPath string, goenv *env) error {
+	if goenv != nil && effectiveOrchestrionMode(goenv.orchestrionMode) == orchestrionModeTestOptimization {
+		packages := append([]string{"testing", "testing/internal/testdeps"}, orchestrionLinkStdlibRootsForMode(goenv.orchestrionMode)...)
+		return rewriteImportcfgFromCurrentStdlibEntriesForPackages(importcfgPath, goenv, packages)
+	}
+	return rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv)
+}
+
+func rewriteImportcfgFromCurrentStdlibEntriesForPackages(importcfgPath string, goenv *env, packages []string) error {
+	allowed := make(map[string]bool, len(packages))
+	for _, pkg := range packages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg != "" {
+			allowed[pkg] = true
+		}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	return rewriteImportcfgFromCurrentStdlibEntriesFiltered(importcfgPath, goenv, func(pkg string) bool {
+		return allowed[pkg]
+	})
+}
+
+func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) error {
+	return rewriteImportcfgFromCurrentStdlibEntriesFiltered(importcfgPath, goenv, nil)
+}
+
+func rewriteImportcfgFromCurrentStdlibEntriesFiltered(importcfgPath string, goenv *env, include func(string) bool) (err error) {
 	span := beginProbe("importcfg.rewrite_from_current_stdlib_entries", newProbeField("importcfg", importcfgPath))
 	defer func() {
 		span.End(err)
@@ -1620,6 +1702,9 @@ func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) 
 		if pkg == "" || strings.Contains(pkg, ".") {
 			continue
 		}
+		if include != nil && !include(pkg) {
+			continue
+		}
 		if _, ok := seen[pkg]; ok {
 			continue
 		}
@@ -1629,29 +1714,78 @@ func rewriteImportcfgFromCurrentStdlibEntries(importcfgPath string, goenv *env) 
 	if len(packages) == 0 {
 		return nil
 	}
-	var exports map[string]string
+	exports := map[string]string{}
+	hadWovenStdlibManifest := false
 	if goenv.stdlibCache != "" {
-		exports, err = readStdlibCacheManifest(goenv.stdlibCache, packages)
+		cacheExports, err := readStdlibCacheManifest(goenv.stdlibCache, packages)
 		if err != nil {
 			return err
 		}
-		if len(exports) == 0 {
-			// A stdlib cache without an Orchestrion manifest is the plain
-			// rules_go cache. Keep the importcfg as generated instead of running
-			// go list with that action-output tree as a writable GOCACHE.
-			return nil
+		if len(cacheExports) > 0 {
+			hadWovenStdlibManifest = true
+			mergeStdlibExports(exports, cacheExports)
 		}
 	}
-	if len(exports) == 0 {
-		exports, err = resolveStdlibExportsForPackageSet(goenv, packages)
-	}
+	persistedExports, err := readPersistedOrchestrionStdlibExports(goenv)
 	if err != nil {
 		return err
+	}
+	if len(persistedExports) > 0 {
+		hadWovenStdlibManifest = true
+		for _, pkg := range missingStdlibExportPackages(packages, exports) {
+			if exportPath := strings.TrimSpace(persistedExports[pkg]); exportPath != "" {
+				exports[pkg] = exportPath
+			}
+		}
+	}
+	if goenv.stdlibCache != "" && !hadWovenStdlibManifest {
+		// A stdlib cache without an Orchestrion manifest is the plain rules_go
+		// cache. Keep the importcfg as generated instead of running go list with
+		// that action-output tree as a writable GOCACHE.
+		return nil
+	}
+	if !hadWovenStdlibManifest {
+		resolvedExports, err := resolveStdlibExportsForPackageSet(goenv, packages)
+		if err != nil {
+			return err
+		}
+		mergeStdlibExports(exports, resolvedExports)
 	}
 	if len(exports) == 0 {
 		return nil
 	}
 	return rewriteImportcfgPackagefiles(importcfgPath, exports, nil)
+}
+
+// mergeStdlibExports copies non-empty stdlib export mappings into dst.
+func mergeStdlibExports(dst map[string]string, src map[string]string) {
+	for pkg, exportPath := range src {
+		pkg = strings.TrimSpace(pkg)
+		exportPath = strings.TrimSpace(exportPath)
+		if pkg == "" || exportPath == "" {
+			continue
+		}
+		dst[pkg] = exportPath
+	}
+}
+
+// missingStdlibExportPackages returns requested stdlib packages that do not
+// already have a usable export path in exports.
+func missingStdlibExportPackages(packages []string, exports map[string]string) []string {
+	missing := make([]string, 0)
+	seen := make(map[string]bool, len(packages))
+	for _, pkg := range packages {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" || seen[pkg] {
+			continue
+		}
+		seen[pkg] = true
+		if strings.TrimSpace(exports[pkg]) == "" {
+			missing = append(missing, pkg)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 func resolveStdlibExportsForPackageSet(goenv *env, packages []string) (map[string]string, error) {

@@ -64,6 +64,11 @@ type env struct {
 	// rewrites should prefer this over any implicit GOCACHE guesswork.
 	stdlibCache string
 
+	// orchestrionMode selects the Orchestrion integration policy used by the
+	// current action. Empty means the generic mode for tests and helper code that
+	// construct env values directly.
+	orchestrionMode string
+
 	// verbose indicates whether subprocess command lines should be printed.
 	verbose bool
 

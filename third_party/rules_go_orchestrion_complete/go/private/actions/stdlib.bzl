@@ -33,6 +33,7 @@ load(
     "//go/private:providers.bzl",
     "GoStdLib",
 )
+load("//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 load("//go/private:sdk.bzl", "parse_version")
 load("//go/private/actions:utils.bzl", "quote_opts")
 
@@ -40,6 +41,7 @@ _ORCHESTRION_PROBE_ENV_VARS = (
     "RULES_GO_ORCHESTRION_PROBE",
     "RULES_GO_ORCHESTRION_PROBE_FILE",
 )
+_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _orchestrion_action_env(
         go,
@@ -59,6 +61,23 @@ def _orchestrion_action_env(
     if orchestrion_tool_version_file:
         env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
+
+def _orchestrion_data_inputs(go):
+    if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return go._ctx.files.data if hasattr(go._ctx.files, "data") else []
+
+    allowed_pin_files = {
+        "go.mod": True,
+        "go.sum": True,
+        "orchestrion.yml": True,
+    }
+    files = []
+    for dep in getattr(go._ctx.attr, "data", []):
+        if OrchestrionPinFilesInfo in dep:
+            for file in dep[OrchestrionPinFilesInfo].files.to_list():
+                if file.basename in allowed_pin_files:
+                    files.append(file)
+    return files
 
 def emit_stdlib(go):
     """Returns a standard library for the target configuration.
@@ -201,8 +220,11 @@ def _build_stdlib(go):
         args.add("-pgoprofile", go.mode.pgoprofile)
         inputs_direct.append(go.mode.pgoprofile)
 
-    if go.orchestrion:
+    stdlib_orchestrion = go.orchestrion
+
+    if stdlib_orchestrion:
         args.add("-orchestrion", go.orchestrion)
+        args.add("-orchestrion_mode", getattr(go, "orchestrion_mode", "general"))
         inputs_direct.append(go.orchestrion)
         if getattr(go, "orchestrion_version_file", None):
             inputs_direct.append(go.orchestrion_version_file)
@@ -214,15 +236,16 @@ def _build_stdlib(go):
         inputs_transitive.append(sdk.srcs)
         if getattr(go, "orchestrion_module_proxy_files", None):
             inputs_transitive.append(go.orchestrion_module_proxy_files)
-        if hasattr(go._ctx.files, "data"):
+        orchestrion_data_inputs = _orchestrion_data_inputs(go)
+        if orchestrion_data_inputs:
             args.add_all(
-                go._ctx.files.data,
+                orchestrion_data_inputs,
                 map_each = _dirname,
                 before_each = "-orchsrc",
                 uniquify = True,
                 expand_directories = False,
             )
-            inputs_direct.extend(go._ctx.files.data)
+            inputs_direct.extend(orchestrion_data_inputs)
 
     outputs = [pkg, stdlib_cache_dir]
     go.actions.run(
@@ -233,16 +256,16 @@ def _build_stdlib(go):
         arguments = [args],
         env = _stdlib_action_env(
             go,
-            getattr(go, "orchestrion_version_file", None),
-            getattr(go, "orchestrion_module_proxy_root_marker", None),
-            getattr(go, "orchestrion_tool_version_file", None),
+            getattr(go, "orchestrion_version_file", None) if stdlib_orchestrion else None,
+            getattr(go, "orchestrion_module_proxy_root_marker", None) if stdlib_orchestrion else None,
+            getattr(go, "orchestrion_tool_version_file", None) if stdlib_orchestrion else None,
         ),
         toolchain = GO_TOOLCHAIN_LABEL,
         execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT,
     )
     list_json, list_cache_dir = _build_stdlib_list_json(go)
     cache_dir = depset([list_cache_dir])
-    if go.orchestrion:
+    if stdlib_orchestrion:
         cache_dir = depset([stdlib_cache_dir])
     return GoStdLib(
         _list_json = list_json,

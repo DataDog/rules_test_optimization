@@ -7,17 +7,23 @@
 """Internal Orchestrion wrapper rule for Go tests."""
 
 _BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
+_ORCHESTRION_MODE_GENERAL = "general"
+_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _orch_transition_impl(_settings, _attr):
     return {
         "@rules_go//go/private/orchestrion:enabled": True,
+        "@rules_go//go/private/orchestrion:mode": _attr.orchestrion_mode,
     }
+
+orch_transition_impl_for_tests = _orch_transition_impl
 
 orch_transition = transition(
     implementation = _orch_transition_impl,
     inputs = [],
     outputs = [
         "@rules_go//go/private/orchestrion:enabled",
+        "@rules_go//go/private/orchestrion:mode",
     ],
 )
 
@@ -131,6 +137,14 @@ orch_go_test = rule(
             executable = True,
             cfg = orch_transition,
             doc = "The underlying raw go_test target built with Orchestrion enabled.",
+        ),
+        "orchestrion_mode": attr.string(
+            default = _ORCHESTRION_MODE_GENERAL,
+            values = [
+                _ORCHESTRION_MODE_GENERAL,
+                _ORCHESTRION_MODE_TEST_OPTIMIZATION,
+            ],
+            doc = "Internal Orchestrion mode forwarded to the raw go_test target.",
         ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
