@@ -2184,7 +2184,7 @@ func isSyntheticTestmainSourceCompileCandidate(importPath string, orchestrionMod
 	return false
 }
 
-func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string, _ string) (string, error) {
+func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string, orchestrion string) (string, error) {
 	// Check that the filtered sources don't import anything outside of
 	// the standard library and the direct dependencies.
 	imports, err := checkImports(srcs.goSrcs, deps, packageListPath, importPath, recompileInternalDeps)
@@ -2220,6 +2220,9 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	importcfgPath, err := buildImportcfgFileForCompile(imports, goenv.installSuffix, workDir)
 	if err != nil {
 		return "", err
+	}
+	if orchestrion == "" {
+		return importcfgPath, nil
 	}
 	if shouldSkipOrchestrionForImportPath(importPath) {
 		if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv); err != nil {

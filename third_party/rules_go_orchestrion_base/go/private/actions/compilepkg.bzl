@@ -153,9 +153,12 @@ def emit_compilepkg(
         archives = archives + [go.coverdata]
 
     sdk = go.sdk
+    compile_orchestrion = _orchestrion_enabled_for_compile(go, testfilter, out_synthetic_testmain_manifest)
     inputs_direct = (sources + embedsrcs + [sdk.package_list, go.toolchain._pack] +
                      [archive.data.export_file for archive in archives])
-    inputs_transitive = [sdk.headers, sdk.tools, go.stdlib.libs, go.stdlib.cache_dir, headers]
+    inputs_transitive = [sdk.headers, sdk.tools, go.stdlib.libs, headers]
+    if compile_orchestrion:
+        inputs_transitive.append(go.stdlib.cache_dir)
     outputs = [out_lib, out_export]
     if out_synthetic_testmain_manifest != None:
         outputs.append(out_synthetic_testmain_manifest)
@@ -203,7 +206,8 @@ def emit_compilepkg(
     compile_args.add("-o", out_export)
     if out_synthetic_testmain_manifest:
         compile_args.add("-synthetic_testmain_manifest", out_synthetic_testmain_manifest)
-    compile_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
+    if compile_orchestrion:
+        compile_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     if out_cgo_export_h:
         compile_args.add("-cgoexport", out_cgo_export_h)
         outputs.append(out_cgo_export_h)
@@ -229,7 +233,6 @@ def emit_compilepkg(
 
     # cgo and the linker action don't support path mapping yet
     # TODO: Remove the second condition after https://github.com/bazelbuild/bazel/pull/21921.
-    compile_orchestrion = _orchestrion_enabled_for_compile(go, testfilter, out_synthetic_testmain_manifest)
     orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if compile_orchestrion else None
     orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if compile_orchestrion else None
     orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if compile_orchestrion else None
@@ -355,7 +358,7 @@ def _run_nogo(
     inputs_direct = (sources + [sdk.package_list] +
                      [archive.data.facts_file for archive in archives if archive.data.facts_file] +
                      [archive.data.export_file for archive in archives])
-    inputs_transitive = [sdk.tools, sdk.headers, go.stdlib.libs, go.stdlib.cache_dir]
+    inputs_transitive = [sdk.tools, sdk.headers, go.stdlib.libs]
     outputs = [out_diagnostics, out_facts]
 
     nogo_args = go.tool_args(go)
