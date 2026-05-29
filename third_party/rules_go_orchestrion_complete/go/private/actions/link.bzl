@@ -83,6 +83,17 @@ def _orchestrion_data_inputs(go):
                     files.append(file)
     return files
 
+def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
+    if not go.orchestrion:
+        return False
+    if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return True
+
+    # In Test Optimization mode, synthetic testmain compile already produced
+    # the Datadog helper packagefile manifest that final link needs. Keep that
+    # final test-binary link on the plain rules_go shape.
+    return synthetic_testmain_manifest == None
+
 def _parse_lld_thread_count(extldflags):
     """Extract --threads=N from extldflags to determine lld CPU usage."""
     for flag in extldflags:
@@ -306,9 +317,11 @@ def emit_link(
         inputs_direct.append(version_map_file)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
-    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
-    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if go.orchestrion else None
-    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if go.orchestrion else None
+    orchestrion_mode = getattr(go, "orchestrion_mode", "general")
+    link_orchestrion = _orchestrion_enabled_for_link(go, synthetic_testmain_manifest)
+    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if link_orchestrion else None
+    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if link_orchestrion else None
+    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if link_orchestrion else None
 
     inputs_transitive = [
         archive.libs,
@@ -321,8 +334,9 @@ def emit_link(
 
     # Add orchestrion for toolexec instrumentation if enabled
     if go.orchestrion:
+        builder_args.add("-orchestrion_mode", orchestrion_mode)
+    if link_orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
-        builder_args.add("-orchestrion_mode", getattr(go, "orchestrion_mode", "general"))
         inputs_direct.append(go.orchestrion)
         if orchestrion_trace_version_file:
             inputs_direct.append(orchestrion_trace_version_file)

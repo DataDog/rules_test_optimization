@@ -1106,13 +1106,19 @@ func waitForJobserverReady(rawURL string, timeout time.Duration) error {
 // TOOLEXEC_IMPORTPATH is also set (required by orchestrion toolexec).
 // If goSdkPath is non-empty, the Go SDK's bin directory is prepended to PATH.
 // If goRootPath is non-empty, it is used as GOROOT for the command.
-func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver, importPath, goSdkPath, goRootPath string, verbose bool, orchestrionMode string) (err error) {
+// warmWovenPackages controls whether this command should preflight Orchestrion's
+// woven dependency closure. Plain Go compiler/linker commands in
+// test_optimization mode do not need that module-resolution warmup.
+func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver, importPath, goSdkPath, goRootPath string, verbose bool, orchestrionMode string, warmWovenPackages bool) (err error) {
+	jobserverReady := jobserver != nil && jobserver.URL() != ""
+	preflightWovenPackages := warmWovenPackages && !jobserverReady
 	span := beginProbe(
 		"orchestrion.execute_command_with_jobserver",
 		newProbeField("argv0", filepath.Base(cmd.Path)),
 		newProbeField("import_path", importPath),
-		newProbeField("jobserver", strconv.FormatBool(jobserver != nil && jobserver.URL() != "")),
+		newProbeField("jobserver", strconv.FormatBool(jobserverReady)),
 		newProbeField("orchestrion_mode", effectiveOrchestrionMode(orchestrionMode)),
+		newProbeField("warm_woven_packages", strconv.FormatBool(preflightWovenPackages)),
 	)
 	defer func() {
 		span.End(err)
@@ -1149,7 +1155,7 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		return err
 	}
 
-	if jobserver != nil && jobserver.URL() != "" {
+	if jobserverReady {
 		cmd.Env = appendEnvIfNotExists(cmd.Env, orchestrionJobserverURLEnvVar, jobserver.URL())
 		cmd.Env = appendEnvIfNotExists(cmd.Env, orchestrionSkipPinEnvVar, "true")
 		// Disable external package driver to ensure go command is used directly
@@ -1195,8 +1201,10 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 			cmd.Args = append([]string{cmd.Args[0], "--log-level=" + logLevel}, cmd.Args[1:]...)
 		}
 	}
-	if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose, orchestrionMode); err != nil {
-		return fmt.Errorf("ensure woven dependencies available: %w", err)
+	if preflightWovenPackages {
+		if err := ensureWovenPackagesAvailable(cmd.Env, goSdkPath, verbose, orchestrionMode); err != nil {
+			return fmt.Errorf("ensure woven dependencies available: %w", err)
+		}
 	}
 	runSpan := beginProbe("orchestrion.execute_command_with_jobserver.run")
 	err = runAndLogCommand(cmd, verbose)

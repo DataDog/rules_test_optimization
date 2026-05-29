@@ -330,7 +330,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		}
 		defer jobserver.cleanup()
 		runSpan := beginProbe("stdlib.run_install", newProbeField("orchestrion_mode", orchestrionMode))
-		if err := goenv.runCommandWithJobserver(installArgs, jobserver, ""); err != nil {
+		if err := goenv.runCommandWithJobserver(installArgs, jobserver, "", true); err != nil {
 			runSpan.End(err)
 			return err
 		}

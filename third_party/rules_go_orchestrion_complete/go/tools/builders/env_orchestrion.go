@@ -28,13 +28,14 @@ import (
 // URL set in the environment if a jobserver is provided. If importPath is
 // non-empty, TOOLEXEC_IMPORTPATH is also set for orchestrion. The Go SDK's bin
 // directory is prepended to PATH so orchestrion can find the `go` binary.
-func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobserver, importPath string) error {
+func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobserver, importPath string, warmWovenPackages bool) error {
 	span := beginProbe(
 		"env.run_command_with_jobserver",
 		newProbeField("argv0", filepath.Base(args[0])),
 		newProbeField("arg_count", strconv.Itoa(len(args)-1)),
 		newProbeField("import_path", importPath),
 		newProbeField("jobserver", strconv.FormatBool(jobserver != nil && jobserver.URL() != "")),
+		newProbeField("warm_woven_packages", strconv.FormatBool(warmWovenPackages)),
 	)
 	buf := &bytes.Buffer{}
 	goRootPath := e.goroot
@@ -42,7 +43,7 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 		goRootPath = os.Getenv("GOROOT")
 	}
 	cmd := e.newBufferedCommand(args, buf)
-	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose, e.orchestrionMode)
+	err := executeCommandWithJobserver(cmd, jobserver, importPath, e.sdk, goRootPath, e.verbose, e.orchestrionMode, warmWovenPackages)
 	if err != nil && jobserver != nil && isOrchestrionJobserverConnectionFailure(buf.String()) {
 		if e.verbose {
 			os.Stderr.Write(relativizePaths(buf.Bytes()))
@@ -50,7 +51,7 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 		fmt.Fprintln(os.Stderr, "orchestrion: jobserver connection failed; retrying command without jobserver")
 		buf.Reset()
 		cmd = e.newBufferedCommand(args, buf)
-		err = executeCommandWithJobserver(cmd, nil, importPath, e.sdk, goRootPath, e.verbose, e.orchestrionMode)
+		err = executeCommandWithJobserver(cmd, nil, importPath, e.sdk, goRootPath, e.verbose, e.orchestrionMode, warmWovenPackages)
 	}
 	span.End(err)
 	os.Stderr.Write(relativizePaths(buf.Bytes()))

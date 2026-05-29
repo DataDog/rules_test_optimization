@@ -421,7 +421,7 @@ func link(args []string) (err error) {
 			newProbeField("import_path", orchImportPath),
 			newProbeField("orchestrion_mode", orchestrionMode),
 		)
-		if err := goenv.runCommandWithJobserver(goargs, jobserver, orchImportPath); err != nil {
+		if err := goenv.runCommandWithJobserver(goargs, jobserver, orchImportPath, linkOrchestrion != ""); err != nil {
 			runSpan.End(err)
 			return err
 		}

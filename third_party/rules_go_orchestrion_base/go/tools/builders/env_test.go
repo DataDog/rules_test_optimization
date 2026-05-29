@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,6 +92,89 @@ func TestNormalizeGoModuleResolutionEnvUsesInitialWorkingDirForRelativeProxyRoot
 	if envMap["GOPROXY"] != wantProxy {
 		t.Fatalf("GOPROXY=%q, want %q", envMap["GOPROXY"], wantProxy)
 	}
+}
+
+func TestExecuteCommandWithJobserverSkipsWovenWarmupWhenDisabled(t *testing.T) {
+	sdkDir, callsPath := writeRecordingFakeGoSDK(t)
+
+	cmd := exec.Command("/bin/sh", "-c", "true")
+	if err := executeCommandWithJobserver(cmd, nil, "example.com/pkg", sdkDir, sdkDir, false, orchestrionModeTestOptimization, false); err != nil {
+		t.Fatalf("executeCommandWithJobserver error: %v", err)
+	}
+
+	if data, err := os.ReadFile(callsPath); err == nil {
+		t.Fatalf("expected no woven warmup go calls, got:\n%s", string(data))
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read calls log: %v", err)
+	}
+}
+
+func TestExecuteCommandWithJobserverWarmsWovenPackagesWhenEnabled(t *testing.T) {
+	sdkDir, callsPath := writeRecordingFakeGoSDK(t)
+
+	cmd := exec.Command("/bin/sh", "-c", "true")
+	if err := executeCommandWithJobserver(cmd, nil, "example.com/pkg", sdkDir, sdkDir, false, orchestrionModeTestOptimization, true); err != nil {
+		t.Fatalf("executeCommandWithJobserver error: %v", err)
+	}
+
+	data, err := os.ReadFile(callsPath)
+	if err != nil {
+		t.Fatalf("read calls log: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "list -mod=mod github.com/DataDog/dd-trace-go/v2/ddtrace/tracer github.com/DataDog/dd-trace-go/v2/instrumentation/env") {
+		t.Fatalf("expected woven warmup go list call, got:\n%s", text)
+	}
+}
+
+func TestExecuteCommandWithJobserverSkipsWovenWarmupWhenJobserverStarted(t *testing.T) {
+	sdkDir, callsPath := writeRecordingFakeGoSDK(t)
+
+	cmd := exec.Command("/bin/sh", "-c", "true")
+	jobserver := &orchestrionJobserver{url: "http://127.0.0.1:1"}
+	if err := executeCommandWithJobserver(cmd, jobserver, "example.com/pkg", sdkDir, sdkDir, false, orchestrionModeTestOptimization, true); err != nil {
+		t.Fatalf("executeCommandWithJobserver error: %v", err)
+	}
+
+	if data, err := os.ReadFile(callsPath); err == nil {
+		t.Fatalf("expected no duplicate woven warmup go calls, got:\n%s", string(data))
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read calls log: %v", err)
+	}
+}
+
+func writeRecordingFakeGoSDK(t *testing.T) (string, string) {
+	t.Helper()
+	sdkDir := t.TempDir()
+	binDir := filepath.Join(sdkDir, "bin")
+	srcDir := filepath.Join(sdkDir, "src")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir fake sdk bin: %v", err)
+	}
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("mkdir fake sdk src: %v", err)
+	}
+	callsPath := filepath.Join(t.TempDir(), "go.calls")
+	t.Setenv("FAKE_GO_CALLS", callsPath)
+	goPath := filepath.Join(binDir, "go")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_GO_CALLS"
+if [ "$1" = "list" ]; then
+  cat <<'EOF'
+github.com/DataDog/dd-trace-go/v2/ddtrace/tracer
+github.com/DataDog/dd-trace-go/v2/instrumentation/env
+EOF
+  exit 0
+fi
+if [ "$1" = "mod" ] && [ "$2" = "download" ]; then
+  exit 0
+fi
+exit 0
+`
+	if err := os.WriteFile(goPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake go: %v", err)
+	}
+	return sdkDir, callsPath
 }
 
 func TestNormalizeGoModuleResolutionEnvWithModuleProxy(t *testing.T) {

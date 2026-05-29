@@ -2355,7 +2355,7 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchestrionS
 	// TOOLEXEC_IMPORTPATH should match the compiler import path, not Bazel's
 	// internal importmap/package path.
 	runSpan := beginProbe("compilepkg.compile_go_action.run_command", newProbeField("package_path", packagePath))
-	err = goenv.runCommandWithJobserver(args, jobserver, orchImportPath)
+	err = goenv.runCommandWithJobserver(args, jobserver, orchImportPath, orchestrion != "")
 	runSpan.End(err)
 	return err
 }
