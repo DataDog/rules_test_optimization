@@ -606,8 +606,10 @@ func compileArchive(
 	}
 
 	// Compile the filtered .go files.
+	// Keep the pre-augmentation synthetic testmain decision: augmenting roots adds
+	// linkdeps sources, but the final testmain compile should still stay plain.
 	compileSpan := beginProbe("compilepkg.compile_go", newProbeField("package_path", packagePath))
-	if err := compileGo(goenv, goSrcs, embedLookupDirs, orchestrionSrcDirs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, orchestrion, orchestrionMode); err != nil {
+	if err := compileGo(goenv, goSrcs, embedLookupDirs, orchestrionSrcDirs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, syntheticTestmain, orchestrion, orchestrionMode); err != nil {
 		compileSpan.End(err)
 		return err
 	}
@@ -2098,7 +2100,7 @@ func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir,
 			return "", "", fmt.Errorf("build symabis for %s: %w", pkg, err)
 		}
 	}
-	if err := compileGo(goenv, goSrcs, nil, nil, meta.ImportPath, meta.ImportPath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, "", outLinkobjPath, outInterfacePath, "", "", goenv.orchestrionMode); err != nil {
+	if err := compileGo(goenv, goSrcs, nil, nil, meta.ImportPath, meta.ImportPath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, "", outLinkobjPath, outInterfacePath, "", false, "", goenv.orchestrionMode); err != nil {
 		return "", "", fmt.Errorf("compile synthetic helper %s: %w", pkg, err)
 	}
 	objFiles := make([]string, 0, len(filteredSrcs.sSrcs)+len(filteredSrcs.sysoSrcs))
@@ -2231,7 +2233,7 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	return importcfgPath, nil
 }
 
-func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchestrionSrcDirs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string, orchestrionMode string) (err error) {
+func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchestrionSrcDirs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg string, syntheticTestmain bool, orchestrion string, orchestrionMode string) (err error) {
 	span := beginProbe(
 		"compilepkg.compile_go_action",
 		newProbeField("package_path", packagePath),
@@ -2241,7 +2243,6 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchestrionS
 		span.End(err)
 	}()
 	sdkPath := abs(goenv.sdk)
-	syntheticTestmain := isSyntheticTestmainCompile(packagePath, srcs)
 	if shouldSkipOrchestrionForImportPath(orchImportPath) {
 		orchestrion = ""
 	}
@@ -2334,6 +2335,15 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchestrionS
 		defer cleanupGoMod()
 	}
 
+	// TOOLEXEC_IMPORTPATH should match the compiler import path, not Bazel's
+	// internal importmap/package path.
+	runSpan := beginProbe("compilepkg.compile_go_action.run_command", newProbeField("package_path", packagePath))
+	if orchestrion == "" {
+		err = goenv.runCommand(args)
+		runSpan.End(err)
+		return err
+	}
+
 	// Start orchestrion jobserver if needed. Use the normalized GOROOT captured
 	// during flag parsing; do not recompute it after any orchestrion chdir.
 	goRootPath := goenv.goroot
@@ -2341,20 +2351,17 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchestrionS
 		goRootPath = os.Getenv("GOROOT")
 	}
 	var jobserver *orchestrionJobserver
-	if !syntheticTestmain {
-		var err error
-		jobserverSpan := beginProbe("compilepkg.compile_go_action.start_jobserver", newProbeField("package_path", packagePath))
-		jobserver, err = startOrchestrionJobserver(orchestrion, sdkPath, goRootPath, goenv.verbose, orchestrionMode)
-		jobserverSpan.End(err)
-		if err != nil {
-			return fmt.Errorf("compilepkg: failed to start orchestrion jobserver: %w", err)
-		}
+	jobserverSpan := beginProbe("compilepkg.compile_go_action.start_jobserver", newProbeField("package_path", packagePath))
+	jobserver, err = startOrchestrionJobserver(orchestrion, sdkPath, goRootPath, goenv.verbose, orchestrionMode)
+	jobserverSpan.End(err)
+	if err != nil {
+		runSpan.End(err)
+		return fmt.Errorf("compilepkg: failed to start orchestrion jobserver: %w", err)
+	}
+	if jobserver != nil {
 		defer jobserver.cleanup()
 	}
 
-	// TOOLEXEC_IMPORTPATH should match the compiler import path, not Bazel's
-	// internal importmap/package path.
-	runSpan := beginProbe("compilepkg.compile_go_action.run_command", newProbeField("package_path", packagePath))
 	err = goenv.runCommandWithJobserver(args, jobserver, orchImportPath, orchestrion != "")
 	runSpan.End(err)
 	return err
