@@ -713,6 +713,7 @@ PY
     --required-test-optimization-pin-file go.mod \
     --required-test-optimization-pin-file orchestrion.yml \
     --require-plain-compile-in-test-optimization \
+    --require-reduced-synthetic-testmain-link-inputs \
     "$aquery_output"
 }
 

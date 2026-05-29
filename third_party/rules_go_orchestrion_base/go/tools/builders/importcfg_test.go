@@ -609,3 +609,51 @@ func TestRewriteImportcfgForSyntheticTestmainStdlibTestOptimizationSkipsUnneeded
 		t.Fatalf("test_optimization did not rewrite testing packagefile:\n%s", got)
 	}
 }
+
+func TestRewriteImportcfgForSyntheticTestmainStdlibTestOptimizationUsesPersistedExportsWithoutCache(t *testing.T) {
+	tempDir := t.TempDir()
+	importcfgPath := filepath.Join(tempDir, "importcfg")
+	originalRuntime := "/bazel-out/stdlib/pkg/runtime.a"
+	original := strings.Join([]string{
+		"packagefile runtime=" + originalRuntime,
+		"packagefile testing=/bazel-out/stdlib/pkg/testing.a",
+		"",
+	}, "\n")
+	if err := os.WriteFile(importcfgPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write importcfg: %v", err)
+	}
+
+	goroot := filepath.Join(tempDir, "goroot")
+	installSuffix := "darwin_arm64"
+	persistedRoot := filepath.Join(goroot, "pkg", orchestrionStdlibExportDirName, installSuffix)
+	persistedTesting := filepath.Join(persistedRoot, "testing.a")
+	if err := os.MkdirAll(filepath.Dir(persistedTesting), 0o755); err != nil {
+		t.Fatalf("mkdir persisted testing archive: %v", err)
+	}
+	if err := os.WriteFile(persistedTesting, []byte("testing"), 0o644); err != nil {
+		t.Fatalf("write persisted testing archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(persistedRoot, orchestrionStdlibExportManifestName), []byte("testing=testing.a\n"), 0o644); err != nil {
+		t.Fatalf("write persisted manifest: %v", err)
+	}
+
+	goenv := &env{
+		goroot:          goroot,
+		installSuffix:   installSuffix,
+		orchestrionMode: orchestrionModeTestOptimization,
+	}
+	if err := rewriteImportcfgForSyntheticTestmainStdlib(importcfgPath, goenv); err != nil {
+		t.Fatalf("rewrite importcfg: %v", err)
+	}
+	data, err := os.ReadFile(importcfgPath)
+	if err != nil {
+		t.Fatalf("read importcfg: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "packagefile runtime="+originalRuntime) {
+		t.Fatalf("test_optimization rewrote unneeded runtime packagefile:\n%s", got)
+	}
+	if !strings.Contains(got, "packagefile testing="+persistedTesting) {
+		t.Fatalf("test_optimization did not rewrite testing from persisted exports without stdlib cache:\n%s", got)
+	}
+}

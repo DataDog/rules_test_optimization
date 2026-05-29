@@ -94,6 +94,16 @@ def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
     # final test-binary link on the plain rules_go shape.
     return synthetic_testmain_manifest == None
 
+def _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion):
+    if (
+        go.orchestrion and
+        getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
+        synthetic_testmain_manifest != None and
+        not link_orchestrion
+    ):
+        return False
+    return True
+
 def emit_link(
         go,
         archive = None,
@@ -224,7 +234,12 @@ def emit_link(
     builder_args.add("-o", executable)
     builder_args.add("-main", archive.data.file)
     builder_args.add("-p", archive.data.importmap)
-    builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
+    synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
+    orchestrion_mode = getattr(go, "orchestrion_mode", "general")
+    link_orchestrion = _orchestrion_enabled_for_link(go, synthetic_testmain_manifest)
+    stdlib_cache_needed_for_link = _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion)
+    if stdlib_cache_needed_for_link:
+        builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     tool_args.add_all(gc_linkopts)
     tool_args.add_all(go.toolchain.flags.link)
 
@@ -235,13 +250,10 @@ def emit_link(
     tool_args.add_joined("-extldflags", extldflags, join_with = " ")
 
     inputs_direct = stamp_inputs + [go.sdk.package_list]
-    synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
     if synthetic_testmain_manifest:
         inputs_direct.append(synthetic_testmain_manifest)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
-    orchestrion_mode = getattr(go, "orchestrion_mode", "general")
-    link_orchestrion = _orchestrion_enabled_for_link(go, synthetic_testmain_manifest)
     orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if link_orchestrion else None
     orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if link_orchestrion else None
     orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if link_orchestrion else None
@@ -252,8 +264,9 @@ def emit_link(
         go.cc_toolchain_files,
         go.sdk.tools,
         go.stdlib.libs,
-        go.stdlib.cache_dir,
     ]
+    if stdlib_cache_needed_for_link:
+        inputs_transitive.append(go.stdlib.cache_dir)
 
     # Add orchestrion for toolexec instrumentation if enabled
     if go.orchestrion:

@@ -704,7 +704,10 @@ func link(args []string) (err error) {
 					return fmt.Errorf("link: append module packagefiles for synthetic test binary: %w", err)
 				}
 			}
-			if goenv.stdlibCache != "" {
+			if goenv.stdlibCache != "" || effectiveOrchestrionMode(orchestrionMode) == orchestrionModeTestOptimization {
+				// Test Optimization synthetic links omit the stdlib cache action
+				// input, but still rewrite testing packagefiles from persisted
+				// woven stdlib exports carried by go.stdlib.libs.
 				if err := rewriteImportcfgForSyntheticTestmainStdlib(importcfgName, goenv); err != nil {
 					return fmt.Errorf("link: rewrite importcfg from current stdlib entries: %w", err)
 				}

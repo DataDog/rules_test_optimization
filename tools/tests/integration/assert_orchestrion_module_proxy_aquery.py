@@ -83,6 +83,15 @@ def parse_args() -> argparse.Namespace:
             "in test_optimization mode."
         ),
     )
+    parser.add_argument(
+        "--require-reduced-synthetic-testmain-link-inputs",
+        action="store_true",
+        help=(
+            "Require test_optimization synthetic testmain GoLink actions to keep "
+            "the synthetic manifest input while omitting the Orchestrion stdlib "
+            "cache tree and proxy/pin-file inputs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -324,6 +333,45 @@ def _is_rules_go_internal_compile_action(action: Action) -> bool:
     return "/external/rules_go+/go/tools/" in output
 
 
+def _is_synthetic_testmain_link_action(action: Action) -> bool:
+    """Return whether a GoLink action links a generated Go test binary."""
+
+    if action.mnemonic != "GoLink":
+        return False
+    main = (_argument_value(action.arguments, "-main") or "").replace("\\", "/")
+    package_path = _argument_value(action.arguments, "-p") or ""
+    return main.endswith("~testmain.a") and package_path in ("", "testmain")
+
+
+def _assert_reduced_synthetic_testmain_link_inputs(action: Action, inputs: list[str]) -> None:
+    main = (_argument_value(action.arguments, "-main") or "").replace("\\", "/")
+    _require(
+        main,
+        "synthetic testmain GoLink is missing -main",
+    )
+    _require(
+        not _uses_orchestrion(action),
+        f"synthetic testmain GoLink unexpectedly passed -orchestrion (main={main!r})",
+    )
+    _require(
+        _contains_path_suffix(inputs, main),
+        f"synthetic testmain GoLink is missing main archive input {main}",
+    )
+    _require(
+        _contains_path_suffix(inputs, main + ".orchestrion.pack"),
+        f"synthetic testmain GoLink is missing synthetic packagefile manifest {main}.orchestrion.pack",
+    )
+    for suffix in ("orchestrion.tool.go", "orchestrion.yml"):
+        _require(
+            not _contains_path_suffix(inputs, suffix),
+            f"synthetic testmain GoLink unexpectedly declared pin-file input {suffix}",
+        )
+    _require(
+        not _contains_path_fragment(inputs, "stdlib_/gocache"),
+        "synthetic testmain GoLink unexpectedly declared the Orchestrion stdlib cache directory as an input",
+    )
+
+
 def _assert_expected_action(
     action: Action,
     inputs: list[str],
@@ -526,6 +574,20 @@ def main() -> int:
             saw_plain_hello_external_test_compile,
             "test_optimization mode did not leave app/hello_external_test.go on the plain GoCompilePkgExternal path",
         )
+    if args.expected_orchestrion_mode == "test_optimization" and args.require_reduced_synthetic_testmain_link_inputs:
+        synthetic_testmain_link_actions = [
+            action for action in link_actions
+            if _is_synthetic_testmain_link_action(action)
+        ]
+        _require(
+            synthetic_testmain_link_actions,
+            "test_optimization mode did not produce a synthetic testmain GoLink action",
+        )
+        for action in synthetic_testmain_link_actions:
+            _assert_reduced_synthetic_testmain_link_inputs(
+                action,
+                _action_inputs(action, artifacts, dep_sets, path_fragments),
+            )
     _require(
         fixture_go_tool_actions,
         "aquery did not contain the fixture Go tool transition actions",
