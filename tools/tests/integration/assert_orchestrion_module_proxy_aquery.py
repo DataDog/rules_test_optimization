@@ -87,9 +87,10 @@ def parse_args() -> argparse.Namespace:
         "--require-reduced-synthetic-testmain-link-inputs",
         action="store_true",
         help=(
-            "Require test_optimization synthetic testmain GoLink actions to keep "
-            "the synthetic manifest input while omitting the Orchestrion stdlib "
-            "cache tree and proxy/pin-file inputs."
+            "Require synthetic testmain GoLink actions to keep the synthetic "
+            "manifest input while omitting unused Orchestrion proxy/pin-file "
+            "inputs. In test_optimization mode, also require the Orchestrion "
+            "stdlib cache tree to be omitted."
         ),
     )
     parser.add_argument(
@@ -361,7 +362,11 @@ def _is_synthetic_testmain_link_action(action: Action) -> bool:
     return main.endswith("~testmain.a") and package_path in ("", "testmain")
 
 
-def _assert_reduced_synthetic_testmain_link_inputs(action: Action, inputs: list[str]) -> None:
+def _assert_reduced_synthetic_testmain_link_inputs(
+    action: Action,
+    inputs: list[str],
+    expected_orchestrion_mode: str,
+) -> None:
     main = (_argument_value(action.arguments, "-main") or "").replace("\\", "/")
     _require(
         main,
@@ -370,6 +375,14 @@ def _assert_reduced_synthetic_testmain_link_inputs(action: Action, inputs: list[
     _require(
         not _uses_orchestrion(action),
         f"synthetic testmain GoLink unexpectedly passed -orchestrion (main={main!r})",
+    )
+    actual_mode = _argument_value(action.arguments, "-orchestrion_mode")
+    _require(
+        actual_mode == expected_orchestrion_mode,
+        (
+            "synthetic testmain GoLink is missing "
+            f"-orchestrion_mode {expected_orchestrion_mode} (got {actual_mode!r})"
+        ),
     )
     _require(
         _contains_path_suffix(inputs, main),
@@ -385,9 +398,32 @@ def _assert_reduced_synthetic_testmain_link_inputs(action: Action, inputs: list[
             f"synthetic testmain GoLink unexpectedly declared pin-file input {suffix}",
         )
     _require(
-        not _contains_path_fragment(inputs, "stdlib_/gocache"),
-        "synthetic testmain GoLink unexpectedly declared the Orchestrion stdlib cache directory as an input",
+        not any("module_proxy/" in path.replace("\\", "/") for path in inputs),
+        "synthetic testmain GoLink unexpectedly declared module proxy files as inputs",
     )
+    for suffix in ("module_proxy/root.marker", "orchestrion_version.txt"):
+        _require(
+            not _contains_path_suffix(inputs, suffix),
+            f"synthetic testmain GoLink unexpectedly declared Orchestrion input {suffix}",
+        )
+    if expected_orchestrion_mode == "test_optimization":
+        _require(
+            "-stdlib_cache" not in action.arguments,
+            "test_optimization synthetic testmain GoLink unexpectedly received -stdlib_cache",
+        )
+        _require(
+            not _contains_path_fragment(inputs, "stdlib_/gocache"),
+            "test_optimization synthetic testmain GoLink unexpectedly declared the Orchestrion stdlib cache directory as an input",
+        )
+    else:
+        _require(
+            "-stdlib_cache" in action.arguments,
+            "general synthetic testmain GoLink should retain -stdlib_cache",
+        )
+        _require(
+            _contains_path_fragment(inputs, "stdlib_/gocache"),
+            "general synthetic testmain GoLink should retain the Orchestrion stdlib cache directory input",
+        )
 
 
 def _assert_test_optimization_linker_flags(action: Action, expected_count: int | None) -> None:
@@ -610,7 +646,7 @@ def main() -> int:
             saw_plain_hello_external_test_compile,
             "test_optimization mode did not leave app/hello_external_test.go on the plain GoCompilePkgExternal path",
         )
-    if args.expected_orchestrion_mode == "test_optimization" and args.require_reduced_synthetic_testmain_link_inputs:
+    if args.require_reduced_synthetic_testmain_link_inputs:
         synthetic_testmain_link_actions = [
             action for action in link_actions
             if _is_synthetic_testmain_link_action(action)
@@ -623,6 +659,7 @@ def main() -> int:
             _assert_reduced_synthetic_testmain_link_inputs(
                 action,
                 _action_inputs(action, artifacts, dep_sets, path_fragments),
+                args.expected_orchestrion_mode,
             )
     if args.expected_orchestrion_mode == "test_optimization" and args.require_test_optimization_linker_flags:
         synthetic_testmain_link_actions = [

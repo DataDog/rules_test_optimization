@@ -86,12 +86,11 @@ def _orchestrion_data_inputs(go):
 def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
     if not go.orchestrion:
         return False
-    if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
-        return True
 
-    # In Test Optimization mode, synthetic testmain compile already produced
-    # the Datadog helper packagefile manifest that final link needs. Keep that
-    # final test-binary link on the plain rules_go shape.
+    # Synthetic testmain compile already produced the Datadog helper packagefile
+    # manifest that final link needs. Keep that final test-binary link on the
+    # plain rules_go shape so its action key is not tied to unused Orchestrion
+    # execution inputs. Generic mode still keeps the stdlib cache input below.
     return synthetic_testmain_manifest == None
 
 def _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion):
