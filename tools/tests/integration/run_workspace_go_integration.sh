@@ -466,6 +466,10 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if got, _ := metadata["bazel.go.orchestrion.mode"].(string); got != wantOrchestrionMode {
 		t.Fatalf("bazel.go.orchestrion.mode = %v, want %q", metadata["bazel.go.orchestrion.mode"], wantOrchestrionMode)
 	}
+	wantLinkerOptimization := wantOrchestrionMode == "test_optimization"
+	if got, _ := metadata["bazel.go.test_binary_linker_optimization"].(bool); got != wantLinkerOptimization {
+		t.Fatalf("bazel.go.test_binary_linker_optimization = %v, want %v", metadata["bazel.go.test_binary_linker_optimization"], wantLinkerOptimization)
+	}
 	if got, _ := metadata["bazel.go.attr.cgo"].(bool); got {
 		t.Fatalf("bazel.go.attr.cgo = %v, want false", metadata["bazel.go.attr.cgo"])
 	}
@@ -735,6 +739,8 @@ run_positive_subscenario() {
   local hermetic_home="$hermetic_root/home"
   local hermetic_xdg="$hermetic_root/xdg-cache"
   local aquery_output="$hermetic_root/hello_test_aquery.textproto"
+  local opt_aquery_output="$hermetic_root/hello_test_opt_aquery.textproto"
+  local no_strip_aquery_output="$hermetic_root/hello_test_no_strip_aquery.textproto"
   local output_base=""
   local start_ns=""
   local end_ns=""
@@ -805,7 +811,53 @@ PY
     --required-test-optimization-pin-file orchestrion.yml \
     --require-plain-compile-in-test-optimization \
     --require-reduced-synthetic-testmain-link-inputs \
+    --require-test-optimization-linker-flags \
+    --expected-test-optimization-linker-flag-count 2 \
     "$aquery_output"
+
+  (
+    cd "$ws_dir"
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      --compilation_mode=opt \
+      "deps(${HELLO_TEST_TARGET})" \
+      --output=textproto > "$opt_aquery_output"
+  )
+
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
+    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
+    --required-test-optimization-pin-file go.mod \
+    --required-test-optimization-pin-file orchestrion.yml \
+    --require-plain-compile-in-test-optimization \
+    --require-reduced-synthetic-testmain-link-inputs \
+    --require-test-optimization-linker-flags \
+    --expected-test-optimization-linker-flag-count 1 \
+    "$opt_aquery_output"
+
+  (
+    cd "$ws_dir"
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      --strip=never \
+      "deps(${HELLO_TEST_TARGET})" \
+      --output=textproto > "$no_strip_aquery_output"
+  )
+
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
+    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
+    --required-test-optimization-pin-file go.mod \
+    --required-test-optimization-pin-file orchestrion.yml \
+    --require-plain-compile-in-test-optimization \
+    --require-reduced-synthetic-testmain-link-inputs \
+    --require-test-optimization-linker-flags \
+    --expected-test-optimization-linker-flag-count 0 \
+    "$no_strip_aquery_output"
 }
 
 run_expected_failure() {

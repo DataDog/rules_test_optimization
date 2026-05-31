@@ -39,6 +39,7 @@ ToptGoMacroCaptureInfo = provider(
     fields = {
         "data_labels": "Forwarded data dependency labels.",
         "env": "Forwarded environment map.",
+        "gc_linkopts": "Forwarded Go linker options.",
         "importpath": "Forwarded importpath attribute.",
         "rundir": "Forwarded runtime working directory.",
     },
@@ -65,6 +66,7 @@ def _go_test_capture_impl(ctx):
         ToptGoMacroCaptureInfo(
             data_labels = [str(dep.label) for dep in ctx.attr.data],
             env = dict(ctx.attr.env),
+            gc_linkopts = list(ctx.attr.gc_linkopts),
             importpath = ctx.attr.importpath,
             rundir = ctx.attr.rundir,
         ),
@@ -95,6 +97,7 @@ _go_test_capture_rule = rule(
         "embed": attr.label_list(),
         "embedsrcs": attr.label_list(allow_files = True),
         "env": attr.string_dict(),
+        "gc_linkopts": attr.string_list(),
         "importpath": attr.string(),
         "rundir": attr.string(),
         "srcs": attr.label_list(allow_files = True),
@@ -324,6 +327,32 @@ def go_macro_test_optimization_mode_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_test_optimization_linker_opt_out_target(name, tags = None):
+    """Target under test for disabling Test Optimization linker flags."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        data = [":test_macro.bzl"],
+        experimental_orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [":test_selection_utils.bzl"],
+        enable_test_binary_linker_optimization = False,
+        gc_linkopts = ["-custom-link-flag"],
+        tags = tags,
+    )
+
+def go_macro_general_mode_linker_flags_target(name, tags = None):
+    """Target under test for preserving linker flags outside Test Optimization."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        data = [":test_macro.bzl"],
+        experimental_orchestrion_mode = "general",
+        gc_linkopts = ["-custom-link-flag"],
+        tags = tags,
+    )
+
 def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
     """Target under test for non-Windows sibling executable materialization."""
     fake_executable_rule(
@@ -541,6 +570,22 @@ def _go_macro_test_optimization_mode_wiring_test_impl(ctx):
     asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     return analysistest.end(env)
 
+def _go_macro_test_optimization_linker_opt_out_wiring_test_impl(ctx):
+    """Assert opt-out preserves caller-provided linker flags exactly."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.equals(env, ["-custom-link-flag"], captured.gc_linkopts)
+    return analysistest.end(env)
+
+def _go_macro_general_mode_linker_flags_wiring_test_impl(ctx):
+    """Assert non-Test Optimization mode preserves caller-provided linker flags."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.equals(env, ["-custom-link-flag"], captured.gc_linkopts)
+    return analysistest.end(env)
+
 def _go_macro_explicit_service_wiring_test_impl(ctx):
     """Assert explicit caller DD_SERVICE is preserved."""
     env = analysistest.begin(ctx)
@@ -726,6 +771,12 @@ go_macro_orchestrion_pin_files_provider_test = analysistest.make(
 )
 go_macro_test_optimization_mode_wiring_test = analysistest.make(
     _go_macro_test_optimization_mode_wiring_test_impl,
+)
+go_macro_test_optimization_linker_opt_out_wiring_test = analysistest.make(
+    _go_macro_test_optimization_linker_opt_out_wiring_test_impl,
+)
+go_macro_general_mode_linker_flags_wiring_test = analysistest.make(
+    _go_macro_general_mode_linker_flags_wiring_test_impl,
 )
 go_macro_explicit_service_wiring_test = analysistest.make(
     _go_macro_explicit_service_wiring_test_impl,

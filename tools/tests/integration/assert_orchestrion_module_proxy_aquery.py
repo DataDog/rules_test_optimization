@@ -92,6 +92,24 @@ def parse_args() -> argparse.Namespace:
             "cache tree and proxy/pin-file inputs."
         ),
     )
+    parser.add_argument(
+        "--require-test-optimization-linker-flags",
+        action="store_true",
+        help=(
+            "Require test_optimization synthetic testmain GoLink actions to pass "
+            "-s and -w so test binaries skip symbol table and DWARF generation."
+        ),
+    )
+    parser.add_argument(
+        "--expected-test-optimization-linker-flag-count",
+        type=int,
+        default=None,
+        help=(
+            "When requiring test_optimization linker flags, require each of -s "
+            "and -w to appear this many times on each synthetic testmain GoLink "
+            "action."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -372,6 +390,24 @@ def _assert_reduced_synthetic_testmain_link_inputs(action: Action, inputs: list[
     )
 
 
+def _assert_test_optimization_linker_flags(action: Action, expected_count: int | None) -> None:
+    for flag in ("-s", "-w"):
+        count = action.arguments.count(flag)
+        if expected_count is None:
+            _require(
+                count > 0,
+                f"synthetic testmain GoLink is missing test binary linker optimization flag {flag}",
+            )
+            continue
+        _require(
+            count == expected_count,
+            (
+                "synthetic testmain GoLink must pass test binary linker "
+                f"optimization flag {flag} exactly {expected_count} time(s); got {count}"
+            ),
+        )
+
+
 def _assert_expected_action(
     action: Action,
     inputs: list[str],
@@ -587,6 +623,20 @@ def main() -> int:
             _assert_reduced_synthetic_testmain_link_inputs(
                 action,
                 _action_inputs(action, artifacts, dep_sets, path_fragments),
+            )
+    if args.expected_orchestrion_mode == "test_optimization" and args.require_test_optimization_linker_flags:
+        synthetic_testmain_link_actions = [
+            action for action in link_actions
+            if _is_synthetic_testmain_link_action(action)
+        ]
+        _require(
+            synthetic_testmain_link_actions,
+            "test_optimization mode did not produce a synthetic testmain GoLink action",
+        )
+        for action in synthetic_testmain_link_actions:
+            _assert_test_optimization_linker_flags(
+                action,
+                args.expected_test_optimization_linker_flag_count,
             )
     _require(
         fixture_go_tool_actions,

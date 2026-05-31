@@ -105,6 +105,19 @@ _ORCHESTRION_MODES = {
     _ORCHESTRION_MODE_GENERAL: None,
     _ORCHESTRION_MODE_TEST_OPTIMIZATION: None,
 }
+_TEST_BINARY_LINKER_OPTIMIZATION_GC_LINKOPTS = select({
+    # rules_go already strips Go binaries under these Bazel modes, and explicit
+    # debug/no-strip modes should keep their normal linker behavior unless the
+    # caller opts in with their own gc_linkopts.
+    str(Label("//:test_optimization_compilation_mode_dbg")): [],
+    str(Label("//:test_optimization_strip_always")): [],
+    str(Label("//:test_optimization_strip_never")): [],
+    str(Label("//:test_optimization_strip_sometimes_fastbuild")): [],
+    "//conditions:default": [
+        "-s",
+        "-w",
+    ],
+})
 
 def _attr_or_default(value, default):
     """Return a Starlark attr value or a default without forcing truthiness."""
@@ -132,6 +145,19 @@ def _concat_label_list_values(left, right):
 
     return normalized_left + normalized_right
 
+def _concat_string_list_values(left, right):
+    """Concatenate string-list-like macro inputs while preserving `select(...)`."""
+    if left == None:
+        return right
+    if type(left) != "select" and left == []:
+        return right
+    if right == None:
+        return left
+    if type(right) != "select" and right == []:
+        return left
+
+    return left + right
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
@@ -153,6 +179,11 @@ def dd_topt_go_test(
         orchestrion_pin_files = None,
         # Experimental Orchestrion mode used by the Datadog rules_go fork.
         experimental_orchestrion_mode = _ORCHESTRION_MODE_GENERAL,
+        # Apply test-only linker flags when Bazel/rules_go is not already
+        # stripping and the user did not explicitly request debug/no-strip
+        # behavior. Production go_binary targets are unaffected because this
+        # macro only forwards flags to its hidden raw go_test target.
+        enable_test_binary_linker_optimization = True,
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
@@ -197,6 +228,12 @@ def dd_topt_go_test(
         `test_optimization` to use the standard Go `testing` Test Optimization
         path: stdlib/`testing` instrumentation, synthetic testmain helper
         wiring, and plain customer/external `_test` package compiles.
+      enable_test_binary_linker_optimization: Optional boolean. When true and
+        `experimental_orchestrion_mode = "test_optimization"`, the hidden raw
+        go_test target receives test-only `-s -w` `gc_linkopts` only in Bazel
+        modes where rules_go is not already stripping and the user did not
+        explicitly request debug/no-strip behavior. Set false to restore
+        caller-provided linker flags exactly if this optimization causes issues.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
@@ -208,6 +245,10 @@ def dd_topt_go_test(
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
     if experimental_orchestrion_mode not in _ORCHESTRION_MODES:
         fail_with_prefix("dd_topt_go_test", "experimental_orchestrion_mode must be one of %s" % ", ".join(sorted(_ORCHESTRION_MODES.keys())))
+    test_binary_linker_optimization_enabled = (
+        experimental_orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
+        enable_test_binary_linker_optimization
+    )
 
     # Support both shapes:
     # 1) Single-service dict with keys: repo_name, labels, set, runtimes
@@ -370,6 +411,7 @@ def dd_topt_go_test(
         linkmode = _attr_or_default(kwargs.get("linkmode"), "auto"),
         goos = _attr_or_default(kwargs.get("goos"), ""),
         goarch = _attr_or_default(kwargs.get("goarch"), ""),
+        test_binary_linker_optimization = test_binary_linker_optimization_enabled,
     )
 
     # ------------------------------------------------------------------
@@ -468,6 +510,11 @@ def dd_topt_go_test(
     # Otherwise keep the package directory default to preserve existing tests.
     if "rundir" not in kwargs:
         kwargs["rundir"] = "." if stage_sources else native.package_name()
+    if test_binary_linker_optimization_enabled:
+        kwargs["gc_linkopts"] = _concat_string_list_values(
+            kwargs.get("gc_linkopts") if "gc_linkopts" in kwargs else [],
+            _TEST_BINARY_LINKER_OPTIMIZATION_GC_LINKOPTS,
+        )
 
     raw_name = name + "__raw_go_test"
     user_tags = wrapper_kwargs.get("tags")

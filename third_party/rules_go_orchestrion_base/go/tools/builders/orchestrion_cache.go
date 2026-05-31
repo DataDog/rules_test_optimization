@@ -25,7 +25,7 @@ const (
 	// compile closure changes. The helper decision and archive caches both key
 	// off this value, so closure changes must force a rebuild instead of reusing
 	// bundles prepared for the older package selection.
-	helperSourceSetVersion = "v6"
+	helperSourceSetVersion = "v7"
 
 	orchestrionPersistentCacheDirName = "rules-go-orchestrion"
 

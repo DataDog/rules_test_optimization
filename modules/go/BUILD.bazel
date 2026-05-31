@@ -6,11 +6,41 @@
 
 load("@rules_go//go:def.bzl", "go_binary")
 
-exports_files([
-    "topt_go_test.bzl",
-    "topt_go_infer.bzl",
-    "topt_go_extension.bzl",
-], visibility = ["//visibility:public"])
+exports_files(
+    [
+        "topt_go_test.bzl",
+        "topt_go_infer.bzl",
+        "topt_go_extension.bzl",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "test_optimization_compilation_mode_dbg",
+    values = {"compilation_mode": "dbg"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "test_optimization_strip_always",
+    values = {"strip": "always"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "test_optimization_strip_never",
+    values = {"strip": "never"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "test_optimization_strip_sometimes_fastbuild",
+    values = {
+        "compilation_mode": "fastbuild",
+        "strip": "sometimes",
+    },
+    visibility = ["//visibility:public"],
+)
 
 go_binary(
     name = "dd_topt_go_bootstrap",

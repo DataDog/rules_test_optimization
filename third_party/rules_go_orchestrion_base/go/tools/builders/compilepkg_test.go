@@ -209,6 +209,9 @@ func TestSyntheticTestmainHelperCacheKeysIncludeMode(t *testing.T) {
 		!hasKeyPart(testOptParts, "helper_export_cache="+helperExportCacheABIVersion) {
 		t.Fatalf("helper cache key parts missing helper export cache ABI: general=%v test_optimization=%v", generalParts, testOptParts)
 	}
+	if !hasKeyPart(generalParts, "source_set=v7") || !hasKeyPart(testOptParts, "source_set=v7") {
+		t.Fatalf("helper cache key parts missing bumped source-set version: general=%v test_optimization=%v", generalParts, testOptParts)
+	}
 
 	decisionParts, err := syntheticTestmainHelperDecisionCacheKeyParts(&env{sdk: sdk, orchestrionMode: orchestrionModeTestOptimization})
 	if err != nil {
@@ -216,6 +219,9 @@ func TestSyntheticTestmainHelperCacheKeysIncludeMode(t *testing.T) {
 	}
 	if !hasKeyPart(decisionParts, "orchestrion_mode=test_optimization") {
 		t.Fatalf("helper decision cache key parts missing mode: %v", decisionParts)
+	}
+	if !hasKeyPart(decisionParts, "source_set=v7") {
+		t.Fatalf("helper decision cache key parts missing bumped source-set version: %v", decisionParts)
 	}
 }
 

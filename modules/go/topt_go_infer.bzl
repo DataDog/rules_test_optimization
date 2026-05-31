@@ -258,6 +258,7 @@ def _topt_go_bazel_metadata_impl(ctx):
         "bazel.go.attr.race": ctx.attr.race,
         "bazel.go.attr.msan": ctx.attr.msan,
         "bazel.go.attr.linkmode": ctx.attr.linkmode,
+        "bazel.go.test_binary_linker_optimization": ctx.attr.test_binary_linker_optimization,
     }
     if ctx.attr.goos:
         metadata["bazel.go.attr.goos"] = ctx.attr.goos
@@ -324,6 +325,7 @@ topt_go_bazel_metadata = rule(
         "linkmode": attr.string(default = "auto"),
         "goos": attr.string(),
         "goarch": attr.string(),
+        "test_binary_linker_optimization": attr.bool(default = False),
         "_orchestrion_tool": attr.label(
             allow_files = True,
             default = "@rules_go//go/private/orchestrion:tool_binary",

@@ -12,6 +12,8 @@ load(
     "go_macro_env_none_wiring_test",
     "go_macro_explicit_service_target",
     "go_macro_explicit_service_wiring_test",
+    "go_macro_general_mode_linker_flags_target",
+    "go_macro_general_mode_linker_flags_wiring_test",
     "go_macro_multi_service_target",
     "go_macro_multi_service_wiring_test",
     "go_macro_orchestrion_pin_files_provider_test",
@@ -30,6 +32,8 @@ load(
     "go_macro_stage_sources_select_wiring_test",
     "go_macro_stage_sources_target",
     "go_macro_stage_sources_wiring_test",
+    "go_macro_test_optimization_linker_opt_out_target",
+    "go_macro_test_optimization_linker_opt_out_wiring_test",
     "go_macro_test_optimization_mode_target",
     "go_macro_test_optimization_mode_wiring_test",
     "has_package_local_go_mod_test",
@@ -378,6 +382,26 @@ go_macro_test_optimization_mode_target(
 go_macro_test_optimization_mode_wiring_test(
     name = "go_macro_test_optimization_mode_wiring_test",
     target_under_test = ":go_macro_test_optimization_mode_target__raw_go_test",
+)
+
+go_macro_test_optimization_linker_opt_out_target(
+    name = "go_macro_test_optimization_linker_opt_out_target",
+    tags = ["manual"],
+)
+
+go_macro_test_optimization_linker_opt_out_wiring_test(
+    name = "go_macro_test_optimization_linker_opt_out_wiring_test",
+    target_under_test = ":go_macro_test_optimization_linker_opt_out_target__raw_go_test",
+)
+
+go_macro_general_mode_linker_flags_target(
+    name = "go_macro_general_mode_linker_flags_target",
+    tags = ["manual"],
+)
+
+go_macro_general_mode_linker_flags_wiring_test(
+    name = "go_macro_general_mode_linker_flags_wiring_test",
+    target_under_test = ":go_macro_general_mode_linker_flags_target__raw_go_test",
 )
 
 build_module_labels_invalid_shape_target_rule(
