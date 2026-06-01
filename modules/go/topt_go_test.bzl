@@ -129,6 +129,67 @@ def _has_package_local_go_mod(package_local_orchestrion_pin_files):
 
 has_package_local_go_mod_for_tests = _has_package_local_go_mod
 
+def _has_go_mod_pin(orchestrion_pin_files):
+    """Return whether explicit Orchestrion pin labels include a go.mod file."""
+    for pin_file in orchestrion_pin_files:
+        pin_file = str(pin_file)
+        if pin_file == "go.mod" or pin_file.endswith(":go.mod") or pin_file.endswith("/go.mod"):
+            return True
+    return False
+
+has_go_mod_pin_for_tests = _has_go_mod_pin
+
+def _validate_orchestrion_mode(orchestrion_mode):
+    """Validate the public Orchestrion mode name."""
+    if orchestrion_mode not in _ORCHESTRION_MODES:
+        fail_with_prefix("dd_topt_go_test", "orchestrion_mode must be one of %s" % ", ".join(sorted(_ORCHESTRION_MODES.keys())))
+
+validate_orchestrion_mode_for_tests = _validate_orchestrion_mode
+
+def _reject_removed_orchestrion_attrs(kwargs):
+    """Reject removed macro attributes before they can leak to go_test."""
+    if "experimental_orchestrion_mode" in kwargs:
+        fail_with_prefix(
+            "dd_topt_go_test",
+            "experimental_orchestrion_mode was removed; use orchestrion_mode",
+        )
+
+reject_removed_orchestrion_attrs_for_tests = _reject_removed_orchestrion_attrs
+
+def _validate_test_optimization_pin_files(
+        orchestrion_mode,
+        package_local_orchestrion_pin_files,
+        explicit_orchestrion_pin_files,
+        orchestrion_pin_inputs):
+    """Validate pin-file requirements for the optimized Go testing path."""
+    if orchestrion_mode != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return
+
+    if (
+        not _has_package_local_go_mod(package_local_orchestrion_pin_files) and
+        not _has_go_mod_pin(explicit_orchestrion_pin_files or [])
+    ):
+        fail_with_prefix(
+            "dd_topt_go_test",
+            (
+                "orchestrion_mode = \"test_optimization\" requires a package-local go.mod " +
+                "or explicit orchestrion_pin_files including the Go module root go.mod " +
+                "(for example //:go.mod, //:go.sum, //:orchestrion.tool.go, and //:orchestrion.yml)"
+            ),
+        )
+
+    if not orchestrion_pin_inputs:
+        fail_with_prefix(
+            "dd_topt_go_test",
+            (
+                "orchestrion_mode = \"test_optimization\" requires package-local " +
+                "Orchestrion pin files or explicit orchestrion_pin_files so compile/link actions " +
+                "can track the module state"
+            ),
+        )
+
+validate_test_optimization_pin_files_for_tests = _validate_test_optimization_pin_files
+
 def _concat_label_list_values(left, right):
     """Concatenate label-list-like macro inputs while preserving `select(...)`."""
     normalized_left = _normalize_user_data(left)
@@ -158,6 +219,27 @@ def _concat_string_list_values(left, right):
 
     return left + right
 
+def _extend_unique_label_values(dest, values):
+    """Append label-like values while preserving order and avoiding duplicates."""
+    seen = {_label_dedupe_key(value): True for value in dest}
+    for value in values:
+        key = _label_dedupe_key(value)
+        if key not in seen:
+            dest.append(value)
+            seen[key] = True
+
+def _label_dedupe_key(value):
+    label = str(value)
+    if label.startswith(":"):
+        return label[1:]
+
+    package_name = native.package_name()
+    same_package_prefix = "//%s:" % package_name if package_name else "//:"
+    if label.startswith(same_package_prefix):
+        return label[len(same_package_prefix):]
+
+    return label
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
@@ -177,8 +259,8 @@ def dd_topt_go_test(
         ci_visibility_enabled = True,
         # Optional module-root Orchestrion pin file labels for nested packages.
         orchestrion_pin_files = None,
-        # Experimental Orchestrion mode used by the Datadog rules_go fork.
-        experimental_orchestrion_mode = _ORCHESTRION_MODE_GENERAL,
+        # Orchestrion mode used by the Datadog rules_go fork.
+        orchestrion_mode = _ORCHESTRION_MODE_GENERAL,
         # Apply test-only linker flags when Bazel/rules_go is not already
         # stripping and the user did not explicitly request debug/no-strip
         # behavior. Production go_binary targets are unaffected because this
@@ -223,17 +305,17 @@ def dd_topt_go_test(
         labels are required unless the BUILD package itself contains `go.mod`;
         the optimized action graph keeps only the effective pin inputs while
         preserving normal runtime data for the test.
-      experimental_orchestrion_mode: Experimental Orchestrion mode. Defaults
-        to `general`, which preserves the current behavior. Set to
-        `test_optimization` to use the standard Go `testing` Test Optimization
-        path: stdlib/`testing` instrumentation, synthetic testmain helper
-        wiring, and plain customer/external `_test` package compiles.
+      orchestrion_mode: Orchestrion mode. Defaults to `general`, which
+        preserves the current behavior. Set to `test_optimization` to use the
+        standard Go `testing` Test Optimization path: stdlib/`testing`
+        instrumentation, synthetic testmain helper wiring, and plain
+        customer/external `_test` package compiles.
       enable_test_binary_linker_optimization: Optional boolean. When true and
-        `experimental_orchestrion_mode = "test_optimization"`, the hidden raw
-        go_test target receives test-only `-s -w` `gc_linkopts` only in Bazel
-        modes where rules_go is not already stripping and the user did not
-        explicitly request debug/no-strip behavior. Set false to restore
-        caller-provided linker flags exactly if this optimization causes issues.
+        `orchestrion_mode = "test_optimization"`, the hidden raw go_test target
+        receives test-only `-s -w` `gc_linkopts` only in Bazel modes where
+        rules_go is not already stripping and the user did not explicitly
+        request debug/no-strip behavior. Set false to restore caller-provided
+        linker flags exactly if this optimization causes issues.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
     """
 
@@ -243,10 +325,10 @@ def dd_topt_go_test(
     # Validate required topt_data early so failures surface at loading time.
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
-    if experimental_orchestrion_mode not in _ORCHESTRION_MODES:
-        fail_with_prefix("dd_topt_go_test", "experimental_orchestrion_mode must be one of %s" % ", ".join(sorted(_ORCHESTRION_MODES.keys())))
+    _reject_removed_orchestrion_attrs(kwargs)
+    _validate_orchestrion_mode(orchestrion_mode)
     test_binary_linker_optimization_enabled = (
-        experimental_orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
+        orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
         enable_test_binary_linker_optimization
     )
 
@@ -398,7 +480,7 @@ def dd_topt_go_test(
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override or "",
-        orchestrion_mode = experimental_orchestrion_mode,
+        orchestrion_mode = orchestrion_mode,
         bazel_package = "//%s" % pkg_path if pkg_path else "//",
         bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
         repo_name = sync_repo_name,
@@ -439,33 +521,16 @@ def dd_topt_go_test(
     orchestrion_pin_inputs = []
     package_local_orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
     if package_local_orchestrion_pin_files:
-        orchestrion_pin_inputs.extend(package_local_orchestrion_pin_files)
+        _extend_unique_label_values(orchestrion_pin_inputs, package_local_orchestrion_pin_files)
     if explicit_orchestrion_pin_files:
-        orchestrion_pin_inputs.extend(explicit_orchestrion_pin_files)
+        _extend_unique_label_values(orchestrion_pin_inputs, explicit_orchestrion_pin_files)
 
-    if (
-        experimental_orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
-        not explicit_orchestrion_pin_files and
-        not _has_package_local_go_mod(package_local_orchestrion_pin_files)
-    ):
-        fail_with_prefix(
-            "dd_topt_go_test",
-            (
-                "experimental_orchestrion_mode = \"test_optimization\" requires a package-local " +
-                "go.mod or explicit orchestrion_pin_files pointing at the Go module root " +
-                "(for example //:go.mod, //:go.sum, //:orchestrion.tool.go, and //:orchestrion.yml)"
-            ),
-        )
-
-    if experimental_orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and not orchestrion_pin_inputs:
-        fail_with_prefix(
-            "dd_topt_go_test",
-            (
-                "experimental_orchestrion_mode = \"test_optimization\" requires package-local " +
-                "Orchestrion pin files or explicit orchestrion_pin_files so compile/link actions " +
-                "can track the module state"
-            ),
-        )
+    _validate_test_optimization_pin_files(
+        orchestrion_mode,
+        package_local_orchestrion_pin_files,
+        explicit_orchestrion_pin_files,
+        orchestrion_pin_inputs,
+    )
 
     if orchestrion_pin_inputs:
         orchestrion_pin_target_name = name + "_orchestrion_pin_files"
@@ -535,6 +600,6 @@ def dd_topt_go_test(
     orch_go_test(
         name = name,
         actual = ":" + raw_name,
-        orchestrion_mode = experimental_orchestrion_mode,
+        orchestrion_mode = orchestrion_mode,
         **wrapper_kwargs
     )

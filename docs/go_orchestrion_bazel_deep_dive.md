@@ -624,10 +624,11 @@ For synthetic test links it:
    still Orchestrion-enabled
 
 In `test_optimization` mode, customer package compiles remain plain and the
-helper closure is reduced around the standard Go `testing` path. The current
-correctness-first implementation still carries the HTTP and slog Datadog contrib
-helpers because the woven stdlib can reference those helper symbols; profiler and
-automatic `testify/suite` support are outside this mode.
+helper closure is reduced around the standard Go `testing` path. The mode still
+lets the woven stdlib cover standard packages such as `net/http` and `log/slog`,
+but Datadog contrib HTTP/slog helpers and profiler roots stay out of the
+synthetic `testmain` helper/link closure. Automatic `testify/suite` support is
+outside this mode.
 
 That is the core consistency rule of the current implementation:
 

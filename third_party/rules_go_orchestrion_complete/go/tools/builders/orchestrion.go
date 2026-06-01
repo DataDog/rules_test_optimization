@@ -971,14 +971,15 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 				absGoSdkPath = abs
 			}
 		}
+		effectiveGoRootPath := jobserverGoRootPath(absGoSdkPath, goRootPath)
 		goBinPath := filepath.Join(absGoSdkPath, "bin")
 		cmd.Env = prependToPath(cmd.Env, goBinPath)
-		cmd.Env = setEnv(cmd.Env, "GOROOT", absGoSdkPath)
+		cmd.Env = setEnv(cmd.Env, "GOROOT", effectiveGoRootPath)
 		// Prevent go from trying to download different toolchains
 		cmd.Env = setEnv(cmd.Env, "GOTOOLCHAIN", "local")
 		// Disable external package driver
 		cmd.Env = setEnv(cmd.Env, "GOPACKAGESDRIVER", "off")
-
+		goSdkPath = absGoSdkPath
 	}
 	goRootSpan := beginProbe("orchestrion.start_jobserver.ensure_goroot_compatibility")
 	err = ensureGoRootCompatibility(getEnv(cmd.Env, "GOROOT"), goSdkPath, verbose)
@@ -1030,6 +1031,19 @@ func startOrchestrionJobserver(orchestrionPath, goSdkPath, goRootPath string, ve
 		urlFile: urlFile,
 		cmd:     cmd,
 	}, nil
+}
+
+func jobserverGoRootPath(goSdkPath, goRootPath string) string {
+	if goRootPath != "" {
+		if filepath.IsAbs(goRootPath) {
+			return goRootPath
+		}
+		if abs, err := filepath.Abs(goRootPath); err == nil {
+			return abs
+		}
+		return goRootPath
+	}
+	return goSdkPath
 }
 
 // URL returns the jobserver URL.

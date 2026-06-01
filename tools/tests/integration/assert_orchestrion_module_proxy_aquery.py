@@ -328,6 +328,26 @@ def _argument_value(arguments: list[str], flag: str) -> str | None:
     return None
 
 
+def _argument_values(arguments: list[str], flag: str) -> list[str]:
+    values = []
+    for idx, argument in enumerate(arguments):
+        if argument == flag and idx + 1 < len(arguments):
+            values.append(arguments[idx + 1])
+        elif argument.startswith(flag + "="):
+            values.append(argument.split("=", 1)[1])
+    return values
+
+
+def _assert_no_runtime_data_orchsrc(action: Action, forbidden_fragments: list[str]) -> None:
+    for value in _argument_values(action.arguments, "-orchsrc"):
+        normalized = value.replace("\\", "/")
+        for fragment in forbidden_fragments:
+            _require(
+                fragment not in normalized,
+                f"{action.mnemonic} unexpectedly passed runtime data to -orchsrc: {value}",
+            )
+
+
 def _action_importpath(action: Action) -> str:
     return _argument_value(action.arguments, "-importpath") or ""
 
@@ -452,6 +472,13 @@ def _assert_expected_action(
     required_test_optimization_pin_files: list[str],
 ) -> None:
     env = action.environment
+    forbidden_runtime_fragments = [
+        ".testoptimization/manifest.txt",
+        "settings.json",
+        "known_tests.json",
+        "test_management.json",
+        "_topt_bazel_metadata.json",
+    ]
     if require_proxy:
         actual_mode = _argument_value(action.arguments, "-orchestrion_mode")
         _require(
@@ -489,6 +516,7 @@ def _assert_expected_action(
             all("sum.golang.org" not in value for value in env.values()),
             f"{action.mnemonic} still references sum.golang.org in its action environment",
         )
+        _assert_no_runtime_data_orchsrc(action, forbidden_runtime_fragments)
         if expected_orchestrion_mode == "test_optimization":
             if action.mnemonic != "GoStdlib":
                 for suffix in required_test_optimization_pin_files:
@@ -500,13 +528,6 @@ def _assert_expected_action(
                 not _contains_path_suffix(inputs, "orchestrion.tool.go"),
                 f"{action.mnemonic} in test_optimization mode should use the synthetic Test Optimization tool pin",
             )
-            forbidden_runtime_fragments = [
-                ".testoptimization/manifest.txt",
-                "settings.json",
-                "known_tests.json",
-                "test_management.json",
-                "_topt_bazel_metadata.json",
-            ]
             for fragment in forbidden_runtime_fragments:
                 _require(
                     not _contains_path_fragment(inputs, fragment),

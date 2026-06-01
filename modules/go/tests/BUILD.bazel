@@ -32,20 +32,30 @@ load(
     "go_macro_stage_sources_select_wiring_test",
     "go_macro_stage_sources_target",
     "go_macro_stage_sources_wiring_test",
+    "go_macro_test_optimization_linker_default_target",
+    "go_macro_test_optimization_linker_default_wiring_test",
     "go_macro_test_optimization_linker_opt_out_target",
     "go_macro_test_optimization_linker_opt_out_wiring_test",
     "go_macro_test_optimization_mode_target",
     "go_macro_test_optimization_mode_wiring_test",
+    "has_go_mod_pin_test",
     "has_package_local_go_mod_test",
     "orch_transition_forwards_mode_test",
     "orch_wrapper_materialized_actual_non_windows_target",
     "orch_wrapper_materialized_actual_non_windows_test",
     "orch_wrapper_materialized_actual_windows_target",
     "orch_wrapper_materialized_actual_windows_test",
+    "reject_removed_orchestrion_attrs_failure_test",
+    "reject_removed_orchestrion_attrs_target_rule",
     "resolve_topt_service_key_missing_failure_test",
     "resolve_topt_service_key_missing_target_rule",
     "resolve_topt_service_key_unknown_failure_test",
     "resolve_topt_service_key_unknown_target_rule",
+    "validate_orchestrion_mode_invalid_failure_test",
+    "validate_orchestrion_mode_invalid_target_rule",
+    "validate_orchestrion_mode_test",
+    "validate_test_optimization_pin_files_missing_go_mod_failure_test",
+    "validate_test_optimization_pin_files_missing_go_mod_target_rule",
     "windows_wrapper_uses_file_payload_mode_test",
     "wrapper_output_name_non_windows_test",
     "wrapper_output_name_target_rule",
@@ -384,6 +394,16 @@ go_macro_test_optimization_mode_wiring_test(
     target_under_test = ":go_macro_test_optimization_mode_target__raw_go_test",
 )
 
+go_macro_test_optimization_linker_default_target(
+    name = "go_macro_test_optimization_linker_default_target",
+    tags = ["manual"],
+)
+
+go_macro_test_optimization_linker_default_wiring_test(
+    name = "go_macro_test_optimization_linker_default_wiring_test",
+    target_under_test = ":go_macro_test_optimization_linker_default_target__raw_go_test",
+)
+
 go_macro_test_optimization_linker_opt_out_target(
     name = "go_macro_test_optimization_linker_opt_out_target",
     tags = ["manual"],
@@ -464,6 +484,36 @@ resolve_topt_service_key_unknown_failure_test(
     target_under_test = ":resolve_topt_service_key_unknown_target",
 )
 
+validate_orchestrion_mode_invalid_target_rule(
+    name = "validate_orchestrion_mode_invalid_target",
+    tags = ["manual"],
+)
+
+validate_orchestrion_mode_invalid_failure_test(
+    name = "validate_orchestrion_mode_invalid_failure_test",
+    target_under_test = ":validate_orchestrion_mode_invalid_target",
+)
+
+reject_removed_orchestrion_attrs_target_rule(
+    name = "reject_removed_orchestrion_attrs_target",
+    tags = ["manual"],
+)
+
+reject_removed_orchestrion_attrs_failure_test(
+    name = "reject_removed_orchestrion_attrs_failure_test",
+    target_under_test = ":reject_removed_orchestrion_attrs_target",
+)
+
+validate_test_optimization_pin_files_missing_go_mod_target_rule(
+    name = "validate_test_optimization_pin_files_missing_go_mod_target",
+    tags = ["manual"],
+)
+
+validate_test_optimization_pin_files_missing_go_mod_failure_test(
+    name = "validate_test_optimization_pin_files_missing_go_mod_failure_test",
+    target_under_test = ":validate_test_optimization_pin_files_missing_go_mod_target",
+)
+
 wrapper_output_name_target_rule(
     name = "wrapper_output_name_non_windows_target",
     executable_basename = "hello_test__raw_go_test",
@@ -520,6 +570,18 @@ has_package_local_go_mod_test(
     timeout = "short",
 )
 
+has_go_mod_pin_test(
+    name = "has_go_mod_pin_test",
+    size = "small",
+    timeout = "short",
+)
+
+validate_orchestrion_mode_test(
+    name = "validate_orchestrion_mode_test",
+    size = "small",
+    timeout = "short",
+)
+
 orch_transition_forwards_mode_test(
     name = "orch_transition_forwards_mode_test",
     size = "small",
@@ -547,8 +609,11 @@ test_suite(
         ":go_macro_stage_sources_rundir_wiring_test",
         ":go_macro_stage_sources_select_wiring_test",
         ":go_macro_stage_sources_wiring_test",
+        ":go_macro_test_optimization_linker_default_wiring_test",
+        ":go_macro_test_optimization_linker_opt_out_wiring_test",
         ":go_macro_test_optimization_mode_wiring_test",
         ":go_stub_includes_manifest_in_files_test",
+        ":has_go_mod_pin_test",
         ":has_package_local_go_mod_test",
         ":normalize_user_data_handles_none_test",
         ":normalize_user_data_invalid_type_failure_test",
@@ -556,6 +621,7 @@ test_suite(
         ":orch_wrapper_materialized_actual_non_windows_test",
         ":orch_wrapper_materialized_actual_windows_test",
         ":orchestrion_metadata_enabled_test",
+        ":reject_removed_orchestrion_attrs_failure_test",
         ":resolve_topt_service_key_missing_failure_test",
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":resolve_topt_service_key_unknown_failure_test",
@@ -571,6 +637,9 @@ test_suite(
         ":selector_override_miss_failure_test",
         ":selector_override_test",
         ":service_mapping_entries_filters_non_service_test",
+        ":validate_orchestrion_mode_invalid_failure_test",
+        ":validate_orchestrion_mode_test",
+        ":validate_test_optimization_pin_files_missing_go_mod_failure_test",
         ":windows_wrapper_uses_file_payload_mode_test",
         ":wrapper_output_name_non_windows_test",
         ":wrapper_output_name_windows_test",

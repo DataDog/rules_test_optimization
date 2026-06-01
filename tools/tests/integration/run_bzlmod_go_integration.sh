@@ -279,7 +279,7 @@ dd_topt_go_test(
         "//:orchestrion.tool.go",
         "//:orchestrion.yml",
     ],
-    experimental_orchestrion_mode = "${ORCHESTRION_MODE}",
+    orchestrion_mode = "${ORCHESTRION_MODE}",
     topt_data = topt_data,
 )
 EOF

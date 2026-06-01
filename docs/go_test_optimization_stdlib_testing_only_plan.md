@@ -24,7 +24,7 @@ stdlib/helper closure are intentionally out of scope for this first pass.
 
 - D-1: Work starts from a clean branch based on `origin/main`:
   `feat/go-topt-stdlib-only-correctness`.
-- D-2: In this branch, `experimental_orchestrion_mode = "test_optimization"`
+- D-2: In this branch, `orchestrion_mode = "test_optimization"`
   means the aggressive Test Optimization mode for correctness: customer package
   compiles stay plain, while stdlib/synthetic `testmain`/link keep the
   Orchestrion context needed for standard `testing` payloads. Do not add a
@@ -90,7 +90,7 @@ Propagate that setting through:
   - add an `orchestrion_mode` attr to `orch_go_test`
   - have `orch_transition` set both `enabled = True` and `mode`
 - `modules/go/topt_go_test.bzl`
-  - add `experimental_orchestrion_mode = "general"`
+  - add `orchestrion_mode = "general"`
   - validate allowed values
   - forward the selected mode to `orch_go_test`
   - require module-root Orchestrion pin files in `test_optimization` when the
@@ -102,7 +102,7 @@ Propagate that setting through:
     it
 
 Keep public defaults conservative: existing callers remain on `general` unless
-they opt into `experimental_orchestrion_mode = "test_optimization"`.
+they opt into `orchestrion_mode = "test_optimization"`.
 
 ### S-2: Gate Compile Orchestrion by Mode
 
@@ -144,11 +144,10 @@ payload correctness. The initial candidate closure is:
 - `runtime`
 - `io/ioutil` where still required by helper dependency resolution
 
-Validated implementation note: the first correctness cut still keeps `net/http`,
-`log/slog`, and the matching Datadog contrib helper roots in the
-`test_optimization` helper/link closure because the woven stdlib can still
-reference those helper symbols. The pure testing-only closure remains a follow-up
-optimization after correctness is proven in the pilot services.
+Validated implementation note: `test_optimization` still lets the woven stdlib
+cover standard packages such as `net/http` and `log/slog`, but the synthetic
+`testmain` helper/link closure no longer carries the matching Datadog contrib
+helper roots. Generic contrib roots remain part of `general` mode only.
 
 Likely files:
 
@@ -173,12 +172,12 @@ the current Orchestrion/stdlib closure permits it:
 - keep `github.com/DataDog/dd-trace-go/v2/internal` only if validation proves it
   is still required by the selected helper closure
 - keep gotesting coverage helpers if coverage validation requires them
-- target follow-up: remove generic contrib roots from this mode once validation
-  proves the woven stdlib no longer references them:
+- keep generic contrib roots and profiler out of this mode unless standard
+  `testing` payload validation proves one is still required:
   - `github.com/DataDog/dd-trace-go/contrib/net/http/v2`
   - `github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion`
   - `github.com/DataDog/dd-trace-go/contrib/log/slog/v2`
-  - profiler unless standard `testing` payload validation requires it
+  - `github.com/DataDog/dd-trace-go/v2/profiler`
 
 Likely files:
 
@@ -219,7 +218,7 @@ Likely files:
 Add or update tests that prove the new shape:
 
 - macro analysis tests in `modules/go/tests/test_macro.bzl`
-  - `experimental_orchestrion_mode = "test_optimization"` is accepted
+  - `orchestrion_mode = "test_optimization"` is accepted
   - selected mode is forwarded to the wrapper
   - module-root pin files are required for nested packages in this mode
   - runtime payload data remains in runfiles

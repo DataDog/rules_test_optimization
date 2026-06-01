@@ -1510,7 +1510,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
-    experimental_orchestrion_mode = "test_optimization",
+    orchestrion_mode = "test_optimization",
     orchestrion_pin_files = [
         "//:go.mod",
         "//:go.sum",

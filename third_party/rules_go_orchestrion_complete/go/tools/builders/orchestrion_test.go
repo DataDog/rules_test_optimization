@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -202,6 +203,107 @@ func TestEnsureGoModExistsMasksExistingConsumerModuleInTestOptimizationMode(t *t
 			t.Fatalf("restored %s = %q, want %q", name, string(got), want)
 		}
 	}
+}
+
+func TestJobserverGoRootPathPrefersExplicitGoRoot(t *testing.T) {
+	sdkDir := t.TempDir()
+	goRootDir := t.TempDir()
+
+	if got := jobserverGoRootPath(sdkDir, goRootDir); got != goRootDir {
+		t.Fatalf("jobserverGoRootPath() = %q, want explicit go root %q", got, goRootDir)
+	}
+}
+
+func TestJobserverGoRootPathFallsBackToSDK(t *testing.T) {
+	sdkDir := t.TempDir()
+
+	if got := jobserverGoRootPath(sdkDir, ""); got != sdkDir {
+		t.Fatalf("jobserverGoRootPath() = %q, want SDK root %q", got, sdkDir)
+	}
+}
+
+func TestStartOrchestrionJobserverUsesExplicitGoRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based fake Orchestrion server is Unix-only")
+	}
+	t.Setenv(orchestrionJobserverURLEnvVar, "")
+	sdkDir := writeFakeGoSDK(t)
+	goRootDir := t.TempDir()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen fake jobserver: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	envPath := filepath.Join(t.TempDir(), "orchestrion.env")
+	t.Setenv("FAKE_ORCHESTRION_ENV", envPath)
+	t.Setenv("FAKE_JOBSERVER_URL", "http://"+listener.Addr().String())
+	orchestrionPath := filepath.Join(t.TempDir(), "orchestrion")
+	script := `#!/bin/sh
+url_file=
+for arg in "$@"; do
+  case "$arg" in
+    -url-file=*) url_file="${arg#-url-file=}" ;;
+  esac
+done
+if [ -z "$url_file" ]; then
+  exit 2
+fi
+env > "$FAKE_ORCHESTRION_ENV"
+printf '%s\n' "$FAKE_JOBSERVER_URL" > "$url_file"
+while :; do
+  sleep 1
+done
+`
+	if err := os.WriteFile(orchestrionPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake orchestrion: %v", err)
+	}
+
+	jobserver, err := startOrchestrionJobserver(orchestrionPath, sdkDir, goRootDir, false, orchestrionModeTestOptimization)
+	if err != nil {
+		t.Fatalf("startOrchestrionJobserver error: %v", err)
+	}
+	defer jobserver.cleanup()
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read fake orchestrion env: %v", err)
+	}
+	envMap := envFileLinesToMap(strings.Split(strings.TrimSpace(string(data)), "\n"))
+	if got := envMap["GOROOT"]; got != goRootDir {
+		t.Fatalf("jobserver GOROOT=%q, want explicit go root %q", got, goRootDir)
+	}
+	if got := envMap["GOTOOLCHAIN"]; got != "local" {
+		t.Fatalf("jobserver GOTOOLCHAIN=%q, want local", got)
+	}
+	if got := envMap["GOPACKAGESDRIVER"]; got != "off" {
+		t.Fatalf("jobserver GOPACKAGESDRIVER=%q, want off", got)
+	}
+	wantPathPrefix := filepath.Join(sdkDir, "bin") + string(os.PathListSeparator)
+	if got := envMap["PATH"]; !strings.HasPrefix(got, wantPathPrefix) {
+		t.Fatalf("jobserver PATH=%q, want prefix %q", got, wantPathPrefix)
+	}
+}
+
+func envFileLinesToMap(lines []string) map[string]string {
+	result := make(map[string]string, len(lines))
+	for _, line := range lines {
+		name, value, ok := strings.Cut(line, "=")
+		if ok {
+			result[name] = value
+		}
+	}
+	return result
 }
 
 func writeFakeGoSDK(t *testing.T) string {

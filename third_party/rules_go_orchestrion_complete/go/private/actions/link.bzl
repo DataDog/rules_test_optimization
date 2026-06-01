@@ -69,12 +69,24 @@ def _orchestrion_action_env(
 def _orchestrion_data_inputs(go):
     if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
         return go._ctx.files.data if hasattr(go._ctx.files, "data") else []
-
-    allowed_pin_files = {
+    return _orchestrion_pin_file_inputs(go, {
         "go.mod": True,
         "go.sum": True,
         "orchestrion.yml": True,
+    })
+
+def _orchestrion_source_inputs(go):
+    allowed_pin_files = {
+        "go.mod": True,
+        "go.sum": True,
+        "orchestrion.tool.go": True,
+        "orchestrion.yml": True,
     }
+    if getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        allowed_pin_files.pop("orchestrion.tool.go")
+    return _orchestrion_pin_file_inputs(go, allowed_pin_files)
+
+def _orchestrion_pin_file_inputs(go, allowed_pin_files):
     files = []
     for dep in getattr(go._ctx.attr, "data", []):
         if OrchestrionPinFilesInfo in dep:
@@ -369,15 +381,17 @@ def emit_link(
         # Stage rule data files for the link builder too so it can reuse the
         # same pinned module files seen during compile (for example go.mod,
         # go.sum, orchestrion.tool.go, orchestrion.yml).
-        orchestrion_data_inputs = _orchestrion_data_inputs(go)
-        if orchestrion_data_inputs:
+        orchestrion_source_inputs = _orchestrion_source_inputs(go)
+        if orchestrion_source_inputs:
             builder_args.add_all(
-                orchestrion_data_inputs,
+                orchestrion_source_inputs,
                 map_each = _dirname,
                 before_each = "-orchsrc",
                 uniquify = True,
                 expand_directories = False,
             )
+        orchestrion_data_inputs = _orchestrion_data_inputs(go)
+        if orchestrion_data_inputs:
             inputs_direct.extend(orchestrion_data_inputs)
     inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
 

@@ -128,7 +128,7 @@ Notes:
 
 ## Go Test Optimization Orchestrion mode
 
-`dd_topt_go_test(...)` accepts `experimental_orchestrion_mode`:
+`dd_topt_go_test(...)` accepts `orchestrion_mode`:
 
 | Value | Description |
 |-------|-------------|

@@ -29,8 +29,12 @@ load(
 load(
     "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "dd_topt_go_test",
+    "has_go_mod_pin_for_tests",
     "has_package_local_go_mod_for_tests",
+    "reject_removed_orchestrion_attrs_for_tests",
     "resolve_topt_service_key_for_tests",
+    "validate_orchestrion_mode_for_tests",
+    "validate_test_optimization_pin_files_for_tests",
 )
 load("@rules_go//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
@@ -322,8 +326,20 @@ def go_macro_test_optimization_mode_target(name, tags = None):
         topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
-        experimental_orchestrion_mode = "test_optimization",
-        orchestrion_pin_files = [":test_selection_utils.bzl"],
+        orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [":go.mod"],
+        tags = tags,
+    )
+
+def go_macro_test_optimization_linker_default_target(name, tags = None):
+    """Target under test for default Test Optimization linker flags."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        data = [":test_macro.bzl"],
+        orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [":go.mod"],
         tags = tags,
     )
 
@@ -334,8 +350,8 @@ def go_macro_test_optimization_linker_opt_out_target(name, tags = None):
         topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
-        experimental_orchestrion_mode = "test_optimization",
-        orchestrion_pin_files = [":test_selection_utils.bzl"],
+        orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [":go.mod"],
         enable_test_binary_linker_optimization = False,
         gc_linkopts = ["-custom-link-flag"],
         tags = tags,
@@ -348,7 +364,7 @@ def go_macro_general_mode_linker_flags_target(name, tags = None):
         topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
-        experimental_orchestrion_mode = "general",
+        orchestrion_mode = "general",
         gc_linkopts = ["-custom-link-flag"],
         tags = tags,
     )
@@ -549,7 +565,8 @@ def _go_macro_orchestrion_pin_files_provider_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     pin_files = target[OrchestrionPinFilesInfo].files.to_list()
-    asserts.equals(env, 2, len(pin_files))
+    asserts.equals(env, 3, len(pin_files))
+    asserts.true(env, _has_file_basename(pin_files, "go.mod"))
     asserts.true(env, _has_file_basename(pin_files, "test_macro.bzl"))
     asserts.true(env, _has_file_basename(pin_files, "test_selection_utils.bzl"))
     return analysistest.end(env)
@@ -576,6 +593,14 @@ def _go_macro_test_optimization_linker_opt_out_wiring_test_impl(ctx):
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
     asserts.equals(env, ["-custom-link-flag"], captured.gc_linkopts)
+    return analysistest.end(env)
+
+def _go_macro_test_optimization_linker_default_wiring_test_impl(ctx):
+    """Assert optimized tests receive default strip linker flags in opt mode."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+    asserts.equals(env, ["-s", "-w"], captured.gc_linkopts)
     return analysistest.end(env)
 
 def _go_macro_general_mode_linker_flags_wiring_test_impl(ctx):
@@ -647,12 +672,46 @@ def _resolve_topt_service_key_unknown_target_impl(_ctx):
     )
     return []
 
+def _validate_orchestrion_mode_invalid_target_impl(_ctx):
+    """Analysis target expected to fail on invalid Orchestrion mode."""
+    validate_orchestrion_mode_for_tests("invalid")
+    return []
+
+def _reject_removed_orchestrion_attrs_target_impl(_ctx):
+    """Analysis target expected to fail on removed Orchestrion macro attrs."""
+    reject_removed_orchestrion_attrs_for_tests({
+        "experimental_orchestrion_mode": "test_optimization",
+    })
+    return []
+
+def _validate_test_optimization_pin_files_missing_go_mod_target_impl(_ctx):
+    """Analysis target expected to fail when optimized mode has no go.mod pin."""
+    validate_test_optimization_pin_files_for_tests(
+        "test_optimization",
+        ["go.sum"],
+        [":test_selection_utils.bzl"],
+        [":test_selection_utils.bzl"],
+    )
+    return []
+
 resolve_topt_service_key_missing_target_rule = rule(
     implementation = _resolve_topt_service_key_missing_target_impl,
 )
 
 resolve_topt_service_key_unknown_target_rule = rule(
     implementation = _resolve_topt_service_key_unknown_target_impl,
+)
+
+validate_orchestrion_mode_invalid_target_rule = rule(
+    implementation = _validate_orchestrion_mode_invalid_target_impl,
+)
+
+reject_removed_orchestrion_attrs_target_rule = rule(
+    implementation = _reject_removed_orchestrion_attrs_target_impl,
+)
+
+validate_test_optimization_pin_files_missing_go_mod_target_rule = rule(
+    implementation = _validate_test_optimization_pin_files_missing_go_mod_target_impl,
 )
 
 def _resolve_topt_service_key_missing_failure_test_impl(ctx):
@@ -667,6 +726,24 @@ def _resolve_topt_service_key_unknown_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "topt_service 'java-service' not found")
     asserts.expect_failure(env, "go_service, ruby_service")
+    return analysistest.end(env)
+
+def _validate_orchestrion_mode_invalid_failure_test_impl(ctx):
+    """Assert invalid Orchestrion mode failures use the public attr name."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "orchestrion_mode must be one of general, test_optimization")
+    return analysistest.end(env)
+
+def _reject_removed_orchestrion_attrs_failure_test_impl(ctx):
+    """Assert removed Orchestrion macro attrs fail with migration guidance."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "experimental_orchestrion_mode was removed; use orchestrion_mode")
+    return analysistest.end(env)
+
+def _validate_test_optimization_pin_files_missing_go_mod_failure_test_impl(ctx):
+    """Assert optimized mode requires a real go.mod pin."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "requires a package-local go.mod or explicit orchestrion_pin_files")
     return analysistest.end(env)
 
 def _wrapper_output_name_non_windows_test_impl(ctx):
@@ -702,6 +779,23 @@ def _has_package_local_go_mod_test_impl(ctx):
     asserts.true(env, has_package_local_go_mod_for_tests(["go.mod", "go.sum"]))
     asserts.false(env, has_package_local_go_mod_for_tests(["go.sum", "orchestrion.yml"]))
     asserts.false(env, has_package_local_go_mod_for_tests([]))
+    return unittest.end(env)
+
+def _has_go_mod_pin_test_impl(ctx):
+    """Assert explicit optimized-mode pin validation looks for go.mod labels."""
+    env = unittest.begin(ctx)
+    asserts.true(env, has_go_mod_pin_for_tests(["//:go.mod"]))
+    asserts.true(env, has_go_mod_pin_for_tests([":go.mod"]))
+    asserts.true(env, has_go_mod_pin_for_tests(["nested/go.mod"]))
+    asserts.false(env, has_go_mod_pin_for_tests([":test_selection_utils.bzl"]))
+    asserts.false(env, has_go_mod_pin_for_tests([]))
+    return unittest.end(env)
+
+def _validate_orchestrion_mode_test_impl(ctx):
+    """Assert the public mode accepts only supported values."""
+    env = unittest.begin(ctx)
+    validate_orchestrion_mode_for_tests("general")
+    validate_orchestrion_mode_for_tests("test_optimization")
     return unittest.end(env)
 
 def _orch_transition_forwards_mode_test_impl(ctx):
@@ -772,6 +866,12 @@ go_macro_orchestrion_pin_files_provider_test = analysistest.make(
 go_macro_test_optimization_mode_wiring_test = analysistest.make(
     _go_macro_test_optimization_mode_wiring_test_impl,
 )
+go_macro_test_optimization_linker_default_wiring_test = analysistest.make(
+    _go_macro_test_optimization_linker_default_wiring_test_impl,
+    config_settings = {
+        "//command_line_option:compilation_mode": "opt",
+    },
+)
 go_macro_test_optimization_linker_opt_out_wiring_test = analysistest.make(
     _go_macro_test_optimization_linker_opt_out_wiring_test_impl,
 )
@@ -792,6 +892,18 @@ resolve_topt_service_key_unknown_failure_test = analysistest.make(
     _resolve_topt_service_key_unknown_failure_test_impl,
     expect_failure = True,
 )
+validate_orchestrion_mode_invalid_failure_test = analysistest.make(
+    _validate_orchestrion_mode_invalid_failure_test_impl,
+    expect_failure = True,
+)
+reject_removed_orchestrion_attrs_failure_test = analysistest.make(
+    _reject_removed_orchestrion_attrs_failure_test_impl,
+    expect_failure = True,
+)
+validate_test_optimization_pin_files_missing_go_mod_failure_test = analysistest.make(
+    _validate_test_optimization_pin_files_missing_go_mod_failure_test_impl,
+    expect_failure = True,
+)
 wrapper_output_name_non_windows_test = analysistest.make(
     _wrapper_output_name_non_windows_test_impl,
 )
@@ -803,6 +915,12 @@ windows_wrapper_uses_file_payload_mode_test = unittest.make(
 )
 has_package_local_go_mod_test = unittest.make(
     _has_package_local_go_mod_test_impl,
+)
+has_go_mod_pin_test = unittest.make(
+    _has_go_mod_pin_test_impl,
+)
+validate_orchestrion_mode_test = unittest.make(
+    _validate_orchestrion_mode_test_impl,
 )
 orch_transition_forwards_mode_test = unittest.make(
     _orch_transition_forwards_mode_test_impl,
