@@ -701,19 +701,18 @@ def main() -> int:
         "aquery did not contain the fixture Go tool transition actions",
     )
 
-    if args.expected_orchestrion_mode == "test_optimization":
-        for action in fixture_go_tool_actions:
-            _require(
-                not _uses_orchestrion(action),
-                f"{action.mnemonic} for fixture Go tool unexpectedly inherited Orchestrion",
-            )
-            _assert_expected_action(
-                action,
-                _action_inputs(action, artifacts, dep_sets, path_fragments),
-                require_proxy=False,
-                expected_orchestrion_mode=args.expected_orchestrion_mode,
-                required_test_optimization_pin_files=required_test_optimization_pin_files,
-            )
+    for action in fixture_go_tool_actions:
+        _require(
+            not _uses_orchestrion(action),
+            f"{action.mnemonic} for fixture Go tool unexpectedly inherited Orchestrion",
+        )
+        _assert_expected_action(
+            action,
+            _action_inputs(action, artifacts, dep_sets, path_fragments),
+            require_proxy=False,
+            expected_orchestrion_mode=args.expected_orchestrion_mode,
+            required_test_optimization_pin_files=required_test_optimization_pin_files,
+        )
 
     for action in stdlib_list_actions:
         _assert_expected_action(

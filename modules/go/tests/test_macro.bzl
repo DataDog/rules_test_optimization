@@ -19,6 +19,7 @@ forwards at analysis time without compiling Go code.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
     "orch_go_test",
@@ -104,6 +105,38 @@ _go_test_capture_rule = rule(
         "importpath": attr.string(),
         "rundir": attr.string(),
         "srcs": attr.label_list(allow_files = True),
+    },
+    executable = True,
+)
+
+def _go_test_transition_mode_impl(ctx):
+    """Expose the transitioned Orchestrion mode through the executable basename."""
+    mode = ctx.attr._orchestrion_mode[BuildSettingInfo].value
+    out = ctx.actions.declare_file(ctx.label.name + "__orchestrion_mode_" + mode + ".sh")
+    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
+    return [
+        DefaultInfo(
+            files = depset([out]),
+            runfiles = ctx.runfiles(files = [out]),
+            executable = out,
+        ),
+    ]
+
+_go_test_transition_mode_rule = rule(
+    implementation = _go_test_transition_mode_impl,
+    attrs = {
+        "data": attr.label_list(allow_files = True),
+        "embed": attr.label_list(),
+        "embedsrcs": attr.label_list(allow_files = True),
+        "env": attr.string_dict(),
+        "gc_linkopts": attr.string_list(),
+        "importpath": attr.string(),
+        "rundir": attr.string(),
+        "srcs": attr.label_list(allow_files = True),
+        "_orchestrion_mode": attr.label(
+            default = "@rules_go//go/private/orchestrion:mode",
+            providers = [BuildSettingInfo],
+        ),
     },
     executable = True,
 )
@@ -325,6 +358,17 @@ def go_macro_test_optimization_mode_target(name, tags = None):
         topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
+        orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [":go.mod"],
+        tags = tags,
+    )
+
+def go_macro_test_optimization_public_wrapper_mode_target(name, tags = None):
+    """Target under test for public wrapper Orchestrion mode forwarding."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_transition_mode_rule,
         orchestrion_mode = "test_optimization",
         orchestrion_pin_files = [":go.mod"],
         tags = tags,
@@ -649,6 +693,24 @@ def _go_macro_public_wrapper_test_impl(ctx):
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
+def _go_macro_test_optimization_public_wrapper_mode_test_impl(ctx):
+    """Assert dd_topt_go_test forwards the optimized mode to the public wrapper."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    asserts.true(
+        env,
+        _has_file_basename(
+            files,
+            (
+                "go_macro_test_optimization_public_wrapper_mode_target__wrapped_" +
+                "go_macro_test_optimization_public_wrapper_mode_target__raw_go_test" +
+                "__orchestrion_mode_test_optimization.sh"
+            ),
+        ),
+    )
+    return analysistest.end(env)
+
 def _resolve_topt_service_key_missing_target_impl(_ctx):
     """Analysis target expected to fail on missing service in multi-service map."""
     resolve_topt_service_key_for_tests(
@@ -865,6 +927,9 @@ go_macro_explicit_service_wiring_test = analysistest.make(
 )
 go_macro_public_wrapper_test = analysistest.make(
     _go_macro_public_wrapper_test_impl,
+)
+go_macro_test_optimization_public_wrapper_mode_test = analysistest.make(
+    _go_macro_test_optimization_public_wrapper_mode_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

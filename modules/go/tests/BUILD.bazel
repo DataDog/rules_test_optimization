@@ -38,6 +38,8 @@ load(
     "go_macro_test_optimization_linker_opt_out_wiring_test",
     "go_macro_test_optimization_mode_target",
     "go_macro_test_optimization_mode_wiring_test",
+    "go_macro_test_optimization_public_wrapper_mode_target",
+    "go_macro_test_optimization_public_wrapper_mode_test",
     "has_go_mod_pin_test",
     "has_package_local_go_mod_test",
     "orch_transition_forwards_mode_test",
@@ -392,6 +394,16 @@ go_macro_test_optimization_mode_wiring_test(
     target_under_test = ":go_macro_test_optimization_mode_target__raw_go_test",
 )
 
+go_macro_test_optimization_public_wrapper_mode_target(
+    name = "go_macro_test_optimization_public_wrapper_mode_target",
+    tags = ["manual"],
+)
+
+go_macro_test_optimization_public_wrapper_mode_test(
+    name = "go_macro_test_optimization_public_wrapper_mode_test",
+    target_under_test = ":go_macro_test_optimization_public_wrapper_mode_target",
+)
+
 go_macro_test_optimization_linker_default_target(
     name = "go_macro_test_optimization_linker_default_target",
     tags = ["manual"],
@@ -600,6 +612,7 @@ test_suite(
         ":go_macro_test_optimization_linker_default_wiring_test",
         ":go_macro_test_optimization_linker_opt_out_wiring_test",
         ":go_macro_test_optimization_mode_wiring_test",
+        ":go_macro_test_optimization_public_wrapper_mode_test",
         ":go_stub_includes_manifest_in_files_test",
         ":has_go_mod_pin_test",
         ":has_package_local_go_mod_test",
