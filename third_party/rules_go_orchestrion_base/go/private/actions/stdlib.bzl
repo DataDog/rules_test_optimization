@@ -33,9 +33,9 @@ load(
     "//go/private:providers.bzl",
     "GoStdLib",
 )
-load("//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 load("//go/private:sdk.bzl", "parse_version")
 load("//go/private/actions:utils.bzl", "quote_opts")
+load("//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
 _ORCHESTRION_PROBE_ENV_VARS = (
     "RULES_GO_ORCHESTRION_PROBE",
