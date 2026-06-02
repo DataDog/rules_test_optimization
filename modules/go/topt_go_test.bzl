@@ -146,16 +146,6 @@ def _validate_orchestrion_mode(orchestrion_mode):
 
 validate_orchestrion_mode_for_tests = _validate_orchestrion_mode
 
-def _reject_removed_orchestrion_attrs(kwargs):
-    """Reject removed macro attributes before they can leak to go_test."""
-    if "experimental_orchestrion_mode" in kwargs:
-        fail_with_prefix(
-            "dd_topt_go_test",
-            "experimental_orchestrion_mode was removed; use orchestrion_mode",
-        )
-
-reject_removed_orchestrion_attrs_for_tests = _reject_removed_orchestrion_attrs
-
 def _validate_test_optimization_pin_files(
         orchestrion_mode,
         package_local_orchestrion_pin_files,
@@ -325,7 +315,6 @@ def dd_topt_go_test(
     # Validate required topt_data early so failures surface at loading time.
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
-    _reject_removed_orchestrion_attrs(kwargs)
     _validate_orchestrion_mode(orchestrion_mode)
     test_binary_linker_optimization_enabled = (
         orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and

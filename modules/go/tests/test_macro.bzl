@@ -31,7 +31,6 @@ load(
     "dd_topt_go_test",
     "has_go_mod_pin_for_tests",
     "has_package_local_go_mod_for_tests",
-    "reject_removed_orchestrion_attrs_for_tests",
     "resolve_topt_service_key_for_tests",
     "validate_orchestrion_mode_for_tests",
     "validate_test_optimization_pin_files_for_tests",
@@ -677,13 +676,6 @@ def _validate_orchestrion_mode_invalid_target_impl(_ctx):
     validate_orchestrion_mode_for_tests("invalid")
     return []
 
-def _reject_removed_orchestrion_attrs_target_impl(_ctx):
-    """Analysis target expected to fail on removed Orchestrion macro attrs."""
-    reject_removed_orchestrion_attrs_for_tests({
-        "experimental_orchestrion_mode": "test_optimization",
-    })
-    return []
-
 def _validate_test_optimization_pin_files_missing_go_mod_target_impl(_ctx):
     """Analysis target expected to fail when optimized mode has no go.mod pin."""
     validate_test_optimization_pin_files_for_tests(
@@ -704,10 +696,6 @@ resolve_topt_service_key_unknown_target_rule = rule(
 
 validate_orchestrion_mode_invalid_target_rule = rule(
     implementation = _validate_orchestrion_mode_invalid_target_impl,
-)
-
-reject_removed_orchestrion_attrs_target_rule = rule(
-    implementation = _reject_removed_orchestrion_attrs_target_impl,
 )
 
 validate_test_optimization_pin_files_missing_go_mod_target_rule = rule(
@@ -732,12 +720,6 @@ def _validate_orchestrion_mode_invalid_failure_test_impl(ctx):
     """Assert invalid Orchestrion mode failures use the public attr name."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "orchestrion_mode must be one of general, test_optimization")
-    return analysistest.end(env)
-
-def _reject_removed_orchestrion_attrs_failure_test_impl(ctx):
-    """Assert removed Orchestrion macro attrs fail with migration guidance."""
-    env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "experimental_orchestrion_mode was removed; use orchestrion_mode")
     return analysistest.end(env)
 
 def _validate_test_optimization_pin_files_missing_go_mod_failure_test_impl(ctx):
@@ -894,10 +876,6 @@ resolve_topt_service_key_unknown_failure_test = analysistest.make(
 )
 validate_orchestrion_mode_invalid_failure_test = analysistest.make(
     _validate_orchestrion_mode_invalid_failure_test_impl,
-    expect_failure = True,
-)
-reject_removed_orchestrion_attrs_failure_test = analysistest.make(
-    _reject_removed_orchestrion_attrs_failure_test_impl,
     expect_failure = True,
 )
 validate_test_optimization_pin_files_missing_go_mod_failure_test = analysistest.make(

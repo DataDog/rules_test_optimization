@@ -45,8 +45,6 @@ load(
     "orch_wrapper_materialized_actual_non_windows_test",
     "orch_wrapper_materialized_actual_windows_target",
     "orch_wrapper_materialized_actual_windows_test",
-    "reject_removed_orchestrion_attrs_failure_test",
-    "reject_removed_orchestrion_attrs_target_rule",
     "resolve_topt_service_key_missing_failure_test",
     "resolve_topt_service_key_missing_target_rule",
     "resolve_topt_service_key_unknown_failure_test",
@@ -494,16 +492,6 @@ validate_orchestrion_mode_invalid_failure_test(
     target_under_test = ":validate_orchestrion_mode_invalid_target",
 )
 
-reject_removed_orchestrion_attrs_target_rule(
-    name = "reject_removed_orchestrion_attrs_target",
-    tags = ["manual"],
-)
-
-reject_removed_orchestrion_attrs_failure_test(
-    name = "reject_removed_orchestrion_attrs_failure_test",
-    target_under_test = ":reject_removed_orchestrion_attrs_target",
-)
-
 validate_test_optimization_pin_files_missing_go_mod_target_rule(
     name = "validate_test_optimization_pin_files_missing_go_mod_target",
     tags = ["manual"],
@@ -621,7 +609,6 @@ test_suite(
         ":orch_wrapper_materialized_actual_non_windows_test",
         ":orch_wrapper_materialized_actual_windows_test",
         ":orchestrion_metadata_enabled_test",
-        ":reject_removed_orchestrion_attrs_failure_test",
         ":resolve_topt_service_key_missing_failure_test",
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":resolve_topt_service_key_unknown_failure_test",
