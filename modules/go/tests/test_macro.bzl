@@ -374,6 +374,15 @@ def go_macro_test_optimization_public_wrapper_mode_target(name, tags = None):
         tags = tags,
     )
 
+def go_macro_default_general_public_wrapper_mode_target(name, tags = None):
+    """Target under test for omitted Orchestrion mode defaulting to general."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        go_test_rule = _go_test_transition_mode_rule,
+        tags = tags,
+    )
+
 def go_macro_test_optimization_linker_default_target(name, tags = None):
     """Target under test for default Test Optimization linker flags."""
     dd_topt_go_test(
@@ -711,6 +720,24 @@ def _go_macro_test_optimization_public_wrapper_mode_test_impl(ctx):
     )
     return analysistest.end(env)
 
+def _go_macro_default_general_public_wrapper_mode_test_impl(ctx):
+    """Assert omitted orchestrion_mode forwards the default general mode."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = target[DefaultInfo].files.to_list()
+    asserts.true(
+        env,
+        _has_file_basename(
+            files,
+            (
+                "go_macro_default_general_public_wrapper_mode_target__wrapped_" +
+                "go_macro_default_general_public_wrapper_mode_target__raw_go_test" +
+                "__orchestrion_mode_general.sh"
+            ),
+        ),
+    )
+    return analysistest.end(env)
+
 def _resolve_topt_service_key_missing_target_impl(_ctx):
     """Analysis target expected to fail on missing service in multi-service map."""
     resolve_topt_service_key_for_tests(
@@ -930,6 +957,9 @@ go_macro_public_wrapper_test = analysistest.make(
 )
 go_macro_test_optimization_public_wrapper_mode_test = analysistest.make(
     _go_macro_test_optimization_public_wrapper_mode_test_impl,
+)
+go_macro_default_general_public_wrapper_mode_test = analysistest.make(
+    _go_macro_default_general_public_wrapper_mode_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,
