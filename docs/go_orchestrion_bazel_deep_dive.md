@@ -83,12 +83,13 @@ The user still writes a Bazel-native target:
 dd_topt_go_test(
     name = "pkg_test",
     srcs = ["*_test.go"],
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data,
 )
 ```
 
-But the raw `go_test` is built under a transition that enables Orchestrion in
-the vendored toolchain.
+But the raw `go_test` is built under a transition that enables the requested
+Orchestrion mode in the vendored toolchain.
 
 ### Why This Section Exists
 
@@ -226,12 +227,22 @@ The macro does three distinct jobs:
 
 1. Select Datadog payload data
 2. Prepare runtime env/data wiring for Test Optimization
-3. Route the compile through Orchestrion
+3. Route the public test through the Orchestrion wrapper transition
 
 The macro expands into:
 
 - a hidden raw `go_test`
 - a public `orch_go_test` wrapper
+
+The wrapper forwards `orchestrion_mode` into the vendored `rules_go` fork. The
+default mode is `general`, which preserves broad generic Orchestrion behavior.
+For standard Go `testing`, use `orchestrion_mode = "test_optimization"`. That
+mode keeps stdlib `testing`, synthetic `testmain`, helper packagefile, importcfg,
+and link support coherent while ordinary customer packages and external `_test`
+packages compile on the plain rules_go path. Nested packages still need
+package-local pin files or explicit `orchestrion_pin_files`, and callers can
+disable the test-binary linker flag optimization with
+`enable_test_binary_linker_optimization = False`.
 
 When present in the current Bazel package, the raw `go_test` stages the local
 Orchestrion pin files as hidden data:
@@ -586,10 +597,16 @@ The link entry point is:
 
 - [link.go](../third_party/rules_go_orchestrion_base/go/tools/builders/link.go)
 
-The link builder has two modes:
+The link builder has two broad paths:
 
 - normal Orchestrion-enabled link
 - synthetic test binary link
+
+In `test_optimization` mode, the final synthetic test binary link does not run
+with `-orchestrion`. It consumes the synthetic `testmain` manifest and helper
+packagefiles produced earlier, then keeps the link action free of unused
+Orchestrion proxy and pin-file inputs. Generic mode can still use the broader
+Orchestrion link behavior.
 
 ### Why This Section Exists
 
@@ -719,8 +736,11 @@ with those expectations.
 
 ### Woven dependency warmup
 
-The builder can probe or warm the dependencies Orchestrion commonly weaves,
-especially Datadog tracing and profiling packages.
+The builder can probe or warm the dependencies Orchestrion commonly weaves.
+In generic mode this includes the broader tracing/profiling and contrib helper
+set. In `test_optimization` mode the synthetic module and helper closure are
+reduced to the standard Go `testing` Test Optimization path and exclude profiler
+and Datadog contrib HTTP/slog helper roots.
 
 #### Why This Exists
 
@@ -742,12 +762,12 @@ sequenceDiagram
     Macro->>Macro: select payload data + add pin files
     Macro->>Wrapper: public test target
     Wrapper->>RG: build raw go_test with transition enabled
-    RG->>Orch: compile packages through Orchestrion
+    RG->>RG: compile customer packages
     RG->>Orch: compile woven stdlib as needed
-    RG->>Orch: compile synthetic testmain
+    RG->>Orch: prepare synthetic testmain helper packagefiles
     RG->>RG: persist synthetic helper manifest sidecar
-    RG->>Orch: link final binary using same helper family
-    Orch->>Bin: produce instrumented test executable
+    RG->>RG: link final binary using same helper family
+    RG->>Bin: produce instrumented test executable
     Bin->>Bin: emit tracer / CI Visibility runtime
 ```
 

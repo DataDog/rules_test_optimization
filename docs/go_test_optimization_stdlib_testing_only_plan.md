@@ -8,6 +8,11 @@ This product includes software developed at Datadog
 
 # Go Test Optimization Stdlib/Testing-Only Plan
 
+This is the historical implementation plan for
+`feat/go-topt-stdlib-only-correctness`. The branch now implements the mode
+plumbing, pin-file validation, reduced helper/link closure, linker optimization
+opt-out, metadata fields, and payload-producing validation described here.
+
 ## Objective
 
 Prove a correctness-first Go Test Optimization mode where `test_optimization`
@@ -41,6 +46,8 @@ stdlib/helper closure are intentionally out of scope for this first pass.
   `general` mode must continue to instrument normal customer code paths.
 
 ## Current Baseline
+
+This section records the pre-branch baseline used when the experiment started.
 
 - `origin/main` does not yet have an Orchestrion mode setting. The wrapper
   transition in `modules/go/topt_go_orchestrion.bzl` only sets
@@ -131,8 +138,11 @@ Orchestrion toolexec".
 
 Keep `GoStdlib` Orchestrion-enabled in `test_optimization`.
 
-Narrow the stdlib closure only to packages required for standard `testing`
-payload correctness. The initial candidate closure is:
+Keep the stdlib closure focused on packages required for standard `testing`
+payload correctness. The implementation still includes stdlib packages such as
+`log`, `log/slog`, and `net/http`; the important reduction is that Datadog
+contrib HTTP/slog helper roots are removed from the synthetic helper/link
+closure in `test_optimization` mode. The initial candidate closure was:
 
 - `testing`
 - `testing/internal/testdeps`
@@ -222,6 +232,10 @@ Add or update tests that prove the new shape:
   - selected mode is forwarded to the wrapper
   - module-root pin files are required for nested packages in this mode
   - runtime payload data remains in runfiles
+  - `enable_test_binary_linker_optimization = False` preserves caller linker
+    flags
+  - metadata records `bazel.go.orchestrion.mode` and
+    `bazel.go.test_binary_linker_optimization`
 - builder unit tests in both vendored variants
   - mode validation
   - mode-aware helper closure

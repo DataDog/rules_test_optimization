@@ -198,6 +198,9 @@ needs to expose the public `go_orchestrion_tool_repo(...)` helper, preserve the
 keep the default tool-repo name `rules_go_orchestrion_tool`. When Go tests live
 below the module root, pass the module-root pin files through
 `orchestrion_pin_files` or inject them from a repo-local wrapper.
+For standard Go `testing`, set `orchestrion_mode = "test_optimization"` on the
+`dd_topt_go_test` call or optimized repo-local wrapper. Automatic
+`testify/suite` instrumentation is not part of that mode.
 
 For WORKSPACE monorepos, prefer bootstrap `--workspace-mode` to generate the
 generic local scaffolding. It can write the root doctor/uploader targets,
@@ -320,9 +323,11 @@ The generated wrapper template should be adapted to the repository's existing
 wrapper layer. Keep scheduling, tags, flaky policy, Docker defaults,
 platform constraints, and other repository-specific behavior in the local
 helper. The optimized wrapper should call `dd_topt_go_test`, pass
-`topt_data`, and always provide module-root pin files:
+`topt_data`, set `orchestrion_mode = "test_optimization"`, and always provide
+module-root pin files:
 
 ```bzl
+orchestrion_mode = "test_optimization",
 orchestrion_pin_files = [
     "//:go.mod",
     "//:go.sum",
@@ -423,6 +428,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data_by_service,
     topt_service = "go_service_a",
 )

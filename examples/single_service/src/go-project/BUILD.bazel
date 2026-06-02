@@ -24,4 +24,5 @@ dd_topt_go_test(
   topt_data = topt_data,
   srcs = ["main_test.go"],
   embed = [":hello_lib"],  # lets the macro infer importpath via rules_go provider
+  orchestrion_mode = "test_optimization",
 )

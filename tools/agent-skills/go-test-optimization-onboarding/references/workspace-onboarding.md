@@ -308,6 +308,9 @@ do not add a root `orchestrion.tool.go` only for Test Optimization. Keep the
 Orchestrion tool version in Bazel, then use package-local pin files or a
 repo-local wrapper that passes `orchestrion_pin_files = []` when that matches
 the repository's Go module policy.
+For standard Go `testing`, that repo-local wrapper should also inject
+`orchestrion_mode = "test_optimization"`. Automatic `testify/suite`
+instrumentation is outside this mode.
 
 ## Bazel Config
 
@@ -409,7 +412,8 @@ Prefer this split:
   flaky policy, exec constraints, and registry behavior.
 - The existing plain wrapper calls that helper with raw `go_test`.
 - A new Test Optimization wrapper calls that helper with `dd_topt_go_test`.
-- The Test Optimization wrapper sets Orchestrion pin files and `topt_data`.
+- The Test Optimization wrapper sets `orchestrion_mode = "test_optimization"`,
+  Orchestrion pin files, and `topt_data`.
 - The wrapper rejects explicit per-target `topt_data` and
   `orchestrion_pin_files` overrides when those values must stay consistent
   across the repository.
@@ -423,6 +427,7 @@ The wrapper should always pass stable Orchestrion pin files when tests are not
 at the repo root:
 
 ```bzl
+orchestrion_mode = "test_optimization",
 orchestrion_pin_files = [
     "//:go.mod",
     "//:go.sum",
