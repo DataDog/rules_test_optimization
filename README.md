@@ -1505,8 +1505,19 @@ dd_topt_go_test(
 
 `dd_topt_go_test` enables CI Visibility and payload-to-files mode by default,
 so opt-in Go tests emit payload files without extra `--test_env` settings.
-For standard Go `testing`, use the `test_optimization` mode shown next; the
-basic snippet above leaves the default generic Orchestrion mode implicit.
+
+### Go Orchestrion mode selection
+
+`dd_topt_go_test` accepts `orchestrion_mode`:
+
+| Value | Description |
+|-------|-------------|
+| `general` | Default. Preserves broad generic Orchestrion behavior for consumers that need instrumentation beyond the Test Optimization-only Go testing path. |
+| `test_optimization` | Standard Go `testing` Test Optimization mode. Keeps the stdlib `testing`, synthetic `testmain`, helper packagefile, importcfg, and link support needed for payloads while leaving customer package compiles and external `_test` package compiles on the normal rules_go path. |
+
+For standard Go `testing` onboarding, including large WORKSPACE monorepos that
+only need Test Optimization payloads, use the `test_optimization` mode shown
+next. The basic snippet above leaves the default `general` mode implicit.
 
 ### Standard `testing` Orchestrion mode
 

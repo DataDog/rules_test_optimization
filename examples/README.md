@@ -131,7 +131,9 @@ Python, Java, NodeJS, .NET, or Ruby, the simpler runtime-specific setup is in
 
 The generated Go wrapper uses `orchestrion_mode = "test_optimization"` for
 standard Go `testing`. Manual `dd_topt_go_test` snippets below set the same mode
-explicitly.
+explicitly. The default Go Orchestrion mode is `general`; these examples choose
+`test_optimization` because they target standard Go `testing` payloads rather
+than broader generic Orchestrion instrumentation.
 
 Bootstrap once after adding the module prerequisites:
 

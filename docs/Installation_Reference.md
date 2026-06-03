@@ -1123,10 +1123,13 @@ dd_topt_go_test(
 ```
 
 Use `orchestrion_mode = "test_optimization"` for standard Go `testing` Test
-Optimization. This mode keeps the stdlib `testing` instrumentation and synthetic
-`testmain` support required for payloads while leaving customer package compiles
-on the normal rules_go path. It does not automatically instrument
-`testify/suite`.
+Optimization. `general` remains the default mode for broader generic
+Orchestrion behavior; the full mode contract is summarized in
+[`Configuration_Reference.md`](./Configuration_Reference.md#go-test-optimization-orchestrion-mode).
+The `test_optimization` mode keeps the stdlib `testing` instrumentation and
+synthetic `testmain` support required for payloads while leaving customer
+package compiles on the normal rules_go path. It does not automatically
+instrument `testify/suite`.
 
 If the tracer needs runtime-visible source files for AST-derived metadata such
 as `test.source.end`, enable source staging explicitly:
