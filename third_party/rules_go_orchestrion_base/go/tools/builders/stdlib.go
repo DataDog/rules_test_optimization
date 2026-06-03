@@ -161,7 +161,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		}
 	}
 	os.Setenv("CGO_LDFLAGS_ALLOW", b.String())
-	os.Setenv("GODEBUG", "installgoroot=all")
+	os.Setenv("GODEBUG", mergeGoDebugSetting(os.Getenv("GODEBUG"), "installgoroot=all"))
 
 	// Build the commands needed to build the std library in the right mode
 	// NOTE: the go command stamps compiled .a files with build ids, which are
@@ -364,6 +364,41 @@ func shouldRemoveStdlibCache(orchestrionPath, cacheOut string) bool {
 	return strings.TrimSpace(orchestrionPath) == "" && strings.TrimSpace(cacheOut) == ""
 }
 
+func mergeGoDebugSetting(existing, setting string) string {
+	setting = strings.TrimSpace(setting)
+	if setting == "" {
+		return strings.TrimSpace(existing)
+	}
+	key := setting
+	if idx := strings.IndexByte(setting, '='); idx >= 0 {
+		key = setting[:idx]
+	}
+	entries := make([]string, 0)
+	replaced := false
+	for _, entry := range strings.Split(existing, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		entryKey := entry
+		if idx := strings.IndexByte(entry, '='); idx >= 0 {
+			entryKey = entry[:idx]
+		}
+		if entryKey == key {
+			if !replaced {
+				entries = append(entries, setting)
+				replaced = true
+			}
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if !replaced {
+		entries = append(entries, setting)
+	}
+	return strings.Join(entries, ",")
+}
+
 func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool) (err error) {
 	span := beginProbe("stdlib.persist_exports", newProbeField("package_count", strconv.Itoa(len(packages))))
 	defer func() {
@@ -376,7 +411,10 @@ func persistOrchestrionStdlibExports(goenv *env, packages []string, verbose bool
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
-	pkgRoot := filepath.Join(abs(goenv.goroot), "pkg", goenv.installSuffix)
+	pkgRoot, ok := existingStdlibPkgRoot(goenv.goroot, goenv.installSuffix)
+	if !ok {
+		return fmt.Errorf("no stdlib archive root found under candidates %v", stdlibPkgRootCandidates(goenv.goroot, goenv.installSuffix))
+	}
 	exports := make(map[string]string)
 	if err := filepath.Walk(pkgRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

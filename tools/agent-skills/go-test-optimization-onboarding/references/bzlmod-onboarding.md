@@ -16,14 +16,14 @@ Go companion module through Bzlmod.
 Add core and Go companion dependencies:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<published-main-commit>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",

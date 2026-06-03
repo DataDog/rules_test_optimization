@@ -136,6 +136,51 @@ func TestRewriteImportcfgFromCurrentStdlibEntriesUsesPersistedMissingExports(t *
 	}
 }
 
+func TestResolveBazelStdlibPkgArchivesUsesGoToolInstallDir(t *testing.T) {
+	t.Setenv("GOOS", "windows")
+	t.Setenv("GOARCH", "amd64")
+
+	tempDir := t.TempDir()
+	goroot := filepath.Join(tempDir, "goroot")
+	installSuffix := "windows_amd64"
+	archivePath := filepath.Join(goroot, "pkg", "windows_amd64_windows_amd64", "log", "slog.a")
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	if err := os.WriteFile(archivePath, []byte("log/slog"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	exports, err := resolveBazelStdlibPkgArchives(&env{
+		goroot:        goroot,
+		installSuffix: installSuffix,
+	}, []string{"log/slog", "net/http"})
+	if err != nil {
+		t.Fatalf("resolveBazelStdlibPkgArchives error: %v", err)
+	}
+	if got := exports["log/slog"]; got != archivePath {
+		t.Fatalf("log/slog archive = %q, want %q", got, archivePath)
+	}
+	if got := exports["net/http"]; got != "" {
+		t.Fatalf("net/http archive = %q, want empty", got)
+	}
+}
+
+func TestStdlibPkgRootCandidatesKeepsLegacyFallback(t *testing.T) {
+	t.Setenv("GOOS", "windows")
+	t.Setenv("GOARCH", "amd64")
+
+	goroot := filepath.Join(t.TempDir(), "goroot")
+	candidates := stdlibPkgRootCandidates(goroot, "windows_amd64")
+	want := []string{
+		filepath.Join(goroot, "pkg", "windows_amd64_windows_amd64"),
+		filepath.Join(goroot, "pkg", "windows_amd64"),
+	}
+	if strings.Join(candidates, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("stdlibPkgRootCandidates = %#v, want %#v", candidates, want)
+	}
+}
+
 func TestModuleExportRequestKeyIncludesStdlibCacheState(t *testing.T) {
 	moduleDir := t.TempDir()
 	for _, name := range []string{"go.mod", "orchestrion.tool.go", "orchestrion.yml"} {

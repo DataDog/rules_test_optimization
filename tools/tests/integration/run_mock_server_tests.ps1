@@ -432,7 +432,7 @@ try {
   $moduleContent = @"
 module(name = "topt-windows-integration", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",

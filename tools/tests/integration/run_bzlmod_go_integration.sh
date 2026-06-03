@@ -550,8 +550,8 @@ write_module_file() {
   cat > "$ws_dir/MODULE.bazel" <<EOF
 module(name = "bzlmod_go_integration")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 archive_override(

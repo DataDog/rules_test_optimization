@@ -15,6 +15,27 @@ versioning.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-03
+
+### Added
+- Go companion support for `orchestrion_mode = "test_optimization"` on
+  `dd_topt_go_test`, including bootstrap/docs wiring and integration coverage
+  for the standard Go `testing` path.
+- Go target metadata for the selected Orchestrion mode and test-binary linker
+  optimization state.
+
+### Changed
+- Optimized Go Test Optimization builds by narrowing Orchestrion work to the
+  test path, trimming synthetic test link inputs, and keeping ordinary package
+  compiles on the plain rules_go path in `test_optimization` mode.
+- Isolated Go Orchestrion dependency preparation so generated onboarding
+  wiring is easier to validate and maintain.
+- Updated the Python example `ddtrace` pin to `4.10.1`.
+
+### Fixed
+- Corrected mode-aware Go Test Optimization metadata so doctor/uploader
+  validation can inspect the selected mode and linker optimization state.
+
 ## [1.1.0] - 2026-05-25
 
 ### Added
