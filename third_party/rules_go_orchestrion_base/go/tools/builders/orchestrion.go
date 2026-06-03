@@ -743,7 +743,7 @@ func preparedSyntheticModuleCacheKey(goSdkPath string, configuredVersions map[st
 	return stableDigestParts(
 		"go_mod="+goModDigest,
 		"tool_go="+toolDigest,
-		"configured_versions="+ddTraceVersionsDigest(configuredVersions),
+		"configured_versions="+ddTraceVersionsDigest(configuredVersions, orchestrionMode),
 		"go_sdk_identity="+sdkIdentity,
 		"orchestrion_mode="+effectiveOrchestrionMode(orchestrionMode),
 		"orchestrion="+orchestrionToolVersionIdentity(),

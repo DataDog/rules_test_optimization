@@ -1349,7 +1349,7 @@ func syntheticTestmainHelperCacheKeyParts(goenv *env) ([]string, error) {
 		return nil, err
 	}
 	return []string{
-		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
+		"configured_versions=" + ddTraceVersionsDigest(configuredVersions, goenv.orchestrionMode),
 		"orchestrion_mode=" + effectiveOrchestrionMode(goenv.orchestrionMode),
 		"sdk=" + sdkIdentity,
 		"target=" + goTargetIdentity(os.Environ()),
@@ -1418,7 +1418,7 @@ func syntheticTestmainHelperDecisionCacheKeyParts(goenv *env) ([]string, error) 
 		return nil, err
 	}
 	return []string{
-		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
+		"configured_versions=" + ddTraceVersionsDigest(configuredVersions, goenv.orchestrionMode),
 		"orchestrion_mode=" + effectiveOrchestrionMode(goenv.orchestrionMode),
 		"sdk=" + sdkIdentity,
 		"target=" + goTargetIdentity(os.Environ()),

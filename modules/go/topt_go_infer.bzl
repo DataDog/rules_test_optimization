@@ -113,6 +113,11 @@ ToptGoImportpathInfo = provider(
     fields = {"importpath": "Go package importpath"},
 )
 
+ToptGoBazelMetadataInfo = provider(
+    doc = "Provider carrying the metadata map emitted by topt_go_bazel_metadata.",
+    fields = {"metadata": "JSON-serializable Bazel metadata map"},
+)
+
 def _importpath_aspect_impl(target, ctx):
     """Aspect to discover the Go importpath.
 
@@ -269,7 +274,10 @@ def _topt_go_bazel_metadata_impl(ctx):
         output = out,
         content = json.encode(metadata) + "\n",
     )
-    return [DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out]))]
+    return [
+        DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out])),
+        ToptGoBazelMetadataInfo(metadata = metadata),
+    ]
 
 def _orchestrion_metadata_enabled(orchestrion_requested, orchestrion_tool_files):
     """Return True when metadata should report Orchestrion as actually enabled."""

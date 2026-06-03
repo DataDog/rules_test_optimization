@@ -118,6 +118,13 @@ _TEST_BINARY_LINKER_OPTIMIZATION_GC_LINKOPTS = select({
         "-w",
     ],
 })
+_TEST_BINARY_LINKER_OPTIMIZATION_APPLIED = select({
+    str(Label("//:test_optimization_compilation_mode_dbg")): False,
+    str(Label("//:test_optimization_strip_always")): False,
+    str(Label("//:test_optimization_strip_never")): False,
+    str(Label("//:test_optimization_strip_sometimes_fastbuild")): False,
+    "//conditions:default": True,
+})
 
 def _attr_or_default(value, default):
     """Return a Starlark attr value or a default without forcing truthiness."""
@@ -316,9 +323,12 @@ def dd_topt_go_test(
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
     _validate_orchestrion_mode(orchestrion_mode)
-    test_binary_linker_optimization_enabled = (
+    test_binary_linker_optimization_requested = (
         orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
         enable_test_binary_linker_optimization
+    )
+    test_binary_linker_optimization_applied = (
+        _TEST_BINARY_LINKER_OPTIMIZATION_APPLIED if test_binary_linker_optimization_requested else False
     )
 
     # Support both shapes:
@@ -482,7 +492,7 @@ def dd_topt_go_test(
         linkmode = _attr_or_default(kwargs.get("linkmode"), "auto"),
         goos = _attr_or_default(kwargs.get("goos"), ""),
         goarch = _attr_or_default(kwargs.get("goarch"), ""),
-        test_binary_linker_optimization = test_binary_linker_optimization_enabled,
+        test_binary_linker_optimization = test_binary_linker_optimization_applied,
     )
 
     # ------------------------------------------------------------------
@@ -564,7 +574,7 @@ def dd_topt_go_test(
     # Otherwise keep the package directory default to preserve existing tests.
     if "rundir" not in kwargs:
         kwargs["rundir"] = "." if stage_sources else native.package_name()
-    if test_binary_linker_optimization_enabled:
+    if test_binary_linker_optimization_requested:
         kwargs["gc_linkopts"] = _concat_string_list_values(
             kwargs.get("gc_linkopts") if "gc_linkopts" in kwargs else [],
             _TEST_BINARY_LINKER_OPTIMIZATION_GC_LINKOPTS,

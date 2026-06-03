@@ -36,6 +36,11 @@ load(
     "go_macro_stage_sources_wiring_test",
     "go_macro_test_optimization_linker_default_target",
     "go_macro_test_optimization_linker_default_wiring_test",
+    "go_macro_test_optimization_linker_metadata_dbg_test",
+    "go_macro_test_optimization_linker_metadata_default_test",
+    "go_macro_test_optimization_linker_metadata_opt_out_test",
+    "go_macro_test_optimization_linker_metadata_opt_test",
+    "go_macro_test_optimization_linker_metadata_strip_never_test",
     "go_macro_test_optimization_linker_opt_out_target",
     "go_macro_test_optimization_linker_opt_out_wiring_test",
     "go_macro_test_optimization_mode_target",
@@ -426,6 +431,26 @@ go_macro_test_optimization_linker_default_wiring_test(
     target_under_test = ":go_macro_test_optimization_linker_default_target__raw_go_test",
 )
 
+go_macro_test_optimization_linker_metadata_opt_test(
+    name = "go_macro_test_optimization_linker_metadata_opt_test",
+    target_under_test = ":go_macro_test_optimization_linker_default_target_topt_bazel_metadata",
+)
+
+go_macro_test_optimization_linker_metadata_default_test(
+    name = "go_macro_test_optimization_linker_metadata_default_test",
+    target_under_test = ":go_macro_test_optimization_linker_default_target_topt_bazel_metadata",
+)
+
+go_macro_test_optimization_linker_metadata_dbg_test(
+    name = "go_macro_test_optimization_linker_metadata_dbg_test",
+    target_under_test = ":go_macro_test_optimization_linker_default_target_topt_bazel_metadata",
+)
+
+go_macro_test_optimization_linker_metadata_strip_never_test(
+    name = "go_macro_test_optimization_linker_metadata_strip_never_test",
+    target_under_test = ":go_macro_test_optimization_linker_default_target_topt_bazel_metadata",
+)
+
 go_macro_test_optimization_linker_opt_out_target(
     name = "go_macro_test_optimization_linker_opt_out_target",
     tags = ["manual"],
@@ -434,6 +459,11 @@ go_macro_test_optimization_linker_opt_out_target(
 go_macro_test_optimization_linker_opt_out_wiring_test(
     name = "go_macro_test_optimization_linker_opt_out_wiring_test",
     target_under_test = ":go_macro_test_optimization_linker_opt_out_target__raw_go_test",
+)
+
+go_macro_test_optimization_linker_metadata_opt_out_test(
+    name = "go_macro_test_optimization_linker_metadata_opt_out_test",
+    target_under_test = ":go_macro_test_optimization_linker_opt_out_target_topt_bazel_metadata",
 )
 
 go_macro_general_mode_linker_flags_target(
@@ -623,6 +653,11 @@ test_suite(
         ":go_macro_stage_sources_select_wiring_test",
         ":go_macro_stage_sources_wiring_test",
         ":go_macro_test_optimization_linker_default_wiring_test",
+        ":go_macro_test_optimization_linker_metadata_dbg_test",
+        ":go_macro_test_optimization_linker_metadata_default_test",
+        ":go_macro_test_optimization_linker_metadata_opt_out_test",
+        ":go_macro_test_optimization_linker_metadata_opt_test",
+        ":go_macro_test_optimization_linker_metadata_strip_never_test",
         ":go_macro_test_optimization_linker_opt_out_wiring_test",
         ":go_macro_test_optimization_mode_wiring_test",
         ":go_macro_test_optimization_public_wrapper_mode_test",

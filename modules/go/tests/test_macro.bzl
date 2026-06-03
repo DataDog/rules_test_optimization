@@ -20,6 +20,7 @@ forwards at analysis time without compiling Go code.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("@datadog-rules-test-optimization-go//:topt_go_infer.bzl", "ToptGoBazelMetadataInfo")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
     "orch_go_test",
@@ -655,6 +656,22 @@ def _go_macro_test_optimization_linker_default_wiring_test_impl(ctx):
     asserts.equals(env, ["-s", "-w"], captured.gc_linkopts)
     return analysistest.end(env)
 
+def _go_macro_test_optimization_linker_metadata_true_test_impl(ctx):
+    """Assert metadata reports the default optimization only when applied."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    metadata = target[ToptGoBazelMetadataInfo].metadata
+    asserts.equals(env, True, metadata["bazel.go.test_binary_linker_optimization"])
+    return analysistest.end(env)
+
+def _go_macro_test_optimization_linker_metadata_false_test_impl(ctx):
+    """Assert metadata reports false when the default optimization is inactive."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    metadata = target[ToptGoBazelMetadataInfo].metadata
+    asserts.equals(env, False, metadata["bazel.go.test_binary_linker_optimization"])
+    return analysistest.end(env)
+
 def _go_macro_general_mode_linker_flags_wiring_test_impl(ctx):
     """Assert non-Test Optimization mode preserves caller-provided linker flags."""
     env = analysistest.begin(ctx)
@@ -942,6 +959,30 @@ go_macro_test_optimization_linker_default_wiring_test = analysistest.make(
     config_settings = {
         "//command_line_option:compilation_mode": "opt",
     },
+)
+go_macro_test_optimization_linker_metadata_opt_test = analysistest.make(
+    _go_macro_test_optimization_linker_metadata_true_test_impl,
+    config_settings = {
+        "//command_line_option:compilation_mode": "opt",
+    },
+)
+go_macro_test_optimization_linker_metadata_default_test = analysistest.make(
+    _go_macro_test_optimization_linker_metadata_false_test_impl,
+)
+go_macro_test_optimization_linker_metadata_dbg_test = analysistest.make(
+    _go_macro_test_optimization_linker_metadata_false_test_impl,
+    config_settings = {
+        "//command_line_option:compilation_mode": "dbg",
+    },
+)
+go_macro_test_optimization_linker_metadata_strip_never_test = analysistest.make(
+    _go_macro_test_optimization_linker_metadata_false_test_impl,
+    config_settings = {
+        "//command_line_option:strip": "never",
+    },
+)
+go_macro_test_optimization_linker_metadata_opt_out_test = analysistest.make(
+    _go_macro_test_optimization_linker_metadata_false_test_impl,
 )
 go_macro_test_optimization_linker_opt_out_wiring_test = analysistest.make(
     _go_macro_test_optimization_linker_opt_out_wiring_test_impl,

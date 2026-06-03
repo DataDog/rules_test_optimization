@@ -466,7 +466,9 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if got, _ := metadata["bazel.go.orchestrion.mode"].(string); got != wantOrchestrionMode {
 		t.Fatalf("bazel.go.orchestrion.mode = %v, want %q", metadata["bazel.go.orchestrion.mode"], wantOrchestrionMode)
 	}
-	wantLinkerOptimization := wantOrchestrionMode == "test_optimization"
+	// This runtime lane uses Bazel's default fastbuild/strip=sometimes
+	// configuration, where the macro does not add its own test-only linker flags.
+	wantLinkerOptimization := false
 	if got, _ := metadata["bazel.go.test_binary_linker_optimization"].(bool); got != wantLinkerOptimization {
 		t.Fatalf("bazel.go.test_binary_linker_optimization = %v, want %v", metadata["bazel.go.test_binary_linker_optimization"], wantLinkerOptimization)
 	}

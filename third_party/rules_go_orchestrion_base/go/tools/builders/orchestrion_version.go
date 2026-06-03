@@ -380,7 +380,7 @@ func validationCacheKey(goExe, moduleDir string, env []string, configured map[st
 	}
 	fileParts := []string{
 		"module_root=" + abs(moduleDir),
-		"configured_versions=" + ddTraceVersionsDigest(configured),
+		"configured_versions=" + ddTraceVersionsDigest(configured, orchestrionMode),
 		"go_tool_identity=" + goToolIdentity,
 		"orchestrion=" + orchestrionToolVersionIdentity(),
 		"orchestrion_mode=" + effectiveOrchestrionMode(orchestrionMode),

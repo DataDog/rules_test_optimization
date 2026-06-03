@@ -251,8 +251,8 @@ func stableDigestParts(parts ...string) string {
 	return shortDigest([]byte(strings.Join(parts, "\n")))
 }
 
-func ddTraceVersionsDigest(versions map[string]string) string {
-	keys := append([]string{}, ddTraceGoModules...)
+func ddTraceVersionsDigest(versions map[string]string, orchestrionMode string) string {
+	keys := ddTraceGoModulesForMode(orchestrionMode)
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, key+"="+strings.TrimSpace(versions[key]))

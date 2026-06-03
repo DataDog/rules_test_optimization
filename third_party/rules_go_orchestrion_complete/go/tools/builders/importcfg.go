@@ -976,7 +976,7 @@ func moduleExportRequestKey(moduleDir string, goenv *env, packages []string) (st
 			return "", nil, err
 		}
 		parts = append(parts,
-			"configured_versions="+ddTraceVersionsDigest(configuredVersions),
+			"configured_versions="+ddTraceVersionsDigest(configuredVersions, goenv.orchestrionMode),
 			"go.mod="+shortDigest([]byte(syntheticOrchestrionGoMod(orchestrionVersion, configuredVersions, goenv.orchestrionMode))),
 			"go.sum=synthetic",
 			"orchestrion.tool.go="+shortDigest([]byte(syntheticOrchestrionToolGoForMode(goenv.orchestrionMode))),
