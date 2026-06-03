@@ -16,14 +16,14 @@ Add the core module and Java companion module. Until Bazel Central Registry
 publication exists, pin both with `git_override` to the same published commit:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.2.0")
 git_override(
     module_name = "datadog-rules-test-optimization-java",
     remote = "https://github.com/DataDog/rules_test_optimization.git",

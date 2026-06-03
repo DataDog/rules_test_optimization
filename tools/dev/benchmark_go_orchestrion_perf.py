@@ -111,8 +111,8 @@ def reduced_module_bazel(config: dict[str, str], root: Path) -> str:
     return f"""module(name = "dd-go-benchmark-fixture")
 
 bazel_dep(name = "rules_go", version = "0.60.0")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",

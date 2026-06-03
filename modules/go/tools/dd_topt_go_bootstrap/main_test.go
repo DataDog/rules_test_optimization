@@ -1037,7 +1037,7 @@ func TestPatchModuleFileInfersRulesGoCommitFromDatadogOverride(t *testing.T) {
 	moduleFile := filepath.Join(dir, "MODULE.bazel")
 	input := `module(name = "example")
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -2082,8 +2082,8 @@ func writeFakeGoTool(t *testing.T, script string) string {
 
 func TestValidateGuidedPrerequisites(t *testing.T) {
 	input := `module(name = "example")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 `
 	if err := validateGuidedPrerequisites(input); err != nil {
 		t.Fatalf("validateGuidedPrerequisites error: %v", err)
@@ -2092,7 +2092,7 @@ bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
 
 func TestValidateGuidedPrerequisitesRequiresCoreAndGo(t *testing.T) {
 	input := `module(name = "example")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
 `
 	if err := validateGuidedPrerequisites(input); err == nil {
 		t.Fatal("expected missing Go companion prerequisite to fail")

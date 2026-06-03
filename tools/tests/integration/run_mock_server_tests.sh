@@ -195,7 +195,7 @@ PY
 cat > MODULE.bazel <<MODULE_EOF
 module(name = "topt-integration", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
 bazel_dep(name = "rules_shell", version = "0.6.1")
 
 local_path_override(
@@ -1123,7 +1123,7 @@ run_malformed_sync_case() {
   cat > "$ws_path/MODULE.bazel" <<MODULE_MALFORMED_EOF
 module(name = "topt-${ws_name}", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",
@@ -1243,7 +1243,7 @@ run_retry_sync_case() {
   cat > "$ws_path/MODULE.bazel" <<MODULE_RETRY_EOF
 module(name = "topt-${ws_name}", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",
@@ -1378,8 +1378,8 @@ mkdir -p "$MULTI_WS"
 cat > "$MULTI_WS/MODULE.bazel" <<MODULE_MULTI_EOF
 module(name = "topt-multi-integration", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 local_path_override(
@@ -1578,8 +1578,8 @@ mkdir -p "$BOOT_WS/bin"
 cat > "$BOOT_WS/MODULE.bazel" <<MODULE_BOOT_EOF
 module(name = "topt-bootstrap-integration", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",
@@ -1917,8 +1917,8 @@ mkdir -p "$GUIDED_BOOT_WS/bin" "$GUIDED_BOOT_WS/src/go-project"
 cat > "$GUIDED_BOOT_WS/MODULE.bazel" <<MODULE_GUIDED_BOOT_EOF
 module(name = "topt-guided-bootstrap-integration", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.0.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.0.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",
@@ -3196,7 +3196,7 @@ cat > "$MANUAL_NO_CO/payloads/tests/manual_no_codeowners.json" <<'JSON_EOF'
   "metadata": {
     "*": {
       "language": "go",
-      "library_version": "1.0.0"
+      "library_version": "1.2.0"
     }
   },
   "events": [
@@ -3333,7 +3333,7 @@ cat > "$MANUAL_EMPTY_OWNER/payloads/tests/manual_empty_owner.json" <<'JSON_EOF'
   "metadata": {
     "*": {
       "language": "go",
-      "library_version": "1.0.0"
+      "library_version": "1.2.0"
     }
   },
   "events": [
@@ -4672,7 +4672,7 @@ cat > "$MANUAL_EVP/payloads/tests/manual_evp_mode.json" <<'JSON_EOF'
   "metadata": {
     "*": {
       "language": "go",
-      "library_version": "1.0.0"
+      "library_version": "1.2.0"
     }
   },
   "events": [
@@ -5025,7 +5025,7 @@ write_manifest_payload() {
   "metadata": {
     "*": {
       "language": "go",
-      "library_version": "1.0.0"
+      "library_version": "1.2.0"
     }
   },
   "events": [
@@ -5206,7 +5206,7 @@ write_manual_test_payload() {
   "metadata": {
     "*": {
       "language": "go",
-      "library_version": "1.0.0"
+      "library_version": "1.2.0"
     }
   },
   "events": [
