@@ -205,6 +205,91 @@ func TestEnsureGoModExistsMasksExistingConsumerModuleInTestOptimizationMode(t *t
 	}
 }
 
+func TestEnsureGoModExistsPreparesGenericDepsFromSyntheticModule(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based fake Go SDK is Unix-only")
+	}
+	sourceDir := t.TempDir()
+	workDir := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.21\n\nrequire (\n\tal.essio.dev/pkg/shellescape v1.6.0\n\tgithub.com/DataDog/dd-trace-go/v2 v2.7.3\n\tgithub.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.7.3\n)\n",
+		"go.sum": "github.com/DataDog/dd-trace-go/v2 v2.7.3 h1:test\n",
+	} {
+		if err := os.WriteFile(filepath.Join(sourceDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write source %s: %v", name, err)
+		}
+	}
+	sdkDir := t.TempDir()
+	binDir := filepath.Join(sdkDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir fake sdk bin: %v", err)
+	}
+	goPath := filepath.Join(binDir, "go")
+	script := `#!/bin/sh
+if [ "$1" = "list" ]; then
+  cat <<'EOF'
+{"Path":"github.com/DataDog/dd-trace-go/v2","Version":"v2.7.3"}
+{"Path":"github.com/DataDog/dd-trace-go/contrib/net/http/v2","Version":"v2.7.3"}
+EOF
+  exit 0
+fi
+if [ "$1" = "mod" ] && [ "$2" = "download" ]; then
+  if grep -q 'al.essio.dev/pkg/shellescape' go.mod; then
+    echo "download used consumer go.mod" >&2
+    exit 1
+  fi
+  if ! grep -q 'module bazel_orchestrion_temp' go.mod; then
+    echo "download did not use synthetic go.mod" >&2
+    exit 1
+  fi
+  exit 0
+fi
+exit 0
+`
+	if err := os.WriteFile(goPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake go: %v", err)
+	}
+	t.Setenv("GOPATH", filepath.Join(t.TempDir(), "gopath"))
+	t.Setenv(rulesGoOrchestrionToolVersionFileEnvVar, writeOrchestrionToolVersionFile(t, "v1.6.0"))
+	t.Setenv(rulesGoOrchestrionVersionFileEnvVar, writeDDTraceGoVersionsFile(t, `{"modules":{"github.com/DataDog/dd-trace-go/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/net/http/v2":"v2.7.3","github.com/DataDog/dd-trace-go/contrib/log/slog/v2":"v2.7.3"}}`))
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir workdir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(previousWD)
+	}()
+
+	cleanup, err := ensureGoModExists([]string{sourceDir}, sdkDir, false, orchestrionModeGeneral)
+	if err != nil {
+		t.Fatalf("ensureGoModExists error: %v", err)
+	}
+	defer cleanup()
+
+	goModData, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatalf("read copied go.mod: %v", err)
+	}
+	if !strings.Contains(string(goModData), "al.essio.dev/pkg/shellescape") {
+		t.Fatalf("general mode did not keep the copied consumer go.mod:\n%s", string(goModData))
+	}
+	toolData, err := os.ReadFile("orchestrion.tool.go")
+	if err != nil {
+		t.Fatalf("read generated orchestrion.tool.go: %v", err)
+	}
+	toolText := string(toolData)
+	if !strings.Contains(toolText, "github.com/DataDog/dd-trace-go/contrib/net/http/v2") {
+		t.Fatalf("generated orchestrion.tool.go missing required net/http import:\n%s", toolText)
+	}
+	if strings.Contains(toolText, "github.com/DataDog/dd-trace-go/contrib/log/slog/v2") {
+		t.Fatalf("generated orchestrion.tool.go imported unrequired slog module:\n%s", toolText)
+	}
+}
+
 func TestJobserverGoRootPathPrefersExplicitGoRoot(t *testing.T) {
 	sdkDir := t.TempDir()
 	goRootDir := t.TempDir()

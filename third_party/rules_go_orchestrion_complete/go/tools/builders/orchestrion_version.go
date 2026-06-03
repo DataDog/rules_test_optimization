@@ -188,6 +188,10 @@ func resolveModuleVersionsFromModule(goExe, moduleDir string, env []string, modu
 	cmdEnv := setEnv(env, "GO111MODULE", "on")
 	cmdEnv = setEnv(cmdEnv, "GOWORK", "off")
 	var err error
+	cmdEnv, err = normalizeGoActionCacheEnv(cmdEnv)
+	if err != nil {
+		return nil, err
+	}
 	cmdEnv, err = normalizeGoModuleResolutionEnv(cmdEnv)
 	if err != nil {
 		return nil, err
@@ -234,13 +238,75 @@ func resolveModuleVersionsFromModule(goExe, moduleDir string, env []string, modu
 	return versions, nil
 }
 
+func ddTraceGoModulesToValidate(moduleDir string, orchestrionMode string) ([]string, error) {
+	modules := ddTraceGoModulesForMode(orchestrionMode)
+	required, err := requiredModulesFromGoMod(filepath.Join(moduleDir, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]string, 0, len(modules))
+	for _, modulePath := range modules {
+		if required[modulePath] {
+			filtered = append(filtered, modulePath)
+		}
+	}
+	return filtered, nil
+}
+
+func requiredModulesFromGoMod(path string) (map[string]bool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read go.mod requirements from %s: %w", path, err)
+	}
+	required := make(map[string]bool)
+	inRequireBlock := false
+	for _, rawLine := range strings.Split(string(content), "\n") {
+		line := stripGoModLineComment(strings.TrimSpace(rawLine))
+		if line == "" {
+			continue
+		}
+		if inRequireBlock {
+			if strings.HasPrefix(line, ")") {
+				inRequireBlock = false
+				continue
+			}
+			if fields := strings.Fields(line); len(fields) > 0 {
+				required[fields[0]] = true
+			}
+			continue
+		}
+		if !strings.HasPrefix(line, "require") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "require"))
+		if strings.HasPrefix(rest, "(") {
+			inRequireBlock = true
+			continue
+		}
+		if fields := strings.Fields(rest); len(fields) > 0 {
+			required[fields[0]] = true
+		}
+	}
+	return required, nil
+}
+
+func stripGoModLineComment(line string) string {
+	if idx := strings.Index(line, "//"); idx >= 0 {
+		line = line[:idx]
+	}
+	return strings.TrimSpace(line)
+}
+
 func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, verbose bool, orchestrionMode string) error {
 	configured, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return err
 	}
 	moduleDir = abs(moduleDir)
-	modules := ddTraceGoModulesForMode(orchestrionMode)
+	modules, err := ddTraceGoModulesToValidate(moduleDir, orchestrionMode)
+	if err != nil {
+		return err
+	}
 	cacheKey, err := validationCacheKey(goExe, moduleDir, env, configured, orchestrionMode)
 	if err != nil {
 		return err
@@ -270,9 +336,12 @@ func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, ver
 		return nil
 	}
 
-	resolved, err := resolveModuleVersionsFromModule(goExe, moduleDir, env, modules)
-	if err != nil {
-		return err
+	resolved := make(map[string]string, len(modules))
+	if len(modules) > 0 {
+		resolved, err = resolveModuleVersionsFromModule(goExe, moduleDir, env, modules)
+		if err != nil {
+			return err
+		}
 	}
 	for _, modulePath := range modules {
 		if verbose {

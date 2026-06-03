@@ -493,7 +493,15 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool, orchest
 	}
 
 	if _, err := os.Stat(orchestrionToolGo); os.IsNotExist(err) {
-		if err := os.WriteFile(orchestrionToolGo, []byte(syntheticOrchestrionToolGoForMode(orchestrionMode)), 0o644); err != nil {
+		toolSource := syntheticOrchestrionToolGoForMode(orchestrionMode)
+		if !testOptimizationMode {
+			requiredModules, requiredErr := ddTraceGoModulesToValidate(mustGetwd(), orchestrionMode)
+			if requiredErr != nil {
+				return nil, requiredErr
+			}
+			toolSource = syntheticOrchestrionToolGoForRequiredModules(orchestrionMode, requiredModules)
+		}
+		if err := os.WriteFile(orchestrionToolGo, []byte(toolSource), 0o644); err != nil {
 			return nil, fmt.Errorf("creating temporary orchestrion.tool.go: %w", err)
 		}
 		filesToCleanup = append(filesToCleanup, orchestrionToolGo)
@@ -534,7 +542,7 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool, orchest
 			}
 		}
 	} else if shouldPrepareSynthetic {
-		if err := prepareSyntheticOrchestrionModule(goSdkPath, orchestrionMode, verbose); err != nil {
+		if err := prepareConfiguredSyntheticOrchestrionModule(goSdkPath, configuredVersions, orchestrionVersion, orchestrionMode, verbose); err != nil {
 			return nil, err
 		}
 	}
@@ -543,6 +551,25 @@ func ensureGoModExists(srcDirs []string, goSdkPath string, verbose bool, orchest
 }
 
 func prepareSyntheticOrchestrionModule(goSdkPath string, orchestrionMode string, verbose bool) (err error) {
+	return prepareSyntheticOrchestrionModuleInDir(goSdkPath, mustGetwd(), orchestrionMode, verbose)
+}
+
+func prepareConfiguredSyntheticOrchestrionModule(goSdkPath string, configuredVersions map[string]string, orchestrionVersion string, orchestrionMode string, verbose bool) error {
+	moduleDir, err := os.MkdirTemp(mustGetwd(), ".orchestrion_synthetic_prepare_")
+	if err != nil {
+		return fmt.Errorf("create temporary synthetic module dir: %w", err)
+	}
+	defer os.RemoveAll(moduleDir)
+	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(syntheticOrchestrionGoMod(orchestrionVersion, configuredVersions, orchestrionMode)), 0o644); err != nil {
+		return fmt.Errorf("write temporary synthetic go.mod: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "orchestrion.tool.go"), []byte(syntheticOrchestrionToolGoForMode(orchestrionMode)), 0o644); err != nil {
+		return fmt.Errorf("write temporary synthetic orchestrion.tool.go: %w", err)
+	}
+	return prepareSyntheticOrchestrionModuleInDir(goSdkPath, moduleDir, orchestrionMode, verbose)
+}
+
+func prepareSyntheticOrchestrionModuleInDir(goSdkPath string, moduleDir string, orchestrionMode string, verbose bool) (err error) {
 	span := beginProbe("orchestrion.prepare_synthetic_module", newProbeField("orchestrion_mode", effectiveOrchestrionMode(orchestrionMode)))
 	defer func() {
 		span.End(err)
@@ -570,7 +597,7 @@ func prepareSyntheticOrchestrionModule(goSdkPath string, orchestrionMode string,
 		env = normalizedEnv
 		env = setEnv(env, "GO111MODULE", "on")
 		cmd.Env = env
-		cmd.Dir = mustGetwd()
+		cmd.Dir = moduleDir
 		out, err := cmd.CombinedOutput()
 		if verbose {
 			fmt.Fprintf(os.Stderr, "orchestrion: %s command=%q\n", label, append([]string{goExe}, args...))

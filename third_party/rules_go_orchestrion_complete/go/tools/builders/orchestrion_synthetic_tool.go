@@ -17,6 +17,7 @@ package main
 import (
 	"io"
 	"os"
+	"strings"
 )
 
 // syntheticOrchestrionToolGoGeneral materializes the generic tools package that
@@ -57,6 +58,33 @@ func syntheticOrchestrionToolGoForMode(mode string) string {
 		return syntheticOrchestrionToolGoTestOptimization
 	}
 	return syntheticOrchestrionToolGoGeneral
+}
+
+func syntheticOrchestrionToolGoForRequiredModules(mode string, requiredModules []string) string {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return syntheticOrchestrionToolGoTestOptimization
+	}
+	imports := []string{
+		"github.com/DataDog/orchestrion",
+		"github.com/DataDog/dd-trace-go/v2/orchestrion",
+	}
+	for _, modulePath := range []string{
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+	} {
+		if containsString(requiredModules, modulePath) {
+			imports = append(imports, modulePath)
+		}
+	}
+	var builder strings.Builder
+	builder.WriteString("//go:build tools\n\npackage tools\n\nimport (\n")
+	for _, importPath := range imports {
+		builder.WriteString("\t_ \"")
+		builder.WriteString(importPath)
+		builder.WriteString("\"\n")
+	}
+	builder.WriteString(")\n")
+	return builder.String()
 }
 
 // copyArchiveFile copies generated archive and cache artifacts without
