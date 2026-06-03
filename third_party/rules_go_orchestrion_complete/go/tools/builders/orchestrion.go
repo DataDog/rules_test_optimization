@@ -1166,7 +1166,7 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 	}()
 	if goSdkPath != "" {
 		effectiveGoRootPath := goSdkPath
-		if filepath.Base(cmd.Path) == "go" && goRootPath != "" {
+		if isGoCommandPath(cmd.Path) && goRootPath != "" {
 			effectiveGoRootPath = goRootPath
 		}
 		goBinPath := filepath.Join(goSdkPath, "bin")
@@ -1217,7 +1217,7 @@ func executeCommandWithJobserver(cmd *exec.Cmd, jobserver *orchestrionJobserver,
 		}
 		if goSdkPath != "" {
 			effectiveGoRootPath := goSdkPath
-			if filepath.Base(cmd.Path) == "go" && goRootPath != "" {
+			if isGoCommandPath(cmd.Path) && goRootPath != "" {
 				effectiveGoRootPath = goRootPath
 			}
 			cmd.Env = setEnv(cmd.Env, "GOROOT", effectiveGoRootPath)
@@ -1304,6 +1304,19 @@ func unsetEnv(env []string, key string) []string {
 		filtered = append(filtered, e)
 	}
 	return filtered
+}
+
+func isGoCommandPath(path string) bool {
+	base := filepath.Base(path)
+	if idx := strings.LastIndex(base, `\`); idx >= 0 {
+		base = base[idx+1:]
+	}
+	switch strings.ToLower(base) {
+	case "go", "go.exe":
+		return true
+	default:
+		return false
+	}
 }
 
 // prependToPath prepends a directory to the PATH environment variable.

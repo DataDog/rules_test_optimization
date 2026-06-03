@@ -658,17 +658,79 @@ func resolveBazelStdlibPkgArchives(goenv *env, packages []string) (map[string]st
 	if goenv == nil || goenv.goroot == "" || goenv.installSuffix == "" || len(packages) == 0 {
 		return nil, nil
 	}
-	pkgRoot := filepath.Join(abs(goenv.goroot), "pkg", goenv.installSuffix)
 	exports := make(map[string]string, len(packages))
-	for _, pkg := range packages {
-		archive := filepath.Join(pkgRoot, filepath.FromSlash(pkg)+".a")
-		info, err := os.Stat(archive)
-		if err != nil || info.IsDir() {
-			continue
+	for _, pkgRoot := range stdlibPkgRootCandidates(goenv.goroot, goenv.installSuffix) {
+		for _, pkg := range packages {
+			if exports[pkg] != "" {
+				continue
+			}
+			archive := filepath.Join(pkgRoot, filepath.FromSlash(pkg)+".a")
+			info, err := os.Stat(archive)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			exports[pkg] = archive
 		}
-		exports[pkg] = archive
 	}
 	return exports, nil
+}
+
+func existingStdlibPkgRoot(goroot, installSuffix string) (string, bool) {
+	for _, candidate := range stdlibPkgRootCandidates(goroot, installSuffix) {
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func stdlibPkgRootCandidates(goroot, installSuffix string) []string {
+	goroot = strings.TrimSpace(goroot)
+	installSuffix = strings.TrimSpace(installSuffix)
+	if goroot == "" || installSuffix == "" {
+		return nil
+	}
+	goroot = abs(goroot)
+
+	platform := goPlatformInstallDir()
+	goToolRoot := ""
+	if platform != "" {
+		goToolRoot = filepath.Join(goroot, "pkg", platform+"_"+installSuffix)
+	}
+	legacyRoot := filepath.Join(goroot, "pkg", installSuffix)
+
+	candidates := make([]string, 0, 2)
+	seen := map[string]bool{}
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		candidates = append(candidates, path)
+	}
+	add(goToolRoot)
+	add(legacyRoot)
+	return candidates
+}
+
+func goPlatformInstallDir() string {
+	goos := strings.TrimSpace(os.Getenv("GOOS"))
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	goarch := strings.TrimSpace(os.Getenv("GOARCH"))
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	if goos == "" || goarch == "" {
+		return ""
+	}
+	return goos + "_" + goarch
 }
 
 func resolveModuleExportsForPackages(goenv *env, packages []string, orchestrionPath, moduleDir string) (map[string]string, error) {

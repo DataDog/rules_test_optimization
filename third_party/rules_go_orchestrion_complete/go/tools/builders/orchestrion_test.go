@@ -9,6 +9,25 @@ import (
 	"testing"
 )
 
+func TestIsGoCommandPathAcceptsWindowsExecutable(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "go", want: true},
+		{path: "/sdk/bin/go", want: true},
+		{path: "go.exe", want: true},
+		{path: `C:\Go\bin\go.exe`, want: true},
+		{path: "gofmt", want: false},
+		{path: "go.exe.bak", want: false},
+	}
+	for _, tt := range tests {
+		if got := isGoCommandPath(tt.path); got != tt.want {
+			t.Fatalf("isGoCommandPath(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestPreparedSyntheticModuleSnapshotAndRestore(t *testing.T) {
 	workDir := t.TempDir()
 	previousWD, err := os.Getwd()
