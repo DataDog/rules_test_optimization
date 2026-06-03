@@ -50,7 +50,9 @@ From this repository, generate published pins with:
 ```
 
 Use `--variant base` for normal repositories and `--variant complete` for large
-monorepos that need the compatibility layer.
+monorepos that need the compatibility layer. The current published release
+tuple is tracked in
+[`docs/Installation_Reference.md`](../../../../docs/Installation_Reference.md#current-v120-published-tuple).
 
 ```bzl
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")

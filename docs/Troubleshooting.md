@@ -116,7 +116,9 @@ or a tuple that was not generated from the real GitHub codeload archive.
 
 3. **Keep the generated tuple together**. If `RTO_COMMIT`,
    `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`, and `RTO_ARCHIVE_PREFIX` come from
-   different commits, archive mode will fail or fetch the wrong source.
+   different commits, archive mode will fail or fetch the wrong source. The
+   current published tuple is tracked in
+   [`docs/Installation_Reference.md`](Installation_Reference.md#current-v120-published-tuple).
 
 4. **Authenticate private archive downloads**. The helper uses `GITHUB_TOKEN`,
    `GH_TOKEN`, or `gh auth token` when available. If codeload returns `404` for

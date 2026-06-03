@@ -233,7 +233,10 @@ Start by identifying the existing Go shape:
 Wire the public WORKSPACE helper instead of copying patch directories or
 declaring `patches = [...]`. Use `rules_go_variant = "base"` for normal
 repositories. Use `rules_go_variant = "complete"` only when the repository
-needs the declared extended monorepo compatibility variant.
+needs the declared extended monorepo compatibility variant. Use the current
+published tuple from
+[`docs/Installation_Reference.md`](Installation_Reference.md#current-v120-published-tuple)
+for the commit, archive URL, archive SHA256, and archive prefix values.
 
 ```bzl
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
