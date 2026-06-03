@@ -2326,6 +2326,7 @@ def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         topt_data = topt_data,
+        orchestrion_mode = "test_optimization",
         orchestrion_pin_files = _ORCHESTRION_PIN_FILES,
         **kwargs
     )
@@ -2434,6 +2435,7 @@ def %s(name, **kwargs):
         _raw_dd_topt_go_test,
         name = name,
         topt_data = topt_data,
+        orchestrion_mode = "test_optimization",
         orchestrion_pin_files = _ORCHESTRION_PIN_FILES,
         **kwargs
     )

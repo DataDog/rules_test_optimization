@@ -33,14 +33,19 @@ load(
     "//go/private:rpath.bzl",
     "rpath",
 )
+load("//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
 _ORCHESTRION_PROBE_ENV_VARS = (
     "RULES_GO_ORCHESTRION_PROBE",
     "RULES_GO_ORCHESTRION_PROBE_FILE",
 )
+_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _format_archive(d):
     return "{}={}={}".format(d.label, d.importmap, d.file.path)
+
+def _dirname(file):
+    return file.dirname
 
 def _orchestrion_action_env(
         go,
@@ -60,6 +65,55 @@ def _orchestrion_action_env(
     if orchestrion_tool_version_file:
         env["RULES_GO_ORCHESTRION_TOOL_VERSION_FILE"] = orchestrion_tool_version_file.path
     return env
+
+def _orchestrion_data_inputs(go):
+    if getattr(go, "orchestrion_mode", "") != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return go._ctx.files.data if hasattr(go._ctx.files, "data") else []
+    return _orchestrion_pin_file_inputs(go, {
+        "go.mod": True,
+        "go.sum": True,
+        "orchestrion.yml": True,
+    })
+
+def _orchestrion_source_inputs(go):
+    allowed_pin_files = {
+        "go.mod": True,
+        "go.sum": True,
+        "orchestrion.tool.go": True,
+        "orchestrion.yml": True,
+    }
+    if getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        allowed_pin_files.pop("orchestrion.tool.go")
+    return _orchestrion_pin_file_inputs(go, allowed_pin_files)
+
+def _orchestrion_pin_file_inputs(go, allowed_pin_files):
+    files = []
+    for dep in getattr(go._ctx.attr, "data", []):
+        if OrchestrionPinFilesInfo in dep:
+            for file in dep[OrchestrionPinFilesInfo].files.to_list():
+                if file.basename in allowed_pin_files:
+                    files.append(file)
+    return files
+
+def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
+    if not go.orchestrion:
+        return False
+
+    # Synthetic testmain compile already produced the Datadog helper packagefile
+    # manifest that final link needs. Keep that final test-binary link on the
+    # plain rules_go shape so its action key is not tied to unused Orchestrion
+    # execution inputs. Generic mode still keeps the stdlib cache input below.
+    return synthetic_testmain_manifest == None
+
+def _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion):
+    if (
+        go.orchestrion and
+        getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
+        synthetic_testmain_manifest != None and
+        not link_orchestrion
+    ):
+        return False
+    return True
 
 def emit_link(
         go,
@@ -191,7 +245,12 @@ def emit_link(
     builder_args.add("-o", executable)
     builder_args.add("-main", archive.data.file)
     builder_args.add("-p", archive.data.importmap)
-    builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
+    synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
+    orchestrion_mode = getattr(go, "orchestrion_mode", "general")
+    link_orchestrion = _orchestrion_enabled_for_link(go, synthetic_testmain_manifest)
+    stdlib_cache_needed_for_link = _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion)
+    if stdlib_cache_needed_for_link:
+        builder_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     tool_args.add_all(gc_linkopts)
     tool_args.add_all(go.toolchain.flags.link)
 
@@ -202,14 +261,13 @@ def emit_link(
     tool_args.add_joined("-extldflags", extldflags, join_with = " ")
 
     inputs_direct = stamp_inputs + [go.sdk.package_list]
-    synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
     if synthetic_testmain_manifest:
         inputs_direct.append(synthetic_testmain_manifest)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
-    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if go.orchestrion else None
-    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if go.orchestrion else None
-    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if go.orchestrion else None
+    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if link_orchestrion else None
+    orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if link_orchestrion else None
+    orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if link_orchestrion else None
 
     inputs_transitive = [
         archive.libs,
@@ -217,11 +275,14 @@ def emit_link(
         go.cc_toolchain_files,
         go.sdk.tools,
         go.stdlib.libs,
-        go.stdlib.cache_dir,
     ]
+    if stdlib_cache_needed_for_link:
+        inputs_transitive.append(go.stdlib.cache_dir)
 
     # Add orchestrion for toolexec instrumentation if enabled
     if go.orchestrion:
+        builder_args.add("-orchestrion_mode", orchestrion_mode)
+    if link_orchestrion:
         builder_args.add("-orchestrion", go.orchestrion)
         inputs_direct.append(go.orchestrion)
         if orchestrion_trace_version_file:
@@ -243,8 +304,18 @@ def emit_link(
         # Stage rule data files for the link builder too so it can reuse the
         # same pinned module files seen during compile (for example go.mod,
         # go.sum, orchestrion.tool.go, orchestrion.yml).
-        if hasattr(go._ctx.files, "data"):
-            inputs_direct.extend(go._ctx.files.data)
+        orchestrion_source_inputs = _orchestrion_source_inputs(go)
+        if orchestrion_source_inputs:
+            builder_args.add_all(
+                orchestrion_source_inputs,
+                map_each = _dirname,
+                before_each = "-orchsrc",
+                uniquify = True,
+                expand_directories = False,
+            )
+        orchestrion_data_inputs = _orchestrion_data_inputs(go)
+        if orchestrion_data_inputs:
+            inputs_direct.extend(orchestrion_data_inputs)
     inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
 
     go.actions.run(

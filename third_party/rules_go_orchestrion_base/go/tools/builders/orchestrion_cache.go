@@ -18,14 +18,14 @@ const (
 	// files plus selected toolchain metadata, so code-only changes would
 	// otherwise keep restoring stale synthetic go.mod state.
 	syntheticModuleCacheABIVersion = "v4"
-	helperDecisionCacheABIVersion  = "v3"
-	helperExportCacheABIVersion    = "v3"
-	helperArchiveCacheABIVersion   = "v9"
+	helperDecisionCacheABIVersion  = "v6"
+	helperExportCacheABIVersion    = "v5"
+	helperArchiveCacheABIVersion   = "v12"
 	// Bump the helper source-set version whenever the synthetic testmain source
 	// compile closure changes. The helper decision and archive caches both key
-	// off this value, so widening the recursive source-compile set must force a
-	// rebuild instead of reusing bundles prepared for the older closure.
-	helperSourceSetVersion = "v3"
+	// off this value, so closure changes must force a rebuild instead of reusing
+	// bundles prepared for the older package selection.
+	helperSourceSetVersion = "v7"
 
 	orchestrionPersistentCacheDirName = "rules-go-orchestrion"
 
@@ -251,8 +251,8 @@ func stableDigestParts(parts ...string) string {
 	return shortDigest([]byte(strings.Join(parts, "\n")))
 }
 
-func ddTraceVersionsDigest(versions map[string]string) string {
-	keys := append([]string{}, ddTraceGoModules...)
+func ddTraceVersionsDigest(versions map[string]string, orchestrionMode string) string {
+	keys := ddTraceGoModulesForMode(orchestrionMode)
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, key+"="+strings.TrimSpace(versions[key]))

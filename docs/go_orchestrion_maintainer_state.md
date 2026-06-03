@@ -61,6 +61,26 @@ The important model is:
 - Orchestrion is not a post-processing step
 - the vendored fork makes Orchestrion part of the normal compile, stdlib, and
   link path
+- `test_optimization` mode is the narrower standard Go `testing` path:
+  customer packages and external `_test` packages compile normally, while
+  stdlib `testing`, synthetic `testmain`, helper packagefiles, importcfg, and
+  link support stay coherent
+
+## Mode Contract
+
+`dd_topt_go_test` exposes two Orchestrion modes:
+
+- `general` is the default and preserves the generic Orchestrion behavior.
+- `test_optimization` is the standard Go `testing` Test Optimization mode. It
+  keeps the stdlib/synthetic-`testmain` path needed for payloads while avoiding
+  Orchestrion on ordinary customer package compiles and external `_test`
+  compiles.
+
+`test_optimization` intentionally does not provide automatic `testify/suite`
+instrumentation. Metadata emitted by the Go macro should include
+`bazel.go.orchestrion.mode`, and it should include
+`bazel.go.test_binary_linker_optimization` so reviewers can tell whether the
+test-binary linker flag optimization was active.
 
 ## Why The Fork Exists
 
@@ -407,12 +427,17 @@ of these checks:
 1. focused builder tests in this repo
 2. relevant vendored Starlark tests in this repo
 3. consumer validation in `../rules_test_optimization_tests`
-4. runtime validation with:
+4. Go integration harnesses for both:
+   - `ORCHESTRION_MODE=general`
+   - `ORCHESTRION_MODE=test_optimization`
+5. runtime validation with:
    - `DD_TRACE_DEBUG=1`
    - `DD_CIVISIBILITY_ENABLED=1`
-5. confirmation that:
+6. confirmation that:
    - tracer startup logs are present
    - the pinned tracer version is the one loaded at runtime
    - a payload file is written under `test.outputs/payloads/tests`
+   - metadata includes the expected `bazel.go.orchestrion.mode`
+   - metadata includes the expected `bazel.go.test_binary_linker_optimization`
 
 That final runtime check is the one that caught the bad stdlib snapshot idea.

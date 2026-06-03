@@ -1,4 +1,4 @@
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 
 filegroup(
     name = "all_rules",
@@ -16,6 +16,16 @@ filegroup(
 bool_flag(
     name = "enabled",
     build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+string_flag(
+    name = "mode",
+    build_setting_default = "general",
+    values = [
+        "general",
+        "test_optimization",
+    ],
     visibility = ["//visibility:public"],
 )
 

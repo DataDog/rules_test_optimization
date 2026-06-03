@@ -126,6 +126,34 @@ Notes:
 - If the workspace setting and the effective local Go module versions differ,
   the build fails instead of mixing versions.
 
+## Go Test Optimization Orchestrion mode
+
+`dd_topt_go_test(...)` accepts `orchestrion_mode`:
+
+| Value | Description |
+|-------|-------------|
+| `general` | Default. Preserves the generic Orchestrion behavior for the transitioned raw `go_test` |
+| `test_optimization` | Standard Go `testing` Test Optimization mode. Keeps stdlib/`testing`, synthetic `testmain`, helper packagefiles, importcfg, and link support, while leaving customer package compiles and external `_test` package compiles on the plain rules_go path |
+
+`test_optimization` mode requires package-local pin files or explicit
+`orchestrion_pin_files` pointing at the Go module root. It uses a reduced
+synthetic Orchestrion tool file for action-time module work, so
+`orchestrion.tool.go` is not required for the optimized mode even when a generic
+Orchestrion setup keeps one for broader integrations. Automatic `testify/suite`
+instrumentation is intentionally outside this mode.
+
+When `orchestrion_mode = "test_optimization"`, `dd_topt_go_test` also enables
+test-binary linker optimization by default in Bazel modes where rules_go is not
+already stripping. Disable it per target or in a repo-local wrapper with:
+
+```bzl
+enable_test_binary_linker_optimization = False
+```
+
+Go target metadata records the selected mode in `bazel.go.orchestrion.mode` and
+whether the linker optimization was active in
+`bazel.go.test_binary_linker_optimization`.
+
 ## Sync extension attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`

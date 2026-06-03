@@ -20,7 +20,7 @@ func TestEnsureSyntheticOrchestrionToolGoCreatesExpectedContents(t *testing.T) {
 		_ = os.Chdir(previousWD)
 	}()
 
-	cleanup, err := ensureSyntheticOrchestrionToolGo(false)
+	cleanup, err := ensureSyntheticOrchestrionToolGo(false, orchestrionModeGeneral)
 	if err != nil {
 		t.Fatalf("ensureSyntheticOrchestrionToolGo error: %v", err)
 	}
@@ -46,6 +46,33 @@ func TestEnsureSyntheticOrchestrionToolGoCreatesExpectedContents(t *testing.T) {
 	cleanup()
 	if _, err := os.Stat("orchestrion.tool.go"); !os.IsNotExist(err) {
 		t.Fatalf("orchestrion.tool.go still exists after cleanup: %v", err)
+	}
+
+	cleanup, err = ensureSyntheticOrchestrionToolGo(false, orchestrionModeTestOptimization)
+	if err != nil {
+		t.Fatalf("ensureSyntheticOrchestrionToolGo test_optimization error: %v", err)
+	}
+	defer cleanup()
+	content, err = os.ReadFile("orchestrion.tool.go")
+	if err != nil {
+		t.Fatalf("read test_optimization orchestrion.tool.go: %v", err)
+	}
+	text = string(content)
+	for _, needle := range []string{
+		`_ "github.com/DataDog/orchestrion"`,
+		`_ "github.com/DataDog/dd-trace-go/v2/orchestrion"`,
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("test_optimization orchestrion.tool.go missing %q:\n%s", needle, text)
+		}
+	}
+	for _, excluded := range []string{
+		`github.com/DataDog/dd-trace-go/contrib/log/slog/v2`,
+		`github.com/DataDog/dd-trace-go/contrib/net/http/v2`,
+	} {
+		if strings.Contains(text, excluded) {
+			t.Fatalf("test_optimization orchestrion.tool.go should exclude %q:\n%s", excluded, text)
+		}
 	}
 }
 

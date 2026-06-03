@@ -129,6 +129,12 @@ macros, with Go using the bootstrap-managed extension. If your team owns only
 Python, Java, NodeJS, .NET, or Ruby, the simpler runtime-specific setup is in
 [`docs/Language_Onboarding.md`](../docs/Language_Onboarding.md).
 
+The generated Go wrapper uses `orchestrion_mode = "test_optimization"` for
+standard Go `testing`. Manual `dd_topt_go_test` snippets below set the same mode
+explicitly. The default Go Orchestrion mode is `general`; these examples choose
+`test_optimization` because they target standard Go `testing` payloads rather
+than broader generic Orchestrion instrumentation.
+
 Bootstrap once after adding the module prerequisites:
 
 ```bash
@@ -492,6 +498,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data_by_service["go_service_a"],  # sanitized key
 )
 ```
@@ -543,6 +550,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data_by_service,
     topt_service = "go_service_a",               # or raw "go-service-a"
     # If two services sanitize to the same key, use the deduped key (e.g. go_service_a_2).

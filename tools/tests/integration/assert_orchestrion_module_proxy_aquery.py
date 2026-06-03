@@ -60,6 +60,57 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Path to the aquery --output=textproto file to validate.",
     )
+    parser.add_argument(
+        "--expected-orchestrion-mode",
+        choices=("general", "test_optimization"),
+        default="general",
+        help="Expected Orchestrion mode on Orchestrion-enabled actions.",
+    )
+    parser.add_argument(
+        "--required-test-optimization-pin-file",
+        action="append",
+        help=(
+            "Pin-file basename that every non-stdlib Orchestrion action must "
+            "declare in test_optimization mode. Repeat for fixture-specific "
+            "pins such as orchestrion.yml."
+        ),
+    )
+    parser.add_argument(
+        "--require-plain-compile-in-test-optimization",
+        action="store_true",
+        help=(
+            "Require non-Orchestrion customer and external test compile actions "
+            "in test_optimization mode."
+        ),
+    )
+    parser.add_argument(
+        "--require-reduced-synthetic-testmain-link-inputs",
+        action="store_true",
+        help=(
+            "Require synthetic testmain GoLink actions to keep the synthetic "
+            "manifest input while omitting unused Orchestrion proxy/pin-file "
+            "inputs. In test_optimization mode, also require the Orchestrion "
+            "stdlib cache tree to be omitted."
+        ),
+    )
+    parser.add_argument(
+        "--require-test-optimization-linker-flags",
+        action="store_true",
+        help=(
+            "Require test_optimization synthetic testmain GoLink actions to pass "
+            "-s and -w so test binaries skip symbol table and DWARF generation."
+        ),
+    )
+    parser.add_argument(
+        "--expected-test-optimization-linker-flag-count",
+        type=int,
+        default=None,
+        help=(
+            "When requiring test_optimization linker flags, require each of -s "
+            "and -w to appear this many times on each synthetic testmain GoLink "
+            "action."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -246,6 +297,11 @@ def _contains_path_suffix(paths: list[str], suffix: str) -> bool:
     return any(path.replace("\\", "/").endswith(normalized_suffix) for path in paths)
 
 
+def _contains_path_fragment(paths: list[str], fragment: str) -> bool:
+    normalized_fragment = fragment.replace("\\", "/")
+    return any(normalized_fragment in path.replace("\\", "/") for path in paths)
+
+
 def _contains_module_proxy_payload(paths: list[str]) -> bool:
     for path in paths:
         normalized = path.replace("\\", "/")
@@ -263,19 +319,175 @@ def _uses_orchestrion(action: Action) -> bool:
     return "-orchestrion" in action.arguments
 
 
+def _argument_value(arguments: list[str], flag: str) -> str | None:
+    for idx, argument in enumerate(arguments):
+        if argument == flag and idx + 1 < len(arguments):
+            return arguments[idx + 1]
+        if argument.startswith(flag + "="):
+            return argument.split("=", 1)[1]
+    return None
+
+
+def _argument_values(arguments: list[str], flag: str) -> list[str]:
+    values = []
+    for idx, argument in enumerate(arguments):
+        if argument == flag and idx + 1 < len(arguments):
+            values.append(arguments[idx + 1])
+        elif argument.startswith(flag + "="):
+            values.append(argument.split("=", 1)[1])
+    return values
+
+
+def _assert_no_runtime_data_orchsrc(action: Action, forbidden_fragments: list[str]) -> None:
+    for value in _argument_values(action.arguments, "-orchsrc"):
+        normalized = value.replace("\\", "/")
+        for fragment in forbidden_fragments:
+            _require(
+                fragment not in normalized,
+                f"{action.mnemonic} unexpectedly passed runtime data to -orchsrc: {value}",
+            )
+
+
+def _action_importpath(action: Action) -> str:
+    return _argument_value(action.arguments, "-importpath") or ""
+
+
+def _action_output(action: Action) -> str:
+    return _argument_value(action.arguments, "-out") or _argument_value(action.arguments, "-o") or ""
+
+
 def _is_fixture_go_tool_action(action: Action) -> bool:
     """Return whether an action belongs to the fixture Go tool transition proof."""
 
     return any("fixture_tool" in arg for arg in action.arguments)
 
 
+def _is_rules_go_internal_compile_action(action: Action) -> bool:
+    """Return whether a compile action belongs to rules_go's own helper binaries."""
+
+    importpath = _action_importpath(action)
+    if importpath.startswith("github.com/bazelbuild/rules_go/go/tools/"):
+        return True
+    output = _action_output(action).replace("\\", "/")
+    return "/external/rules_go+/go/tools/" in output
+
+
+def _is_synthetic_testmain_link_action(action: Action) -> bool:
+    """Return whether a GoLink action links a generated Go test binary."""
+
+    if action.mnemonic != "GoLink":
+        return False
+    main = (_argument_value(action.arguments, "-main") or "").replace("\\", "/")
+    package_path = _argument_value(action.arguments, "-p") or ""
+    return main.endswith("~testmain.a") and package_path in ("", "testmain")
+
+
+def _assert_reduced_synthetic_testmain_link_inputs(
+    action: Action,
+    inputs: list[str],
+    expected_orchestrion_mode: str,
+) -> None:
+    main = (_argument_value(action.arguments, "-main") or "").replace("\\", "/")
+    _require(
+        main,
+        "synthetic testmain GoLink is missing -main",
+    )
+    _require(
+        not _uses_orchestrion(action),
+        f"synthetic testmain GoLink unexpectedly passed -orchestrion (main={main!r})",
+    )
+    actual_mode = _argument_value(action.arguments, "-orchestrion_mode")
+    _require(
+        actual_mode == expected_orchestrion_mode,
+        (
+            "synthetic testmain GoLink is missing "
+            f"-orchestrion_mode {expected_orchestrion_mode} (got {actual_mode!r})"
+        ),
+    )
+    _require(
+        _contains_path_suffix(inputs, main),
+        f"synthetic testmain GoLink is missing main archive input {main}",
+    )
+    _require(
+        _contains_path_suffix(inputs, main + ".orchestrion.pack"),
+        f"synthetic testmain GoLink is missing synthetic packagefile manifest {main}.orchestrion.pack",
+    )
+    for suffix in ("orchestrion.tool.go", "orchestrion.yml"):
+        _require(
+            not _contains_path_suffix(inputs, suffix),
+            f"synthetic testmain GoLink unexpectedly declared pin-file input {suffix}",
+        )
+    _require(
+        not any("module_proxy/" in path.replace("\\", "/") for path in inputs),
+        "synthetic testmain GoLink unexpectedly declared module proxy files as inputs",
+    )
+    for suffix in ("module_proxy/root.marker", "orchestrion_version.txt"):
+        _require(
+            not _contains_path_suffix(inputs, suffix),
+            f"synthetic testmain GoLink unexpectedly declared Orchestrion input {suffix}",
+        )
+    if expected_orchestrion_mode == "test_optimization":
+        _require(
+            "-stdlib_cache" not in action.arguments,
+            "test_optimization synthetic testmain GoLink unexpectedly received -stdlib_cache",
+        )
+        _require(
+            not _contains_path_fragment(inputs, "stdlib_/gocache"),
+            "test_optimization synthetic testmain GoLink unexpectedly declared the Orchestrion stdlib cache directory as an input",
+        )
+    else:
+        _require(
+            "-stdlib_cache" in action.arguments,
+            "general synthetic testmain GoLink should retain -stdlib_cache",
+        )
+        _require(
+            _contains_path_fragment(inputs, "stdlib_/gocache"),
+            "general synthetic testmain GoLink should retain the Orchestrion stdlib cache directory input",
+        )
+
+
+def _assert_test_optimization_linker_flags(action: Action, expected_count: int | None) -> None:
+    for flag in ("-s", "-w"):
+        count = action.arguments.count(flag)
+        if expected_count is None:
+            _require(
+                count > 0,
+                f"synthetic testmain GoLink is missing test binary linker optimization flag {flag}",
+            )
+            continue
+        _require(
+            count == expected_count,
+            (
+                "synthetic testmain GoLink must pass test binary linker "
+                f"optimization flag {flag} exactly {expected_count} time(s); got {count}"
+            ),
+        )
+
+
 def _assert_expected_action(
     action: Action,
     inputs: list[str],
     require_proxy: bool,
+    expected_orchestrion_mode: str,
+    required_test_optimization_pin_files: list[str],
 ) -> None:
     env = action.environment
+    forbidden_runtime_fragments = [
+        ".testoptimization/manifest.txt",
+        "settings.json",
+        "known_tests.json",
+        "test_management.json",
+        "_topt_bazel_metadata.json",
+    ]
     if require_proxy:
+        actual_mode = _argument_value(action.arguments, "-orchestrion_mode")
+        _require(
+            actual_mode == expected_orchestrion_mode,
+            (
+                f"{action.mnemonic} is missing -orchestrion_mode {expected_orchestrion_mode} "
+                f"(got {actual_mode!r}, importpath={_action_importpath(action)!r}, output={_action_output(action)!r})"
+            ),
+        )
         _require(
             "RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT" in env,
             f"{action.mnemonic} is missing RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT",
@@ -304,6 +516,23 @@ def _assert_expected_action(
             all("sum.golang.org" not in value for value in env.values()),
             f"{action.mnemonic} still references sum.golang.org in its action environment",
         )
+        _assert_no_runtime_data_orchsrc(action, forbidden_runtime_fragments)
+        if expected_orchestrion_mode == "test_optimization":
+            if action.mnemonic != "GoStdlib":
+                for suffix in required_test_optimization_pin_files:
+                    _require(
+                        _contains_path_suffix(inputs, suffix),
+                        f"{action.mnemonic} in test_optimization mode is missing pin-file input {suffix}",
+                    )
+            _require(
+                not _contains_path_suffix(inputs, "orchestrion.tool.go"),
+                f"{action.mnemonic} in test_optimization mode should use the synthetic Test Optimization tool pin",
+            )
+            for fragment in forbidden_runtime_fragments:
+                _require(
+                    not _contains_path_fragment(inputs, fragment),
+                    f"{action.mnemonic} in test_optimization mode unexpectedly declared runtime data input {fragment}",
+                )
         return
 
     forbidden_env = {
@@ -327,10 +556,20 @@ def _assert_expected_action(
         not any("module_proxy/" in path.replace("\\", "/") for path in inputs),
         f"{action.mnemonic} unexpectedly declared module_proxy files as inputs",
     )
+    if action.mnemonic in {"GoCompilePkg", "GoCompilePkgExternal"}:
+        _require(
+            "-stdlib_cache" not in action.arguments,
+            f"{action.mnemonic} unexpectedly received -stdlib_cache",
+        )
+        _require(
+            not _contains_path_fragment(inputs, "stdlib_/gocache"),
+            f"{action.mnemonic} unexpectedly declared the Orchestrion stdlib cache directory as an input",
+        )
 
 
 def main() -> int:
     args = parse_args()
+    required_test_optimization_pin_files = args.required_test_optimization_pin_file or ["go.mod"]
     text = args.aquery_textproto.read_text(encoding="utf-8")
 
     path_fragments: dict[int, PathFragment] = {}
@@ -363,19 +602,48 @@ def main() -> int:
 
     orchestrion_actions = []
     orchestrion_stdlib_actions = []
+    non_orchestrion_fixture_compile_actions = []
+    non_orchestrion_external_test_compile_actions = []
+    saw_plain_hello_external_test_compile = False
     fixture_go_tool_actions = []
     for action in compile_actions + stdlib_actions + link_actions:
+        inputs = _action_inputs(action, artifacts, dep_sets, path_fragments)
+        if (
+            args.expected_orchestrion_mode == "test_optimization"
+            and _is_rules_go_internal_compile_action(action)
+        ):
+            continue
         if _is_fixture_go_tool_action(action):
             fixture_go_tool_actions.append(action)
         require_proxy = _uses_orchestrion(action)
+        if (
+            args.expected_orchestrion_mode == "test_optimization"
+            and action.mnemonic == "GoCompilePkgExternal"
+            and require_proxy
+            and not _is_fixture_go_tool_action(action)
+        ):
+            _require(False, "test_optimization mode unexpectedly passed -orchestrion to GoCompilePkgExternal")
+        if (
+            args.expected_orchestrion_mode == "test_optimization"
+            and action.mnemonic in {"GoCompilePkg", "GoCompilePkgExternal"}
+            and not require_proxy
+            and not _is_fixture_go_tool_action(action)
+        ):
+            non_orchestrion_fixture_compile_actions.append(action)
+            if action.mnemonic == "GoCompilePkgExternal":
+                non_orchestrion_external_test_compile_actions.append(action)
+                if _contains_path_suffix(inputs, "app/hello_external_test.go"):
+                    saw_plain_hello_external_test_compile = True
         if require_proxy:
             orchestrion_actions.append(action)
             if action.mnemonic == "GoStdlib":
                 orchestrion_stdlib_actions.append(action)
         _assert_expected_action(
             action,
-            _action_inputs(action, artifacts, dep_sets, path_fragments),
+            inputs,
             require_proxy=require_proxy,
+            expected_orchestrion_mode=args.expected_orchestrion_mode,
+            required_test_optimization_pin_files=required_test_optimization_pin_files,
         )
 
     _require(
@@ -386,6 +654,48 @@ def main() -> int:
         orchestrion_stdlib_actions,
         "aquery did not contain any Orchestrion-enabled GoStdlib actions",
     )
+    if args.expected_orchestrion_mode == "test_optimization" and args.require_plain_compile_in_test_optimization:
+        _require(
+            non_orchestrion_fixture_compile_actions,
+            "test_optimization mode did not leave any fixture compile actions on the plain rules_go path",
+        )
+        _require(
+            non_orchestrion_external_test_compile_actions,
+            "test_optimization mode did not leave any external _test compile actions on the plain rules_go path",
+        )
+        _require(
+            saw_plain_hello_external_test_compile,
+            "test_optimization mode did not leave app/hello_external_test.go on the plain GoCompilePkgExternal path",
+        )
+    if args.require_reduced_synthetic_testmain_link_inputs:
+        synthetic_testmain_link_actions = [
+            action for action in link_actions
+            if _is_synthetic_testmain_link_action(action)
+        ]
+        _require(
+            synthetic_testmain_link_actions,
+            "test_optimization mode did not produce a synthetic testmain GoLink action",
+        )
+        for action in synthetic_testmain_link_actions:
+            _assert_reduced_synthetic_testmain_link_inputs(
+                action,
+                _action_inputs(action, artifacts, dep_sets, path_fragments),
+                args.expected_orchestrion_mode,
+            )
+    if args.expected_orchestrion_mode == "test_optimization" and args.require_test_optimization_linker_flags:
+        synthetic_testmain_link_actions = [
+            action for action in link_actions
+            if _is_synthetic_testmain_link_action(action)
+        ]
+        _require(
+            synthetic_testmain_link_actions,
+            "test_optimization mode did not produce a synthetic testmain GoLink action",
+        )
+        for action in synthetic_testmain_link_actions:
+            _assert_test_optimization_linker_flags(
+                action,
+                args.expected_test_optimization_linker_flag_count,
+            )
     _require(
         fixture_go_tool_actions,
         "aquery did not contain the fixture Go tool transition actions",
@@ -400,10 +710,18 @@ def main() -> int:
             action,
             _action_inputs(action, artifacts, dep_sets, path_fragments),
             require_proxy=False,
+            expected_orchestrion_mode=args.expected_orchestrion_mode,
+            required_test_optimization_pin_files=required_test_optimization_pin_files,
         )
 
     for action in stdlib_list_actions:
-        _assert_expected_action(action, _action_inputs(action, artifacts, dep_sets, path_fragments), require_proxy=False)
+        _assert_expected_action(
+            action,
+            _action_inputs(action, artifacts, dep_sets, path_fragments),
+            require_proxy=False,
+            expected_orchestrion_mode=args.expected_orchestrion_mode,
+            required_test_optimization_pin_files=required_test_optimization_pin_files,
+        )
 
     print("aquery offline-proxy wiring check passed")
     return 0

@@ -143,6 +143,17 @@ if [[ "${RULES_GO_VARIANT}" == "base" ]]; then
 else
   echo "Skipping go/tools/bzltestutil upstream unit tests for complete; the complete compatibility layer intentionally changes XML log emission semantics without carrying upstream test rewrites." >&2
 fi
+
+# These builder tests cover the Datadog Orchestrion mode and cache-key changes
+# more directly than the downstream smoke targets. Keep this list focused on
+# stable, variant-sensitive builder suites.
+bazel_test \
+  //go/tools/builders:compilepkg_test \
+  //go/tools/builders:env_test \
+  //go/tools/builders:importcfg_test \
+  //go/tools/builders:orchestrion_test \
+  //go/tools/builders:orchestrion_version_test
+
 # Keep the Starlark smoke lane focused on the variant-sensitive suites instead of
 # the whole package. The broader package pulls in unrelated SDK/provider tests
 # that do not prove the variant split and are less stable across hosts.

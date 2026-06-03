@@ -23,6 +23,17 @@ var ddTraceGoModules = []string{
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
 }
 
+var ddTraceGoModulesTestOptimization = []string{
+	"github.com/DataDog/dd-trace-go/v2",
+}
+
+func ddTraceGoModulesForMode(orchestrionMode string) []string {
+	if effectiveOrchestrionMode(orchestrionMode) == orchestrionModeTestOptimization {
+		return ddTraceGoModulesTestOptimization
+	}
+	return ddTraceGoModules
+}
+
 type goListModule struct {
 	Path    string `json:"Path"`
 	Version string `json:"Version"`
@@ -177,6 +188,10 @@ func resolveModuleVersionsFromModule(goExe, moduleDir string, env []string, modu
 	cmdEnv := setEnv(env, "GO111MODULE", "on")
 	cmdEnv = setEnv(cmdEnv, "GOWORK", "off")
 	var err error
+	cmdEnv, err = normalizeGoActionCacheEnv(cmdEnv)
+	if err != nil {
+		return nil, err
+	}
 	cmdEnv, err = normalizeGoModuleResolutionEnv(cmdEnv)
 	if err != nil {
 		return nil, err
@@ -223,13 +238,76 @@ func resolveModuleVersionsFromModule(goExe, moduleDir string, env []string, modu
 	return versions, nil
 }
 
-func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, verbose bool) error {
+func ddTraceGoModulesToValidate(moduleDir string, orchestrionMode string) ([]string, error) {
+	modules := ddTraceGoModulesForMode(orchestrionMode)
+	required, err := requiredModulesFromGoMod(filepath.Join(moduleDir, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]string, 0, len(modules))
+	for _, modulePath := range modules {
+		if required[modulePath] {
+			filtered = append(filtered, modulePath)
+		}
+	}
+	return filtered, nil
+}
+
+func requiredModulesFromGoMod(path string) (map[string]bool, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read go.mod requirements from %s: %w", path, err)
+	}
+	required := make(map[string]bool)
+	inRequireBlock := false
+	for _, rawLine := range strings.Split(string(content), "\n") {
+		line := stripGoModLineComment(strings.TrimSpace(rawLine))
+		if line == "" {
+			continue
+		}
+		if inRequireBlock {
+			if strings.HasPrefix(line, ")") {
+				inRequireBlock = false
+				continue
+			}
+			if fields := strings.Fields(line); len(fields) > 0 {
+				required[fields[0]] = true
+			}
+			continue
+		}
+		if !strings.HasPrefix(line, "require") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "require"))
+		if strings.HasPrefix(rest, "(") {
+			inRequireBlock = true
+			continue
+		}
+		if fields := strings.Fields(rest); len(fields) > 0 {
+			required[fields[0]] = true
+		}
+	}
+	return required, nil
+}
+
+func stripGoModLineComment(line string) string {
+	if idx := strings.Index(line, "//"); idx >= 0 {
+		line = line[:idx]
+	}
+	return strings.TrimSpace(line)
+}
+
+func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, verbose bool, orchestrionMode string) error {
 	configured, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return err
 	}
 	moduleDir = abs(moduleDir)
-	cacheKey, err := validationCacheKey(goExe, moduleDir, env, configured)
+	modules, err := ddTraceGoModulesToValidate(moduleDir, orchestrionMode)
+	if err != nil {
+		return err
+	}
+	cacheKey, err := validationCacheKey(goExe, moduleDir, env, configured, orchestrionMode)
 	if err != nil {
 		return err
 	}
@@ -258,11 +336,14 @@ func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, ver
 		return nil
 	}
 
-	resolved, err := resolveModuleVersionsFromModule(goExe, moduleDir, env, ddTraceGoModules)
-	if err != nil {
-		return err
+	resolved := make(map[string]string, len(modules))
+	if len(modules) > 0 {
+		resolved, err = resolveModuleVersionsFromModule(goExe, moduleDir, env, modules)
+		if err != nil {
+			return err
+		}
 	}
-	for _, modulePath := range ddTraceGoModules {
+	for _, modulePath := range modules {
 		if verbose {
 			fmt.Fprintf(os.Stderr, "orchestrion: configured dd-trace-go version=%s resolved=%s module=%s moduleDir=%s\n", configured[modulePath], resolved[modulePath], modulePath, moduleDir)
 		}
@@ -292,12 +373,17 @@ func validateResolvedDDTraceGoVersion(goExe, moduleDir string, env []string, ver
 	return nil
 }
 
-func validationCacheKey(goExe, moduleDir string, env []string, configured map[string]string) (string, error) {
+func validationCacheKey(goExe, moduleDir string, env []string, configured map[string]string, orchestrionMode string) (string, error) {
+	goToolIdentity, err := goSDKCacheIdentity(filepath.Dir(filepath.Dir(abs(goExe))))
+	if err != nil {
+		return "", err
+	}
 	fileParts := []string{
 		"module_root=" + abs(moduleDir),
-		"configured_versions=" + ddTraceVersionsDigest(configured),
-		"go_tool=" + abs(goExe),
+		"configured_versions=" + ddTraceVersionsDigest(configured, orchestrionMode),
+		"go_tool_identity=" + goToolIdentity,
 		"orchestrion=" + orchestrionToolVersionIdentity(),
+		"orchestrion_mode=" + effectiveOrchestrionMode(orchestrionMode),
 		"target=" + goTargetIdentity(env),
 		"validation_cache=" + validationCacheABIVersion,
 	}
@@ -313,18 +399,20 @@ func validationCacheKey(goExe, moduleDir string, env []string, configured map[st
 
 // syntheticOrchestrionGoMod renders the synthetic module used by the builders
 // when they need a temporary module root for Orchestrion-managed operations.
-func syntheticOrchestrionGoMod(orchestrionVersion string, versions map[string]string) string {
-	return fmt.Sprintf(`module bazel_orchestrion_temp
+func syntheticOrchestrionGoMod(orchestrionVersion string, versions map[string]string, orchestrionMode string) string {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf(`module bazel_orchestrion_temp
 
 go %s
 
 require (
 	github.com/DataDog/orchestrion %s
-	github.com/DataDog/dd-trace-go/v2 %s
-	github.com/DataDog/dd-trace-go/contrib/net/http/v2 %s
-	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 %s
-)
-`, orchestrionSyntheticGoModVersion, orchestrionVersion, versions["github.com/DataDog/dd-trace-go/v2"], versions["github.com/DataDog/dd-trace-go/contrib/net/http/v2"], versions["github.com/DataDog/dd-trace-go/contrib/log/slog/v2"])
+`, orchestrionSyntheticGoModVersion, orchestrionVersion))
+	for _, modulePath := range ddTraceGoModulesForMode(orchestrionMode) {
+		builder.WriteString(fmt.Sprintf("\t%s %s\n", modulePath, versions[modulePath]))
+	}
+	builder.WriteString(")\n")
+	return builder.String()
 }
 
 func containsString(values []string, target string) bool {

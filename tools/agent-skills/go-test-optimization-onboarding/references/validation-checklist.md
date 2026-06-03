@@ -129,6 +129,8 @@ Expected:
 - No `.msgpack` or `.msgpack.gz` payloads exist.
 - Go payload metadata does not contain `bazel.go.payload_selection =
   "full_bundle_no_match"`.
+- Go target metadata records the expected `bazel.go.orchestrion.mode`. For
+  standard Go `testing` onboarding, that value should be `test_optimization`.
 
 Valid payload selections:
 
@@ -146,6 +148,9 @@ on the default allowlist:
 - Use `expected_targets` for runtime test targets that must emit payloads.
 - Use `expected_payload_selection_by_target` when a target must report a
   specific selection value.
+- Inspect `bazel_target_metadata.json` directly when the pilot must prove a
+  specific Orchestrion mode, because the doctor validates payload shape rather
+  than replacing mode-specific rollout evidence.
 - Use `allowed_payload_selections` only when the whole onboarding deliberately
   permits a smaller set than the default.
 - Do not list `.build_test` or build-only controls in `expected_targets`

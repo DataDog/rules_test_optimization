@@ -381,6 +381,7 @@ full bundle.
    dd_topt_go_test(
        name = "my_test",
        module_label_override = "my_expected_module",  # Matches :module_my_expected_module
+       orchestrion_mode = "test_optimization",
        ...
    )
    ```

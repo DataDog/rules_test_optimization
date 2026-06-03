@@ -99,6 +99,25 @@ review snippets first, then `--write-bazelrc`, `--write-root-targets`,
 `--write-validation-script` only when those generated files match the
 repository's local policy.
 
+## dd-source Onboarding Policy
+
+When applying this guide to `dd-source`, treat it as a large WORKSPACE monorepo:
+
+- Use the WORKSPACE onboarding path, not the Bzlmod guided flow.
+- Keep Test Optimization policy in the repo-local optimized Go wrapper instead
+  of changing every BUILD file to call the public macro directly.
+- The optimized Go wrapper should pass
+  `orchestrion_mode = "test_optimization"` for standard Go `testing` targets.
+  Do not rely on the public macro's default `general` mode for dd-source Test
+  Optimization onboarding. Use `general` only for explicit compatibility
+  validation.
+- Preserve dd-source wrapper policy such as tags, scheduling, Docker defaults,
+  platform constraints, and flaky-test behavior in the local helper layer.
+- Validate with fresh `bazel-testlogs/<target>/test.outputs/`, inspect
+  `bazel_target_metadata.json` for
+  `bazel.go.orchestrion.mode = "test_optimization"` on Go targets, then run
+  the doctor and uploader dry-run before any real upload.
+
 ## Branch And PR Hygiene
 
 Before making changes in a real repository, confirm whether to use the current

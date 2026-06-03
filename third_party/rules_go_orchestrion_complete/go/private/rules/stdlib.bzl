@@ -53,6 +53,10 @@ stdlib = rule(
             default = "//go/private/orchestrion:enabled",
             providers = [BuildSettingInfo],
         ),
+        "_orchestrion_mode": attr.label(
+            default = "//go/private/orchestrion:mode",
+            providers = [BuildSettingInfo],
+        ),
         "_orchestrion_tool_binary": attr.label(
             default = "//go/private/orchestrion:tool_binary",
             allow_files = True,

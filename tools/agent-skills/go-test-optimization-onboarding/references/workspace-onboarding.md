@@ -308,6 +308,9 @@ do not add a root `orchestrion.tool.go` only for Test Optimization. Keep the
 Orchestrion tool version in Bazel, then use package-local pin files or a
 repo-local wrapper that passes `orchestrion_pin_files = []` when that matches
 the repository's Go module policy.
+For standard Go `testing`, that repo-local wrapper should also inject
+`orchestrion_mode = "test_optimization"`. Automatic `testify/suite`
+instrumentation is outside this mode.
 
 ## Bazel Config
 
@@ -409,7 +412,8 @@ Prefer this split:
   flaky policy, exec constraints, and registry behavior.
 - The existing plain wrapper calls that helper with raw `go_test`.
 - A new Test Optimization wrapper calls that helper with `dd_topt_go_test`.
-- The Test Optimization wrapper sets Orchestrion pin files and `topt_data`.
+- The Test Optimization wrapper sets `orchestrion_mode = "test_optimization"`,
+  Orchestrion pin files, and `topt_data`.
 - The wrapper rejects explicit per-target `topt_data` and
   `orchestrion_pin_files` overrides when those values must stay consistent
   across the repository.
@@ -423,6 +427,7 @@ The wrapper should always pass stable Orchestrion pin files when tests are not
 at the repo root:
 
 ```bzl
+orchestrion_mode = "test_optimization",
 orchestrion_pin_files = [
     "//:go.mod",
     "//:go.sum",
@@ -434,6 +439,41 @@ topt_data = topt_data
 
 If the repository has multiple Go modules, use the pin files that correspond to
 the module owning the target.
+
+### dd-source Wrapper Shape
+
+For `dd-source`, use this guide's large WORKSPACE monorepo path and keep the
+Test Optimization policy in `rules/go/dd_topt_go_test.bzl`. The repo-local
+wrapper should call the public Go macro with the existing dd-source Go wrapper
+as the underlying `go_test_rule`, the aggregate service data, and the optimized
+standard Go `testing` Orchestrion mode:
+
+```bzl
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", _rto_dd_topt_go_test = "dd_topt_go_test")
+load("@test_optimization_data_go//:aggregate.bzl", "topt_data_by_service")
+load("//rules/go:dd_go_test.bzl", "go_test")
+
+_rto_dd_topt_go_test(
+    name = name,
+    go_test_rule = go_test,
+    orchestrion_mode = "test_optimization",
+    orchestrion_pin_files = [
+        "//:go.mod",
+        "//:go.sum",
+    ],
+    topt_data = topt_data_by_service,
+    topt_service = topt_service,
+    **kwargs
+)
+```
+
+The dd-source wrapper should own and reject caller overrides for `go_test_rule`,
+`orchestrion_pin_files`, and `topt_data`, so individual BUILD files cannot drift
+away from the centrally validated Test Optimization setup. Declare pilot
+services in `tools/test_optimization/repositories.bzl`, and keep the expected
+runtime targets for doctor/uploader validation in `tools/test_optimization/BUILD.bazel`.
+Use `orchestrion_mode = "general"` only for explicit compatibility validation,
+not for the normal dd-source Test Optimization onboarding path.
 
 ## Target Conversion
 

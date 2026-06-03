@@ -113,6 +113,11 @@ ToptGoImportpathInfo = provider(
     fields = {"importpath": "Go package importpath"},
 )
 
+ToptGoBazelMetadataInfo = provider(
+    doc = "Provider carrying the metadata map emitted by topt_go_bazel_metadata.",
+    fields = {"metadata": "JSON-serializable Bazel metadata map"},
+)
+
 def _importpath_aspect_impl(target, ctx):
     """Aspect to discover the Go importpath.
 
@@ -252,11 +257,13 @@ def _topt_go_bazel_metadata_impl(ctx):
         "bazel.go.importpath_source": selection.importpath_source,
         "bazel.go.payload_selection": selection.selection,
         "bazel.go.orchestrion.enabled": orchestrion_configured,
+        "bazel.go.orchestrion.mode": ctx.attr.orchestrion_mode,
         "bazel.go.attr.cgo": ctx.attr.cgo,
         "bazel.go.attr.pure": ctx.attr.pure,
         "bazel.go.attr.race": ctx.attr.race,
         "bazel.go.attr.msan": ctx.attr.msan,
         "bazel.go.attr.linkmode": ctx.attr.linkmode,
+        "bazel.go.test_binary_linker_optimization": ctx.attr.test_binary_linker_optimization,
     }
     if ctx.attr.goos:
         metadata["bazel.go.attr.goos"] = ctx.attr.goos
@@ -267,7 +274,10 @@ def _topt_go_bazel_metadata_impl(ctx):
         output = out,
         content = json.encode(metadata) + "\n",
     )
-    return [DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out]))]
+    return [
+        DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out])),
+        ToptGoBazelMetadataInfo(metadata = metadata),
+    ]
 
 def _orchestrion_metadata_enabled(orchestrion_requested, orchestrion_tool_files):
     """Return True when metadata should report Orchestrion as actually enabled."""
@@ -310,6 +320,7 @@ topt_go_bazel_metadata = rule(
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),
+        "orchestrion_mode": attr.string(default = "general", values = ["general", "test_optimization"]),
         "bazel_package": attr.string(mandatory = True),
         "bazel_target": attr.string(mandatory = True),
         "repo_name": attr.string(mandatory = True),
@@ -322,6 +333,7 @@ topt_go_bazel_metadata = rule(
         "linkmode": attr.string(default = "auto"),
         "goos": attr.string(),
         "goarch": attr.string(),
+        "test_binary_linker_optimization": attr.bool(default = False),
         "_orchestrion_tool": attr.label(
             allow_files = True,
             default = "@rules_go//go/private/orchestrion:tool_binary",

@@ -291,6 +291,7 @@ func TestRunWorkspaceModeWritesSelectedFilesWithoutModuleBazel(t *testing.T) {
 		`def dd_go_test(name, **kwargs):`,
 		`def dd_topt_go_test(name, **kwargs):`,
 		`load("@test_optimization_data_worker//:export.bzl", "topt_data")`,
+		`orchestrion_mode = "test_optimization"`,
 		`orchestrion_pin_files = _ORCHESTRION_PIN_FILES`,
 	} {
 		if !strings.Contains(wrapperText, want) {
@@ -2271,7 +2272,7 @@ func TestEnsureGuidedWrapperCreatesFiles(t *testing.T) {
 	if !strings.Contains(text, wrapperBlockStart) || !strings.Contains(text, `load("@test_optimization_data//:export.bzl", "topt_data")`) {
 		t.Fatalf("expected managed wrapper content:\n%s", text)
 	}
-	if !strings.Contains(text, `orchestrion_pin_files = _ORCHESTRION_PIN_FILES`) || !strings.Contains(text, `"//:orchestrion.tool.go"`) {
+	if !strings.Contains(text, `orchestrion_mode = "test_optimization"`) || !strings.Contains(text, `orchestrion_pin_files = _ORCHESTRION_PIN_FILES`) || !strings.Contains(text, `"//:orchestrion.tool.go"`) {
 		t.Fatalf("expected wrapper to pass root Orchestrion pin files:\n%s", text)
 	}
 }

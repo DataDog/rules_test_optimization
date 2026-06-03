@@ -33,10 +33,12 @@ import (
 	"strings"
 )
 
-var syntheticTestmainRootPackages = []struct {
+type syntheticTestmainRootPackage struct {
 	alias       string
 	packagePath string
-}{
+}
+
+var syntheticTestmainRootPackagesGeneral = []syntheticTestmainRootPackage{
 	{
 		alias:       "example.com/__orchestrion/gotesting",
 		packagePath: "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
@@ -67,7 +69,22 @@ var syntheticTestmainRootPackages = []struct {
 	},
 }
 
-var syntheticTestmainSourceCompiledPackages = map[string]bool{
+var syntheticTestmainRootPackagesTestOptimization = []syntheticTestmainRootPackage{
+	{
+		alias:       "example.com/__orchestrion/gotesting",
+		packagePath: "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+	},
+	{
+		alias:       "example.com/__orchestrion/integrations",
+		packagePath: "github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations",
+	},
+	{
+		alias:       "example.com/__orchestrion/tracer",
+		packagePath: "github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	},
+}
+
+var syntheticTestmainSourceCompiledPackagesGeneral = map[string]bool{
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting":          true,
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage": true,
 	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations":                    true,
@@ -77,6 +94,27 @@ var syntheticTestmainSourceCompiledPackages = map[string]bool{
 	"github.com/DataDog/dd-trace-go/contrib/net/http/v2":                                      true,
 	"github.com/DataDog/dd-trace-go/contrib/net/http/v2/internal/orchestrion":                 true,
 	"github.com/DataDog/dd-trace-go/contrib/log/slog/v2":                                      true,
+}
+
+var syntheticTestmainSourceCompiledPackagesTestOptimization = map[string]bool{
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting":          true,
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage": true,
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations":                    true,
+	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer":                                        true,
+}
+
+func syntheticTestmainRootPackagesForMode(mode string) []syntheticTestmainRootPackage {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return syntheticTestmainRootPackagesTestOptimization
+	}
+	return syntheticTestmainRootPackagesGeneral
+}
+
+func syntheticTestmainSourceCompiledPackagesForMode(mode string) map[string]bool {
+	if effectiveOrchestrionMode(mode) == orchestrionModeTestOptimization {
+		return syntheticTestmainSourceCompiledPackagesTestOptimization
+	}
+	return syntheticTestmainSourceCompiledPackagesGeneral
 }
 
 const syntheticTestmainPackagefileManifestName = "orchestrion.pack"
@@ -114,7 +152,7 @@ func compilePkg(args []string) error {
 	fs := flag.NewFlagSet("GoCompilePkg", flag.ExitOnError)
 	goenv := envFlags(fs)
 	var pack string
-	var unfilteredSrcs, coverSrcs, embedSrcs, embedLookupDirs, embedRoots, recompileInternalDeps multiFlag
+	var unfilteredSrcs, coverSrcs, embedSrcs, embedLookupDirs, embedRoots, recompileInternalDeps, orchestrionSrcDirs multiFlag
 	var deps archiveMultiFlag
 	var importPath, packagePath, packageListPath, coverMode string
 	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, cgoExportHPath, cgoGoSrcsPath string
@@ -123,8 +161,11 @@ func compilePkg(args []string) error {
 	var coverFormat string
 	var pgoprofile string
 	var orchestrion string
+	var orchestrionMode string
 	fs.StringVar(&pack, "pack", "", "Path of the pack tool.")
 	fs.StringVar(&orchestrion, "orchestrion", "", "Path to orchestrion binary for toolexec instrumentation")
+	fs.StringVar(&orchestrionMode, "orchestrion_mode", orchestrionModeGeneral, "Orchestrion integration mode")
+	fs.Var(&orchestrionSrcDirs, "orchsrc", "source directory that may contain Orchestrion pin files")
 	fs.Var(&unfilteredSrcs, "src", ".go, .c, .cc, .m, .mm, .s, or .S file to be filtered and compiled")
 	fs.Var(&coverSrcs, "cover", ".go file that should be instrumented for coverage (must also be a -src)")
 	fs.Var(&embedSrcs, "embedsrc", "file that may be compiled into the package with a //go:embed directive")
@@ -158,6 +199,11 @@ func compilePkg(args []string) error {
 	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
 		return err
 	}
+	orchestrionMode, err = validateOrchestrionMode(orchestrionMode)
+	if err != nil {
+		return err
+	}
+	goenv.orchestrionMode = orchestrionMode
 	if importPath == "" {
 		importPath = packagePath
 	}
@@ -216,7 +262,9 @@ func compilePkg(args []string) error {
 		coverFormat,
 		recompileInternalDeps,
 		pgoprofile,
-		orchestrion)
+		orchestrion,
+		orchestrionSrcDirs,
+		orchestrionMode)
 }
 
 func compileArchive(
@@ -251,12 +299,15 @@ func compileArchive(
 	recompileInternalDeps []string,
 	pgoprofile string,
 	orchestrion string,
+	orchestrionSrcDirs []string,
+	orchestrionMode string,
 ) (err error) {
 	span := beginProbe(
 		"compilepkg.compile_archive",
 		newProbeField("package_path", packagePath),
 		newProbeField("import_path", orchImportPath),
 		newProbeField("orchestrion", strconv.FormatBool(orchestrion != "")),
+		newProbeField("orchestrion_mode", orchestrionMode),
 	)
 	defer func() {
 		span.End(err)
@@ -421,8 +472,12 @@ func compileArchive(
 
 	syntheticTestmain := isSyntheticTestmainCompile(packagePath, goSrcs)
 	if syntheticTestmain && orchestrion != "" {
-		synthSpan := beginProbe("compilepkg.augment_synthetic_testmain_roots", newProbeField("package_path", packagePath))
-		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, pack, workDir, srcs, deps, embedLookupDirs, orchestrion)
+		synthSpan := beginProbe(
+			"compilepkg.augment_synthetic_testmain_roots",
+			newProbeField("package_path", packagePath),
+			newProbeField("orchestrion_mode", orchestrionMode),
+		)
+		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, pack, workDir, srcs, deps, embedLookupDirs, orchestrion, orchestrionMode)
 		synthSpan.End(err)
 		if err != nil {
 			return err
@@ -551,8 +606,10 @@ func compileArchive(
 	}
 
 	// Compile the filtered .go files.
+	// Keep the pre-augmentation synthetic testmain decision: augmenting roots adds
+	// linkdeps sources, but the final testmain compile should still stay plain.
 	compileSpan := beginProbe("compilepkg.compile_go", newProbeField("package_path", packagePath))
-	if err := compileGo(goenv, goSrcs, embedLookupDirs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, orchestrion); err != nil {
+	if err := compileGo(goenv, goSrcs, embedLookupDirs, orchestrionSrcDirs, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, pgoprofile, outLinkObj, outInterfacePath, coverageCfg, syntheticTestmain, orchestrion, orchestrionMode); err != nil {
 		compileSpan.End(err)
 		return err
 	}
@@ -611,17 +668,24 @@ func compileArchive(
 	return nil
 }
 
-func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiveSrcs, deps []archive, embedLookupDirs []string, orchestrion string) (_ archiveSrcs, _ []archive, _ string, err error) {
-	span := beginProbe("compilepkg.augment_synthetic_testmain_roots")
+func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiveSrcs, deps []archive, embedLookupDirs []string, orchestrion string, orchestrionMode string) (_ archiveSrcs, _ []archive, _ string, err error) {
+	rootPackages := syntheticTestmainRootPackagesForMode(orchestrionMode)
+	closurePackages := orchestrionLinkClosurePackagesForMode(orchestrionMode)
+	span := beginProbe(
+		"compilepkg.augment_synthetic_testmain_roots",
+		newProbeField("orchestrion_mode", effectiveOrchestrionMode(orchestrionMode)),
+		newProbeField("root_count", strconv.Itoa(len(rootPackages))),
+		newProbeField("closure_count", strconv.Itoa(len(closurePackages))),
+	)
 	defer func() {
 		span.End(err)
 	}()
 	existingArchives := existingArchivesByPackagePath(deps)
-	packages := make([]string, 0, len(syntheticTestmainRootPackages)+len(orchestrionLinkClosurePackages))
-	for _, root := range syntheticTestmainRootPackages {
+	packages := make([]string, 0, len(rootPackages)+len(closurePackages))
+	for _, root := range rootPackages {
 		packages = append(packages, root.packagePath)
 	}
-	for _, pkg := range orchestrionLinkClosurePackages {
+	for _, pkg := range closurePackages {
 		if pkg == "" {
 			continue
 		}
@@ -646,14 +710,14 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 	compileExports := make(map[string]string)
 	exportPackages := make([]string, 0, len(packages))
 	for _, pkg := range packages {
-		if isSyntheticTestmainSourceCompileCandidate(pkg) {
+		if isSyntheticTestmainSourceCompileCandidate(pkg, orchestrionMode) {
 			continue
 		}
 		exportPackages = append(exportPackages, pkg)
 	}
 
 	forcedExportRoot := ""
-	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, pack, workDir, moduleDir, packages, existingArchives); err != nil {
+	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, pack, workDir, moduleDir, packages, existingArchives, orchestrionMode); err != nil {
 		return srcs, deps, "", fmt.Errorf("compile synthetic testmain source packages: %w", err)
 	} else {
 		forcedExportRoot = exportRoot
@@ -692,7 +756,7 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 		}
 		manifestLines[line] = struct{}{}
 	}
-	for _, root := range syntheticTestmainRootPackages {
+	for _, root := range rootPackages {
 		compilePath := strings.TrimSpace(compileExports[root.packagePath])
 		linkPath := strings.TrimSpace(exports[root.packagePath])
 		if existing, ok := existingArchives[root.packagePath]; ok {
@@ -877,17 +941,18 @@ type syntheticTestmainHelperDecisionState struct {
 	externalPackages []string
 }
 
-func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir string, packages []string, existingArchives map[string]archive) (_ map[string]compiledModuleArchive, _ string, err error) {
+func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir string, packages []string, existingArchives map[string]archive, orchestrionMode string) (_ map[string]compiledModuleArchive, _ string, err error) {
 	span := beginProbe(
 		"compilepkg.compile_synthetic_testmain_source_packages",
 		newProbeField("package_count", strconv.Itoa(len(packages))),
+		newProbeField("orchestrion_mode", effectiveOrchestrionMode(orchestrionMode)),
 	)
 	defer func() {
 		span.End(err)
 	}()
 	selected := make([]string, 0, len(packages))
 	for _, pkg := range packages {
-		if isSyntheticTestmainSourceCompileCandidate(pkg) {
+		if isSyntheticTestmainSourceCompileCandidate(pkg, orchestrionMode) {
 			selected = append(selected, pkg)
 		}
 	}
@@ -895,7 +960,7 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 		return nil, "", nil
 	}
 
-	resolveModuleDir, err := prepareSyntheticTestmainModuleDir(workDir, moduleDir)
+	resolveModuleDir, err := prepareSyntheticTestmainModuleDir(workDir, moduleDir, orchestrionMode)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1004,7 +1069,7 @@ func compileSyntheticTestmainSourcePackages(goenv *env, pack, workDir, moduleDir
 	return loadSyntheticTestmainHelperCache(cachePaths)
 }
 
-func prepareSyntheticTestmainModuleDir(workDir, sourceModuleDir string) (string, error) {
+func prepareSyntheticTestmainModuleDir(workDir, sourceModuleDir string, orchestrionMode string) (string, error) {
 	versions, err := configuredDDTraceGoVersionsRequired()
 	if err != nil {
 		return "", err
@@ -1017,7 +1082,7 @@ func prepareSyntheticTestmainModuleDir(workDir, sourceModuleDir string) (string,
 	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
 		return "", fmt.Errorf("prepare synthetic testmain module dir: %w", err)
 	}
-	if _, err := seedSyntheticTestmainModuleFiles(sourceModuleDir, moduleDir, orchestrionVersion, versions); err != nil {
+	if _, err := seedSyntheticTestmainModuleFiles(sourceModuleDir, moduleDir, orchestrionVersion, versions, orchestrionMode); err != nil {
 		return "", err
 	}
 	return moduleDir, nil
@@ -1028,9 +1093,9 @@ func prepareSyntheticTestmainModuleDir(workDir, sourceModuleDir string) (string,
 // consumer packages, so they use the configured Orchestrion/dd-trace module graph
 // instead of copying the consumer go.mod. Copying the consumer graph can require
 // module versions that are intentionally absent from the offline tool proxy.
-func seedSyntheticTestmainModuleFiles(sourceModuleDir, syntheticDir, orchestrionVersion string, versions map[string]string) (bool, error) {
+func seedSyntheticTestmainModuleFiles(sourceModuleDir, syntheticDir, orchestrionVersion string, versions map[string]string, orchestrionMode string) (bool, error) {
 	goModPath := filepath.Join(syntheticDir, "go.mod")
-	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(orchestrionVersion, versions)), 0o644); err != nil {
+	if err := os.WriteFile(goModPath, []byte(syntheticOrchestrionGoMod(orchestrionVersion, versions, orchestrionMode)), 0o644); err != nil {
 		return false, fmt.Errorf("write synthetic testmain go.mod: %w", err)
 	}
 	return false, nil
@@ -1284,13 +1349,15 @@ func syntheticTestmainHelperCacheKeyParts(goenv *env) ([]string, error) {
 		return nil, err
 	}
 	return []string{
-		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
+		"configured_versions=" + ddTraceVersionsDigest(configuredVersions, goenv.orchestrionMode),
+		"orchestrion_mode=" + effectiveOrchestrionMode(goenv.orchestrionMode),
 		"sdk=" + sdkIdentity,
 		"target=" + goTargetIdentity(os.Environ()),
 		"installsuffix=" + goenv.installSuffix,
 		"stdlib=" + stdlibKey,
 		"orchestrion=" + orchestrionToolVersionIdentity(),
 		"source_set=" + helperSourceSetVersion,
+		"helper_export_cache=" + helperExportCacheABIVersion,
 		"helper_archive_cache=" + helperArchiveCacheABIVersion,
 	}, nil
 }
@@ -1351,7 +1418,8 @@ func syntheticTestmainHelperDecisionCacheKeyParts(goenv *env) ([]string, error) 
 		return nil, err
 	}
 	return []string{
-		"configured_versions=" + ddTraceVersionsDigest(configuredVersions),
+		"configured_versions=" + ddTraceVersionsDigest(configuredVersions, goenv.orchestrionMode),
+		"orchestrion_mode=" + effectiveOrchestrionMode(goenv.orchestrionMode),
 		"sdk=" + sdkIdentity,
 		"target=" + goTargetIdentity(os.Environ()),
 		"orchestrion=" + orchestrionToolVersionIdentity(),
@@ -1657,6 +1725,9 @@ func loadSyntheticTestmainHelperCache(paths cachePaths) (map[string]compiledModu
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, "", fmt.Errorf("parse synthetic helper cache manifest %s: %w", paths.manifestPath, err)
 	}
+	if manifest.HelperArchiveCache != helperArchiveCacheABIVersion {
+		return nil, "", fmt.Errorf("synthetic helper cache manifest %s has archive cache ABI %q, want %q", paths.manifestPath, manifest.HelperArchiveCache, helperArchiveCacheABIVersion)
+	}
 	compiled := make(map[string]compiledModuleArchive, len(manifest.Packages))
 	for pkg, archive := range manifest.Packages {
 		linkClosure := make(map[string]string, len(archive.LinkClosure))
@@ -1843,6 +1914,10 @@ func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg s
 	if visiting[pkg] {
 		return rootSet[pkg], nil
 	}
+	orchestrionMode := orchestrionModeGeneral
+	if goenv != nil {
+		orchestrionMode = effectiveOrchestrionMode(goenv.orchestrionMode)
+	}
 	meta, err := loadModulePackageMetadataCached(goenv, moduleDir, exportRoot, metaCache, pkg)
 	if err != nil {
 		return false, err
@@ -1859,7 +1934,9 @@ func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg s
 		if imp == "" || !strings.Contains(imp, ".") {
 			switch imp {
 			case "flag", "log", "log/slog", "net/http", "os", "os/exec", "testing":
-				needsCompile = true
+				if syntheticStdlibImportForcesSourceCompile(pkg, orchestrionMode) {
+					needsCompile = true
+				}
 			}
 			continue
 		}
@@ -1873,6 +1950,13 @@ func packageNeedsSyntheticSourceCompile(goenv *env, moduleDir, exportRoot, pkg s
 	}
 	decisions[pkg] = needsCompile
 	return needsCompile, nil
+}
+
+// syntheticStdlibImportForcesSourceCompile reports whether a package that
+// imports stdlib archives touched by the synthetic helper graph must be rebuilt
+// from source to keep compiler and linker fingerprints aligned.
+func syntheticStdlibImportForcesSourceCompile(_ string, _ string) bool {
+	return true
 }
 
 func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir, exportRoot string, rootSet map[string]bool, sourceDecisions map[string]bool, metaCache map[string]*modulePackageMetadata, compiled map[string]compiledModuleArchive, externalExports map[string]string, pkg string) (_ string, _ string, err error) {
@@ -2016,7 +2100,7 @@ func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir,
 			return "", "", fmt.Errorf("build symabis for %s: %w", pkg, err)
 		}
 	}
-	if err := compileGo(goenv, goSrcs, nil, meta.ImportPath, meta.ImportPath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, "", outLinkobjPath, outInterfacePath, "", ""); err != nil {
+	if err := compileGo(goenv, goSrcs, nil, nil, meta.ImportPath, meta.ImportPath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath, gcFlags, "", outLinkobjPath, outInterfacePath, "", false, "", goenv.orchestrionMode); err != nil {
 		return "", "", fmt.Errorf("compile synthetic helper %s: %w", pkg, err)
 	}
 	objFiles := make([]string, 0, len(filteredSrcs.sSrcs)+len(filteredSrcs.sysoSrcs))
@@ -2083,22 +2167,24 @@ func shouldSkipOrchestrionForImportPath(importPath string) bool {
 // explicit set covers public helper entry points, while the prefix rules keep
 // internal helper packages aligned without adding every new helper dependency
 // to a fixed list.
-func isSyntheticTestmainSourceCompileCandidate(importPath string) bool {
+func isSyntheticTestmainSourceCompileCandidate(importPath string, orchestrionMode string) bool {
 	importPath = strings.TrimSpace(importPath)
-	if syntheticTestmainSourceCompiledPackages[importPath] {
+	if syntheticTestmainSourceCompiledPackagesForMode(orchestrionMode)[importPath] {
 		return true
 	}
-	if strings.HasPrefix(importPath, "github.com/DataDog/dd-trace-go/v2/internal/") {
+	if effectiveOrchestrionMode(orchestrionMode) == orchestrionModeGeneral &&
+		strings.HasPrefix(importPath, "github.com/DataDog/dd-trace-go/v2/internal/") {
 		return true
 	}
-	if strings.HasPrefix(importPath, "github.com/DataDog/dd-trace-go/contrib/") &&
+	if effectiveOrchestrionMode(orchestrionMode) == orchestrionModeGeneral &&
+		strings.HasPrefix(importPath, "github.com/DataDog/dd-trace-go/contrib/") &&
 		strings.Contains(importPath, "/internal/orchestrion") {
 		return true
 	}
 	return false
 }
 
-func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string, _ string) (string, error) {
+func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, deps []archive, packageListPath string, recompileInternalDeps []string, compilingWithCgo bool, coverMode string, workDir string, orchestrion string) (string, error) {
 	// Check that the filtered sources don't import anything outside of
 	// the standard library and the direct dependencies.
 	imports, err := checkImports(srcs.goSrcs, deps, packageListPath, importPath, recompileInternalDeps)
@@ -2135,6 +2221,9 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	if err != nil {
 		return "", err
 	}
+	if orchestrion == "" {
+		return importcfgPath, nil
+	}
 	if shouldSkipOrchestrionForImportPath(importPath) {
 		if err := rewriteImportcfgFromCurrentStdlibEntries(importcfgPath, goenv); err != nil {
 			return "", fmt.Errorf("compilepkg: rewrite importcfg from helper package stdlib entries: %w", err)
@@ -2147,7 +2236,7 @@ func checkImportsAndBuildCfg(goenv *env, importPath string, srcs archiveSrcs, de
 	return importcfgPath, nil
 }
 
-func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg, orchestrion string) (err error) {
+func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchestrionSrcDirs []string, orchImportPath, packagePath, importcfgPath, embedcfgPath, asmHdrPath, symabisPath string, gcFlags []string, pgoprofile, outLinkobjPath, outInterfacePath, coverageCfg string, syntheticTestmain bool, orchestrion string, orchestrionMode string) (err error) {
 	span := beginProbe(
 		"compilepkg.compile_go_action",
 		newProbeField("package_path", packagePath),
@@ -2157,7 +2246,6 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPa
 		span.End(err)
 	}()
 	sdkPath := abs(goenv.sdk)
-	syntheticTestmain := isSyntheticTestmainCompile(packagePath, srcs)
 	if shouldSkipOrchestrionForImportPath(orchImportPath) {
 		orchestrion = ""
 	}
@@ -2224,11 +2312,14 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPa
 		for _, lookupDir := range embedLookupDirs {
 			addSrcDir(lookupDir)
 		}
+		for _, dir := range orchestrionSrcDirs {
+			addSrcDir(dir)
+		}
 		for _, src := range srcs {
 			addSrcDir(filepath.Dir(src))
 		}
 		workDirSpan := beginProbe("compilepkg.compile_go_action.enter_orchestrion_workdir", newProbeField("package_path", packagePath))
-		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose)
+		restoreOrchWorkDir, err := enterOrchestrionWorkDir(srcDirs, goenv.verbose, orchestrionMode)
 		workDirSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("compilepkg: %w", err)
@@ -2239,12 +2330,21 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPa
 			orchImportPath += ".test"
 		}
 		goModSpan := beginProbe("compilepkg.compile_go_action.ensure_go_mod_exists", newProbeField("package_path", packagePath))
-		cleanupGoMod, err := ensureGoModExists(srcDirs, sdkPath, goenv.verbose)
+		cleanupGoMod, err := ensureGoModExists(srcDirs, sdkPath, goenv.verbose, orchestrionMode)
 		goModSpan.End(err)
 		if err != nil {
 			return fmt.Errorf("compilepkg: %w", err)
 		}
 		defer cleanupGoMod()
+	}
+
+	// TOOLEXEC_IMPORTPATH should match the compiler import path, not Bazel's
+	// internal importmap/package path.
+	runSpan := beginProbe("compilepkg.compile_go_action.run_command", newProbeField("package_path", packagePath))
+	if orchestrion == "" {
+		err = goenv.runCommand(args)
+		runSpan.End(err)
+		return err
 	}
 
 	// Start orchestrion jobserver if needed. Use the normalized GOROOT captured
@@ -2254,21 +2354,18 @@ func compileGo(goenv *env, srcs []string, embedLookupDirs []string, orchImportPa
 		goRootPath = os.Getenv("GOROOT")
 	}
 	var jobserver *orchestrionJobserver
-	if !syntheticTestmain {
-		var err error
-		jobserverSpan := beginProbe("compilepkg.compile_go_action.start_jobserver", newProbeField("package_path", packagePath))
-		jobserver, err = startOrchestrionJobserver(orchestrion, sdkPath, goRootPath, goenv.verbose)
-		jobserverSpan.End(err)
-		if err != nil {
-			return fmt.Errorf("compilepkg: failed to start orchestrion jobserver: %w", err)
-		}
+	jobserverSpan := beginProbe("compilepkg.compile_go_action.start_jobserver", newProbeField("package_path", packagePath))
+	jobserver, err = startOrchestrionJobserver(orchestrion, sdkPath, goRootPath, goenv.verbose, orchestrionMode)
+	jobserverSpan.End(err)
+	if err != nil {
+		runSpan.End(err)
+		return fmt.Errorf("compilepkg: failed to start orchestrion jobserver: %w", err)
+	}
+	if jobserver != nil {
 		defer jobserver.cleanup()
 	}
 
-	// TOOLEXEC_IMPORTPATH should match the compiler import path, not Bazel's
-	// internal importmap/package path.
-	runSpan := beginProbe("compilepkg.compile_go_action.run_command", newProbeField("package_path", packagePath))
-	err = goenv.runCommandWithJobserver(args, jobserver, orchImportPath)
+	err = goenv.runCommandWithJobserver(args, jobserver, orchImportPath, orchestrion != "")
 	runSpan.End(err)
 	return err
 }

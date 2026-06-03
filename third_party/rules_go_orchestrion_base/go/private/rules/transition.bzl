@@ -161,6 +161,10 @@ go_transition = transition(
     ] + TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
 )
 
+_ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
+_ORCHESTRION_MODE_SETTING = "//go/private/orchestrion:mode"
+_ORCHESTRION_MODE_GENERAL = "general"
+
 def _request_nogo_transition(settings, _attr):
     """Indicates that we want the project configured nogo instead of a noop.
 
@@ -173,13 +177,14 @@ def _request_nogo_transition(settings, _attr):
     """
     settings = dict(settings)
     settings["//go/private:request_nogo"] = True
-    settings["//go/private/orchestrion:enabled"] = settings.get("//go/private/orchestrion:enabled", False)
+    settings[_ORCHESTRION_ENABLED_SETTING] = settings.get(_ORCHESTRION_ENABLED_SETTING, False)
+    settings[_ORCHESTRION_MODE_SETTING] = settings.get(_ORCHESTRION_MODE_SETTING, _ORCHESTRION_MODE_GENERAL)
     return settings
 
 request_nogo_transition = transition(
     implementation = _request_nogo_transition,
-    inputs = ["//go/private/orchestrion:enabled"],
-    outputs = ["//go/private:request_nogo", "//go/private/orchestrion:enabled"],
+    inputs = [_ORCHESTRION_ENABLED_SETTING, _ORCHESTRION_MODE_SETTING],
+    outputs = ["//go/private:request_nogo", _ORCHESTRION_ENABLED_SETTING, _ORCHESTRION_MODE_SETTING],
 )
 
 def _non_request_nogo_transition(settings, _attr):
@@ -190,16 +195,15 @@ def _non_request_nogo_transition(settings, _attr):
     # for CC toolchain dependencies when doing CGO.
     return {
         "//go/private:request_nogo": False,
-        "//go/private/orchestrion:enabled": settings.get("//go/private/orchestrion:enabled", False),
+        _ORCHESTRION_ENABLED_SETTING: settings.get(_ORCHESTRION_ENABLED_SETTING, False),
+        _ORCHESTRION_MODE_SETTING: settings.get(_ORCHESTRION_MODE_SETTING, _ORCHESTRION_MODE_GENERAL),
     }
 
 non_request_nogo_transition = transition(
     implementation = _non_request_nogo_transition,
-    inputs = ["//go/private/orchestrion:enabled"],
-    outputs = ["//go/private:request_nogo", "//go/private/orchestrion:enabled"],
+    inputs = [_ORCHESTRION_ENABLED_SETTING, _ORCHESTRION_MODE_SETTING],
+    outputs = ["//go/private:request_nogo", _ORCHESTRION_ENABLED_SETTING, _ORCHESTRION_MODE_SETTING],
 )
-
-_ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
 
 _common_reset_transition_dict = dict({
     "//go/private:request_nogo": False,
@@ -216,12 +220,14 @@ _common_reset_transition_dict = dict({
 _reset_transition_dict = dict(_common_reset_transition_dict, **{
     "//go/private:bootstrap_nogo": True,
     _ORCHESTRION_ENABLED_SETTING: False,
+    _ORCHESTRION_MODE_SETTING: _ORCHESTRION_MODE_GENERAL,
 })
 
 _reset_transition_keys = sorted(_reset_transition_dict.keys())
 
 _stdlib_keep_keys = sorted([
     _ORCHESTRION_ENABLED_SETTING,
+    _ORCHESTRION_MODE_SETTING,
     "//go/config:msan",
     "//go/config:race",
     "//go/config:pure",

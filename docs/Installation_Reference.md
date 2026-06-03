@@ -290,7 +290,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
 The generated wrapper template creates a plain local wrapper and an optimized
 local wrapper. Keep repository-specific scheduling, tags, flaky behavior,
 Docker defaults, and platform constraints in the local policy helper; the
-optimized wrapper owns only `topt_data` and `orchestrion_pin_files`.
+optimized wrapper owns only `topt_data`, `orchestrion_mode = "test_optimization"`,
+and `orchestrion_pin_files`.
 WORKSPACE mode does not run Go module commands unless `--go-mod-sync` is passed
 explicitly, so large repos can review generated files before changing
 `go.mod`/`go.sum`.
@@ -1116,9 +1117,19 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],  # Enables provider-based importpath inference
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data,
 )
 ```
+
+Use `orchestrion_mode = "test_optimization"` for standard Go `testing` Test
+Optimization. `general` remains the default mode for broader generic
+Orchestrion behavior; the full mode contract is summarized in
+[`Configuration_Reference.md`](./Configuration_Reference.md#go-test-optimization-orchestrion-mode).
+The `test_optimization` mode keeps the stdlib `testing` instrumentation and
+synthetic `testmain` support required for payloads while leaving customer
+package compiles on the normal rules_go path. It does not automatically
+instrument `testify/suite`.
 
 If the tracer needs runtime-visible source files for AST-derived metadata such
 as `test.source.end`, enable source staging explicitly:
@@ -1128,6 +1139,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
+    orchestrion_mode = "test_optimization",
     stage_sources = True,
     topt_data = topt_data,
 )
@@ -1159,6 +1171,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
+    orchestrion_mode = "test_optimization",
     orchestrion_pin_files = [
         "//:go.mod",
         "//:go.sum",
@@ -1168,3 +1181,8 @@ dd_topt_go_test(
     topt_data = topt_data,
 )
 ```
+
+For pure `test_optimization` mode, `go.mod` plus `go.sum` are the required module
+pins and `orchestrion.yml` is included when the repository uses one. A generic
+Orchestrion setup may still keep `orchestrion.tool.go`; the optimized mode uses
+a reduced synthetic tool file for action-time module work.

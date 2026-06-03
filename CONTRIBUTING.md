@@ -82,6 +82,10 @@ This product includes software developed at Datadog
     - normal mode
     - hermetic mode with the inline CI sandbox/network-blocking flags
     - structural `aquery` assertions for the Orchestrion offline module proxy wiring
+  - For Go Orchestrion changes, run each relevant script with both
+    `ORCHESTRION_MODE=general` and `ORCHESTRION_MODE=test_optimization`; the
+    optimized mode is the standard Go `testing` Test Optimization path and
+    should still produce payloads.
 - Vendored rules_go variant smoke:
   - `RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh`
   - `RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_smoke.sh`
@@ -174,6 +178,8 @@ This product includes software developed at Datadog
   error diagnostics remain actionable.
 - [ ] Ran split-aware validation commands relevant to changed files.
 - [ ] Updated docs/snippets for any load-path, module, or API changes.
+- [ ] For Go Orchestrion changes, documented any `orchestrion_mode` behavior,
+  unsupported `testify/suite` scope, opt-out flags, and payload metadata changes.
 - [ ] Updated `LICENSE-3rdparty.csv` for dependency or vendored-code changes.
 - [ ] Confirmed no stale references to removed legacy paths (for example
   `//tools/go:*`, replaced by `modules/go/...` targets).

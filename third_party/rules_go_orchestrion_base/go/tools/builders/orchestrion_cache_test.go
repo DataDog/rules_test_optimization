@@ -30,6 +30,37 @@ func TestCacheEntryReadyRequiresManifestAndReady(t *testing.T) {
 	}
 }
 
+func TestDDTraceVersionsDigestUsesEffectiveModeModules(t *testing.T) {
+	baseVersions := map[string]string{
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0",
+	}
+	contribChanged := map[string]string{
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0",
+	}
+	rootChanged := map[string]string{
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.7.1",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.8.0",
+	}
+
+	if ddTraceVersionsDigest(baseVersions, orchestrionModeGeneral) == ddTraceVersionsDigest(contribChanged, orchestrionModeGeneral) {
+		t.Fatal("general mode digest should include contrib module versions")
+	}
+	if ddTraceVersionsDigest(baseVersions, orchestrionModeTestOptimization) != ddTraceVersionsDigest(contribChanged, orchestrionModeTestOptimization) {
+		t.Fatal("test_optimization digest should ignore unused contrib module versions")
+	}
+	if ddTraceVersionsDigest(baseVersions, orchestrionModeGeneral) == ddTraceVersionsDigest(rootChanged, orchestrionModeGeneral) {
+		t.Fatal("general mode digest should include the root tracer module version")
+	}
+	if ddTraceVersionsDigest(baseVersions, orchestrionModeTestOptimization) == ddTraceVersionsDigest(rootChanged, orchestrionModeTestOptimization) {
+		t.Fatal("test_optimization digest should include the root tracer module version")
+	}
+}
+
 func TestAcquireCacheLockReplacesStaleLock(t *testing.T) {
 	lockDir := filepath.Join(t.TempDir(), "cache.lock")
 	if err := os.MkdirAll(lockDir, 0o755); err != nil {

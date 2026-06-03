@@ -314,28 +314,52 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Validate WORKSPACE Go companion path (base)
+      - name: Validate WORKSPACE Go companion path (base, general)
         shell: bash
         run: |
           USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
             ./tools/tests/integration/run_workspace_go_integration.sh
 
-      - name: Validate WORKSPACE Go companion path (complete)
+      - name: Validate WORKSPACE Go companion path (complete, general)
         shell: bash
         run: |
           USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
             ./tools/tests/integration/run_workspace_go_integration.sh
 
-      - name: Validate Bzlmod Go companion path (base)
+      - name: Validate Bzlmod Go companion path (base, general)
         shell: bash
         run: |
           USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
             ./tools/tests/integration/run_bzlmod_go_integration.sh
 
-      - name: Validate Bzlmod Go companion path (complete)
+      - name: Validate Bzlmod Go companion path (complete, general)
         shell: bash
         run: |
           USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
+            ./tools/tests/integration/run_bzlmod_go_integration.sh
+
+      - name: Validate WORKSPACE Go companion path (base, test_optimization)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base ORCHESTRION_MODE=test_optimization \
+            ./tools/tests/integration/run_workspace_go_integration.sh
+
+      - name: Validate WORKSPACE Go companion path (complete, test_optimization)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete ORCHESTRION_MODE=test_optimization \
+            ./tools/tests/integration/run_workspace_go_integration.sh
+
+      - name: Validate Bzlmod Go companion path (base, test_optimization)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base ORCHESTRION_MODE=test_optimization \
+            ./tools/tests/integration/run_bzlmod_go_integration.sh
+
+      - name: Validate Bzlmod Go companion path (complete, test_optimization)
+        shell: bash
+        run: |
+          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete ORCHESTRION_MODE=test_optimization \
             ./tools/tests/integration/run_bzlmod_go_integration.sh
 
   coverage-tools:

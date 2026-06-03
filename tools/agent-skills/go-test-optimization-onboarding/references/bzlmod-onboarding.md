@@ -214,6 +214,7 @@ dd_topt_go_test(
     name = "go_default_test",
     srcs = ["service_test.go"],
     embed = [":service_lib"],
+    orchestrion_mode = "test_optimization",
     orchestrion_pin_files = [
         "//:go.mod",
         "//:go.sum",
@@ -227,6 +228,11 @@ dd_topt_go_test(
 Prefer `embed` so the macro can infer the same import path that `rules_go`
 uses. Use explicit `importpath` only when the repository already uses explicit
 import paths and the value is known to match the compiled package.
+
+Set `orchestrion_mode = "test_optimization"` for standard Go `testing`
+onboarding. The generated local wrapper should inject this mode; manual
+`dd_topt_go_test` callsites must set it explicitly. Automatic `testify/suite`
+instrumentation is outside this mode.
 
 Pass `orchestrion_pin_files` whenever tests live outside the package that owns
 the pin files. Ensure those labels are exported from the owning package. The
@@ -289,6 +295,7 @@ dd_topt_go_test(
     name = "go_default_test",
     srcs = ["service_test.go"],
     embed = [":service_lib"],
+    orchestrion_mode = "test_optimization",
     orchestrion_pin_files = [
         "//:go.mod",
         "//:go.sum",

@@ -43,6 +43,7 @@ BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion"
 BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-rc.2}"
@@ -266,7 +267,10 @@ go_reset_target(
 
 dd_topt_go_test(
     name = "hello_test",
-    srcs = ["hello_test.go"],
+    srcs = [
+        "hello_external_test.go",
+        "hello_test.go",
+    ],
     data = [":fixture_tool_reset"],
     embed = [":hello_lib"],
     orchestrion_pin_files = [
@@ -275,6 +279,7 @@ dd_topt_go_test(
         "//:orchestrion.tool.go",
         "//:orchestrion.yml",
     ],
+    orchestrion_mode = "${ORCHESTRION_MODE}",
     topt_data = topt_data,
 )
 EOF
@@ -291,6 +296,14 @@ EOF
 package main
 
 func main() {}
+EOF
+
+  cat > "$ws_dir/app/hello_external_test.go" <<'EOF'
+package main_test
+
+import "testing"
+
+func TestExternalPackageArchive(t *testing.T) {}
 EOF
 
   cat > "$ws_dir/app/hello_test.go" <<EOF
@@ -313,6 +326,7 @@ const (
 	wantBazelTarget = "//app:hello_test"
 	wantModuleImportpath = "${MODULE_IMPORTPATH}"
 	wantOrchestrionEnabled = true
+	wantOrchestrionMode = "${ORCHESTRION_MODE}"
 )
 
 func resolveRlocation(p string) (string, bool) {
@@ -448,6 +462,15 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	}
 	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
 		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
+	}
+	if got, _ := metadata["bazel.go.orchestrion.mode"].(string); got != wantOrchestrionMode {
+		t.Fatalf("bazel.go.orchestrion.mode = %v, want %q", metadata["bazel.go.orchestrion.mode"], wantOrchestrionMode)
+	}
+	// This runtime lane uses Bazel's default fastbuild/strip=sometimes
+	// configuration, where the macro does not add its own test-only linker flags.
+	wantLinkerOptimization := false
+	if got, _ := metadata["bazel.go.test_binary_linker_optimization"].(bool); got != wantLinkerOptimization {
+		t.Fatalf("bazel.go.test_binary_linker_optimization = %v, want %v", metadata["bazel.go.test_binary_linker_optimization"], wantLinkerOptimization)
 	}
 	if got, _ := metadata["bazel.go.attr.cgo"].(bool); got {
 		t.Fatalf("bazel.go.attr.cgo = %v, want false", metadata["bazel.go.attr.cgo"])
@@ -718,6 +741,8 @@ run_positive_subscenario() {
   local hermetic_home="$hermetic_root/home"
   local hermetic_xdg="$hermetic_root/xdg-cache"
   local aquery_output="$hermetic_root/hello_test_aquery.textproto"
+  local opt_aquery_output="$hermetic_root/hello_test_opt_aquery.textproto"
+  local no_strip_aquery_output="$hermetic_root/hello_test_no_strip_aquery.textproto"
   local output_base=""
   local start_ns=""
   local end_ns=""
@@ -782,7 +807,59 @@ PY
       --output=textproto > "$aquery_output"
   )
 
-  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" "$aquery_output"
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
+    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
+    --required-test-optimization-pin-file go.mod \
+    --required-test-optimization-pin-file orchestrion.yml \
+    --require-plain-compile-in-test-optimization \
+    --require-reduced-synthetic-testmain-link-inputs \
+    --require-test-optimization-linker-flags \
+    --expected-test-optimization-linker-flag-count 2 \
+    "$aquery_output"
+
+  (
+    cd "$ws_dir"
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      --compilation_mode=opt \
+      "deps(${HELLO_TEST_TARGET})" \
+      --output=textproto > "$opt_aquery_output"
+  )
+
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
+    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
+    --required-test-optimization-pin-file go.mod \
+    --required-test-optimization-pin-file orchestrion.yml \
+    --require-plain-compile-in-test-optimization \
+    --require-reduced-synthetic-testmain-link-inputs \
+    --require-test-optimization-linker-flags \
+    --expected-test-optimization-linker-flag-count 1 \
+    "$opt_aquery_output"
+
+  (
+    cd "$ws_dir"
+    HOME="$hermetic_home" \
+    XDG_CACHE_HOME="$hermetic_xdg" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+      "${workspace_flags[@]}" \
+      "${HERMETIC_BUILD_FLAGS[@]}" \
+      --strip=never \
+      "deps(${HELLO_TEST_TARGET})" \
+      --output=textproto > "$no_strip_aquery_output"
+  )
+
+  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
+    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
+    --required-test-optimization-pin-file go.mod \
+    --required-test-optimization-pin-file orchestrion.yml \
+    --require-plain-compile-in-test-optimization \
+    --require-reduced-synthetic-testmain-link-inputs \
+    --require-test-optimization-linker-flags \
+    --expected-test-optimization-linker-flag-count 0 \
+    "$no_strip_aquery_output"
 }
 
 run_expected_failure() {

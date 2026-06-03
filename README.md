@@ -339,6 +339,8 @@ The bootstrap helper:
 - can print or write the recommended `.bazelrc` block with
   `--print-bazelrc-snippet` or `--write-bazelrc`
 - creates `//tools/build:dd_go_test.bzl` for workspace-local Go tests
+- configures that wrapper with `orchestrion_mode = "test_optimization"` for the
+  standard Go `testing` Test Optimization path
 - writes a deterministic `orchestrion.tool.go` that matches the Bazel-side Orchestrion wiring
 - repins `dd-trace-go` and the Orchestrion-managed Go helper packages to the resolved tracer versions
 - writes a starter `orchestrion.yml` when missing
@@ -386,7 +388,9 @@ dd_go_test(
 
 Use the manual `dd_topt_go_test(..., topt_data = ...)` path only when the
 workspace already has custom sync wiring, mixed-language layout, or multi-service
-Go setup.
+Go setup. Manual Go callsites should set
+`orchestrion_mode = "test_optimization"` for standard Go `testing`; the default
+`general` mode preserves broader generic Orchestrion behavior.
 
 ### Bzlmod + Python companion (`dd_topt_py_test`)
 
@@ -719,6 +723,7 @@ def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         topt_data = topt_data,
+        orchestrion_mode = "test_optimization",
         orchestrion_pin_files = [
             "//:go.mod",
             "//:go.sum",
@@ -1501,6 +1506,53 @@ dd_topt_go_test(
 `dd_topt_go_test` enables CI Visibility and payload-to-files mode by default,
 so opt-in Go tests emit payload files without extra `--test_env` settings.
 
+### Go Orchestrion mode selection
+
+`dd_topt_go_test` accepts `orchestrion_mode`:
+
+| Value | Description |
+|-------|-------------|
+| `general` | Default. Preserves broad generic Orchestrion behavior for consumers that need instrumentation beyond the Test Optimization-only Go testing path. |
+| `test_optimization` | Standard Go `testing` Test Optimization mode. Keeps the stdlib `testing`, synthetic `testmain`, helper packagefile, importcfg, and link support needed for payloads while leaving customer package compiles and external `_test` package compiles on the normal rules_go path. |
+
+For standard Go `testing` onboarding, including large WORKSPACE monorepos that
+only need Test Optimization payloads, use the `test_optimization` mode shown
+next. The basic snippet above leaves the default `general` mode implicit.
+
+### Standard `testing` Orchestrion mode
+
+`dd_topt_go_test` also accepts:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test",
+    srcs = ["*_test.go"],
+    embed = [":pkg_lib"],
+    orchestrion_mode = "test_optimization",
+    orchestrion_pin_files = [
+        "//:go.mod",
+        "//:go.sum",
+        "//:orchestrion.tool.go",
+        "//:orchestrion.yml",
+    ],
+    topt_data = topt_data,
+)
+```
+
+In this mode, the Go fork keeps the standard-library `testing` path,
+synthetic `testmain` helper packagefiles, importcfg rewrites, and final link
+support needed for Test Optimization payloads. Customer package compiles and
+external `_test` package compiles stay on the normal rules_go compile path.
+
+When enabled, the macro also applies test-binary-only linker flags in Bazel modes
+where rules_go is not already stripping. Set
+`enable_test_binary_linker_optimization = False` on a specific
+`dd_topt_go_test` target or repo-local wrapper if a consumer needs the exact
+caller-provided linker flags during rollout.
+
+This mode is for standard Go `testing` support. Automatic `testify/suite`
+instrumentation is not supported in `test_optimization` mode.
+
 If the tracer needs runtime-visible source files for AST-derived metadata such
 as `test.source.end`, enable source staging explicitly:
 
@@ -1509,6 +1561,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
+    orchestrion_mode = "test_optimization",
     stage_sources = True,
     topt_data = topt_data,
 )
@@ -1576,6 +1629,7 @@ dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
     data = glob(["testdata/**"]),
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data,
 )
 ```
@@ -1603,6 +1657,7 @@ dd_topt_go_test(
     srcs = ["*_test.go"],
     embed = [":pkg_lib"],
     module_label_override = "github_com_example_custom_pkg",
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data,
 )
 ```
@@ -1619,6 +1674,7 @@ load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 dd_topt_go_test(
     name = "pkg_go_test",
     srcs = ["*_test.go"],
+    orchestrion_mode = "test_optimization",
     topt_data = topt_data_by_service,   # pass mapping
     topt_service = "go_service_a",      # select service
 )

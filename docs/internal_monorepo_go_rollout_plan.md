@@ -61,6 +61,9 @@ SHA256, and archive prefix generated from the same published commit.
   - `require_git_metadata = True`
 - Keep repository-specific scheduling, Docker, tags, platform constraints, and
   flaky policy in the repository-local wrapper layer.
+- Set `orchestrion_mode = "test_optimization"` in the optimized wrapper for
+  standard Go `testing` Test Optimization pilots. The `general` mode remains
+  available for explicit compatibility validation only.
 - Keep a plain wrapper path for controls and unconverted tests.
 - Convert only the agreed runtime-emitting pilot targets first.
 - Do not list `.build_test`, compile-only, or other build-only controls as
