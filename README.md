@@ -168,6 +168,26 @@ prints `RTO_COMMIT`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
 and the default Orchestrion version. Published GitHub pins use `tar.gz`; other
 archive types must be mirrored and documented outside this helper.
 
+Current `v1.2.0` GitHub pins:
+
+```bash
+RTO_COMMIT="69953536d4ef1252c8181c267d16c61263f0aa4c"
+RTO_REMOTE="https://github.com/DataDog/rules_test_optimization.git"
+RTO_ARCHIVE_URL="https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/69953536d4ef1252c8181c267d16c61263f0aa4c"
+RTO_ARCHIVE_SHA256="fd54d1871fc01ff0bb3db190dfaadaa8256edd68a4f3bb85ecc08b315fbf5bd4"
+RTO_ARCHIVE_PREFIX="rules_test_optimization-69953536d4ef1252c8181c267d16c61263f0aa4c"
+RTO_ARCHIVE_TYPE="tar.gz"
+RULES_GO_VARIANT="complete"
+RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_complete"
+DD_TRACE_GO_VERSION="v2.9.0-rc.2"
+ORCHESTRION_VERSION="v1.9.0"
+```
+
+The archive URL, SHA256, and prefix are tied to the repository commit. Use the
+same values with `RULES_GO_VARIANT="base"` and
+`RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_base"` when a
+consumer should use the base variant instead of the complete variant.
+
 Consumers using the Go bootstrap can print the same tuple or write a
 repository-local summary:
 
