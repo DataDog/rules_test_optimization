@@ -4,5 +4,5 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-pytest>=9.0.3
+pytest>=9.1.0
 ddtrace==4.10.1
