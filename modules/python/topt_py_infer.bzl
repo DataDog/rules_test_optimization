@@ -15,9 +15,11 @@ This companion mirrors the Go selector flow:
 load(
     "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
     "select_module_group_name",
+    "selected_payload_runfiles",
 )
 
 _select_module_group_name = select_module_group_name
+_selected_payload_runfiles = selected_payload_runfiles
 
 # Public aliases for unit tests.
 select_module_group_name_for_tests = _select_module_group_name
@@ -91,38 +93,6 @@ def _select_from_candidates(candidates, module_group_names, include_per_module, 
             return selected_name
     return ""
 
-def _canonical_payload_symlinks(files):
-    """Return canonical cache/http symlinks for selected payload files."""
-    settings_file = None
-    known_tests_file = None
-    test_management_file = None
-
-    for file in files:
-        if file.basename == "settings.json":
-            settings_file = file
-        elif file.basename == "known_tests.json":
-            known_tests_file = file
-        elif file.basename == "test_management.json":
-            test_management_file = file
-
-    if settings_file == None:
-        return {}
-
-    cache_http_dir = "/".join(settings_file.short_path.split("/")[:-1])
-    if not cache_http_dir:
-        return {}
-
-    symlinks = {}
-    if known_tests_file != None:
-        known_tests_path = cache_http_dir + "/known_tests.json"
-        if known_tests_file.short_path != known_tests_path:
-            symlinks[known_tests_path] = known_tests_file
-    if test_management_file != None:
-        test_management_path = cache_http_dir + "/test_management.json"
-        if test_management_file.short_path != test_management_path:
-            symlinks[test_management_path] = test_management_file
-    return symlinks
-
 def _topt_py_payloads_selector_impl(ctx):
     module_group_names = [m.label.name for m in ctx.attr.module_groups]
 
@@ -180,10 +150,13 @@ def _topt_py_payloads_selector_impl(ctx):
 
     source = chosen if chosen != None else ctx.attr.full_files
     src_default = source[DefaultInfo]
-    files = src_default.files.to_list()
+    payload = _selected_payload_runfiles(
+        src_default.files.to_list(),
+        include_flaky_tests = False,
+    )
     return [DefaultInfo(
-        files = depset(files),
-        runfiles = ctx.runfiles(files = files, symlinks = _canonical_payload_symlinks(files)),
+        files = depset(payload.files),
+        runfiles = ctx.runfiles(files = payload.files, symlinks = payload.symlinks),
     )]
 
 topt_py_payloads_selector = rule(

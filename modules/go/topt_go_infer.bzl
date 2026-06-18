@@ -37,6 +37,7 @@ Maintenance notes:
 load(
     "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
     "select_module_group_name",
+    "selected_payload_runfiles",
 )
 
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
@@ -44,6 +45,7 @@ load(
 load("@rules_go//go:def.bzl", "GoArchive", "GoInfo")
 
 _select_module_group_name = select_module_group_name
+_selected_payload_runfiles = selected_payload_runfiles
 
 # Public alias for unit tests.
 select_module_group_name_for_tests = _select_module_group_name
@@ -171,47 +173,6 @@ _importpath_aspect = aspect(
     attr_aspects = ["embed", "deps"],
 )
 
-def _canonical_payload_symlinks(files):
-    """Return canonical cache/http symlinks for selected payload files.
-
-    Module-specific payload groups are produced in the generated sync
-    repository, but their raw runfiles paths can pick up workspace-prefixed
-    roots when consumed from another repository. The Go companion normalizes
-    those runfiles here so code that starts from `DD_TEST_OPTIMIZATION_MANIFEST_FILE`
-    can always find `cache/http/*` next to the exported manifest path.
-    """
-    settings_file = None
-    known_tests_file = None
-    test_management_file = None
-
-    for file in files:
-        if file.basename == "settings.json":
-            settings_file = file
-        elif file.basename == "known_tests.json":
-            known_tests_file = file
-        elif file.basename == "test_management.json":
-            test_management_file = file
-
-    if settings_file == None:
-        return {}
-
-    cache_http_dir = "/".join(settings_file.short_path.split("/")[:-1])
-    if not cache_http_dir:
-        return {}
-
-    symlinks = {}
-
-    def maybe_add(filename, file):
-        if file == None:
-            return
-        canonical_path = cache_http_dir + "/" + filename
-        if file.short_path != canonical_path:
-            symlinks[canonical_path] = file
-
-    maybe_add("known_tests.json", known_tests_file)
-    maybe_add("test_management.json", test_management_file)
-    return symlinks
-
 def _topt_go_payloads_selector_impl(ctx):
     """Rule implementation that exposes selected payload files as runfiles.
 
@@ -231,11 +192,13 @@ def _topt_go_payloads_selector_impl(ctx):
     # Rebuild runfiles here so the main workspace controls the canonical
     # manifest-adjacent paths that downstream test code reads at runtime.
     src_default = source[DefaultInfo]
-    files = src_default.files.to_list()
-    symlinks = _canonical_payload_symlinks(files)
+    payload = _selected_payload_runfiles(
+        src_default.files.to_list(),
+        include_flaky_tests = False,
+    )
     return [DefaultInfo(
-        files = depset(files),
-        runfiles = ctx.runfiles(files = files, symlinks = symlinks),
+        files = depset(payload.files),
+        runfiles = ctx.runfiles(files = payload.files, symlinks = payload.symlinks),
     )]
 
 def _topt_go_bazel_metadata_impl(ctx):
