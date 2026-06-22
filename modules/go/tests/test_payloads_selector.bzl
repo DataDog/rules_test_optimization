@@ -33,6 +33,25 @@ _payload_marker = rule(
     },
 )
 
+def _cache_payload_impl(ctx):
+    """Create a multi-file payload cache for runfiles filtering assertions."""
+    manifest = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/manifest.txt")
+    settings = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/cache/http/settings.json")
+    known_tests = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/module_selected/cache/http/known_tests.json")
+    test_management = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/module_selected/cache/http/test_management.json")
+    flaky_tests = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/module_selected/cache/http/flaky_tests.json")
+    files = [manifest, settings, known_tests, test_management, flaky_tests]
+    for file in files:
+        ctx.actions.write(file, "{}\n")
+    return [DefaultInfo(
+        files = depset(files),
+        runfiles = ctx.runfiles(files = files),
+    )]
+
+_cache_payload = rule(
+    implementation = _cache_payload_impl,
+)
+
 def _embed_source_impl(_ctx):
     """Implement embed source impl behavior."""
     return []
@@ -72,6 +91,9 @@ def selector_payload_fixture_targets():
     _payload_marker(
         name = "module_custom_override",
         marker = "module:override",
+    )
+    _cache_payload(
+        name = "module_example_com_cache_pkg",
     )
     _embed_source(
         name = "embed_leaf",
@@ -217,12 +239,45 @@ def selector_override_miss_failure_target(name, tags = None):
         tags = tags,
     )
 
+def selector_omits_flaky_tests_target(name, tags = None):
+    """Selected Go payloads should not expose unused flaky_tests.json data."""
+    topt_go_payloads_selector(
+        name = name,
+        explicit_importpath = "example.com/cache/pkg",
+        embeds = [],
+        fallback_importpath = "example.com/cache/pkg",
+        full_files = ":full_payload",
+        module_groups = [":module_example_com_cache_pkg"],
+        include_per_module = True,
+        tags = tags,
+    )
+
 def _has_fragment(items, fragment):
     """Implement has fragment behavior."""
     for item in items:
         if fragment in item:
             return True
     return False
+
+def _has_suffix(items, suffix):
+    """Implement has suffix behavior."""
+    for item in items:
+        if item.endswith(suffix):
+            return True
+    return False
+
+def _assert_core_cache_symlinks(env, symlink_paths):
+    """Assert canonical core payload symlinks are preserved."""
+    asserts.true(
+        env,
+        _has_fragment(symlink_paths, "/.testoptimization/cache/http/known_tests.json"),
+        "expected canonical known_tests.json symlink in paths: %s" % symlink_paths,
+    )
+    asserts.true(
+        env,
+        _has_fragment(symlink_paths, "/.testoptimization/cache/http/test_management.json"),
+        "expected canonical test_management.json symlink in paths: %s" % symlink_paths,
+    )
 
 def _assert_selected(env, target, expected_fragment):
     """Implement assert selected behavior."""
@@ -304,6 +359,19 @@ def _selector_override_miss_failure_test_impl(ctx):
     asserts.expect_failure(env, "Available module groups")
     return analysistest.end(env)
 
+def _selector_omits_flaky_tests_test_impl(ctx):
+    """Implement selector flaky-tests filtering behavior."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = [f.basename for f in target[DefaultInfo].files.to_list()]
+    runfiles = [f.basename for f in target[DefaultInfo].default_runfiles.files.to_list()]
+    symlink_paths = [s.path for s in target[DefaultInfo].default_runfiles.symlinks.to_list()]
+    _assert_core_cache_symlinks(env, symlink_paths)
+    asserts.false(env, _has_fragment(files, "flaky_tests.json"), "unexpected flaky_tests.json in files: %s" % files)
+    asserts.false(env, _has_fragment(runfiles, "flaky_tests.json"), "unexpected flaky_tests.json in runfiles: %s" % runfiles)
+    asserts.false(env, _has_suffix(symlink_paths, "/flaky_tests.json"), "unexpected flaky_tests.json symlink: %s" % symlink_paths)
+    return analysistest.end(env)
+
 selector_explicit_precedence_test = analysistest.make(
     _selector_explicit_precedence_test_impl,
 )
@@ -335,4 +403,7 @@ selector_explicit_miss_failure_test = analysistest.make(
 selector_override_miss_failure_test = analysistest.make(
     _selector_override_miss_failure_test_impl,
     expect_failure = True,
+)
+selector_omits_flaky_tests_test = analysistest.make(
+    _selector_omits_flaky_tests_test_impl,
 )

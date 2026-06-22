@@ -33,6 +33,24 @@ _payload_marker = rule(
     },
 )
 
+def _cache_payload_impl(ctx):
+    manifest = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/manifest.txt")
+    settings = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/cache/http/settings.json")
+    known_tests = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/module_selected/cache/http/known_tests.json")
+    test_management = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/module_selected/cache/http/test_management.json")
+    flaky_tests = ctx.actions.declare_file(ctx.label.name + "/.testoptimization/module_selected/cache/http/flaky_tests.json")
+    files = [manifest, settings, known_tests, test_management, flaky_tests]
+    for file in files:
+        ctx.actions.write(file, "{}\n")
+    return [DefaultInfo(
+        files = depset(files),
+        runfiles = ctx.runfiles(files = files),
+    )]
+
+_cache_payload = rule(
+    implementation = _cache_payload_impl,
+)
+
 def _java_source_impl(_ctx):
     return []
 
@@ -73,6 +91,9 @@ def selector_payload_fixture_targets():
     _payload_marker(
         name = "module_custom_override",
         marker = "module:override",
+    )
+    _cache_payload(
+        name = "module_com_example_cache_pkg",
     )
     _java_source(
         name = "deps_leaf",
@@ -219,11 +240,39 @@ def selector_override_miss_failure_target(name, tags = None):
         tags = tags,
     )
 
+def selector_flaky_tests_canonical_runfiles_target(name, tags = None):
+    topt_java_payloads_selector(
+        name = name,
+        explicit_identifier = "com.example.cache.pkg",
+        full_files = ":full_payload",
+        module_groups = [":module_com_example_cache_pkg"],
+        include_per_module = True,
+        tags = tags,
+    )
+
 def _has_fragment(items, fragment):
     for item in items:
         if fragment in item:
             return True
     return False
+
+def _has_suffix(items, suffix):
+    for item in items:
+        if item.endswith(suffix):
+            return True
+    return False
+
+def _assert_core_cache_symlinks(env, symlink_paths):
+    asserts.true(
+        env,
+        _has_fragment(symlink_paths, "/.testoptimization/cache/http/known_tests.json"),
+        "expected canonical known_tests.json symlink in paths: %s" % symlink_paths,
+    )
+    asserts.true(
+        env,
+        _has_fragment(symlink_paths, "/.testoptimization/cache/http/test_management.json"),
+        "expected canonical test_management.json symlink in paths: %s" % symlink_paths,
+    )
 
 def _assert_selected(env, target, expected_fragment):
     files = [f.basename for f in target[DefaultInfo].files.to_list()]
@@ -294,6 +343,22 @@ def _selector_override_miss_failure_test_impl(ctx):
     asserts.expect_failure(env, "Available module groups")
     return analysistest.end(env)
 
+def _selector_flaky_tests_canonical_runfiles_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    files = [f.basename for f in target[DefaultInfo].files.to_list()]
+    runfiles = [f.basename for f in target[DefaultInfo].default_runfiles.files.to_list()]
+    symlink_paths = [s.path for s in target[DefaultInfo].default_runfiles.symlinks.to_list()]
+    _assert_core_cache_symlinks(env, symlink_paths)
+    asserts.true(env, _has_fragment(files, "flaky_tests.json"), "expected flaky_tests.json in files: %s" % files)
+    asserts.true(env, _has_fragment(runfiles, "flaky_tests.json"), "expected flaky_tests.json in runfiles: %s" % runfiles)
+    asserts.true(
+        env,
+        _has_suffix(symlink_paths, "/cache/http/flaky_tests.json"),
+        "expected canonical flaky_tests.json symlink in paths: %s" % symlink_paths,
+    )
+    return analysistest.end(env)
+
 selector_explicit_precedence_test = analysistest.make(
     _selector_explicit_precedence_test_impl,
 )
@@ -325,4 +390,7 @@ selector_explicit_miss_failure_test = analysistest.make(
 selector_override_miss_failure_test = analysistest.make(
     _selector_override_miss_failure_test_impl,
     expect_failure = True,
+)
+selector_flaky_tests_canonical_runfiles_test = analysistest.make(
+    _selector_flaky_tests_canonical_runfiles_test_impl,
 )

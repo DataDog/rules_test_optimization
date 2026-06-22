@@ -44,6 +44,8 @@ load(
     "selector_explicit_precedence_test",
     "selector_fallback_target",
     "selector_fallback_test",
+    "selector_flaky_tests_canonical_runfiles_target",
+    "selector_flaky_tests_canonical_runfiles_test",
     "selector_include_disabled_target",
     "selector_include_disabled_test",
     "selector_no_match_fallback_target",
@@ -137,6 +139,16 @@ java_stub_includes_manifest_in_files_test(
 )
 
 selector_payload_fixture_targets()
+
+selector_flaky_tests_canonical_runfiles_target(
+    name = "selector_flaky_tests_canonical_runfiles_target",
+    tags = ["manual"],
+)
+
+selector_flaky_tests_canonical_runfiles_test(
+    name = "selector_flaky_tests_canonical_runfiles_test",
+    target_under_test = ":selector_flaky_tests_canonical_runfiles_target",
+)
 
 selector_explicit_precedence_target(
     name = "selector_explicit_precedence_target",
@@ -435,6 +447,7 @@ test_suite(
         ":selector_explicit_miss_failure_test",
         ":selector_explicit_precedence_test",
         ":selector_fallback_test",
+        ":selector_flaky_tests_canonical_runfiles_test",
         ":selector_include_disabled_test",
         ":selector_no_match_fallback_test",
         ":selector_override_miss_failure_test",

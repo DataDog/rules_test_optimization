@@ -74,6 +74,8 @@ load(
     "selector_include_disabled_test",
     "selector_no_match_fallback_target",
     "selector_no_match_fallback_test",
+    "selector_omits_flaky_tests_target",
+    "selector_omits_flaky_tests_test",
     "selector_override_miss_failure_target",
     "selector_override_miss_failure_test",
     "selector_override_target",
@@ -154,6 +156,16 @@ py_stub_includes_manifest_in_files_test(
 )
 
 selector_payload_fixture_targets()
+
+selector_omits_flaky_tests_target(
+    name = "selector_omits_flaky_tests_target",
+    tags = ["manual"],
+)
+
+selector_omits_flaky_tests_test(
+    name = "selector_omits_flaky_tests_test",
+    target_under_test = ":selector_omits_flaky_tests_target",
+)
 
 selector_explicit_precedence_target(
     name = "selector_explicit_precedence_target",
@@ -593,6 +605,7 @@ test_suite(
         ":selector_imports_precedence_test",
         ":selector_include_disabled_test",
         ":selector_no_match_fallback_test",
+        ":selector_omits_flaky_tests_test",
         ":selector_override_miss_failure_test",
         ":selector_override_test",
         ":service_mapping_entries_filters_non_service_test",
