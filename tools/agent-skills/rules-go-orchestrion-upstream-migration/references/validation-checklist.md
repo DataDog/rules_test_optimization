@@ -12,15 +12,16 @@ Use this checklist before calling a `rules_go` upstream migration complete.
 
 ## Metadata And Inventory
 
-Run these checks after editing either variant:
+Run these checks after editing any `rules_go` support line:
 
 ```bash
 python3 tools/dev/generate_rules_go_fork_maps.py --check
 python3 tools/dev/materialize_rules_go_fork.py check --all
 python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt
+python3 tools/dev/check_release_archive_contents.py
 python3 tools/dev/diff_rules_go_fork.py --all
 git diff -- third_party/rules_go_orchestrion
-git diff -- third_party/rgo/v0_60_0/base.CHANGED_FILES.md
+git diff -- third_party/rgo
 ```
 
 Expected:
@@ -28,7 +29,9 @@ Expected:
 - generated fork maps are current
 - patch series recreate checked-in materialized trees
 - profile verification passes
-- both diff commands report the same counts as the regenerated reports
+- release archive contents include the registry, profiles, metadata, changed
+  files, patch series, and materialized base trees
+- diff commands report the same counts as the regenerated reports
 - generated reports name the new upstream tag or commit
 - no generated report was edited manually
 
@@ -94,7 +97,7 @@ called done, run the sibling fixture repository with local overrides:
    `local_path_override(...)` entries for this repository and affected
    companion modules.
 2. Add a temporary `rules_go` override pointing to the registry-resolved local
-   tree for the migrated upstream and variant.
+   tree for the migrated upstream and `base` variant.
 3. Run the fixture's documented entrypoint, such as:
 
 ```bash

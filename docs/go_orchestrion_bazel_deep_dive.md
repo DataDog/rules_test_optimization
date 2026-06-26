@@ -48,7 +48,15 @@ The Go integration spans four layers:
 3. Vendored `rules_go` fork with Orchestrion support
 4. Datadog Orchestrion itself, built from patched source
 
-Primary implementation entry points:
+Primary implementation entry points follow the default upstream path
+`third_party/rgo/v0_60_0/base`. For another supported upstream, resolve the
+tree with:
+
+```bash
+python3 tools/dev/materialize_rules_go_fork.py resolve --upstream <upstream> --variant base
+```
+
+Then use the same relative files under that tree.
 
 - [modules/go/topt_go_test.bzl](../modules/go/topt_go_test.bzl)
 - [modules/go/topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
