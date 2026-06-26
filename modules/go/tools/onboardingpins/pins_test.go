@@ -211,6 +211,13 @@ func TestRulesGoSelectionForStripPrefixAcceptsLegacyV060BaseAlias(t *testing.T) 
 	}
 }
 
+func TestRulesGoSelectionForStripPrefixRejectsLegacyCompleteAlias(t *testing.T) {
+	_, _, err := RulesGoSelectionForStripPrefix("third_party/rules_go_orchestrion_complete")
+	if err == nil || !strings.Contains(err.Error(), removedCompleteVariantError) {
+		t.Fatalf("RulesGoSelectionForStripPrefix error=%v, want complete variant rejection", err)
+	}
+}
+
 func TestResolveRejectsCompleteVariant(t *testing.T) {
 	_, err := Resolve(context.Background(), Options{
 		WorkspaceDir: variantWorkspace(t),

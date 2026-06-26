@@ -1118,6 +1118,25 @@ git_override(
 	}
 }
 
+func TestHydrateManagedRulesGoVariantRejectsLegacyCompleteStripPrefix(t *testing.T) {
+	content := `module(name = "example")
+
+# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/example/repo.git",
+    commit = "deadbeef",
+    strip_prefix = "third_party/rules_go_orchestrion_complete",
+)
+# END Datadog Go Orchestrion bootstrap
+`
+	cfg := config{rulesGoVariant: defaultRulesGoVariant, rulesGoUpstream: "default"}
+	err := hydrateManagedRulesGoVariant(&cfg, content)
+	if err == nil || !strings.Contains(err.Error(), `rules_go_variant "complete" is no longer supported. Use "base".`) {
+		t.Fatalf("hydrateManagedRulesGoVariant error=%v, want complete variant rejection", err)
+	}
+}
+
 func TestManagedModuleBlockIncludesPerModuleVersions(t *testing.T) {
 	cfg := config{
 		orchestrionVersion: "v1.9.0",

@@ -34,6 +34,8 @@ const (
 	DefaultOrchestrionVersion = "v1.9.0"
 	// DefaultMainRef is the remote ref that published pins must be reachable from.
 	DefaultMainRef = "origin/main"
+
+	removedCompleteVariantError = `rules_go_variant "complete" is no longer supported. Use "base".`
 )
 
 // ArchiveFetcher returns the bytes for one archive URL.
@@ -289,6 +291,9 @@ func RulesGoSelectionForStripPrefix(stripPrefix string) (string, string, error) 
 			}
 		}
 	}
+	if stripPrefix == "third_party/rules_go_orchestrion_complete" {
+		return "", "", errors.New(removedCompleteVariantError)
+	}
 	if selection, ok := legacyRulesGoForkStripPrefixAliases[stripPrefix]; ok {
 		return selection.upstream, selection.variant, nil
 	}
@@ -303,7 +308,7 @@ func resolveRulesGoStripPrefix(upstream string, variant string) (string, string,
 		variant = "base"
 	}
 	if variant == "complete" {
-		return "", "", "", errors.New(`rules_go_variant "complete" is no longer supported. Use "base".`)
+		return "", "", "", errors.New(removedCompleteVariantError)
 	}
 	variants, ok := rulesGoForkStripPrefixes[upstream]
 	if !ok {
