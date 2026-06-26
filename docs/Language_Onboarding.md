@@ -131,7 +131,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-rc.2 \
+  --dd-trace-go-version v2.9.0 \
   --write-bazelrc
 ```
 
@@ -147,7 +147,7 @@ missing. With `--write-bazelrc`, it also writes the managed
 `test-optimization` config used by the command examples above.
 
 `--dd-trace-go-version` is optional. If omitted, the default is
-`v2.9.0-rc.2`. It accepts a tag, pseudo-version,
+`v2.9.0`. It accepts a tag, pseudo-version,
 branch, or commit SHA. Bootstrap resolves that input to the exact tracer
 versions Bazel will use, repins the local Go module to match, and later builds
 fail fast if the workspace setting and local pins no longer match.
@@ -231,9 +231,11 @@ Start by identifying the existing Go shape:
   wrapper path.
 
 Wire the public WORKSPACE helper instead of copying patch directories or
-declaring `patches = [...]`. Use `rules_go_variant = "base"` for normal
-repositories. Use `rules_go_variant = "complete"` only when the repository
-needs the declared extended monorepo compatibility variant. Use the current
+declaring `patches = [...]`. Use `rules_go_variant = "base"`. When multiple
+upstream `rules_go` versions are supported, use `rules_go_upstream` to choose
+the upstream support line; omit it to preserve the repository default. The
+default `rules_go_upstream` is currently `v0_60_0`, which preserves the
+existing `third_party/rgo/v0_60_0/base` path. Use the current
 published tuple from
 [`docs/Installation_Reference.md`](Installation_Reference.md#current-v120-published-tuple)
 for the commit, archive URL, archive SHA256, and archive prefix values.
@@ -257,7 +259,8 @@ datadog_go_test_optimization_workspace_repositories(
     datadog_fetch = "git",
     rules_go_repo_name = "<existing_rules_go_repo_name>",
     rules_go_fetch = "archive",
-    rules_go_variant = "complete",
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
     rto_archive_url = "https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/<rules-test-optimization-commit>",
     rto_archive_sha256 = "<sha256-for-that-archive>",
     rto_archive_prefix = "rules_test_optimization-<rules-test-optimization-commit>",
@@ -267,7 +270,7 @@ load("@<existing_rules_go_repo_name>//go:orchestrion_workspace.bzl", "go_orchest
 
 go_orchestrion_tool_repo(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0-rc.2",
+    dd_trace_go_version = "v2.9.0",
 )
 
 load(
@@ -305,8 +308,9 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service "<datadog-service-name>" \
   --runtime-version "<go-sdk-version>" \
   --rules-go-repo-name "<existing_rules_go_repo_name>" \
-  --rules-go-variant complete \
-  --dd-trace-go-version v2.9.0-rc.2 \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
+  --dd-trace-go-version v2.9.0 \
   --write-bazelrc \
   --write-root-targets \
   --write-orchestrion-files \

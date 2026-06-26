@@ -279,6 +279,8 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
 | `DD_TEST_OPTIMIZATION_CONTEXT_JSON` | unset | Legacy explicit override for one readable `context.json` path. It still wins when set, but mixed-runtime workspaces should prefer bundling all context targets in uploader `data`. |
+| `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | `auto` | Cache-safety mode for execution-log filtering: `auto`, `required`, `optional`, or `disabled`. In `auto`, CI requires an execution log and local runs preserve legacy behavior with a warning. |
+| `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | auto | Optional explicit path to the JSON execution log from the matching `bazel test` invocation. When unset in `auto` mode, the uploader looks for `.topt/bazel-execution-log.json`. When a log is used, the uploader processes only `test.outputs/` directories whose Bazel target had a non-cached `TestRunner` action in that log. |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
 
 ### `DD_TEST_OPTIMIZATION_FILTER_PREFIX` behavior
@@ -292,6 +294,59 @@ prefixes:
 
 Leave it at `0` for normal repositories where uploader-managed payload
 directories contain only Datadog files.
+
+### Execution-log cache filtering behavior
+
+`--remote_download_outputs=all` makes payload files available to the doctor and
+uploader, but Bazel can download those files from a local, disk, remote, or
+sandbox cache. Those cached payloads describe the original test execution, not
+necessarily the current commit.
+
+To keep test caching enabled without uploading cached payloads, generate Bazel's
+JSON execution log during the same test invocation. The uploader's default
+`auto` mode discovers `.topt/bazel-execution-log.json` automatically:
+
+```bash
+mkdir -p .topt
+bazel test \
+  --config=test-optimization \
+  --remote_download_outputs=all \
+  --execution_log_json_file=.topt/bazel-execution-log.json \
+  //...
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+  bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
+```
+
+Use `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` or
+`--execution-log-json=.topt/bazel-execution-log.json` after the uploader
+target's `--` separator when the execution log lives at a non-default path.
+
+Cache-safety modes:
+
+- `auto` (default): use the explicit/default execution log when present. In CI,
+  fail closed if no execution log is available. Outside CI, preserve the
+  historical upload behavior and emit a warning.
+- `required`: always require an execution log.
+- `optional`: use an execution log when explicitly configured, but otherwise
+  preserve historical upload behavior without the CI fail-closed default.
+- `disabled`: skip execution-log filtering even if a log path is configured.
+  The equivalent CLI flag is `--allow-cached-payload-uploads`.
+
+When execution-log filtering is active, the uploader:
+
+- Parses `TestRunner` entries from the JSON execution log.
+- Treats entries with `cacheHit: true` or a runner description containing
+  `cache hit` as ineligible.
+- Keeps only targets whose action output includes `test.outputs/`.
+- Compares each eligible target label and `test.outputs` path to the payload
+  directory's `bazel_target_metadata.json` and local path under `bazel-testlogs`.
+- Skips missing metadata or labels absent from the fresh execution set.
+
+On Unix, active execution-log filtering requires `jq` to parse the Bazel
+execution log. If the requested execution log is missing or malformed, or if
+`auto`/CI or `required` mode cannot find a log, the uploader exits with code `2`
+instead of falling back to uploading everything.
 
 ### `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` behavior (including `0`)
 
@@ -413,6 +468,10 @@ tests. Custom wrappers for other languages should set the same contract:
 2. Use a single uploader target per workspace (no concurrent uploaders)
 3. Tests must run locally, or use `--remote_download_outputs=all`
 4. Run uploader on the same machine/workspace where tests executed
+5. When using downloaded test outputs from any cache, generate the matching
+   execution log with `--execution_log_json_file=.topt/bazel-execution-log.json`
+   so cached payloads are skipped. Use `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON`
+   or `--execution-log-json` only when the log lives at a non-default path.
 
 For Go onboarding, the bootstrap validation script follows the same rule. It
 runs upload only when the operator passes `--upload`:

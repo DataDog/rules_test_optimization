@@ -107,7 +107,7 @@ jobs:
       - name: Run Bazel tests
         timeout-minutes: 25
         shell: bash
-        run: ./bazelw test //tools/...
+        run: ./bazelw test //tools/... --test_output=errors
 
       - name: Run Bazel tests (go companion module)
         if: matrix.os == 'ubuntu-latest'
@@ -254,7 +254,9 @@ jobs:
   rules-go-variant-smoke:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
-    timeout-minutes: 45
+    # This job runs the smoke harness serially for every supported upstream.
+    # Keep enough headroom as the registry grows.
+    timeout-minutes: 75
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -281,18 +283,19 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Run vendored rules_go base smoke coverage
+      - name: Run vendored rules_go smoke coverage
         shell: bash
-        run: RULES_GO_VARIANT=base ./tools/dev/run_rules_go_variant_smoke.sh
-
-      - name: Run vendored rules_go complete smoke coverage
-        shell: bash
-        run: RULES_GO_VARIANT=complete ./tools/dev/run_rules_go_variant_smoke.sh
+        run: |
+          while IFS= read -r upstream; do
+            RULES_GO_UPSTREAM="${upstream}" \
+            RULES_GO_VARIANT="base" \
+              ./tools/dev/run_rules_go_variant_smoke.sh
+          done < <(python3 tools/dev/materialize_rules_go_fork.py list-upstreams)
 
   workspace-compat:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -314,53 +317,24 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Validate WORKSPACE Go companion path (base, general)
+      - name: Validate Go companion consumer paths
         shell: bash
         run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
-            ./tools/tests/integration/run_workspace_go_integration.sh
+          while IFS= read -r upstream; do
+            for mode in general test_optimization; do
+              USE_BAZEL_VERSION=8.4.1 \
+              RULES_GO_UPSTREAM="${upstream}" \
+              RULES_GO_VARIANT="base" \
+              ORCHESTRION_MODE="${mode}" \
+                ./tools/tests/integration/run_workspace_go_integration.sh
 
-      - name: Validate WORKSPACE Go companion path (complete, general)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
-            ./tools/tests/integration/run_workspace_go_integration.sh
-
-      - name: Validate Bzlmod Go companion path (base, general)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
-            ./tools/tests/integration/run_bzlmod_go_integration.sh
-
-      - name: Validate Bzlmod Go companion path (complete, general)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
-            ./tools/tests/integration/run_bzlmod_go_integration.sh
-
-      - name: Validate WORKSPACE Go companion path (base, test_optimization)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base ORCHESTRION_MODE=test_optimization \
-            ./tools/tests/integration/run_workspace_go_integration.sh
-
-      - name: Validate WORKSPACE Go companion path (complete, test_optimization)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete ORCHESTRION_MODE=test_optimization \
-            ./tools/tests/integration/run_workspace_go_integration.sh
-
-      - name: Validate Bzlmod Go companion path (base, test_optimization)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base ORCHESTRION_MODE=test_optimization \
-            ./tools/tests/integration/run_bzlmod_go_integration.sh
-
-      - name: Validate Bzlmod Go companion path (complete, test_optimization)
-        shell: bash
-        run: |
-          USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete ORCHESTRION_MODE=test_optimization \
-            ./tools/tests/integration/run_bzlmod_go_integration.sh
+              USE_BAZEL_VERSION=8.4.1 \
+              RULES_GO_UPSTREAM="${upstream}" \
+              RULES_GO_VARIANT="base" \
+              ORCHESTRION_MODE="${mode}" \
+                ./tools/tests/integration/run_bzlmod_go_integration.sh
+            done
+          done < <(python3 tools/dev/materialize_rules_go_fork.py list-upstreams)
 
   coverage-tools:
     needs: changes
@@ -485,6 +459,7 @@ jobs:
       run_schema_validation: true
       run_fixture_json_validation: true
       run_schema_parser_parity: true
+      run_rules_go_fork_drift: true
 
   # Policy: keep the hermetic lane Linux-only for now.
   # Rationale: sandbox/network-blocking semantics are most reliable on Linux;

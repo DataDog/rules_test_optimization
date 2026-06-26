@@ -48,9 +48,11 @@ This product includes software developed at Datadog
 - Python tooling tests:
   - `./bazelw test //tools/tests/python:python_tools_test`
 - rules_go variant verification:
-  - `python3 tools/dev/verify_rules_go_variants.py`
-  - `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report`
-  - `python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --write-report`
+  - `python3 tools/dev/generate_rules_go_fork_maps.py --check`
+  - `python3 tools/dev/materialize_rules_go_fork.py check --all`
+  - `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`
+  - `python3 tools/dev/check_release_archive_contents.py`
+  - `python3 tools/dev/diff_rules_go_fork.py --all --write-report`
 - Optional Python tooling dependencies (for local script execution):
   - `python3 -m pip install --require-hashes -r tools/requirements.txt`
 - Local lint prerequisites (match CI tooling):
@@ -71,13 +73,9 @@ This product includes software developed at Datadog
     and no-match fallback behavior.
 - Go consumer integration harnesses:
   - WORKSPACE base:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - WORKSPACE complete:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
-  - Bzlmod complete:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete tools/tests/integration/run_bzlmod_go_integration.sh`
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
   - Each script now validates:
     - normal mode
     - hermetic mode with the inline CI sandbox/network-blocking flags
@@ -87,13 +85,13 @@ This product includes software developed at Datadog
     optimized mode is the standard Go `testing` Test Optimization path and
     should still produce payloads.
 - Vendored rules_go variant smoke:
-  - `RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh`
-  - `RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_smoke.sh`
+  - `RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh`
+  - when adding a new upstream, run the same commands with
+    `RULES_GO_UPSTREAM=<new_upstream>`
   - copies the selected variant into a temp tree, applies the maintainer-only
     proof overlay, and runs the fast vendored-fork regression set
 - Vendored rules_go extended variant coverage:
-  - `RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_extended.sh`
-  - `RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_extended.sh`
+  - `RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_extended.sh`
   - runs the slower extended regression set against the selected variant
 - Hermetic smoke (mirror CI flags):
   - run the same test commands with sandbox/network-blocking flags from `.github/workflows/ci.yml`
@@ -101,10 +99,10 @@ This product includes software developed at Datadog
   - In `../rules_test_optimization_tests/MODULE.bazel`, temporarily enable the
     documented `local_path_override(...)` entries for core and each affected
     companion module so the fixture repo resolves this checkout.
-  - If the change touches `third_party/rules_go_orchestrion_base` or related Go
+  - If the change touches a rules_go fork tree or related Go
     bootstrap/orchestrion wiring, also add a temporary
-    `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rules_go_orchestrion_base")`
-    there so the sibling repo resolves the local clean base fork.
+    `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/<registry-resolved-tree-path>")`
+    there so the sibling repo resolves the selected local fork.
   - Run the relevant fixture entrypoints there before calling the work done.
   - Restore the fixture repo to `git_override(...)` pins before pushing its PR.
 
@@ -132,9 +130,7 @@ This product includes software developed at Datadog
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
 - `workspace-compat`:
   - WORKSPACE base
-  - WORKSPACE complete
   - Bzlmod base
-  - Bzlmod complete
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
 - `rules-go-variant-smoke`:
   - vendored `rules_go` variant verification and fast fork regression coverage

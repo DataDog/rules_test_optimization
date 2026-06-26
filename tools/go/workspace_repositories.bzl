@@ -17,14 +17,15 @@ load(
     "//tools/core:common_utils.bzl",
     "fail_with_prefix",
 )
+load(
+    "//tools/go:rules_go_forks.bzl",
+    "RULES_GO_DEFAULT_UPSTREAM",
+    "rules_go_fork_strip_prefix",
+)
 
 _OWNER = "datadog_go_test_optimization_workspace_repositories"
 _GO_COMPANION_REPO = "datadog-rules-test-optimization-go"
 _VALID_FETCH_MODES = ["git", "archive"]
-_RULES_GO_VARIANT_PREFIXES = {
-    "base": "third_party/rules_go_orchestrion_base",
-    "complete": "third_party/rules_go_orchestrion_complete",
-}
 
 def _archive_attrs(name, url, sha256, strip_prefix, archive_type, repo_mapping = None):
     """Return a normalized http_archive spec attrs dict."""
@@ -74,14 +75,6 @@ def _validate_fetch_mode(value, attr_name):
             "%s must be one of %s, got %r" % (attr_name, _VALID_FETCH_MODES, value),
         )
 
-def _validate_variant(value):
-    """Validate the published rules_go Orchestrion variant name."""
-    if value not in _RULES_GO_VARIANT_PREFIXES:
-        fail_with_prefix(
-            _OWNER,
-            "rules_go_variant must be one of %s, got %r" % (sorted(_RULES_GO_VARIANT_PREFIXES.keys()), value),
-        )
-
 def _require_archive_attrs(url, sha256, prefix, archive_type):
     """Validate archive-mode inputs shared by Datadog and rules_go archives."""
     missing = []
@@ -102,6 +95,7 @@ def _build_workspace_repository_specs(
         datadog_fetch = "git",
         rules_go_fetch = "git",
         rules_go_repo_name = "io_bazel_rules_go",
+        rules_go_upstream = "default",
         rules_go_variant = "base",
         rto_archive_url = None,
         rto_archive_sha256 = None,
@@ -116,7 +110,9 @@ def _build_workspace_repository_specs(
       datadog_fetch: Fetch mode for the Go companion repository.
       rules_go_fetch: Fetch mode for the rules_go Orchestrion fork.
       rules_go_repo_name: Repository name used by the consumer for rules_go.
-      rules_go_variant: Published variant, either "base" or "complete".
+      rules_go_upstream: Supported Datadog-managed rules_go upstream id.
+        Defaults to "default", currently the generated RULES_GO_DEFAULT_UPSTREAM.
+      rules_go_variant: Published variant. Only "base" is supported.
       rto_archive_url: Archive URL used by archive fetch mode.
       rto_archive_sha256: Archive SHA256 used by archive fetch mode.
       rto_archive_prefix: Archive root prefix used by archive fetch mode.
@@ -128,7 +124,6 @@ def _build_workspace_repository_specs(
     """
     _validate_fetch_mode(datadog_fetch, "datadog_fetch")
     _validate_fetch_mode(rules_go_fetch, "rules_go_fetch")
-    _validate_variant(rules_go_variant)
 
     if not rto_commit and (datadog_fetch == "git" or rules_go_fetch == "git"):
         fail_with_prefix(_OWNER, "rto_commit is required when datadog_fetch or rules_go_fetch is 'git'")
@@ -145,7 +140,7 @@ def _build_workspace_repository_specs(
         if repo_name in existing:
             _fail_existing_repo(repo_name)
 
-    rules_go_strip_prefix = _RULES_GO_VARIANT_PREFIXES[rules_go_variant]
+    rules_go_strip_prefix = rules_go_fork_strip_prefix(rules_go_upstream, rules_go_variant)
     companion_repo_mapping = {"@rules_go": "@" + rules_go_repo_name}
 
     specs = []
@@ -243,6 +238,7 @@ def datadog_go_test_optimization_workspace_repositories(
         datadog_fetch = "git",
         rules_go_fetch = "git",
         rules_go_repo_name = "io_bazel_rules_go",
+        rules_go_upstream = "default",
         rules_go_variant = "base",
         rto_archive_url = None,
         rto_archive_sha256 = None,
@@ -260,6 +256,7 @@ def datadog_go_test_optimization_workspace_repositories(
         datadog_fetch = datadog_fetch,
         rules_go_fetch = rules_go_fetch,
         rules_go_repo_name = rules_go_repo_name,
+        rules_go_upstream = rules_go_upstream,
         rules_go_variant = rules_go_variant,
         rto_archive_url = rto_archive_url,
         rto_archive_sha256 = rto_archive_sha256,

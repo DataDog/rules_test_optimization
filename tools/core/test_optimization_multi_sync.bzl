@@ -149,10 +149,18 @@ def _render_aggregate_bzl(service_keys, repo_names):
         lines.append("    )")
     return "\n".join(lines) + "\n"
 
+def _render_aggregate_export_bzl():
+    """Render the public export shim for the aggregate multi-service repo."""
+    return (
+        'load(":aggregate.bzl", _topt_data_by_service = "topt_data_by_service")\n\n' +
+        "topt_data_by_service = _topt_data_by_service\n"
+    )
+
 # Public aliases for unit tests.
 compute_multi_service_keys_for_tests = _compute_service_keys
 compute_multi_repo_names_for_tests = _compute_repo_names
 render_multi_aggregate_bzl_for_tests = _render_aggregate_bzl
+render_multi_aggregate_export_bzl_for_tests = _render_aggregate_export_bzl
 record_multi_repo_owner_or_fail_for_tests = _record_multi_repo_owner_or_fail
 
 # ---------------------------------------------------------------------------
@@ -168,9 +176,7 @@ def _multi_aggregate_impl(ctx):
     repos = list(ctx.attr.repo_names)
     ctx.file("aggregate.bzl", _render_aggregate_bzl(keys, repos))
 
-    # Small export shim so consumers can load the mapping
-    export_content = 'load(":aggregate.bzl", "topt_data_by_service")\n\n'
-    ctx.file("export.bzl", export_content)
+    ctx.file("export.bzl", _render_aggregate_export_bzl())
 
     build_content = (
         'load(":aggregate.bzl", "define_targets")\n' +

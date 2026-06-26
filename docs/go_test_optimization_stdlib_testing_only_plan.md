@@ -40,8 +40,8 @@ stdlib/helper closure are intentionally out of scope for this first pass.
 - D-4: Correctness is the only success criterion for this pass: tests must
   emit usable payloads, doctor must pass, and uploader dry-run enrichment must
   pass. Timing and performance benchmarking come later.
-- D-5: Validate first in `dd-source` using the existing
-  `code-workload-runner-pipelines-descriptor` Go pilot service.
+- D-5: Validate first in a large WORKSPACE consumer repository using an
+  existing selected Go service owned by that repository.
 - D-6: Preserve generic Orchestrion behavior outside `test_optimization`.
   `general` mode must continue to instrument normal customer code paths.
 
@@ -72,8 +72,8 @@ This section records the pre-branch baseline used when the experiment started.
 - NG-2: Do not preserve automatic `testify/suite` weaving in
   `test_optimization` v1.
 - NG-3: Do not remove generic Orchestrion support from `general`.
-- NG-4: Do not broaden the `dd-source` pilot beyond the selected Go service
-  until the small correctness proof passes.
+- NG-4: Do not broaden the consumer-repository validation beyond the selected Go
+  service until the small correctness proof passes.
 - NG-5: Do not run a real upload during correctness validation; use uploader
   dry-run with enrichment validation.
 
@@ -81,10 +81,10 @@ This section records the pre-branch baseline used when the experiment started.
 
 ### S-1: Add Mode Plumbing
 
-Add an Orchestrion mode build setting to both vendored variants:
+Add an Orchestrion mode build setting to supported base trees:
 
-- `third_party/rules_go_orchestrion_base/go/private/orchestrion/BUILD`
-- `third_party/rules_go_orchestrion_complete/go/private/orchestrion/BUILD`
+- `third_party/rgo/v0_60_0/base/go/private/orchestrion/BUILD`
+- `third_party/rgo/v0_60_0/base/go/private/orchestrion/BUILD`
 
 The setting must accept at least:
 
@@ -113,7 +113,7 @@ they opt into `orchestrion_mode = "test_optimization"`.
 
 ### S-2: Gate Compile Orchestrion by Mode
 
-In both vendored variants, update compile action wiring so:
+In supported base trees, update compile action wiring so:
 
 - `general`: preserve existing behavior.
 - `test_optimization`: do not pass `-orchestrion` to customer package compiles.
@@ -124,10 +124,10 @@ In both vendored variants, update compile action wiring so:
 
 Likely files:
 
-- `third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl`
-- `third_party/rules_go_orchestrion_complete/go/private/actions/compilepkg.bzl`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/compilepkg.go`
+- `third_party/rgo/v0_60_0/base/go/private/actions/compilepkg.bzl`
+- `third_party/rgo/v0_60_0/base/go/private/actions/compilepkg.bzl`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go`
 
 The key rule is: disabling compile toolexec must not disable synthetic
 `testmain` helper/root resolution. If necessary, separate "action has
@@ -161,12 +161,12 @@ helper roots. Generic contrib roots remain part of `general` mode only.
 
 Likely files:
 
-- `third_party/rules_go_orchestrion_base/go/private/actions/stdlib.bzl`
-- `third_party/rules_go_orchestrion_complete/go/private/actions/stdlib.bzl`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/stdlib.go`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/importcfg.go`
+- `third_party/rgo/v0_60_0/base/go/private/actions/stdlib.bzl`
+- `third_party/rgo/v0_60_0/base/go/private/actions/stdlib.bzl`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go`
 
 ### S-4: Preserve Synthetic Testmain And Helper Packagefiles
 
@@ -191,14 +191,14 @@ the current Orchestrion/stdlib closure permits it:
 
 Likely files:
 
-- `third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/compilepkg.go`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/link.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/link.go`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion_synthetic_tool.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/orchestrion_synthetic_tool.go`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion_version.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/orchestrion_version.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/link.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/link.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion_synthetic_tool.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion_synthetic_tool.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion_version.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion_version.go`
 
 ### S-5: Preserve Link And Importcfg Coherence
 
@@ -216,12 +216,12 @@ misses helper packagefiles.
 
 Likely files:
 
-- `third_party/rules_go_orchestrion_base/go/private/actions/link.bzl`
-- `third_party/rules_go_orchestrion_complete/go/private/actions/link.bzl`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/link.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/link.go`
-- `third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go`
-- `third_party/rules_go_orchestrion_complete/go/tools/builders/importcfg.go`
+- `third_party/rgo/v0_60_0/base/go/private/actions/link.bzl`
+- `third_party/rgo/v0_60_0/base/go/private/actions/link.bzl`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/link.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/link.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go`
+- `third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go`
 
 ### S-6: Update Tests And Docs
 
@@ -236,7 +236,7 @@ Add or update tests that prove the new shape:
     flags
   - metadata records `bazel.go.orchestrion.mode` and
     `bazel.go.test_binary_linker_optimization`
-- builder unit tests in both vendored variants
+- builder unit tests in supported base trees
   - mode validation
   - mode-aware helper closure
   - stdlib package list reduction
@@ -265,15 +265,15 @@ does not support automatic `testify/suite` instrumentation.
 
 Apply semantic changes to both:
 
-- `third_party/rules_go_orchestrion_base`
-- `third_party/rules_go_orchestrion_complete`
+- `third_party/rgo/v0_60_0/base`
+- `third_party/rgo/v0_60_0/base`
 
 Then refresh and verify fork metadata:
 
 ```bash
-python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report
-python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --write-report
-python3 tools/dev/verify_rules_go_variants.py
+python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rgo/v0_60_0/base.METADATA.json --write-report
+python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rgo/v0_60_0/base.METADATA.json --write-report
+python3 tools/dev/verify_rules_go_profiles.py
 ```
 
 ## Local Validation
@@ -284,21 +284,20 @@ Run narrow checks first:
 ./bazelw test //modules/go/tests:all
 ```
 
-Run vendored builder tests for both variants. If root labels do not expose the
-vendored fork tests directly, use the existing variant smoke scripts:
+Run vendored builder tests for supported base trees. If root labels do not expose the
+vendored fork tests directly, use the existing smoke script:
 
 ```bash
 RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh
-RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_smoke.sh
 ```
 
 Then run Go consumer integration harnesses:
 
 ```bash
 USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh
-USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete tools/tests/integration/run_workspace_go_integration.sh
+USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh
 USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh
-USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete tools/tests/integration/run_bzlmod_go_integration.sh
+USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh
 ```
 
 Run full repo validation only after focused checks pass:
@@ -307,59 +306,57 @@ Run full repo validation only after focused checks pass:
 ./bazelw test //...
 ```
 
-## dd-source Pilot Validation
+## Consumer Repository Validation
 
-Use the local `dd-source` checkout at:
+Use a local checkout of the WORKSPACE consumer repository under validation:
 
 ```text
-/Users/tony.redondo/dd/dd-source
+<consumer-repository-checkout>
 ```
 
-Current pilot service:
+Current selected service:
 
-- service key: `code_workload_runner_pipelines_descriptor`
-- service name: `code-workload-runner-pipelines-descriptor`
-- Go sync repo:
-  `test_optimization_data_go_code_workload_runner_pipelines_descriptor`
-- pilot targets:
-  - `//domains/ci-app/apps/apis/code-workload-runner-pipelines-descriptor/internal/inspector:go_default_test`
-  - `//domains/ci-app/apps/apis/code-workload-runner-pipelines-descriptor/internal/finder:go_default_test`
+- service key: `<service_key>`
+- service name: `<service-name>`
+- Go sync repo: `test_optimization_data_go_<service_key>`
+- selected targets:
+  - `//path/to/service/package:primary_go_test`
+  - `//path/to/service/package:secondary_go_test`
 
-The current `dd-source` target
-`//tools/test_optimization:dd_test_optimization_doctor` also expects the Python
-`query_validator` target. For a Go-only proof, either temporarily narrow that
-doctor target in a separate `dd-source` validation branch/worktree, or also run:
+If the consumer repository's doctor target expects non-Go selected targets, either
+temporarily narrow that doctor target in a separate validation branch/worktree,
+or also run those required non-Go targets before doctor validation:
 
 ```bash
 bin/bzl test --config=test-optimization \
-  //domains/ffe/apps/apis/query_validator/internal/validator/tests:test_sql_validator
+  //<path/to/non-go/service>:required_runtime_test
 ```
 
-Do not overwrite existing `dd-source` local changes. Before modifying that
-checkout, inspect status with:
+Do not overwrite existing local changes in the consumer checkout. Before
+modifying that checkout, inspect status with:
 
 ```bash
 git -c core.fsmonitor=false status --short --branch
 ```
 
-Point `dd-source` to this local rules checkout for validation. Because the
-current `dd-source` WORKSPACE uses archive pins, use the least invasive local
-override pattern available in that checkout. If no helper exists, patch the
-validation worktree to use this checkout's `datadog-rules-test-optimization`
-and matching local `rules_go` variant rather than the pinned archive.
+Point the consumer repository to this local rules checkout for validation. If the
+consumer WORKSPACE uses archive pins, use the least invasive local override
+pattern available in that checkout. If no helper exists, patch the validation
+worktree to use this checkout's `datadog-rules-test-optimization` and matching
+local `rules_go` variant rather than the pinned archive.
 
-Run the Go pilot:
+Run the selected Go targets:
 
 ```bash
 bin/bzl sync --config=test-optimization \
-  --only=test_optimization_data_go_code_workload_runner_pipelines_descriptor \
+  --only=test_optimization_data_go_<service_key> \
   --repo_env=FETCH_SALT="$(date +%s)"
 
 bin/bzl test --config=test-optimization \
-  //domains/ci-app/apps/apis/code-workload-runner-pipelines-descriptor/internal/inspector:go_default_test
+  //path/to/service/package:primary_go_test
 
 bin/bzl test --config=test-optimization \
-  //domains/ci-app/apps/apis/code-workload-runner-pipelines-descriptor/internal/finder:go_default_test
+  //path/to/service/package:secondary_go_test
 ```
 
 Run doctor and uploader dry-run:
@@ -375,10 +372,10 @@ bin/bzl run --config=test-optimization \
   --expected-enriched-tag=bazel.go.payload_selection
 ```
 
-Evidence required from `dd-source`:
+Evidence required from the consumer repository:
 
-- both Go pilot tests pass
-- each pilot has `bazel-testlogs/.../test.outputs/payloads/tests/*.json`
+- both selected Go tests pass
+- each selected test has `bazel-testlogs/.../test.outputs/payloads/tests/*.json`
 - each payload JSON is parseable and contains uploadable test events
 - `bazel_target_metadata.json` exists beside each target's payloads
 - metadata includes the exact `bazel.target`, `bazel.package`, service, and
@@ -388,15 +385,16 @@ Evidence required from `dd-source`:
 - logs or payloads prove CI Visibility initialized; test success alone is not
   sufficient
 
-If possible, add one build-shape proof in `dd-source` with probes enabled:
+If possible, add one build-shape proof in the consumer repository with probes
+enabled:
 
 ```bash
 RULES_GO_ORCHESTRION_PROBE=1 \
-RULES_GO_ORCHESTRION_PROBE_FILE=/tmp/dd-source-topt-probes.log \
+RULES_GO_ORCHESTRION_PROBE_FILE=/tmp/consumer-repository-topt-probes.log \
 bin/bzl test --config=test-optimization \
   --action_env=RULES_GO_ORCHESTRION_PROBE=1 \
-  --action_env=RULES_GO_ORCHESTRION_PROBE_FILE=/tmp/dd-source-topt-probes.log \
-  //domains/ci-app/apps/apis/code-workload-runner-pipelines-descriptor/internal/inspector:go_default_test
+  --action_env=RULES_GO_ORCHESTRION_PROBE_FILE=/tmp/consumer-repository-topt-probes.log \
+  //path/to/service/package:primary_go_test
 ```
 
 The probe or aquery evidence must show:
@@ -417,12 +415,12 @@ The probe or aquery evidence must show:
 - R-3: `testify/suite` users lose automatic suite instrumentation in
   `test_optimization` v1. Mitigation: document this explicitly and add a
   negative/unsupported fixture.
-- R-4: Fork variants can drift. Mitigation: update base and complete together,
-  refresh changed-files reports, and run variant verification.
-- R-5: `dd-source` has local changes and environment-specific Bazel state.
-  Mitigation: use `git -c core.fsmonitor=false`, avoid overwriting unrelated
-  edits, validate in a separate worktree if needed, and run heavy commands
-  serially.
+- R-4: Fork support lines can drift. Mitigation: update supported base trees together,
+  refresh changed-files reports, and run profile verification.
+- R-5: The consumer repository can have local changes and environment-specific
+  Bazel state. Mitigation: use `git -c core.fsmonitor=false`, avoid
+  overwriting unrelated edits, validate in a separate worktree if needed, and
+  run heavy commands serially.
 - R-6: Local Bazel or Orchestrion caches can hide correctness problems.
   Mitigation: run at least one clean-ish validation after `bazel shutdown` and
   refresh sync data with `FETCH_SALT`.
@@ -436,9 +434,10 @@ The experiment is done only when all of these are true:
   Orchestrion in `test_optimization`.
 - Stdlib/`testing`, synthetic `testmain`, helper packagefiles, link, and
   importcfg remain coherent.
-- Standard Go `testing` pilot targets in `dd-source` emit usable payloads.
-- Doctor and uploader dry-run enrichment pass for the pilot.
+- Standard Go `testing` targets in the consumer repository emit usable
+  payloads.
+- Doctor and uploader dry-run enrichment pass for the selected targets.
 - `testify/suite` automatic instrumentation is either documented as unsupported
   or covered by a negative fixture.
-- Both vendored fork variants are updated and verified.
+- Supported vendored fork base trees are updated and verified.
 - No performance claims are made from this pass.

@@ -141,8 +141,8 @@ Symptoms:
 Checks:
 
 - The consumer uses a current published commit from this repository.
-- The consumer resolves `rules_go` to `rules_go_orchestrion_base` or
-  `rules_go_orchestrion_complete`, not upstream plain `rules_go`.
+- The consumer resolves `rules_go` to the versioned Orchestrion base tree or another
+  versioned base tree, not upstream plain `rules_go`.
 - The WORKSPACE helper or Bzlmod override points at the correct variant.
 - `go_orchestrion_tool_repo` is loaded from the same `rules_go` repository name
   used by the consumer, not from an undeclared default alias.

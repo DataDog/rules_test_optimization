@@ -172,6 +172,22 @@ function Resolve-ArtifactPath {
     return $null
 }
 
+function Resolve-RuntimeFilePath {
+    param([string]$InputPath)
+
+    if (-not $InputPath) { return $null }
+    if (Test-Path -LiteralPath $InputPath -PathType Leaf) {
+        return $InputPath
+    }
+    if ($env:BUILD_WORKSPACE_DIRECTORY) {
+        $workspaceCandidate = Join-Path $env:BUILD_WORKSPACE_DIRECTORY $InputPath
+        if (Test-Path -LiteralPath $workspaceCandidate -PathType Leaf) {
+            return $workspaceCandidate
+        }
+    }
+    return (Resolve-ArtifactPath $InputPath)
+}
+
 # Logging functions (defined early so other functions can use them)
 # Note: $Debug is set later, so Dbg checks the variable at runtime
 $script:DebugMode = $false  # Will be set properly after Normalize-Bool is defined
@@ -559,6 +575,13 @@ Dbg "gzip enabled: $GzipPayloads"
 
 $DryRun = $false
 $ValidateEnrichment = $false
+$ExecutionLogJson = $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON
+$ExecutionLogMode = if ($env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE) { $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE } else { "auto" }
+$DefaultExecutionLogJson = ".topt/bazel-execution-log.json"
+$script:ExecutionEligibilityEnabled = $false
+$script:ExecutionEligibleLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:ExecutionEligibleOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:ExecutionSkippedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $ExpectedEnrichedTags = New-Object System.Collections.Generic.List[string]
 $DefaultExpectedEnrichedTags = @(
     "git.repository_url",
@@ -574,6 +597,10 @@ function Show-Usage {
     Write-Host "  --dry-run                    Enrich and validate payloads without uploading or deleting files."
     Write-Host "  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment."
     Write-Host "  --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags."
+    Write-Host "  --execution-log-json PATH    Only upload payloads from TestRunner actions that executed in this Bazel execution log."
+    Write-Host "  --execution-log-mode MODE    Cache-safety mode: auto, required, optional, or disabled. Default: auto."
+    Write-Host "  --allow-cached-payload-uploads"
+    Write-Host "                                Disable execution-log cache filtering for this uploader run."
 }
 
 for ($i = 0; $i -lt $args.Count; $i++) {
@@ -599,6 +626,36 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         $ExpectedEnrichedTags.Add($arg.Substring("--expected-enriched-tag=".Length)) | Out-Null
         continue
     }
+    if ($arg -eq "--execution-log-json") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --execution-log-json requires a file path"
+            exit 2
+        }
+        $i++
+        $ExecutionLogJson = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--execution-log-json=")) {
+        $ExecutionLogJson = $arg.Substring("--execution-log-json=".Length)
+        continue
+    }
+    if ($arg -eq "--execution-log-mode") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --execution-log-mode requires one of: auto, required, optional, disabled"
+            exit 2
+        }
+        $i++
+        $ExecutionLogMode = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--execution-log-mode=")) {
+        $ExecutionLogMode = $arg.Substring("--execution-log-mode=".Length)
+        continue
+    }
+    if ($arg -eq "--allow-cached-payload-uploads") {
+        $ExecutionLogMode = "disabled"
+        continue
+    }
     if ($arg -eq "--help" -or $arg -eq "-h") {
         Show-Usage
         exit 0
@@ -612,8 +669,16 @@ if ($ValidateEnrichment -and -not $DryRun) {
     Log "error: --validate-enrichment requires --dry-run"
     exit 2
 }
+$ExecutionLogMode = $ExecutionLogMode.ToLowerInvariant()
+if (@("auto", "required", "optional", "disabled") -notcontains $ExecutionLogMode) {
+    Log "error: DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE/--execution-log-mode must be one of: auto, required, optional, disabled"
+    exit 2
+}
 $script:DryRun = $DryRun
 $script:ValidateEnrichment = $ValidateEnrichment
+$script:ExecutionLogJson = $ExecutionLogJson
+$script:ExecutionLogMode = $ExecutionLogMode
+$script:DefaultExecutionLogJson = $DefaultExecutionLogJson
 $script:ExpectedEnrichedTags = $ExpectedEnrichedTags
 $script:DefaultExpectedEnrichedTags = $DefaultExpectedEnrichedTags
 
@@ -764,6 +829,7 @@ function Resolve-DirectoryPhysicalPath {
 # Keep the logical path for messages/context derivation, but walk the physical
 # directory so a workspace bazel-testlogs symlink is handled consistently.
 $TestlogsScanDir = Resolve-DirectoryPhysicalPath $TestlogsDir
+$script:TestlogsScanDir = $TestlogsScanDir
 Dbg "using TestlogsScanDir=$TestlogsScanDir"
 
 # Find all test.outputs directories (supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth)
@@ -1724,6 +1790,210 @@ function Get-BazelTargetMetadataPath([string]$PayloadFile) {
   return $null
 }
 
+function Get-JsonStreamObjects([string]$PathValue) {
+  $text = Get-Content -LiteralPath $PathValue -Raw -Encoding UTF8
+  $objects = New-Object System.Collections.Generic.List[object]
+  $depth = 0
+  $start = -1
+  $inString = $false
+  $escape = $false
+  for ($i = 0; $i -lt $text.Length; $i++) {
+    $ch = $text[$i]
+    if ($inString) {
+      if ($escape) {
+        $escape = $false
+      } elseif ($ch -eq '\') {
+        $escape = $true
+      } elseif ($ch -eq '"') {
+        $inString = $false
+      }
+      continue
+    }
+    if ($ch -eq '"') {
+      $inString = $true
+      continue
+    }
+    if ($ch -eq '{') {
+      if ($depth -eq 0) { $start = $i }
+      $depth++
+      continue
+    }
+    if ($ch -eq '}') {
+      $depth--
+      if ($depth -eq 0 -and $start -ge 0) {
+        $json = $text.Substring($start, $i - $start + 1)
+        $objects.Add(($json | ConvertFrom-Json -ErrorAction Stop)) | Out-Null
+        $start = -1
+      }
+      if ($depth -lt 0) {
+        throw "unbalanced JSON object stream"
+      }
+    }
+  }
+  if ($depth -ne 0 -or $inString) {
+    throw "unterminated JSON object stream"
+  }
+  return $objects
+}
+
+function Get-ExecutionLogTestOutputKey([string]$PathValue) {
+  if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+  $normalized = $PathValue.Replace('\', '/')
+  $marker = "/testlogs/"
+  $markerIndex = $normalized.LastIndexOf($marker, [System.StringComparison]::Ordinal)
+  if ($markerIndex -ge 0) {
+    $normalized = $normalized.Substring($markerIndex + $marker.Length)
+  } else {
+    $normalized = $normalized.TrimStart('/')
+  }
+
+  $insideIndex = $normalized.IndexOf("/test.outputs/", [System.StringComparison]::Ordinal)
+  if ($insideIndex -ge 0) {
+    $normalized = $normalized.Substring(0, $insideIndex) + "/test.outputs"
+  } elseif (-not $normalized.EndsWith("/test.outputs", [System.StringComparison]::Ordinal)) {
+    return ""
+  }
+
+  while ($normalized.StartsWith("./", [System.StringComparison]::Ordinal)) {
+    $normalized = $normalized.Substring(2)
+  }
+  return $normalized.TrimStart('/')
+}
+
+function Get-SpawnTestOutputKeys($Spawn) {
+  $values = New-Object System.Collections.Generic.List[string]
+  $keys = New-Object System.Collections.Generic.List[string]
+  foreach ($item in @($Spawn.listedOutputs)) {
+    if ($item -is [string]) { $values.Add($item) | Out-Null }
+  }
+  foreach ($item in @($Spawn.actualOutputs)) {
+    if ($null -ne $item -and $item.PSObject.Properties.Name -contains "path" -and $item.path -is [string]) {
+      $values.Add([string]$item.path) | Out-Null
+    }
+  }
+  foreach ($value in $values) {
+    $key = Get-ExecutionLogTestOutputKey ([string]$value)
+    if (-not [string]::IsNullOrWhiteSpace($key)) {
+      $keys.Add($key) | Out-Null
+    }
+  }
+  return $keys
+}
+
+function Test-CiEnvironment {
+  $ci = [string]$env:CI
+  if ([string]::IsNullOrWhiteSpace($ci)) { return $false }
+  $normalized = $ci.ToLowerInvariant()
+  return ($normalized -ne "0" -and $normalized -ne "false" -and $normalized -ne "no")
+}
+
+function Initialize-ExecutionLogEligibility {
+  if ($script:ExecutionLogMode -eq "disabled") {
+    if (-not [string]::IsNullOrWhiteSpace($script:ExecutionLogJson)) {
+      Log "warning: execution-log filtering disabled; ignoring configured execution log: $($script:ExecutionLogJson)"
+    }
+    return
+  }
+
+  if ([string]::IsNullOrWhiteSpace($script:ExecutionLogJson) -and $script:ExecutionLogMode -eq "auto") {
+    $resolvedDefaultLog = Resolve-RuntimeFilePath $script:DefaultExecutionLogJson
+    if (-not [string]::IsNullOrWhiteSpace($resolvedDefaultLog) -and (Test-Path -LiteralPath $resolvedDefaultLog -PathType Leaf)) {
+      $script:ExecutionLogJson = $script:DefaultExecutionLogJson
+    }
+  }
+
+  if ([string]::IsNullOrWhiteSpace($script:ExecutionLogJson)) {
+    if ($script:ExecutionLogMode -eq "required" -or ($script:ExecutionLogMode -eq "auto" -and (Test-CiEnvironment))) {
+      if ($script:ExecutionLogMode -eq "required") {
+        Log "error: execution-log cache filtering is required by DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=required / --execution-log-mode=required. Run bazel test with --execution_log_json_file=$($script:DefaultExecutionLogJson), then rerun the uploader, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+      } else {
+        Log "error: execution-log cache filtering is required in CI. Run bazel test with --execution_log_json_file=$($script:DefaultExecutionLogJson), then rerun the uploader, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+      }
+      exit 2
+    }
+    if ($script:ExecutionLogMode -eq "auto") {
+      Log "warning: execution-log cache filtering is not configured; cached test outputs may be uploaded. Add --execution_log_json_file=$($script:DefaultExecutionLogJson) to bazel test, or set DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled to opt out explicitly."
+    }
+    return
+  }
+
+  $resolvedLog = Resolve-RuntimeFilePath $script:ExecutionLogJson
+  if ([string]::IsNullOrWhiteSpace($resolvedLog) -or -not (Test-Path -LiteralPath $resolvedLog -PathType Leaf)) {
+    Log "error: execution log JSON not found: $($script:ExecutionLogJson)"
+    exit 2
+  }
+  try {
+    foreach ($spawn in @(Get-JsonStreamObjects $resolvedLog)) {
+      if (([string]($spawn.mnemonic)) -ne "TestRunner") { continue }
+      $outputKeys = @(Get-SpawnTestOutputKeys $spawn)
+      if ($outputKeys.Count -eq 0) { continue }
+      if ($spawn.PSObject.Properties.Name -contains "cacheHit" -and [bool]$spawn.cacheHit) { continue }
+      $runner = [string]($spawn.runner)
+      if ($runner.ToLowerInvariant().Contains("cache hit")) { continue }
+      $label = [string]($spawn.targetLabel)
+      if (-not [string]::IsNullOrWhiteSpace($label)) {
+        $script:ExecutionEligibleLabels.Add($label) | Out-Null
+        foreach ($outputKey in $outputKeys) {
+          $script:ExecutionEligibleOutputs.Add("$label`t$outputKey") | Out-Null
+        }
+      }
+    }
+  } catch {
+    Log "error: failed to parse execution log JSON: $resolvedLog"
+    exit 2
+  }
+  $script:ExecutionEligibilityEnabled = $true
+  Dbg "execution-log freshness filter enabled: $resolvedLog ($($script:ExecutionEligibleOutputs.Count) eligible test outputs)"
+}
+
+function Get-TestOutputTargetLabel([string]$OutputsDir) {
+  if ([string]::IsNullOrWhiteSpace($OutputsDir)) { return "" }
+  $metadataPath = Join-Path $OutputsDir $script:BazelTargetMetadataOutput
+  if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) { return "" }
+  try {
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    return [string]($metadata.'bazel.target')
+  } catch {
+    return ""
+  }
+}
+
+function Get-TestOutputDirKey([string]$OutputsDir) {
+  if ([string]::IsNullOrWhiteSpace($OutputsDir)) { return "" }
+  $normalized = $OutputsDir.Replace('\', '/').TrimEnd('/')
+  $scanRoot = ([string]$script:TestlogsScanDir).Replace('\', '/').TrimEnd('/')
+  if (-not [string]::IsNullOrWhiteSpace($scanRoot) -and $normalized.StartsWith($scanRoot + "/", [System.StringComparison]::Ordinal)) {
+    return $normalized.Substring($scanRoot.Length + 1)
+  }
+  return (Get-ExecutionLogTestOutputKey $normalized)
+}
+
+function Write-ExecutionSkipOnce([string]$OutputsDir, [string]$Reason) {
+  if ($script:ExecutionSkippedOutputs.Add($OutputsDir)) {
+    [Console]::Out.WriteLine("[dd-uploader] skipping cached test output: $OutputsDir ($Reason)")
+  }
+}
+
+function Test-OutputDirExecutionEligible([string]$OutputsDir) {
+  if (-not $script:ExecutionEligibilityEnabled) { return $true }
+  $targetLabel = Get-TestOutputTargetLabel $OutputsDir
+  if ([string]::IsNullOrWhiteSpace($targetLabel)) {
+    Write-ExecutionSkipOnce $OutputsDir "missing bazel.target metadata"
+    return $false
+  }
+  $outputKey = Get-TestOutputDirKey $OutputsDir
+  if ([string]::IsNullOrWhiteSpace($outputKey)) {
+    Write-ExecutionSkipOnce $OutputsDir "could not map test.outputs path"
+    return $false
+  }
+  $eligibleOutput = $script:ExecutionEligibleOutputs.Contains("$targetLabel`t$outputKey")
+  if ($eligibleOutput) {
+    return $true
+  }
+  Write-ExecutionSkipOnce $OutputsDir "target $targetLabel output $outputKey was not freshly executed"
+  return $false
+}
+
 $script:ContextInfoCache = @{}
 
 function Get-ContextInfo([string]$ContextPath) {
@@ -2273,6 +2543,7 @@ function Resolve-TelemetryFactsSources {
 function Get-AllSortedTelemetryFiles {
     $files = @()
     foreach ($outputsDir in $script:TestOutputsCache) {
+        if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
         $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
         if (-not (Test-Path -LiteralPath $telemetryDir)) { continue }
         foreach ($file in (Get-SortedPayloadFiles $telemetryDir)) {
@@ -3035,6 +3306,7 @@ function Upload-AllTests {
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {
+        if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
         $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
         if (-not (Test-Path -LiteralPath $testsDir)) { continue }
         foreach ($f in @(Get-SortedRawTestMsgpackFiles $testsDir)) {
@@ -3107,6 +3379,7 @@ function Upload-AllCoverage {
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {
+        if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
         $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
         if (-not (Test-Path -LiteralPath $covDir)) { continue }
         $files = Get-SortedPayloadFiles $covDir
@@ -3154,6 +3427,7 @@ function Upload-AllTelemetry {
     try {
         $plan = New-TelemetryAugmentationPlan
         foreach ($outputsDir in $script:TestOutputsCache) {
+            if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
             $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
             if (-not (Test-Path -LiteralPath $telemetryDir)) { continue }
             $files = Get-SortedPayloadFiles $telemetryDir
@@ -3224,6 +3498,7 @@ function Upload-AllTelemetry {
 try {
     # Run tests first, then coverage. This ordering mirrors historical behavior
     # and keeps log/snapshot expectations stable across platforms.
+    Initialize-ExecutionLogEligibility
     Upload-AllTests
     Upload-AllCoverage
     Upload-AllTelemetry

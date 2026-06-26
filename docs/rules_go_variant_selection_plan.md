@@ -6,58 +6,68 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# rules_go Orchestrion Variant Selection
+# rules_go Orchestrion Support Selection
 
-This repository no longer exposes a public consumer flow based on applying
-separate Bazel patches. Consumers choose one complete `rules_go` tree instead.
+This repository exposes one supported public `rules_go` tree variant, `base`.
+Consumers that already own a private `rules_go` patch stack can also consume a
+generated sparse patch profile as an input to a local rebase or merge inside
+their own repository.
 
-## Published Variants
+## Published Variant
 
-- `third_party/rules_go_orchestrion_base`: `rules_go` v0.60.0 plus the generic
-  Orchestrion integration and correctness fixes maintained by this repository.
-- `third_party/rules_go_orchestrion_complete`: the base variant plus declared
-  historical monorepo compatibility differences.
+- `base`: upstream `rules_go` plus the generic Orchestrion integration and
+  correctness fixes maintained by this repository.
 
-Both variants are complete repository roots. A consumer should point
+The base variant is a complete repository root. A consumer should point
 `rules_go`, `io_bazel_rules_go`, or its equivalent repository name directly at
-one of these subtrees. Consumers should not configure `patches`, `patch_tool`,
-`patch_args`, or a consumer-owned patch directory for this integration.
+this subtree when it does not already maintain its own `rules_go` patch stack.
+
+The default `rules_go_upstream` is currently `v0_60_0`, which preserves the
+existing `third_party/rgo/v0_60_0/base` path. When multiple upstream
+`rules_go` versions are supported, use `rules_go_upstream` to choose the upstream
+support line. Omitting `rules_go_upstream` preserves the repository default.
 
 ## Selection Rule
 
 - Use `base` for normal WORKSPACE and Bzlmod consumers.
-- Use `complete` only when a large monorepo needs the declared extended
-  compatibility layer.
+- Use a generated consumer patch profile only when the consuming repository
+  already applies its own private `rules_go` patch stack and needs to preserve
+  that ownership model.
 
-The current declared difference is tracked in
-`third_party/rules_go_orchestrion_variants.json` and verified by:
+Public consumer patch profiles live under
+`third_party/rules_go_orchestrion/profiles/` and are verified by:
 
 ```bash
-python3 tools/dev/verify_rules_go_variants.py
+python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt
 ```
 
 ## Maintainer Workflow
 
-When the generic Orchestrion integration changes, modify
-`third_party/rules_go_orchestrion_base` directly and then copy or intentionally
-reapply the same correctness change to `third_party/rules_go_orchestrion_complete`
-if the file exists there.
+Maintainers track each supported upstream version with both:
 
-When a change is specific to the extended compatibility layer, modify only
-`third_party/rules_go_orchestrion_complete` and add the changed path to
-`third_party/rules_go_orchestrion_variants.json` with a precise reason.
+- patch series under `third_party/rules_go_orchestrion/patches/<upstream>/`
+- materialized base trees under the registry-selected `tree_path`
+
+The patch series is the maintainer source for rebasing. The materialized tree is
+the consumer artifact. CI verifies that they match.
+
+When the generic Orchestrion integration changes, update the base tree for the
+target upstream, regenerate the maintainer patch series, and verify that the
+consumer patch profiles still round-trip against clean upstream `rules_go`.
 
 After any variant change, regenerate the upstream delta reports:
 
 ```bash
-python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json --write-report
-python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json --write-report
-python3 tools/dev/verify_rules_go_variants.py
+python3 tools/dev/diff_rules_go_fork.py --all --write-report
+python3 tools/dev/materialize_rules_go_fork.py check --all
+python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt
 ```
 
-Run both variant smoke lanes before publishing:
+Run the smoke lane before publishing:
 
 ```bash
-RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh
-RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_smoke.sh
+RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh
 ```
+
+When adding a new upstream, run the same smoke commands with
+`RULES_GO_UPSTREAM=<new_upstream>`.

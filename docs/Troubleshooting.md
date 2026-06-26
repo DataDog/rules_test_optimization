@@ -101,7 +101,8 @@ or a tuple that was not generated from the real GitHub codeload archive.
    ```bash
    ./bazelw run //tools/dev:print_go_onboarding_pins -- \
      --commit "$(git rev-parse origin/main)" \
-     --variant complete \
+     --rules-go-upstream v0_60_0 \
+     --variant base \
      --verify-main-reachable
    ```
 
@@ -111,7 +112,8 @@ or a tuple that was not generated from the real GitHub codeload archive.
    bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
      --print-published-pins \
      --rto-commit <published-origin-main-sha> \
-     --rules-go-variant complete
+     --rules-go-upstream v0_60_0 \
+     --rules-go-variant base
    ```
 
 3. **Keep the generated tuple together**. If `RTO_COMMIT`,
@@ -131,7 +133,8 @@ or a tuple that was not generated from the real GitHub codeload archive.
    bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
      --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
      --rto-commit <published-origin-main-sha> \
-     --rules-go-variant complete
+     --rules-go-upstream v0_60_0 \
+     --rules-go-variant base
    ```
 
 ## Private repository fetch
@@ -422,7 +425,7 @@ module version.
    - the effective local module graph resolved from `go.mod` and `go.sum`
 
 4. **If you omitted the version entirely**, remember the default is
-   `v2.9.0-rc.2`.
+   `v2.9.0`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one
 set of tracer versions while the local Go module still resolves another.

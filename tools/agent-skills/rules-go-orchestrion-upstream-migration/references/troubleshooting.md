@@ -15,7 +15,7 @@ new upstream shape no longer matches the existing Orchestrion delta cleanly.
 
 Symptoms:
 
-- the current `base.patch` fails on the new upstream tree
+- the current `patches/<upstream>/<variant>.series` stack fails on the new upstream tree
 - upstream moved or rewrote one of the sensitive surfaces
 - conflicts appear in compile, stdlib, link, or transition files
 
@@ -30,26 +30,30 @@ Checks:
 Do not force old file structure into the new upstream tree. Port the behavior
 to the new upstream design.
 
-## Variant Verification Fails
+## Profile Verification Fails
 
 Symptoms:
 
-- `python3 tools/dev/verify_rules_go_variants.py` reports unexpected
-  differences
-- declared differences are no longer present
+- `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`
+  reports a patch generation, patch apply, file-mode, symlink, or denylist
+  failure
+- a generated public consumer patch includes files that the profile should
+  exclude
 
 Checks:
 
-- If the difference is generic Orchestrion behavior, copy or reapply it to both
-  `base` and `complete`.
-- If the difference is compatibility-only behavior, keep it only in `complete`
-  and add or update the entry in
-  `third_party/rules_go_orchestrion_variants.json`.
-- If an allowlisted path no longer differs, remove it from the allowlist.
-- Re-run the verifier after every metadata edit.
+- If the missing change is generic Orchestrion behavior, port it into the base
+  tree and regenerate the maintainer patch series.
+- If a generated patch includes an excluded file, update
+  `third_party/rules_go_orchestrion/profiles/<profile>.json` only when that
+  file is intentionally public for all consumers of the profile.
+- If the denylist fires, remove the private-only text from public sources or
+  move the consumer-specific instruction into the private repository.
+- Re-run the verifier after every profile or base-tree edit.
 
-Do not remove verifier failures by deleting behavior from one variant without
-understanding which variant owns it.
+Do not weaken a profile or denylist failure without proving that the resulting
+patch remains public, deterministic, and applicable to clean upstream
+`rules_go`.
 
 ## Changed-File Counts Look Wrong
 
@@ -66,7 +70,8 @@ Checks:
   in metadata.
 - Check for generated files, local caches, or editor artifacts accidentally
   copied into the vendored tree.
-- Use `python3 tools/dev/diff_rules_go_fork.py --list` to inspect path classes.
+- Use `python3 tools/dev/diff_rules_go_fork.py --all` or a focused
+  `--upstream <id> --variant <name>` command to inspect path classes.
 
 Do not hand-edit the report to make counts look right.
 

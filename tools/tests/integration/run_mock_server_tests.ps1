@@ -398,6 +398,14 @@ $mockOut = Join-Path $tempRoot "mock.out"
 $mockErr = Join-Path $tempRoot "mock.err"
 $port = Get-FreePort
 $serverProc = $null
+$originalExecutionLogMode = $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE
+if ([string]::IsNullOrWhiteSpace($env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE)) {
+  # Most scenarios in this harness use hand-written payload directories rather
+  # than a preceding `bazel test` invocation, so they opt into legacy optional
+  # filtering. Dedicated scenarios below assert the CI default and
+  # execution-log cache-safety behavior.
+  $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE = "optional"
+}
 
 Push-Location $repoRoot
 try {
@@ -877,6 +885,191 @@ filegroup(
     throw "multi-context uploader dry-run deleted the source test payload"
   }
 
+  # Scenario: CI defaults to cache-safe uploads. If no Bazel execution log is
+  # available, the uploader must fail closed unless the caller opts out
+  # explicitly.
+  $ciRequiredTranscript = Join-Path $tempRoot "ci_requires_execution_log.transcript.txt"
+  $requiredTranscript = Join-Path $tempRoot "required_execution_log.transcript.txt"
+  $ciOptOutTranscript = Join-Path $tempRoot "ci_execution_log_opt_out.transcript.txt"
+  $missingLogWorkspace = Join-Path $tempRoot "missing-execution-log-workspace"
+  New-Item -ItemType Directory -Force -Path $missingLogWorkspace | Out-Null
+  $savedCi = $env:CI
+  $savedExecutionLogMode = $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE
+  $savedExecutionLogJson = $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON
+  $savedBuildWorkspaceDirectory = $env:BUILD_WORKSPACE_DIRECTORY
+  try {
+    Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON -ErrorAction SilentlyContinue
+    $env:BUILD_WORKSPACE_DIRECTORY = $missingLogWorkspace
+    $env:CI = "true"
+    Push-Location $missingLogWorkspace
+    try {
+      $ciRequiredExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs @("--dry-run") -TranscriptPath $ciRequiredTranscript
+      if ($ciRequiredExitCode -eq 0) {
+        throw "CI uploader unexpectedly succeeded without execution-log filtering`n$(Get-Content -LiteralPath $ciRequiredTranscript -Raw -ErrorAction SilentlyContinue)"
+      }
+      $ciRequiredOutput = Get-Content -LiteralPath $ciRequiredTranscript -Raw -Encoding UTF8
+      if (-not $ciRequiredOutput.Contains("execution-log cache filtering is required in CI")) {
+        throw "CI missing-execution-log failure was not actionable`n$ciRequiredOutput"
+      }
+
+      $env:CI = ""
+      $requiredExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs @("--dry-run", "--execution-log-mode=required") -TranscriptPath $requiredTranscript
+      if ($requiredExitCode -eq 0) {
+        throw "required-mode uploader unexpectedly succeeded without execution-log filtering`n$(Get-Content -LiteralPath $requiredTranscript -Raw -ErrorAction SilentlyContinue)"
+      }
+      $requiredOutput = Get-Content -LiteralPath $requiredTranscript -Raw -Encoding UTF8
+      if (-not $requiredOutput.Contains("execution-log cache filtering is required by")) {
+        throw "required-mode missing-execution-log failure was not actionable`n$requiredOutput"
+      }
+
+      $env:CI = "true"
+      $ciOptOutExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs @("--dry-run", "--allow-cached-payload-uploads") -TranscriptPath $ciOptOutTranscript
+      if ($ciOptOutExitCode -ne 0) {
+        throw "CI uploader opt-out failed with exit code $ciOptOutExitCode`n$(Get-Content -LiteralPath $ciOptOutTranscript -Raw -ErrorAction SilentlyContinue)"
+      }
+    } finally {
+      Pop-Location
+    }
+  } finally {
+    if ([string]::IsNullOrWhiteSpace($savedCi)) {
+      Remove-Item Env:CI -ErrorAction SilentlyContinue
+    } else {
+      $env:CI = $savedCi
+    }
+    if ([string]::IsNullOrWhiteSpace($savedExecutionLogMode)) {
+      Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE -ErrorAction SilentlyContinue
+    } else {
+      $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE = $savedExecutionLogMode
+    }
+    if ([string]::IsNullOrWhiteSpace($savedExecutionLogJson)) {
+      Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON -ErrorAction SilentlyContinue
+    } else {
+      $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON = $savedExecutionLogJson
+    }
+    if ([string]::IsNullOrWhiteSpace($savedBuildWorkspaceDirectory)) {
+      Remove-Item Env:BUILD_WORKSPACE_DIRECTORY -ErrorAction SilentlyContinue
+    } else {
+      $env:BUILD_WORKSPACE_DIRECTORY = $savedBuildWorkspaceDirectory
+    }
+  }
+
+  # Scenario: an execution log can mark one output for a target as fresh and
+  # another output for the same target as cached. The uploader must match the
+  # output path as well as the target label so it does not enrich cached
+  # payloads for the current commit.
+  $executionLogTestlogsDir = Join-Path $tempRoot "bazel-testlogs-execution-log"
+  $executionLogFreshOutputs = Join-Path $executionLogTestlogsDir "same_label/fresh_attempt/test.outputs"
+  $executionLogCachedOutputs = Join-Path $executionLogTestlogsDir "same_label/cached_attempt/test.outputs"
+  Initialize-WindowsCiTestOutputs -Root $executionLogFreshOutputs
+  Initialize-WindowsCiTestOutputs -Root $executionLogCachedOutputs
+  @'
+{
+  "bazel.package": "same_label",
+  "bazel.target": "//same_label:payload_test"
+}
+'@ | Set-Content -LiteralPath (Join-Path $executionLogFreshOutputs "bazel_target_metadata.json") -Encoding UTF8
+  @'
+{
+  "bazel.package": "same_label",
+  "bazel.target": "//same_label:payload_test"
+}
+'@ | Set-Content -LiteralPath (Join-Path $executionLogCachedOutputs "bazel_target_metadata.json") -Encoding UTF8
+  $executionLogJson = Join-Path $tempRoot "same_label_execution_log.json"
+  @'
+{
+  "mnemonic": "TestRunner",
+  "runner": "processwrapper-sandbox",
+  "cacheHit": false,
+  "targetLabel": "//same_label:payload_test",
+  "listedOutputs": ["bazel-out/x64_windows-fastbuild/testlogs/same_label/fresh_attempt/test.outputs"]
+}
+{
+  "mnemonic": "TestRunner",
+  "runner": "disk cache hit",
+  "cacheHit": true,
+  "targetLabel": "//same_label:payload_test",
+  "listedOutputs": ["bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_attempt/test.outputs"]
+}
+'@ | Set-Content -LiteralPath $executionLogJson -Encoding UTF8
+
+  $env:TESTLOGS_DIR = $executionLogTestlogsDir
+  Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
+  $env:DD_SITE = "datadoghq.com"
+  $env:DD_TEST_OPTIMIZATION_AGENTLESS_URL = "http://127.0.0.1:$port"
+  Remove-Item Env:DD_TEST_OPTIMIZATION_AGENT_URL -ErrorAction SilentlyContinue
+  $executionLogTranscript = Join-Path $tempRoot "execution_log_filter.transcript.txt"
+  $executionLogDryRunStart = @(Read-JsonLog -Path $mockLog).Count
+  $executionLogArgs = @("--dry-run", "--validate-enrichment", "--execution-log-json", $executionLogJson)
+  $executionLogExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $executionLogArgs -TranscriptPath $executionLogTranscript
+  if ($executionLogExitCode -ne 0) {
+    throw "execution-log uploader dry-run failed with exit code $executionLogExitCode`n$(Get-Content -LiteralPath $executionLogTranscript -Raw -ErrorAction SilentlyContinue)"
+  }
+  $executionLogOutput = Get-Content -LiteralPath $executionLogTranscript -Raw -Encoding UTF8
+  if (-not $executionLogOutput.Contains("skipping cached test output")) {
+    throw "execution-log uploader dry-run did not report a cached-output skip"
+  }
+  if (-not $executionLogOutput.Contains("dry-run validated 1 test payloads")) {
+    throw "execution-log uploader dry-run did not process exactly one fresh payload"
+  }
+  if ($executionLogOutput.Contains("dry-run validated 2 test payloads")) {
+    throw "execution-log uploader dry-run processed the cached payload for the same target label"
+  }
+  if (@(Read-NewLogEntries -Path $mockLog -StartIndex $executionLogDryRunStart).Count -ne 0) {
+    throw "execution-log uploader dry-run unexpectedly sent requests to the mock server"
+  }
+
+  $defaultExecutionLogWorkspace = Join-Path $tempRoot "default-execution-log-workspace"
+  $defaultExecutionLogDir = Join-Path $defaultExecutionLogWorkspace ".topt"
+  New-Item -ItemType Directory -Force -Path $defaultExecutionLogDir | Out-Null
+  Copy-Item -LiteralPath $executionLogJson -Destination (Join-Path $defaultExecutionLogDir "bazel-execution-log.json") -Force
+  $defaultExecutionLogTranscript = Join-Path $tempRoot "default_execution_log_filter.transcript.txt"
+  $savedCi = $env:CI
+  $savedExecutionLogMode = $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE
+  $savedExecutionLogJson = $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON
+  $savedBuildWorkspaceDirectory = $env:BUILD_WORKSPACE_DIRECTORY
+  try {
+    Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON -ErrorAction SilentlyContinue
+    $env:BUILD_WORKSPACE_DIRECTORY = $defaultExecutionLogWorkspace
+    $env:CI = "true"
+    Push-Location $defaultExecutionLogWorkspace
+    try {
+      $defaultExecutionLogExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs @("--dry-run") -TranscriptPath $defaultExecutionLogTranscript
+    } finally {
+      Pop-Location
+    }
+    if ($defaultExecutionLogExitCode -ne 0) {
+      throw "default execution-log discovery dry-run failed with exit code $defaultExecutionLogExitCode`n$(Get-Content -LiteralPath $defaultExecutionLogTranscript -Raw -ErrorAction SilentlyContinue)"
+    }
+    $defaultExecutionLogOutput = Get-Content -LiteralPath $defaultExecutionLogTranscript -Raw -Encoding UTF8
+    if (-not $defaultExecutionLogOutput.Contains("skipping cached test output")) {
+      throw "default execution-log discovery did not enable cached-output filtering`n$defaultExecutionLogOutput"
+    }
+  } finally {
+    if ([string]::IsNullOrWhiteSpace($savedCi)) {
+      Remove-Item Env:CI -ErrorAction SilentlyContinue
+    } else {
+      $env:CI = $savedCi
+    }
+    if ([string]::IsNullOrWhiteSpace($savedExecutionLogMode)) {
+      Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE -ErrorAction SilentlyContinue
+    } else {
+      $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE = $savedExecutionLogMode
+    }
+    if ([string]::IsNullOrWhiteSpace($savedExecutionLogJson)) {
+      Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON -ErrorAction SilentlyContinue
+    } else {
+      $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON = $savedExecutionLogJson
+    }
+    if ([string]::IsNullOrWhiteSpace($savedBuildWorkspaceDirectory)) {
+      Remove-Item Env:BUILD_WORKSPACE_DIRECTORY -ErrorAction SilentlyContinue
+    } else {
+      $env:BUILD_WORKSPACE_DIRECTORY = $savedBuildWorkspaceDirectory
+    }
+  }
+  $env:TESTLOGS_DIR = $multiContextTestlogsDir
+
   $multiContextTranscript = Join-Path $tempRoot "multi_context.transcript.txt"
   $multiContextStart = @(Read-JsonLog -Path $mockLog).Count
   $env:DD_API_KEY = [string]::new("0", 32)
@@ -1354,6 +1547,11 @@ $anchorPayload
 } finally {
   if ($serverProc -and -not $serverProc.HasExited) {
     Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
+  }
+  if ([string]::IsNullOrWhiteSpace($originalExecutionLogMode)) {
+    Remove-Item Env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE -ErrorAction SilentlyContinue
+  } else {
+    $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE = $originalExecutionLogMode
   }
   Pop-Location
 }

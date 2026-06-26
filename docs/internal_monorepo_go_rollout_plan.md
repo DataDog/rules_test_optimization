@@ -19,15 +19,13 @@ when the rollout needs a reviewable local pilot before wider adoption.
 
 ## Published Contract
 
-- Consume one complete `rules_go` Orchestrion variant. Do not copy patch
+- Consume one complete base `rules_go` Orchestrion tree. Do not copy patch
   directories, and do not configure `patches`, `patch_tool`, or `patch_args`.
-- Use `rules_go_orchestrion_base` for ordinary repositories.
-- Use `rules_go_orchestrion_complete` only when the monorepo needs the declared
-  extended compatibility layer.
+- Use the versioned base `rules_go` Orchestrion tree for ordinary repositories.
 - Keep the repository's existing Bazel name for `rules_go` when other
   repository code depends on that name.
 - Use the public WORKSPACE helper so the Go companion repo mapping and the
-  selected `rules_go` variant stay consistent.
+  selected `rules_go` upstream support line stay consistent.
 
 ```bzl
 load(
@@ -38,7 +36,8 @@ load(
 datadog_go_test_optimization_workspace_repositories(
     rto_commit = "<published-origin-main-sha>",
     rules_go_repo_name = "<existing_rules_go_repo_name>",
-    rules_go_variant = "complete",
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
 )
 ```
 
@@ -85,8 +84,9 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service "<datadog-service-name>" \
   --runtime-version "<go-sdk-version>" \
   --rules-go-repo-name "<existing_rules_go_repo_name>" \
-  --rules-go-variant complete \
-  --dd-trace-go-version v2.9.0-rc.2 \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
+  --dd-trace-go-version v2.9.0 \
   --write-bazelrc \
   --write-root-targets \
   --write-orchestrion-files \

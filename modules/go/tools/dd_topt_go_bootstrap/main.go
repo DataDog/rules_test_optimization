@@ -32,7 +32,7 @@ const (
 	defaultRulesGoFetch          = "git"
 	defaultRulesGoRepoName       = "io_bazel_rules_go"
 	defaultOrchestrionVersion    = "v1.9.0"
-	defaultDDTraceGoVersion      = "v2.9.0-rc.2"
+	defaultDDTraceGoVersion      = "v2.9.0"
 	defaultSyncRepoName          = "test_optimization_data"
 	defaultDoctorTargetName      = "dd_test_optimization_doctor"
 	defaultUploaderTargetName    = "dd_upload_payloads"
@@ -241,9 +241,11 @@ type config struct {
 	rulesGoRemoteSet bool
 	// rulesGoCommitSet records whether the operator explicitly selected the
 	// rules_go fork commit instead of accepting an inferred commit.
-	rulesGoCommitSet  bool
-	rulesGoVariant    string
-	rulesGoVariantSet bool
+	rulesGoCommitSet   bool
+	rulesGoUpstream    string
+	rulesGoUpstreamSet bool
+	rulesGoVariant     string
+	rulesGoVariantSet  bool
 	// publishedPinsArchiveFetcher is test-only override for codeload downloads.
 	publishedPinsArchiveFetcher onboardingpins.ArchiveFetcher
 	// publishedPinsGitRunner is test-only override for git reachability checks.
@@ -323,7 +325,8 @@ func parseFlags() config {
 	flag.StringVar(&cfg.ddTraceGoVersion, "dd-trace-go-version", defaultDDTraceGoVersion, "dd-trace-go version to pin for Orchestrion-backed instrumentation")
 	flag.StringVar(&cfg.rulesGoRemote, "rules-go-remote", defaultRulesGoRemote, "rules_go fork remote used for Orchestrion support")
 	flag.StringVar(&cfg.rulesGoCommit, "rules-go-commit", defaultRulesGoCommit, "rules_go fork commit used for Orchestrion support; inferred from Datadog git_override wiring when omitted")
-	flag.StringVar(&cfg.rulesGoVariant, "rules-go-variant", defaultRulesGoVariant, "rules_go Orchestrion variant to use: base or complete")
+	flag.StringVar(&cfg.rulesGoUpstream, "rules-go-upstream", "default", "Datadog-managed rules_go upstream support id, for example v0_60_0")
+	flag.StringVar(&cfg.rulesGoVariant, "rules-go-variant", defaultRulesGoVariant, "rules_go Orchestrion variant to use: base")
 	flag.StringVar(&cfg.datadogFetch, "datadog-fetch", defaultDatadogFetch, "WORKSPACE snippet fetch mode for Datadog companion repositories: git or archive")
 	flag.StringVar(&cfg.rulesGoFetch, "rules-go-fetch", defaultRulesGoFetch, "WORKSPACE snippet fetch mode for rules_go: git or archive")
 	flag.StringVar(&cfg.rulesGoRepoName, "rules-go-repo-name", defaultRulesGoRepoName, "WORKSPACE snippet repository name for the rules_go fork")
@@ -342,6 +345,9 @@ func parseFlags() config {
 		}
 		if f.Name == "rules-go-commit" {
 			cfg.rulesGoCommitSet = true
+		}
+		if f.Name == "rules-go-upstream" {
+			cfg.rulesGoUpstreamSet = true
 		}
 		if f.Name == "rules-go-variant" {
 			cfg.rulesGoVariantSet = true
@@ -387,7 +393,7 @@ func run(cfg config) error {
 		cfg.goModSync = defaultGoModSync
 	}
 	normalizeValidationScriptTargets(&cfg)
-	if err := validateRulesGoVariant(cfg.rulesGoVariant); err != nil {
+	if _, err := rulesGoStripPrefix(cfg); err != nil {
 		return err
 	}
 	if err := validateFetchMode(cfg.datadogFetch, "datadog-fetch"); err != nil {
@@ -537,7 +543,7 @@ func run(cfg config) error {
 			return err
 		}
 	}
-	if !cfg.rulesGoVariantSet {
+	if !cfg.rulesGoVariantSet && !cfg.rulesGoUpstreamSet {
 		if err := hydrateManagedRulesGoVariant(&cfg, string(moduleContent)); err != nil {
 			return err
 		}
@@ -782,11 +788,20 @@ func patchModuleFile(cfg config) error {
 		return errors.New("rules_go fork commit is required; add a git_override for datadog-rules-test-optimization-go/datadog-rules-test-optimization or pass --rules-go-commit explicitly")
 	}
 
-	if !strings.Contains(text, managedBlockStart) && strings.Contains(text, `module_name = "rules_go"`) && !rulesGoOverrideCompatible(text, cfg) {
-		return errors.New("MODULE.bazel already contains an incompatible rules_go git_override; update it manually before running the Datadog bootstrap")
+	if !strings.Contains(text, managedBlockStart) && strings.Contains(text, `module_name = "rules_go"`) {
+		compatible, err := rulesGoOverrideCompatible(text, cfg)
+		if err != nil {
+			return err
+		}
+		if !compatible {
+			return errors.New("MODULE.bazel already contains an incompatible rules_go git_override; update it manually before running the Datadog bootstrap")
+		}
 	}
 
-	managedBlock := managedModuleBlock(cfg)
+	managedBlock, err := managedModuleBlockWithError(cfg)
+	if err != nil {
+		return err
+	}
 
 	text, err = replaceManagedSection(text, managedBlockStart, managedBlockEnd, managedBlock)
 	if err != nil {
@@ -813,6 +828,15 @@ func patchModuleFile(cfg config) error {
 }
 
 func managedModuleBlock(cfg config) string {
+	block, _ := managedModuleBlockWithError(cfg)
+	return block
+}
+
+func managedModuleBlockWithError(cfg config) (string, error) {
+	stripPrefix, err := rulesGoStripPrefix(cfg)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(`%s
 git_override(
     module_name = "rules_go",
@@ -828,16 +852,12 @@ orchestrion.from_source(
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, rulesGoStripPrefix(cfg), cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd)
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, stripPrefix, cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd), nil
 }
 
 func validateRulesGoVariant(variant string) error {
-	// Keep the public bootstrap contract explicit: normal consumers use the
-	// generic base variant, while large monorepos can opt into complete.
-	if variant == "base" || variant == "complete" {
-		return nil
-	}
-	return fmt.Errorf("--rules-go-variant must be \"base\" or \"complete\", got %q", variant)
+	_, err := onboardingpins.RulesGoStripPrefix("default", variant)
+	return err
 }
 
 func validateFetchMode(value, flagName string) error {
@@ -1395,6 +1415,8 @@ func validationScript(cfg config) (string, error) {
 	fmt.Fprintf(&buf, "SYNC_REPO=%s\n", shellQuote(cfg.syncRepoName))
 	fmt.Fprintf(&buf, "DOCTOR_TARGET=%s\n", shellQuote(cfg.validationDoctorTarget))
 	fmt.Fprintf(&buf, "UPLOAD_TARGET=%s\n", shellQuote(cfg.validationUploadTarget))
+	fmt.Fprintf(&buf, "EXECUTION_LOG_JSON=%s\n", shellQuote(".topt/bazel-execution-log.json"))
+	fmt.Fprintf(&buf, "EXECUTION_LOG_DIR=%s\n", shellQuote(".topt/execution-logs"))
 	fmt.Fprintf(&buf, "MIN_FREE_DISK_GB=%d\n", cfg.minFreeDiskGB)
 	fmt.Fprintf(&buf, "LARGE_MONOREPO=%s\n", shellBool(cfg.largeMonorepo))
 	fmt.Fprintf(&buf, "SHUTDOWN_BAZEL_ON_EXIT=%s\n", shellBool(cfg.shutdownBazelOnExit))
@@ -1457,6 +1479,30 @@ cleanup() {
   fi
 }
 
+prepare_execution_logs() {
+  mkdir -p "${EXECUTION_LOG_DIR}" "$(dirname "${EXECUTION_LOG_JSON}")"
+  find "${EXECUTION_LOG_DIR}" -type f -name '*.json' -delete
+  : > "${EXECUTION_LOG_JSON}"
+}
+
+execution_log_path_for_target() {
+  local target="$1"
+  local safe="${target//[^A-Za-z0-9_.-]/_}"
+  if [[ -z "${safe}" ]]; then
+    safe="target"
+  fi
+  printf '%s/%s.json\n' "${EXECUTION_LOG_DIR}" "${safe}"
+}
+
+append_execution_log() {
+  local path="$1"
+  if [[ ! -s "${path}" ]]; then
+    return 0
+  fi
+  cat "${path}" >> "${EXECUTION_LOG_JSON}"
+  printf '\n' >> "${EXECUTION_LOG_JSON}"
+}
+
 run_step() {
   local label="$1"
   shift
@@ -1497,11 +1543,15 @@ if (( sync_status != 0 )); then
 fi
 
 test_status=0
+prepare_execution_logs
 run_test_target() {
   local target="$1"
+  local execution_log_path
+  execution_log_path="$(execution_log_path_for_target "${target}")"
   check_disk
-  run_step "test ${target}" "${BAZEL}" test "${TEST_FLAGS[@]}" "${target}"
+  run_step "test ${target}" "${BAZEL}" test "${TEST_FLAGS[@]}" "--execution_log_json_file=${execution_log_path}" "${target}"
   local status=$?
+  append_execution_log "${execution_log_path}"
   if (( status != 0 && test_status == 0 )); then
     test_status=${status}
   fi
@@ -1617,6 +1667,7 @@ func resolvePublishedPins(cfg config) (onboardingpins.Pins, error) {
 		WorkspaceDir:        workspaceDir,
 		Commit:              commit,
 		Remote:              cfg.rulesGoRemote,
+		RulesGoUpstream:     cfg.rulesGoUpstream,
 		Variant:             cfg.rulesGoVariant,
 		ArchiveType:         cfg.rtoArchiveType,
 		DDTraceGoVersion:    cfg.ddTraceGoVersion,
@@ -1775,8 +1826,9 @@ datadog_go_test_optimization_workspace_repositories(
     datadog_fetch = "%s",
     rules_go_fetch = "%s",
     rules_go_repo_name = "%s",
+    rules_go_upstream = "%s",
     rules_go_variant = "%s",
-`, rtoCommit, cfg.rulesGoRemote, cfg.datadogFetch, cfg.rulesGoFetch, cfg.rulesGoRepoName, cfg.rulesGoVariant))
+`, rtoCommit, cfg.rulesGoRemote, cfg.datadogFetch, cfg.rulesGoFetch, cfg.rulesGoRepoName, effectiveRulesGoUpstream(cfg), cfg.rulesGoVariant))
 	if cfg.datadogFetch == "archive" || cfg.rulesGoFetch == "archive" {
 		buf.WriteString(fmt.Sprintf(`    rto_archive_url = "%s",
     rto_archive_sha256 = "%s",
@@ -1831,12 +1883,19 @@ func workspaceSnippetTracerConfig(cfg config) string {
 	return fmt.Sprintf("    dd_trace_go_version = %q,", cfg.ddTraceGoVersion)
 }
 
-func rulesGoStripPrefix(cfg config) string {
+func rulesGoStripPrefix(cfg config) (string, error) {
 	variant := cfg.rulesGoVariant
 	if variant == "" {
 		variant = defaultRulesGoVariant
 	}
-	return "third_party/rules_go_orchestrion_" + variant
+	return onboardingpins.RulesGoStripPrefix(effectiveRulesGoUpstream(cfg), variant)
+}
+
+func effectiveRulesGoUpstream(cfg config) string {
+	if cfg.rulesGoUpstream == "" {
+		return "default"
+	}
+	return cfg.rulesGoUpstream
 }
 
 func managedTracerConfigBlock(cfg config) string {
@@ -2107,7 +2166,7 @@ func moduleUsesRepo(content, repoName string) bool {
 	return false
 }
 
-func rulesGoOverrideCompatible(content string, cfg config) bool {
+func rulesGoOverrideCompatible(content string, cfg config) (bool, error) {
 	overridePattern := regexp.MustCompile(`(?s)git_override\(\s*module_name\s*=\s*"rules_go"(.*?)\n\)`)
 	remotePattern := regexp.MustCompile(`remote\s*=\s*"([^"]+)"`)
 	commitPattern := regexp.MustCompile(`commit\s*=\s*"([^"]+)"`)
@@ -2115,16 +2174,20 @@ func rulesGoOverrideCompatible(content string, cfg config) bool {
 
 	match := overridePattern.FindStringSubmatch(content)
 	if len(match) < 2 {
-		return false
+		return false, nil
 	}
 	body := match[1]
 	remoteMatch := remotePattern.FindStringSubmatch(body)
 	commitMatch := commitPattern.FindStringSubmatch(body)
 	stripPrefixMatch := stripPrefixPattern.FindStringSubmatch(body)
 	if len(remoteMatch) < 2 || len(commitMatch) < 2 || len(stripPrefixMatch) < 2 {
-		return false
+		return false, nil
 	}
-	return remoteMatch[1] == cfg.rulesGoRemote && commitMatch[1] == cfg.rulesGoCommit && stripPrefixMatch[1] == rulesGoStripPrefix(cfg)
+	stripPrefix, err := rulesGoStripPrefix(cfg)
+	if err != nil {
+		return false, err
+	}
+	return remoteMatch[1] == cfg.rulesGoRemote && commitMatch[1] == cfg.rulesGoCommit && stripPrefixMatch[1] == stripPrefix, nil
 }
 
 func ensureGuidedWorkspaceFiles(cfg config) error {
@@ -2732,22 +2795,23 @@ func hydrateManagedTracerConfig(cfg *config, content string) error {
 
 func hydrateManagedRulesGoVariant(cfg *config, content string) error {
 	// Rerunning the bootstrap should preserve the variant the managed block
-	// already selected. Without this, complete-variant workspaces silently
-	// downgrade to the base variant unless every rerun repeats the flag.
+	// already selected so workspace snippets remain stable across reruns.
 	start := strings.Index(content, managedBlockStart)
 	end := strings.Index(content, managedBlockEnd)
 	if start < 0 || end < 0 || end <= start {
 		return nil
 	}
-	stripPrefixPattern := regexp.MustCompile(`strip_prefix\s*=\s*"third_party/rules_go_orchestrion_([^"]+)"`)
+	stripPrefixPattern := regexp.MustCompile(`strip_prefix\s*=\s*"([^"]+)"`)
 	match := stripPrefixPattern.FindStringSubmatch(content[start:end])
 	if len(match) != 2 {
 		return nil
 	}
-	if err := validateRulesGoVariant(match[1]); err != nil {
+	upstream, variant, err := onboardingpins.RulesGoSelectionForStripPrefix(match[1])
+	if err != nil {
 		return err
 	}
-	cfg.rulesGoVariant = match[1]
+	cfg.rulesGoUpstream = upstream
+	cfg.rulesGoVariant = variant
 	return nil
 }
 

@@ -243,6 +243,23 @@ resolve_artifact_path() {
     echo ""
 }
 
+resolve_runtime_file_path() {
+    local input_path="$1"
+    if [[ -z "$input_path" ]]; then
+        echo ""
+        return
+    fi
+    if [[ -f "$input_path" ]]; then
+        echo "$input_path"
+        return
+    fi
+    if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" && -f "$BUILD_WORKSPACE_DIRECTORY/$input_path" ]]; then
+        echo "$BUILD_WORKSPACE_DIRECTORY/$input_path"
+        return
+    fi
+    resolve_artifact_path "$input_path"
+}
+
 # Resolve bundled context inputs used for payload enrichment.
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without making `bazel run //:dd_upload_payloads` depend on sync labels.
@@ -503,6 +520,13 @@ RUNTIME_ID=$(generate_uuid)
 TELEMETRY_SESSION_FALLBACK=$(generate_uuid)
 DRY_RUN=0
 VALIDATE_ENRICHMENT=0
+EXECUTION_LOG_JSON="${DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON:-}"
+EXECUTION_LOG_MODE="${DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE:-auto}"
+DEFAULT_EXECUTION_LOG_JSON=".topt/bazel-execution-log.json"
+EXECUTION_ELIGIBILITY_ENABLED=0
+EXECUTION_ELIGIBLE_LABELS_FILE=""
+EXECUTION_ELIGIBLE_OUTPUTS_FILE=""
+EXECUTION_SKIPPED_OUTPUTS_FILE=""
 EXPECTED_ENRICHED_TAGS=()
 DEFAULT_EXPECTED_ENRICHED_TAGS=(
     "git.repository_url"
@@ -519,6 +543,10 @@ Options:
   --dry-run                    Enrich and validate payloads without uploading or deleting files.
   --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment.
   --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags.
+  --execution-log-json PATH    Only upload payloads from TestRunner actions that executed in this Bazel execution log.
+  --execution-log-mode MODE    Cache-safety mode: auto, required, optional, or disabled. Default: auto.
+  --allow-cached-payload-uploads
+                                Disable execution-log cache filtering for this uploader run.
 EOF
 }
 
@@ -544,6 +572,34 @@ while (($# > 0)); do
             EXPECTED_ENRICHED_TAGS+=("${1#--expected-enriched-tag=}")
             shift
             ;;
+        --execution-log-json)
+            if (($# < 2)); then
+                log "error: --execution-log-json requires a file path"
+                exit 2
+            fi
+            EXECUTION_LOG_JSON="$2"
+            shift 2
+            ;;
+        --execution-log-json=*)
+            EXECUTION_LOG_JSON="${1#--execution-log-json=}"
+            shift
+            ;;
+        --execution-log-mode)
+            if (($# < 2)); then
+                log "error: --execution-log-mode requires one of: auto, required, optional, disabled"
+                exit 2
+            fi
+            EXECUTION_LOG_MODE="$2"
+            shift 2
+            ;;
+        --execution-log-mode=*)
+            EXECUTION_LOG_MODE="${1#--execution-log-mode=}"
+            shift
+            ;;
+        --allow-cached-payload-uploads)
+            EXECUTION_LOG_MODE="disabled"
+            shift
+            ;;
         --help|-h)
             print_usage
             exit 0
@@ -560,6 +616,15 @@ if (( VALIDATE_ENRICHMENT == 1 && DRY_RUN == 0 )); then
     log "error: --validate-enrichment requires --dry-run"
     exit 2
 fi
+
+EXECUTION_LOG_MODE="$(echo "$EXECUTION_LOG_MODE" | tr '[:upper:]' '[:lower:]')"
+case "$EXECUTION_LOG_MODE" in
+    auto|required|optional|disabled) ;;
+    *)
+        log "error: DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE/--execution-log-mode must be one of: auto, required, optional, disabled"
+        exit 2
+        ;;
+esac
 
 # Validate numeric environment variables
 validate_numeric "QUIESCENT_SEC" "$QUIESCENT_SEC"
@@ -1884,6 +1949,175 @@ find_bazel_target_metadata() {
   return 1
 }
 
+is_ci_environment() {
+  local ci
+  ci="$(echo "${CI:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ -n "$ci" && "$ci" != "0" && "$ci" != "false" && "$ci" != "no" ]]
+}
+
+prepare_execution_log_eligibility() {
+  if [[ "$EXECUTION_LOG_MODE" == "disabled" ]]; then
+    if [[ -n "$EXECUTION_LOG_JSON" ]]; then
+      log "warning: execution-log filtering disabled; ignoring configured execution log: $EXECUTION_LOG_JSON"
+    fi
+    return 0
+  fi
+
+  if [[ -z "$EXECUTION_LOG_JSON" && "$EXECUTION_LOG_MODE" == "auto" ]]; then
+    local resolved_default_log
+    resolved_default_log="$(resolve_runtime_file_path "$DEFAULT_EXECUTION_LOG_JSON")"
+    if [[ -n "$resolved_default_log" && -f "$resolved_default_log" ]]; then
+      EXECUTION_LOG_JSON="$DEFAULT_EXECUTION_LOG_JSON"
+    fi
+  fi
+
+  if [[ -z "$EXECUTION_LOG_JSON" ]]; then
+    local require_execution_log=0
+    if [[ "$EXECUTION_LOG_MODE" == "required" ]]; then
+      require_execution_log=1
+    elif [[ "$EXECUTION_LOG_MODE" == "auto" ]] && is_ci_environment; then
+      require_execution_log=1
+    fi
+
+    if (( require_execution_log == 1 )); then
+      if [[ "$EXECUTION_LOG_MODE" == "required" ]]; then
+        log "error: execution-log cache filtering is required by DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=required / --execution-log-mode=required. Run bazel test with --execution_log_json_file=$DEFAULT_EXECUTION_LOG_JSON, then rerun the uploader, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+      else
+        log "error: execution-log cache filtering is required in CI. Run bazel test with --execution_log_json_file=$DEFAULT_EXECUTION_LOG_JSON, then rerun the uploader, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+      fi
+      exit 2
+    fi
+    if [[ "$EXECUTION_LOG_MODE" == "auto" ]]; then
+      log "warning: execution-log cache filtering is not configured; cached test outputs may be uploaded. Add --execution_log_json_file=$DEFAULT_EXECUTION_LOG_JSON to bazel test, or set DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled to opt out explicitly."
+    fi
+    return 0
+  fi
+  if (( JQ_AVAILABLE == 0 )); then
+    log "error: DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON/--execution-log-json requires jq to parse Bazel execution logs"
+    exit 2
+  fi
+
+  local resolved_log
+  resolved_log="$(resolve_runtime_file_path "$EXECUTION_LOG_JSON")"
+  if [[ -z "$resolved_log" || ! -f "$resolved_log" ]]; then
+    log "error: execution log JSON not found: $EXECUTION_LOG_JSON"
+    exit 2
+  fi
+
+  EXECUTION_ELIGIBLE_LABELS_FILE="$TMP_PAYLOAD_DIR/execution_eligible_targets.txt"
+  EXECUTION_ELIGIBLE_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/execution_eligible_outputs.txt"
+  EXECUTION_SKIPPED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/execution_skipped_outputs.txt"
+  : >"$EXECUTION_SKIPPED_OUTPUTS_FILE"
+
+  if ! jq -r '
+    def outputs:
+      ((.listedOutputs // []) + ((.actualOutputs // []) | map(.path // "")));
+    def test_output_key:
+      gsub("\\\\"; "/")
+      | if contains("/testlogs/") then split("/testlogs/")[-1] else sub("^/+"; "") end
+      | if contains("/test.outputs/") then (split("/test.outputs/")[0] + "/test.outputs")
+        elif endswith("/test.outputs") then .
+        else empty
+        end
+      | sub("^\\./"; "")
+      | sub("^/+"; "");
+    select((.mnemonic // "") == "TestRunner")
+    | select((.cacheHit // false) != true)
+    | select((((.runner // "") | ascii_downcase | contains("cache hit"))) | not)
+    | (.targetLabel // empty) as $label
+    | select($label != "")
+    | outputs[]?
+    | select(type == "string")
+    | test_output_key as $output_key
+    | select($output_key != "")
+    | "\($label)\t\($output_key)"
+  ' "$resolved_log" | LC_ALL=C sort -u >"$EXECUTION_ELIGIBLE_OUTPUTS_FILE"; then
+    log "error: failed to parse execution log JSON: $resolved_log"
+    exit 2
+  fi
+  cut -f1 "$EXECUTION_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$EXECUTION_ELIGIBLE_LABELS_FILE"
+
+  EXECUTION_ELIGIBILITY_ENABLED=1
+  dbg "execution-log freshness filter enabled: $resolved_log ($(wc -l <"$EXECUTION_ELIGIBLE_OUTPUTS_FILE" | tr -d ' ') eligible test outputs)"
+}
+
+test_output_target_label() {
+  local outputs_dir="$1"
+  local metadata_file="$outputs_dir/$BAZEL_TARGET_METADATA_OUTPUT"
+  if [[ ! -f "$metadata_file" ]]; then
+    echo ""
+    return 0
+  fi
+  if (( JQ_AVAILABLE == 0 )); then
+    echo ""
+    return 0
+  fi
+  jq -r '."bazel.target" // empty' "$metadata_file" 2>/dev/null || true
+}
+
+test_output_dir_key() {
+  local outputs_dir="${1%/}"
+  local scan_root="${TESTLOGS_SCAN_DIR%/}"
+  if [[ "$outputs_dir" == "$scan_root/"* ]]; then
+    echo "${outputs_dir#$scan_root/}"
+    return 0
+  fi
+  outputs_dir="${outputs_dir//\\//}"
+  if [[ "$outputs_dir" == *"/testlogs/"* ]]; then
+    outputs_dir="${outputs_dir##*/testlogs/}"
+  fi
+  if [[ "$outputs_dir" == *"/test.outputs/"* ]]; then
+    outputs_dir="${outputs_dir%%/test.outputs/*}/test.outputs"
+  fi
+  outputs_dir="${outputs_dir#/}"
+  outputs_dir="${outputs_dir#./}"
+  if [[ "$outputs_dir" == *"/test.outputs" ]]; then
+    echo "$outputs_dir"
+    return 0
+  fi
+  echo ""
+}
+
+log_execution_skip_once() {
+  local outputs_dir="$1"
+  local reason="$2"
+  if [[ -n "$EXECUTION_SKIPPED_OUTPUTS_FILE" && -f "$EXECUTION_SKIPPED_OUTPUTS_FILE" ]]; then
+    if grep -Fxq "$outputs_dir" "$EXECUTION_SKIPPED_OUTPUTS_FILE" 2>/dev/null; then
+      return 0
+    fi
+    printf '%s\n' "$outputs_dir" >>"$EXECUTION_SKIPPED_OUTPUTS_FILE"
+  fi
+  log "skipping cached test output: $outputs_dir ($reason)"
+}
+
+test_output_dir_is_execution_eligible() {
+  local outputs_dir="$1"
+  if (( EXECUTION_ELIGIBILITY_ENABLED == 0 )); then
+    return 0
+  fi
+
+  local target_label
+  target_label="$(test_output_target_label "$outputs_dir")"
+  if [[ -z "$target_label" ]]; then
+    log_execution_skip_once "$outputs_dir" "missing bazel.target metadata"
+    return 1
+  fi
+
+  local output_key
+  output_key="$(test_output_dir_key "$outputs_dir")"
+  if [[ -z "$output_key" ]]; then
+    log_execution_skip_once "$outputs_dir" "could not map test.outputs path"
+    return 1
+  fi
+
+  if grep -Fxq "$target_label"$'\t'"$output_key" "$EXECUTION_ELIGIBLE_OUTPUTS_FILE" 2>/dev/null; then
+    return 0
+  fi
+
+  log_execution_skip_once "$outputs_dir" "target $target_label output $output_key was not freshly executed"
+  return 1
+}
+
 payload_repo_name_from_metadata() {
   local metadata_file="$1"
   [[ -n "$metadata_file" && -f "$metadata_file" ]] || return 0
@@ -2379,6 +2613,7 @@ resolve_telemetry_facts_sources() {
 list_all_sorted_telemetry_files() {
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
+        test_output_dir_is_execution_eligible "$outputs_dir" || continue
         local telemetry_dir="$outputs_dir/payloads/telemetry"
         [[ -d "$telemetry_dir" ]] || continue
         list_sorted_payload_files "$telemetry_dir"
@@ -3209,6 +3444,7 @@ upload_all_tests() {
     # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
+        test_output_dir_is_execution_eligible "$outputs_dir" || continue
         local tests_dir="$outputs_dir/payloads/tests"
         [[ -d "$tests_dir" ]] || continue
 
@@ -3277,6 +3513,7 @@ upload_all_coverage() {
     # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
+        test_output_dir_is_execution_eligible "$outputs_dir" || continue
         local cov_dir="$outputs_dir/payloads/coverage"
         [[ -d "$cov_dir" ]] || continue
 
@@ -3332,6 +3569,7 @@ upload_all_telemetry() {
     fi
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
+        test_output_dir_is_execution_eligible "$outputs_dir" || continue
         local telemetry_dir="$outputs_dir/payloads/telemetry"
         [[ -d "$telemetry_dir" ]] || continue
 
@@ -3389,6 +3627,7 @@ upload_all_telemetry() {
     fi
 }
 
+prepare_execution_log_eligibility
 upload_all_tests
 upload_all_coverage
 upload_all_telemetry

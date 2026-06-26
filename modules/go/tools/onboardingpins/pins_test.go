@@ -103,7 +103,7 @@ func TestResolveReturnsPublishedTuple(t *testing.T) {
 	pins, err := Resolve(context.Background(), Options{
 		WorkspaceDir:        dir,
 		Commit:              commit,
-		Variant:             "complete",
+		Variant:             "base",
 		VerifyMainReachable: true,
 		FetchArchive:        archiveFromString("archive"),
 	})
@@ -119,8 +119,107 @@ func TestResolveReturnsPublishedTuple(t *testing.T) {
 	if pins.RTOArchivePrefix != "rules_test_optimization-"+commit {
 		t.Fatalf("unexpected archive prefix: %s", pins.RTOArchivePrefix)
 	}
-	if pins.RulesGoStripPrefix != "third_party/rules_go_orchestrion_complete" {
+	if pins.RulesGoStripPrefix != "third_party/rgo/v0_60_0/base" {
 		t.Fatalf("unexpected strip prefix: %s", pins.RulesGoStripPrefix)
+	}
+}
+
+func TestResolveUsesDefaultRulesGoUpstream(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	pins, err := Resolve(context.Background(), Options{
+		WorkspaceDir:       variantWorkspace(t),
+		Commit:             commit,
+		Variant:            "base",
+		DDTraceGoVersion:   DefaultDDTraceGoVersion,
+		OrchestrionVersion: DefaultOrchestrionVersion,
+		FetchArchive:       archiveFromString("archive"),
+		ValidateVariantDir: true,
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if pins.RulesGoUpstream != DefaultRulesGoUpstream {
+		t.Fatalf("RulesGoUpstream=%q, want %q", pins.RulesGoUpstream, DefaultRulesGoUpstream)
+	}
+	if pins.RulesGoStripPrefix != "third_party/rgo/v0_60_0/base" {
+		t.Fatalf("RulesGoStripPrefix=%q", pins.RulesGoStripPrefix)
+	}
+}
+
+func TestResolveNormalizesDefaultRulesGoVariant(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	pins, err := Resolve(context.Background(), Options{
+		WorkspaceDir:       variantWorkspace(t),
+		Commit:             commit,
+		Variant:            "default",
+		DDTraceGoVersion:   DefaultDDTraceGoVersion,
+		OrchestrionVersion: DefaultOrchestrionVersion,
+		FetchArchive:       archiveFromString("archive"),
+		ValidateVariantDir: true,
+	})
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if pins.Variant != "base" {
+		t.Fatalf("Variant=%q, want base", pins.Variant)
+	}
+	if pins.RulesGoStripPrefix != "third_party/rgo/v0_60_0/base" {
+		t.Fatalf("RulesGoStripPrefix=%q", pins.RulesGoStripPrefix)
+	}
+}
+
+func TestResolveRejectsUnknownRulesGoUpstream(t *testing.T) {
+	_, err := Resolve(context.Background(), Options{
+		Commit:           strings.Repeat("a", 40),
+		Variant:          "base",
+		RulesGoUpstream:  "v9_99_0",
+		FetchArchive:     archiveFromString("archive"),
+		DDTraceGoVersion: DefaultDDTraceGoVersion,
+	})
+	if err == nil || !strings.Contains(err.Error(), "rules_go_upstream") {
+		t.Fatalf("Resolve error=%v, want rules_go_upstream rejection", err)
+	}
+}
+
+func TestRulesGoStripPrefixDefaultsToGeneratedBase(t *testing.T) {
+	prefix, err := RulesGoStripPrefix("default", "default")
+	if err != nil {
+		t.Fatalf("RulesGoStripPrefix error: %v", err)
+	}
+	if prefix != "third_party/rgo/v0_60_0/base" {
+		t.Fatalf("RulesGoStripPrefix=%q", prefix)
+	}
+}
+
+func TestRulesGoSelectionForStripPrefixFindsBaseVariant(t *testing.T) {
+	upstream, variant, err := RulesGoSelectionForStripPrefix("third_party/rgo/v0_60_0/base")
+	if err != nil {
+		t.Fatalf("RulesGoSelectionForStripPrefix error: %v", err)
+	}
+	if upstream != "v0_60_0" || variant != "base" {
+		t.Fatalf("selection=%s/%s, want v0_60_0/base", upstream, variant)
+	}
+}
+
+func TestRulesGoSelectionForStripPrefixAcceptsLegacyV060BaseAlias(t *testing.T) {
+	upstream, variant, err := RulesGoSelectionForStripPrefix("third_party/rules_go_orchestrion_base")
+	if err != nil {
+		t.Fatalf("RulesGoSelectionForStripPrefix error: %v", err)
+	}
+	if upstream != "v0_60_0" || variant != "base" {
+		t.Fatalf("selection=%s/%s, want v0_60_0/base", upstream, variant)
+	}
+}
+
+func TestResolveRejectsCompleteVariant(t *testing.T) {
+	_, err := Resolve(context.Background(), Options{
+		WorkspaceDir: variantWorkspace(t),
+		Commit:       strings.Repeat("a", 40),
+		Variant:      "complete",
+		FetchArchive: archiveFromString("archive"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `rules_go_variant "complete" is no longer supported. Use "base".`) {
+		t.Fatalf("Resolve error=%v, want complete variant rejection", err)
 	}
 }
 
@@ -139,7 +238,7 @@ func TestResolveValidatesVariantDirWhenRequested(t *testing.T) {
 	_, err := Resolve(context.Background(), Options{
 		WorkspaceDir:       dir,
 		Commit:             commit,
-		Variant:            "complete",
+		Variant:            "base",
 		ValidateVariantDir: true,
 		FetchArchive:       archiveFromString("archive"),
 	})
@@ -163,7 +262,7 @@ func TestResolveCanSkipVariantDirForConsumerBootstrap(t *testing.T) {
 	if _, err := Resolve(context.Background(), Options{
 		WorkspaceDir: dir,
 		Commit:       commit,
-		Variant:      "complete",
+		Variant:      "base",
 		FetchArchive: archiveFromString("archive"),
 	}); err != nil {
 		t.Fatalf("Resolve should not require local variant dirs when ValidateVariantDir is false: %v", err)
@@ -180,8 +279,8 @@ func TestSummaryContainsCurrentCommitOnly(t *testing.T) {
 		RTOArchiveSHA256:   strings.Repeat("1", 64),
 		RTOArchivePrefix:   "rules_test_optimization-" + commit,
 		RTOArchiveType:     DefaultArchiveType,
-		Variant:            "complete",
-		RulesGoStripPrefix: "third_party/rules_go_orchestrion_complete",
+		Variant:            "base",
+		RulesGoStripPrefix: "third_party/rgo/v0_60_0/base",
 		DDTraceGoVersion:   DefaultDDTraceGoVersion,
 		OrchestrionVersion: DefaultOrchestrionVersion,
 	})
@@ -196,10 +295,8 @@ func TestSummaryContainsCurrentCommitOnly(t *testing.T) {
 func variantWorkspace(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, variant := range []string{"base", "complete"} {
-		if err := os.MkdirAll(filepath.Join(dir, "third_party", "rules_go_orchestrion_"+variant), 0o755); err != nil {
-			t.Fatalf("create variant dir: %v", err)
-		}
+	if err := os.MkdirAll(filepath.Join(dir, "third_party", "rgo", "v0_60_0", "base"), 0o755); err != nil {
+		t.Fatalf("create variant dir: %v", err)
 	}
 	return dir
 }
@@ -245,7 +342,7 @@ func TestCodeloadURLRejectsNonGitHubRemote(t *testing.T) {
 	}
 }
 
-func TestFormatShellIncludesCompleteTuple(t *testing.T) {
+func TestFormatShellIncludesBaseTuple(t *testing.T) {
 	pins := Pins{
 		RTOCommit:          strings.Repeat("a", 40),
 		RTORemote:          DefaultRemote,
@@ -254,7 +351,7 @@ func TestFormatShellIncludesCompleteTuple(t *testing.T) {
 		RTOArchivePrefix:   "rules_test_optimization-" + strings.Repeat("a", 40),
 		RTOArchiveType:     DefaultArchiveType,
 		Variant:            "base",
-		RulesGoStripPrefix: "third_party/rules_go_orchestrion_base",
+		RulesGoStripPrefix: "third_party/rgo/v0_60_0/base",
 		DDTraceGoVersion:   DefaultDDTraceGoVersion,
 		OrchestrionVersion: DefaultOrchestrionVersion,
 	}
@@ -265,6 +362,7 @@ func TestFormatShellIncludesCompleteTuple(t *testing.T) {
 		"RTO_ARCHIVE_URL=",
 		"RTO_ARCHIVE_SHA256=",
 		"RTO_ARCHIVE_PREFIX=",
+		"RULES_GO_UPSTREAM=",
 		"RULES_GO_VARIANT=",
 		"DD_TRACE_GO_VERSION=",
 		"ORCHESTRION_VERSION=",
@@ -283,8 +381,9 @@ func ExampleFormatShell() {
 		RTOArchiveSHA256:   strings.Repeat("1", 64),
 		RTOArchivePrefix:   "rules_test_optimization-" + strings.Repeat("a", 40),
 		RTOArchiveType:     DefaultArchiveType,
-		Variant:            "complete",
-		RulesGoStripPrefix: "third_party/rules_go_orchestrion_complete",
+		RulesGoUpstream:    DefaultRulesGoUpstream,
+		Variant:            "base",
+		RulesGoStripPrefix: "third_party/rgo/v0_60_0/base",
 		DDTraceGoVersion:   DefaultDDTraceGoVersion,
 		OrchestrionVersion: DefaultOrchestrionVersion,
 	}))
@@ -295,8 +394,9 @@ func ExampleFormatShell() {
 	// RTO_ARCHIVE_SHA256="1111111111111111111111111111111111111111111111111111111111111111"
 	// RTO_ARCHIVE_PREFIX="rules_test_optimization-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	// RTO_ARCHIVE_TYPE="tar.gz"
-	// RULES_GO_VARIANT="complete"
-	// RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_complete"
-	// DD_TRACE_GO_VERSION="v2.9.0-rc.2"
+	// RULES_GO_UPSTREAM="v0_60_0"
+	// RULES_GO_VARIANT="base"
+	// RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
+	// DD_TRACE_GO_VERSION="v2.9.0"
 	// ORCHESTRION_VERSION="v1.9.0"
 }

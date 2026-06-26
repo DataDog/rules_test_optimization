@@ -42,11 +42,11 @@ BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion"
 # release downloaded SDKs, extracted repos, and sandbox outputs during cleanup.
 BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
-ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.6.0}"
+ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0-rc.2}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0}"
 SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
@@ -56,6 +56,7 @@ INTEGRATION_SCENARIO_MODE="${INTEGRATION_SCENARIO_MODE:-full}"
 MEASURE_OUTPUT_PATH="${MEASURE_OUTPUT_PATH:-}"
 ARCHIVE_SHA256=""
 ARCHIVE_URL=""
+RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
 RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
 HERMETIC_BUILD_FLAGS=(
   --spawn_strategy=sandboxed
@@ -103,14 +104,14 @@ fi
 require_command "$GO_BIN" "go binary not found (tried '$GO_BIN')"
 require_command tar "tar is required for the WORKSPACE archive fixture"
 
-case "$RULES_GO_VARIANT" in
-  base|complete)
-    ;;
-  *)
-    echo "error: RULES_GO_VARIANT must be 'base' or 'complete', got '$RULES_GO_VARIANT'" >&2
-    exit 1
-    ;;
-esac
+resolve_rules_go_fork_path() {
+  "$PYTHON" "$REPO_ROOT/tools/dev/materialize_rules_go_fork.py" resolve \
+    --upstream "$RULES_GO_UPSTREAM" \
+    --variant "$RULES_GO_VARIANT"
+}
+
+rules_go_fork_rel="$(resolve_rules_go_fork_path)"
+rules_go_fork_abs="${REPO_ROOT}/${rules_go_fork_rel}"
 
 bzl_quote() {
   "$PYTHON" - <<'PY' "$1"
@@ -521,16 +522,16 @@ EOF
 write_orchestrion_go_sum() {
   local ws_dir="$1"
 
-  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0-rc.2" && "$ORCHESTRION_VERSION" == "v1.6.0" ]]; then
+  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0" && "$ORCHESTRION_VERSION" == "v1.9.0" ]]; then
     cat > "$ws_dir/go.sum" <<'EOF'
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-rc.2 h1:yK4ZuP8ZlX25JNCxqyIFWS0bo7uO/09PyUZQaBq8JOM=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0-rc.2/go.mod h1:DKz8vnMfTfi9rUUQ5Mzl1Gypl4yIgHNYt+RCXZGAX8k=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-rc.2 h1:C5LUnGTUVZBfUOnqElROZfAQ/vS0Efap3WEwdeg+imE=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0-rc.2/go.mod h1:nlDaIbj9d4ZR5V/RKtzkj5Sr0iSmMY8uYnEOyJDA5XA=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-rc.2 h1:gSkZbKLPQzeON4TOqy6Cjo9N5zwpij2YJnypSQy+Bdg=
-github.com/DataDog/dd-trace-go/v2 v2.9.0-rc.2/go.mod h1:ZFJoP0mJs9DJcUteQYmNApyDb6duhUTZBPlpvA1itF8=
-github.com/DataDog/orchestrion v1.6.0 h1:vGlV16WhB8CWP26ehdsiDkVN09lslnG60utJ+wb9rS4=
-github.com/DataDog/orchestrion v1.6.0/go.mod h1:CYY2VfaEQVr+gwKSlpUoHBF9JIO4eV3BfSeG0YAQwZE=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0 h1:o5PABRmFQQ1uJcog3PnNF9+182EODnjHB6fjGTFkOIs=
+github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0/go.mod h1:+wuXa6KiqwWqg3J29gSFcRqu4hxTIJ2twz7BhjZ933Q=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0 h1:bkNoThs8Y2i1pt4eoSWq2QhQ84qAoSZRtuHyQgXbDUE=
+github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0/go.mod h1:IublECGcvP3j2VkSyyfD3vhC/QcbwWigkQyzzQY15eY=
+github.com/DataDog/dd-trace-go/v2 v2.9.0 h1:J/EsZ7nPqkf3Pa56AAre306ylYMhtzz6oylmchqc6JA=
+github.com/DataDog/dd-trace-go/v2 v2.9.0/go.mod h1:SdMkCESSBc2knx56Xol2pO7jhMDPi7MxyNj6vRYMW48=
+github.com/DataDog/orchestrion v1.9.0 h1:TmjQfgaIMZDnGAmNXHIw5P7R+q4hOEJN5B/S24IqbKA=
+github.com/DataDog/orchestrion v1.9.0/go.mod h1:FvbdNvK2PY3YnEIw0MHqdBELhZ0P7nUpWaJB3TgUtNE=
 EOF
     return
   fi
@@ -550,7 +551,7 @@ write_positive_workspace() {
   local archive_url_bzl
 
   repo_root_bzl="$(bzl_quote "$REPO_ROOT")"
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}")"
+  rules_go_fork_bzl="$(bzl_quote "$rules_go_fork_abs")"
   companion_root_bzl="$(bzl_quote "$REPO_ROOT/modules/go")"
   archive_url_bzl="$(bzl_quote "$ARCHIVE_URL")"
 
@@ -599,6 +600,7 @@ datadog_go_test_optimization_workspace_repositories(
     datadog_fetch = "archive",
     rules_go_fetch = "archive",
     rules_go_repo_name = "io_bazel_rules_go",
+    rules_go_upstream = "${RULES_GO_UPSTREAM}",
     rules_go_variant = "${RULES_GO_VARIANT}",
     rto_archive_url = ${archive_url_bzl},
     rto_archive_sha256 = "${ARCHIVE_SHA256}",
@@ -653,7 +655,7 @@ write_invalid_workspace() {
   local scenario="$2"
   local rules_go_fork_bzl
 
-  rules_go_fork_bzl="$(bzl_quote "$REPO_ROOT/third_party/rules_go_orchestrion_${RULES_GO_VARIANT}")"
+  rules_go_fork_bzl="$(bzl_quote "$rules_go_fork_abs")"
 
   cat > "$ws_dir/WORKSPACE" <<EOF
 workspace(name = "workspace_go_invalid_${scenario}")

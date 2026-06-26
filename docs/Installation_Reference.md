@@ -102,14 +102,15 @@ From a `rules_test_optimization` checkout:
 ```bash
 ./bazelw run //tools/dev:print_go_onboarding_pins -- \
   --commit "$(git rev-parse origin/main)" \
-  --variant complete \
+  --rules-go-upstream v0_60_0 \
+  --variant base \
   --verify-main-reachable
 ```
 
 The command prints the full tuple used by WORKSPACE archive mode:
 `RTO_COMMIT`, `RTO_REMOTE`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
-`RTO_ARCHIVE_PREFIX`, `RTO_ARCHIVE_TYPE`, `RULES_GO_VARIANT`,
-`RULES_GO_STRIP_PREFIX`, `DD_TRACE_GO_VERSION`, and
+`RTO_ARCHIVE_PREFIX`, `RTO_ARCHIVE_TYPE`, `RULES_GO_UPSTREAM`,
+`RULES_GO_VARIANT`, `RULES_GO_STRIP_PREFIX`, `DD_TRACE_GO_VERSION`, and
 `ORCHESTRION_VERSION`. Published GitHub codeload pins are `tar.gz`; use a
 separate repository-owned mirror process for any other archive format.
 
@@ -122,16 +123,14 @@ RTO_ARCHIVE_URL="https://codeload.github.com/DataDog/rules_test_optimization/tar
 RTO_ARCHIVE_SHA256="fd54d1871fc01ff0bb3db190dfaadaa8256edd68a4f3bb85ecc08b315fbf5bd4"
 RTO_ARCHIVE_PREFIX="rules_test_optimization-69953536d4ef1252c8181c267d16c61263f0aa4c"
 RTO_ARCHIVE_TYPE="tar.gz"
-RULES_GO_VARIANT="complete"
-RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_complete"
-DD_TRACE_GO_VERSION="v2.9.0-rc.2"
+RULES_GO_UPSTREAM="v0_60_0"
+RULES_GO_VARIANT="base"
+RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
+DD_TRACE_GO_VERSION="v2.9.0"
 ORCHESTRION_VERSION="v1.9.0"
 ```
 
-The archive URL, SHA256, and prefix are tied to the repository commit. Use the
-same values with `RULES_GO_VARIANT="base"` and
-`RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_base"` when a
-consumer should use the base variant instead of the complete variant.
+The archive URL, SHA256, and prefix are tied to the repository commit.
 
 From a consumer that already has the Go companion available, the bootstrap can
 print the same tuple or write a checked-in Markdown summary:
@@ -140,12 +139,14 @@ print the same tuple or write a checked-in Markdown summary:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --print-published-pins \
   --rto-commit <published-origin-main-sha> \
-  --rules-go-variant complete
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base
 
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
   --rto-commit <published-origin-main-sha> \
-  --rules-go-variant complete
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base
 ```
 
 The bootstrap summary command does not inspect `MODULE.bazel` or `go.mod`; it
@@ -230,7 +231,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-rc.2 \
+  --dd-trace-go-version v2.9.0 \
   --write-bazelrc
 ```
 
@@ -241,13 +242,13 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-rc.2 \
+  --dd-trace-go-version v2.9.0 \
   --go-module-dir path/to/go-module \
   --write-bazelrc
 ```
 
 `--dd-trace-go-version` is optional. If omitted, the workspace uses the default
-`v2.9.0-rc.2`. It accepts a tag, pseudo-version,
+`v2.9.0`. It accepts a tag, pseudo-version,
 branch, or commit SHA. Bootstrap resolves that input to exact tracer versions,
 keeps the local Go module pins on those same versions, and prevents Bazel and
 the Go module from silently drifting apart.
@@ -289,7 +290,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --runtime-version 1.25.0 \
   --sync-repo-name test_optimization_data \
   --rto-commit <commit-sha> \
-  --rules-go-variant complete \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
   --rules-go-repo-name io_bazel_rules_go
 ```
 
@@ -301,7 +303,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service go-service \
   --runtime-version 1.25.0 \
   --sync-repo-name test_optimization_data \
-  --rules-go-variant complete \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
   --rules-go-repo-name io_bazel_rules_go \
   --write-bazelrc \
   --write-root-targets \
@@ -1059,7 +1062,8 @@ load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "d
 datadog_go_test_optimization_workspace_repositories(
     rto_commit = "<commit-sha>",
     rules_go_repo_name = "io_bazel_rules_go",
-    rules_go_variant = "base",  # or "complete" for extended monorepo compatibility
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
 )
 ```
 
@@ -1073,7 +1077,8 @@ datadog_go_test_optimization_workspace_repositories(
     datadog_fetch = "archive",
     rules_go_fetch = "archive",
     rules_go_repo_name = "io_bazel_rules_go",
-    rules_go_variant = "complete",
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
     rto_archive_url = "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
     rto_archive_sha256 = "<sha256-for-archive>",
     rto_archive_prefix = "rules_test_optimization-<commit-sha>",
@@ -1081,10 +1086,13 @@ datadog_go_test_optimization_workspace_repositories(
 ```
 
 Supported helper combinations are `git/git`, `git/archive`, and
-`archive/archive`. Use `rules_go_variant = "base"` for normal consumers and
-`rules_go_variant = "complete"` for repositories that need the declared extended
-monorepo compatibility layer. The helper never applies `patches`, `patch_tool`,
-or `patch_args`; both variants are complete `rules_go` trees.
+`archive/archive`. Use `rules_go_variant = "base"` for supported consumers.
+When multiple upstream `rules_go` versions are supported, use
+`rules_go_upstream` to select the upstream support line; omit it to preserve
+the repository default. The default `rules_go_upstream` is currently `v0_60_0`,
+which preserves the existing `third_party/rgo/v0_60_0/base` path. The
+helper never applies `patches`, `patch_tool`, or `patch_args`; it points
+consumers at a complete base `rules_go` tree.
 
 Then configure Go, Gazelle, and the Orchestrion tool repository:
 
@@ -1122,7 +1130,8 @@ Notes for the helper:
 - Keep the default tool-repo name `rules_go_orchestrion_tool`; the current fork
   resolves that name internally.
 - Do not configure `patches`, `patch_tool`, or `patch_args` for this integration;
-  choose the complete variant instead when the base variant is not enough.
+  repositories that already own their `rules_go` patch stack should generate the
+  public consumer patch profile and rebase or merge it locally.
 
 Then in your Go package `BUILD.bazel`:
 

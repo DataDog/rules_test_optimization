@@ -42,6 +42,8 @@ PYTHON="${PYTHON:-python3}"
 # under test instead of relying on the old hardcoded bootstrap tag.
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 export ORCHESTRION_VERSION
+RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
+RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
   if command -v python >/dev/null 2>&1; then
     PYTHON=python
@@ -54,6 +56,17 @@ fi
 export REPO_ROOT
 export LOG_FILE
 export SNAPSHOT_DIR
+# Most scenarios in this harness use hand-written payload directories rather
+# than a preceding `bazel test` invocation, so they opt into legacy optional
+# filtering. Dedicated scenarios below assert the CI default and execution-log
+# cache-safety behavior.
+export DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE="${DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE:-optional}"
+
+resolve_rules_go_fork_path() {
+  "$PYTHON" "$REPO_ROOT/tools/dev/materialize_rules_go_fork.py" resolve \
+    --upstream "$RULES_GO_UPSTREAM" \
+    --variant "$RULES_GO_VARIANT"
+}
 
 REAL_GO_BIN_HOST="${REAL_GO_BIN_HOST:-$(command -v go || true)}"
 if [[ -z "$REAL_GO_BIN_HOST" ]]; then
@@ -181,10 +194,12 @@ path = os.path.normpath(os.path.join(os.environ["REPO_ROOT"], "modules", "go"))
 print(json.dumps(path.replace("\\\\", "/")))
 PY
 )
+RULES_GO_FORK_REL="$(resolve_rules_go_fork_path)"
+export RULES_GO_FORK_REL
 ESCAPED_RULES_GO_VENDOR=$("$PYTHON" - <<'PY'
 import json
 import os
-path = os.path.normpath(os.path.join(os.environ["REPO_ROOT"], "third_party", "rules_go_orchestrion_base"))
+path = os.path.normpath(os.path.join(os.environ["REPO_ROOT"], os.environ["RULES_GO_FORK_REL"]))
 print(json.dumps(path.replace("\\\\", "/")))
 PY
 )
@@ -635,6 +650,245 @@ if grep -qiE "DD_API_KEY mismatch|API[ _-]?key mismatch" "$UPLOADER_LOG"; then
   cat "$UPLOADER_LOG" || true
   exit 1
 fi
+
+# Scenario: CI defaults to cache-safe uploads. If no Bazel execution log is
+# available, the uploader must fail closed unless the caller opts out explicitly.
+rm -rf "$WORKSPACE/.topt"
+CI_REQUIRED_EXEC_LOG="$TMP_WS/uploader_ci_requires_execution_log.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON \
+  CI=true \
+  TESTLOGS_DIR="$TESTLOGS_DIR" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --dry-run >"$CI_REQUIRED_EXEC_LOG" 2>&1; then
+  echo "error: CI uploader unexpectedly succeeded without execution-log filtering"
+  cat "$CI_REQUIRED_EXEC_LOG" || true
+  exit 1
+fi
+if ! grep -q "execution-log cache filtering is required in CI" "$CI_REQUIRED_EXEC_LOG"; then
+  echo "error: CI missing-execution-log failure was not actionable"
+  cat "$CI_REQUIRED_EXEC_LOG" || true
+  exit 1
+fi
+
+REQUIRED_EXEC_LOG="$TMP_WS/uploader_required_execution_log.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON \
+  CI= \
+  TESTLOGS_DIR="$TESTLOGS_DIR" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --dry-run --execution-log-mode=required >"$REQUIRED_EXEC_LOG" 2>&1; then
+  echo "error: required-mode uploader unexpectedly succeeded without execution-log filtering"
+  cat "$REQUIRED_EXEC_LOG" || true
+  exit 1
+fi
+if ! grep -q "execution-log cache filtering is required by" "$REQUIRED_EXEC_LOG"; then
+  echo "error: required-mode missing-execution-log failure was not actionable"
+  cat "$REQUIRED_EXEC_LOG" || true
+  exit 1
+fi
+
+CI_OPTOUT_EXEC_LOG="$TMP_WS/uploader_ci_execution_log_opt_out.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON \
+  CI=true \
+  TESTLOGS_DIR="$TESTLOGS_DIR" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --dry-run --allow-cached-payload-uploads >"$CI_OPTOUT_EXEC_LOG" 2>&1; then
+  echo "error: CI uploader opt-out failed"
+  cat "$CI_OPTOUT_EXEC_LOG" || true
+  exit 1
+fi
+
+# Scenario: an execution log can mark some downloaded test outputs as cache hits.
+# The uploader must keep test result caching enabled, but skip cached payloads so
+# it does not enrich and upload old payloads for the current commit.
+EXEC_LOG_TESTLOGS="$TMP_WS/execution_log_testlogs"
+EXEC_LOG_FRESH_OUTPUT="$EXEC_LOG_TESTLOGS/fresh_attempt/payload_test/test.outputs"
+EXEC_LOG_CACHED_OUTPUT="$EXEC_LOG_TESTLOGS/cached_attempt/payload_test/test.outputs"
+mkdir -p "$EXEC_LOG_FRESH_OUTPUT/payloads/tests" "$EXEC_LOG_CACHED_OUTPUT/payloads/tests"
+cat > "$EXEC_LOG_FRESH_OUTPUT/payloads/tests/span_events_fresh_execution_log.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.2.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Fresh.ExecutionLog",
+        "meta": {
+          "test.source.file": "manual/fresh.go"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+cat > "$EXEC_LOG_CACHED_OUTPUT/payloads/tests/span_events_cached_execution_log.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.2.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Cached.ExecutionLog",
+        "meta": {
+          "test.source.file": "manual/cached.go"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+cat > "$EXEC_LOG_FRESH_OUTPUT/bazel_target_metadata.json" <<'JSON_EOF'
+{"bazel.target":"//same_label:payload_test","bazel.package":"same_label"}
+JSON_EOF
+cat > "$EXEC_LOG_CACHED_OUTPUT/bazel_target_metadata.json" <<'JSON_EOF'
+{"bazel.target":"//same_label:payload_test","bazel.package":"same_label"}
+JSON_EOF
+EXECUTION_LOG_JSON="$TMP_WS/test_execution_log.json"
+cat > "$EXECUTION_LOG_JSON" <<'JSON_EOF'
+{
+  "mnemonic": "TestRunner",
+  "runner": "processwrapper-sandbox",
+  "cacheHit": false,
+  "targetLabel": "//same_label:payload_test",
+  "listedOutputs": ["bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.outputs"]
+}
+{
+  "mnemonic": "TestRunner",
+  "runner": "disk cache hit",
+  "cacheHit": true,
+  "targetLabel": "//same_label:payload_test",
+  "listedOutputs": ["bazel-out/darwin_arm64-fastbuild/testlogs/cached_attempt/payload_test/test.outputs"]
+}
+JSON_EOF
+
+EXEC_LOG_UPLOAD_LOG_START="$(log_line_count)"
+EXEC_LOG_UPLOADER_LOG="$TMP_WS/uploader_execution_log_filter.log"
+if ! TESTLOGS_DIR="$EXEC_LOG_TESTLOGS" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+  "${REPO_ENVS[@]}" -- --execution-log-json "$EXECUTION_LOG_JSON" >"$EXEC_LOG_UPLOADER_LOG" 2>&1; then
+  echo "error: uploader execution-log freshness scenario failed"
+  cat "$EXEC_LOG_UPLOADER_LOG" || true
+  exit 1
+fi
+
+EXEC_LOG_UPLOAD_LOG_START="$EXEC_LOG_UPLOAD_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("EXEC_LOG_UPLOAD_LOG_START", "0") or "0")
+resources = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("path") != "/api/v2/citestcycle":
+            continue
+        payload = json.loads(base64.b64decode(record.get("body_b64", "")).decode("utf-8"))
+        for event in payload.get("events", []):
+            resource = ((event.get("content") or {}).get("resource"))
+            if resource:
+                resources.append(resource)
+
+if "Fresh.ExecutionLog" not in resources:
+    print("error: fresh execution-log payload was not uploaded")
+    print(resources)
+    sys.exit(1)
+if "Cached.ExecutionLog" in resources:
+    print("error: cached execution-log payload was uploaded")
+    print(resources)
+    sys.exit(1)
+PY
+if ! grep -q "skipping cached test output" "$EXEC_LOG_UPLOADER_LOG"; then
+  echo "error: execution-log freshness scenario did not log a cached-output skip"
+  cat "$EXEC_LOG_UPLOADER_LOG" || true
+  exit 1
+fi
+
+mkdir -p "$WORKSPACE/.topt"
+cp "$EXECUTION_LOG_JSON" "$WORKSPACE/.topt/bazel-execution-log.json"
+DEFAULT_EXEC_LOG_UPLOADER_LOG="$TMP_WS/uploader_default_execution_log_filter.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON \
+  CI=true \
+  TESTLOGS_DIR="$EXEC_LOG_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --dry-run >"$DEFAULT_EXEC_LOG_UPLOADER_LOG" 2>&1; then
+  echo "error: uploader default execution-log discovery scenario failed"
+  cat "$DEFAULT_EXEC_LOG_UPLOADER_LOG" || true
+  exit 1
+fi
+if ! grep -q "skipping cached test output" "$DEFAULT_EXEC_LOG_UPLOADER_LOG"; then
+  echo "error: default execution-log discovery did not enable cached-output filtering"
+  cat "$DEFAULT_EXEC_LOG_UPLOADER_LOG" || true
+  exit 1
+fi
+rm -rf "$WORKSPACE/.topt"
+
+rm -rf "$EXEC_LOG_TESTLOGS"
 
 "$PYTHON" - <<'PY'
 import json
@@ -1426,8 +1680,7 @@ MODULE_MULTI_EOF
 
 cat > "$MULTI_WS/BUILD.bazel" <<'BUILD_MULTI_EOF'
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
-load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
-load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 load("//:macro_probe.bzl", "fake_go_test")
 
 filegroup(
@@ -1445,20 +1698,14 @@ filegroup(
 dd_topt_go_test(
     name = "macro_service_probe",
     go_test_rule = fake_go_test,
-    topt_data = {
-        "go_service": topt_data_go_service,
-        "go_service_2": topt_data_go_service_2,
-    },
+    topt_data = topt_data_by_service,
     topt_service = "go_service_2",
 )
 
 dd_topt_go_test(
     name = "macro_data_none_probe",
     go_test_rule = fake_go_test,
-    topt_data = {
-        "go_service": topt_data_go_service,
-        "go_service_2": topt_data_go_service_2,
-    },
+    topt_data = topt_data_by_service,
     topt_service = "go_service",
     data = None,
 )
@@ -1499,17 +1746,13 @@ MACRO_PROBE_EOF
 mkdir -p "$MULTI_WS/invalid"
 cat > "$MULTI_WS/invalid/BUILD.bazel" <<'BUILD_MULTI_INVALID_EOF'
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
-load("@test_optimization_data_go_service//:export.bzl", topt_data_go_service = "topt_data")
-load("@test_optimization_data_go_service_2//:export.bzl", topt_data_go_service_2 = "topt_data")
+load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 load("//:macro_probe.bzl", "fake_go_test")
 
 dd_topt_go_test(
     name = "macro_service_probe_invalid",
     go_test_rule = fake_go_test,
-    topt_data = {
-        "go_service": topt_data_go_service,
-        "go_service_2": topt_data_go_service_2,
-    },
+    topt_data = topt_data_by_service,
     topt_service = "missing_service",
 )
 BUILD_MULTI_INVALID_EOF
@@ -1697,9 +1940,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-rc.2)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
       run_real_go "$@"
       exit 0
       ;;
@@ -1720,9 +1963,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-rc.2|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-rc.2|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-rc.2)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -1732,8 +1975,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-rc.2" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-rc.2"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0"
   exit 0
 fi
 
@@ -1747,7 +1990,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0-rc.2\n'
+      printf 'v2.9.0\n'
       exit 0
       ;;
   esac
@@ -1755,10 +1998,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-rc.2)
-      printf '{"Version":"v2.9.0-rc.2"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+      printf '{"Version":"v2.9.0"}\n'
       exit 0
       ;;
   esac
@@ -1773,7 +2016,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0-rc.2"}\n'
+      printf '{"Version":"v2.9.0"}\n'
       exit 0
       ;;
   esac
@@ -1868,7 +2111,9 @@ chmod +x "$BOOT_WS/bin/go"
   REAL_GO_BIN="$REAL_GO_BIN_HOST" PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
     --workspace "$BOOT_WS" \
     --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
-    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT"
+    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT" \
+    --rules-go-upstream "$RULES_GO_UPSTREAM" \
+    --rules-go-variant "$RULES_GO_VARIANT"
 )
 
 if ! grep -q 'git_override(' "$BOOT_WS/MODULE.bazel"; then
@@ -1876,7 +2121,7 @@ if ! grep -q 'git_override(' "$BOOT_WS/MODULE.bazel"; then
   cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
-if ! grep -q 'strip_prefix = "third_party/rules_go_orchestrion_base"' "$BOOT_WS/MODULE.bazel"; then
+if ! grep -q "strip_prefix = \"${RULES_GO_FORK_REL}\"" "$BOOT_WS/MODULE.bazel"; then
   echo "error: bootstrap helper did not add vendored rules_go strip_prefix"
   cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
@@ -2022,9 +2267,9 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-rc.2)
+    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
       run_real_go "$@"
       exit 0
       ;;
@@ -2037,9 +2282,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0-rc.2|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-rc.2|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-rc.2)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -2049,8 +2294,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0-rc.2" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0-rc.2"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0"
   exit 0
 fi
 
@@ -2064,7 +2309,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0-rc.2\n'
+      printf 'v2.9.0\n'
       exit 0
       ;;
   esac
@@ -2072,10 +2317,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0-rc.2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0-rc.2)
-      printf '{"Version":"v2.9.0-rc.2"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+      printf '{"Version":"v2.9.0"}\n'
       exit 0
       ;;
   esac
@@ -2090,7 +2335,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0-rc.2"}\n'
+      printf '{"Version":"v2.9.0"}\n'
       exit 0
       ;;
   esac
@@ -2341,6 +2586,8 @@ BUILD_GUIDED_EOF
     --workspace "$GUIDED_BOOT_WS" \
     --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
     --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT" \
+    --rules-go-upstream "$RULES_GO_UPSTREAM" \
+    --rules-go-variant "$RULES_GO_VARIANT" \
     --guided \
     --service "go-service" \
     --runtime-version "1.2.3" \

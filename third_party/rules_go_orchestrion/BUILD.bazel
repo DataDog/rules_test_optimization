@@ -1,0 +1,30 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+exports_files([
+    "registry.json",
+    "patches/v0_60_0/base.series",
+    "patches/v0_60_0/base/0001-full-delta.patch",
+    "patches/v0_61_1/base.series",
+    "patches/v0_61_1/base/0001-full-delta.patch",
+], visibility = ["//visibility:public"])
+
+filegroup(
+    name = "base_patch_series",
+    srcs = [
+        "patches/v0_60_0/base.series",
+        "patches/v0_60_0/base/0001-full-delta.patch",
+        "patches/v0_61_1/base.series",
+        "patches/v0_61_1/base/0001-full-delta.patch",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "workspace_runtime_profile",
+    srcs = ["profiles/workspace_runtime.json"],
+    visibility = ["//visibility:public"],
+)
