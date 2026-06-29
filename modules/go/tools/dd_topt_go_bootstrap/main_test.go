@@ -1965,7 +1965,7 @@ exit 0
 `, logPath))
 
 	cfg := config{
-		goBinary: goPath,
+		goBinary:    goPath,
 		goModuleDir: t.TempDir(),
 		ddTraceGoVersions: map[string]string{
 			"github.com/DataDog/dd-trace-go/v2":                  "v2.9.0",
