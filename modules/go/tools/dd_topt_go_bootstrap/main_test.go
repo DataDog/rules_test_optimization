@@ -43,6 +43,18 @@ func captureStdout(buf *strings.Builder, fn func() error) error {
 	return copyErr
 }
 
+func shellPwdPath(t *testing.T, dir string, elems ...string) string {
+	t.Helper()
+	cmd := exec.Command("bash", "-c", "pwd -P")
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("resolve bash pwd for %s: %v", dir, err)
+	}
+	parts := append([]string{strings.TrimSpace(string(output))}, elems...)
+	return strings.Join(parts, "/")
+}
+
 func TestInsertAfterModuleDecl(t *testing.T) {
 	input := "module(name = \"example\")\n"
 	got, err := insertAfterModuleDecl(input, "bazel_dep(name = \"rules_go\", version = \"0.60.0\")\n")
@@ -602,7 +614,8 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`SYNC_REPO='test_optimization_data_worker'`,
 		`DOCTOR_TARGET='//:dd_test_optimization_doctor'`,
 		`UPLOAD_TARGET='//:dd_upload_payloads'`,
-		`BEP_JSON_DIR='.topt/bep'`,
+		`WORKSPACE_DIR="$(pwd -P)"`,
+		`BEP_JSON_DIR="${WORKSPACE_DIR}/.topt/bep"`,
 		`MIN_FREE_DISK_GB=35`,
 		`LARGE_MONOREPO=1`,
 		`SHUTDOWN_BAZEL_ON_EXIT=1`,
@@ -734,11 +747,12 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 		t.Fatalf("read fake bazel log: %v", err)
 	}
 	logText := string(logBytes)
+	bepPath := shellPwdPath(t, dir, ".topt", "bep", "__pkg_go_default_test.json")
 	for _, want := range []string{
 		"sync --config=test-optimization --repo_env=FETCH_SALT=",
-		"test --config=test-optimization --build_event_json_file=",
+		"test --config=test-optimization --build_event_json_file=" + bepPath + " //pkg:go_default_test",
 		"//pkg:go_default_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=.topt/bep/__pkg_go_default_test.json --freshness-source=bep --freshness-mode=required",
+		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + bepPath + " --freshness-source=bep --freshness-mode=required",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
@@ -813,12 +827,15 @@ set -euo pipefail
 		t.Fatalf("read fake bazel log: %v", err)
 	}
 	logText := string(logBytes)
+	controlBEPPath := shellPwdPath(t, dir, ".topt", "bep", "__control_go_default_test.json")
+	oneBEPPath := shellPwdPath(t, dir, ".topt", "bep", "__pkg_one_test.json")
+	twoBEPPath := shellPwdPath(t, dir, ".topt", "bep", "__pkg_two_test.json")
 	for _, want := range []string{
-		"test --config=test-optimization --build_event_json_file=.topt/bep/__control_go_default_test.json //control:go_default_test",
-		"test --config=test-optimization --build_event_json_file=.topt/bep/__pkg_one_test.json //pkg:one_test",
-		"test --config=test-optimization --build_event_json_file=.topt/bep/__pkg_two_test.json //pkg:two_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=.topt/bep/__control_go_default_test.json --bep-json=.topt/bep/__pkg_one_test.json --bep-json=.topt/bep/__pkg_two_test.json --freshness-source=bep --freshness-mode=required",
-		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/bep/__control_go_default_test.json --bep-json=.topt/bep/__pkg_one_test.json --bep-json=.topt/bep/__pkg_two_test.json --freshness-source=bep --freshness-mode=required",
+		"test --config=test-optimization --build_event_json_file=" + controlBEPPath + " //control:go_default_test",
+		"test --config=test-optimization --build_event_json_file=" + oneBEPPath + " //pkg:one_test",
+		"test --config=test-optimization --build_event_json_file=" + twoBEPPath + " //pkg:two_test",
+		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required",
+		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
