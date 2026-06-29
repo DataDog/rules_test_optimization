@@ -1985,6 +1985,49 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertNotIn('resolve_runtime_file_path "$DEFAULT_EXECUTION_LOG_JSON"', bash_text)
         self.assertNotIn("Resolve-RuntimeFilePath $script:DefaultExecutionLogJson", powershell_text)
 
+    def test_uploader_skips_empty_output_dirs_before_freshness_metadata_gate(self) -> None:
+        """Validate BEP required mode ignores empty control test.outputs directories."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("payload_dir_has_replayable_files()", bash_text)
+        self.assertIn("test_payload_dir_has_candidate_files()", bash_text)
+        self.assertRegex(
+            bash_text,
+            r'test_payload_dir_has_candidate_files "\$tests_dir" \|\| continue\s+'
+            r'test_output_dir_is_freshness_eligible "\$outputs_dir" \|\| continue',
+        )
+        self.assertRegex(
+            bash_text,
+            r'payload_dir_has_replayable_files "\$cov_dir" \|\| continue\s+'
+            r'test_output_dir_is_freshness_eligible "\$outputs_dir" \|\| continue',
+        )
+        self.assertRegex(
+            bash_text,
+            r'payload_dir_has_replayable_files "\$telemetry_dir" \|\| continue\s+'
+            r'test_output_dir_is_freshness_eligible "\$outputs_dir" \|\| continue',
+        )
+
+        self.assertIn("function Test-PayloadDirHasReplayableFiles", powershell_text)
+        self.assertIn("function Test-TestPayloadDirHasCandidateFiles", powershell_text)
+        self.assertRegex(
+            powershell_text,
+            r'if \(-not \(Test-TestPayloadDirHasCandidateFiles \$testsDir\)\) \{ continue \}\s+'
+            r'if \(-not \(Test-OutputDirFreshnessEligible \$outputsDir\.FullName\)\) \{ continue \}',
+        )
+        self.assertRegex(
+            powershell_text,
+            r'if \(-not \(Test-PayloadDirHasReplayableFiles \$covDir\)\) \{ continue \}\s+'
+            r'if \(-not \(Test-OutputDirFreshnessEligible \$outputsDir\.FullName\)\) \{ continue \}',
+        )
+        self.assertRegex(
+            powershell_text,
+            r'if \(-not \(Test-PayloadDirHasReplayableFiles \$telemetryDir\)\) \{ continue \}\s+'
+            r'if \(-not \(Test-OutputDirFreshnessEligible \$outputsDir\.FullName\)\) \{ continue \}',
+        )
+
     def test_uploader_dry_run_validates_default_enrichment_tags(self) -> None:
         """Validate dry-run checks the git and Bazel tags needed by downstream upload."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")

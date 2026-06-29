@@ -940,6 +940,11 @@ for output_dir in "$BEP_FRESH_OUTPUT" "$BEP_CACHED_LOCAL_OUTPUT" "$BEP_CACHED_RE
 {"bazel.target":"//same_label:bep_payload_test","bazel.package":"same_label"}
 JSON_EOF
 done
+# A plain control target can leave a test.outputs directory with no payloads and
+# no Bazel metadata. BEP required mode must ignore it because there is no local
+# candidate payload to authorize.
+BEP_EMPTY_CONTROL_OUTPUT="$BEP_TESTLOGS/same_label/empty_control/test.outputs"
+mkdir -p "$BEP_EMPTY_CONTROL_OUTPUT"
 BEP_JSON="$TMP_WS/test_bep_freshness.json"
 cat > "$BEP_JSON" <<'JSON_EOF'
 {"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"local"},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.outputs"},{"name":"diagnostic.remote","uri":"bytestream://remote-cas/blobs/abcdef/456"}]}}
@@ -978,6 +983,11 @@ if ! grep -q "dry-run validated 1 test payloads" "$BEP_DRY_RUN_LOG"; then
 fi
 if ! grep -q "skipping cached or non-current test output" "$BEP_DRY_RUN_LOG"; then
   echo "error: BEP dry-run did not log cached/non-current skips"
+  cat "$BEP_DRY_RUN_LOG" || true
+  exit 1
+fi
+if grep -q "bazel.target metadata is missing" "$BEP_DRY_RUN_LOG"; then
+  echo "error: BEP dry-run treated an empty control test.outputs directory as a payload candidate"
   cat "$BEP_DRY_RUN_LOG" || true
   exit 1
 fi

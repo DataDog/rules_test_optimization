@@ -1062,6 +1062,11 @@ filegroup(
 }
 '@ | Set-Content -LiteralPath (Join-Path $entry.Root "bazel_target_metadata.json") -Encoding UTF8
   }
+  # A plain control target can leave a test.outputs directory with no payloads
+  # and no Bazel metadata. BEP required mode must ignore it because there is no
+  # local candidate payload to authorize.
+  $bepEmptyControlOutputs = Join-Path $bepTestlogsDir "same_label/empty_control/test.outputs"
+  New-Item -ItemType Directory -Force -Path $bepEmptyControlOutputs | Out-Null
   $bepJson = Join-Path $tempRoot "same_label_bep.json"
   @'
 {"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"local"},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/fresh_attempt/test.outputs"},{"name":"diagnostic.remote","uri":"bytestream://remote-cas/blobs/abcdef/456"}]}}
@@ -1090,6 +1095,9 @@ filegroup(
   }
   if (-not $bepDryRunOutput.Contains("skipping cached or non-current test output")) {
     throw "BEP uploader dry-run did not report cached/non-current skips`n$bepDryRunOutput"
+  }
+  if ($bepDryRunOutput.Contains("bazel.target metadata is missing")) {
+    throw "BEP uploader dry-run treated an empty control test.outputs directory as a payload candidate`n$bepDryRunOutput"
   }
 	  if (@(Read-NewLogEntries -Path $mockLog -StartIndex $bepDryRunStart).Count -ne 0) {
 	    throw "BEP uploader dry-run unexpectedly sent requests to the mock server"

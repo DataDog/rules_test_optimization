@@ -2832,6 +2832,18 @@ list_sorted_raw_test_msgpack_files() {
     find "$dir" -maxdepth 1 -type f -name "*.msgpack" -print 2>/dev/null | LC_ALL=C sort
 }
 
+payload_dir_has_replayable_files() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    [[ -n "$(find "$dir" -maxdepth 1 -type f \( -name "*.json" -o -name "*.msgpack" \) -print -quit 2>/dev/null)" ]]
+}
+
+test_payload_dir_has_candidate_files() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    [[ -n "$(find "$dir" -maxdepth 1 -type f \( -name "*.json" -o -name "*.msgpack" \) -print -quit 2>/dev/null)" ]]
+}
+
 # Return true when a JSON test payload has at least one uploadable event. Some
 # tracers can leave empty `{}` placeholder files in Bazel test outputs; those
 # files are not valid Test Optimization payloads and should not be uploaded.
@@ -3090,9 +3102,9 @@ resolve_telemetry_facts_sources() {
 list_all_sorted_telemetry_files() {
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
         local telemetry_dir="$outputs_dir/payloads/telemetry"
-        [[ -d "$telemetry_dir" ]] || continue
+        payload_dir_has_replayable_files "$telemetry_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
         list_sorted_payload_files "$telemetry_dir"
     done < <(printf '%s\n' "$TEST_OUTPUTS_CACHE")
 }
@@ -3921,9 +3933,9 @@ upload_all_tests() {
     # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
         local tests_dir="$outputs_dir/payloads/tests"
-        [[ -d "$tests_dir" ]] || continue
+        test_payload_dir_has_candidate_files "$tests_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
@@ -3990,9 +4002,9 @@ upload_all_coverage() {
     # Iterate the cached test.outputs list to avoid rescanning the filesystem.
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
         local cov_dir="$outputs_dir/payloads/coverage"
-        [[ -d "$cov_dir" ]] || continue
+        payload_dir_has_replayable_files "$cov_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
@@ -4046,9 +4058,9 @@ upload_all_telemetry() {
     fi
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
-        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
         local telemetry_dir="$outputs_dir/payloads/telemetry"
-        [[ -d "$telemetry_dir" ]] || continue
+        payload_dir_has_replayable_files "$telemetry_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue

@@ -2745,6 +2745,14 @@ function Get-SortedRawTestMsgpackFiles([string]$DirPath) {
     return $files
 }
 
+function Test-PayloadDirHasReplayableFiles([string]$DirPath) {
+    return ((@(Get-SortedPayloadFiles $DirPath)).Count -gt 0)
+}
+
+function Test-TestPayloadDirHasCandidateFiles([string]$DirPath) {
+    return (((@(Get-SortedTestPayloadFiles $DirPath)).Count + (@(Get-SortedRawTestMsgpackFiles $DirPath)).Count) -gt 0)
+}
+
 # Return true when a JSON test payload has at least one uploadable event. Some
 # tracers can leave empty `{}` placeholder files under payloads/tests; those
 # files are not valid Test Optimization payloads and should not be uploaded.
@@ -2975,9 +2983,9 @@ function Resolve-TelemetryFactsSources {
 function Get-AllSortedTelemetryFiles {
     $files = @()
     foreach ($outputsDir in $script:TestOutputsCache) {
-        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
-        if (-not (Test-Path -LiteralPath $telemetryDir)) { continue }
+        if (-not (Test-PayloadDirHasReplayableFiles $telemetryDir)) { continue }
+        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         foreach ($file in (Get-SortedPayloadFiles $telemetryDir)) {
             $files += ,$file
         }
@@ -3738,9 +3746,9 @@ function Upload-AllTests {
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {
-        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
-        if (-not (Test-Path -LiteralPath $testsDir)) { continue }
+        if (-not (Test-TestPayloadDirHasCandidateFiles $testsDir)) { continue }
+        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         foreach ($f in @(Get-SortedRawTestMsgpackFiles $testsDir)) {
             Log "error: raw msgpack test payload is not supported in Bazel file mode: $($f.FullName)"
             $failed++
@@ -3811,9 +3819,9 @@ function Upload-AllCoverage {
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {
-        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
-        if (-not (Test-Path -LiteralPath $covDir)) { continue }
+        if (-not (Test-PayloadDirHasReplayableFiles $covDir)) { continue }
+        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         $files = Get-SortedPayloadFiles $covDir
         foreach ($f in $files) {
             if (-not (Test-PrefixFilter $f.FullName "coverage_")) {
@@ -3859,9 +3867,9 @@ function Upload-AllTelemetry {
     try {
         $plan = New-TelemetryAugmentationPlan
         foreach ($outputsDir in $script:TestOutputsCache) {
-            if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
             $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
-            if (-not (Test-Path -LiteralPath $telemetryDir)) { continue }
+            if (-not (Test-PayloadDirHasReplayableFiles $telemetryDir)) { continue }
+            if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
             $files = Get-SortedPayloadFiles $telemetryDir
             foreach ($f in $files) {
                 $bodyPath = $f.FullName
