@@ -623,6 +623,87 @@ def _validate_expected_target_bep_freshness(
     return fresh_output_dirs
 
 
+def _validate_discovered_bep_freshness(
+    output_dirs: list[Path],
+    freshness: BepFreshness,
+    *,
+    required: bool,
+) -> list[Path]:
+    """Return discovered output dirs proven fresh by matching BEP TestResult outputs."""
+    if not required:
+        return output_dirs
+
+    local_labels: set[str] = set()
+    for output_dir in output_dirs:
+        for metadata_file in _metadata_files(output_dir):
+            metadata = _load_json(metadata_file)
+            if isinstance(metadata, dict):
+                label = _metadata_target_label(metadata, None)
+                if label:
+                    local_labels.add(label)
+
+    for remote in freshness.remote_only_outputs:
+        if remote.label in local_labels:
+            _fail(
+                "BEP references remote-only test outputs for "
+                f"{remote.label}: {remote.artifact}. Rerun bazel test with "
+                "--build_event_json_file and --remote_download_outputs=all before running the doctor."
+            )
+
+    missing_local_labels = sorted(local_labels.intersection(freshness.missing_output_mappings))
+    if missing_local_labels:
+        _fail(
+            "BEP required freshness cannot authorize discovered Test Optimization output "
+            f"for {missing_local_labels[0]} because the fresh TestResult did not contain "
+            "a mappable test.outputs reference. Rerun bazel test with "
+            "--build_event_json_file and --remote_download_outputs=all before running the doctor."
+        )
+
+    fresh_output_dirs = []
+    for output_dir in output_dirs:
+        candidate_labels = {
+            candidate_label
+            for candidate_label, candidate_key in freshness.eligible_outputs
+            if _local_output_matches_bep_key(output_dir, candidate_key)
+        }
+        if not candidate_labels:
+            continue
+        metadata_files = _metadata_files(output_dir)
+        if not metadata_files:
+            _fail(
+                f"BEP required freshness cannot authorize {output_dir} because "
+                "bazel_target_metadata.json is missing."
+            )
+        metadata = _load_json(metadata_files[0])
+        label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
+        if not label:
+            _fail(
+                f"BEP required freshness cannot authorize {output_dir} because "
+                "bazel_target_metadata.json does not contain bazel.target."
+            )
+        if label in candidate_labels:
+            fresh_output_dirs.append(output_dir)
+
+    if not fresh_output_dirs:
+        cached_local_labels = {
+            label
+            for label, _ in freshness.cached_outputs
+            if label in local_labels
+        }
+        if cached_local_labels:
+            reason = f"BEP reported only cached results for {sorted(cached_local_labels)[0]}"
+        else:
+            reason = "no fresh BEP TestResult matched local test.outputs"
+        _fail(
+            "BEP required freshness did not authorize any discovered Test Optimization "
+            f"output directories ({reason}). Rerun bazel test with --build_event_json_file "
+            "and --remote_download_outputs=all, then rerun the doctor with --bep-json "
+            "and --freshness-source=bep --freshness-mode=required."
+        )
+
+    return fresh_output_dirs
+
+
 def _discover_output_dirs(testlogs_dir: Path) -> list[Path]:
     return sorted(path for path in testlogs_dir.rglob("test.outputs") if path.is_dir())
 
@@ -896,7 +977,7 @@ def main(argv: list[str]) -> int:
         if not output_dirs:
             _fail(f"no Test Optimization output directories found under {testlogs_dir}")
 
-    if expected_targets and args.freshness_mode != "disabled":
+    if args.freshness_mode != "disabled":
         bep_files = _configured_bep_json_files(args)
         strict_bep_required = args.freshness_mode == "required"
         if args.freshness_source == "execution_log" and strict_bep_required:
@@ -907,12 +988,20 @@ def main(argv: list[str]) -> int:
                 unavailable_is_error=args.freshness_mode != "optional",
             )
             if freshness is not None:
-                output_dirs = _validate_expected_target_bep_freshness(
-                    output_dirs,
-                    set(expected_targets),
-                    freshness,
-                    required=strict_bep_required or args.freshness_mode == "auto",
-                )
+                required = strict_bep_required or args.freshness_mode == "auto"
+                if expected_targets:
+                    output_dirs = _validate_expected_target_bep_freshness(
+                        output_dirs,
+                        set(expected_targets),
+                        freshness,
+                        required=required,
+                    )
+                else:
+                    output_dirs = _validate_discovered_bep_freshness(
+                        output_dirs,
+                        freshness,
+                        required=required,
+                    )
         elif strict_bep_required:
             _fail(
                 "BEP freshness validation is required but no BEP JSON file was configured. "

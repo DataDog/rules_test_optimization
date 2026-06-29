@@ -936,6 +936,74 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             self.assertEqual([fresh_output], selected_outputs)
             self.mod._validate_outputs(selected_outputs, True, True, True, True)
 
+    def test_doctor_required_bep_discovery_rejects_cached_only_output(self) -> None:
+        """Validate BEP required mode is strict even without configured expected targets."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root, "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                        cached_locally=True,
+                    ),
+                ],
+            )
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)}),
+                mock.patch("sys.stderr", stderr),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--bep-json",
+                        str(bep),
+                        "--freshness-source=bep",
+                        "--freshness-mode=required",
+                    ])
+
+        self.assertEqual(1, raised.exception.code)
+        self.assertIn("BEP required freshness did not authorize", stderr.getvalue())
+
+    def test_doctor_required_bep_discovery_accepts_fresh_output(self) -> None:
+        """Validate documented BEP required doctor flow works without expected targets."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root, "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                    ),
+                ],
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)},
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                ])
+
+        self.assertEqual(0, rc)
+
     def test_expected_target_output_mapping(self) -> None:
         """Validate local Bazel labels map to bazel-testlogs output dirs."""
         root = Path("/tmp/bazel-testlogs")
