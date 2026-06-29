@@ -33,6 +33,8 @@ Keep the RFC contract intact:
 - Do not copy or apply `rules_go` patch bundles manually.
 - Use `--remote_download_outputs=all` when remote execution or remote cache can
   leave test outputs remote-only.
+- Run pilot tests with `--build_event_json_file` and pass the same BEP file to
+  doctor/uploader with `--freshness-source=bep --freshness-mode=required`.
 
 ## First Actions
 
@@ -86,6 +88,8 @@ Every successful Go onboarding should end with these pieces:
   unless the repository explicitly wants that behavior.
 - Test commands use a named config such as `--config=test-optimization`.
 - Remote-output-sensitive test configs include `--remote_download_outputs=all`.
+- Validation commands pass the matching BEP file to doctor and uploader in
+  required BEP freshness mode.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a

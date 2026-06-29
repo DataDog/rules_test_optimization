@@ -602,8 +602,7 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`SYNC_REPO='test_optimization_data_worker'`,
 		`DOCTOR_TARGET='//:dd_test_optimization_doctor'`,
 		`UPLOAD_TARGET='//:dd_upload_payloads'`,
-		`EXECUTION_LOG_JSON='.topt/bazel-execution-log.json'`,
-		`EXECUTION_LOG_DIR='.topt/execution-logs'`,
+		`BEP_JSON_DIR='.topt/bep'`,
 		`MIN_FREE_DISK_GB=35`,
 		`LARGE_MONOREPO=1`,
 		`SHUTDOWN_BAZEL_ON_EXIT=1`,
@@ -615,7 +614,10 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`'//worker/control:go_default_test'`,
 		`'//worker:go_default_test'`,
 		`'//worker:topt_flaky_test'`,
-		`--execution_log_json_file=${execution_log_path}`,
+		`--build_event_json_file=${bep_json_path}`,
+		`--bep-json=${bep_json_path}`,
+		`--freshness-source=bep`,
+		`--freshness-mode=required`,
 		`sync -> controls -> instrumented tests -> doctor -> optional upload`,
 		`upload skipped; rerun with --upload`,
 		`${BAZEL}" shutdown`,
@@ -734,9 +736,9 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 	logText := string(logBytes)
 	for _, want := range []string{
 		"sync --config=test-optimization --repo_env=FETCH_SALT=",
-		"test --config=test-optimization --execution_log_json_file=",
+		"test --config=test-optimization --build_event_json_file=",
 		"//pkg:go_default_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor",
+		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=.topt/bep/__pkg_go_default_test.json --freshness-source=bep --freshness-mode=required",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
@@ -747,35 +749,34 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 	}
 }
 
-func TestValidationScriptAggregatesExecutionLogsBeforeUpload(t *testing.T) {
+func TestValidationScriptPassesBepFilesBeforeUpload(t *testing.T) {
 	dir := t.TempDir()
 	fakeBazel := filepath.Join(dir, "bazel")
 	logPath := filepath.Join(dir, "bazel.log")
 	fakeBazelScript := `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "$BAZEL_LOG"
-if [[ "${1:-}" == "test" ]]; then
-  log_path=""
-  target=""
-  for arg in "$@"; do
-    case "$arg" in
-      --execution_log_json_file=*)
-        log_path="${arg#--execution_log_json_file=}"
-        ;;
-      //*)
-        target="$arg"
-        ;;
-    esac
-  done
-  if [[ -z "$log_path" ]]; then
-    echo "missing --execution_log_json_file" >&2
-    exit 42
-  fi
-  safe="${target//[^A-Za-z0-9_.-]/_}"
-  mkdir -p "$(dirname "$log_path")"
-  printf '{"mnemonic":"TestRunner","cacheHit":false,"targetLabel":"%s","listedOutputs":["bazel-out/testlogs/%s/test.outputs"]}\n' "$target" "$safe" > "$log_path"
-fi
-`
+	printf '%s\n' "$*" >> "$BAZEL_LOG"
+	if [[ "${1:-}" == "test" ]]; then
+	  bep_path=""
+	  target=""
+	  for arg in "$@"; do
+	    case "$arg" in
+	      --build_event_json_file=*)
+	        bep_path="${arg#--build_event_json_file=}"
+	        ;;
+	      //*)
+	        target="$arg"
+	        ;;
+	    esac
+	  done
+	  if [[ -z "$bep_path" ]]; then
+	    echo "missing --build_event_json_file" >&2
+	    exit 42
+	  fi
+	  mkdir -p "$(dirname "$bep_path")"
+	  printf '{"id":{"testResult":{"label":"%s","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/testlogs/%s/test.outputs"}]}}\n' "$target" "${target//[^A-Za-z0-9_.-]/_}" > "$bep_path"
+	fi
+	`
 	if err := os.WriteFile(fakeBazel, []byte(fakeBazelScript), 0o755); err != nil {
 		t.Fatalf("write fake bazel: %v", err)
 	}
@@ -813,11 +814,11 @@ fi
 	}
 	logText := string(logBytes)
 	for _, want := range []string{
-		"test --config=test-optimization --execution_log_json_file=.topt/execution-logs/__control_go_default_test.json //control:go_default_test",
-		"test --config=test-optimization --execution_log_json_file=.topt/execution-logs/__pkg_one_test.json //pkg:one_test",
-		"test --config=test-optimization --execution_log_json_file=.topt/execution-logs/__pkg_two_test.json //pkg:two_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor",
-		"run --config=test-optimization //:dd_upload_payloads",
+		"test --config=test-optimization --build_event_json_file=.topt/bep/__control_go_default_test.json //control:go_default_test",
+		"test --config=test-optimization --build_event_json_file=.topt/bep/__pkg_one_test.json //pkg:one_test",
+		"test --config=test-optimization --build_event_json_file=.topt/bep/__pkg_two_test.json //pkg:two_test",
+		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=.topt/bep/__control_go_default_test.json --bep-json=.topt/bep/__pkg_one_test.json --bep-json=.topt/bep/__pkg_two_test.json --freshness-source=bep --freshness-mode=required",
+		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/bep/__control_go_default_test.json --bep-json=.topt/bep/__pkg_one_test.json --bep-json=.topt/bep/__pkg_two_test.json --freshness-source=bep --freshness-mode=required",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
@@ -829,22 +830,21 @@ fi
 		t.Fatalf("upload did not run after doctor:\n%s", logText)
 	}
 
-	combinedLogBytes, err := os.ReadFile(filepath.Join(dir, ".topt", "bazel-execution-log.json"))
-	if err != nil {
-		t.Fatalf("read combined execution log: %v", err)
-	}
-	combinedLog := string(combinedLogBytes)
-	for _, want := range []string{
-		`"targetLabel":"//control:go_default_test"`,
-		`"targetLabel":"//pkg:one_test"`,
-		`"targetLabel":"//pkg:two_test"`,
+	for _, entry := range []struct {
+		path  string
+		label string
+	}{
+		{filepath.Join(dir, ".topt", "bep", "__control_go_default_test.json"), "//control:go_default_test"},
+		{filepath.Join(dir, ".topt", "bep", "__pkg_one_test.json"), "//pkg:one_test"},
+		{filepath.Join(dir, ".topt", "bep", "__pkg_two_test.json"), "//pkg:two_test"},
 	} {
-		if !strings.Contains(combinedLog, want) {
-			t.Fatalf("combined execution log missing %q:\n%s", want, combinedLog)
+		bepBytes, err := os.ReadFile(entry.path)
+		if err != nil {
+			t.Fatalf("read BEP file %s: %v", entry.path, err)
 		}
-	}
-	if got := strings.Count(combinedLog, `"mnemonic":"TestRunner"`); got != 3 {
-		t.Fatalf("combined execution log has %d TestRunner entries, want 3:\n%s", got, combinedLog)
+		if !strings.Contains(string(bepBytes), `"label":"`+entry.label+`"`) {
+			t.Fatalf("BEP file %s missing label %s:\n%s", entry.path, entry.label, bepBytes)
+		}
 	}
 }
 
@@ -1950,6 +1950,45 @@ func TestSyntheticDDTraceGoVersionCheckModUsesConfiguredVersions(t *testing.T) {
 		want := modulePath + " " + version
 		if !strings.Contains(got, want) {
 			t.Fatalf("syntheticDDTraceGoVersionCheckMod missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestWarmOrchestrionModuleCacheIncludesSyntheticTestOptimizationPackages(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script based helper test is Unix-only")
+	}
+	logPath := filepath.Join(t.TempDir(), "go-calls.log")
+	goPath := writeFakeGoTool(t, fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %q
+exit 0
+`, logPath))
+
+	cfg := config{
+		goBinary: goPath,
+		goModuleDir: t.TempDir(),
+		ddTraceGoVersions: map[string]string{
+			"github.com/DataDog/dd-trace-go/v2":                  "v2.9.0",
+			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0",
+			"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0",
+		},
+	}
+	if err := warmOrchestrionModuleCache(cfg); err != nil {
+		t.Fatalf("warmOrchestrionModuleCache error: %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read go call log: %v", err)
+	}
+	text := string(data)
+	for _, packagePath := range []string{
+		"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+		"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage",
+		"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations",
+	} {
+		want := "list -mod=mod " + packagePath
+		if !strings.Contains(text, want) {
+			t.Fatalf("warmOrchestrionModuleCache missing %q:\n%s", want, text)
 		}
 	}
 }

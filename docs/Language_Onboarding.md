@@ -78,18 +78,31 @@ test, doctor, or uploader commands.
 Shared upload command:
 
 ```bash
-bazel test --config=test-optimization //... || test_status=$?; test_status=${test_status:-0}
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+mkdir -p .topt
+rm -f .topt/bazel-bep.json
+bazel test --config=test-optimization --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json //... || test_status=$?; test_status=${test_status:-0}
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required || doctor_status=$?; doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$doctor_status"
 fi
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --dry-run \
+  --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
 if [ "$dry_run_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$dry_run_status"
 fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
@@ -361,18 +374,20 @@ Validate in this order:
 1. Run `bazel sync --config=test-optimization --only=test_optimization_data`
    with a fresh `FETCH_SALT` when metadata should be refetched.
 2. Run plain and build-only controls first.
-3. Run the instrumented targets in small batches, serially if disk or cache
+3. Run the instrumented targets in small batches with
+   `--build_event_json_file=.topt/<batch>.bep.json`, serially if disk or cache
    pressure is high.
-4. Run `bazel run --config=test-optimization //:dd_test_optimization_doctor`.
+4. Run `bazel run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=.topt/<batch>.bep.json --freshness-source=bep --freshness-mode=required`.
 5. Run
-   `bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment`.
+   `bazel run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/<batch>.bep.json --freshness-source=bep --freshness-mode=required --dry-run --validate-enrichment`.
 6. Run the real uploader with `DD_API_KEY` and `DD_SITE` in the command
-   environment, not in the test sandbox.
+   environment, the same `--bep-json` flags, and not in the test sandbox.
 
 For remote execution or remote cache setups, keep
 `test:test-optimization --remote_download_outputs=all` in the active `.bazelrc`
 config. Without local undeclared outputs, the doctor and uploader cannot inspect
-or enrich the payloads after `bazel test`.
+or enrich the payloads after `bazel test`. Use a unique BEP file per Bazel test
+invocation and remove stale BEP files before reuse.
 
 If the doctor reports missing Git metadata, missing Bazel metadata,
 `full_bundle_no_match`, or msgpack payloads, fix the sync, wrapper, tracer, or

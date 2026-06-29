@@ -360,9 +360,11 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
 ```
 
 The generated script runs `sync -> controls -> instrumented tests -> doctor`.
-It uploads only when called with `--upload`; the default is `--no-upload`. It
-does not delete caches, print secrets, use BES/BEP, proxy payloads, or pass
-`DD_GIT_*` through `--test_env`.
+It captures one BEP JSON file per Bazel test invocation and passes those files
+to doctor/uploader with `--freshness-source=bep --freshness-mode=required`. It
+uploads only when called with `--upload`; the default is `--no-upload`. It does
+not delete caches, print secrets, proxy payloads, or pass `DD_GIT_*` through
+`--test_env`.
 
 ### Go Bazel config
 
@@ -397,10 +399,23 @@ deliberately want fresh backend metadata.
 Run Go onboarding commands with this config:
 
 ```bash
-bazel test --config=test-optimization //...
-bazel run --config=test-optimization //:dd_test_optimization_doctor
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+mkdir -p .topt
+rm -f .topt/bazel-bep.json
+bazel test --config=test-optimization --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json //...
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required
+bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --dry-run \
+  --validate-enrichment
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required
 ```
 
 Do not run the real uploader if the doctor or dry-run enrichment step fails.
@@ -717,7 +732,12 @@ After tests and doctor pass, you can validate the exact enriched outbound test
 payload without uploading or deleting files:
 
 ```bash
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --dry-run \
+  --validate-enrichment
 ```
 
 Multi-service aggregator variant:
@@ -793,12 +813,12 @@ common:test-optimization --repo_env=RUBY_MODULE_PATH
 
 # Uploader (bazel run, pass credentials inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
-#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/bazel-bep.json --freshness-source=bep --freshness-mode=required
 # PowerShell equivalent:
 #   # Set once per shell session before first run:
 #   # $env:DD_API_KEY = "<your-api-key>"
 #   # $env:DD_SITE = "datadoghq.com"
-#   bazel run --config=test-optimization //:dd_upload_payloads
+#   bazel run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/bazel-bep.json --freshness-source=bep --freshness-mode=required
 
 # Tests (runtime)
 # Keep uploader credentials out of test runtime by default.

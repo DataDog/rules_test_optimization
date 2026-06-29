@@ -102,6 +102,9 @@ var orchestrionToolPackages = append([]string{"github.com/DataDog/orchestrion"},
 
 var ddTraceGoWarmPackages = []string{
 	"github.com/DataDog/dd-trace-go/v2/ddtrace/tracer",
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations",
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting",
+	"github.com/DataDog/dd-trace-go/v2/internal/civisibility/integrations/gotesting/coverage",
 	"github.com/DataDog/dd-trace-go/v2/profiler",
 	"github.com/DataDog/dd-trace-go/v2/instrumentation/env",
 	"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
@@ -1415,8 +1418,7 @@ func validationScript(cfg config) (string, error) {
 	fmt.Fprintf(&buf, "SYNC_REPO=%s\n", shellQuote(cfg.syncRepoName))
 	fmt.Fprintf(&buf, "DOCTOR_TARGET=%s\n", shellQuote(cfg.validationDoctorTarget))
 	fmt.Fprintf(&buf, "UPLOAD_TARGET=%s\n", shellQuote(cfg.validationUploadTarget))
-	fmt.Fprintf(&buf, "EXECUTION_LOG_JSON=%s\n", shellQuote(".topt/bazel-execution-log.json"))
-	fmt.Fprintf(&buf, "EXECUTION_LOG_DIR=%s\n", shellQuote(".topt/execution-logs"))
+	fmt.Fprintf(&buf, "BEP_JSON_DIR=%s\n", shellQuote(".topt/bep"))
 	fmt.Fprintf(&buf, "MIN_FREE_DISK_GB=%d\n", cfg.minFreeDiskGB)
 	fmt.Fprintf(&buf, "LARGE_MONOREPO=%s\n", shellBool(cfg.largeMonorepo))
 	fmt.Fprintf(&buf, "SHUTDOWN_BAZEL_ON_EXIT=%s\n", shellBool(cfg.shutdownBazelOnExit))
@@ -1479,28 +1481,18 @@ cleanup() {
   fi
 }
 
-prepare_execution_logs() {
-  mkdir -p "${EXECUTION_LOG_DIR}" "$(dirname "${EXECUTION_LOG_JSON}")"
-  find "${EXECUTION_LOG_DIR}" -type f -name '*.json' -delete
-  : > "${EXECUTION_LOG_JSON}"
+prepare_bep_files() {
+  mkdir -p "${BEP_JSON_DIR}"
+  find "${BEP_JSON_DIR}" -type f -name '*.json' -delete
 }
 
-execution_log_path_for_target() {
+bep_json_path_for_target() {
   local target="$1"
   local safe="${target//[^A-Za-z0-9_.-]/_}"
   if [[ -z "${safe}" ]]; then
     safe="target"
   fi
-  printf '%s/%s.json\n' "${EXECUTION_LOG_DIR}" "${safe}"
-}
-
-append_execution_log() {
-  local path="$1"
-  if [[ ! -s "${path}" ]]; then
-    return 0
-  fi
-  cat "${path}" >> "${EXECUTION_LOG_JSON}"
-  printf '\n' >> "${EXECUTION_LOG_JSON}"
+  printf '%s/%s.json\n' "${BEP_JSON_DIR}" "${safe}"
 }
 
 run_step() {
@@ -1543,15 +1535,16 @@ if (( sync_status != 0 )); then
 fi
 
 test_status=0
-prepare_execution_logs
+BEP_JSON_ARGS=()
+prepare_bep_files
 run_test_target() {
   local target="$1"
-  local execution_log_path
-  execution_log_path="$(execution_log_path_for_target "${target}")"
+  local bep_json_path
+  bep_json_path="$(bep_json_path_for_target "${target}")"
   check_disk
-  run_step "test ${target}" "${BAZEL}" test "${TEST_FLAGS[@]}" "--execution_log_json_file=${execution_log_path}" "${target}"
+  run_step "test ${target}" "${BAZEL}" test "${TEST_FLAGS[@]}" "--build_event_json_file=${bep_json_path}" "${target}"
   local status=$?
-  append_execution_log "${execution_log_path}"
+  BEP_JSON_ARGS+=("--bep-json=${bep_json_path}")
   if (( status != 0 && test_status == 0 )); then
     test_status=${status}
   fi
@@ -1575,7 +1568,7 @@ if (( test_status != 0 )); then
 fi
 
 check_disk
-run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}"
+run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}" -- "${BEP_JSON_ARGS[@]}" --freshness-source=bep --freshness-mode=required
 doctor_status=$?
 if (( doctor_status != 0 )); then
   warn "doctor failed; skipping upload"
@@ -1588,7 +1581,7 @@ if (( upload == 0 )); then
 fi
 
 check_disk
-run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}"
+run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" --freshness-source=bep --freshness-mode=required
 exit $?
 `)
 	return buf.String(), nil

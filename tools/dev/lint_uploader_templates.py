@@ -51,6 +51,8 @@ def _lint_batch_template(template: str) -> None:
     normalized = _TOKEN_RE.sub("dd_upload_payloads.ps1", template).lower()
     if "powershell.exe" not in normalized:
         raise RuntimeError("batch template missing powershell.exe invocation")
+    if "%*" not in normalized:
+        raise RuntimeError("batch template must forward CLI arguments to PowerShell with %*")
     if "exit /b %errorlevel%" not in normalized:
         raise RuntimeError("batch template missing exit code propagation (exit /b %ERRORLEVEL%)")
 

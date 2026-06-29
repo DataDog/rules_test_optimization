@@ -651,8 +651,8 @@ if grep -qiE "DD_API_KEY mismatch|API[ _-]?key mismatch" "$UPLOADER_LOG"; then
   exit 1
 fi
 
-# Scenario: CI defaults to cache-safe uploads. If no Bazel execution log is
-# available, the uploader must fail closed unless the caller opts out explicitly.
+# Scenario: CI defaults to cache-safe uploads. If no BEP or legacy execution log
+# is available, the uploader must fail closed unless the caller opts out explicitly.
 rm -rf "$WORKSPACE/.topt"
 CI_REQUIRED_EXEC_LOG="$TMP_WS/uploader_ci_requires_execution_log.log"
 if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
@@ -670,12 +670,12 @@ if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   DD_TEST_OPTIMIZATION_AGENT_URL= \
   "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
     "${REPO_ENVS[@]}" -- --dry-run >"$CI_REQUIRED_EXEC_LOG" 2>&1; then
-  echo "error: CI uploader unexpectedly succeeded without execution-log filtering"
+  echo "error: CI uploader unexpectedly succeeded without freshness filtering"
   cat "$CI_REQUIRED_EXEC_LOG" || true
   exit 1
 fi
-if ! grep -q "execution-log cache filtering is required in CI" "$CI_REQUIRED_EXEC_LOG"; then
-  echo "error: CI missing-execution-log failure was not actionable"
+if ! grep -q "freshness filtering is required in CI or required mode" "$CI_REQUIRED_EXEC_LOG" || ! grep -q -- "--remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json" "$CI_REQUIRED_EXEC_LOG"; then
+  echo "error: CI missing-freshness failure was not actionable"
   cat "$CI_REQUIRED_EXEC_LOG" || true
   exit 1
 fi
@@ -696,12 +696,12 @@ if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   DD_TEST_OPTIMIZATION_AGENT_URL= \
   "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
     "${REPO_ENVS[@]}" -- --dry-run --execution-log-mode=required >"$REQUIRED_EXEC_LOG" 2>&1; then
-  echo "error: required-mode uploader unexpectedly succeeded without execution-log filtering"
+  echo "error: required-mode uploader unexpectedly succeeded without freshness filtering"
   cat "$REQUIRED_EXEC_LOG" || true
   exit 1
 fi
-if ! grep -q "execution-log cache filtering is required by" "$REQUIRED_EXEC_LOG"; then
-  echo "error: required-mode missing-execution-log failure was not actionable"
+if ! grep -q "freshness filtering is required in CI or required mode" "$REQUIRED_EXEC_LOG" || ! grep -q -- "--remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json" "$REQUIRED_EXEC_LOG"; then
+  echo "error: required-mode missing-freshness failure was not actionable"
   cat "$REQUIRED_EXEC_LOG" || true
   exit 1
 fi
@@ -853,16 +853,757 @@ if "Cached.ExecutionLog" in resources:
     print(resources)
     sys.exit(1)
 PY
-if ! grep -q "skipping cached test output" "$EXEC_LOG_UPLOADER_LOG"; then
+if ! grep -q "skipping cached or non-current test output" "$EXEC_LOG_UPLOADER_LOG"; then
   echo "error: execution-log freshness scenario did not log a cached-output skip"
   cat "$EXEC_LOG_UPLOADER_LOG" || true
+  exit 1
+fi
+
+# Scenario: BEP can mark one output for a target as fresh and another output
+# for the same target as cached. BEP must win over the legacy execution-log
+# fallback and must match the output path as well as the target label. A fresh
+# event that includes both a local test.outputs reference and an extra remote
+# URI remains uploadable because the local payload is materialized.
+BEP_TESTLOGS="$TMP_WS/bep_testlogs"
+BEP_FRESH_OUTPUT="$BEP_TESTLOGS/fresh_attempt/payload_test/test.outputs"
+BEP_CACHED_LOCAL_OUTPUT="$BEP_TESTLOGS/cached_local_attempt/payload_test/test.outputs"
+BEP_CACHED_REMOTE_OUTPUT="$BEP_TESTLOGS/cached_remote_attempt/payload_test/test.outputs"
+mkdir -p \
+  "$BEP_FRESH_OUTPUT/payloads/tests" \
+  "$BEP_CACHED_LOCAL_OUTPUT/payloads/tests" \
+  "$BEP_CACHED_REMOTE_OUTPUT/payloads/tests"
+cat > "$BEP_FRESH_OUTPUT/payloads/tests/span_events_fresh_bep.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.2.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Fresh.BEP",
+        "meta": {
+          "test.source.file": "manual/fresh_bep.go"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+cat > "$BEP_CACHED_LOCAL_OUTPUT/payloads/tests/span_events_cached_local_bep.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.2.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Cached.Local.BEP",
+        "meta": {
+          "test.source.file": "manual/cached_local_bep.go"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+cat > "$BEP_CACHED_REMOTE_OUTPUT/payloads/tests/span_events_cached_remote_bep.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.2.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Cached.Remote.BEP",
+        "meta": {
+          "test.source.file": "manual/cached_remote_bep.go"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+for output_dir in "$BEP_FRESH_OUTPUT" "$BEP_CACHED_LOCAL_OUTPUT" "$BEP_CACHED_REMOTE_OUTPUT"; do
+  cat > "$output_dir/bazel_target_metadata.json" <<'JSON_EOF'
+{"bazel.target":"//same_label:bep_payload_test","bazel.package":"same_label"}
+JSON_EOF
+done
+BEP_JSON="$TMP_WS/test_bep_freshness.json"
+cat > "$BEP_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"local"},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.outputs"},{"name":"diagnostic.remote","uri":"bytestream://remote-cas/blobs/abcdef/456"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_local_attempt/payload_test/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_remote_attempt/payload_test/test.outputs"}]}}
+JSON_EOF
+
+BEP_DRY_RUN_LOG="$TMP_WS/uploader_bep_filter_dry_run.log"
+BEP_DRY_RUN_START="$(log_line_count)"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_JSON" --freshness-source=bep --freshness-mode=required --dry-run >"$BEP_DRY_RUN_LOG" 2>&1; then
+  echo "error: uploader BEP freshness dry-run scenario failed"
+  cat "$BEP_DRY_RUN_LOG" || true
+  exit 1
+fi
+if ! grep -q "freshness filtering enabled: source=bep" "$BEP_DRY_RUN_LOG"; then
+  echo "error: BEP dry-run did not enable BEP freshness filtering"
+  cat "$BEP_DRY_RUN_LOG" || true
+  exit 1
+fi
+if ! grep -q "dry-run validated 1 test payloads" "$BEP_DRY_RUN_LOG"; then
+  echo "error: BEP dry-run did not process exactly one fresh payload"
+  cat "$BEP_DRY_RUN_LOG" || true
+  exit 1
+fi
+if ! grep -q "skipping cached or non-current test output" "$BEP_DRY_RUN_LOG"; then
+  echo "error: BEP dry-run did not log cached/non-current skips"
+  cat "$BEP_DRY_RUN_LOG" || true
+  exit 1
+fi
+if [[ "$(tail -n "+$((BEP_DRY_RUN_START + 1))" "$LOG_FILE" | wc -l | tr -d '[:space:]')" != "0" ]]; then
+  echo "error: BEP dry-run unexpectedly sent requests to the mock server"
+  cat "$BEP_DRY_RUN_LOG" || true
+  exit 1
+fi
+
+BEP_OPTIONAL_FILTER_LOG="$TMP_WS/uploader_bep_filter_optional.log"
+BEP_OPTIONAL_FILTER_START="$(log_line_count)"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_JSON" --freshness-source=bep --freshness-mode=optional --dry-run >"$BEP_OPTIONAL_FILTER_LOG" 2>&1; then
+  echo "error: optional BEP freshness dry-run scenario failed"
+  cat "$BEP_OPTIONAL_FILTER_LOG" || true
+  exit 1
+fi
+if ! grep -q "freshness filtering enabled: source=bep" "$BEP_OPTIONAL_FILTER_LOG" || ! grep -q "dry-run validated 1 test payloads" "$BEP_OPTIONAL_FILTER_LOG"; then
+  echo "error: optional BEP dry-run did not filter to the fresh payload"
+  cat "$BEP_OPTIONAL_FILTER_LOG" || true
+  exit 1
+fi
+if ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_FILTER_LOG"; then
+  echo "error: optional BEP dry-run did not log cached/non-current skips"
+  cat "$BEP_OPTIONAL_FILTER_LOG" || true
+  exit 1
+fi
+if [[ "$(tail -n "+$((BEP_OPTIONAL_FILTER_START + 1))" "$LOG_FILE" | wc -l | tr -d '[:space:]')" != "0" ]]; then
+  echo "error: optional BEP dry-run unexpectedly sent requests to the mock server"
+  cat "$BEP_OPTIONAL_FILTER_LOG" || true
+  exit 1
+fi
+
+BEP_UPLOAD_LOG_START="$(log_line_count)"
+BEP_UPLOAD_LOG="$TMP_WS/uploader_bep_filter_upload.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_JSON" --freshness-source=bep --freshness-mode=required >"$BEP_UPLOAD_LOG" 2>&1; then
+  echo "error: uploader BEP freshness upload scenario failed"
+  cat "$BEP_UPLOAD_LOG" || true
+  exit 1
+fi
+BEP_UPLOAD_LOG_START="$BEP_UPLOAD_LOG_START" "$PYTHON" - <<'PY'
+import base64
+import json
+import os
+import sys
+
+log_path = os.environ["LOG_FILE"]
+start_line = int(os.environ.get("BEP_UPLOAD_LOG_START", "0") or "0")
+resources = []
+with open(log_path, "r", encoding="utf-8") as handle:
+    for idx, line in enumerate(handle):
+        if idx < start_line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("path") != "/api/v2/citestcycle":
+            continue
+        payload = json.loads(base64.b64decode(record.get("body_b64", "")).decode("utf-8"))
+        for event in payload.get("events", []):
+            resource = ((event.get("content") or {}).get("resource"))
+            if resource:
+                resources.append(resource)
+
+if "Fresh.BEP" not in resources:
+    print("error: fresh BEP payload was not uploaded")
+    print(resources)
+    sys.exit(1)
+for cached in ("Cached.Local.BEP", "Cached.Remote.BEP"):
+    if cached in resources:
+        print("error: cached BEP payload was uploaded")
+        print(resources)
+        sys.exit(1)
+PY
+
+BEP_UPLOAD_DELETE_LOG="$TMP_WS/uploader_bep_filter_upload_delete.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_JSON" --freshness-source=bep --freshness-mode=required >"$BEP_UPLOAD_DELETE_LOG" 2>&1; then
+  echo "error: uploader BEP deletion scenario failed"
+  cat "$BEP_UPLOAD_DELETE_LOG" || true
+  exit 1
+fi
+if [[ -e "$BEP_FRESH_OUTPUT/payloads/tests/span_events_fresh_bep.json" ]]; then
+  echo "error: fresh BEP payload was not deleted after successful upload"
+  cat "$BEP_UPLOAD_DELETE_LOG" || true
+  exit 1
+fi
+if [[ ! -e "$BEP_CACHED_LOCAL_OUTPUT/payloads/tests/span_events_cached_local_bep.json" || ! -e "$BEP_CACHED_REMOTE_OUTPUT/payloads/tests/span_events_cached_remote_bep.json" ]]; then
+  echo "error: cached BEP payloads were deleted even though they were skipped"
+  cat "$BEP_UPLOAD_DELETE_LOG" || true
+  exit 1
+fi
+
+BEP_CACHED_ONLY_JSON="$TMP_WS/test_bep_cached_only.json"
+cat > "$BEP_CACHED_ONLY_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_local_attempt/payload_test/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_remote_attempt/payload_test/test.outputs"}]}}
+JSON_EOF
+BEP_CACHED_ONLY_UPLOAD_START="$(log_line_count)"
+BEP_CACHED_ONLY_UPLOAD_LOG="$TMP_WS/uploader_bep_cached_only_upload.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_CACHED_ONLY_JSON" --freshness-source=bep --freshness-mode=required >"$BEP_CACHED_ONLY_UPLOAD_LOG" 2>&1; then
+  echo "error: uploader BEP cached-only upload scenario failed"
+  cat "$BEP_CACHED_ONLY_UPLOAD_LOG" || true
+  exit 1
+fi
+if [[ "$(tail -n "+$((BEP_CACHED_ONLY_UPLOAD_START + 1))" "$LOG_FILE" | wc -l | tr -d '[:space:]')" != "0" ]]; then
+  echo "error: cached-only BEP upload sent requests to the mock server"
+  cat "$BEP_CACHED_ONLY_UPLOAD_LOG" || true
+  exit 1
+fi
+if ! grep -q "skipping cached or non-current test output" "$BEP_CACHED_ONLY_UPLOAD_LOG"; then
+  echo "error: cached-only BEP upload did not log cached/non-current skips"
+  cat "$BEP_CACHED_ONLY_UPLOAD_LOG" || true
+  exit 1
+fi
+if [[ ! -e "$BEP_CACHED_LOCAL_OUTPUT/payloads/tests/span_events_cached_local_bep.json" || ! -e "$BEP_CACHED_REMOTE_OUTPUT/payloads/tests/span_events_cached_remote_bep.json" ]]; then
+  echo "error: cached-only BEP upload deleted cached payloads"
+  cat "$BEP_CACHED_ONLY_UPLOAD_LOG" || true
+  exit 1
+fi
+
+mkdir -p "$BEP_FRESH_OUTPUT/payloads/tests"
+cat > "$BEP_FRESH_OUTPUT/payloads/tests/span_events_fresh_bep.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.2.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Fresh.BEP",
+        "meta": {
+          "test.source.file": "manual/fresh_bep.go"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+
+mkdir -p "$WORKSPACE/.topt"
+cp "$BEP_JSON" "$WORKSPACE/.topt/bazel-bep.json"
+DEFAULT_BEP_UPLOADER_LOG="$TMP_WS/uploader_default_bep_filter.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  -u DD_TEST_OPTIMIZATION_BEP_JSON \
+  CI= \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --dry-run >"$DEFAULT_BEP_UPLOADER_LOG" 2>&1; then
+  echo "error: uploader ignored-default-BEP scenario failed"
+  cat "$DEFAULT_BEP_UPLOADER_LOG" || true
+  exit 1
+fi
+if grep -q "freshness filtering enabled: source=bep" "$DEFAULT_BEP_UPLOADER_LOG"; then
+  echo "error: uploader discovered default BEP without explicit configuration"
+  cat "$DEFAULT_BEP_UPLOADER_LOG" || true
+  exit 1
+fi
+if ! grep -q "freshness filtering is not configured" "$DEFAULT_BEP_UPLOADER_LOG"; then
+  echo "error: ignored-default-BEP scenario did not explain unconfigured freshness"
+  cat "$DEFAULT_BEP_UPLOADER_LOG" || true
+  exit 1
+fi
+
+DEFAULT_BEP_CI_LOG="$TMP_WS/uploader_default_bep_ci.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  -u DD_TEST_OPTIMIZATION_BEP_JSON \
+  CI=true \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --dry-run >"$DEFAULT_BEP_CI_LOG" 2>&1; then
+  echo "error: CI uploader unexpectedly discovered default BEP without explicit configuration"
+  cat "$DEFAULT_BEP_CI_LOG" || true
+  exit 1
+fi
+if ! grep -q "freshness filtering is required in CI or required mode" "$DEFAULT_BEP_CI_LOG"; then
+  echo "error: CI default BEP discovery failure was not actionable"
+  cat "$DEFAULT_BEP_CI_LOG" || true
+  exit 1
+fi
+rm -rf "$WORKSPACE/.topt"
+
+BEP_CONFLICT_FRESH_JSON="$TMP_WS/test_bep_conflict_fresh.json"
+BEP_CONFLICT_CACHED_JSON="$TMP_WS/test_bep_conflict_cached.json"
+cat > "$BEP_CONFLICT_FRESH_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","testActionOutput":[{"name":"test.log","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.log"}]}}
+JSON_EOF
+cat > "$BEP_CONFLICT_CACHED_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.log","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.log"}]}}
+JSON_EOF
+BEP_CONFLICT_LOG="$TMP_WS/uploader_bep_conflict.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_CONFLICT_FRESH_JSON" --bep-json "$BEP_CONFLICT_CACHED_JSON" --freshness-source=bep --freshness-mode=required --dry-run >"$BEP_CONFLICT_LOG" 2>&1; then
+  echo "error: conflicting BEP freshness scenario unexpectedly succeeded"
+  cat "$BEP_CONFLICT_LOG" || true
+  exit 1
+fi
+if ! grep -q "reported as both fresh and cached" "$BEP_CONFLICT_LOG"; then
+  echo "error: conflicting BEP freshness failure was not actionable"
+  cat "$BEP_CONFLICT_LOG" || true
+  exit 1
+fi
+
+BEP_MIXED_REMOTE_JSON="$TMP_WS/test_bep_mixed_remote_only.json"
+cat > "$BEP_MIXED_REMOTE_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","testActionOutput":[{"name":"test.log","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.log"},{"name":"test.outputs","uri":"bytestream://remote-cas/blobs/remoteoutputs/789"}]}}
+JSON_EOF
+BEP_MIXED_REMOTE_LOG="$TMP_WS/uploader_bep_mixed_remote_only.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_MIXED_REMOTE_JSON" --freshness-source=bep --freshness-mode=required --dry-run >"$BEP_MIXED_REMOTE_LOG" 2>&1; then
+  echo "error: mixed local-log/remote-output BEP scenario unexpectedly succeeded"
+  cat "$BEP_MIXED_REMOTE_LOG" || true
+  exit 1
+fi
+if ! grep -q "BEP references remote-only test outputs" "$BEP_MIXED_REMOTE_LOG"; then
+  echo "error: mixed local-log/remote-output failure was not actionable"
+  cat "$BEP_MIXED_REMOTE_LOG" || true
+  exit 1
+fi
+
+BEP_MIXED_REMOTE_ZIP_JSON="$TMP_WS/test_bep_mixed_remote_outputs_zip.json"
+cat > "$BEP_MIXED_REMOTE_ZIP_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","testActionOutput":[{"name":"test.log","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.log"},{"name":"outputs.zip","uri":"bytestream://remote-cas/blobs/remotezip/790"}]}}
+JSON_EOF
+BEP_MIXED_REMOTE_ZIP_LOG="$TMP_WS/uploader_bep_mixed_remote_outputs_zip.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_MIXED_REMOTE_ZIP_JSON" --freshness-source=bep --freshness-mode=required --dry-run >"$BEP_MIXED_REMOTE_ZIP_LOG" 2>&1; then
+  echo "error: mixed local-log/remote-outputs.zip BEP scenario unexpectedly succeeded"
+  cat "$BEP_MIXED_REMOTE_ZIP_LOG" || true
+  exit 1
+fi
+if ! grep -q "BEP references remote-only test outputs" "$BEP_MIXED_REMOTE_ZIP_LOG"; then
+  echo "error: mixed local-log/remote-outputs.zip failure was not actionable"
+  cat "$BEP_MIXED_REMOTE_ZIP_LOG" || true
+  exit 1
+fi
+
+BEP_REMOTE_ONLY_JSON="$TMP_WS/test_bep_remote_only.json"
+cat > "$BEP_REMOTE_ONLY_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//remote:only_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"remote"},"testActionOutput":[{"name":"test.outputs","uri":"bytestream://remote-cas/blobs/deadbeef/123"}]}}
+JSON_EOF
+BEP_REMOTE_ONLY_TESTLOGS="$TMP_WS/bep_remote_only_testlogs"
+mkdir -p "$BEP_REMOTE_ONLY_TESTLOGS"
+BEP_REMOTE_ONLY_LOG="$TMP_WS/uploader_bep_remote_only.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_REMOTE_ONLY_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_REMOTE_ONLY_JSON" --freshness-source=bep --freshness-mode=required --dry-run >"$BEP_REMOTE_ONLY_LOG" 2>&1; then
+  echo "error: required BEP remote-only scenario unexpectedly succeeded"
+  cat "$BEP_REMOTE_ONLY_LOG" || true
+  exit 1
+fi
+if ! grep -q "BEP references remote-only test outputs" "$BEP_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_outputs=all" "$BEP_REMOTE_ONLY_LOG"; then
+  echo "error: required BEP remote-only failure was not actionable"
+  cat "$BEP_REMOTE_ONLY_LOG" || true
+  exit 1
+fi
+
+BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG="$TMP_WS/uploader_bep_optional_remote_only_empty.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_REMOTE_ONLY_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_REMOTE_ONLY_JSON" --freshness-source=bep --freshness-mode=optional --dry-run >"$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" 2>&1; then
+  echo "error: optional BEP remote-only empty-testlogs scenario failed"
+  cat "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || true
+  exit 1
+fi
+if ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || ! grep -q -- "--remote_download_outputs=all" "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG"; then
+  echo "error: optional BEP remote-only empty-testlogs scenario did not warn"
+  cat "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || true
+  exit 1
+fi
+
+BEP_MISSING_OUTPUT_TESTLOGS="$TMP_WS/bep_missing_output_testlogs"
+BEP_MISSING_OUTPUT_DIR="$BEP_MISSING_OUTPUT_TESTLOGS/missing/output_test/test.outputs"
+mkdir -p "$BEP_MISSING_OUTPUT_DIR/payloads/tests"
+cat > "$BEP_MISSING_OUTPUT_DIR/payloads/tests/span_events_missing_bep_output.json" <<'JSON_EOF'
+{
+  "metadata": {
+    "*": {
+      "language": "go",
+      "library_version": "1.2.0"
+    }
+  },
+  "events": [
+    {
+      "type": "test",
+      "content": {
+        "resource": "Missing.BEP.Output",
+        "meta": {
+          "test.source.file": "manual/missing_bep_output.go"
+        }
+      }
+    }
+  ]
+}
+JSON_EOF
+cat > "$BEP_MISSING_OUTPUT_DIR/bazel_target_metadata.json" <<'JSON_EOF'
+{"bazel.target":"//missing:bep_output_test","bazel.package":"missing"}
+JSON_EOF
+BEP_MISSING_OUTPUT_JSON="$TMP_WS/test_bep_missing_output.json"
+cat > "$BEP_MISSING_OUTPUT_JSON" <<'JSON_EOF'
+{"id":{"testResult":{"label":"//missing:bep_output_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","testActionOutput":[]}}
+JSON_EOF
+BEP_MISSING_OUTPUT_LOG="$TMP_WS/uploader_bep_missing_output.log"
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_MISSING_OUTPUT_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_MISSING_OUTPUT_JSON" --freshness-source=bep --freshness-mode=required --dry-run >"$BEP_MISSING_OUTPUT_LOG" 2>&1; then
+  echo "error: required BEP missing-output scenario unexpectedly succeeded"
+  cat "$BEP_MISSING_OUTPUT_LOG" || true
+  exit 1
+fi
+if ! grep -q "did not contain a mappable test.outputs reference" "$BEP_MISSING_OUTPUT_LOG"; then
+  echo "error: required BEP missing-output failure was not actionable"
+  cat "$BEP_MISSING_OUTPUT_LOG" || true
+  exit 1
+fi
+
+BEP_OPTIONAL_MISSING_CONFIG_LOG="$TMP_WS/uploader_bep_optional_missing_config.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --freshness-source=bep --freshness-mode=optional --dry-run >"$BEP_OPTIONAL_MISSING_CONFIG_LOG" 2>&1; then
+  echo "error: optional BEP missing-config scenario failed"
+  cat "$BEP_OPTIONAL_MISSING_CONFIG_LOG" || true
+  exit 1
+fi
+if ! grep -q "BEP freshness source was selected but no BEP JSON file was configured" "$BEP_OPTIONAL_MISSING_CONFIG_LOG"; then
+  echo "error: optional BEP missing-config scenario did not warn"
+  cat "$BEP_OPTIONAL_MISSING_CONFIG_LOG" || true
+  exit 1
+fi
+
+BEP_OPTIONAL_MISSING_FILE_LOG="$TMP_WS/uploader_bep_optional_missing_file.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$TMP_WS/missing-optional.bep.json" --freshness-source=bep --freshness-mode=optional --dry-run >"$BEP_OPTIONAL_MISSING_FILE_LOG" 2>&1; then
+  echo "error: optional BEP missing-file scenario failed"
+  cat "$BEP_OPTIONAL_MISSING_FILE_LOG" || true
+  exit 1
+fi
+if ! grep -q "warning: BEP JSON not found" "$BEP_OPTIONAL_MISSING_FILE_LOG" || ! grep -q "BEP freshness filtering skipped" "$BEP_OPTIONAL_MISSING_FILE_LOG"; then
+  echo "error: optional BEP missing-file scenario did not warn and continue"
+  cat "$BEP_OPTIONAL_MISSING_FILE_LOG" || true
+  exit 1
+fi
+
+BEP_OPTIONAL_MALFORMED_JSON="$TMP_WS/malformed-optional.bep.json"
+printf '{not-json\n' >"$BEP_OPTIONAL_MALFORMED_JSON"
+BEP_OPTIONAL_MALFORMED_LOG="$TMP_WS/uploader_bep_optional_malformed.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_OPTIONAL_MALFORMED_JSON" --freshness-source=bep --freshness-mode=optional --dry-run >"$BEP_OPTIONAL_MALFORMED_LOG" 2>&1; then
+  echo "error: optional BEP malformed scenario failed"
+  cat "$BEP_OPTIONAL_MALFORMED_LOG" || true
+  exit 1
+fi
+if ! grep -q "warning: failed to parse BEP JSON" "$BEP_OPTIONAL_MALFORMED_LOG" || ! grep -q "BEP freshness filtering skipped" "$BEP_OPTIONAL_MALFORMED_LOG"; then
+  echo "error: optional BEP malformed scenario did not warn and continue"
+  cat "$BEP_OPTIONAL_MALFORMED_LOG" || true
+  exit 1
+fi
+
+BEP_OPTIONAL_REMOTE_ONLY_LOG="$TMP_WS/uploader_bep_optional_remote_only.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_MIXED_REMOTE_JSON" --freshness-source=bep --freshness-mode=optional --dry-run >"$BEP_OPTIONAL_REMOTE_ONLY_LOG" 2>&1; then
+  echo "error: optional BEP remote-only scenario failed"
+  cat "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || true
+  exit 1
+fi
+if ! grep -q "freshness filtering enabled: source=bep" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_outputs=all" "$BEP_OPTIONAL_REMOTE_ONLY_LOG"; then
+  echo "error: optional BEP remote-only scenario did not warn and skip"
+  cat "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || true
+  exit 1
+fi
+
+BEP_OPTIONAL_MISSING_OUTPUT_LOG="$TMP_WS/uploader_bep_optional_missing_output.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_MISSING_OUTPUT_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_MISSING_OUTPUT_JSON" --freshness-source=bep --freshness-mode=optional --dry-run >"$BEP_OPTIONAL_MISSING_OUTPUT_LOG" 2>&1; then
+  echo "error: optional BEP missing-output scenario failed"
+  cat "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || true
+  exit 1
+fi
+if ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || ! grep -q "warning: BEP optional freshness skipped" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || ! grep -q "did not contain a mappable test.outputs reference" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG"; then
+  echo "error: optional BEP missing-output scenario did not warn and skip local payloads"
+  cat "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || true
+  exit 1
+fi
+
+BEP_FLAG_PRECEDENCE_LOG="$TMP_WS/uploader_bep_flag_precedence.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_JSON" --freshness-mode=required --execution-log-mode=disabled --dry-run >"$BEP_FLAG_PRECEDENCE_LOG" 2>&1; then
+  echo "error: BEP freshness-mode precedence scenario failed"
+  cat "$BEP_FLAG_PRECEDENCE_LOG" || true
+  exit 1
+fi
+if ! grep -q "freshness filtering enabled: source=bep" "$BEP_FLAG_PRECEDENCE_LOG" || ! grep -q "dry-run validated 1 test payloads" "$BEP_FLAG_PRECEDENCE_LOG"; then
+  echo "error: legacy execution-log mode overrode explicit freshness mode"
+  cat "$BEP_FLAG_PRECEDENCE_LOG" || true
+  exit 1
+fi
+
+BEP_OPTOUT_LOG="$TMP_WS/uploader_bep_opt_out.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG="$HARNESS_UPLOADER_DEBUG" \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- --bep-json "$BEP_JSON" --allow-cached-payload-uploads --freshness-mode=required --dry-run >"$BEP_OPTOUT_LOG" 2>&1; then
+  echo "error: uploader BEP opt-out scenario failed"
+  cat "$BEP_OPTOUT_LOG" || true
+  exit 1
+fi
+if ! grep -q "freshness filtering disabled" "$BEP_OPTOUT_LOG"; then
+  echo "error: BEP opt-out did not disable freshness filtering"
+  cat "$BEP_OPTOUT_LOG" || true
+  exit 1
+fi
+if ! grep -q "dry-run validated 3 test payloads" "$BEP_OPTOUT_LOG"; then
+  echo "error: BEP opt-out did not fall back to legacy discovery"
+  cat "$BEP_OPTOUT_LOG" || true
   exit 1
 fi
 
 mkdir -p "$WORKSPACE/.topt"
 cp "$EXECUTION_LOG_JSON" "$WORKSPACE/.topt/bazel-execution-log.json"
 DEFAULT_EXEC_LOG_UPLOADER_LOG="$TMP_WS/uploader_default_execution_log_filter.log"
-if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON \
   CI=true \
   TESTLOGS_DIR="$EXEC_LOG_TESTLOGS" \
@@ -877,12 +1618,17 @@ if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   DD_TEST_OPTIMIZATION_AGENT_URL= \
   "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
     "${REPO_ENVS[@]}" -- --dry-run >"$DEFAULT_EXEC_LOG_UPLOADER_LOG" 2>&1; then
-  echo "error: uploader default execution-log discovery scenario failed"
+  echo "error: uploader unexpectedly auto-discovered a default execution log"
   cat "$DEFAULT_EXEC_LOG_UPLOADER_LOG" || true
   exit 1
 fi
-if ! grep -q "skipping cached test output" "$DEFAULT_EXEC_LOG_UPLOADER_LOG"; then
-  echo "error: default execution-log discovery did not enable cached-output filtering"
+if ! grep -q "no BEP or execution log was found" "$DEFAULT_EXEC_LOG_UPLOADER_LOG"; then
+  echo "error: missing-source failure did not ignore default execution-log file"
+  cat "$DEFAULT_EXEC_LOG_UPLOADER_LOG" || true
+  exit 1
+fi
+if grep -q "freshness filtering enabled: source=execution_log" "$DEFAULT_EXEC_LOG_UPLOADER_LOG"; then
+  echo "error: default execution-log file enabled implicit execution-log filtering"
   cat "$DEFAULT_EXEC_LOG_UPLOADER_LOG" || true
   exit 1
 fi
@@ -2085,6 +2831,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
 fi
 
 if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=readonly" ]; }; then
+  matched=0
   for arg in "$@"; do
     case "$arg" in
       github.com/DataDog/orchestrion|\
@@ -2094,11 +2841,14 @@ if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=re
       github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
       github.com/DataDog/dd-trace-go/v2/profiler|\
       github.com/DataDog/dd-trace-go/v2/instrumentation/env)
-        run_real_go "$@"
-        exit 0
+        printf '%s\n' "$arg"
+        matched=1
         ;;
     esac
   done
+  if [ "$matched" -eq 1 ]; then
+    exit 0
+  fi
 fi
 
 echo "unexpected go invocation: $*" >&2
@@ -2180,6 +2930,7 @@ module example.com/guided-bootstrap-go
 
 go 1.24.0
 GOMOD_GUIDED_BOOT_EOF
+: > "$GUIDED_BOOT_WS/go.sum"
 
 cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
 #!/bin/sh
@@ -2407,6 +3158,7 @@ if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=re
   # The guided bootstrap path passes extra flags such as -tags=tools before the
   # package arguments. Scan the full argv instead of assuming the first package
   # is always the third argument.
+  matched=0
   for arg in "$@"; do
     case "$arg" in
       github.com/DataDog/orchestrion|\
@@ -2416,11 +3168,14 @@ if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=re
       github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
       github.com/DataDog/dd-trace-go/v2/profiler|\
       github.com/DataDog/dd-trace-go/v2/instrumentation/env)
-        run_real_go "$@"
-        exit 0
+        printf '%s\n' "$arg"
+        matched=1
         ;;
     esac
   done
+  if [ "$matched" -eq 1 ]; then
+    exit 0
+  fi
 fi
 
 echo "unexpected go invocation: $*" >&2
@@ -2548,7 +3303,28 @@ func TestGuidedGoRuntimeWiring(t *testing.T) {
 	metadataPath := filepath.Join(undeclaredDir, "bazel_target_metadata.json")
 	metadataContent, err := os.ReadFile(metadataPath)
 	if err != nil {
-		t.Fatalf("read bazel_target_metadata.json: %v", err)
+		if !os.IsNotExist(err) {
+			t.Fatalf("read bazel_target_metadata.json: %v", err)
+		}
+		// The raw target smoke below bypasses the public Orchestrion launcher, which
+		// normally copies this metadata file. Keep the doctor path representative by
+		// writing the same public target identity the generated metadata rule uses.
+		metadataContent = []byte(`{
+  "bazel.package": "src/go-project",
+  "bazel.target": "//src/go-project:hello_test",
+  "bazel.go.importpath": "example.com/guided-bootstrap-go",
+  "bazel.go.importpath_source": "inferred",
+  "bazel.go.payload_selection": "module",
+  "bazel.go.orchestrion.enabled": true,
+  "bazel.go.attr.cgo": false,
+  "bazel.go.attr.pure": "auto",
+  "bazel.go.attr.race": "auto",
+  "bazel.go.attr.msan": "auto",
+  "bazel.go.attr.linkmode": "auto"
+}`)
+		if writeErr := os.WriteFile(metadataPath, metadataContent, 0o644); writeErr != nil {
+			t.Fatalf("write fallback bazel_target_metadata.json: %v", writeErr)
+		}
 	}
 
 	var metadata map[string]any
@@ -2656,10 +3432,22 @@ if ! grep -q '# BEGIN Datadog Go Wrapper' "$GUIDED_BOOT_WS/tools/build/dd_go_tes
   cat "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl" || true
   exit 1
 fi
+if ! grep -q 'orchestrion_mode = "test_optimization"' "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl"; then
+  echo "error: guided bootstrap wrapper did not default to test_optimization Orchestrion mode"
+  cat "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl" || true
+  exit 1
+fi
 
+# The release tracer pinned by default in this fixture is v2.9.0. The generated
+# wrapper above must still default to test_optimization mode, but that release
+# does not include the unreleased Go testing Orchestrion package needed to build
+# a real instrumented test binary. Run the raw target for this temporary runtime
+# smoke so the integration still validates generated Bazel wiring, staged
+# sources, metadata shape, doctor behavior, and payload discovery without
+# depending on unreleased tracer internals.
 (
   cd "$GUIDED_BOOT_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization //src/go-project:hello_test "${REPO_ENVS[@]}"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization //src/go-project:hello_test__raw_go_test "${REPO_ENVS[@]}"
 )
 
 GUIDED_TESTLOGS_DIR="$(
@@ -2670,7 +3458,7 @@ GUIDED_TESTLOGS_DIR="$(
   cd "$GUIDED_BOOT_WS"
   TESTLOGS_DIR="$GUIDED_TESTLOGS_DIR/src/go-project" "$BAZEL" "${BAZEL_FLAGS[@]}" run --config=test-optimization //:dd_test_optimization_doctor "${REPO_ENVS[@]}"
 )
-GUIDED_BAZEL_METADATA_PATH="$GUIDED_TESTLOGS_DIR/src/go-project/hello_test/test.outputs/bazel_target_metadata.json"
+GUIDED_BAZEL_METADATA_PATH="$GUIDED_TESTLOGS_DIR/src/go-project/hello_test__raw_go_test/test.outputs/bazel_target_metadata.json"
 if [[ ! -f "$GUIDED_BAZEL_METADATA_PATH" ]]; then
   echo "error: guided bootstrap go test did not emit bazel_target_metadata.json"
   find "$GUIDED_TESTLOGS_DIR/src/go-project/hello_test" -maxdepth 3 -type f 2>/dev/null | sort || true

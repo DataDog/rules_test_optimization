@@ -310,38 +310,32 @@ runtime/service repo so uploader enrichment stays aligned with each payload.
 Running tests, validating payloads, and uploading payloads:
 
 ```bash
-# Run tests, doctor, enrichment dry-run, then upload payloads.
-bazel test //... || test_status=$?; test_status=${test_status:-0}
-bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+# Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
+mkdir -p .topt
+rm -f .topt/bazel-bep.json
+bazel test //... --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json || test_status=$?; test_status=${test_status:-0}
+bazel run //:dd_test_optimization_doctor -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required || doctor_status=$?; doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$doctor_status"
 fi
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+bazel run //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --dry-run \
+  --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
 if [ "$dry_run_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$dry_run_status"
 fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-upload_status=$?
-if [ "$test_status" -ne 0 ]; then
-  exit "$test_status"
-fi
-exit "$upload_status"
-
-# RBE users: download outputs so uploader can discover payload files
-bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
-bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-if [ "$doctor_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$doctor_status"
-fi
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-if [ "$dry_run_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$dry_run_status"
-fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required
 upload_status=$?
 if [ "$test_status" -ne 0 ]; then
   exit "$test_status"
@@ -350,18 +344,28 @@ exit "$upload_status"
 ```
 
 ```powershell
-# Run tests, doctor, enrichment dry-run, then upload payloads.
-bazel test //...
+# Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
+New-Item -ItemType Directory -Force .topt | Out-Null
+Remove-Item .topt/bazel-bep.json -ErrorAction SilentlyContinue
+bazel test //... --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run //:dd_test_optimization_doctor
+bazel run //:dd_test_optimization_doctor -- `
+  --bep-json=.topt/bazel-bep.json `
+  --freshness-source=bep `
+  --freshness-mode=required
 $doctorStatus = $LASTEXITCODE
 if ($null -eq $doctorStatus) { $doctorStatus = 0 }
 if ($doctorStatus -ne 0) {
   if ($testStatus -ne 0) { exit $testStatus }
   exit $doctorStatus
 }
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment
+bazel run //:dd_upload_payloads -- `
+  --bep-json=.topt/bazel-bep.json `
+  --freshness-source=bep `
+  --freshness-mode=required `
+  --dry-run `
+  --validate-enrichment
 $dryRunStatus = $LASTEXITCODE
 if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
 if ($dryRunStatus -ne 0) {
@@ -371,30 +375,10 @@ if ($dryRunStatus -ne 0) {
 # Set once per shell session before first run:
 # $env:DD_API_KEY = "<your-api-key>"
 # $env:DD_SITE = "datadoghq.com"
-bazel run //:dd_upload_payloads
-$uploadStatus = $LASTEXITCODE
-if ($testStatus -ne 0) { exit $testStatus }
-exit $uploadStatus
-
-# RBE users: download outputs so uploader can discover payload files
-bazel test //... --remote_download_outputs=all
-$testStatus = $LASTEXITCODE
-if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run //:dd_test_optimization_doctor
-$doctorStatus = $LASTEXITCODE
-if ($null -eq $doctorStatus) { $doctorStatus = 0 }
-if ($doctorStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $doctorStatus
-}
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment
-$dryRunStatus = $LASTEXITCODE
-if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
-if ($dryRunStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $dryRunStatus
-}
-bazel run //:dd_upload_payloads
+bazel run //:dd_upload_payloads -- `
+  --bep-json=.topt/bazel-bep.json `
+  --freshness-source=bep `
+  --freshness-mode=required
 $uploadStatus = $LASTEXITCODE
 if ($testStatus -ne 0) { exit $testStatus }
 exit $uploadStatus

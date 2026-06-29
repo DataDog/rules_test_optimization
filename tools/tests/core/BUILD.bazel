@@ -113,6 +113,7 @@ load(
     "decode_json_object_valid_test",
     "dirname_test",
     "example_stub_custom_out_dir_test",
+    "example_stub_context_contains_doctor_metadata_test",
     "example_stub_export_manifest_path_test",
     "example_stub_export_string_escaping_test",
     "example_stub_includes_manifest_in_files_test",
@@ -862,6 +863,12 @@ example_stub_manifest_content_matches_sync_contract_test(
     timeout = "short",
 )
 
+example_stub_context_contains_doctor_metadata_test(
+    name = "example_stub_context_contains_doctor_metadata_test",
+    size = "small",
+    timeout = "short",
+)
+
 example_stub_service_keys_targets_test(
     name = "example_stub_service_keys_targets_test",
     size = "small",
@@ -1478,6 +1485,7 @@ test_suite(
         ":example_stub_custom_out_dir_test",
         ":example_stub_export_manifest_path_test",
         ":example_stub_export_string_escaping_test",
+        ":example_stub_context_contains_doctor_metadata_test",
         ":example_stub_includes_manifest_in_files_test",
         ":example_stub_manifest_content_matches_sync_contract_test",
         ":example_stub_module_targets_test",

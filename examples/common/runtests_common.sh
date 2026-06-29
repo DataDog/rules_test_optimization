@@ -21,6 +21,16 @@ run_example_runtests() {
   bazelw="${script_dir}/../../bazelw"
 
   cd "$script_dir"
+  mkdir -p .topt
+  local non_hermetic_bep=".topt/non-hermetic.bep.json"
+  local hermetic_bep=".topt/hermetic.bep.json"
+  rm -f "$non_hermetic_bep" "$hermetic_bep"
+  local bep_args=(
+    "--bep-json=${non_hermetic_bep}"
+    "--bep-json=${hermetic_bep}"
+    "--freshness-source=bep"
+    "--freshness-mode=required"
+  )
 
   # Handle run cmd behavior.
   run_cmd() {
@@ -32,13 +42,13 @@ run_example_runtests() {
   }
 
   echo "--- non-hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug || test_status=$?
+  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_outputs=all --build_event_json_file="$non_hermetic_bep" || test_status=$?
 
   echo "--- hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic || test_status=$?
+  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic --remote_download_outputs=all --build_event_json_file="$hermetic_bep" || test_status=$?
 
   echo "--- validating payloads"
-  run_cmd "${bazelw}" run //:dd_test_optimization_doctor || doctor_status=$?
+  run_cmd "${bazelw}" run //:dd_test_optimization_doctor -- "${bep_args[@]}" || doctor_status=$?
   if [[ "$doctor_status" -ne 0 ]]; then
     if [[ "$test_status" -ne 0 ]]; then
       return "$test_status"
@@ -47,7 +57,7 @@ run_example_runtests() {
   fi
 
   echo "--- validating upload enrichment"
-  run_cmd "${bazelw}" run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
+  run_cmd "${bazelw}" run //:dd_upload_payloads -- "${bep_args[@]}" --dry-run --validate-enrichment || dry_run_status=$?
   if [[ "$dry_run_status" -ne 0 ]]; then
     if [[ "$test_status" -ne 0 ]]; then
       return "$test_status"
@@ -57,7 +67,7 @@ run_example_runtests() {
 
   echo "--- uploading payloads"
   # Requires DD_API_KEY and DD_SITE environment variables.
-  DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run //:dd_upload_payloads || upload_status=$?
+  DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run //:dd_upload_payloads -- "${bep_args[@]}" || upload_status=$?
 
   if [[ "$test_status" -ne 0 ]]; then
     return "$test_status"

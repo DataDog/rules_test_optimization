@@ -196,8 +196,15 @@ if ($env:DD_TEST_OPTIMIZATION_DEBUG) {
         { $_ -in '1', 'true', 'yes' } { $script:DebugMode = $true }
     }
 }
-function Log([string]$msg) { Write-Output "[dd-uploader] $msg" }
+function Log([string]$msg) { [Console]::Out.WriteLine("[dd-uploader] $msg") }
 function Log-Stderr([string]$msg) { [Console]::Error.WriteLine("[dd-uploader] $msg") }
+function Use-OptionalBepUnavailable([string]$msg) {
+    if ($script:FreshnessMode -ne "optional") { return $false }
+    [Console]::Out.WriteLine("[dd-uploader] warning: $msg; BEP freshness filtering skipped and cached test outputs may be uploaded")
+    $script:FreshnessSelectedSource = "none"
+    $script:FreshnessEligibilityEnabled = $false
+    return $true
+}
 function Dbg([string]$msg) { if ($script:DebugMode) { Write-Host "[dd-uploader][dbg] $msg" } }
 function Write-Utf8NoBomFile([string]$Path, [string]$Content) {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -575,9 +582,33 @@ Dbg "gzip enabled: $GzipPayloads"
 
 $DryRun = $false
 $ValidateEnrichment = $false
+$BepJsonFiles = New-Object System.Collections.Generic.List[string]
+if ($env:DD_TEST_OPTIMIZATION_BEP_JSON) {
+    $BepJsonFiles.Add($env:DD_TEST_OPTIMIZATION_BEP_JSON) | Out-Null
+}
+$FreshnessMode = if ($env:DD_TEST_OPTIMIZATION_FRESHNESS_MODE) {
+    $env:DD_TEST_OPTIMIZATION_FRESHNESS_MODE
+} elseif ($env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE) {
+    $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE
+} else {
+    "auto"
+}
+$FreshnessModeHasNewConfig = -not [string]::IsNullOrWhiteSpace($env:DD_TEST_OPTIMIZATION_FRESHNESS_MODE)
+$FreshnessDisabledExplicit = $false
+$FreshnessSource = if ($env:DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE) { $env:DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE } else { "auto" }
 $ExecutionLogJson = $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON
-$ExecutionLogMode = if ($env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE) { $env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE } else { "auto" }
+$ExecutionLogMode = $FreshnessMode
+$DefaultBepJson = ".topt/bazel-bep.json"
 $DefaultExecutionLogJson = ".topt/bazel-execution-log.json"
+$script:FreshnessEligibilityEnabled = $false
+$script:FreshnessSelectedSource = "none"
+$script:FreshnessEligibleLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessEligibleOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessCachedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessSkippedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessRemoteOnlyOutputs = New-Object System.Collections.Generic.List[object]
+$script:FreshnessMissingOutputLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessSkipWasWritten = $false
 $script:ExecutionEligibilityEnabled = $false
 $script:ExecutionEligibleLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:ExecutionEligibleOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -597,10 +628,13 @@ function Show-Usage {
     Write-Host "  --dry-run                    Enrich and validate payloads without uploading or deleting files."
     Write-Host "  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment."
     Write-Host "  --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags."
+    Write-Host "  --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable."
+    Write-Host "  --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto."
+    Write-Host "  --freshness-mode MODE        Cache-safety mode: auto, required, optional, or disabled. Default: auto."
     Write-Host "  --execution-log-json PATH    Only upload payloads from TestRunner actions that executed in this Bazel execution log."
-    Write-Host "  --execution-log-mode MODE    Cache-safety mode: auto, required, optional, or disabled. Default: auto."
+    Write-Host "  --execution-log-mode MODE    Legacy alias for --freshness-mode."
     Write-Host "  --allow-cached-payload-uploads"
-    Write-Host "                                Disable execution-log cache filtering for this uploader run."
+    Write-Host "                                Disable BEP and execution-log cache filtering for this uploader run."
 }
 
 for ($i = 0; $i -lt $args.Count; $i++) {
@@ -626,6 +660,49 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         $ExpectedEnrichedTags.Add($arg.Substring("--expected-enriched-tag=".Length)) | Out-Null
         continue
     }
+    if ($arg -eq "--bep-json") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --bep-json requires a file path"
+            exit 2
+        }
+        $i++
+        $BepJsonFiles.Add([string]$args[$i]) | Out-Null
+        continue
+    }
+    if ($arg.StartsWith("--bep-json=")) {
+        $BepJsonFiles.Add($arg.Substring("--bep-json=".Length)) | Out-Null
+        continue
+    }
+    if ($arg -eq "--freshness-source") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --freshness-source requires one of: auto, bep, execution_log"
+            exit 2
+        }
+        $i++
+        $FreshnessSource = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--freshness-source=")) {
+        $FreshnessSource = $arg.Substring("--freshness-source=".Length)
+        continue
+    }
+    if ($arg -eq "--freshness-mode") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --freshness-mode requires one of: auto, required, optional, disabled"
+            exit 2
+        }
+        $i++
+        $FreshnessMode = [string]$args[$i]
+        $ExecutionLogMode = $FreshnessMode
+        $FreshnessModeHasNewConfig = $true
+        continue
+    }
+    if ($arg.StartsWith("--freshness-mode=")) {
+        $FreshnessMode = $arg.Substring("--freshness-mode=".Length)
+        $ExecutionLogMode = $FreshnessMode
+        $FreshnessModeHasNewConfig = $true
+        continue
+    }
     if ($arg -eq "--execution-log-json") {
         if ($i + 1 -ge $args.Count) {
             Log "error: --execution-log-json requires a file path"
@@ -646,13 +723,21 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         }
         $i++
         $ExecutionLogMode = [string]$args[$i]
+        if (-not $FreshnessModeHasNewConfig) {
+          $FreshnessMode = $ExecutionLogMode
+        }
         continue
     }
     if ($arg.StartsWith("--execution-log-mode=")) {
         $ExecutionLogMode = $arg.Substring("--execution-log-mode=".Length)
+        if (-not $FreshnessModeHasNewConfig) {
+          $FreshnessMode = $ExecutionLogMode
+        }
         continue
     }
     if ($arg -eq "--allow-cached-payload-uploads") {
+        $FreshnessDisabledExplicit = $true
+        $FreshnessMode = "disabled"
         $ExecutionLogMode = "disabled"
         continue
     }
@@ -669,13 +754,27 @@ if ($ValidateEnrichment -and -not $DryRun) {
     Log "error: --validate-enrichment requires --dry-run"
     exit 2
 }
-$ExecutionLogMode = $ExecutionLogMode.ToLowerInvariant()
-if (@("auto", "required", "optional", "disabled") -notcontains $ExecutionLogMode) {
-    Log "error: DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE/--execution-log-mode must be one of: auto, required, optional, disabled"
+if ($FreshnessDisabledExplicit) {
+    $FreshnessMode = "disabled"
+    $ExecutionLogMode = "disabled"
+}
+$FreshnessMode = $FreshnessMode.ToLowerInvariant()
+$FreshnessSource = $FreshnessSource.ToLowerInvariant()
+$ExecutionLogMode = $FreshnessMode
+if (@("auto", "required", "optional", "disabled") -notcontains $FreshnessMode) {
+    Log "error: DD_TEST_OPTIMIZATION_FRESHNESS_MODE/--freshness-mode must be one of: auto, required, optional, disabled"
+    exit 2
+}
+if (@("auto", "bep", "execution_log") -notcontains $FreshnessSource) {
+    Log "error: DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE/--freshness-source must be one of: auto, bep, execution_log"
     exit 2
 }
 $script:DryRun = $DryRun
 $script:ValidateEnrichment = $ValidateEnrichment
+$script:BepJsonFiles = $BepJsonFiles
+$script:FreshnessMode = $FreshnessMode
+$script:FreshnessSource = $FreshnessSource
+$script:DefaultBepJson = $DefaultBepJson
 $script:ExecutionLogJson = $ExecutionLogJson
 $script:ExecutionLogMode = $ExecutionLogMode
 $script:DefaultExecutionLogJson = $DefaultExecutionLogJson
@@ -947,6 +1046,10 @@ while ($true) {
             } else {
                 Log "no payload files found and no test execution detected; nothing to upload"
             }
+            if ($script:FreshnessMode -ne "disabled" -and ($script:FreshnessSource -eq "bep" -or $script:BepJsonFiles.Count -gt 0)) {
+                Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
+            }
             Release-Lock
             exit 0
         }
@@ -961,6 +1064,10 @@ while ($true) {
                 }
             } else {
                 Log "no payload files found and no test execution detected; nothing to upload"
+            }
+            if ($script:FreshnessMode -ne "disabled" -and ($script:FreshnessSource -eq "bep" -or $script:BepJsonFiles.Count -gt 0)) {
+                Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
             }
             Release-Lock
             exit 0
@@ -1880,6 +1987,225 @@ function Get-SpawnTestOutputKeys($Spawn) {
   return $keys
 }
 
+function Get-BepTestOutputKey([string]$PathValue) {
+  if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+  $normalized = $PathValue
+  if ($normalized.StartsWith("file://", [System.StringComparison]::OrdinalIgnoreCase)) {
+    try {
+      $uri = [System.Uri]$normalized
+      $normalized = [System.Uri]::UnescapeDataString($uri.LocalPath)
+    } catch {
+      $normalized = $normalized.Substring("file://".Length)
+    }
+  }
+  $normalized = [System.Uri]::UnescapeDataString($normalized).Replace('\', '/').TrimStart('/')
+  $marker = "/testlogs/"
+  $markerIndex = $normalized.LastIndexOf($marker, [System.StringComparison]::Ordinal)
+  if ($markerIndex -ge 0) {
+    $normalized = $normalized.Substring($markerIndex + $marker.Length)
+  } else {
+    $bazelMarker = "/bazel-testlogs/"
+    $bazelMarkerIndex = $normalized.LastIndexOf($bazelMarker, [System.StringComparison]::Ordinal)
+    if ($bazelMarkerIndex -ge 0) {
+      $normalized = $normalized.Substring($bazelMarkerIndex + $bazelMarker.Length)
+    }
+  }
+  while ($normalized.StartsWith("./", [System.StringComparison]::Ordinal)) {
+    $normalized = $normalized.Substring(2)
+  }
+  $insideIndex = $normalized.IndexOf("/test.outputs/", [System.StringComparison]::Ordinal)
+  if ($insideIndex -ge 0) {
+    return ($normalized.Substring(0, $insideIndex) + "/test.outputs").TrimStart('/')
+  }
+  if ($normalized.EndsWith("/test.outputs", [System.StringComparison]::Ordinal)) {
+    return $normalized.TrimStart('/')
+  }
+  if ($normalized.EndsWith("/outputs.zip", [System.StringComparison]::Ordinal)) {
+    $separatorIndex = $normalized.LastIndexOf("/", [System.StringComparison]::Ordinal)
+    $parent = if ($separatorIndex -ge 0) { $normalized.Substring(0, $separatorIndex) } else { "" }
+    return ($parent + "/test.outputs").TrimStart('/')
+  }
+  if ($normalized.EndsWith("/test.log", [System.StringComparison]::Ordinal) -or $normalized.EndsWith("/test.xml", [System.StringComparison]::Ordinal)) {
+    $parent = $normalized.Substring(0, $normalized.LastIndexOf("/", [System.StringComparison]::Ordinal))
+    return ($parent + "/test.outputs").TrimStart('/')
+  }
+  return ""
+}
+
+function Test-BepRemoteOnlyReference([string]$PathValue) {
+  if ([string]::IsNullOrWhiteSpace($PathValue)) { return $false }
+  $lowered = $PathValue.ToLowerInvariant()
+  if ($lowered.StartsWith("file://")) { return $false }
+  if ($lowered -match '^[a-z][a-z0-9+.-]*://') { return $true }
+  if ($lowered.StartsWith("blobs/")) { return $true }
+  if ($lowered -match '^[0-9a-f]{32,}/[0-9]+$') { return $true }
+  return $false
+}
+
+function Test-BepTestOutputsArtifactHint([string]$PathValue) {
+  if ([string]::IsNullOrWhiteSpace($PathValue)) { return $false }
+  $normalized = $PathValue.Replace('\', '/').ToLowerInvariant()
+  if ($normalized.StartsWith("file://")) {
+    $normalized = $normalized.Substring("file://".Length)
+  }
+  return (
+    $normalized -eq "test.outputs" -or
+    $normalized -eq "outputs.zip" -or
+    $normalized.Contains("/test.outputs/") -or
+    $normalized.EndsWith("/test.outputs", [System.StringComparison]::Ordinal) -or
+    $normalized.EndsWith("/outputs.zip", [System.StringComparison]::Ordinal)
+  )
+}
+
+function Get-BepFileReferenceCandidates($FileObject) {
+  $values = New-Object System.Collections.Generic.List[string]
+  if ($FileObject -is [string]) {
+    $values.Add($FileObject) | Out-Null
+    return $values
+  }
+  foreach ($key in @("uri", "name", "path")) {
+    $value = Get-MapValue $FileObject $key
+    if (($value -is [string]) -and -not [string]::IsNullOrWhiteSpace($value)) {
+      $values.Add([string]$value) | Out-Null
+    }
+  }
+  $name = Get-MapValue $FileObject "name"
+  $pathPrefix = Get-MapValue $FileObject "pathPrefix"
+  if ($null -eq $pathPrefix) { $pathPrefix = Get-MapValue $FileObject "path_prefix" }
+  if (($name -is [string]) -and -not [string]::IsNullOrWhiteSpace($name) -and $pathPrefix -is [System.Collections.IEnumerable] -and -not ($pathPrefix -is [string])) {
+    $parts = New-Object System.Collections.ArrayList
+    foreach ($part in @($pathPrefix)) {
+      if (($part -is [string]) -and -not [string]::IsNullOrWhiteSpace($part)) {
+        $parts.Add([string]$part) | Out-Null
+      }
+    }
+    if ($parts.Count -gt 0) {
+      $parts.Add([string]$name) | Out-Null
+      $values.Add(($parts.ToArray() -join "/")) | Out-Null
+    }
+  }
+  return $values
+}
+
+function Initialize-BepEligibility {
+  $script:FreshnessEligibleLabels.Clear()
+  $script:FreshnessEligibleOutputs.Clear()
+  $script:FreshnessCachedOutputs.Clear()
+  $script:FreshnessSkippedOutputs.Clear()
+  $script:FreshnessRemoteOnlyOutputs.Clear()
+  $script:FreshnessMissingOutputLabels.Clear()
+
+	  foreach ($bepJson in @($script:BepJsonFiles)) {
+	    $resolvedBep = Resolve-RuntimeFilePath $bepJson
+	    if ([string]::IsNullOrWhiteSpace($resolvedBep) -or -not (Test-Path -LiteralPath $resolvedBep -PathType Leaf)) {
+	      if (Use-OptionalBepUnavailable "BEP JSON not found: $bepJson") {
+	        return
+	      }
+	      Log "error: BEP JSON not found: $bepJson"
+	      exit 2
+	    }
+    try {
+      foreach ($event in @(Get-JsonStreamObjects $resolvedBep)) {
+        $eventId = Get-MapValue $event 'id'
+        $testResultId = Get-MapValue $eventId 'testResult'
+        if ($null -eq $testResultId) { $testResultId = Get-MapValue $eventId 'test_result' }
+        if ($null -eq $testResultId) { continue }
+        $label = [string](Get-MapValue $testResultId 'label')
+        if ([string]::IsNullOrWhiteSpace($label)) { continue }
+        $result = Get-MapValue $event 'testResult'
+        if ($null -eq $result) { $result = Get-MapValue $event 'test_result' }
+        if ($null -eq $result) { continue }
+        $cachedLocally = [bool](Get-MapValue $result 'cachedLocally')
+        if (-not $cachedLocally) { $cachedLocally = [bool](Get-MapValue $result 'cached_locally') }
+        $executionInfo = Get-MapValue $result 'executionInfo'
+        if ($null -eq $executionInfo) { $executionInfo = Get-MapValue $result 'execution_info' }
+        $cachedRemotely = [bool](Get-MapValue $executionInfo 'cachedRemotely')
+        if (-not $cachedRemotely) { $cachedRemotely = [bool](Get-MapValue $executionInfo 'cached_remotely') }
+	        $outputs = Get-MapValue $result 'testActionOutput'
+	        if ($null -eq $outputs) { $outputs = Get-MapValue $result 'test_action_output' }
+	        $mappedAny = $false
+	        $eventEligibleOutputs = New-Object System.Collections.ArrayList
+	        $eventCachedOutputs = New-Object System.Collections.ArrayList
+	        $remoteOnlyCandidates = New-Object System.Collections.ArrayList
+        foreach ($output in @($outputs)) {
+          $outputMappedAny = $false
+          $outputHasTestOutputsHint = $false
+          $outputRemoteCandidates = New-Object System.Collections.ArrayList
+          foreach ($candidate in @(Get-BepFileReferenceCandidates $output)) {
+            $outputKey = Get-BepTestOutputKey $candidate
+            if (-not [string]::IsNullOrWhiteSpace($outputKey)) {
+	              $mappedAny = $true
+	              $outputMappedAny = $true
+	              if ($cachedLocally -or $cachedRemotely) {
+	                $eventCachedOutputs.Add("$label`t$outputKey") | Out-Null
+	              } else {
+	                $eventEligibleOutputs.Add("$label`t$outputKey") | Out-Null
+	              }
+            }
+            if (Test-BepTestOutputsArtifactHint $candidate) {
+              $outputHasTestOutputsHint = $true
+            }
+            if ((-not $cachedLocally) -and (-not $cachedRemotely) -and (Test-BepRemoteOnlyReference $candidate)) {
+              $outputRemoteCandidates.Add([string]$candidate) | Out-Null
+            }
+          }
+          if ((-not $cachedLocally) -and (-not $cachedRemotely) -and $outputRemoteCandidates.Count -gt 0) {
+            $remoteOnlyCandidates.Add([pscustomobject]@{
+              Candidates = @($outputRemoteCandidates.ToArray())
+              HasTestOutputsHint = $outputHasTestOutputsHint
+            }) | Out-Null
+          }
+        }
+        $eventRemoteOnlyAny = $false
+        foreach ($remoteRef in @($remoteOnlyCandidates)) {
+          if ($remoteRef.HasTestOutputsHint -or (-not $mappedAny)) {
+            foreach ($candidate in @($remoteRef.Candidates)) {
+              $eventRemoteOnlyAny = $true
+              $script:FreshnessRemoteOnlyOutputs.Add([pscustomobject]@{
+                Label = $label
+                Artifact = $candidate
+                Reason = "remote_only"
+              }) | Out-Null
+	            }
+	          }
+	        }
+	        foreach ($entry in @($eventCachedOutputs.ToArray())) {
+	          $script:FreshnessCachedOutputs.Add([string]$entry) | Out-Null
+	        }
+	        if (-not $eventRemoteOnlyAny) {
+	          foreach ($entry in @($eventEligibleOutputs.ToArray())) {
+	            $script:FreshnessEligibleOutputs.Add([string]$entry) | Out-Null
+	            $script:FreshnessEligibleLabels.Add(($entry -split "`t", 2)[0]) | Out-Null
+	          }
+	        }
+	        if ((-not $cachedLocally) -and (-not $cachedRemotely) -and (-not $mappedAny) -and (-not $eventRemoteOnlyAny)) {
+	          $script:FreshnessMissingOutputLabels.Add($label) | Out-Null
+	        }
+      }
+	    } catch {
+	      if (Use-OptionalBepUnavailable "failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message))") {
+	        return
+	      }
+	      Log "error: failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message))"
+	      exit 2
+	    }
+  }
+
+  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
+  if ($conflictingOutputs.Count -gt 0) {
+    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  }
+
+	  $script:FreshnessSelectedSource = "bep"
+	  $script:FreshnessEligibilityEnabled = $true
+	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count)"
+	  if ($script:FreshnessMode -eq "optional" -and $script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
+	    $first = $script:FreshnessRemoteOnlyOutputs[0]
+	    Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); skipping those outputs. Rerun with --remote_download_outputs=all to materialize payloads locally."
+	  }
+	}
+
 function Test-CiEnvironment {
   $ci = [string]$env:CI
   if ([string]::IsNullOrWhiteSpace($ci)) { return $false }
@@ -1895,24 +2221,17 @@ function Initialize-ExecutionLogEligibility {
     return
   }
 
-  if ([string]::IsNullOrWhiteSpace($script:ExecutionLogJson) -and $script:ExecutionLogMode -eq "auto") {
-    $resolvedDefaultLog = Resolve-RuntimeFilePath $script:DefaultExecutionLogJson
-    if (-not [string]::IsNullOrWhiteSpace($resolvedDefaultLog) -and (Test-Path -LiteralPath $resolvedDefaultLog -PathType Leaf)) {
-      $script:ExecutionLogJson = $script:DefaultExecutionLogJson
-    }
-  }
-
   if ([string]::IsNullOrWhiteSpace($script:ExecutionLogJson)) {
     if ($script:ExecutionLogMode -eq "required" -or ($script:ExecutionLogMode -eq "auto" -and (Test-CiEnvironment))) {
       if ($script:ExecutionLogMode -eq "required") {
-        Log "error: execution-log cache filtering is required by DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=required / --execution-log-mode=required. Run bazel test with --execution_log_json_file=$($script:DefaultExecutionLogJson), then rerun the uploader, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+        Log "error: execution-log cache filtering is required by DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=required / --execution-log-mode=required. Run bazel test with --execution_log_json_file=$($script:DefaultExecutionLogJson), then rerun the uploader with --execution-log-json=$($script:DefaultExecutionLogJson), or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
       } else {
-        Log "error: execution-log cache filtering is required in CI. Run bazel test with --execution_log_json_file=$($script:DefaultExecutionLogJson), then rerun the uploader, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+        Log "error: execution-log cache filtering is required in CI. Run bazel test with --execution_log_json_file=$($script:DefaultExecutionLogJson), then rerun the uploader with --execution-log-json=$($script:DefaultExecutionLogJson), or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
       }
       exit 2
     }
     if ($script:ExecutionLogMode -eq "auto") {
-      Log "warning: execution-log cache filtering is not configured; cached test outputs may be uploaded. Add --execution_log_json_file=$($script:DefaultExecutionLogJson) to bazel test, or set DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled to opt out explicitly."
+      Log "warning: execution-log cache filtering is not configured; cached test outputs may be uploaded. Add --execution_log_json_file=$($script:DefaultExecutionLogJson) to bazel test and --execution-log-json=$($script:DefaultExecutionLogJson) to the uploader, or set DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled to opt out explicitly."
     }
     return
   }
@@ -1946,6 +2265,58 @@ function Initialize-ExecutionLogEligibility {
   Dbg "execution-log freshness filter enabled: $resolvedLog ($($script:ExecutionEligibleOutputs.Count) eligible test outputs)"
 }
 
+function Initialize-FreshnessEligibility {
+  if ($script:FreshnessMode -eq "disabled") {
+    if ($script:BepJsonFiles.Count -gt 0) {
+      Log "warning: freshness filtering disabled; ignoring configured BEP JSON"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:ExecutionLogJson)) {
+      Log "warning: freshness filtering disabled; ignoring configured execution log: $($script:ExecutionLogJson)"
+    }
+    $script:FreshnessSelectedSource = "none"
+    $script:FreshnessEligibilityEnabled = $false
+    Log "freshness filtering disabled"
+    return
+  }
+
+  if ($script:FreshnessSource -eq "bep") {
+    if ($script:BepJsonFiles.Count -eq 0) {
+      if ($script:FreshnessMode -eq "required" -or ($script:FreshnessMode -eq "auto" -and (Test-CiEnvironment))) {
+        Log "error: BEP freshness filtering is required but no BEP JSON file was configured. Run bazel test with --remote_download_outputs=all --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson), or opt out explicitly with --allow-cached-payload-uploads."
+        exit 2
+      }
+      Log "warning: BEP freshness source was selected but no BEP JSON file was configured; cached test outputs may be uploaded. Rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+      return
+    }
+    Initialize-BepEligibility
+    return
+  }
+
+  if ($script:FreshnessSource -eq "execution_log") {
+    Initialize-ExecutionLogEligibility
+  } elseif ($script:BepJsonFiles.Count -gt 0) {
+    Initialize-BepEligibility
+  } else {
+    if ([string]::IsNullOrWhiteSpace($script:ExecutionLogJson)) {
+      if ($script:FreshnessMode -eq "required" -or ($script:FreshnessMode -eq "auto" -and (Test-CiEnvironment))) {
+        Log "error: freshness filtering is required in CI or required mode, but no BEP or execution log was found. Run bazel test with --remote_download_outputs=all --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+        exit 2
+      }
+      Log "warning: freshness filtering is not configured; cached test outputs may be uploaded. Prefer bazel test --remote_download_outputs=all --build_event_json_file=$($script:DefaultBepJson) and rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+      return
+    }
+    Initialize-ExecutionLogEligibility
+  }
+
+  if ($script:ExecutionEligibilityEnabled) {
+    $script:FreshnessSelectedSource = "execution_log"
+    $script:FreshnessEligibilityEnabled = $true
+    foreach ($item in $script:ExecutionEligibleLabels) { $script:FreshnessEligibleLabels.Add($item) | Out-Null }
+    foreach ($item in $script:ExecutionEligibleOutputs) { $script:FreshnessEligibleOutputs.Add($item) | Out-Null }
+    Log "freshness filtering enabled: source=execution_log"
+  }
+}
+
 function Get-TestOutputTargetLabel([string]$OutputsDir) {
   if ([string]::IsNullOrWhiteSpace($OutputsDir)) { return "" }
   $metadataPath = Join-Path $OutputsDir $script:BazelTargetMetadataOutput
@@ -1972,6 +2343,67 @@ function Write-ExecutionSkipOnce([string]$OutputsDir, [string]$Reason) {
   if ($script:ExecutionSkippedOutputs.Add($OutputsDir)) {
     [Console]::Out.WriteLine("[dd-uploader] skipping cached test output: $OutputsDir ($Reason)")
   }
+}
+
+function Assert-NoRequiredRemoteOnlyBepOutputs {
+  if ($script:FreshnessSelectedSource -ne "bep" -or $script:FreshnessMode -ne "required") { return }
+  if ($script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
+    $first = $script:FreshnessRemoteOnlyOutputs[0]
+    Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $($first.Artifact). Rerun with --remote_download_outputs=all or configure a BEP artifact fetcher."
+    exit 2
+  }
+}
+
+function Write-FreshnessSkipOnce([string]$OutputsDir, [string]$Reason) {
+  $script:FreshnessSkipWasWritten = $false
+  if ($script:FreshnessSkippedOutputs.Add($OutputsDir)) {
+    [Console]::Out.WriteLine("[dd-uploader] skipping cached or non-current test output: $OutputsDir ($Reason)")
+    $script:FreshnessSkipWasWritten = $true
+  }
+}
+
+function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
+  Assert-NoRequiredRemoteOnlyBepOutputs
+  if (-not $script:FreshnessEligibilityEnabled) { return $true }
+  $targetLabel = Get-TestOutputTargetLabel $OutputsDir
+  if ([string]::IsNullOrWhiteSpace($targetLabel)) {
+    if ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
+      Log "error: BEP required freshness cannot authorize $OutputsDir because bazel.target metadata is missing"
+      exit 2
+    }
+    Write-FreshnessSkipOnce $OutputsDir "missing bazel.target metadata"
+    return $false
+  }
+  $outputKey = Get-TestOutputDirKey $OutputsDir
+  if ([string]::IsNullOrWhiteSpace($outputKey)) {
+    if ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
+      Log "error: BEP required freshness cannot authorize $OutputsDir because the test.outputs path could not be mapped"
+      exit 2
+    }
+    Write-FreshnessSkipOnce $OutputsDir "could not map test.outputs path"
+    return $false
+  }
+  if ($script:FreshnessEligibleOutputs.Contains("$targetLabel`t$outputKey")) {
+    return $true
+  }
+  if ($script:FreshnessCachedOutputs.Contains("$targetLabel`t$outputKey")) {
+    Write-FreshnessSkipOnce $OutputsDir "BEP reported cached result for target $targetLabel output $outputKey"
+	  } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
+	    if ($script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
+	      Log "error: BEP required freshness cannot authorize $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
+	      exit 2
+	    } else {
+	      Write-FreshnessSkipOnce $OutputsDir "no fresh BEP TestResult matched target $targetLabel output $outputKey"
+	    }
+	  } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "optional" -and $script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
+	    Write-FreshnessSkipOnce $OutputsDir "fresh BEP TestResult for $targetLabel did not contain a mappable test.outputs reference"
+	    if ($script:FreshnessSkipWasWritten) {
+	      Log "warning: BEP optional freshness skipped $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
+	    }
+	  } else {
+	    Write-FreshnessSkipOnce $OutputsDir "no fresh $($script:FreshnessSelectedSource) result matched target $targetLabel output $outputKey"
+	  }
+  return $false
 }
 
 function Test-OutputDirExecutionEligible([string]$OutputsDir) {
@@ -2543,7 +2975,7 @@ function Resolve-TelemetryFactsSources {
 function Get-AllSortedTelemetryFiles {
     $files = @()
     foreach ($outputsDir in $script:TestOutputsCache) {
-        if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
+        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
         if (-not (Test-Path -LiteralPath $telemetryDir)) { continue }
         foreach ($file in (Get-SortedPayloadFiles $telemetryDir)) {
@@ -3306,7 +3738,7 @@ function Upload-AllTests {
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {
-        if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
+        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
         if (-not (Test-Path -LiteralPath $testsDir)) { continue }
         foreach ($f in @(Get-SortedRawTestMsgpackFiles $testsDir)) {
@@ -3379,7 +3811,7 @@ function Upload-AllCoverage {
     $failed = 0
     $skipped = 0
     foreach ($outputsDir in $script:TestOutputsCache) {
-        if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
+        if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
         if (-not (Test-Path -LiteralPath $covDir)) { continue }
         $files = Get-SortedPayloadFiles $covDir
@@ -3427,7 +3859,7 @@ function Upload-AllTelemetry {
     try {
         $plan = New-TelemetryAugmentationPlan
         foreach ($outputsDir in $script:TestOutputsCache) {
-            if (-not (Test-OutputDirExecutionEligible $outputsDir.FullName)) { continue }
+            if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
             $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
             if (-not (Test-Path -LiteralPath $telemetryDir)) { continue }
             $files = Get-SortedPayloadFiles $telemetryDir
@@ -3498,7 +3930,8 @@ function Upload-AllTelemetry {
 try {
     # Run tests first, then coverage. This ordering mirrors historical behavior
     # and keeps log/snapshot expectations stable across platforms.
-    Initialize-ExecutionLogEligibility
+    Initialize-FreshnessEligibility
+    Assert-NoRequiredRemoteOnlyBepOutputs
     Upload-AllTests
     Upload-AllCoverage
     Upload-AllTelemetry

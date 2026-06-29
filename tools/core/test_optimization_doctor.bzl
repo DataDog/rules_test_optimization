@@ -169,7 +169,7 @@ CONFIG_PATH="$(resolve_runfile "%s" "%s")" || {
   exit 2
 }
 export DD_TEST_OPTIMIZATION_DOCTOR_RUNFILES_WORKSPACE="$RUNFILES_WORKSPACE"
-exec "$PYTHON_BIN" "$RUNTIME_PATH" --config "$CONFIG_PATH"
+exec "$PYTHON_BIN" "$RUNTIME_PATH" --config "$CONFIG_PATH" "$@"
 """ % (ctx.workspace_name, ctx.file._runtime.path, ctx.file._runtime.short_path, config_file.path, config_file.short_path),
     )
 
@@ -319,7 +319,7 @@ if (-not $ConfigPath) {
   exit 2
 }
 $env:DD_TEST_OPTIMIZATION_DOCTOR_RUNFILES_WORKSPACE = $RunfilesWorkspace
-& $PythonBin $RuntimePath --config $ConfigPath
+& $PythonBin $RuntimePath --config $ConfigPath @args
 exit $LASTEXITCODE
 """ % (
             ctx.workspace_name,
@@ -337,7 +337,7 @@ exit $LASTEXITCODE
         content = """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%%SCRIPT_DIR%%%s"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%%SCRIPT_DIR%%%s" %%*
 exit /b %%ERRORLEVEL%%
 """ % ps_file.basename,
     )

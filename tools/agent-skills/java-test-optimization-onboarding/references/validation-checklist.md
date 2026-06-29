@@ -87,17 +87,27 @@ bazel sync --enable_workspace --config=test-optimization \
 Preserve test failure priority:
 
 ```bash
-bazel test --config=test-optimization //path/to:java_test || test_status=$?
+mkdir -p .topt
+rm -f .topt/pilot.bep.json
+bazel test --config=test-optimization --remote_download_outputs=all --build_event_json_file=.topt/pilot.bep.json //path/to:java_test || test_status=$?
 test_status=${test_status:-0}
 
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor || doctor_status=$?
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
+  --bep-json=.topt/pilot.bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required || doctor_status=$?
 doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$doctor_status"
 fi
 
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
+  --bep-json=.topt/pilot.bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --dry-run \
+  --validate-enrichment || dry_run_status=$?
 dry_run_status=${dry_run_status:-0}
 if [ "$dry_run_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -105,7 +115,10 @@ if [ "$dry_run_status" -ne 0 ]; then
 fi
 
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
+  bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
+    --bep-json=.topt/pilot.bep.json \
+    --freshness-source=bep \
+    --freshness-mode=required
 upload_status=$?
 
 if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -142,4 +155,6 @@ test:test-optimization --remote_download_outputs=all
 ```
 
 Rules cannot force this client behavior. Without it, tests may pass while the
-doctor and uploader cannot see local payload files.
+doctor and uploader cannot see local payload files. Use a unique
+`--build_event_json_file` for each Bazel test invocation and pass the same BEP
+file to doctor/uploader with `--freshness-source=bep --freshness-mode=required`.

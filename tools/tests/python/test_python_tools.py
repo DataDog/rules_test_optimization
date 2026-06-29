@@ -335,6 +335,607 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         )
         return output
 
+    @staticmethod
+    def _write_doctor_config(root: Path, expected_targets: list[str]) -> Path:
+        """Create a minimal doctor config for runtime main() tests."""
+        config = {
+            "context_manifest_path": "",
+            "context_manifest_short_path": "",
+            "forbid_dd_git_test_env": False,
+            "require_git_metadata": False,
+            "expected_targets": expected_targets,
+            "require_json_payloads": True,
+            "require_bazel_metadata": True,
+            "forbid_full_bundle_no_match": True,
+            "forbid_msgpack_payloads": True,
+            "allowed_payload_selections": ["module"],
+            "expected_payload_selection_by_target": {},
+        }
+        config_path = root / "doctor.config.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        return config_path
+
+    @staticmethod
+    def _write_bep(path: Path, events: list[dict[str, object]]) -> None:
+        """Write newline-delimited BEP JSON events."""
+        path.write_text(
+            "".join(json.dumps(event) + "\n" for event in events),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _bep_test_result(
+        label: str,
+        output: str,
+        *,
+        cached_locally: bool = False,
+        cached_remotely: bool = False,
+    ) -> dict[str, object]:
+        """Return a minimal BEP TestResult event for doctor freshness tests."""
+        event: dict[str, object] = {
+            "id": {
+                "testResult": {
+                    "label": label,
+                    "run": 1,
+                    "shard": 1,
+                    "attempt": 1,
+                },
+            },
+            "testResult": {
+                "testActionOutput": [
+                    {
+                        "name": "test.outputs",
+                        "uri": output,
+                    },
+                ],
+                "status": "PASSED",
+            },
+        }
+        result = event["testResult"]
+        assert isinstance(result, dict)
+        if cached_locally:
+            result["cachedLocally"] = True
+        if cached_remotely:
+            result["executionInfo"] = {"cachedRemotely": True}
+        return event
+
+    def test_parse_args_accepts_bep_freshness_flags(self) -> None:
+        """Validate doctor accepts BEP freshness CLI flags passed through Bazel launchers."""
+        args = self.mod._parse_args([
+            "--config",
+            "doctor.config.json",
+            "--bep-json",
+            ".topt/fresh.bep.json",
+            "--freshness-source=bep",
+            "--freshness-mode=required",
+        ])
+
+        self.assertEqual("doctor.config.json", args.config)
+        self.assertEqual([".topt/fresh.bep.json"], args.bep_json)
+        self.assertEqual("bep", args.freshness_source)
+        self.assertEqual("required", args.freshness_mode)
+
+    def test_doctor_optional_bep_without_configured_file_warns_and_continues(self) -> None:
+        """Validate optional BEP source without a file preserves local doctor validation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root, "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            stderr = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)}),
+                mock.patch("sys.stderr", stderr),
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                ])
+
+        self.assertEqual(0, rc)
+        self.assertIn("BEP freshness source was selected but no BEP JSON file was configured", stderr.getvalue())
+
+    def test_doctor_optional_missing_bep_file_warns_and_continues(self) -> None:
+        """Validate optional configured missing BEP keeps historical local doctor behavior."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root, "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            stderr = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)}),
+                mock.patch("sys.stderr", stderr),
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(root / "missing.bep.json"),
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                ])
+
+        self.assertEqual(0, rc)
+        self.assertIn("warning: BEP JSON file not found", stderr.getvalue())
+
+    def test_doctor_optional_malformed_bep_file_warns_and_continues(self) -> None:
+        """Validate optional configured malformed BEP keeps historical local doctor behavior."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root, "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            malformed_bep = root / "malformed.bep.json"
+            malformed_bep.write_text("{not-json\n", encoding="utf-8")
+            stderr = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)}),
+                mock.patch("sys.stderr", stderr),
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(malformed_bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                ])
+
+        self.assertEqual(0, rc)
+        self.assertIn("warning: invalid BEP JSON", stderr.getvalue())
+
+    def test_bep_output_key_normalizes_file_uri_and_nested_outputs(self) -> None:
+        """Validate BEP paths map to concrete bazel-testlogs test.outputs directories."""
+        key = self.mod._bep_test_output_key(
+            "file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/"
+            "shard_1_of_2/attempt_1/test.outputs/payloads/tests/span_events_1.json"
+        )
+
+        self.assertEqual("pkg/target/shard_1_of_2/attempt_1/test.outputs", key)
+
+    def test_bep_output_key_maps_outputs_zip_to_containing_test_outputs(self) -> None:
+        """Validate BEP outputs.zip references map to the containing test.outputs directory."""
+        key = self.mod._bep_test_output_key(
+            r"C:\tmp\execroot\main\bazel-out\x64_windows-fastbuild\testlogs\pkg\target\test.outputs\outputs.zip"
+        )
+        sibling_key = self.mod._bep_test_output_key(
+            "file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/outputs.zip"
+        )
+        windows_sibling_key = self.mod._bep_test_output_key(
+            r"C:\tmp\execroot\main\bazel-out\x64_windows-fastbuild\testlogs\pkg\target\outputs.zip"
+        )
+
+        self.assertEqual("pkg/target/test.outputs", key)
+        self.assertEqual("pkg/target/test.outputs", sibling_key)
+        self.assertEqual("pkg/target/test.outputs", windows_sibling_key)
+
+    def test_bep_output_key_maps_test_log_and_xml_to_sibling_outputs(self) -> None:
+        """Validate real Bazel BEP test.log/test.xml references map to sibling test.outputs."""
+        log_key = self.mod._bep_test_output_key(
+            "file:///tmp/workspace/bazel-testlogs/pkg/target/test.log"
+        )
+        xml_key = self.mod._bep_test_output_key(
+            "file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.xml"
+        )
+
+        self.assertEqual("pkg/target/test.outputs", log_key)
+        self.assertEqual("pkg/target/test.outputs", xml_key)
+
+    def test_bep_file_reference_candidates_support_path_prefix(self) -> None:
+        """Validate direct BEP File pathPrefix/name objects reconstruct a local path."""
+        candidates = self.mod._bep_file_reference_candidates({
+            "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+            "name": "test.log",
+        })
+
+        self.assertIn("bazel-out/k8-fastbuild/testlogs/pkg/target/test.log", candidates)
+        self.assertEqual(
+            "pkg/target/test.outputs",
+            self.mod._bep_test_output_key(candidates[-1]),
+        )
+
+    def test_parse_bep_eligible_outputs_skips_cached_results(self) -> None:
+        """Validate BEP freshness keeps only non-cached concrete output mappings."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bep = tmp_path / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                    ),
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/cached_local/test.outputs",
+                        cached_locally=True,
+                    ),
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/cached_remote/test.outputs",
+                        cached_remotely=True,
+                    ),
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertIn(("//pkg:target", "pkg/cached_local/test.outputs"), freshness.cached_outputs)
+        self.assertIn(("//pkg:target", "pkg/cached_remote/test.outputs"), freshness.cached_outputs)
+
+    def test_parse_bep_eligible_outputs_accepts_real_test_log_outputs(self) -> None:
+        """Validate real Bazel TestResult log outputs authorize their sibling payload directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bep = tmp_path / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "testActionOutput": [
+                                {
+                                    "name": "test.log",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.log",
+                                },
+                                {
+                                    "name": "test.xml",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.xml",
+                                },
+                            ],
+                            "status": "PASSED",
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual(set(), freshness.cached_outputs)
+
+    def test_parse_bep_freshness_accepts_checked_in_real_log_xml_fixture(self) -> None:
+        """Validate checked-in real-shaped BEP log/XML outputs stay parser-compatible."""
+        bep = _runfile("tools/tests/python/fixtures/bep_fresh_log_xml.ndjson")
+
+        freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual(set(), freshness.cached_outputs)
+        self.assertEqual([], freshness.remote_only_outputs)
+
+    def test_parse_bep_freshness_accepts_checked_in_cached_and_snake_case_fixtures(self) -> None:
+        """Validate checked-in cached and snake_case BEP variants stay parser-compatible."""
+        cached = _runfile("tools/tests/python/fixtures/bep_cached_local.ndjson")
+        snake_case = _runfile("tools/tests/python/fixtures/bep_snake_case_remote_cached.ndjson")
+
+        freshness = self.mod._parse_bep_freshness([cached, snake_case])
+
+        self.assertEqual(set(), freshness.eligible_outputs)
+        self.assertIn(("//pkg:target", "pkg/target/test.outputs"), freshness.cached_outputs)
+        self.assertIn(("//pkg:target", "pkg/remote_cached/test.outputs"), freshness.cached_outputs)
+        self.assertEqual(1, len(freshness.remote_only_outputs))
+        self.assertEqual("//pkg:remote_only", freshness.remote_only_outputs[0].label)
+
+    def test_parse_bep_freshness_accepts_sanitized_captured_bazel_fixtures(self) -> None:
+        """Validate sanitized real Bazel BEP fixtures keep fresh and cached semantics."""
+        fresh = _runfile("tools/tests/python/fixtures/bep_captured_bazelw_wrapper_fresh.ndjson")
+        cached = _runfile("tools/tests/python/fixtures/bep_captured_bazelw_wrapper_cached.ndjson")
+
+        fresh_state = self.mod._parse_bep_freshness([fresh])
+        cached_state = self.mod._parse_bep_freshness([cached])
+
+        output_key = "tools/tests/python/bazelw_wrapper_test/test.outputs"
+        self.assertEqual(
+            {("//tools/tests/python:bazelw_wrapper_test", output_key)},
+            fresh_state.eligible_outputs,
+        )
+        self.assertEqual(set(), fresh_state.cached_outputs)
+        self.assertEqual(set(), cached_state.eligible_outputs)
+        self.assertEqual(
+            {("//tools/tests/python:bazelw_wrapper_test", output_key)},
+            cached_state.cached_outputs,
+        )
+
+    def test_checked_in_bep_fixtures_are_sanitized(self) -> None:
+        """Validate checked-in BEP fixtures do not contain local secrets or raw host paths."""
+        fixture_root = _runfile("tools/tests/python/fixtures")
+        denied_patterns = [
+            r"DD_API_KEY",
+            r"OPENAI_API_KEY",
+            r"(?i)api[_-]?key",
+            r"(?i)secret",
+            r"(?i)token",
+            r"/Users/",
+            r"/private/",
+            r"/var/folders/",
+            r"dd-source",
+        ]
+
+        for fixture in sorted(fixture_root.glob("bep_*.ndjson")):
+            text = fixture.read_text(encoding="utf-8")
+            for pattern in denied_patterns:
+                self.assertIsNone(
+                    re.search(pattern, text),
+                    f"{fixture} contains unsanitized BEP content matching {pattern!r}",
+                )
+
+    def test_parse_bep_freshness_rejects_conflicting_output_state(self) -> None:
+        """Validate overlapping BEP files cannot report the same output as fresh and cached."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fresh_bep = tmp_path / "fresh.bep.json"
+            cached_bep = tmp_path / "cached.bep.json"
+            output = "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.log"
+            self._write_bep(fresh_bep, [self._bep_test_result("//pkg:target", output)])
+            self._write_bep(cached_bep, [self._bep_test_result("//pkg:target", output, cached_locally=True)])
+
+            with self.assertRaises(SystemExit):
+                self.mod._parse_bep_freshness([fresh_bep, cached_bep])
+
+    def test_parse_bep_freshness_records_remote_only_outputs(self) -> None:
+        """Validate required mode can fail before local scanning for remote-only outputs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "bytestream://remote-cas/blobs/deadbeef/123",
+                    ),
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual([], sorted(freshness.eligible_outputs))
+        self.assertEqual(1, len(freshness.remote_only_outputs))
+        self.assertEqual("//pkg:target", freshness.remote_only_outputs[0].label)
+
+    def test_parse_bep_freshness_records_remote_only_outputs_with_local_log(self) -> None:
+        """Validate local logs do not hide remote-only undeclared outputs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.log",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.log",
+                                },
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual(set(), freshness.eligible_outputs)
+        self.assertEqual(1, len(freshness.remote_only_outputs))
+        self.assertEqual("//pkg:target", freshness.remote_only_outputs[0].label)
+
+    def test_parse_bep_freshness_ignores_diagnostic_remote_uri_with_local_output(self) -> None:
+        """Validate unrelated remote diagnostic artifacts do not block a mapped local output."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.log",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.log",
+                                },
+                                {
+                                    "name": "diagnostic.remote",
+                                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual([], freshness.remote_only_outputs)
+
+    def test_parse_bep_freshness_records_remote_outputs_zip_with_local_log(self) -> None:
+        """Validate remote outputs.zip overrides a local log/xml sibling mapping."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.log",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.log",
+                                },
+                                {
+                                    "name": "outputs.zip",
+                                    "uri": "bytestream://remote-cas/blobs/feedface/456",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual(set(), freshness.eligible_outputs)
+        self.assertEqual(1, len(freshness.remote_only_outputs))
+        self.assertEqual("//pkg:target", freshness.remote_only_outputs[0].label)
+
+    def test_parse_bep_freshness_records_missing_output_mappings(self) -> None:
+        """Validate strict freshness can reject fresh BEP results without output paths."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {"status": "PASSED", "testActionOutput": []},
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual(set(), freshness.eligible_outputs)
+        self.assertEqual({"//pkg:target"}, freshness.missing_output_mappings)
+
+    def test_expected_target_requires_fresh_bep_match(self) -> None:
+        """Validate strict doctor freshness rejects expected targets missing from BEP."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module", "//pkg:target")
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/other/test.outputs",
+                    ),
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            with self.assertRaises(SystemExit):
+                self.mod._validate_expected_target_bep_freshness(
+                    [output],
+                    {"//pkg:target"},
+                    freshness,
+                    required=True,
+                )
+
+    def test_expected_target_rejects_cached_bep_match(self) -> None:
+        """Validate strict doctor freshness rejects expected targets served from cache."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module", "//pkg:target")
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                        cached_locally=True,
+                    ),
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            with self.assertRaises(SystemExit):
+                self.mod._validate_expected_target_bep_freshness(
+                    [output],
+                    {"//pkg:target"},
+                    freshness,
+                    required=True,
+                )
+
+    def test_expected_target_accepts_fresh_bep_match(self) -> None:
+        """Validate strict doctor freshness accepts expected targets with fresh BEP outputs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module", "//pkg:target")
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                    ),
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            self.mod._validate_expected_target_bep_freshness(
+                [output],
+                {"//pkg:target"},
+                freshness,
+                required=True,
+            )
+
+    def test_expected_target_rejects_missing_metadata_in_bep_required_mode(self) -> None:
+        """Validate BEP required mode does not authorize outputs without metadata."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module", "//pkg:target")
+            (output / "bazel_target_metadata.json").unlink()
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                    ),
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            with self.assertRaises(SystemExit):
+                self.mod._validate_expected_target_bep_freshness(
+                    [output],
+                    {"//pkg:target"},
+                    freshness,
+                    required=True,
+                )
+
+    def test_expected_target_filters_stale_extra_outputs_before_payload_validation(self) -> None:
+        """Validate strict BEP doctor checks only outputs from the current invocation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fresh_output = self._write_doctor_output(root, "module", "//pkg:target")
+            stale_output = root / "pkg" / "target" / "attempt_2" / "test.outputs"
+            stale_output.mkdir(parents=True)
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                    ),
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            selected_outputs = self.mod._validate_expected_target_bep_freshness(
+                [fresh_output, stale_output],
+                {"//pkg:target"},
+                freshness,
+                required=True,
+            )
+
+            self.assertEqual([fresh_output], selected_outputs)
+            self.mod._validate_outputs(selected_outputs, True, True, True, True)
+
     def test_expected_target_output_mapping(self) -> None:
         """Validate local Bazel labels map to bazel-testlogs output dirs."""
         root = Path("/tmp/bazel-testlogs")
@@ -591,6 +1192,14 @@ class TestOptimizationDoctorTests(unittest.TestCase):
 
 class TestOptimizationDoctorLauncherTests(unittest.TestCase):
     """Test case group covering generated doctor launchers."""
+
+    def test_launchers_forward_doctor_cli_args(self) -> None:
+        """Validate generated launchers pass BEP freshness CLI args through to the runtime."""
+        doctor_rule = _runfile("tools/core/test_optimization_doctor.bzl").read_text(encoding="utf-8")
+
+        self.assertIn('exec "$PYTHON_BIN" "$RUNTIME_PATH" --config "$CONFIG_PATH" "$@"', doctor_rule)
+        self.assertIn("& $PythonBin $RuntimePath --config $ConfigPath @args", doctor_rule)
+        self.assertIn('-File "%%SCRIPT_DIR%%%s" %%*', doctor_rule)
 
     def test_windows_launcher_resolves_powershell_next_to_batch(self) -> None:
         """Validate the Windows launcher resolves the generated PowerShell script next to the batch file."""
@@ -1129,9 +1738,18 @@ class LintUploaderTemplatesTests(unittest.TestCase):
         """Validate lint batch template accepts expected shape behavior."""
         self.mod._lint_batch_template(
             "@echo off\n"
-            "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\"\n"
+            "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\" %*\n"
             "exit /b %ERRORLEVEL%\n"
         )
+
+    def test_lint_batch_template_requires_argument_forwarding(self) -> None:
+        """Validate Windows launcher keeps Bazel-run CLI args for the PowerShell uploader."""
+        with self.assertRaises(RuntimeError):
+            self.mod._lint_batch_template(
+                "@echo off\n"
+                "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\"\n"
+                "exit /b %ERRORLEVEL%\n"
+            )
 
 
 class RuntimeTemplateParityTests(unittest.TestCase):
@@ -1265,6 +1883,107 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("DryRun-SingleTest may emit validation diagnostics", powershell_text)
         self.assertIn("dry-run kept test payload", powershell_text)
         self.assertIn("if ($Agentless -and -not $script:DryRun)", powershell_text)
+
+    def test_uploader_exposes_source_neutral_bep_freshness_flags(self) -> None:
+        """Validate uploader runtimes expose source-neutral BEP freshness controls."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        for token in [
+            "--freshness-source",
+            "--freshness-mode",
+            "--bep-json",
+            "DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE",
+            "DD_TEST_OPTIMIZATION_FRESHNESS_MODE",
+            "DD_TEST_OPTIMIZATION_BEP_JSON",
+            "FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE",
+            "FRESHNESS_MISSING_OUTPUT_LABELS_FILE",
+            "prepare_bep_eligibility",
+            "test_output_dir_is_freshness_eligible",
+        ]:
+            self.assertIn(token, bash_text)
+
+        for token in [
+            "--freshness-source",
+            "--freshness-mode",
+            "--bep-json",
+            "DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE",
+            "DD_TEST_OPTIMIZATION_FRESHNESS_MODE",
+            "DD_TEST_OPTIMIZATION_BEP_JSON",
+            "FreshnessRemoteOnlyOutputs",
+            "FreshnessMissingOutputLabels",
+            "Initialize-BepEligibility",
+            "Test-OutputDirFreshnessEligible",
+        ]:
+            self.assertIn(token, powershell_text)
+
+        self.assertIn("test_outputs_artifact_hint", bash_text)
+        self.assertIn("event_has_mappable_output", bash_text)
+        self.assertIn("Test-BepTestOutputsArtifactHint", powershell_text)
+        self.assertIn("$eventRemoteOnlyAny", powershell_text)
+        self.assertIn('elif endswith("/test.log") or endswith("/test.xml")', bash_text)
+        self.assertIn('elif endswith("/outputs.zip")', bash_text)
+        self.assertIn('/bazel-testlogs/', bash_text)
+        self.assertNotIn("Resolve-DefaultBepIfAvailable", powershell_text)
+        self.assertNotIn("resolve_default_bep_if_available", bash_text)
+        self.assertIn('EndsWith("/test.log"', powershell_text)
+        self.assertIn('EndsWith("/outputs.zip"', powershell_text)
+        self.assertIn("reported as both fresh and cached", bash_text)
+        self.assertIn("reported as both fresh and cached", powershell_text)
+        self.assertLess(bash_text.index("--bep-json"), bash_text.index("--execution-log-json"))
+        self.assertLess(
+            powershell_text.index("--bep-json"),
+            powershell_text.index("--execution-log-json"),
+        )
+
+    def test_uploader_checks_required_bep_before_no_payload_noop(self) -> None:
+        """Validate configured BEP freshness is evaluated before no-payload early exits."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        expected_log = "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+        self.assertIn(expected_log, bash_text)
+        self.assertIn(expected_log, powershell_text)
+        self.assertLess(
+            bash_text.index(expected_log),
+            bash_text.index("prepare_freshness_eligibility"),
+        )
+        self.assertLess(
+            powershell_text.index(expected_log),
+            powershell_text.index("Initialize-FreshnessEligibility"),
+        )
+        self.assertIn("prepare_freshness_eligibility\nvalidate_bep_remote_only_outputs", bash_text)
+        self.assertIn(
+            "Initialize-FreshnessEligibility\n    Assert-NoRequiredRemoteOnlyBepOutputs",
+            powershell_text,
+        )
+
+    def test_uploader_freshness_flags_have_source_neutral_ci_errors_and_precedence(self) -> None:
+        """Validate new freshness flags own precedence and auto-mode CI guidance."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (bash_text, powershell_text):
+            self.assertIn("freshness filtering is required in CI or required mode", text)
+            self.assertIn("--build_event_json_file", text)
+            self.assertIn("--freshness-source=bep --freshness-mode=required", text)
+            self.assertIn("BEP required freshness cannot authorize", text)
+            self.assertIn("BEP freshness source was selected but no BEP JSON file was configured", text)
+
+        self.assertIn("FRESHNESS_MODE_HAS_NEW_CONFIG", bash_text)
+        self.assertIn("if (( FRESHNESS_MODE_HAS_NEW_CONFIG == 0 ))", bash_text)
+        self.assertIn("FRESHNESS_DISABLED_EXPLICIT", bash_text)
+        self.assertIn("$FreshnessModeHasNewConfig", powershell_text)
+        self.assertIn("if (-not $FreshnessModeHasNewConfig)", powershell_text)
+        self.assertIn("$FreshnessDisabledExplicit", powershell_text)
+        self.assertNotIn('resolve_runtime_file_path "$DEFAULT_EXECUTION_LOG_JSON"', bash_text)
+        self.assertNotIn("Resolve-RuntimeFilePath $script:DefaultExecutionLogJson", powershell_text)
 
     def test_uploader_dry_run_validates_default_enrichment_tags(self) -> None:
         """Validate dry-run checks the git and Bazel tags needed by downstream upload."""

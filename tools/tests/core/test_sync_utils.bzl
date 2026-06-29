@@ -64,6 +64,7 @@ load(
     "//tools/tests:example_stub_repo.bzl",
     "bzl_string_literal_for_tests",
     "render_stub_build_for_tests",
+    "render_stub_context_for_tests",
     "render_stub_export_for_tests",
     "render_stub_telemetry_facts_for_tests",
     "stub_manifest_content_for_tests",
@@ -1435,6 +1436,17 @@ def _example_stub_manifest_content_matches_sync_contract_test(ctx):
     asserts.equals(env, "version=1\n", stub_manifest_content_for_tests())
     return unittest.end(env)
 
+def _example_stub_context_contains_doctor_metadata_test(ctx):
+    """Ensure the stub context satisfies doctor git and Bazel metadata checks."""
+    env = unittest.begin(ctx)
+    context = render_stub_context_for_tests("stub-service")
+    asserts.true(env, '"git.repository_url":"https://github.com/DataDog/rules-test-optimization-fixture.git"' in context)
+    asserts.true(env, '"git.commit.sha":"1234567890abcdef1234567890abcdef12345678"' in context)
+    asserts.true(env, '"git.branch":"main"' in context)
+    asserts.true(env, '"bazel.rule_name":"datadog-rules-test-optimization"' in context)
+    asserts.true(env, '"service.name":"stub-service"' in context)
+    return unittest.end(env)
+
 def _example_stub_service_keys_targets_test(ctx):
     """Validate service-suffixed filegroups are emitted for service keys."""
     env = unittest.begin(ctx)
@@ -2185,6 +2197,7 @@ clone_payload_with_detached_attributes_test = unittest.make(_clone_payload_with_
 clone_payload_with_nested_structure_test = unittest.make(_clone_payload_with_nested_structure_test)
 example_stub_includes_manifest_in_files_test = unittest.make(_example_stub_includes_manifest_in_files_test)
 example_stub_manifest_content_matches_sync_contract_test = unittest.make(_example_stub_manifest_content_matches_sync_contract_test)
+example_stub_context_contains_doctor_metadata_test = unittest.make(_example_stub_context_contains_doctor_metadata_test)
 example_stub_service_keys_targets_test = unittest.make(_example_stub_service_keys_targets_test)
 example_stub_module_targets_test = unittest.make(_example_stub_module_targets_test)
 example_stub_custom_out_dir_test = unittest.make(_example_stub_custom_out_dir_test)

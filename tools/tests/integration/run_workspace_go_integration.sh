@@ -58,6 +58,14 @@ ARCHIVE_SHA256=""
 ARCHIVE_URL=""
 RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
 RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
+FIXTURE_GIT_REPOSITORY_URL="${FIXTURE_GIT_REPOSITORY_URL:-https://github.com/DataDog/rules-test-optimization-fixture.git}"
+FIXTURE_GIT_BRANCH="${FIXTURE_GIT_BRANCH:-main}"
+FIXTURE_GIT_COMMIT_SHA="${FIXTURE_GIT_COMMIT_SHA:-1234567890abcdef1234567890abcdef12345678}"
+BAZEL_EXTRA_ARGS=(
+  "--repo_env=DD_GIT_REPOSITORY_URL=${FIXTURE_GIT_REPOSITORY_URL}"
+  "--repo_env=DD_GIT_BRANCH=${FIXTURE_GIT_BRANCH}"
+  "--repo_env=DD_GIT_COMMIT_SHA=${FIXTURE_GIT_COMMIT_SHA}"
+)
 HERMETIC_BUILD_FLAGS=(
   --spawn_strategy=sandboxed
   --incompatible_strict_action_env
@@ -211,6 +219,130 @@ for path in json_files:
 PY
 }
 
+assert_log_contains() {
+  local log_path="$1"
+  local expected="$2"
+  local description="$3"
+
+  if ! grep -q "$expected" "$log_path"; then
+    echo "error: $description" >&2
+    cat "$log_path" >&2 || true
+    exit 1
+  fi
+}
+
+assert_log_matches() {
+  local log_path="$1"
+  local expected_re="$2"
+  local description="$3"
+
+  if ! grep -Eq "$expected_re" "$log_path"; then
+    echo "error: $description" >&2
+    cat "$log_path" >&2 || true
+    exit 1
+  fi
+}
+
+assert_bep_has_cached_test_result() {
+  local bep_path="$1"
+  "$PYTHON" - "$bep_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+bep_path = Path(sys.argv[1])
+for raw in bep_path.read_text(encoding="utf-8-sig").splitlines():
+    if not raw.strip():
+        continue
+    event = json.loads(raw)
+    if "testResult" not in event.get("id", {}) and "test_result" not in event.get("id", {}):
+        continue
+    result = event.get("testResult") or event.get("test_result") or {}
+    execution_info = result.get("executionInfo") or result.get("execution_info") or {}
+    if result.get("cachedLocally") or result.get("cached_locally") or execution_info.get("cachedRemotely") or execution_info.get("cached_remotely"):
+        raise SystemExit(0)
+raise SystemExit(f"error: {bep_path} did not contain a cached TestResult")
+PY
+}
+
+run_bep_freshness_scenario() {
+  local ws_dir="$1"
+  local mode="$2"
+  local -a workspace_flags=("${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace)
+  local bep_dir="$ws_dir/.topt/bep-${mode}"
+  local fresh_bep="$bep_dir/fresh.bep.json"
+  local cached_bep="$bep_dir/cached.bep.json"
+  local fresh_log="$bep_dir/fresh.log"
+  local cached_log="$bep_dir/cached.log"
+  local opt_out_log="$bep_dir/opt-out.log"
+
+  mkdir -p "$bep_dir"
+  rm -f "$fresh_bep" "$cached_bep" "$fresh_log" "$cached_log" "$opt_out_log"
+
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${workspace_flags[@]}" \
+      --remote_download_outputs=all \
+      --cache_test_results=no \
+      --build_event_json_file="$fresh_bep" \
+      "$HELLO_TEST_TARGET"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" run \
+      "${workspace_flags[@]}" \
+      //:dd_test_optimization_doctor -- \
+      --bep-json="$fresh_bep" \
+      --freshness-source=bep \
+      --freshness-mode=required
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" run \
+      "${workspace_flags[@]}" \
+      //:dd_upload_payloads -- \
+      --bep-json="$fresh_bep" \
+      --freshness-source=bep \
+      --freshness-mode=required \
+      --dry-run \
+      --validate-enrichment \
+      --expected-enriched-tag=bazel.go.payload_selection
+  ) >"$fresh_log" 2>&1
+  assert_log_contains "$fresh_log" "freshness filtering enabled: source=bep" "fresh BEP run did not select BEP freshness"
+  assert_log_contains "$fresh_log" "dry-run validated enriched test payload" "fresh BEP run did not validate enrichment"
+  assert_log_matches "$fresh_log" "dry-run validated [1-9][0-9]* test payloads" "fresh BEP run did not validate any payloads"
+
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${workspace_flags[@]}" \
+      --remote_download_outputs=all \
+      --build_event_json_file="$cached_bep" \
+      "$HELLO_TEST_TARGET"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" run \
+      "${workspace_flags[@]}" \
+      //:dd_upload_payloads -- \
+      --bep-json="$cached_bep" \
+      --freshness-source=bep \
+      --freshness-mode=required \
+      --dry-run \
+      --validate-enrichment
+  ) >"$cached_log" 2>&1
+  assert_bep_has_cached_test_result "$cached_bep"
+  assert_log_contains "$cached_log" "freshness filtering enabled: source=bep" "cached BEP run did not select BEP freshness"
+  assert_log_contains "$cached_log" "dry-run validated 0 test payloads" "cached BEP run did not suppress cached payloads"
+  assert_log_contains "$cached_log" "skipping cached or non-current test output" "cached BEP run did not log a cached-output skip"
+
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" run \
+      "${workspace_flags[@]}" \
+      //:dd_upload_payloads -- \
+      --bep-json="$cached_bep" \
+      --allow-cached-payload-uploads \
+      --dry-run \
+      --validate-enrichment \
+      --expected-enriched-tag=bazel.go.payload_selection
+  ) >"$opt_out_log" 2>&1
+  assert_log_contains "$opt_out_log" "freshness filtering disabled" "BEP opt-out did not disable freshness filtering"
+  assert_log_matches "$opt_out_log" "dry-run validated [1-9][0-9]* test payloads" "BEP opt-out did not preserve legacy payload discovery"
+}
+
 create_fixture_archive() {
   local root_dir="$ARCHIVE_ROOT/$ARCHIVE_NAME"
 
@@ -235,12 +367,26 @@ write_shared_fixture_sources() {
   mkdir -p "$ws_dir/app"
 
   cat > "$ws_dir/BUILD.bazel" <<'EOF'
+load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+
 exports_files([
     "go.mod",
     "go.sum",
     "orchestrion.tool.go",
     "orchestrion.yml",
 ])
+
+dd_test_optimization_doctor(
+    name = "dd_test_optimization_doctor",
+    data = ["@test_optimization_data//:test_optimization_context"],
+    expected_targets = ["//app:hello_test"],
+)
+
+dd_payload_uploader(
+    name = "dd_upload_payloads",
+    data = ["@test_optimization_data//:test_optimization_context"],
+)
 EOF
 
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
@@ -723,7 +869,7 @@ run_positive_fixture() {
 run_positive_subscenario() {
   local ws_dir="$1"
   local mode="$2"
-  local -a workspace_flags=(--noenable_bzlmod --enable_workspace)
+  local -a workspace_flags=("${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace)
 
   if [[ "$mode" == "standard" ]]; then
     (
@@ -731,6 +877,7 @@ run_positive_subscenario() {
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test "${workspace_flags[@]}" "$HELLO_TEST_TARGET"
     )
     assert_json_test_payloads "$ws_dir" "$mode"
+    run_bep_freshness_scenario "$ws_dir" "$mode"
     return
   fi
 

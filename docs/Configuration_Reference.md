@@ -494,6 +494,11 @@ The uploader rule reads these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | Override uploader quiescence wait |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | Limit payload discovery depth in large trees |
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | Explicit CODEOWNERS path for enrichment |
+| `DD_TEST_OPTIMIZATION_BEP_JSON` | BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation |
+| `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE` | Freshness source: `auto`, `bep`, or `execution_log` |
+| `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
+| `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | Optional explicit legacy execution-log fallback path; default execution-log files are not auto-discovered |
+| `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset |
 | `TESTLOGS_DIR` | Explicit `bazel-testlogs` path for non-standard layouts |
 
 Uploader CLI flags:
@@ -503,6 +508,12 @@ Uploader CLI flags:
 | `--dry-run` | Enrich and validate discovered payloads without uploading or deleting files |
 | `--validate-enrichment` | In dry-run mode, require key Git and Bazel tags to exist after enrichment |
 | `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, `bazel.package`, and `bazel.go.payload_selection` |
+| `--bep-json=<path>` | BEP JSON file from the matching Bazel test invocation; repeat for multiple invocations |
+| `--freshness-source=<source>` | Freshness source: `auto`, `bep`, or `execution_log` |
+| `--freshness-mode=<mode>` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
+| `--allow-cached-payload-uploads` | Explicitly disables BEP and legacy execution-log freshness filtering |
+| `--execution-log-json=<path>` | Explicit legacy execution-log fallback path |
+| `--execution-log-mode=<mode>` | Legacy alias for freshness mode |
 
 Numeric precision caveat:
 - Keep high-cardinality IDs (for example CI job IDs) as strings when possible.

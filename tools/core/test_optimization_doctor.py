@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 
 FORBIDDEN_TEST_ENV_RE = re.compile(
@@ -35,11 +36,42 @@ DEFAULT_ALLOWED_GO_PAYLOAD_SELECTIONS = {
     "full_bundle_disabled",
 }
 DOCTOR_EXECROOT_ENV = "DD_TEST_OPTIMIZATION_DOCTOR_EXECROOT"
+VALID_FRESHNESS_MODES = {"auto", "required", "optional", "disabled"}
+VALID_FRESHNESS_SOURCES = {"auto", "bep", "execution_log"}
+
+
+class BepRemoteOnlyOutput:
+    """Fresh BEP output that is not available as a local file in phase 1."""
+
+    def __init__(self, label: str, artifact: str, reason: str) -> None:
+        self.label = label
+        self.artifact = artifact
+        self.reason = reason
+
+
+class BepFreshness:
+    """Parsed BEP freshness state used by doctor strict expected-target checks."""
+
+    def __init__(
+        self,
+        eligible_outputs: set[tuple[str, str]],
+        cached_outputs: set[tuple[str, str]],
+        remote_only_outputs: list[BepRemoteOnlyOutput],
+        missing_output_mappings: set[str],
+    ) -> None:
+        self.eligible_outputs = eligible_outputs
+        self.cached_outputs = cached_outputs
+        self.remote_only_outputs = remote_only_outputs
+        self.missing_output_mappings = missing_output_mappings
 
 
 def _fail(message: str) -> None:
     print(f"[dd-test-optimization-doctor] {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def _warn(message: str) -> None:
+    print(f"[dd-test-optimization-doctor] warning: {message}", file=sys.stderr)
 
 
 def _load_json(path: Path) -> Any:
@@ -50,6 +82,34 @@ def _load_json(path: Path) -> Any:
         _fail(f"missing JSON file: {path}")
     except json.JSONDecodeError as exc:
         _fail(f"invalid JSON in {path}: {exc}")
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse doctor runtime arguments, including optional BEP freshness flags."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--bep-json", action="append", default=[])
+    parser.add_argument(
+        "--freshness-source",
+        choices=sorted(VALID_FRESHNESS_SOURCES),
+        default=os.environ.get("DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE", "auto").lower(),
+    )
+    parser.add_argument(
+        "--freshness-mode",
+        choices=sorted(VALID_FRESHNESS_MODES),
+        default=os.environ.get("DD_TEST_OPTIMIZATION_FRESHNESS_MODE", "auto").lower(),
+    )
+    return parser.parse_args(argv)
+
+
+def _configured_bep_json_files(args: argparse.Namespace) -> list[Path]:
+    """Return BEP files selected by CLI or environment with CLI precedence."""
+    if args.bep_json:
+        raw_files = args.bep_json
+    else:
+        env_value = os.environ.get("DD_TEST_OPTIMIZATION_BEP_JSON", "")
+        raw_files = [env_value] if env_value else []
+    return [Path(raw).expanduser().resolve() for raw in raw_files if raw]
 
 
 def _workspace_root() -> Path:
@@ -255,6 +315,312 @@ def _missing_expected_target_message(label: str, target_root: Path, missing_part
         "rerun them with --remote_download_outputs=all "
         "so Bazel downloads test.outputs locally."
     )
+
+
+def _coalesced_field(obj: Any, camel: str, snake: str, default: Any = None) -> Any:
+    """Read a BEP JSON field accepting camelCase and snake_case spellings."""
+    if not isinstance(obj, dict):
+        return default
+    if camel in obj:
+        return obj[camel]
+    if snake in obj:
+        return obj[snake]
+    return default
+
+
+def _bep_file_reference_candidates(file_obj: Any) -> list[str]:
+    """Return useful path/URI strings from a BEP File JSON object."""
+    if isinstance(file_obj, str):
+        return [file_obj]
+    if not isinstance(file_obj, dict):
+        return []
+    values = []
+    for key in ("uri", "name", "path"):
+        value = file_obj.get(key)
+        if isinstance(value, str) and value:
+            values.append(value)
+    path_prefix = _coalesced_field(file_obj, "pathPrefix", "path_prefix", [])
+    name = file_obj.get("name")
+    if isinstance(path_prefix, list) and isinstance(name, str) and name:
+        path_parts = [part for part in path_prefix if isinstance(part, str) and part]
+        if path_parts:
+            values.append("/".join(path_parts + [name]))
+    return values
+
+
+def _strip_file_uri(value: str) -> str:
+    """Return a local path-like value for `file://` URI references."""
+    if not value.lower().startswith("file://"):
+        return value
+    parsed = urlparse(value)
+    if parsed.scheme != "file":
+        return value
+    path = unquote(parsed.path or "")
+    if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+        path = f"//{parsed.netloc}{path}"
+    return path
+
+
+def _bep_test_output_key(path_value: str) -> str:
+    """Normalize a BEP output reference to a bazel-testlogs-relative test.outputs key."""
+    if not path_value:
+        return ""
+    normalized = _strip_file_uri(path_value)
+    normalized = unquote(normalized).replace("\\", "/")
+    if "/testlogs/" in normalized:
+        normalized = normalized.rsplit("/testlogs/", 1)[-1]
+    elif "/bazel-testlogs/" in normalized:
+        normalized = normalized.rsplit("/bazel-testlogs/", 1)[-1]
+    else:
+        normalized = normalized.lstrip("/")
+
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.lstrip("/")
+
+    marker = "/test.outputs/"
+    if marker in normalized:
+        normalized = normalized.split(marker, 1)[0] + "/test.outputs"
+    elif normalized.endswith("/test.outputs"):
+        pass
+    elif normalized.endswith("/outputs.zip"):
+        normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
+    elif normalized.endswith("/test.log") or normalized.endswith("/test.xml"):
+        normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
+    else:
+        return ""
+
+    return normalized.lstrip("/")
+
+
+def _is_remote_only_bep_reference(path_value: str) -> bool:
+    """Return true when a BEP file reference is not locally materialized in phase 1."""
+    if not path_value:
+        return False
+    lowered = path_value.lower()
+    if lowered.startswith("file://"):
+        return False
+    if re.match(r"^[a-z][a-z0-9+.-]*://", lowered):
+        return True
+    if lowered.startswith("blobs/") or re.match(r"^[0-9a-f]{32,}/[0-9]+$", lowered):
+        return True
+    return False
+
+
+def _bep_test_outputs_artifact_hint(path_value: str) -> bool:
+    """Return true when a BEP reference appears to describe undeclared test outputs."""
+    if not path_value:
+        return False
+    normalized = _strip_file_uri(path_value).replace("\\", "/").lower()
+    return (
+        normalized == "test.outputs"
+        or normalized == "outputs.zip"
+        or "/test.outputs/" in normalized
+        or normalized.endswith("/test.outputs")
+        or normalized.endswith("/outputs.zip")
+    )
+
+
+def _parse_bep_freshness(
+    bep_files: list[Path],
+    *,
+    unavailable_is_error: bool = True,
+) -> BepFreshness | None:
+    """Parse BEP JSON files and return concrete fresh/cached output mappings."""
+    eligible_outputs: set[tuple[str, str]] = set()
+    cached_outputs: set[tuple[str, str]] = set()
+    remote_only_outputs: list[BepRemoteOnlyOutput] = []
+    missing_output_mappings: set[str] = set()
+
+    for bep_file in bep_files:
+        if not bep_file.is_file():
+            if not unavailable_is_error:
+                _warn(
+                    f"BEP JSON file not found: {bep_file}; skipping BEP freshness "
+                    "validation and preserving historical local output validation"
+                )
+                return None
+            _fail(f"BEP JSON file not found: {bep_file}")
+        try:
+            lines = bep_file.read_text(encoding="utf-8-sig").splitlines()
+        except OSError as exc:
+            if not unavailable_is_error:
+                _warn(
+                    f"failed to read BEP JSON file {bep_file}: {exc}; skipping BEP "
+                    "freshness validation and preserving historical local output validation"
+                )
+                return None
+            _fail(f"failed to read BEP JSON file {bep_file}: {exc}")
+
+        for line_number, raw_line in enumerate(lines, start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                event = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                if not unavailable_is_error:
+                    _warn(
+                        f"invalid BEP JSON in {bep_file}:{line_number}: {exc}; skipping "
+                        "BEP freshness validation and preserving historical local output validation"
+                    )
+                    return None
+                _fail(f"invalid BEP JSON in {bep_file}:{line_number}: {exc}")
+            event_id = event.get("id") if isinstance(event, dict) else {}
+            test_result_id = _coalesced_field(event_id, "testResult", "test_result", {})
+            if not isinstance(test_result_id, dict):
+                continue
+            label = test_result_id.get("label")
+            if not isinstance(label, str) or not label:
+                continue
+
+            result = _coalesced_field(event, "testResult", "test_result", {})
+            if not isinstance(result, dict):
+                continue
+            cached_locally = bool(_coalesced_field(result, "cachedLocally", "cached_locally", False))
+            execution_info = _coalesced_field(result, "executionInfo", "execution_info", {})
+            cached_remotely = bool(
+                _coalesced_field(execution_info, "cachedRemotely", "cached_remotely", False)
+            )
+            outputs = _coalesced_field(result, "testActionOutput", "test_action_output", [])
+            mapped_any = False
+            remote_any = False
+            event_fresh_pairs: set[tuple[str, str]] = set()
+            event_cached_pairs: set[tuple[str, str]] = set()
+            remote_only_candidates: list[tuple[list[str], bool]] = []
+            for output in outputs if isinstance(outputs, list) else []:
+                output_candidates = _bep_file_reference_candidates(output)
+                output_mapped_any = False
+                output_has_test_outputs_hint = False
+                output_remote_candidates: list[str] = []
+                for candidate in output_candidates:
+                    output_key = _bep_test_output_key(candidate)
+                    if output_key:
+                        mapped_any = True
+                        output_mapped_any = True
+                        pair = (label, output_key)
+                        if cached_locally or cached_remotely:
+                            event_cached_pairs.add(pair)
+                        else:
+                            event_fresh_pairs.add(pair)
+                    if _bep_test_outputs_artifact_hint(candidate):
+                        output_has_test_outputs_hint = True
+                    if not (cached_locally or cached_remotely) and _is_remote_only_bep_reference(candidate):
+                        output_remote_candidates.append(candidate)
+                if output_remote_candidates and not (cached_locally or cached_remotely):
+                    remote_only_candidates.append((
+                        output_remote_candidates,
+                        output_has_test_outputs_hint,
+                    ))
+
+            for candidates, has_test_outputs_hint in remote_only_candidates:
+                if not has_test_outputs_hint and mapped_any:
+                    continue
+                for candidate in candidates:
+                    remote_any = True
+                    remote_only_outputs.append(
+                        BepRemoteOnlyOutput(label=label, artifact=candidate, reason="remote_only")
+                    )
+
+            cached_outputs.update(event_cached_pairs)
+            if not remote_any:
+                eligible_outputs.update(event_fresh_pairs)
+
+            if not mapped_any and not remote_any and not (cached_locally or cached_remotely):
+                missing_output_mappings.add(label)
+
+    conflicting_outputs = eligible_outputs.intersection(cached_outputs)
+    if conflicting_outputs:
+        label, output_key = sorted(conflicting_outputs)[0]
+        _fail(
+            "BEP freshness is ambiguous: the same test output is reported as both "
+            f"fresh and cached: {label} {output_key}. Use one BEP file per Bazel test "
+            "invocation and do not pass overlapping stale BEP files."
+        )
+
+    return BepFreshness(
+        eligible_outputs=eligible_outputs,
+        cached_outputs=cached_outputs,
+        remote_only_outputs=remote_only_outputs,
+        missing_output_mappings=missing_output_mappings,
+    )
+
+
+def _local_test_output_key(output_dir: Path) -> str:
+    """Return a stable bazel-testlogs-relative key for a local test.outputs directory."""
+    return _bep_test_output_key(str(output_dir))
+
+
+def _local_output_matches_bep_key(output_dir: Path, bep_key: str) -> bool:
+    """Return true when a local test.outputs path corresponds to one BEP key."""
+    output_path = str(output_dir).replace("\\", "/").rstrip("/")
+    return output_path.endswith("/" + bep_key.rstrip("/")) or output_path == bep_key.rstrip("/")
+
+
+def _validate_expected_target_bep_freshness(
+    output_dirs: list[Path],
+    expected_targets: set[str],
+    freshness: BepFreshness,
+    *,
+    required: bool,
+) -> list[Path]:
+    """Return expected target output dirs proven fresh by matching BEP TestResult outputs."""
+    if not required:
+        return output_dirs
+    for remote in freshness.remote_only_outputs:
+        if not expected_targets or remote.label in expected_targets:
+            _fail(
+                "BEP references remote-only test outputs for "
+                f"{remote.label}: {remote.artifact}. Rerun bazel test with "
+                "--build_event_json_file and --remote_download_outputs=all before running the doctor."
+            )
+
+    fresh_output_dirs = []
+    fresh_labels = set()
+    for output_dir in output_dirs:
+        candidate_labels = {
+            candidate_label
+            for candidate_label, candidate_key in freshness.eligible_outputs
+            if _local_output_matches_bep_key(output_dir, candidate_key)
+        }
+        if not candidate_labels:
+            continue
+        metadata_files = _metadata_files(output_dir)
+        label = ""
+        if not metadata_files:
+            _fail(
+                f"BEP required freshness cannot authorize {output_dir} because "
+                "bazel_target_metadata.json is missing."
+            )
+        metadata = _load_json(metadata_files[0])
+        if isinstance(metadata, dict):
+            label = _metadata_target_label(metadata, None) or ""
+        if not label:
+            _fail(
+                f"BEP required freshness cannot authorize {output_dir} because "
+                "bazel_target_metadata.json does not contain bazel.target."
+            )
+        matched = label in candidate_labels
+        if matched:
+            fresh_output_dirs.append(output_dir)
+            fresh_labels.add(label)
+
+    missing_labels = expected_targets - fresh_labels
+    if missing_labels:
+        missing_label = sorted(missing_labels)[0]
+        if missing_label in freshness.missing_output_mappings:
+            reason = "the fresh TestResult did not contain a mappable test.outputs reference"
+        elif any(label == missing_label for label, _ in freshness.cached_outputs):
+            reason = "BEP reported only cached results for this target"
+        else:
+            reason = "no fresh BEP TestResult matched this target's local test.outputs"
+        _fail(
+            f"expected target output is not fresh in BEP: {missing_label} ({reason}). "
+            "Rerun bazel test with --build_event_json_file and --remote_download_outputs=all, "
+            "then rerun the doctor with --bep-json and --freshness-source=bep "
+            "--freshness-mode=required."
+        )
+
+    return fresh_output_dirs
 
 
 def _discover_output_dirs(testlogs_dir: Path) -> list[Path]:
@@ -498,9 +864,7 @@ def _format_selection_summary(summary: dict[str, int]) -> str:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    args = parser.parse_args(argv)
+    args = _parse_args(argv)
 
     config_path = Path(args.config).resolve()
     config = _load_json(config_path)
@@ -531,6 +895,37 @@ def main(argv: list[str]) -> int:
         target_by_output_dir = {}
         if not output_dirs:
             _fail(f"no Test Optimization output directories found under {testlogs_dir}")
+
+    if expected_targets and args.freshness_mode != "disabled":
+        bep_files = _configured_bep_json_files(args)
+        strict_bep_required = args.freshness_mode == "required"
+        if args.freshness_source == "execution_log" and strict_bep_required:
+            _fail("doctor freshness validation only supports BEP; use --freshness-source=bep")
+        if bep_files:
+            freshness = _parse_bep_freshness(
+                bep_files,
+                unavailable_is_error=args.freshness_mode != "optional",
+            )
+            if freshness is not None:
+                output_dirs = _validate_expected_target_bep_freshness(
+                    output_dirs,
+                    set(expected_targets),
+                    freshness,
+                    required=strict_bep_required or args.freshness_mode == "auto",
+                )
+        elif strict_bep_required:
+            _fail(
+                "BEP freshness validation is required but no BEP JSON file was configured. "
+                "Run bazel test with --build_event_json_file=.topt/bazel-bep.json and rerun "
+                "the doctor with --bep-json=.topt/bazel-bep.json --freshness-source=bep "
+                "--freshness-mode=required."
+            )
+        elif args.freshness_source == "bep":
+            print(
+                "[dd-test-optimization-doctor] warning: BEP freshness source was selected but no "
+                "BEP JSON file was configured; skipping BEP freshness validation",
+                file=sys.stderr,
+            )
 
     allowed_payload_selections = set(config.get("allowed_payload_selections") or [])
     selection_summary = _validate_outputs(

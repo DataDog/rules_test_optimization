@@ -188,8 +188,16 @@ global root `BUILD.bazel` wiring unrelated to Test Optimization.
 
 2. Run package-local labels:
    ```bash
-   bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
-   bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment
+   bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
+     --bep-json=.topt/bazel-bep.json \
+     --freshness-source=bep \
+     --freshness-mode=required
+   bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
+     --bep-json=.topt/bazel-bep.json \
+     --freshness-source=bep \
+     --freshness-mode=required \
+     --dry-run \
+     --validate-enrichment
    ```
 
 3. If Bazel repeatedly refetches Test Optimization metadata, check whether a
@@ -225,8 +233,11 @@ global root `BUILD.bazel` wiring unrelated to Test Optimization.
    ```
    PowerShell uses `*>&1` (not Bash `2>&1`) to merge stderr/stdout.
 
-4. **For RBE users**: Add `--remote_download_outputs=all` to download test
-   outputs locally.
+4. **For RBE/remote-cache users**: Add `--remote_download_outputs=all` to
+   download test outputs locally, and run tests with
+   `--build_event_json_file=.topt/bazel-bep.json`. Pass the same BEP file to
+   doctor/uploader with `--freshness-source=bep --freshness-mode=required` so
+   cached outputs are skipped instead of uploaded as fresh results.
 
 ## Doctor failures
 
@@ -306,11 +317,21 @@ before upload.
 **Solution**: Run the uploader dry-run after tests and doctor:
 
 ```bash
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --dry-run \
+  --validate-enrichment
 ```
 
 ```powershell
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+bazel run --config=test-optimization //:dd_upload_payloads -- `
+  --bep-json=.topt/bazel-bep.json `
+  --freshness-source=bep `
+  --freshness-mode=required `
+  --dry-run `
+  --validate-enrichment
 ```
 
 Dry-run mode does not upload, does not delete payload files, and does not need
@@ -332,14 +353,20 @@ Dry-run mode does not upload, does not delete payload files, and does not need
 ```bash
 # Bash - use array for multiple flags
 BAZEL_FLAGS=("--output_base=/custom/base")
-TESTLOGS_DIR=$(bazel "${BAZEL_FLAGS[@]}" info bazel-testlogs) bazel "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads
+TESTLOGS_DIR=$(bazel "${BAZEL_FLAGS[@]}" info bazel-testlogs) bazel "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required
 ```
 
 ```powershell
 # PowerShell
 $BazelFlags = @("--output_base=/custom/base")
 $env:TESTLOGS_DIR = (bazel @BazelFlags info bazel-testlogs)
-bazel @BazelFlags run //:dd_upload_payloads
+bazel @BazelFlags run //:dd_upload_payloads -- `
+  --bep-json=.topt/bazel-bep.json `
+  --freshness-source=bep `
+  --freshness-mode=required
 ```
 
 ## Tests not uploading (network errors)
