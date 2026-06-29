@@ -4102,7 +4102,7 @@ index fdeda2d..e8a3e32 100644
  	}
  }
 diff --git a/go/tools/builders/compilepkg.go b/go/tools/builders/compilepkg.go
-index e2b0be5..ee2ac9c 100644
+index e2b0be5..dab85cb 100644
 --- a/go/tools/builders/compilepkg.go
 +++ b/go/tools/builders/compilepkg.go
 @@ -17,17 +17,131 @@
@@ -4429,7 +4429,7 @@ index e2b0be5..ee2ac9c 100644
  
  	// Compile the .s files with Go's assembler, if this is not a cgo package.
  	// Cgo is assembled by cc above.
-@@ -489,100 +668,1758 @@ func compileArchive(
+@@ -489,100 +668,1761 @@ func compileArchive(
  	return nil
  }
  
@@ -5049,7 +5049,10 @@ index e2b0be5..ee2ac9c 100644
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 +	}
-+	moduleCacheRoot := filepath.Join(abs(exportRoot), ".exports_gopath")
++	moduleCacheRoot := moduleExportModuleCacheRoot(exportRoot)
++	if err := os.MkdirAll(filepath.Join(moduleCacheRoot, "pkg", "mod"), 0o755); err != nil {
++		return nil, fmt.Errorf("prepare module export cache: %w", err)
++	}
 +	env = setEnv(env, "GOPATH", moduleCacheRoot)
 +	env = setEnv(env, "GOMODCACHE", filepath.Join(moduleCacheRoot, "pkg", "mod"))
 +	env = setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)
@@ -6257,10 +6260,10 @@ index e2b0be5..ee2ac9c 100644
  }
 diff --git a/go/tools/builders/compilepkg_test.go b/go/tools/builders/compilepkg_test.go
 new file mode 100644
-index 0000000..d257adf
+index 0000000..9f7a1b0
 --- /dev/null
 +++ b/go/tools/builders/compilepkg_test.go
-@@ -0,0 +1,724 @@
+@@ -0,0 +1,727 @@
 +package main
 +
 +import (
@@ -6638,11 +6641,11 @@ index 0000000..d257adf
 +	}
 +}
 +
-+// TestModulePackageCommandEnvUsesExportLocalModuleCache verifies that
-+// synthetic metadata and export commands isolate their module cache from the
-+// shared orchestrion cache entry, so a bad extraction in one run cannot poison
-+// later helper rebuilds.
-+func TestModulePackageCommandEnvUsesExportLocalModuleCache(t *testing.T) {
++// TestModulePackageCommandEnvUsesShortExportModuleCache verifies that
++// synthetic metadata and export commands isolate downloaded module sources in a
++// short cache path derived from the export root, avoiding deeply nested
++// Orchestrion cache paths that break Windows subprocesses.
++func TestModulePackageCommandEnvUsesShortExportModuleCache(t *testing.T) {
 +	sdkRoot := filepath.Join(t.TempDir(), "sdk")
 +	exportRoot := filepath.Join(t.TempDir(), "exports")
 +	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
@@ -6657,9 +6660,12 @@ index 0000000..d257adf
 +		t.Fatalf("modulePackageCommandEnv error: %v", err)
 +	}
 +
-+	wantGoPath := filepath.Join(exportRoot, ".exports_gopath")
++	wantGoPath := moduleExportModuleCacheRoot(exportRoot)
 +	if got := getEnv(envv, "GOPATH"); got != wantGoPath {
 +		t.Fatalf("GOPATH = %q, want %q", got, wantGoPath)
++	}
++	if strings.Contains(wantGoPath, exportRoot) {
++		t.Fatalf("GOPATH = %q should not be nested under export root %q", wantGoPath, exportRoot)
 +	}
 +	wantGoModCache := filepath.Join(wantGoPath, "pkg", "mod")
 +	if got := getEnv(envv, "GOMODCACHE"); got != wantGoModCache {
@@ -7635,7 +7641,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..0dbaaac 100644
+index c25763a..2fe91fa 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -7733,7 +7739,7 @@ index c25763a..0dbaaac 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1664 @@ package with this path is linked.`,
+@@ -213,6 +286,1677 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -8226,7 +8232,7 @@ index c25763a..0dbaaac 100644
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare module gocache: %w", err)
 +	}
-+	moduleCacheRoot := filepath.Join(gocache, ".exports_gopath")
++	moduleCacheRoot := moduleExportModuleCacheRoot(gocache)
 +	if err := os.MkdirAll(filepath.Join(moduleCacheRoot, "pkg", "mod"), 0o755); err != nil {
 +		return nil, fmt.Errorf("prepare module export cache: %w", err)
 +	}
@@ -8296,6 +8302,19 @@ index c25763a..0dbaaac 100644
 +		env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
 +	}
 +	return normalizeGoActionCacheEnv(env)
++}
++
++func moduleExportModuleCacheRoot(exportRoot string) string {
++	// Keep downloaded module source trees out of the nested export cache. On
++	// Windows, `go list -export` launches tools like asm.exe with package
++	// directories under GOMODCACHE as their working directory, and deeply nested
++	// Bazel/Orchestrion cache paths can exceed practical Windows path limits.
++	return filepath.Join(
++		os.TempDir(),
++		orchestrionSharedCacheDirName,
++		"module-gopath",
++		stableDigestParts("export_root="+abs(exportRoot)),
++	)
 +}
 +
 +func sanitizeModuleExportArchives(exports map[string]string) error {

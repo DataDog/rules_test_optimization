@@ -1217,7 +1217,10 @@ func modulePackageCommandEnv(goenv *env, exportRoot string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 	}
-	moduleCacheRoot := filepath.Join(abs(exportRoot), ".exports_gopath")
+	moduleCacheRoot := moduleExportModuleCacheRoot(exportRoot)
+	if err := os.MkdirAll(filepath.Join(moduleCacheRoot, "pkg", "mod"), 0o755); err != nil {
+		return nil, fmt.Errorf("prepare module export cache: %w", err)
+	}
 	env = setEnv(env, "GOPATH", moduleCacheRoot)
 	env = setEnv(env, "GOMODCACHE", filepath.Join(moduleCacheRoot, "pkg", "mod"))
 	env = setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)

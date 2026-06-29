@@ -375,11 +375,11 @@ func TestSeedSyntheticTestmainModuleFilesFallsBack(t *testing.T) {
 	}
 }
 
-// TestModulePackageCommandEnvUsesExportLocalModuleCache verifies that
-// synthetic metadata and export commands isolate their module cache from the
-// shared orchestrion cache entry, so a bad extraction in one run cannot poison
-// later helper rebuilds.
-func TestModulePackageCommandEnvUsesExportLocalModuleCache(t *testing.T) {
+// TestModulePackageCommandEnvUsesShortExportModuleCache verifies that
+// synthetic metadata and export commands isolate downloaded module sources in a
+// short cache path derived from the export root, avoiding deeply nested
+// Orchestrion cache paths that break Windows subprocesses.
+func TestModulePackageCommandEnvUsesShortExportModuleCache(t *testing.T) {
 	sdkRoot := filepath.Join(t.TempDir(), "sdk")
 	exportRoot := filepath.Join(t.TempDir(), "exports")
 	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
@@ -394,9 +394,12 @@ func TestModulePackageCommandEnvUsesExportLocalModuleCache(t *testing.T) {
 		t.Fatalf("modulePackageCommandEnv error: %v", err)
 	}
 
-	wantGoPath := filepath.Join(exportRoot, ".exports_gopath")
+	wantGoPath := moduleExportModuleCacheRoot(exportRoot)
 	if got := getEnv(envv, "GOPATH"); got != wantGoPath {
 		t.Fatalf("GOPATH = %q, want %q", got, wantGoPath)
+	}
+	if strings.Contains(wantGoPath, exportRoot) {
+		t.Fatalf("GOPATH = %q should not be nested under export root %q", wantGoPath, exportRoot)
 	}
 	wantGoModCache := filepath.Join(wantGoPath, "pkg", "mod")
 	if got := getEnv(envv, "GOMODCACHE"); got != wantGoModCache {

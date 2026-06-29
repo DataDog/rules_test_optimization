@@ -775,7 +775,7 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if err != nil {
 		return nil, fmt.Errorf("prepare module gocache: %w", err)
 	}
-	moduleCacheRoot := filepath.Join(gocache, ".exports_gopath")
+	moduleCacheRoot := moduleExportModuleCacheRoot(gocache)
 	if err := os.MkdirAll(filepath.Join(moduleCacheRoot, "pkg", "mod"), 0o755); err != nil {
 		return nil, fmt.Errorf("prepare module export cache: %w", err)
 	}
@@ -845,6 +845,19 @@ func moduleExportGoListBaseEnv(goenv *env, environ []string) ([]string, error) {
 		env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
 	}
 	return normalizeGoActionCacheEnv(env)
+}
+
+func moduleExportModuleCacheRoot(exportRoot string) string {
+	// Keep downloaded module source trees out of the nested export cache. On
+	// Windows, `go list -export` launches tools like asm.exe with package
+	// directories under GOMODCACHE as their working directory, and deeply nested
+	// Bazel/Orchestrion cache paths can exceed practical Windows path limits.
+	return filepath.Join(
+		os.TempDir(),
+		orchestrionSharedCacheDirName,
+		"module-gopath",
+		stableDigestParts("export_root="+abs(exportRoot)),
+	)
 }
 
 func sanitizeModuleExportArchives(exports map[string]string) error {
