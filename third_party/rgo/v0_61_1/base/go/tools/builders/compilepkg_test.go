@@ -394,7 +394,7 @@ func TestModulePackageCommandEnvUsesExportLocalModuleCache(t *testing.T) {
 		t.Fatalf("modulePackageCommandEnv error: %v", err)
 	}
 
-	wantGoPath := filepath.Join(filepath.Dir(exportRoot), ".exports_gopath")
+	wantGoPath := filepath.Join(exportRoot, ".exports_gopath")
 	if got := getEnv(envv, "GOPATH"); got != wantGoPath {
 		t.Fatalf("GOPATH = %q, want %q", got, wantGoPath)
 	}

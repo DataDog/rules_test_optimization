@@ -83,6 +83,19 @@ func normalizeGoModuleResolutionEnv(env []string) ([]string, error) {
 	return env, nil
 }
 
+func ensureGoFlagsModMode(env []string) []string {
+	goFlags := strings.TrimSpace(getEnv(env, "GOFLAGS"))
+	if strings.Contains(goFlags, "-mod=") {
+		return env
+	}
+	if goFlags == "" {
+		goFlags = "-mod=mod"
+	} else {
+		goFlags = "-mod=mod " + goFlags
+	}
+	return setEnv(env, "GOFLAGS", goFlags)
+}
+
 // normalizeGoCompilerCommandEnv makes Bazel execroot-relative compiler paths
 // acceptable to Go subprocesses that validate CC, CXX, and FC before module
 // resolution. Bare tool names such as "clang" are left untouched so Go can

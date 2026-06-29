@@ -1980,7 +1980,7 @@ index 0000000..488d4ad
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..5042477
+index 0000000..0565233
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
 @@ -0,0 +1,1422 @@
@@ -4071,7 +4071,7 @@ index fdeda2d..e8a3e32 100644
  	}
  }
 diff --git a/go/tools/builders/compilepkg.go b/go/tools/builders/compilepkg.go
-index e2b0be5..da1904e 100644
+index e2b0be5..ee2ac9c 100644
 --- a/go/tools/builders/compilepkg.go
 +++ b/go/tools/builders/compilepkg.go
 @@ -17,17 +17,131 @@
@@ -4398,7 +4398,7 @@ index e2b0be5..da1904e 100644
  
  	// Compile the .s files with Go's assembler, if this is not a cgo package.
  	// Cgo is assembled by cc above.
-@@ -489,100 +668,1742 @@ func compileArchive(
+@@ -489,100 +668,1758 @@ func compileArchive(
  	return nil
  }
  
@@ -5018,15 +5018,13 @@ index e2b0be5..da1904e 100644
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 +	}
-+	moduleCacheRoot := filepath.Join(filepath.Dir(abs(exportRoot)), ".exports_gopath")
++	moduleCacheRoot := filepath.Join(abs(exportRoot), ".exports_gopath")
 +	env = setEnv(env, "GOPATH", moduleCacheRoot)
 +	env = setEnv(env, "GOMODCACHE", filepath.Join(moduleCacheRoot, "pkg", "mod"))
 +	env = setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)
 +	env = setEnv(env, "GIT_CONFIG_NOSYSTEM", "1")
 +	env = setEnv(env, "GIT_TERMINAL_PROMPT", "0")
-+	if getEnv(env, "GOFLAGS") == "" {
-+		env = setEnv(env, "GOFLAGS", "-mod=mod")
-+	}
++	env = ensureGoFlagsModMode(env)
 +	if getEnv(env, "HOME") == "" {
 +		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 +		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -5055,16 +5053,34 @@ index e2b0be5..da1904e 100644
 +	cmd.Stderr = &stderr
 +	err = cmd.Run()
 +	if err != nil {
-+		return nil, fmt.Errorf("go list package metadata for %s: %w\n%s", pkg, err, strings.TrimSpace(stderr.String()))
++		return nil, modulePackageError(pkg, fmt.Sprintf("go list package metadata: %v", err), stderr.String())
 +	}
 +	var meta modulePackageMetadata
 +	if err := json.Unmarshal(stdout.Bytes(), &meta); err != nil {
 +		return nil, fmt.Errorf("parse package metadata for %s: %w", pkg, err)
 +	}
 +	if meta.Dir == "" || meta.ImportPath == "" || len(meta.GoFiles) == 0 {
-+		return nil, fmt.Errorf("incomplete package metadata for %s", pkg)
++		return nil, incompleteModulePackageMetadataError(pkg, meta, stderr.String())
 +	}
 +	return &meta, nil
++}
++
++func modulePackageError(pkg, message, stderr string) error {
++	stderr = strings.TrimSpace(stderr)
++	if stderr == "" {
++		return fmt.Errorf("%s for %s", message, pkg)
++	}
++	return fmt.Errorf("%s for %s\n%s", message, pkg, stderr)
++}
++
++func incompleteModulePackageMetadataError(pkg string, meta modulePackageMetadata, stderr string) error {
++	message := fmt.Sprintf(
++		"incomplete package metadata (Dir=%q ImportPath=%q GoFiles=%d)",
++		meta.Dir,
++		meta.ImportPath,
++		len(meta.GoFiles),
++	)
++	return modulePackageError(pkg, message, stderr)
 +}
 +
 +func loadModulePackageMetadataBatch(goenv *env, moduleDir, exportRoot string, packages []string) (map[string]*modulePackageMetadata, error) {
@@ -6210,7 +6226,7 @@ index e2b0be5..da1904e 100644
  }
 diff --git a/go/tools/builders/compilepkg_test.go b/go/tools/builders/compilepkg_test.go
 new file mode 100644
-index 0000000..e56a3df
+index 0000000..d257adf
 --- /dev/null
 +++ b/go/tools/builders/compilepkg_test.go
 @@ -0,0 +1,724 @@
@@ -6610,7 +6626,7 @@ index 0000000..e56a3df
 +		t.Fatalf("modulePackageCommandEnv error: %v", err)
 +	}
 +
-+	wantGoPath := filepath.Join(filepath.Dir(exportRoot), ".exports_gopath")
++	wantGoPath := filepath.Join(exportRoot, ".exports_gopath")
 +	if got := getEnv(envv, "GOPATH"); got != wantGoPath {
 +		t.Fatalf("GOPATH = %q, want %q", got, wantGoPath)
 +	}
@@ -7594,7 +7610,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..807da79 100644
+index c25763a..c5fac84 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -7692,7 +7708,7 @@ index c25763a..807da79 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1640 @@ package with this path is linked.`,
+@@ -213,6 +286,1644 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -8195,15 +8211,19 @@ index c25763a..807da79 100644
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare module gocache: %w", err)
 +	}
++	moduleCacheRoot := filepath.Join(gocache, ".exports_gopath")
++	if err := os.MkdirAll(filepath.Join(moduleCacheRoot, "pkg", "mod"), 0o755); err != nil {
++		return nil, fmt.Errorf("prepare module export cache: %w", err)
++	}
 +	cmd.Env = setEnv(cmd.Env, "GOCACHE", gocache)
++	cmd.Env = setEnv(cmd.Env, "GOPATH", moduleCacheRoot)
++	cmd.Env = setEnv(cmd.Env, "GOMODCACHE", filepath.Join(moduleCacheRoot, "pkg", "mod"))
 +	cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
 +	cmd.Env, err = normalizeGoModuleResolutionEnv(cmd.Env)
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 +	}
-+	if getEnv(cmd.Env, "GOFLAGS") == "" {
-+		cmd.Env = setEnv(cmd.Env, "GOFLAGS", "-mod=mod")
-+	}
++	cmd.Env = ensureGoFlagsModMode(cmd.Env)
 +	if getEnv(cmd.Env, "HOME") == "" {
 +		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 +		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -10486,10 +10506,10 @@ index 11dc0ab..610af53 100644
  	if *buildmode == "c-archive" {
 diff --git a/go/tools/builders/module_proxy.go b/go/tools/builders/module_proxy.go
 new file mode 100644
-index 0000000..14d7dfc
+index 0000000..1655ad7
 --- /dev/null
 +++ b/go/tools/builders/module_proxy.go
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,291 @@
 +package main
 +
 +import (
@@ -10573,6 +10593,19 @@ index 0000000..14d7dfc
 +		env = setEnv(env, "GOSUMDB", "sum.golang.org")
 +	}
 +	return env, nil
++}
++
++func ensureGoFlagsModMode(env []string) []string {
++	goFlags := strings.TrimSpace(getEnv(env, "GOFLAGS"))
++	if strings.Contains(goFlags, "-mod=") {
++		return env
++	}
++	if goFlags == "" {
++		goFlags = "-mod=mod"
++	} else {
++		goFlags = "-mod=mod " + goFlags
++	}
++	return setEnv(env, "GOFLAGS", goFlags)
 +}
 +
 +// normalizeGoCompilerCommandEnv makes Bazel execroot-relative compiler paths
@@ -13523,7 +13556,7 @@ index 0000000..828fec6
 +}
 diff --git a/go/tools/builders/orchestrion_version.go b/go/tools/builders/orchestrion_version.go
 new file mode 100644
-index 0000000..72df9c2
+index 0000000..d59f9b4
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_version.go
 @@ -0,0 +1,425 @@
@@ -13954,7 +13987,7 @@ index 0000000..72df9c2
 +}
 diff --git a/go/tools/builders/orchestrion_version_test.go b/go/tools/builders/orchestrion_version_test.go
 new file mode 100644
-index 0000000..753a632
+index 0000000..9ad4197
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_version_test.go
 @@ -0,0 +1,410 @@

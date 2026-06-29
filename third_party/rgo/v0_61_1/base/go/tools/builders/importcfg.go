@@ -785,15 +785,19 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if err != nil {
 		return nil, fmt.Errorf("prepare module gocache: %w", err)
 	}
+	moduleCacheRoot := filepath.Join(gocache, ".exports_gopath")
+	if err := os.MkdirAll(filepath.Join(moduleCacheRoot, "pkg", "mod"), 0o755); err != nil {
+		return nil, fmt.Errorf("prepare module export cache: %w", err)
+	}
 	cmd.Env = setEnv(cmd.Env, "GOCACHE", gocache)
+	cmd.Env = setEnv(cmd.Env, "GOPATH", moduleCacheRoot)
+	cmd.Env = setEnv(cmd.Env, "GOMODCACHE", filepath.Join(moduleCacheRoot, "pkg", "mod"))
 	cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
 	cmd.Env, err = normalizeGoModuleResolutionEnv(cmd.Env)
 	if err != nil {
 		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 	}
-	if getEnv(cmd.Env, "GOFLAGS") == "" {
-		cmd.Env = setEnv(cmd.Env, "GOFLAGS", "-mod=mod")
-	}
+	cmd.Env = ensureGoFlagsModMode(cmd.Env)
 	if getEnv(cmd.Env, "HOME") == "" {
 		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 		if err := os.MkdirAll(homePath, 0o755); err != nil {

@@ -1217,15 +1217,13 @@ func modulePackageCommandEnv(goenv *env, exportRoot string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 	}
-	moduleCacheRoot := filepath.Join(filepath.Dir(abs(exportRoot)), ".exports_gopath")
+	moduleCacheRoot := filepath.Join(abs(exportRoot), ".exports_gopath")
 	env = setEnv(env, "GOPATH", moduleCacheRoot)
 	env = setEnv(env, "GOMODCACHE", filepath.Join(moduleCacheRoot, "pkg", "mod"))
 	env = setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)
 	env = setEnv(env, "GIT_CONFIG_NOSYSTEM", "1")
 	env = setEnv(env, "GIT_TERMINAL_PROMPT", "0")
-	if getEnv(env, "GOFLAGS") == "" {
-		env = setEnv(env, "GOFLAGS", "-mod=mod")
-	}
+	env = ensureGoFlagsModMode(env)
 	if getEnv(env, "HOME") == "" {
 		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -1254,16 +1252,34 @@ func loadModulePackageMetadata(goenv *env, moduleDir, exportRoot, pkg string) (*
 	cmd.Stderr = &stderr
 	err = cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("go list package metadata for %s: %w\n%s", pkg, err, strings.TrimSpace(stderr.String()))
+		return nil, modulePackageError(pkg, fmt.Sprintf("go list package metadata: %v", err), stderr.String())
 	}
 	var meta modulePackageMetadata
 	if err := json.Unmarshal(stdout.Bytes(), &meta); err != nil {
 		return nil, fmt.Errorf("parse package metadata for %s: %w", pkg, err)
 	}
 	if meta.Dir == "" || meta.ImportPath == "" || len(meta.GoFiles) == 0 {
-		return nil, fmt.Errorf("incomplete package metadata for %s", pkg)
+		return nil, incompleteModulePackageMetadataError(pkg, meta, stderr.String())
 	}
 	return &meta, nil
+}
+
+func modulePackageError(pkg, message, stderr string) error {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return fmt.Errorf("%s for %s", message, pkg)
+	}
+	return fmt.Errorf("%s for %s\n%s", message, pkg, stderr)
+}
+
+func incompleteModulePackageMetadataError(pkg string, meta modulePackageMetadata, stderr string) error {
+	message := fmt.Sprintf(
+		"incomplete package metadata (Dir=%q ImportPath=%q GoFiles=%d)",
+		meta.Dir,
+		meta.ImportPath,
+		len(meta.GoFiles),
+	)
+	return modulePackageError(pkg, message, stderr)
 }
 
 func loadModulePackageMetadataBatch(goenv *env, moduleDir, exportRoot string, packages []string) (map[string]*modulePackageMetadata, error) {
