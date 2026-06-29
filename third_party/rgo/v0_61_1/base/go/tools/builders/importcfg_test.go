@@ -490,6 +490,79 @@ func TestModuleExportRequestKeyIgnoresSdkExecrootPath(t *testing.T) {
 	}
 }
 
+func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
+	sdkRoot := filepath.Join(t.TempDir(), "sdk")
+	wovenGoRoot := filepath.Join(t.TempDir(), "woven_goroot")
+	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir fake sdk bin: %v", err)
+	}
+
+	envv, err := moduleExportGoListBaseEnv(&env{
+		sdk:    sdkRoot,
+		goroot: wovenGoRoot,
+	}, []string{
+		"GOROOT=" + wovenGoRoot,
+		"PATH=/usr/bin",
+	})
+	if err != nil {
+		t.Fatalf("moduleExportGoListBaseEnv error: %v", err)
+	}
+
+	if got := getEnv(envv, "GOROOT"); got != sdkRoot {
+		t.Fatalf("GOROOT = %q, want SDK root %q", got, sdkRoot)
+	}
+	wantPathPrefix := filepath.Join(sdkRoot, "bin") + string(os.PathListSeparator)
+	if got := getEnv(envv, "PATH"); !strings.HasPrefix(got, wantPathPrefix) {
+		t.Fatalf("PATH = %q, want prefix %q", got, wantPathPrefix)
+	}
+	if got := getEnv(envv, "GO111MODULE"); got != "on" {
+		t.Fatalf("GO111MODULE = %q, want on", got)
+	}
+	if got := getEnv(envv, "GOWORK"); got != "off" {
+		t.Fatalf("GOWORK = %q, want off", got)
+	}
+	if got := getEnv(envv, orchestrionJobserverURLEnvVar); got != "" {
+		t.Fatalf("%s = %q, want empty", orchestrionJobserverURLEnvVar, got)
+	}
+	if got := getEnv(envv, "DD_ORCHESTRION_IS_GOMOD_VERSION"); got != "" {
+		t.Fatalf("DD_ORCHESTRION_IS_GOMOD_VERSION = %q, want empty", got)
+	}
+}
+
+func TestCacheStdlibGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
+	sdkRoot := filepath.Join(t.TempDir(), "sdk")
+	wovenGoRoot := filepath.Join(t.TempDir(), "woven_goroot")
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir fake sdk bin: %v", err)
+	}
+
+	envv := cacheStdlibGoListBaseEnv(&env{
+		sdk:    sdkRoot,
+		goroot: wovenGoRoot,
+	}, cacheRoot, []string{
+		"GOROOT=" + wovenGoRoot,
+		"PATH=/usr/bin",
+	})
+
+	if got := getEnv(envv, "GOROOT"); got != sdkRoot {
+		t.Fatalf("GOROOT = %q, want SDK root %q", got, sdkRoot)
+	}
+	if got := getEnv(envv, "GOCACHE"); got != cacheRoot {
+		t.Fatalf("GOCACHE = %q, want %q", got, cacheRoot)
+	}
+	wantPathPrefix := filepath.Join(sdkRoot, "bin") + string(os.PathListSeparator)
+	if got := getEnv(envv, "PATH"); !strings.HasPrefix(got, wantPathPrefix) {
+		t.Fatalf("PATH = %q, want prefix %q", got, wantPathPrefix)
+	}
+	if got := getEnv(envv, "GO111MODULE"); got != "off" {
+		t.Fatalf("GO111MODULE = %q, want off", got)
+	}
+	if got := getEnv(envv, "GOWORK"); got != "off" {
+		t.Fatalf("GOWORK = %q, want off", got)
+	}
+}
+
 func TestModuleExportCacheManifestRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	paths := orchestrionCachePaths(root, "module-exports", "abc123")

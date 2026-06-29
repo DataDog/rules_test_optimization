@@ -16,7 +16,7 @@ index 3843895..facea60 100644
  
  go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 diff --git a/MODULE.bazel.lock b/MODULE.bazel.lock
-index baae45c..84dc632 100644
+index baae45c..194ca85 100644
 --- a/MODULE.bazel.lock
 +++ b/MODULE.bazel.lock
 @@ -159,6 +159,176 @@
@@ -25,7 +25,7 @@ index baae45c..84dc632 100644
    "moduleExtensions": {
 +    "//go:extensions.bzl%orchestrion": {
 +      "general": {
-+        "bzlTransitiveDigest": "TbrKHhlgTJS9KKK5RZ0ZWY3tQKaOcbgMq16isTCZGl0=",
++        "bzlTransitiveDigest": "ay840Xt9h5EN1rlnR51718JDt8PsrPXujj9FSSUrrBM=",
 +        "usagesDigest": "uzG4j+dPOAh/T8fqRnNWcwaH4INbm74AsvyHGrBh/Go=",
 +        "recordedFileInputs": {},
 +        "recordedDirentsInputs": {},
@@ -7610,7 +7610,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..c5fac84 100644
+index c25763a..0dbaaac 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -7708,7 +7708,7 @@ index c25763a..c5fac84 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1644 @@ package with this path is linked.`,
+@@ -213,6 +286,1664 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -8133,17 +8133,7 @@ index c25763a..c5fac84 100644
 +	if moduleDir != "" {
 +		cmd.Dir = abs(moduleDir)
 +	}
-+	cmd.Env = append([]string{}, os.Environ()...)
-+	cmd.Env = setEnv(cmd.Env, "GO111MODULE", "on")
-+	cmd.Env = setEnv(cmd.Env, "GOWORK", "off")
-+	cmd.Env = setEnv(cmd.Env, orchestrionJobserverURLEnvVar, "")
-+	cmd.Env = setEnv(cmd.Env, "DD_ORCHESTRION_IS_GOMOD_VERSION", "")
-+	if goenv.goroot != "" {
-+		cmd.Env = setEnv(cmd.Env, "GOROOT", abs(goenv.goroot))
-+	}
-+	goBin := filepath.Join(abs(goenv.sdk), "bin")
-+	cmd.Env = setEnv(cmd.Env, "PATH", goBin+string(os.PathListSeparator)+getEnv(cmd.Env, "PATH"))
-+	cmd.Env, err = normalizeGoActionCacheEnv(cmd.Env)
++	cmd.Env, err = moduleExportGoListBaseEnv(goenv, os.Environ())
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare module action cache env: %w", err)
 +	}
@@ -8264,6 +8254,23 @@ index c25763a..c5fac84 100644
 +		}
 +	}
 +	return exports, nil
++}
++
++func moduleExportGoListBaseEnv(goenv *env, environ []string) ([]string, error) {
++	env := append([]string{}, environ...)
++	env = setEnv(env, "GO111MODULE", "on")
++	env = setEnv(env, "GOWORK", "off")
++	env = setEnv(env, orchestrionJobserverURLEnvVar, "")
++	env = setEnv(env, "DD_ORCHESTRION_IS_GOMOD_VERSION", "")
++	if goenv != nil && goenv.sdk != "" {
++		// Module `go list` commands run with the SDK `go` binary, so their
++		// GOROOT must be the complete SDK root. The woven stdlib tree is still
++		// supplied separately through the Orchestrion stdlib cache.
++		env = setEnv(env, "GOROOT", abs(goenv.sdk))
++		goBin := filepath.Join(abs(goenv.sdk), "bin")
++		env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
++	}
++	return normalizeGoActionCacheEnv(env)
 +}
 +
 +func sanitizeModuleExportArchives(exports map[string]string) error {
@@ -8816,9 +8823,6 @@ index c25763a..c5fac84 100644
 +	}
 +
 +	baseEnv := append([]string{}, os.Environ()...)
-+	baseEnv = setEnv(baseEnv, "GOROOT", goenv.goroot)
-+	baseEnv = setEnv(baseEnv, "GO111MODULE", "off")
-+	baseEnv = setEnv(baseEnv, "GOWORK", "off")
 +	cachePath := cacheRoot
 +	if cachePath == "" {
 +		cachePath = getEnv(baseEnv, "GOCACHE")
@@ -8830,7 +8834,7 @@ index c25763a..c5fac84 100644
 +	if err := os.MkdirAll(cachePath, 0o755); err != nil {
 +		return nil, fmt.Errorf("prepare stdlib cache exports: %w", err)
 +	}
-+	baseEnv = setEnv(baseEnv, "GOCACHE", cachePath)
++	baseEnv = cacheStdlibGoListBaseEnv(goenv, cachePath, baseEnv)
 +	if getEnv(baseEnv, "HOME") == "" {
 +		homePath := filepath.Join(goenv.goroot, ".home")
 +		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -8870,6 +8874,22 @@ index c25763a..c5fac84 100644
 +		exports[parts[0]] = parts[1]
 +	}
 +	return exports, nil
++}
++
++func cacheStdlibGoListBaseEnv(goenv *env, cachePath string, environ []string) []string {
++	env := append([]string{}, environ...)
++	if goenv != nil && goenv.sdk != "" {
++		// This `go list` computes cache paths for later module export commands.
++		// It must use the complete SDK GOROOT so Go can find pkg/tool binaries;
++		// the woven stdlib artifacts are supplied through GOCACHE.
++		env = setEnv(env, "GOROOT", abs(goenv.sdk))
++		goBin := filepath.Join(abs(goenv.sdk), "bin")
++		env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
++	}
++	env = setEnv(env, "GO111MODULE", "off")
++	env = setEnv(env, "GOWORK", "off")
++	env = setEnv(env, "GOCACHE", cachePath)
++	return env
 +}
 +
 +func readStdlibCacheManifest(cacheRoot string, packages []string) (map[string]string, error) {
@@ -9355,10 +9375,10 @@ index c25763a..c5fac84 100644
  	known   []string
 diff --git a/go/tools/builders/importcfg_test.go b/go/tools/builders/importcfg_test.go
 new file mode 100644
-index 0000000..d141c93
+index 0000000..468b62f
 --- /dev/null
 +++ b/go/tools/builders/importcfg_test.go
-@@ -0,0 +1,704 @@
+@@ -0,0 +1,777 @@
 +package main
 +
 +import (
@@ -9848,6 +9868,79 @@ index 0000000..d141c93
 +	}
 +	if keyA != keyB {
 +		t.Fatalf("moduleExportRequestKey changed across equivalent sdk paths: %q != %q", keyA, keyB)
++	}
++}
++
++func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
++	sdkRoot := filepath.Join(t.TempDir(), "sdk")
++	wovenGoRoot := filepath.Join(t.TempDir(), "woven_goroot")
++	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
++		t.Fatalf("mkdir fake sdk bin: %v", err)
++	}
++
++	envv, err := moduleExportGoListBaseEnv(&env{
++		sdk:    sdkRoot,
++		goroot: wovenGoRoot,
++	}, []string{
++		"GOROOT=" + wovenGoRoot,
++		"PATH=/usr/bin",
++	})
++	if err != nil {
++		t.Fatalf("moduleExportGoListBaseEnv error: %v", err)
++	}
++
++	if got := getEnv(envv, "GOROOT"); got != sdkRoot {
++		t.Fatalf("GOROOT = %q, want SDK root %q", got, sdkRoot)
++	}
++	wantPathPrefix := filepath.Join(sdkRoot, "bin") + string(os.PathListSeparator)
++	if got := getEnv(envv, "PATH"); !strings.HasPrefix(got, wantPathPrefix) {
++		t.Fatalf("PATH = %q, want prefix %q", got, wantPathPrefix)
++	}
++	if got := getEnv(envv, "GO111MODULE"); got != "on" {
++		t.Fatalf("GO111MODULE = %q, want on", got)
++	}
++	if got := getEnv(envv, "GOWORK"); got != "off" {
++		t.Fatalf("GOWORK = %q, want off", got)
++	}
++	if got := getEnv(envv, orchestrionJobserverURLEnvVar); got != "" {
++		t.Fatalf("%s = %q, want empty", orchestrionJobserverURLEnvVar, got)
++	}
++	if got := getEnv(envv, "DD_ORCHESTRION_IS_GOMOD_VERSION"); got != "" {
++		t.Fatalf("DD_ORCHESTRION_IS_GOMOD_VERSION = %q, want empty", got)
++	}
++}
++
++func TestCacheStdlibGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
++	sdkRoot := filepath.Join(t.TempDir(), "sdk")
++	wovenGoRoot := filepath.Join(t.TempDir(), "woven_goroot")
++	cacheRoot := filepath.Join(t.TempDir(), "cache")
++	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
++		t.Fatalf("mkdir fake sdk bin: %v", err)
++	}
++
++	envv := cacheStdlibGoListBaseEnv(&env{
++		sdk:    sdkRoot,
++		goroot: wovenGoRoot,
++	}, cacheRoot, []string{
++		"GOROOT=" + wovenGoRoot,
++		"PATH=/usr/bin",
++	})
++
++	if got := getEnv(envv, "GOROOT"); got != sdkRoot {
++		t.Fatalf("GOROOT = %q, want SDK root %q", got, sdkRoot)
++	}
++	if got := getEnv(envv, "GOCACHE"); got != cacheRoot {
++		t.Fatalf("GOCACHE = %q, want %q", got, cacheRoot)
++	}
++	wantPathPrefix := filepath.Join(sdkRoot, "bin") + string(os.PathListSeparator)
++	if got := getEnv(envv, "PATH"); !strings.HasPrefix(got, wantPathPrefix) {
++		t.Fatalf("PATH = %q, want prefix %q", got, wantPathPrefix)
++	}
++	if got := getEnv(envv, "GO111MODULE"); got != "off" {
++		t.Fatalf("GO111MODULE = %q, want off", got)
++	}
++	if got := getEnv(envv, "GOWORK"); got != "off" {
++		t.Fatalf("GOWORK = %q, want off", got)
 +	}
 +}
 +

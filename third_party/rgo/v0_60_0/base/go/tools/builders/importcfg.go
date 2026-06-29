@@ -707,17 +707,7 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if moduleDir != "" {
 		cmd.Dir = abs(moduleDir)
 	}
-	cmd.Env = append([]string{}, os.Environ()...)
-	cmd.Env = setEnv(cmd.Env, "GO111MODULE", "on")
-	cmd.Env = setEnv(cmd.Env, "GOWORK", "off")
-	cmd.Env = setEnv(cmd.Env, orchestrionJobserverURLEnvVar, "")
-	cmd.Env = setEnv(cmd.Env, "DD_ORCHESTRION_IS_GOMOD_VERSION", "")
-	if goenv.goroot != "" {
-		cmd.Env = setEnv(cmd.Env, "GOROOT", abs(goenv.goroot))
-	}
-	goBin := filepath.Join(abs(goenv.sdk), "bin")
-	cmd.Env = setEnv(cmd.Env, "PATH", goBin+string(os.PathListSeparator)+getEnv(cmd.Env, "PATH"))
-	cmd.Env, err = normalizeGoActionCacheEnv(cmd.Env)
+	cmd.Env, err = moduleExportGoListBaseEnv(goenv, os.Environ())
 	if err != nil {
 		return nil, fmt.Errorf("prepare module action cache env: %w", err)
 	}
@@ -838,6 +828,23 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 		}
 	}
 	return exports, nil
+}
+
+func moduleExportGoListBaseEnv(goenv *env, environ []string) ([]string, error) {
+	env := append([]string{}, environ...)
+	env = setEnv(env, "GO111MODULE", "on")
+	env = setEnv(env, "GOWORK", "off")
+	env = setEnv(env, orchestrionJobserverURLEnvVar, "")
+	env = setEnv(env, "DD_ORCHESTRION_IS_GOMOD_VERSION", "")
+	if goenv != nil && goenv.sdk != "" {
+		// Module `go list` commands run with the SDK `go` binary, so their
+		// GOROOT must be the complete SDK root. The woven stdlib tree is still
+		// supplied separately through the Orchestrion stdlib cache.
+		env = setEnv(env, "GOROOT", abs(goenv.sdk))
+		goBin := filepath.Join(abs(goenv.sdk), "bin")
+		env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
+	}
+	return normalizeGoActionCacheEnv(env)
 }
 
 func sanitizeModuleExportArchives(exports map[string]string) error {
@@ -1390,9 +1397,6 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 	}
 
 	baseEnv := append([]string{}, os.Environ()...)
-	baseEnv = setEnv(baseEnv, "GOROOT", goenv.goroot)
-	baseEnv = setEnv(baseEnv, "GO111MODULE", "off")
-	baseEnv = setEnv(baseEnv, "GOWORK", "off")
 	cachePath := cacheRoot
 	if cachePath == "" {
 		cachePath = getEnv(baseEnv, "GOCACHE")
@@ -1404,7 +1408,7 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 	if err := os.MkdirAll(cachePath, 0o755); err != nil {
 		return nil, fmt.Errorf("prepare stdlib cache exports: %w", err)
 	}
-	baseEnv = setEnv(baseEnv, "GOCACHE", cachePath)
+	baseEnv = cacheStdlibGoListBaseEnv(goenv, cachePath, baseEnv)
 	if getEnv(baseEnv, "HOME") == "" {
 		homePath := filepath.Join(goenv.goroot, ".home")
 		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -1444,6 +1448,22 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 		exports[parts[0]] = parts[1]
 	}
 	return exports, nil
+}
+
+func cacheStdlibGoListBaseEnv(goenv *env, cachePath string, environ []string) []string {
+	env := append([]string{}, environ...)
+	if goenv != nil && goenv.sdk != "" {
+		// This `go list` computes cache paths for later module export commands.
+		// It must use the complete SDK GOROOT so Go can find pkg/tool binaries;
+		// the woven stdlib artifacts are supplied through GOCACHE.
+		env = setEnv(env, "GOROOT", abs(goenv.sdk))
+		goBin := filepath.Join(abs(goenv.sdk), "bin")
+		env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
+	}
+	env = setEnv(env, "GO111MODULE", "off")
+	env = setEnv(env, "GOWORK", "off")
+	env = setEnv(env, "GOCACHE", cachePath)
+	return env
 }
 
 func readStdlibCacheManifest(cacheRoot string, packages []string) (map[string]string, error) {
