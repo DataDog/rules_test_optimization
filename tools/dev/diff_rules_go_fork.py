@@ -26,8 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METADATA = (
     REPO_ROOT
     / "third_party"
-    / "rules_go_orchestrion"
-    / "versions"
+    / "rgo"
     / "v0_60_0"
     / "base.METADATA.json"
 )
@@ -358,8 +357,8 @@ def export_patch_series(
         patch_path = output_dir / patch_name
         patch_path.write_text(patch_text, encoding="utf-8")
         series_path.write_text("%s\n" % patch_path.relative_to(patch_root).as_posix(), encoding="utf-8")
-    print("wrote %s" % patch_path.relative_to(REPO_ROOT).as_posix())
-    print("wrote %s" % series_path.relative_to(REPO_ROOT).as_posix())
+    print("wrote %s" % display_path(patch_path))
+    print("wrote %s" % display_path(series_path))
 
 
 def resolve_repo_path(value: str) -> Path:
@@ -368,6 +367,14 @@ def resolve_repo_path(value: str) -> Path:
     if not path.is_absolute():
         path = REPO_ROOT / path
     return path.resolve()
+
+
+def display_path(path: Path) -> str:
+    """Return a readable path, relative to the repo when possible."""
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def run_diff_command(
@@ -379,6 +386,26 @@ def run_diff_command(
     label: str = "",
 ) -> int:
     """Run the diff helper workflow for one metadata object."""
+    if args.export_patch_series:
+        if not args.new_tree:
+            raise ValueError("--new-tree is required with --export-patch-series")
+        if not args.patch_root:
+            raise ValueError("--patch-root is required with --export-patch-series")
+        if not args.patch_output_dir:
+            raise ValueError("--patch-output-dir is required with --export-patch-series")
+        if not args.series_file:
+            raise ValueError("--series-file is required with --export-patch-series")
+        if args.old_tree:
+            export_patch_series(
+                old_root=resolve_repo_path(args.old_tree),
+                new_root=resolve_repo_path(args.new_tree),
+                patch_root=resolve_repo_path(args.patch_root),
+                output_dir=resolve_repo_path(args.patch_output_dir),
+                series_path=resolve_repo_path(args.series_file),
+                patch_name=args.patch_name,
+            )
+            return 0
+
     with tempfile.TemporaryDirectory(prefix="rules_go_upstream_") as tmp:
         upstream_root = download_upstream_tree(
             metadata["upstream"]["repository"],
@@ -403,17 +430,8 @@ def run_diff_command(
             return emit_patch(upstream_root, fork_root)
 
         if args.export_patch_series:
-            if not args.new_tree:
-                raise ValueError("--new-tree is required with --export-patch-series")
-            if not args.patch_root:
-                raise ValueError("--patch-root is required with --export-patch-series")
-            if not args.patch_output_dir:
-                raise ValueError("--patch-output-dir is required with --export-patch-series")
-            if not args.series_file:
-                raise ValueError("--series-file is required with --export-patch-series")
-            old_root = resolve_repo_path(args.old_tree) if args.old_tree else upstream_root
             export_patch_series(
-                old_root=old_root,
+                old_root=upstream_root,
                 new_root=resolve_repo_path(args.new_tree),
                 patch_root=resolve_repo_path(args.patch_root),
                 output_dir=resolve_repo_path(args.patch_output_dir),

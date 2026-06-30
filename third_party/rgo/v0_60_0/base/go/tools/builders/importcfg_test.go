@@ -775,3 +775,42 @@ func TestRewriteImportcfgForSyntheticTestmainStdlibTestOptimizationUsesPersisted
 		t.Fatalf("test_optimization did not rewrite testing from persisted exports without stdlib cache:\n%s", got)
 	}
 }
+
+func TestCurrentWovenStdlibCacheKeyUsesPersistedExportsWithoutCache(t *testing.T) {
+	tempDir := t.TempDir()
+	goroot := filepath.Join(tempDir, "goroot")
+	installSuffix := "darwin_arm64"
+	persistedRoot := filepath.Join(goroot, "pkg", orchestrionStdlibExportDirName, installSuffix)
+	persistedTesting := filepath.Join(persistedRoot, "testing.a")
+	if err := os.MkdirAll(filepath.Dir(persistedTesting), 0o755); err != nil {
+		t.Fatalf("mkdir persisted testing archive: %v", err)
+	}
+	if err := os.WriteFile(persistedTesting, []byte("testing-v1"), 0o644); err != nil {
+		t.Fatalf("write persisted testing archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(persistedRoot, orchestrionStdlibExportManifestName), []byte("testing=testing.a\n"), 0o644); err != nil {
+		t.Fatalf("write persisted manifest: %v", err)
+	}
+
+	goenv := &env{
+		goroot:        goroot,
+		installSuffix: installSuffix,
+	}
+	first, err := currentWovenStdlibCacheKey(goenv)
+	if err != nil {
+		t.Fatalf("currentWovenStdlibCacheKey error: %v", err)
+	}
+	if first == "default" {
+		t.Fatalf("currentWovenStdlibCacheKey ignored persisted exports without stdlib cache")
+	}
+	if err := os.WriteFile(persistedTesting, []byte("testing-v2"), 0o644); err != nil {
+		t.Fatalf("rewrite persisted testing archive: %v", err)
+	}
+	second, err := currentWovenStdlibCacheKey(goenv)
+	if err != nil {
+		t.Fatalf("currentWovenStdlibCacheKey after rewrite error: %v", err)
+	}
+	if second == first {
+		t.Fatalf("currentWovenStdlibCacheKey did not change after persisted archive content changed: %q", second)
+	}
+}

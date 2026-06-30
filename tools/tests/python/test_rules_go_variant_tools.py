@@ -163,6 +163,56 @@ class RulesGoForkDiffToolTests(unittest.TestCase):
             metadata["generated_report"],
         )
 
+    def test_default_metadata_path_exists(self) -> None:
+        """The default metadata path follows the canonical materialized tree."""
+        self.assertTrue(self.mod.DEFAULT_METADATA.is_file())
+        self.assertEqual(
+            "third_party/rgo/v0_60_0/base.METADATA.json",
+            self.mod.DEFAULT_METADATA.relative_to(self.mod.REPO_ROOT).as_posix(),
+        )
+
+    def test_export_patch_series_with_old_tree_skips_upstream_download(self) -> None:
+        """Local old-tree exports do not download upstream rules_go."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_tree = root / "old"
+            new_tree = root / "new"
+            patch_root = root / "patches"
+            output_dir = patch_root / "base"
+            series_file = patch_root / "base.series"
+            old_tree.mkdir()
+            new_tree.mkdir()
+            (old_tree / "example.txt").write_text("old\n", encoding="utf-8")
+            (new_tree / "example.txt").write_text("new\n", encoding="utf-8")
+
+            args = SimpleNamespace(
+                export_patch_series=True,
+                list=False,
+                new_tree=str(new_tree),
+                old_tree=str(old_tree),
+                patch=False,
+                patch_name="0001-full-delta.patch",
+                patch_output_dir=str(output_dir),
+                patch_root=str(patch_root),
+                report_path="",
+                series_file=str(series_file),
+                write_report=False,
+            )
+
+            with mock.patch.object(self.mod, "download_upstream_tree") as download:
+                status = self.mod.run_diff_command(
+                    args,
+                    Path("metadata.json"),
+                    {"upstream": {"repository": "unused", "commit": "unused"}},
+                    new_tree,
+                    root / "report.md",
+                )
+
+            self.assertEqual(0, status)
+            download.assert_not_called()
+            self.assertTrue((output_dir / "0001-full-delta.patch").is_file())
+            self.assertEqual("base/0001-full-delta.patch\n", series_file.read_text(encoding="utf-8"))
+
 
 class RulesGoForkRegistryTests(unittest.TestCase):
     """Test the versioned rules_go fork registry."""

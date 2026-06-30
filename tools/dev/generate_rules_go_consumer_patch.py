@@ -133,10 +133,10 @@ def classify_paths(paths: list[str], profile: PatchProfile) -> PathClassificatio
     excluded: list[str] = []
     unclassified: list[str] = []
     for path in changed:
-        if matches_any(path, profile.include):
-            included.append(path)
-        elif matches_any(path, profile.exclude):
+        if matches_any(path, profile.exclude):
             excluded.append(path)
+        elif matches_any(path, profile.include):
+            included.append(path)
         else:
             unclassified.append(path)
     return PathClassification(

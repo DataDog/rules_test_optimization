@@ -114,6 +114,7 @@ class RulesGoProfileToolTests(unittest.TestCase):
             "go/private/BUILD.bazel",
             "go/private/actions/compilepkg.bzl",
             "go/private/orchestrion/extensions.bzl",
+            "go/private/orchestrion/extensions_test.go",
             "go/tools/builders/BUILD.bazel",
             "go/tools/builders/builder.go",
             "go/tools/builders/env_test.go",
@@ -130,6 +131,7 @@ class RulesGoProfileToolTests(unittest.TestCase):
         self.assertIn("go/tools/builders/BUILD.bazel", classification.included)
         self.assertIn("go/tools/builders/builder.go", classification.included)
         self.assertIn("go/tools/builders/env_test.go", classification.excluded)
+        self.assertIn("go/private/orchestrion/extensions_test.go", classification.excluded)
 
     def test_profile_validation_rejects_bare_basename_patterns(self) -> None:
         """Root-only excludes must be anchored, not bare basenames."""

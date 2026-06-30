@@ -2388,21 +2388,21 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
   }
   if ($script:FreshnessCachedOutputs.Contains("$targetLabel`t$outputKey")) {
     Write-FreshnessSkipOnce $OutputsDir "BEP reported cached result for target $targetLabel output $outputKey"
-	  } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
-	    if ($script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
-	      Log "error: BEP required freshness cannot authorize $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
-	      exit 2
-	    } else {
-	      Write-FreshnessSkipOnce $OutputsDir "no fresh BEP TestResult matched target $targetLabel output $outputKey"
-	    }
-	  } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "optional" -and $script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
-	    Write-FreshnessSkipOnce $OutputsDir "fresh BEP TestResult for $targetLabel did not contain a mappable test.outputs reference"
-	    if ($script:FreshnessSkipWasWritten) {
-	      Log "warning: BEP optional freshness skipped $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
-	    }
-	  } else {
-	    Write-FreshnessSkipOnce $OutputsDir "no fresh $($script:FreshnessSelectedSource) result matched target $targetLabel output $outputKey"
-	  }
+  } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
+    if ($script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
+      Log "error: BEP required freshness cannot authorize $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
+      exit 2
+    } else {
+      Write-FreshnessSkipOnce $OutputsDir "no fresh BEP TestResult matched target $targetLabel output $outputKey"
+    }
+  } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "optional" -and $script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
+    Write-FreshnessSkipOnce $OutputsDir "fresh BEP TestResult for $targetLabel did not contain a mappable test.outputs reference"
+    if ($script:FreshnessSkipWasWritten) {
+      Log "warning: BEP optional freshness skipped $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
+    }
+  } else {
+    Write-FreshnessSkipOnce $OutputsDir "no fresh $($script:FreshnessSelectedSource) result matched target $targetLabel output $outputKey"
+  }
   return $false
 }
 

@@ -1024,15 +1024,16 @@ func moduleExportRequestKey(moduleDir string, goenv *env, packages []string) (st
 }
 
 func currentWovenStdlibCacheKey(goenv *env) (string, error) {
-	if goenv == nil || goenv.stdlibCache == "" {
+	if goenv == nil {
 		return "default", nil
 	}
-	exports, err := readAllStdlibCacheManifest(goenv.stdlibCache)
-	if err != nil {
-		return "", err
-	}
-	if exports == nil {
-		exports = map[string]string{}
+	exports := map[string]string{}
+	if goenv.stdlibCache != "" {
+		cacheExports, err := readAllStdlibCacheManifest(goenv.stdlibCache)
+		if err != nil {
+			return "", err
+		}
+		mergeStdlibExports(exports, cacheExports)
 	}
 	persisted, err := readPersistedOrchestrionStdlibExports(goenv)
 	if err != nil {

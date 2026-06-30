@@ -7641,7 +7641,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..2fe91fa 100644
+index c25763a..3f0e203 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -7739,7 +7739,7 @@ index c25763a..2fe91fa 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1677 @@ package with this path is linked.`,
+@@ -213,6 +286,1678 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -8481,15 +8481,16 @@ index c25763a..2fe91fa 100644
 +}
 +
 +func currentWovenStdlibCacheKey(goenv *env) (string, error) {
-+	if goenv == nil || goenv.stdlibCache == "" {
++	if goenv == nil {
 +		return "default", nil
 +	}
-+	exports, err := readAllStdlibCacheManifest(goenv.stdlibCache)
-+	if err != nil {
-+		return "", err
-+	}
-+	if exports == nil {
-+		exports = map[string]string{}
++	exports := map[string]string{}
++	if goenv.stdlibCache != "" {
++		cacheExports, err := readAllStdlibCacheManifest(goenv.stdlibCache)
++		if err != nil {
++			return "", err
++		}
++		mergeStdlibExports(exports, cacheExports)
 +	}
 +	persisted, err := readPersistedOrchestrionStdlibExports(goenv)
 +	if err != nil {
@@ -9419,10 +9420,10 @@ index c25763a..2fe91fa 100644
  	known   []string
 diff --git a/go/tools/builders/importcfg_test.go b/go/tools/builders/importcfg_test.go
 new file mode 100644
-index 0000000..468b62f
+index 0000000..3724594
 --- /dev/null
 +++ b/go/tools/builders/importcfg_test.go
-@@ -0,0 +1,777 @@
+@@ -0,0 +1,816 @@
 +package main
 +
 +import (
@@ -10198,6 +10199,45 @@ index 0000000..468b62f
 +	}
 +	if !strings.Contains(got, "packagefile testing="+persistedTesting) {
 +		t.Fatalf("test_optimization did not rewrite testing from persisted exports without stdlib cache:\n%s", got)
++	}
++}
++
++func TestCurrentWovenStdlibCacheKeyUsesPersistedExportsWithoutCache(t *testing.T) {
++	tempDir := t.TempDir()
++	goroot := filepath.Join(tempDir, "goroot")
++	installSuffix := "darwin_arm64"
++	persistedRoot := filepath.Join(goroot, "pkg", orchestrionStdlibExportDirName, installSuffix)
++	persistedTesting := filepath.Join(persistedRoot, "testing.a")
++	if err := os.MkdirAll(filepath.Dir(persistedTesting), 0o755); err != nil {
++		t.Fatalf("mkdir persisted testing archive: %v", err)
++	}
++	if err := os.WriteFile(persistedTesting, []byte("testing-v1"), 0o644); err != nil {
++		t.Fatalf("write persisted testing archive: %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(persistedRoot, orchestrionStdlibExportManifestName), []byte("testing=testing.a\n"), 0o644); err != nil {
++		t.Fatalf("write persisted manifest: %v", err)
++	}
++
++	goenv := &env{
++		goroot:        goroot,
++		installSuffix: installSuffix,
++	}
++	first, err := currentWovenStdlibCacheKey(goenv)
++	if err != nil {
++		t.Fatalf("currentWovenStdlibCacheKey error: %v", err)
++	}
++	if first == "default" {
++		t.Fatalf("currentWovenStdlibCacheKey ignored persisted exports without stdlib cache")
++	}
++	if err := os.WriteFile(persistedTesting, []byte("testing-v2"), 0o644); err != nil {
++		t.Fatalf("rewrite persisted testing archive: %v", err)
++	}
++	second, err := currentWovenStdlibCacheKey(goenv)
++	if err != nil {
++		t.Fatalf("currentWovenStdlibCacheKey after rewrite error: %v", err)
++	}
++	if second == first {
++		t.Fatalf("currentWovenStdlibCacheKey did not change after persisted archive content changed: %q", second)
 +	}
 +}
 diff --git a/go/tools/builders/link.go b/go/tools/builders/link.go
