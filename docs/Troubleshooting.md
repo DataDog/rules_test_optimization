@@ -371,8 +371,10 @@ Common messages:
   staging decompressed-size limit.
 - `BEP artifact staging requires python3`: the Bash uploader needs `python3`
   only when artifact staging is enabled.
-- `BEP artifact staging requires python3 or python`: the PowerShell uploader
-  needs `python3` or `python` only when artifact staging is enabled.
+- `BEP artifact staging requires PYTHON, python3, or python`: the PowerShell
+  uploader needs Python only when artifact staging is enabled. Set
+  `DD_TEST_OPTIMIZATION_PYTHON` or `PYTHON` when Python is not discoverable as
+  `python3` or `python` on `PATH`.
 
 ## Uploader enrichment dry-run
 

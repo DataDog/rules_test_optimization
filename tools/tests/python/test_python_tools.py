@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -82,6 +83,31 @@ def _load_module(name: str, rel_path: str) -> types.ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _require_functional_bash(testcase: unittest.TestCase) -> str:
+    """Return a usable Bash executable or skip the caller's test."""
+    bash = shutil.which("bash")
+    if bash is None:
+        testcase.skipTest("bash is required for Bash runtime execution")
+    result = subprocess.run(
+        [bash, "-lc", "true"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        testcase.skipTest(f"bash is not functional in this environment: {result.stderr.strip()}")
+    return bash
+
+
+def _require_command(testcase: unittest.TestCase, command: str, reason: str) -> str:
+    """Return an executable command path or skip the caller's test."""
+    path = shutil.which(command)
+    if path is None:
+        testcase.skipTest(reason)
+    return path
 
 
 _BEP_ARTIFACT_STAGE_HELPER_RLOC = "tools/core/bep_artifact_stage_helper.py"
@@ -470,6 +496,21 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             ],
         )
         return self.mod._parse_bep_freshness([bep])
+
+    @staticmethod
+    def _write_python_downloader(path: Path, source: str) -> Path:
+        """Create a small downloader executable that works on POSIX and Windows."""
+        script = path.with_suffix(".py")
+        script.write_text("#!/usr/bin/env python3\n" + source.lstrip(), encoding="utf-8")
+        if os.name == "nt":
+            launcher = path.with_suffix(".cmd")
+            launcher.write_text(
+                f'@echo off\r\n"{sys.executable}" "{script}" %*\r\nexit /b %ERRORLEVEL%\r\n',
+                encoding="utf-8",
+            )
+            return launcher
+        script.chmod(0o755)
+        return script
 
     @staticmethod
     def _extract_single_quoted_block(text: str, variable_name: str) -> str:
@@ -1268,10 +1309,8 @@ $rows | ConvertTo-Json -Compress
 
     def test_bep_output_key_parity_across_python_bash_and_powershell(self) -> None:
         """Validate all runtimes use the same canonical BEP output-key precedence."""
-        if subprocess.run(["which", "jq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-            self.skipTest("jq is required for Bash BEP parser parity")
-        if subprocess.run(["which", "pwsh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-            self.skipTest("pwsh is required for PowerShell BEP parser parity")
+        _require_command(self, "jq", "jq is required for Bash BEP parser parity")
+        _require_command(self, "pwsh", "pwsh is required for PowerShell BEP parser parity")
 
         cases: list[dict[str, object]] = [
             {
@@ -2063,18 +2102,21 @@ $rows | ConvertTo-Json -Compress
                         "bazel.go.payload_selection": "module",
                     }),
                 )
-            downloader = root / "downloader with space"
-            downloader.write_text(
-                "#!/bin/sh\n"
-                "out=''\n"
-                "while [ $# -gt 0 ]; do\n"
-                "  if [ \"$1\" = '--output' ]; then shift; out=\"$1\"; fi\n"
-                "  shift\n"
-                "done\n"
-                "cp \"$SOURCE_ZIP\" \"$out\"\n",
-                encoding="utf-8",
+            downloader = self._write_python_downloader(
+                root / "downloader with space",
+                """
+import os
+import shutil
+import sys
+
+out = ""
+args = iter(sys.argv[1:])
+for arg in args:
+    if arg == "--output":
+        out = next(args)
+shutil.copyfile(os.environ["SOURCE_ZIP"], out)
+""",
             )
-            downloader.chmod(0o755)
             bep = root / "freshness.bep.json"
             self._write_bep(
                 bep,
@@ -2123,9 +2165,7 @@ $rows | ConvertTo-Json -Compress
         """Validate downloader failures cannot authorize stale outputs.zip files."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            downloader = root / "downloader"
-            downloader.write_text("#!/bin/sh\nexit 42\n", encoding="utf-8")
-            downloader.chmod(0o755)
+            downloader = self._write_python_downloader(root / "downloader", "import sys\nsys.exit(42)\n")
             bep = root / "freshness.bep.json"
             self._write_bep(
                 bep,
@@ -2174,15 +2214,16 @@ $rows | ConvertTo-Json -Compress
         """Validate downloader stdout/stderr is not copied into materialization warnings."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            downloader = root / "downloader"
-            downloader.write_text(
-                "#!/bin/sh\n"
-                "echo secret-token-on-stdout\n"
-                "echo secret-token-on-stderr >&2\n"
-                "exit 7\n",
-                encoding="utf-8",
+            downloader = self._write_python_downloader(
+                root / "downloader",
+                """
+import sys
+
+print("secret-token-on-stdout")
+print("secret-token-on-stderr", file=sys.stderr)
+sys.exit(7)
+""",
             )
-            downloader.chmod(0o755)
             freshness = self._remote_outputs_zip_freshness(root)
             stderr = io.StringIO()
 
@@ -2229,14 +2270,16 @@ $rows | ConvertTo-Json -Compress
         """Validate downloader timeout terminates quickly and does not leak output."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            downloader = root / "downloader"
-            downloader.write_text(
-                "#!/bin/sh\n"
-                "echo timeout-secret >&2\n"
-                "sleep 5\n",
-                encoding="utf-8",
+            downloader = self._write_python_downloader(
+                root / "downloader",
+                """
+import sys
+import time
+
+print("timeout-secret", file=sys.stderr)
+time.sleep(5)
+""",
             )
-            downloader.chmod(0o755)
             freshness = self._remote_outputs_zip_freshness(root)
             stderr = io.StringIO()
 
@@ -2258,18 +2301,20 @@ $rows | ConvertTo-Json -Compress
         """Validate invalid downloader-produced outputs.zip does not authorize payloads."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            downloader = root / "downloader"
-            downloader.write_text(
-                "#!/bin/sh\n"
-                "out=''\n"
-                "while [ $# -gt 0 ]; do\n"
-                "  if [ \"$1\" = '--output' ]; then shift; out=\"$1\"; fi\n"
-                "  shift\n"
-                "done\n"
-                "printf 'not-a-zip' > \"$out\"\n",
-                encoding="utf-8",
+            downloader = self._write_python_downloader(
+                root / "downloader",
+                """
+from pathlib import Path
+import sys
+
+out = ""
+args = iter(sys.argv[1:])
+for arg in args:
+    if arg == "--output":
+        out = next(args)
+Path(out).write_text("not-a-zip", encoding="utf-8")
+""",
             )
-            downloader.chmod(0o755)
             freshness = self._remote_outputs_zip_freshness(root)
             stderr = io.StringIO()
 
@@ -2290,18 +2335,20 @@ $rows | ConvertTo-Json -Compress
         """Validate a downloader cannot satisfy the contract with an outputs.zip directory."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            downloader = root / "downloader"
-            downloader.write_text(
-                "#!/bin/sh\n"
-                "out=''\n"
-                "while [ $# -gt 0 ]; do\n"
-                "  if [ \"$1\" = '--output' ]; then shift; out=\"$1\"; fi\n"
-                "  shift\n"
-                "done\n"
-                "mkdir -p \"$out\"\n",
-                encoding="utf-8",
+            downloader = self._write_python_downloader(
+                root / "downloader",
+                """
+from pathlib import Path
+import sys
+
+out = ""
+args = iter(sys.argv[1:])
+for arg in args:
+    if arg == "--output":
+        out = next(args)
+Path(out).mkdir(parents=True)
+""",
             )
-            downloader.chmod(0o755)
             freshness = self._remote_outputs_zip_freshness(root)
             stderr = io.StringIO()
 
@@ -3930,6 +3977,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         env.update({
             "BUILD_WORKSPACE_DIRECTORY": str(root),
             "DD_TEST_OPTIMIZATION_DEBUG": "1",
+            "PYTHON": sys.executable,
             "RUNFILES_DIR": str(runfiles_dir),
             "TESTLOGS_DIR": str(root / "bazel-testlogs"),
         })
@@ -4270,9 +4318,10 @@ echo blocked
             )
             blocked_labels = root / "blocked-labels.txt"
             blocked_labels.write_text("//pkg:target\n", encoding="utf-8")
+            bash = _require_functional_bash(self)
 
             result = subprocess.run(
-                ["bash", "-c", script, "bash-test", str(blocked_labels), str(outputs_dir)],
+                [bash, "-c", script, "bash-test", str(blocked_labels), str(outputs_dir)],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -4284,8 +4333,8 @@ echo blocked
 
     def test_generated_bash_uploader_executes_bep_staging_runfiles(self) -> None:
         """Validate generated Bash uploader resolves non-sibling helper runfiles."""
-        if subprocess.run(["which", "jq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-            self.skipTest("jq is required for Bash BEP freshness parsing")
+        _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
+        bash = _require_functional_bash(self)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4304,7 +4353,7 @@ echo blocked
             generated_bash.chmod(0o755)
             result = subprocess.run(
                 [
-                    "bash",
+                    bash,
                     str(generated_bash),
                     "--bep-json",
                     str(bep),
@@ -4334,8 +4383,7 @@ echo blocked
 
     def test_generated_powershell_uploader_executes_bep_staging_runfiles(self) -> None:
         """Validate generated PowerShell uploader resolves non-sibling helper runfiles."""
-        if subprocess.run(["which", "pwsh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-            self.skipTest("pwsh is required for generated PowerShell uploader execution")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell uploader execution")
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4353,7 +4401,7 @@ echo blocked
             )
             result = subprocess.run(
                 [
-                    "pwsh",
+                    pwsh,
                     "-NoLogo",
                     "-NoProfile",
                     "-File",

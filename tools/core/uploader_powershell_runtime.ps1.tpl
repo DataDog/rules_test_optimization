@@ -1002,6 +1002,14 @@ function Test-ArtifactStagingRequested {
 }
 
 function Get-PythonForBepArtifactStaging {
+    foreach ($candidate in @($env:DD_TEST_OPTIMIZATION_PYTHON, $env:PYTHON)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).ProviderPath
+        }
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+    }
     foreach ($candidate in @("python3", "python")) {
         $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
         if ($cmd) { return $cmd.Source }
@@ -1080,7 +1088,7 @@ function Stage-BepArtifacts {
     if ($script:BepJsonFiles.Count -eq 0) { return }
     $pythonBin = Get-PythonForBepArtifactStaging
     if (-not $pythonBin) {
-        Log "error: BEP artifact staging requires python3 or python"
+        Log "error: BEP artifact staging requires PYTHON, python3, or python"
         exit 2
     }
     $script:BepArtifactStageHelper = Resolve-Runfile $script:BepArtifactStageHelperRloc
