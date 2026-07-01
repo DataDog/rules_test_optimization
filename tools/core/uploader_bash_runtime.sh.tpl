@@ -473,6 +473,29 @@ validate_positive_decimal() {
     fi
 }
 
+is_absolute_path() {
+    case "$1" in
+        /*|[A-Za-z]:/*|[A-Za-z]:\\*|\\\\*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+bep_artifact_staging_python() {
+    local candidate
+    for candidate in "${DD_TEST_OPTIMIZATION_PYTHON:-}" "${PYTHON:-}" python3 python; do
+        [[ -n "$candidate" ]] || continue
+        if [[ -f "$candidate" || -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+        if command -v "$candidate" >/dev/null 2>&1; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Generate UUID (best effort). Uses uuidgen, python3, or /dev/urandom.
 generate_uuid() {
     if command -v uuidgen >/dev/null 2>&1; then
@@ -836,7 +859,7 @@ if [[ -z "$ARTIFACT_STAGING_DIR" ]]; then
     else
         ARTIFACT_STAGING_DIR="$(pwd)/.topt/bep-artifacts"
     fi
-elif [[ "$ARTIFACT_STAGING_DIR" != /* ]]; then
+elif ! is_absolute_path "$ARTIFACT_STAGING_DIR"; then
     if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
         ARTIFACT_STAGING_DIR="$BUILD_WORKSPACE_DIRECTORY/$ARTIFACT_STAGING_DIR"
     else
@@ -1127,8 +1150,9 @@ stage_bep_artifacts() {
     if [[ ${#BEP_JSON_FILES[@]} -eq 0 ]]; then
         return 0
     fi
-    if ! command -v python3 >/dev/null 2>&1; then
-        log "error: BEP artifact staging requires python3"
+    local python_bin
+    if ! python_bin="$(bep_artifact_staging_python)"; then
+        log "error: BEP artifact staging requires PYTHON, python3, or python"
         exit 2
     fi
 
@@ -1173,7 +1197,7 @@ stage_bep_artifacts() {
     if [[ -n "$BEP_ARTIFACT_DOWNLOADER" ]]; then
         helper_args+=(--bep-artifact-downloader "$BEP_ARTIFACT_DOWNLOADER")
     fi
-    python3 "$BEP_ARTIFACT_STAGE_HELPER" "${helper_args[@]}" "${resolved_bep_files[@]}" >"$helper_out" 2>"$helper_err" || helper_status=$?
+    "$python_bin" "$BEP_ARTIFACT_STAGE_HELPER" "${helper_args[@]}" "${resolved_bep_files[@]}" >"$helper_out" 2>"$helper_err" || helper_status=$?
     if [[ -s "$helper_err" ]]; then
         cat "$helper_err" >&2
     fi

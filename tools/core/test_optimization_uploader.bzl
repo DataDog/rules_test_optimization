@@ -923,9 +923,8 @@ BEP artifact resolution:
     - Remote/CAS carriers require `--bep-artifact-downloader` or
       `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER`; the value must be one
       executable path that writes an `outputs.zip` archive to `--output`.
-    - Artifact staging requires Python at uploader runtime. Bash looks for
-      `python3`; PowerShell accepts `DD_TEST_OPTIMIZATION_PYTHON`, `PYTHON`,
-      `python3`, or `python`.
+    - Artifact staging requires Python at uploader runtime. Bash and PowerShell
+      accept `DD_TEST_OPTIMIZATION_PYTHON`, `PYTHON`, `python3`, or `python`.
 
 New artifact flags and env aliases:
     --artifact-source=local|bep|auto

@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import types
 from typing import Optional
 import unittest
@@ -72,6 +73,18 @@ def _runfile(rel_path: str) -> Path:
                         return Path(value)
 
     raise FileNotFoundError(f"runfile not found: {rel_path} (checked: {candidates})")
+
+
+def _cleanup_tempdir_with_windows_retry(path: Path) -> None:
+    """Remove a temp directory, tolerating short-lived Windows subprocess handles."""
+    for attempt in range(6):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError:
+            if os.name != "nt" or attempt == 5:
+                raise
+            time.sleep(0.25 * (attempt + 1))
 
 
 def _load_module(name: str, rel_path: str) -> types.ModuleType:
@@ -4220,9 +4233,11 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             "STAGED_REMOTE_CLEARANCES_FILE",
         ]:
             self.assertIn(token, bash_text)
-        self.assertIn('python3 "$BEP_ARTIFACT_STAGE_HELPER"', bash_text)
+        self.assertIn('bep_artifact_staging_python()', bash_text)
+        self.assertIn('"$python_bin" "$BEP_ARTIFACT_STAGE_HELPER"', bash_text)
         self.assertIn('--doctor-runtime "$DOCTOR_RUNTIME"', bash_text)
-        self.assertIn('elif [[ "$ARTIFACT_STAGING_DIR" != /* ]]', bash_text)
+        self.assertIn('elif ! is_absolute_path "$ARTIFACT_STAGING_DIR"', bash_text)
+        self.assertIn('[A-Za-z]:/*|[A-Za-z]:\\\\*|\\\\\\\\*) return 0', bash_text)
         self.assertIn('ARTIFACT_STAGING_DIR="$BUILD_WORKSPACE_DIRECTORY/$ARTIFACT_STAGING_DIR"', bash_text)
         self.assertIn('resolved_bep_json="$(resolve_runtime_file_path "$bep_json")"', bash_text)
         self.assertIn('"${resolved_bep_files[@]}"', bash_text)
@@ -4385,8 +4400,8 @@ echo blocked
         """Validate generated PowerShell uploader resolves non-sibling helper runfiles."""
         pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell uploader execution")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+        root = Path(tempfile.mkdtemp())
+        try:
             empty_testlogs = root / "bazel-testlogs"
             empty_testlogs.mkdir()
             bep = self._write_bep_staging_smoke_fixture(root)
@@ -4423,6 +4438,8 @@ echo blocked
                 stderr=subprocess.PIPE,
                 check=False,
             )
+        finally:
+            _cleanup_tempdir_with_windows_retry(root)
 
         output = result.stdout + result.stderr
         self.assertEqual(0, result.returncode, output)
