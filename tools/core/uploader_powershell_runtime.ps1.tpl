@@ -1115,8 +1115,16 @@ function Stage-BepArtifacts {
         $cmd += @("--bep-artifact-downloader", $script:BepArtifactDownloader)
     }
     $cmd += @($resolvedBepJsonFiles.ToArray())
-    $helperOutput = @(& $PythonBin $script:BepArtifactStageHelper @cmd 2>&1)
+    $helperStderr = Join-Path $script:TmpPayloadDir ("bep_artifacts_stderr_" + [System.Guid]::NewGuid().ToString("N") + ".txt")
+    $helperOutput = @(& $PythonBin $script:BepArtifactStageHelper @cmd 2> $helperStderr)
     $helperStatus = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    if (Test-Path -LiteralPath $helperStderr -PathType Leaf) {
+        foreach ($line in @(Get-Content -LiteralPath $helperStderr -ErrorAction SilentlyContinue)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                Log-Stderr ([string]$line)
+            }
+        }
+    }
     if ($helperStatus -ne 0) {
         foreach ($line in $helperOutput) { Log-Stderr ([string]$line) }
         Log "error: BEP artifact staging helper failed with exit code $helperStatus"
