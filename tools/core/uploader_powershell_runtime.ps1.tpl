@@ -973,7 +973,7 @@ function Release-Lock {
             } else {
                 $fullRuns = [System.IO.Path]::GetFullPath($runsRoot)
             }
-            if ($fullRoot.StartsWith($fullRuns + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::Ordinal)) {
+            if (Test-PathUnderDirectory $fullRoot $fullRuns) {
                 Remove-Item -LiteralPath $fullRoot -Recurse -Force -ErrorAction SilentlyContinue
             } else {
                 Log-Stderr "warning: refusing to clean BEP staging root outside owned run directory: $stagedRoot"
@@ -1052,8 +1052,9 @@ function Parse-BepArtifactHelperOutput {
                     Log "error: malformed BEP artifact helper root row"
                     exit 2
                 }
-                $script:StagedTestlogsDirs.Add($parts[1]) | Out-Null
-                $script:TestlogsScanDirs.Add($parts[1]) | Out-Null
+                $stagedRoot = Resolve-DirectoryPhysicalPath $parts[1]
+                $script:StagedTestlogsDirs.Add($stagedRoot) | Out-Null
+                $script:TestlogsScanDirs.Add($stagedRoot) | Out-Null
             }
             "staged" {
                 if ($parts.Count -ne 6 -or [string]::IsNullOrWhiteSpace($parts[1]) -or [string]::IsNullOrWhiteSpace($parts[2]) -or [string]::IsNullOrWhiteSpace($parts[3]) -or [string]::IsNullOrWhiteSpace($parts[5])) {
@@ -1221,8 +1222,33 @@ function Resolve-DirectoryPhysicalPath {
         }
         return $item.FullName
     } catch {
-        return $Path
+        try {
+            return [System.IO.Path]::GetFullPath($Path)
+        } catch {
+            return $Path
+        }
     }
+}
+
+function Get-PathPrefixComparison {
+    if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+        return [System.StringComparison]::OrdinalIgnoreCase
+    }
+    return [System.StringComparison]::Ordinal
+}
+
+function Normalize-PathForPrefix([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return "" }
+    return $Path.Replace('\', '/').TrimEnd('/')
+}
+
+function Test-PathUnderDirectory([string]$Path, [string]$Root) {
+    $normalizedPath = Normalize-PathForPrefix $Path
+    $normalizedRoot = Normalize-PathForPrefix $Root
+    if ([string]::IsNullOrWhiteSpace($normalizedPath) -or [string]::IsNullOrWhiteSpace($normalizedRoot)) {
+        return $false
+    }
+    return $normalizedPath.StartsWith($normalizedRoot + "/", (Get-PathPrefixComparison))
 }
 
 # Keep the logical path for messages/context derivation, but walk the physical
@@ -1267,10 +1293,11 @@ function Find-TestOutputs {
 
 function Get-TestOutputDirKey([string]$OutputsDir) {
   if ([string]::IsNullOrWhiteSpace($OutputsDir)) { return "" }
-  $normalized = $OutputsDir.Replace('\', '/').TrimEnd('/')
+  $normalized = Normalize-PathForPrefix $OutputsDir
+  $comparison = Get-PathPrefixComparison
   foreach ($scanDir in @($script:TestlogsScanDirs)) {
-    $scanRoot = ([string]$scanDir).Replace('\', '/').TrimEnd('/')
-    if (-not [string]::IsNullOrWhiteSpace($scanRoot) -and $normalized.StartsWith($scanRoot + "/", [System.StringComparison]::Ordinal)) {
+    $scanRoot = Normalize-PathForPrefix ([string]$scanDir)
+    if (-not [string]::IsNullOrWhiteSpace($scanRoot) -and $normalized.StartsWith($scanRoot + "/", $comparison)) {
       return $normalized.Substring($scanRoot.Length + 1)
     }
   }
@@ -1321,7 +1348,7 @@ function Update-TestOutputsCache {
         if ($script:SelectedBepArtifactOutputKeys.Contains($key)) {
             $isStaged = $false
             foreach ($stagedRoot in @($script:StagedTestlogsDirs)) {
-                if ($dir.FullName.StartsWith($stagedRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::Ordinal)) {
+                if (Test-PathUnderDirectory $dir.FullName $stagedRoot) {
                     $isStaged = $true
                     break
                 }
