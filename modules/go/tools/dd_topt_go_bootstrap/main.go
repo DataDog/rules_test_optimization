@@ -1363,7 +1363,9 @@ func bazelrcSnippet(cfg config) (string, error) {
 	for _, key := range bazelrcRepoEnvKeys {
 		fmt.Fprintf(&buf, "common:%s --repo_env=%s\n", cfg.bazelrcConfig, key)
 	}
-	fmt.Fprintf(&buf, "test:%s --remote_download_outputs=all\n", cfg.bazelrcConfig)
+	fmt.Fprintf(&buf, "test:%s --remote_download_minimal\n", cfg.bazelrcConfig)
+	fmt.Fprintf(&buf, "test:%s --remote_download_regex=.*test[.]outputs.*\n", cfg.bazelrcConfig)
+	fmt.Fprintf(&buf, "test:%s --zip_undeclared_test_outputs\n", cfg.bazelrcConfig)
 	buf.WriteString(bazelrcBlockEnd)
 	buf.WriteString("\n")
 	return buf.String(), nil
@@ -1435,9 +1437,11 @@ func validationScript(cfg config) (string, error) {
 	testFlags = append(testFlags, cfg.extraTestFlags...)
 	runFlags := append(append([]string{}, commonFlags...), cfg.extraRunFlags...)
 	syncFlags := append(append([]string{}, commonFlags...), cfg.extraSyncFlags...)
+	bepRunArgs := []string{"--freshness-source=bep", "--freshness-mode=required", "--artifact-source=bep"}
 	writeShellArray(&buf, "SYNC_FLAGS", syncFlags)
 	writeShellArray(&buf, "TEST_FLAGS", testFlags)
 	writeShellArray(&buf, "RUN_FLAGS", runFlags)
+	writeShellArray(&buf, "BEP_RUN_ARGS", bepRunArgs)
 	buf.WriteString(`
 usage() {
   cat <<'EOF'
@@ -1569,7 +1573,7 @@ if (( test_status != 0 )); then
 fi
 
 check_disk
-run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}" -- "${BEP_JSON_ARGS[@]}" --freshness-source=bep --freshness-mode=required
+run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}"
 doctor_status=$?
 if (( doctor_status != 0 )); then
   warn "doctor failed; skipping upload"
@@ -1582,7 +1586,7 @@ if (( upload == 0 )); then
 fi
 
 check_disk
-run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" --freshness-source=bep --freshness-mode=required
+run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}"
 exit $?
 `)
 	return buf.String(), nil

@@ -14,7 +14,8 @@ Notes:
   `@test_optimization_data//:test_optimization_*` labels exist.
 - Pass normal go_test attributes via **kwargs.
 - Payloads are written to TEST_UNDECLARED_OUTPUTS_DIR automatically.
-- RBE users: ensure --remote_download_outputs=all is set.
+- RBE users: ensure --remote_download_minimal and
+  --remote_download_regex=.*test[.]outputs.* are set.
 - Import path inference mirrors rules_go behavior by walking `embed` via
   an aspect and reading the GoArchive provider; when unavailable, falls
   back to go_module_path + Bazel package path.

@@ -411,7 +411,9 @@ func TestBazelrcSnippetUsesRepoEnvOnlyForSyncMetadata(t *testing.T) {
 		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`,
 		`common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL`,
 		`common:test-optimization --repo_env=DD_PR_NUMBER`,
-		`test:test-optimization --remote_download_outputs=all`,
+		`test:test-optimization --remote_download_minimal`,
+		`test:test-optimization --remote_download_regex=.*test[.]outputs.*`,
+		`test:test-optimization --zip_undeclared_test_outputs`,
 		bazelrcBlockEnd,
 	} {
 		if !strings.Contains(got, want) {
@@ -457,7 +459,44 @@ func TestRunPrintBazelrcSnippetDoesNotRequireModuleFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("run --print-bazelrc-snippet error: %v", err)
 	}
-	if got := buf.String(); !strings.Contains(got, `test:test-optimization --remote_download_outputs=all`) {
+	if got := buf.String(); !strings.Contains(got, `test:test-optimization --remote_download_minimal`) {
+		t.Fatalf("expected bazelrc snippet on stdout:\n%s", got)
+	}
+}
+
+func TestRunPrintBazelrcSnippetUsesSelectiveRemoteDownloads(t *testing.T) {
+	dir := t.TempDir()
+	var buf strings.Builder
+	if err := captureStdout(&buf, func() error {
+		return run(config{
+			workspaceDir:        dir,
+			printBazelrcSnippet: true,
+			bazelrcConfig:       "test-optimization",
+			datadogFetch:        defaultDatadogFetch,
+			rulesGoFetch:        defaultRulesGoFetch,
+			rulesGoVariant:      defaultRulesGoVariant,
+			ddTraceGoVersion:    defaultDDTraceGoVersion,
+			orchestrionVersion:  defaultOrchestrionVersion,
+			rulesGoRepoName:     defaultRulesGoRepoName,
+			rulesGoRemote:       defaultRulesGoRemote,
+			syncRepoName:        defaultSyncRepoName,
+			doctorTargetName:    defaultDoctorTargetName,
+			uploaderTargetName:  defaultUploaderTargetName,
+		})
+	}); err != nil {
+		t.Fatalf("run --print-bazelrc-snippet error: %v", err)
+	}
+	got := buf.String()
+	for _, want := range []string{
+		`test:test-optimization --remote_download_minimal`,
+		`test:test-optimization --remote_download_regex=.*test[.]outputs.*`,
+		`test:test-optimization --zip_undeclared_test_outputs`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected bazelrc snippet to contain %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `--remote_download_outputs=all`) {
 		t.Fatalf("expected bazelrc snippet on stdout:\n%s", got)
 	}
 }
@@ -861,6 +900,57 @@ set -euo pipefail
 		}
 		if !strings.Contains(string(bepBytes), `"label":"`+entry.label+`"`) {
 			t.Fatalf("BEP file %s missing label %s:\n%s", entry.path, entry.label, bepBytes)
+		}
+	}
+}
+
+func TestValidationScriptUsesBepArtifactSourceForZippedOutputs(t *testing.T) {
+	dir := t.TempDir()
+	fakeBazel := filepath.Join(dir, "bazel")
+	logPath := filepath.Join(dir, "bazel.log")
+	if err := os.WriteFile(fakeBazel, []byte("#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$BAZEL_LOG\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake bazel: %v", err)
+	}
+
+	script, err := validationScript(config{
+		printValidationScript:  true,
+		bazelCommand:           fakeBazel,
+		bazelConfig:            "test-optimization",
+		syncRepoName:           defaultSyncRepoName,
+		validationDoctorTarget: "//:dd_test_optimization_doctor",
+		validationUploadTarget: "//:dd_upload_payloads",
+		expectedTargets:        []string{"//pkg:go_default_test"},
+		extraTestFlags:         []string{"--zip_undeclared_test_outputs"},
+		minFreeDiskGB:          defaultMinFreeDiskGB,
+	})
+	if err != nil {
+		t.Fatalf("validationScript error: %v", err)
+	}
+	scriptPath := filepath.Join(dir, "validate.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write validation script: %v", err)
+	}
+
+	cmd := exec.Command("bash", scriptPath, "--upload")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("validation script failed: %v\n%s", err, output)
+	}
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake bazel log: %v", err)
+	}
+	logText := string(logBytes)
+	for _, want := range []string{
+		"test --config=test-optimization --zip_undeclared_test_outputs --build_event_json_file=",
+		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=",
+		"--freshness-source=bep --freshness-mode=required --artifact-source=bep",
+		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
 		}
 	}
 }

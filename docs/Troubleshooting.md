@@ -233,11 +233,14 @@ global root `BUILD.bazel` wiring unrelated to Test Optimization.
    ```
    PowerShell uses `*>&1` (not Bash `2>&1`) to merge stderr/stdout.
 
-4. **For RBE/remote-cache users**: Add `--remote_download_outputs=all` to
-   download test outputs locally, and run tests with
+4. **For RBE/remote-cache users**: Add
+   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` to
+   download only `test.outputs` locally, and run tests with
    `--build_event_json_file=.topt/bazel-bep.json`. Pass the same BEP file to
    doctor/uploader with `--freshness-source=bep --freshness-mode=required` so
-   cached outputs are skipped instead of uploaded as fresh results.
+   cached outputs are skipped instead of uploaded as fresh results. If tests
+   use `--zip_undeclared_test_outputs`, also pass `--artifact-source=bep` so
+   doctor/uploader extract local `outputs.zip` carriers through BEP staging.
 
 ## Doctor failures
 
@@ -302,22 +305,54 @@ fails before upload.
 
 6. **Expected target output missing**: Run the exact target listed in
    `expected_targets` before the doctor. With remote execution or remote cache,
-   run tests with `--remote_download_outputs=all` or enable BEP artifact
-   resolution with `--artifact-source=bep --remote-artifacts=download`.
+   run tests with
+   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`. If
+   outputs are zipped, add `--artifact-source=bep`; if BEP references remote-only
+   artifacts, enable BEP artifact resolution with
+   `--artifact-source=bep --remote-artifacts=download`.
 
 ## BEP artifact resolution failures
 
 **Symptom**: The doctor or uploader is configured with BEP freshness, but
-`test.outputs/` is not present under `bazel-testlogs/` because the Bazel
-invocation used remote execution or remote cache without downloading outputs.
+loose `test.outputs/payloads/...` files are not present under `bazel-testlogs/`
+because the Bazel invocation used remote execution/cache, zipped undeclared
+outputs, or left the selected BEP artifacts remote-only.
 
 **Solutions**:
 
-1. Prefer `--remote_download_outputs=all` when CI can afford it. This keeps the
-   default local discovery path and avoids an extra artifact resolver.
+1. Prefer selective local materialization when Bazel can download the needed
+   outputs:
+   ```bash
+   bazel test \
+     --remote_download_minimal \
+     --remote_download_regex=.*test[.]outputs.* \
+     --build_event_json_file=.topt/bazel-bep.json \
+     //...
+   ```
+   This keeps the default local discovery path and avoids downloading unrelated
+   build outputs.
 
-2. If CI cannot download all test outputs, pass the same BEP file to doctor and
-   uploader and enable staging:
+2. If the test command uses `--zip_undeclared_test_outputs`, pass the same BEP
+   file to doctor/uploader and enable local BEP artifact staging:
+   ```bash
+   bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
+     --bep-json=.topt/bazel-bep.json \
+     --freshness-source=bep \
+     --freshness-mode=required \
+     --artifact-source=bep
+
+   bazel run --config=test-optimization //:dd_upload_payloads -- \
+     --bep-json=.topt/bazel-bep.json \
+     --freshness-source=bep \
+     --freshness-mode=required \
+     --artifact-source=bep \
+     --dry-run \
+     --validate-enrichment
+   ```
+   `--remote-artifacts` is not required for local `outputs.zip` files.
+
+3. If CI cannot download `test.outputs` or `outputs.zip` locally, pass the same
+   BEP file to doctor and uploader and enable remote staging:
    ```bash
    bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
      --bep-json=.topt/bazel-bep.json \
@@ -338,7 +373,7 @@ invocation used remote execution or remote cache without downloading outputs.
      --validate-enrichment
    ```
 
-3. For remote/CAS BEP artifact references, configure one downloader executable:
+4. For remote/CAS BEP artifact references, configure one downloader executable:
    ```bash
    export DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER=/path/to/download-outputs-zip
    ```
@@ -354,7 +389,7 @@ Common messages:
 - `--artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON`:
   pass the BEP JSON produced by the matching `bazel test` invocation.
 - `BEP artifact is remote-only and no downloader is configured`: either use
-  `--remote_download_outputs=all`, configure
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`, configure
   `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER`, or use
   `--remote-artifacts=disabled` outside required freshness mode.
 - `BEP artifact is not available locally`: the BEP points at a local path or
@@ -615,7 +650,9 @@ long command sequence, local controls, disk checks, and an explicit upload step.
 The generated script never deletes caches. In `--large-monorepo` mode it warns
 when free disk drops below `--min-free-disk-gb`, runs phases serially, and can
 shut down Bazel on exit. It still depends on the normal Bazel config for
-`--remote_download_outputs=all`; no rule can force that client-side behavior.
+`--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`, or on
+`--artifact-source=bep` when outputs are zipped; no rule can force that
+client-side Bazel behavior.
 
 ## Windows-specific issues
 

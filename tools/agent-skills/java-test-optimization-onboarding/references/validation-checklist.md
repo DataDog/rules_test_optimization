@@ -89,7 +89,7 @@ Preserve test failure priority:
 ```bash
 mkdir -p .topt
 rm -f .topt/pilot.bep.json
-bazel test --config=test-optimization --remote_download_outputs=all --build_event_json_file=.topt/pilot.bep.json //path/to:java_test || test_status=$?
+bazel test --config=test-optimization --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/pilot.bep.json //path/to:java_test || test_status=$?
 test_status=${test_status:-0}
 
 bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
@@ -151,10 +151,23 @@ they do not run instrumented test code.
 If tests use remote execution or remote cache, the test config must include:
 
 ```text
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
 ```
+
+If the pilot test command uses `--zip_undeclared_test_outputs`, include
+`--artifact-source=bep` in the matching doctor and uploader commands.
 
 Rules cannot force this client behavior. Without it, tests may pass while the
 doctor and uploader cannot see local payload files. Use a unique
 `--build_event_json_file` for each Bazel test invocation and pass the same BEP
 file to doctor/uploader with `--freshness-source=bep --freshness-mode=required`.
+
+Artifact mode choices:
+
+| Situation | Doctor/uploader flags |
+|-----------|-----------------------|
+| Loose `test.outputs/payloads/...` exists locally | `--bep-json ... --freshness-source=bep --freshness-mode=required` |
+| Tests used `--zip_undeclared_test_outputs` and local `outputs.zip` exists | Add `--artifact-source=bep` |
+| BEP references remote/CAS `test.outputs` or `outputs.zip` artifacts | Add `--artifact-source=bep --remote-artifacts=download --bep-artifact-downloader=/path/to/downloader`; use `--remote-artifacts=required` for strict all-or-nothing validation |
+| Mixed migration where local outputs may be stale but BEP can stage fresh carriers | Use `--artifact-source=auto --remote-artifacts=download` so staged BEP outputs win for matching output keys |

@@ -674,7 +674,7 @@ if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   cat "$CI_REQUIRED_EXEC_LOG" || true
   exit 1
 fi
-if ! grep -q "freshness filtering is required in CI or required mode" "$CI_REQUIRED_EXEC_LOG" || ! grep -q -- "--remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json" "$CI_REQUIRED_EXEC_LOG"; then
+if ! grep -q "freshness filtering is required in CI or required mode" "$CI_REQUIRED_EXEC_LOG" || ! grep -Fq -- "--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json" "$CI_REQUIRED_EXEC_LOG"; then
   echo "error: CI missing-freshness failure was not actionable"
   cat "$CI_REQUIRED_EXEC_LOG" || true
   exit 1
@@ -700,7 +700,7 @@ if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   cat "$REQUIRED_EXEC_LOG" || true
   exit 1
 fi
-if ! grep -q "freshness filtering is required in CI or required mode" "$REQUIRED_EXEC_LOG" || ! grep -q -- "--remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json" "$REQUIRED_EXEC_LOG"; then
+if ! grep -q "freshness filtering is required in CI or required mode" "$REQUIRED_EXEC_LOG" || ! grep -Fq -- "--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json" "$REQUIRED_EXEC_LOG"; then
   echo "error: required-mode missing-freshness failure was not actionable"
   cat "$REQUIRED_EXEC_LOG" || true
   exit 1
@@ -1624,7 +1624,7 @@ if env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   cat "$BEP_REMOTE_ONLY_LOG" || true
   exit 1
 fi
-if ! grep -q "BEP references remote-only test outputs" "$BEP_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_outputs=all" "$BEP_REMOTE_ONLY_LOG"; then
+if ! grep -q "BEP references remote-only test outputs" "$BEP_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_minimal" "$BEP_REMOTE_ONLY_LOG" || ! grep -Fq -- "--remote_download_regex=.*test[.]outputs.*" "$BEP_REMOTE_ONLY_LOG"; then
   echo "error: required BEP remote-only failure was not actionable"
   cat "$BEP_REMOTE_ONLY_LOG" || true
   exit 1
@@ -1648,7 +1648,7 @@ if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   cat "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || true
   exit 1
 fi
-if ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || ! grep -q -- "--remote_download_outputs=all" "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG"; then
+if ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || ! grep -q -- "--remote_download_minimal" "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || ! grep -Fq -- "--remote_download_regex=.*test[.]outputs.*" "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG"; then
   echo "error: optional BEP remote-only empty-testlogs scenario did not warn"
   cat "$BEP_OPTIONAL_REMOTE_ONLY_EMPTY_LOG" || true
   exit 1
@@ -1801,7 +1801,7 @@ if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   cat "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || true
   exit 1
 fi
-if ! grep -q "freshness filtering enabled: source=bep" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_outputs=all" "$BEP_OPTIONAL_REMOTE_ONLY_LOG"; then
+if ! grep -q "freshness filtering enabled: source=bep" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_minimal" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -Fq -- "--remote_download_regex=.*test[.]outputs.*" "$BEP_OPTIONAL_REMOTE_ONLY_LOG"; then
   echo "error: optional BEP remote-only scenario did not warn and skip"
   cat "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || true
   exit 1
@@ -3698,8 +3698,8 @@ if grep -q -- '--test_env=DD_TEST_OPTIMIZATION_AGENT' "$GUIDED_BOOT_WS/.bazelrc"
   cat "$GUIDED_BOOT_WS/.bazelrc" || true
   exit 1
 fi
-if ! grep -q -- 'test:test-optimization --remote_download_outputs=all' "$GUIDED_BOOT_WS/.bazelrc"; then
-  echo "error: guided bootstrap .bazelrc did not configure remote_download_outputs"
+if ! grep -q -- 'test:test-optimization --remote_download_minimal' "$GUIDED_BOOT_WS/.bazelrc" || ! grep -Fq -- 'test:test-optimization --remote_download_regex=.*test[.]outputs.*' "$GUIDED_BOOT_WS/.bazelrc"; then
+  echo "error: guided bootstrap .bazelrc did not configure selective remote downloads"
   cat "$GUIDED_BOOT_WS/.bazelrc" || true
   exit 1
 fi

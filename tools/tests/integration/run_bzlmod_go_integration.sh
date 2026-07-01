@@ -385,7 +385,8 @@ run_bep_freshness_scenario() {
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
       "${bzlmod_flags[@]}" \
-      --remote_download_outputs=all \
+      --remote_download_minimal \
+      --remote_download_regex=.*test[.]outputs.* \
       --cache_test_results=no \
       --build_event_json_file="$fresh_bep" \
       "$HELLO_TEST_TARGET"
@@ -450,13 +451,15 @@ run_bep_freshness_scenario() {
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
       "${bzlmod_flags[@]}" \
-      --remote_download_outputs=all \
+      --remote_download_minimal \
+      --remote_download_regex=.*test[.]outputs.* \
       --cache_test_results=yes \
       "$HELLO_TEST_TARGET"
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
       "${bzlmod_flags[@]}" \
-      --remote_download_outputs=all \
+      --remote_download_minimal \
+      --remote_download_regex=.*test[.]outputs.* \
       --cache_test_results=yes \
       --build_event_json_file="$cached_bep" \
       "$HELLO_TEST_TARGET"

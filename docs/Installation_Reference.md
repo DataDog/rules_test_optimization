@@ -364,7 +364,10 @@ It captures one BEP JSON file per Bazel test invocation and passes those files
 to doctor/uploader with `--freshness-source=bep --freshness-mode=required`. It
 uploads only when called with `--upload`; the default is `--no-upload`. It does
 not delete caches, print secrets, proxy payloads, or pass `DD_GIT_*` through
-`--test_env`.
+`--test_env`. If the generated test command is configured with
+`--zip_undeclared_test_outputs`, the script also passes `--artifact-source=bep`
+to doctor/uploader so local `outputs.zip` carriers are extracted through BEP
+artifact staging.
 
 ### Go Bazel config
 
@@ -382,7 +385,9 @@ common:test-optimization --repo_env=DD_GIT_BRANCH
 common:test-optimization --repo_env=DD_GIT_TAG
 common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 ```
 
 The full generated block includes all sync metadata inputs from the repository
@@ -391,6 +396,13 @@ rule. It intentionally does not include `--test_env=DD_GIT_*`,
 `--test_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`. Git metadata belongs to the
 sync metadata fetch through `--repo_env`, and uploader credentials/endpoints are
 read later by `bazel run`.
+
+The generated config intentionally does not include a fixed
+`--build_event_json_file`. Simple one-shot CI wrappers may pass
+`--build_event_json_file=.topt/bazel-bep.json` after creating `.topt/`.
+Wrappers that run multiple Bazel test invocations should pass a unique BEP path
+per invocation and export the matching `DD_TEST_OPTIMIZATION_BEP_JSON` before
+doctor/uploader.
 
 `FETCH_SALT` is intentionally not part of the generated default config. Use it
 only in a separate force-refresh `bazel sync --only=<repo>` command when you
@@ -401,21 +413,20 @@ Run Go onboarding commands with this config:
 ```bash
 mkdir -p .topt
 rm -f .topt/bazel-bep.json
-bazel test --config=test-optimization --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json //...
-bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required
+export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
+export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
+export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
+export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
+
+bazel test \
+  --config=test-optimization \
+  --build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON" \
+  //...
+bazel run --config=test-optimization //:dd_test_optimization_doctor
 bazel run --config=test-optimization //:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required \
   --dry-run \
   --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 ```
 
 Do not run the real uploader if the doctor or dry-run enrichment step fails.
@@ -797,7 +808,9 @@ common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 # Optional: override detected Go module path for export.bzl
 common:test-optimization --repo_env=GO_MODULE_PATH
 # Optional: provide Python module path hint for export.bzl
@@ -811,14 +824,24 @@ common:test-optimization --repo_env=DOTNET_MODULE_PATH
 # Optional: provide Ruby module path hint for export.bzl
 common:test-optimization --repo_env=RUBY_MODULE_PATH
 
-# Uploader (bazel run, pass credentials inline or export before run)
+# Doctor/uploader runtime (export in CI or in the wrapper before bazel run)
+#   export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
+#   export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
+#   export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
+#   export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
+#
+# Uploader credentials (pass inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
-#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/bazel-bep.json --freshness-source=bep --freshness-mode=required
+#   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 # PowerShell equivalent:
 #   # Set once per shell session before first run:
 #   # $env:DD_API_KEY = "<your-api-key>"
 #   # $env:DD_SITE = "datadoghq.com"
-#   bazel run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/bazel-bep.json --freshness-source=bep --freshness-mode=required
+#   # $env:DD_TEST_OPTIMIZATION_BEP_JSON = ".topt/bazel-bep.json"
+#   # $env:DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE = "bep"
+#   # $env:DD_TEST_OPTIMIZATION_FRESHNESS_MODE = "required"
+#   # $env:DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE = "bep"
+#   bazel run --config=test-optimization //:dd_upload_payloads
 
 # Tests (runtime)
 # Keep uploader credentials out of test runtime by default.

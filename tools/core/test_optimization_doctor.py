@@ -45,6 +45,12 @@ VALID_FRESHNESS_MODES = {"auto", "required", "optional", "disabled"}
 VALID_FRESHNESS_SOURCES = {"auto", "bep", "execution_log"}
 VALID_ARTIFACT_SOURCES = {"auto", "bep", "local"}
 VALID_REMOTE_ARTIFACT_MODES = {"disabled", "download", "required"}
+REMOTE_TEST_OUTPUT_DOWNLOAD_HINT = (
+    "rerun them with --remote_download_minimal "
+    "--remote_download_regex=.*test[.]outputs.* so Bazel downloads test.outputs locally. "
+    "If the test run also uses --zip_undeclared_test_outputs, rerun the doctor/uploader "
+    "with --artifact-source=bep so local outputs.zip carriers are materialized before discovery."
+)
 STAGING_MARKER = ".dd-topt-bep-staged"
 MAX_OUTPUTS_TREE_FILES = 10000
 MAX_OUTPUTS_TREE_BYTES = 512 * 1024 * 1024
@@ -446,8 +452,7 @@ def _missing_expected_target_message(label: str, target_root: Path, missing_part
         "Run this exact instrumented test target before running the doctor. "
         "Do not list build-only, wrapper-only, or analysis-only targets in "
         "expected_targets. If tests ran with remote execution or remote cache, "
-        "rerun them with --remote_download_outputs=all "
-        "so Bazel downloads test.outputs locally."
+        f"{REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
     )
 
 
@@ -1356,7 +1361,7 @@ def _validate_expected_target_bep_freshness(
             _fail(
                 "BEP references remote-only test outputs for "
                 f"{remote.label}: {remote.artifact}. Rerun bazel test with "
-                "--build_event_json_file and --remote_download_outputs=all before running the doctor."
+                f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
             )
 
     fresh_output_dirs = []
@@ -1400,7 +1405,7 @@ def _validate_expected_target_bep_freshness(
             reason = "no fresh BEP TestResult matched this target's local test.outputs"
         _fail(
             f"expected target output is not fresh in BEP: {missing_label} ({reason}). "
-            "Rerun bazel test with --build_event_json_file and --remote_download_outputs=all, "
+            f"Rerun bazel test with --build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT} "
             "then rerun the doctor with --bep-json and --freshness-source=bep "
             "--freshness-mode=required."
         )
@@ -1432,7 +1437,7 @@ def _validate_discovered_bep_freshness(
             _fail(
                 "BEP references remote-only test outputs for "
                 f"{remote.label}: {remote.artifact}. Rerun bazel test with "
-                "--build_event_json_file and --remote_download_outputs=all before running the doctor."
+                f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
             )
 
     missing_local_labels = sorted(local_labels.intersection(freshness.missing_output_mappings))
@@ -1441,7 +1446,7 @@ def _validate_discovered_bep_freshness(
             "BEP required freshness cannot authorize discovered Test Optimization output "
             f"for {missing_local_labels[0]} because the fresh TestResult did not contain "
             "a mappable test.outputs reference. Rerun bazel test with "
-            "--build_event_json_file and --remote_download_outputs=all before running the doctor."
+            f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
         )
 
     fresh_output_dirs = []
@@ -1482,7 +1487,7 @@ def _validate_discovered_bep_freshness(
         _fail(
             "BEP required freshness did not authorize any discovered Test Optimization "
             f"output directories ({reason}). Rerun bazel test with --build_event_json_file "
-            "and --remote_download_outputs=all, then rerun the doctor with --bep-json "
+            f"and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT} then rerun the doctor with --bep-json "
             "and --freshness-source=bep --freshness-mode=required."
         )
 

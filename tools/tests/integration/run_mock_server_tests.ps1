@@ -911,7 +911,7 @@ filegroup(
         throw "CI uploader unexpectedly succeeded without freshness filtering`n$(Get-Content -LiteralPath $ciRequiredTranscript -Raw -ErrorAction SilentlyContinue)"
       }
       $ciRequiredOutput = Get-Content -LiteralPath $ciRequiredTranscript -Raw -Encoding UTF8
-      if (-not $ciRequiredOutput.Contains("freshness filtering is required in CI or required mode") -or -not $ciRequiredOutput.Contains("--remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json")) {
+      if (-not $ciRequiredOutput.Contains("freshness filtering is required in CI or required mode") -or -not $ciRequiredOutput.Contains("--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json")) {
         throw "CI missing-freshness failure was not actionable`n$ciRequiredOutput"
       }
 
@@ -921,7 +921,7 @@ filegroup(
         throw "required-mode uploader unexpectedly succeeded without freshness filtering`n$(Get-Content -LiteralPath $requiredTranscript -Raw -ErrorAction SilentlyContinue)"
       }
       $requiredOutput = Get-Content -LiteralPath $requiredTranscript -Raw -Encoding UTF8
-      if (-not $requiredOutput.Contains("freshness filtering is required in CI or required mode") -or -not $requiredOutput.Contains("--remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json")) {
+      if (-not $requiredOutput.Contains("freshness filtering is required in CI or required mode") -or -not $requiredOutput.Contains("--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json")) {
         throw "required-mode missing-freshness failure was not actionable`n$requiredOutput"
       }
 
@@ -1601,7 +1601,7 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
     throw "required BEP remote-only scenario unexpectedly succeeded`n$(Get-Content -LiteralPath $bepRemoteOnlyTranscript -Raw -ErrorAction SilentlyContinue)"
   }
   $bepRemoteOnlyOutput = Get-Content -LiteralPath $bepRemoteOnlyTranscript -Raw -Encoding UTF8
-	  if (-not $bepRemoteOnlyOutput.Contains("BEP references remote-only test outputs") -or -not $bepRemoteOnlyOutput.Contains("--remote_download_outputs=all")) {
+	  if (-not $bepRemoteOnlyOutput.Contains("BEP references remote-only test outputs") -or -not $bepRemoteOnlyOutput.Contains("--remote_download_minimal") -or -not $bepRemoteOnlyOutput.Contains("--remote_download_regex=.*test[.]outputs.*")) {
 	    throw "required BEP remote-only failure was not actionable`n$bepRemoteOnlyOutput"
 	  }
 
@@ -1614,7 +1614,7 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	    throw "optional BEP remote-only empty-testlogs scenario failed with exit code $bepOptionalRemoteOnlyEmptyExitCode`n$(Get-Content -LiteralPath $bepOptionalRemoteOnlyEmptyTranscript -Raw -ErrorAction SilentlyContinue)"
 	  }
 	  $bepOptionalRemoteOnlyEmptyOutput = Get-Content -LiteralPath $bepOptionalRemoteOnlyEmptyTranscript -Raw -Encoding UTF8
-	  if (-not $bepOptionalRemoteOnlyEmptyOutput.Contains("warning: BEP references remote-only test outputs") -or -not $bepOptionalRemoteOnlyEmptyOutput.Contains("--remote_download_outputs=all")) {
+	  if (-not $bepOptionalRemoteOnlyEmptyOutput.Contains("warning: BEP references remote-only test outputs") -or -not $bepOptionalRemoteOnlyEmptyOutput.Contains("--remote_download_minimal") -or -not $bepOptionalRemoteOnlyEmptyOutput.Contains("--remote_download_regex=.*test[.]outputs.*")) {
 	    throw "optional BEP remote-only empty-testlogs scenario did not warn`n$bepOptionalRemoteOnlyEmptyOutput"
 	  }
 
@@ -1695,7 +1695,7 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	    throw "optional BEP remote-only scenario failed with exit code $bepOptionalRemoteOnlyExitCode`n$(Get-Content -LiteralPath $bepOptionalRemoteOnlyTranscript -Raw -ErrorAction SilentlyContinue)"
 	  }
 	  $bepOptionalRemoteOnlyOutput = Get-Content -LiteralPath $bepOptionalRemoteOnlyTranscript -Raw -Encoding UTF8
-		  if (-not $bepOptionalRemoteOnlyOutput.Contains("freshness filtering enabled: source=bep") -or -not $bepOptionalRemoteOnlyOutput.Contains("warning: BEP references remote-only test outputs") -or -not $bepOptionalRemoteOnlyOutput.Contains("skipping cached or non-current test output") -or -not $bepOptionalRemoteOnlyOutput.Contains("--remote_download_outputs=all")) {
+		  if (-not $bepOptionalRemoteOnlyOutput.Contains("freshness filtering enabled: source=bep") -or -not $bepOptionalRemoteOnlyOutput.Contains("warning: BEP references remote-only test outputs") -or -not $bepOptionalRemoteOnlyOutput.Contains("skipping cached or non-current test output") -or -not $bepOptionalRemoteOnlyOutput.Contains("--remote_download_minimal") -or -not $bepOptionalRemoteOnlyOutput.Contains("--remote_download_regex=.*test[.]outputs.*")) {
 		    throw "optional BEP remote-only scenario did not warn and skip`n$bepOptionalRemoteOnlyOutput"
 		  }
 

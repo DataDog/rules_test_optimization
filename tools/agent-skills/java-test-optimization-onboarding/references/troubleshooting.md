@@ -109,7 +109,21 @@ command.
 If tests use remote execution or remote cache, add:
 
 ```text
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
 ```
+
+If tests use `--zip_undeclared_test_outputs`, add `--artifact-source=bep` to
+the matching doctor and uploader commands.
+
+If BEP still points at remote/CAS artifacts, add
+`--artifact-source=bep --remote-artifacts=download` and configure
+`--bep-artifact-downloader=/path/to/downloader`. Use
+`--remote-artifacts=required` only when the rollout should fail if any selected
+artifact cannot be materialized.
+
+If local outputs may be stale while BEP can stage fresh carriers, consider
+`--artifact-source=auto --remote-artifacts=download` so staged outputs win for
+matching BEP output keys.
 
 Then re-run tests before running doctor and uploader.

@@ -352,7 +352,8 @@ common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
 # Optional for local experiments when runtime_module_path is not checked in.
 common:test-optimization --repo_env=GO_MODULE_PATH
 ```
@@ -379,8 +380,12 @@ sandbox.
 
 If the repository already uses a service-specific config name, keep it. The
 important part is that sync, test, doctor, and uploader commands all use the
-same config, and that the test config includes `--remote_download_outputs=all`
-when remote outputs may otherwise stay remote-only.
+same config, and that the test config includes
+`--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` when
+remote outputs may otherwise stay remote-only. If tests use
+`--zip_undeclared_test_outputs`, also pass `--artifact-source=bep` to doctor and
+uploader so zipped undeclared outputs are staged from BEP before local
+discovery.
 
 ## Root Targets
 

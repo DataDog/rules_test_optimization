@@ -3089,7 +3089,9 @@ Path(out).mkdir(parents=True)
             self.assertIn("Run this exact instrumented test target before running the doctor", stderr.getvalue())
             self.assertIn("build-only", stderr.getvalue())
             self.assertIn("wrapper-only", stderr.getvalue())
-            self.assertIn("--remote_download_outputs=all", stderr.getvalue())
+            self.assertIn("--remote_download_minimal", stderr.getvalue())
+            self.assertIn("--remote_download_regex=.*test[.]outputs.*", stderr.getvalue())
+            self.assertIn("--artifact-source=bep", stderr.getvalue())
 
     def test_validate_git_metadata_requires_core_tags(self) -> None:
         """Validate context.json must contain git metadata used by enrichment."""

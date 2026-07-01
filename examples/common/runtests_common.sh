@@ -42,10 +42,10 @@ run_example_runtests() {
   }
 
   echo "--- non-hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_outputs=all --build_event_json_file="$non_hermetic_bep" || test_status=$?
+  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file="$non_hermetic_bep" || test_status=$?
 
   echo "--- hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic --remote_download_outputs=all --build_event_json_file="$hermetic_bep" || test_status=$?
+  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file="$hermetic_bep" || test_status=$?
 
   echo "--- validating payloads"
   run_cmd "${bazelw}" run //:dd_test_optimization_doctor -- "${bep_args[@]}" || doctor_status=$?

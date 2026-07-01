@@ -31,8 +31,12 @@ Keep the RFC contract intact:
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync
   metadata.
 - Do not pass uploader credentials or upload endpoints into the test sandbox.
-- Use `--remote_download_outputs=all` when remote execution or remote cache can
-  leave test outputs remote-only.
+- Use `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
+  when remote execution or remote cache can leave test outputs remote-only.
+  If the test run uses `--zip_undeclared_test_outputs`, pass
+  `--artifact-source=bep` to doctor and uploader.
+  If BEP still points at remote/CAS artifacts, use BEP artifact resolution with
+  `--remote-artifacts=download` or `required` and a downloader.
 - Run pilot tests with `--build_event_json_file` and pass the same BEP file to
   doctor/uploader with `--freshness-source=bep --freshness-mode=required`.
 
@@ -85,7 +89,8 @@ Every successful Python onboarding should end with these pieces:
   labels are still fine for small repositories.
 - `.bazelrc` or CLI commands provide sync metadata with `--repo_env`.
 - Test commands use a named config such as `--config=test-optimization`.
-- Remote-output-sensitive test configs include `--remote_download_outputs=all`.
+- Remote-output-sensitive test configs include
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`.
 - Validation commands pass the matching BEP file to doctor and uploader in
   required BEP freshness mode.
 - `FETCH_SALT` is used only for a separate, explicit

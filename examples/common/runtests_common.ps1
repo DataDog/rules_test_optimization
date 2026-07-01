@@ -58,11 +58,11 @@ function Invoke-ExampleRunTests {
     )
 
     Write-Output "--- non-hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_outputs=all", "--build_event_json_file=$nonHermeticBep")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--build_event_json_file=$nonHermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic", "--remote_download_outputs=all", "--build_event_json_file=$hermeticBep")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--build_event_json_file=$hermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- validating payloads"

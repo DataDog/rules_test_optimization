@@ -87,7 +87,10 @@ class BootstrapSnippetTest(unittest.TestCase):
         args = _args()
         snippet = main.render_bazelrc_snippet(args)
         self.assertIn("common:test-optimization --repo_env=DD_API_KEY", snippet)
-        self.assertIn("test:test-optimization --remote_download_outputs=all", snippet)
+        self.assertIn("test:test-optimization --remote_download_minimal", snippet)
+        self.assertIn("test:test-optimization --remote_download_regex=.*test[.]outputs.*", snippet)
+        self.assertIn("test:test-optimization --zip_undeclared_test_outputs", snippet)
+        self.assertNotIn("--remote_download_outputs=all", snippet)
         self.assertNotIn("--test_env=DD_GIT_", snippet)
         self.assertNotIn("--test_env=DD_API_KEY", snippet)
         self.assertNotIn("--test_env=DD_SITE", snippet)
@@ -98,7 +101,11 @@ class BootstrapSnippetTest(unittest.TestCase):
     def test_normal_commands_do_not_include_fetch_salt(self) -> None:
         """Normal commands do not force metadata refreshes."""
         args = _args("--expected-target=//app:test")
-        self.assertNotIn("FETCH_SALT", main.render_command_snippet(args))
+        snippet = main.render_command_snippet(args)
+        self.assertIn("DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json", snippet)
+        self.assertIn("DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep", snippet)
+        self.assertIn('--build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON"', snippet)
+        self.assertNotIn("FETCH_SALT", snippet)
 
     def test_default_output_does_not_include_fetch_salt(self) -> None:
         """Default onboarding output excludes the explicit refresh command."""
@@ -126,7 +133,8 @@ class BootstrapSnippetTest(unittest.TestCase):
         """Command output uses the requested Bazel wrapper and test targets."""
         args = _args("--bazel-command=./bazelw", "--test-target=//app:explicit", "--expected-target=//app:expected")
         snippet = main.render_command_snippet(args)
-        self.assertIn("./bazelw test --config=test-optimization //app:explicit", snippet)
+        self.assertIn("./bazelw test --config=test-optimization", snippet)
+        self.assertIn("--build_event_json_file=\"$DD_TEST_OPTIMIZATION_BEP_JSON\" //app:explicit", snippet)
         self.assertNotIn("//app:expected", snippet)
 
     def test_command_snippet_gates_real_upload_on_validation(self) -> None:
@@ -145,7 +153,9 @@ class BootstrapSnippetTest(unittest.TestCase):
     def test_command_snippet_falls_back_to_expected_targets(self) -> None:
         """Expected targets are reused for commands when test targets are omitted."""
         args = _args("--expected-target=//app:expected")
-        self.assertIn("bazel test --config=test-optimization //app:expected", main.render_command_snippet(args))
+        snippet = main.render_command_snippet(args)
+        self.assertIn("bazel test --config=test-optimization", snippet)
+        self.assertIn("--build_event_json_file=\"$DD_TEST_OPTIMIZATION_BEP_JSON\" //app:expected", snippet)
 
     def test_target_snippet_uses_package_local_targets(self) -> None:
         """Target output wires the helper and strict expected targets."""

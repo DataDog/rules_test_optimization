@@ -313,7 +313,7 @@ Running tests, validating payloads, and uploading payloads:
 # Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
 mkdir -p .topt
 rm -f .topt/bazel-bep.json
-bazel test //... --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json || test_status=$?; test_status=${test_status:-0}
+bazel test //... --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json || test_status=$?; test_status=${test_status:-0}
 bazel run //:dd_test_optimization_doctor -- \
   --bep-json=.topt/bazel-bep.json \
   --freshness-source=bep \
@@ -347,7 +347,7 @@ exit "$upload_status"
 # Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
 New-Item -ItemType Directory -Force .topt | Out-Null
 Remove-Item .topt/bazel-bep.json -ErrorAction SilentlyContinue
-bazel test //... --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json
+bazel test //... --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json
 $testStatus = $LASTEXITCODE
 if ($null -eq $testStatus) { $testStatus = 0 }
 bazel run //:dd_test_optimization_doctor -- `

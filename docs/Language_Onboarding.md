@@ -60,7 +60,9 @@ common:test-optimization --repo_env=DD_GIT_BRANCH
 common:test-optimization --repo_env=DD_GIT_TAG
 common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 ```
 
 Pass `DD_GIT_*` only through `--repo_env`. Never forward it as test
@@ -80,11 +82,13 @@ Shared upload command:
 ```bash
 mkdir -p .topt
 rm -f .topt/bazel-bep.json
-bazel test --config=test-optimization --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json //... || test_status=$?; test_status=${test_status:-0}
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required || doctor_status=$?; doctor_status=${doctor_status:-0}
+export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
+export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
+export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
+export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
+
+bazel test --config=test-optimization --build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON" //... || test_status=$?; test_status=${test_status:-0}
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$doctor_status"
@@ -377,16 +381,25 @@ Validate in this order:
 3. Run the instrumented targets in small batches with
    `--build_event_json_file=.topt/<batch>.bep.json`, serially if disk or cache
    pressure is high.
-4. Run `bazel run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=.topt/<batch>.bep.json --freshness-source=bep --freshness-mode=required`.
+4. Export `DD_TEST_OPTIMIZATION_BEP_JSON=.topt/<batch>.bep.json`,
+   `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep`,
+   `DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required`, and
+   `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep`, then run
+   `bazel run --config=test-optimization //:dd_test_optimization_doctor`.
 5. Run
-   `bazel run --config=test-optimization //:dd_upload_payloads -- --bep-json=.topt/<batch>.bep.json --freshness-source=bep --freshness-mode=required --dry-run --validate-enrichment`.
+   `bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment`.
 6. Run the real uploader with `DD_API_KEY` and `DD_SITE` in the command
-   environment, the same `--bep-json` flags, and not in the test sandbox.
+   environment. Keep `DD_TEST_OPTIMIZATION_*` in the wrapper or CI
+   environment, not in the test sandbox.
 
 For remote execution or remote cache setups, keep
-`test:test-optimization --remote_download_outputs=all` in the active `.bazelrc`
-config. Without local undeclared outputs, the doctor and uploader cannot inspect
-or enrich the payloads after `bazel test`. Use a unique BEP file per Bazel test
+`test:test-optimization --remote_download_minimal` and
+`test:test-optimization --remote_download_regex=.*test[.]outputs.*` plus
+`test:test-optimization --zip_undeclared_test_outputs` in the
+active `.bazelrc` config. Without local undeclared outputs, the doctor and
+uploader cannot inspect or enrich the payloads after `bazel test`.
+`DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` makes local `outputs.zip` carriers
+extract through BEP artifact staging. Use a unique BEP file per Bazel test
 invocation and remove stale BEP files before reuse.
 
 If the doctor reports missing Git metadata, missing Bazel metadata,

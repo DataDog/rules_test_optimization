@@ -31,8 +31,12 @@ Keep the RFC contract intact:
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync metadata.
 - Do not pass uploader endpoints or credentials into the test sandbox.
 - Do not copy or apply `rules_go` patch bundles manually.
-- Use `--remote_download_outputs=all` when remote execution or remote cache can
-  leave test outputs remote-only.
+- Use `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
+  when remote execution or remote cache can leave test outputs remote-only.
+  If the test run uses `--zip_undeclared_test_outputs`, pass
+  `--artifact-source=bep` to doctor and uploader.
+  If BEP still points at remote/CAS artifacts, use BEP artifact resolution with
+  `--remote-artifacts=download` or `required` and a downloader.
 - Run pilot tests with `--build_event_json_file` and pass the same BEP file to
   doctor/uploader with `--freshness-source=bep --freshness-mode=required`.
 
@@ -87,7 +91,8 @@ Every successful Go onboarding should end with these pieces:
   declarations when they exist, and agents do not run broad `go mod tidy`
   unless the repository explicitly wants that behavior.
 - Test commands use a named config such as `--config=test-optimization`.
-- Remote-output-sensitive test configs include `--remote_download_outputs=all`.
+- Remote-output-sensitive test configs include
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`.
 - Validation commands pass the matching BEP file to doctor and uploader in
   required BEP freshness mode.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.

@@ -2663,7 +2663,7 @@ function Initialize-BepEligibility {
 	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count)"
 	  if ($script:FreshnessMode -eq "optional" -and $script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
 	    $first = $script:FreshnessRemoteOnlyOutputs[0]
-	    Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); skipping those outputs. Rerun with --remote_download_outputs=all to materialize payloads locally."
+	    Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); skipping those outputs. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* to materialize payloads locally. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
 	  }
 	}
 
@@ -2743,7 +2743,7 @@ function Initialize-FreshnessEligibility {
   if ($script:FreshnessSource -eq "bep") {
     if ($script:BepJsonFiles.Count -eq 0) {
       if ($script:FreshnessMode -eq "required" -or ($script:FreshnessMode -eq "auto" -and (Test-CiEnvironment))) {
-        Log "error: BEP freshness filtering is required but no BEP JSON file was configured. Run bazel test with --remote_download_outputs=all --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson), or opt out explicitly with --allow-cached-payload-uploads."
+        Log "error: BEP freshness filtering is required but no BEP JSON file was configured. Run bazel test with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson), or opt out explicitly with --allow-cached-payload-uploads."
         exit 2
       }
       Log "warning: BEP freshness source was selected but no BEP JSON file was configured; cached test outputs may be uploaded. Rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
@@ -2760,10 +2760,10 @@ function Initialize-FreshnessEligibility {
   } else {
     if ([string]::IsNullOrWhiteSpace($script:ExecutionLogJson)) {
       if ($script:FreshnessMode -eq "required" -or ($script:FreshnessMode -eq "auto" -and (Test-CiEnvironment))) {
-        Log "error: freshness filtering is required in CI or required mode, but no BEP or execution log was found. Run bazel test with --remote_download_outputs=all --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+        Log "error: freshness filtering is required in CI or required mode, but no BEP or execution log was found. Run bazel test with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
         exit 2
       }
-      Log "warning: freshness filtering is not configured; cached test outputs may be uploaded. Prefer bazel test --remote_download_outputs=all --build_event_json_file=$($script:DefaultBepJson) and rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+      Log "warning: freshness filtering is not configured; cached test outputs may be uploaded. Prefer bazel test --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$($script:DefaultBepJson) and rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
       return
     }
     Initialize-ExecutionLogEligibility
@@ -2841,7 +2841,7 @@ function Assert-NoRequiredRemoteOnlyBepOutputs {
       Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); remote artifact staging is disabled."
       return
     }
-    Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $($first.Artifact). Rerun with --remote_download_outputs=all or configure a BEP artifact fetcher."
+    Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $($first.Artifact). Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
     exit 2
   }
 }
@@ -2886,7 +2886,7 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
     Write-FreshnessSkipOnce $OutputsDir "BEP reported cached result for target $targetLabel output $outputKey"
   } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
     if ($script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
-      Log "error: BEP required freshness cannot authorize $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
+      Log "error: BEP required freshness cannot authorize $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
       exit 2
     } else {
       Write-FreshnessSkipOnce $OutputsDir "no fresh BEP TestResult matched target $targetLabel output $outputKey"
@@ -2894,7 +2894,7 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
   } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "optional" -and $script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
     Write-FreshnessSkipOnce $OutputsDir "fresh BEP TestResult for $targetLabel did not contain a mappable test.outputs reference"
     if ($script:FreshnessSkipWasWritten) {
-      Log "warning: BEP optional freshness skipped $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_outputs=all and inspect the BEP testActionOutput entries."
+      Log "warning: BEP optional freshness skipped $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
     }
   } else {
     Write-FreshnessSkipOnce $OutputsDir "no fresh $($script:FreshnessSelectedSource) result matched target $targetLabel output $outputKey"

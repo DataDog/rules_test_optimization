@@ -30,7 +30,16 @@ Checks:
   service repository, for example `@test_optimization_data_<service>//:export.bzl`?
 - Is `DD_CIVISIBILITY_ENABLED` or equivalent tracer setup enabled by the macro?
 - With remote execution/cache, did the test config use
-  `--remote_download_outputs=all`?
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`?
+- If tests used `--zip_undeclared_test_outputs`, did doctor/uploader use
+  `--artifact-source=bep`?
+- If BEP still points at remote/CAS artifacts, did doctor/uploader use
+  `--artifact-source=bep --remote-artifacts=download` with a configured
+  `--bep-artifact-downloader`? Use `--remote-artifacts=required` only when the
+  rollout should fail if any selected artifact cannot be materialized.
+- If local outputs may be stale while BEP can stage fresh carriers, consider
+  `--artifact-source=auto --remote-artifacts=download` so staged outputs win for
+  matching BEP output keys.
 
 Fix the target selection or wrapper first. Do not work around missing payloads
 by adding a proxy or uploading from inside the test sandbox.

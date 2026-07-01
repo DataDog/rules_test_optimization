@@ -253,8 +253,14 @@ Doctor notes:
 - The doctor checks local files only. It does not upload, delete, or rewrite
   payloads.
 - When `expected_targets` is set, each listed test must have run before the
-  doctor. If tests ran remotely, use `--remote_download_outputs=all` so
-  `test.outputs` exists locally.
+  doctor. If tests ran remotely, prefer
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` so
+  `test.outputs` exists locally without downloading unrelated outputs. If the
+  test command used `--zip_undeclared_test_outputs`, pass
+  `--artifact-source=bep` to the doctor so local `outputs.zip` carriers are
+  extracted through BEP artifact staging before validation. If BEP references
+  remote-only artifacts that were not downloaded locally, configure BEP
+  artifact resolution with `--remote-artifacts=download` or `required`.
 - The doctor scans versioned `.bazelrc` files for `--test_env=DD_GIT_*`, but it
   cannot see ad-hoc `--test_env=DD_GIT_*` flags typed directly on the CLI.
 - The doctor prints a payload-selection summary so rollout owners can quickly
@@ -343,9 +349,10 @@ onboarding snippets for the selected mode. It writes files only when
 | `--write-targets` / `--targets-build-path` | `false` / `tools/test_optimization/BUILD.bazel` | Insert or replace the managed doctor/uploader block |
 
 Generated `.bazelrc` blocks use `common:<config> --repo_env=...` for sync
-metadata and `test:<config> --remote_download_outputs=all` for local output
-availability. They do not include `FETCH_SALT`, `DD_GIT_*` test env,
-`DD_API_KEY` test env, upload endpoint test env, or
+metadata plus `test:<config> --remote_download_minimal` and
+`test:<config> --remote_download_regex=.*test[.]outputs.*` for local output
+availability in remote execution/cache setups. They do not include
+`FETCH_SALT`, `DD_GIT_*` test env, `DD_API_KEY` test env, upload endpoint test env, or
 `DD_CIVISIBILITY_AGENTLESS_ENABLED`.
 
 ## How data is fetched
@@ -497,6 +504,11 @@ The uploader rule reads these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_BEP_JSON` | BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE` | Freshness source: `auto`, `bep`, or `execution_log` |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
+| `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | Artifact discovery source: `local`, `bep`, or `auto`. Recommended CI with zipped undeclared outputs should set `bep` |
+| `DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS` | Remote BEP artifact handling: `disabled`, `download`, or `required` |
+| `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | Directory used for per-run staged BEP artifacts |
+| `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER` | Optional executable used to download remote/CAS BEP artifacts |
+| `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC` | Timeout for the BEP artifact downloader |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | Optional explicit legacy execution-log fallback path; default execution-log files are not auto-discovered |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset |
 | `TESTLOGS_DIR` | Explicit `bazel-testlogs` path for non-standard layouts |
@@ -514,6 +526,21 @@ Uploader CLI flags:
 | `--allow-cached-payload-uploads` | Explicitly disables BEP and legacy execution-log freshness filtering |
 | `--execution-log-json=<path>` | Explicit legacy execution-log fallback path |
 | `--execution-log-mode=<mode>` | Legacy alias for freshness mode |
+| `--artifact-source=<source>` | Artifact discovery source: `local`, `bep`, or `auto`. Default `local` scans local `bazel-testlogs`; `bep` stages BEP-referenced `test.outputs` directories or local `outputs.zip` carriers before discovery; `auto` can stage BEP artifacts while preserving local discovery fallback |
+| `--remote-artifacts=<mode>` | Remote BEP artifact handling: `disabled`, `download`, or `required`. Default `disabled` never downloads remote/CAS artifacts. `download` stages what it can and skips unresolved remote artifacts. `required` fails if any selected fresh BEP artifact cannot be materialized |
+| `--artifact-staging-dir=<path>` | Directory used for per-run staged BEP artifacts; wrapper examples use `.topt/bep-artifacts` |
+| `--bep-artifact-downloader=<path>` | Executable used to download remote/CAS BEP artifacts. It receives `--uri`, `--name`, and `--output`, and must write an `outputs.zip` archive to `--output` |
+| `--bep-artifact-downloader-timeout-sec=<seconds>` | Timeout for the BEP artifact downloader |
+
+Uploader execution modes:
+
+| Scenario | Test command shape | Doctor/uploader flags |
+|----------|--------------------|-----------------------|
+| Local development, no cache-safety requirement | Normal local `bazel test` that leaves `bazel-testlogs/**/test.outputs` on disk | Defaults are enough, or pass `--freshness-mode=disabled` / `--allow-cached-payload-uploads` intentionally |
+| Recommended CI | `.bazelrc` includes `--remote_download_minimal`, `--remote_download_regex=.*test[.]outputs.*`, and `--zip_undeclared_test_outputs`; wrapper passes a fresh `--build_event_json_file=...` | Prefer env: `DD_TEST_OPTIMIZATION_BEP_JSON`, `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep`, `DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required`, `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` |
+| CI without zipped outputs | Same BEP-producing test command, but no `--zip_undeclared_test_outputs` | BEP freshness env is enough; `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` is still valid and stages BEP-referenced local directories |
+| Remote/CAS artifacts not present locally | Same BEP-producing test command; selective download did not materialize `test.outputs` locally | Add `--artifact-source=bep --remote-artifacts=download --bep-artifact-downloader=/path/to/downloader`, or use `--remote-artifacts=required` for strict all-or-nothing behavior |
+| Transitional local+BEP staging | BEP-producing test command with some local outputs and some BEP-stageable carriers | `--artifact-source=auto --remote-artifacts=download` lets staged BEP outputs win over stale local directories with the same BEP output key |
 
 Numeric precision caveat:
 - Keep high-cardinality IDs (for example CI job IDs) as strings when possible.
