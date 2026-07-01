@@ -1385,14 +1385,15 @@ dbg "Waiting for test outputs to quiesce..."
 test_output_dir_key() {
   local outputs_dir="${1%/}"
   local scan_root
+  outputs_dir="${outputs_dir//\\//}"
   for scan_root in "${TESTLOGS_SCAN_DIRS[@]+${TESTLOGS_SCAN_DIRS[@]}}"; do
     scan_root="${scan_root%/}"
+    scan_root="${scan_root//\\//}"
     if [[ -n "$scan_root" && "$outputs_dir" == "$scan_root/"* ]]; then
       echo "${outputs_dir#$scan_root/}"
       return 0
     fi
   done
-  outputs_dir="${outputs_dir//\\//}"
   if [[ "$outputs_dir" == *"/testlogs/"* ]]; then
     outputs_dir="${outputs_dir##*/testlogs/}"
   fi
@@ -1431,9 +1432,12 @@ cache_test_outputs() {
         fi
         if [[ -n "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE" && -s "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE" ]]; then
             if grep -Fxq "$key" "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE" 2>/dev/null; then
-                local staged_match=0 staged_root
+                local staged_match=0 staged_root normalized_outputs_dir normalized_staged_root
+                normalized_outputs_dir="${outputs_dir//\\//}"
                 for staged_root in "${STAGED_TESTLOGS_DIRS[@]+${STAGED_TESTLOGS_DIRS[@]}}"; do
-                    case "$outputs_dir" in "$staged_root"/*) staged_match=1 ;; esac
+                    normalized_staged_root="${staged_root%/}"
+                    normalized_staged_root="${normalized_staged_root//\\//}"
+                    case "$normalized_outputs_dir" in "$normalized_staged_root"/*) staged_match=1 ;; esac
                 done
                 if (( staged_match == 0 )); then
                     dbg "suppressing local test.outputs selected for BEP artifact staging: $outputs_dir"

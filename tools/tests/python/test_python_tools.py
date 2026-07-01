@@ -4239,6 +4239,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn('elif ! is_absolute_path "$ARTIFACT_STAGING_DIR"', bash_text)
         self.assertIn('[A-Za-z]:/*|[A-Za-z]:\\\\*|\\\\\\\\*) return 0', bash_text)
         self.assertIn('ARTIFACT_STAGING_DIR="$BUILD_WORKSPACE_DIRECTORY/$ARTIFACT_STAGING_DIR"', bash_text)
+        self.assertIn('outputs_dir="${outputs_dir//\\\\//}"', bash_text)
+        self.assertIn('scan_root="${scan_root//\\\\//}"', bash_text)
         self.assertIn('resolved_bep_json="$(resolve_runtime_file_path "$bep_json")"', bash_text)
         self.assertIn('"${resolved_bep_files[@]}"', bash_text)
         self.assertNotIn('"${helper_args[@]}" "${BEP_JSON_FILES[@]}"', bash_text)
@@ -4273,6 +4275,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         ]:
             self.assertIn(token, powershell_text)
         self.assertIn("& $PythonBin $script:BepArtifactStageHelper", powershell_text)
+        self.assertIn("if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }", powershell_text)
         self.assertIn('"--doctor-runtime", $script:DoctorRuntime', powershell_text)
         self.assertIn("-not [System.IO.Path]::IsPathRooted($ArtifactStagingDir)", powershell_text)
         self.assertIn("Join-Path $env:BUILD_WORKSPACE_DIRECTORY $ArtifactStagingDir", powershell_text)

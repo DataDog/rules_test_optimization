@@ -1123,7 +1123,7 @@ function Stage-BepArtifacts {
     }
     $cmd += @($resolvedBepJsonFiles.ToArray())
     $helperOutput = @(& $PythonBin $script:BepArtifactStageHelper @cmd 2>&1)
-    $helperStatus = $LASTEXITCODE
+    $helperStatus = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
     if ($helperStatus -ne 0) {
         foreach ($line in $helperOutput) { Log-Stderr ([string]$line) }
         Log "error: BEP artifact staging helper failed with exit code $helperStatus"
