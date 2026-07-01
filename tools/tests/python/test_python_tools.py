@@ -4473,8 +4473,9 @@ echo blocked
         self.assertIn('full_staged_root="$(cd "$staged_root"', bash_text)
         self.assertIn('"$full_runs_root"/*) rm -rf "$full_staged_root"', bash_text)
         self.assertNotIn('"$runs_root"/*) rm -rf "$staged_root"', bash_text)
-        self.assertIn("(Resolve-Path -LiteralPath $stagedRoot).ProviderPath", powershell_text)
-        self.assertIn("(Resolve-Path -LiteralPath $runsRoot).ProviderPath", powershell_text)
+        self.assertIn("$fullRoot = Resolve-DirectoryPhysicalPath $stagedRoot", powershell_text)
+        self.assertIn("$fullRuns = Resolve-DirectoryPhysicalPath $runsRoot", powershell_text)
+        self.assertIn("Test-PathUnderDirectory $fullRoot $fullRuns", powershell_text)
 
     def test_uploader_freshness_flags_have_source_neutral_ci_errors_and_precedence(self) -> None:
         """Validate new freshness flags own precedence and auto-mode CI guidance."""

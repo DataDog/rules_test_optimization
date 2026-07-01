@@ -963,16 +963,8 @@ function Release-Lock {
     foreach ($stagedRoot in @($script:StagedTestlogsDirs)) {
         if ([string]::IsNullOrWhiteSpace($stagedRoot)) { continue }
         try {
-            if (Test-Path -LiteralPath $stagedRoot -PathType Container) {
-                $fullRoot = (Resolve-Path -LiteralPath $stagedRoot).ProviderPath
-            } else {
-                $fullRoot = [System.IO.Path]::GetFullPath($stagedRoot)
-            }
-            if (Test-Path -LiteralPath $runsRoot -PathType Container) {
-                $fullRuns = (Resolve-Path -LiteralPath $runsRoot).ProviderPath
-            } else {
-                $fullRuns = [System.IO.Path]::GetFullPath($runsRoot)
-            }
+            $fullRoot = Resolve-DirectoryPhysicalPath $stagedRoot
+            $fullRuns = Resolve-DirectoryPhysicalPath $runsRoot
             if (Test-PathUnderDirectory $fullRoot $fullRuns) {
                 Remove-Item -LiteralPath $fullRoot -Recurse -Force -ErrorAction SilentlyContinue
             } else {
