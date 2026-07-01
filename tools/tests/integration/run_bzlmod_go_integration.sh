@@ -259,6 +259,18 @@ assert_log_matches() {
   fi
 }
 
+assert_log_not_contains() {
+  local log_path="$1"
+  local unexpected="$2"
+  local description="$3"
+
+  if grep -Fq "$unexpected" "$log_path"; then
+    echo "error: $description" >&2
+    cat "$log_path" >&2 || true
+    exit 1
+  fi
+}
+
 assert_bep_has_cached_test_result() {
   local bep_path="$1"
   "$PYTHON" - "$bep_path" <<'PY'
@@ -281,6 +293,78 @@ raise SystemExit(f"error: {bep_path} did not contain a cached TestResult")
 PY
 }
 
+simulate_bep_artifact_only_outputs() {
+  local ws_dir="$1"
+  local fresh_bep="$2"
+  local original_source="$ws_dir/bazel-testlogs/app/hello_test/test.outputs"
+  local simulated_testlogs="$ws_dir/.topt/simulated-local-testlogs"
+  local source="$simulated_testlogs/app/hello_test/test.outputs"
+  local artifact_root="$ws_dir/.topt/simulated-remote-artifacts"
+  local staged_source="$artifact_root/app/hello_test/test.outputs"
+
+  if [[ ! -d "$original_source" ]]; then
+    echo "error: BEP artifact simulation source is missing: $original_source" >&2
+    exit 1
+  fi
+  rm -rf "$artifact_root" "$simulated_testlogs"
+  cp -R "$ws_dir/bazel-testlogs" "$simulated_testlogs"
+  mkdir -p "$(dirname "$staged_source")"
+  cp -R "$original_source" "$staged_source"
+  chmod -R u+w "$simulated_testlogs" "$artifact_root" 2>/dev/null || true
+  rm -rf "$source"
+
+  "$PYTHON" - "$fresh_bep" "$staged_source" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+bep = Path(sys.argv[1])
+staged = Path(sys.argv[2]).resolve().as_uri()
+canonical_prefix = ["bazel-out", "k8-fastbuild", "testlogs", "app", "hello_test"]
+lines = []
+rewritten = 0
+uploadable = 0
+for raw in bep.read_text(encoding="utf-8-sig").splitlines():
+    if not raw.strip():
+        continue
+    event = json.loads(raw)
+    result = event.get("testResult") or event.get("test_result")
+    if isinstance(result, dict):
+        outputs = result.get("testActionOutput") or result.get("test_action_output") or []
+        if "testActionOutput" not in result and "test_action_output" not in result:
+            result["testActionOutput"] = outputs
+        replaced = False
+        for output in outputs:
+            if not isinstance(output, dict):
+                continue
+            if output.get("name") == "test.outputs":
+                uploadable += 1
+                if not replaced:
+                    output["uri"] = staged
+                    output["name"] = "test.outputs"
+                    output["pathPrefix"] = canonical_prefix
+                    output.pop("path", None)
+                    rewritten += 1
+                    replaced = True
+        if not replaced:
+            outputs.append({"name": "test.outputs", "uri": staged, "pathPrefix": canonical_prefix})
+            rewritten += 1
+            uploadable += 1
+    lines.append(json.dumps(event, sort_keys=True))
+if rewritten == 0:
+    raise SystemExit("failed to rewrite any BEP TestResult output for staged artifact simulation")
+if uploadable != 1:
+    raise SystemExit(f"expected exactly one uploadable test.outputs carrier after rewrite, found {uploadable}")
+bep.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+
+  if [[ -d "$source" ]]; then
+    echo "error: BEP artifact simulation failed to remove local test.outputs from scan root: $source" >&2
+    exit 1
+  fi
+  printf '%s\n' "$simulated_testlogs"
+}
+
 run_bep_freshness_scenario() {
   local ws_dir="$1"
   local mode="$2"
@@ -289,11 +373,12 @@ run_bep_freshness_scenario() {
   local fresh_bep="$bep_dir/fresh.bep.json"
   local cached_bep="$bep_dir/cached.bep.json"
   local fresh_log="$bep_dir/fresh.log"
+  local staged_log="$bep_dir/staged-artifacts.log"
   local cached_log="$bep_dir/cached.log"
   local opt_out_log="$bep_dir/opt-out.log"
 
   mkdir -p "$bep_dir"
-  rm -f "$fresh_bep" "$cached_bep" "$fresh_log" "$cached_log" "$opt_out_log"
+  rm -f "$fresh_bep" "$cached_bep" "$fresh_log" "$staged_log" "$cached_log" "$opt_out_log"
 
   (
     cd "$ws_dir"
@@ -326,12 +411,53 @@ run_bep_freshness_scenario() {
   assert_log_contains "$fresh_log" "dry-run validated enriched test payload" "fresh BEP run did not validate enrichment"
   assert_log_matches "$fresh_log" "dry-run validated [1-9][0-9]* test payloads" "fresh BEP run did not validate any payloads"
 
+  simulated_testlogs="$(simulate_bep_artifact_only_outputs "$ws_dir" "$fresh_bep")"
+  (
+    cd "$ws_dir"
+    TESTLOGS_DIR="$simulated_testlogs" \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" run \
+      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+      "${bzlmod_flags[@]}" \
+      //:dd_test_optimization_doctor -- \
+      --bep-json "$fresh_bep" \
+      --freshness-source=bep \
+      --freshness-mode=required \
+      --artifact-source=bep \
+      --remote-artifacts=download \
+      --artifact-staging-dir "$ws_dir/.topt/bep-artifacts"
+    TESTLOGS_DIR="$simulated_testlogs" \
+    DD_TEST_OPTIMIZATION_DEBUG=1 \
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" run \
+      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+      "${bzlmod_flags[@]}" \
+      //:dd_upload_payloads -- \
+      --dry-run \
+      --validate-enrichment \
+      --bep-json "$fresh_bep" \
+      --freshness-source=bep \
+      --freshness-mode=required \
+      --artifact-source=bep \
+      --remote-artifacts=download \
+      --artifact-staging-dir "$ws_dir/.topt/bep-artifacts" \
+      --expected-enriched-tag=bazel.go.payload_selection
+  ) >"$staged_log" 2>&1
+  assert_log_contains "$staged_log" "BEP artifact staging selected output key: app/hello_test/test.outputs" "staged BEP run did not keep the canonical output key"
+  assert_log_not_contains "$staged_log" "simulated-remote-artifacts/app/hello_test/test.outputs" "staged BEP run derived an output key from the external artifact carrier"
+  assert_log_matches "$staged_log" "dry-run validated [1-9][0-9]* test payloads" "staged BEP run did not validate any payloads"
+
   (
     cd "$ws_dir"
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
       "${bzlmod_flags[@]}" \
       --remote_download_outputs=all \
+      --cache_test_results=yes \
+      "$HELLO_TEST_TARGET"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+      "${bzlmod_flags[@]}" \
+      --remote_download_outputs=all \
+      --cache_test_results=yes \
       --build_event_json_file="$cached_bep" \
       "$HELLO_TEST_TARGET"
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" run \

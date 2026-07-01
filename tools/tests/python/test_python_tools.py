@@ -16,10 +16,13 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import sys
 import tempfile
 import types
 from typing import Optional
 import unittest
+import zipfile
 from unittest import mock
 
 
@@ -79,6 +82,52 @@ def _load_module(name: str, rel_path: str) -> types.ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+_BEP_ARTIFACT_STAGE_HELPER_RLOC = "tools/core/bep_artifact_stage_helper.py"
+_DOCTOR_RUNTIME_RLOC = "tools/core/test_optimization_doctor.py"
+_NON_SIBLING_DOCTOR_RUNTIME_RLOC = "tools/tests/python/fixtures/runtime_doctor/test_optimization_doctor.py"
+
+
+def _render_uploader_runtime_template(
+    rel_path: str,
+    *,
+    bep_artifact_stage_helper_rloc: str = _BEP_ARTIFACT_STAGE_HELPER_RLOC,
+    doctor_runtime_rloc: str = _DOCTOR_RUNTIME_RLOC,
+) -> str:
+    """Render uploader runtime template placeholders for direct unit tests."""
+    text = _runfile(rel_path).read_text(encoding="utf-8")
+    substitutions = {
+        "bep_artifact_stage_helper_rloc": bep_artifact_stage_helper_rloc,
+        "context_json_path": "",
+        "context_json_rloc": "",
+        "context_manifest_path": "",
+        "context_manifest_rloc": "",
+        "curl_retry_flags": "--retry 3 --retry-delay 2 --retry-connrefused",
+        "debug": "false",
+        "doctor_runtime_rloc": doctor_runtime_rloc,
+        "fail_on_error": "false",
+        "filter_prefix": "false",
+        "gzip_payloads": "false",
+        "keep_payloads": "false",
+        "max_wait_sec": "300",
+        "ps_name": "generated_uploader.ps1",
+        "quiescent_sec": "10",
+        "rules_version": "test-rules-version",
+        "schema_json_path": "",
+        "schema_json_rloc": "",
+        "schema_validator_path": "",
+        "schema_validator_rloc": "",
+        "telemetry_facts_manifest_path": "",
+        "telemetry_facts_manifest_rloc": "",
+        "uploader_version": "test-uploader-version",
+    }
+    for key, value in substitutions.items():
+        text = text.replace(f"__DDTPL_{key.upper()}__", value)
+    unresolved = sorted(set(re.findall(r"__DDTPL_[A-Z0-9_]+__", text)))
+    if unresolved:
+        raise AssertionError(f"unresolved template placeholders in {rel_path}: {unresolved}")
+    return text
 
 
 class ValidatePayloadSchemaTests(unittest.TestCase):
@@ -399,6 +448,213 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             result["executionInfo"] = {"cachedRemotely": True}
         return event
 
+    def _remote_outputs_zip_freshness(self, root: Path, *, label: str = "//pkg:remote_only") -> object:
+        """Create BEP freshness for one remote stageable outputs.zip carrier."""
+        bep = root / "freshness.bep.json"
+        self._write_bep(
+            bep,
+            [
+                {
+                    "id": {"testResult": {"label": label, "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [
+                            {
+                                "name": "test.outputs",
+                                "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "remote_only"],
+                            },
+                        ],
+                    },
+                },
+            ],
+        )
+        return self.mod._parse_bep_freshness([bep])
+
+    @staticmethod
+    def _extract_single_quoted_block(text: str, variable_name: str) -> str:
+        """Extract a single-quoted multiline shell variable body from a template."""
+        match = re.search(rf"{re.escape(variable_name)}='\n(?P<body>.*?)\n[ \t]*'", text, re.S)
+        if match is None:
+            raise AssertionError(f"unable to locate {variable_name}")
+        return match.group("body")
+
+    @staticmethod
+    def _extract_powershell_function_block(text: str, start: str, end: str) -> str:
+        """Extract a contiguous PowerShell function block by marker strings."""
+        start_index = text.index(start)
+        end_index = text.index(end, start_index)
+        return text[start_index:end_index]
+
+    @staticmethod
+    def _extract_text_block(text: str, start: str, end: str) -> str:
+        """Extract a contiguous text block by marker strings."""
+        start_index = text.index(start)
+        end_index = text.index(end, start_index)
+        return text[start_index:end_index]
+
+    def _python_canonical_bep_output_key(self, output: object) -> str:
+        """Return the Python runtime's canonical output key for one BEP output."""
+        candidates = self.mod._bep_file_reference_candidates(output)
+        for candidate in self.mod._bep_canonical_output_key_candidates(output, candidates):
+            output_key = self.mod._bep_test_output_key(candidate)
+            if output_key:
+                return output_key
+        return ""
+
+    def test_python_canonical_bep_output_key_precedence_is_unconditional(self) -> None:
+        """Validate canonical Python output-key precedence without jq/pwsh availability."""
+        cases: list[tuple[str, object, str]] = [
+            (
+                "pathPrefix beats external carrier uri",
+                {
+                    "name": "test.outputs",
+                    "uri": "file:///tmp/workspace/.topt/simulated-remote-artifacts/app/hello_test/test.outputs",
+                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "app", "hello_test"],
+                },
+                "app/hello_test/test.outputs",
+            ),
+            (
+                "path beats external carrier uri",
+                {
+                    "name": "test.outputs",
+                    "uri": "file:///tmp/workspace/.topt/simulated-remote-artifacts/pkg/path_target/test.outputs",
+                    "path": "bazel-out/k8-fastbuild/testlogs/pkg/path_target/test.outputs",
+                },
+                "pkg/path_target/test.outputs",
+            ),
+            (
+                "arbitrary external carrier has no key",
+                {
+                    "name": "test.outputs",
+                    "uri": "file:///tmp/copied/test.outputs",
+                },
+                "",
+            ),
+            (
+                "bare carrier name has no key",
+                {"name": "test.outputs"},
+                "",
+            ),
+            (
+                "opaque remote carrier without metadata has no key",
+                {
+                    "name": "test.outputs",
+                    "uri": "bytestream://remote-cas/blobs/no-key/123",
+                },
+                "",
+            ),
+        ]
+
+        for name, output, expected in cases:
+            with self.subTest(name=name):
+                self.assertEqual(expected, self._python_canonical_bep_output_key(output))
+
+    def _bash_jq_canonical_bep_output_keys(self, cases: list[dict[str, object]]) -> dict[str, str]:
+        """Run Bash runtime jq functions against BEP output-key parity cases."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        key_defs = self._extract_single_quoted_block(bash_text, "bep_test_output_key_jq")
+        remote_defs = self._extract_single_quoted_block(bash_text, "is_remote_only_bep_reference_jq")
+        jq_program = key_defs + "\n" + remote_defs + r"""
+def field($obj; $camel; $snake):
+  ($obj[$camel] // $obj[$snake]);
+def candidates($output):
+  if ($output | type) == "string" then [$output]
+  else
+    ($output.name // "") as $name
+    | (field($output; "pathPrefix"; "path_prefix") // []) as $path_prefix
+    | [
+        ($output.uri // ""),
+        ($output.path // ""),
+        $name,
+        (if (($path_prefix | type) == "array" and ($name | type) == "string" and $name != "")
+         then (($path_prefix + [$name]) | map(select(type == "string" and . != "")) | join("/"))
+         else ""
+         end)
+      ]
+  end
+  | map(select(type == "string" and . != ""));
+.[] as $case
+| ($case.output) as $output
+| (candidates($output)) as $raw_candidates
+| ([
+    bep_canonical_output_key_candidates($output; $raw_candidates)[]?
+    | test_outputs_key
+    | select(. != "")
+  ] | .[0] // "") as $output_key
+| [$case.name, $output_key]
+| @tsv
+"""
+        result = subprocess.run(
+            ["jq", "-r", jq_program],
+            input=json.dumps(cases),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return dict(line.split("\t", 1) for line in result.stdout.splitlines() if line)
+
+    def _powershell_canonical_bep_output_keys(self, cases: list[dict[str, object]]) -> dict[str, str]:
+        """Run PowerShell runtime functions against BEP output-key parity cases."""
+        powershell_text = self._generated_powershell_runtime_text()
+        script = "\n".join([
+            "$ErrorActionPreference = 'Stop'",
+            self._extract_powershell_function_block(
+                powershell_text,
+                "function Get-MapValue",
+                "function Get-StringPropertyValue",
+            ),
+            self._extract_powershell_function_block(
+                powershell_text,
+                "function Get-BepTestOutputKey",
+                "function Initialize-BepEligibility",
+            ),
+            r"""
+$cases = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$rows = New-Object System.Collections.Generic.List[object]
+foreach ($case in @($cases)) {
+  $output = $case.output
+  $rawCandidates = @(Get-BepFileReferenceCandidates $output)
+  $outputKey = ""
+  foreach ($candidate in @(Get-BepCanonicalOutputKeyCandidates $output $rawCandidates)) {
+    $candidateKey = Get-BepTestOutputKey $candidate
+    if (-not [string]::IsNullOrWhiteSpace($candidateKey)) {
+      $outputKey = $candidateKey
+      break
+    }
+  }
+  $rows.Add([pscustomobject]@{ name = [string]$case.name; key = $outputKey }) | Out-Null
+}
+$rows | ConvertTo-Json -Compress
+""",
+        ])
+        result = subprocess.run(
+            ["pwsh", "-NoLogo", "-NoProfile", "-Command", script],
+            input=json.dumps(cases),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        rows = json.loads(result.stdout or "[]")
+        if isinstance(rows, dict):
+            rows = [rows]
+        return {str(row["name"]): str(row.get("key", "")) for row in rows}
+
+    def _generated_powershell_runtime_text(self) -> str:
+        """Return the rendered PowerShell uploader used by parity tests."""
+        try:
+            return _runfile("tools/tests/python/fixtures/generated_uploader/generated_uploader.ps1").read_text(
+                encoding="utf-8"
+            )
+        except FileNotFoundError:
+            if os.environ.get("TEST_SRCDIR"):
+                raise
+            return _render_uploader_runtime_template("tools/core/uploader_powershell_runtime.ps1.tpl")
+
     def test_parse_args_accepts_bep_freshness_flags(self) -> None:
         """Validate doctor accepts BEP freshness CLI flags passed through Bazel launchers."""
         args = self.mod._parse_args([
@@ -414,6 +670,482 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         self.assertEqual([".topt/fresh.bep.json"], args.bep_json)
         self.assertEqual("bep", args.freshness_source)
         self.assertEqual("required", args.freshness_mode)
+
+    def test_parse_args_accepts_bep_artifact_resolution_flags(self) -> None:
+        """Validate doctor accepts BEP artifact resolution flags."""
+        args = self.mod._parse_args([
+            "--config",
+            "doctor.config.json",
+            "--artifact-source=bep",
+            "--remote-artifacts=download",
+            "--artifact-staging-dir=.topt/custom-bep-artifacts",
+            "--bep-artifact-downloader=/tmp/fetcher",
+            "--bep-artifact-downloader-timeout-sec=1.5",
+        ])
+
+        self.assertEqual("bep", args.artifact_source)
+        self.assertEqual("download", args.remote_artifacts)
+        self.assertEqual(".topt/custom-bep-artifacts", args.artifact_staging_dir)
+        self.assertEqual("/tmp/fetcher", args.bep_artifact_downloader)
+        self.assertEqual(1.5, args.bep_artifact_downloader_timeout_sec)
+
+    def test_parse_args_rejects_scientific_downloader_timeout(self) -> None:
+        """Validate downloader timeout rejects scientific notation before staging."""
+        with self.assertRaises(SystemExit):
+            self.mod._parse_args([
+                "--config",
+                "doctor.config.json",
+                "--bep-artifact-downloader-timeout-sec=1e3",
+            ])
+
+    def test_parse_args_rejects_invalid_artifact_resolution_env_defaults(self) -> None:
+        """Validate env defaults fail through controlled artifact resolution errors."""
+        cases = [
+            (
+                {"DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE": "remote"},
+                "unsupported artifact-source 'remote'",
+            ),
+            (
+                {"DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS": "maybe"},
+                "unsupported remote-artifacts 'maybe'",
+            ),
+            (
+                {"DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC": "1e3"},
+                "--bep-artifact-downloader-timeout-sec must be a finite number greater than zero",
+            ),
+        ]
+        for env, expected in cases:
+            with self.subTest(env=env):
+                stderr = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, env, clear=False),
+                    mock.patch("sys.stderr", stderr),
+                    self.assertRaises(SystemExit),
+                ):
+                    self.mod._parse_args(["--config", "doctor.config.json"])
+                error = stderr.getvalue()
+                self.assertIn(expected, error)
+                self.assertIn("[dd-test-optimization-doctor]", error)
+                self.assertNotIn("Traceback", error)
+                self.assertNotIn("usage:", error)
+
+    def test_local_artifact_path_from_file_uri_normalizes_windows_drive(self) -> None:
+        """Validate Windows drive-letter file URIs are converted before Path handling."""
+        self.assertEqual(
+            Path("C:/tmp/out/test.outputs"),
+            self.mod._local_artifact_path_from_reference("file:///C:/tmp/out/test.outputs"),
+        )
+        self.assertEqual(
+            Path("C:/tmp/out/test.outputs"),
+            self.mod._local_artifact_path_from_reference("file://localhost/C:/tmp/out/test.outputs"),
+        )
+
+    def test_local_artifact_path_from_file_uri_preserves_unc_share(self) -> None:
+        """Validate UNC file URI references keep their server/share prefix."""
+        self.assertEqual(
+            Path("//server/share/out/test.outputs"),
+            self.mod._local_artifact_path_from_reference("file://server/share/out/test.outputs"),
+        )
+
+    def test_doctor_stages_bep_artifact_when_local_testlogs_are_missing(self) -> None:
+        """Validate doctor can validate BEP-staged payloads without local bazel-testlogs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_output = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": source_output.as_uri(),
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "pkg",
+                                        "target",
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"BUILD_WORKSPACE_DIRECTORY": str(root)},
+                clear=False,
+            ):
+                os.environ.pop("TESTLOGS_DIR", None)
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                ])
+
+        self.assertEqual(0, rc)
+
+    def test_doctor_artifact_source_local_does_not_stage_bep_artifacts(self) -> None:
+        """Validate local artifact source preserves local-only output discovery."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_output = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": source_output.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root)}, clear=False):
+                os.environ.pop("TESTLOGS_DIR", None)
+                with self.assertRaises(SystemExit):
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--bep-json",
+                        str(bep),
+                        "--freshness-source=bep",
+                        "--freshness-mode=required",
+                        "--artifact-source=local",
+                    ])
+
+    def test_doctor_auto_download_staged_output_wins_over_stale_local_same_key(self) -> None:
+        """Validate auto staging does not trust stale local output keys."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            custom_testlogs = root / "custom-output-root"
+            stale_local = self._write_doctor_output(custom_testlogs, "full_bundle_disabled", "//pkg:target")
+            fresh_external = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": fresh_external.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "BUILD_WORKSPACE_DIRECTORY": str(root),
+                    "TESTLOGS_DIR": str(custom_testlogs),
+                },
+                clear=False,
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=auto",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                ])
+
+            self.assertEqual(0, rc)
+            self.assertTrue((stale_local / "payloads" / "tests" / "span_events_1.json").is_file())
+            runs_root = root / ".topt" / "bep-artifacts" / "__runs"
+            self.assertEqual([], list(runs_root.iterdir()) if runs_root.exists() else [])
+
+    def test_doctor_expected_target_validation_uses_staged_target_mapping(self) -> None:
+        """Validate staged expected targets still enforce per-target payload selection."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_output = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["expected_payload_selection_by_target"] = {"//pkg:target": "module"}
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": source_output.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root)}, clear=False):
+                os.environ.pop("TESTLOGS_DIR", None)
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                ])
+
+            self.assertEqual(0, rc)
+
+    def test_doctor_required_remote_disabled_fails_remote_only_freshness(self) -> None:
+        """Validate disabling downloads does not authorize stale local fallback in required mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root / "bazel-testlogs", "module", "//pkg:remote_only")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:remote_only", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "BUILD_WORKSPACE_DIRECTORY": str(root),
+                    "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+                },
+                clear=False,
+            ):
+                with self.assertRaises(SystemExit):
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--bep-json",
+                        str(bep),
+                        "--freshness-source=bep",
+                        "--freshness-mode=required",
+                        "--artifact-source=bep",
+                        "--remote-artifacts=disabled",
+                    ])
+
+    def test_doctor_required_no_key_carrier_fails_before_local_fallback(self) -> None:
+        """Validate hinted no-key carriers fail in required artifact mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "file:///tmp/copied/test.outputs",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root)}, clear=False),
+                mock.patch("sys.stderr", stderr),
+            ):
+                os.environ.pop("TESTLOGS_DIR", None)
+                with self.assertRaises(SystemExit):
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--bep-json",
+                        str(bep),
+                        "--artifact-source=bep",
+                        "--remote-artifacts=required",
+                        "--freshness-source=bep",
+                        "--freshness-mode=required",
+                    ])
+
+            self.assertIn("no mappable test.outputs key", stderr.getvalue())
+
+    def test_doctor_download_no_key_carrier_blocks_stale_local_fallback(self) -> None:
+        """Validate no-key BEP artifacts cannot authorize stale local payloads."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root / "bazel-testlogs", "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "file:///tmp/copied/test.outputs",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "BUILD_WORKSPACE_DIRECTORY": str(root),
+                        "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+                    },
+                    clear=False,
+                ),
+                mock.patch("sys.stderr", stderr),
+            ):
+                with self.assertRaises(SystemExit):
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--bep-json",
+                        str(bep),
+                        "--artifact-source=bep",
+                        "--remote-artifacts=download",
+                        "--freshness-source=bep",
+                        "--freshness-mode=disabled",
+                    ])
+
+            self.assertIn("no mappable test.outputs key", stderr.getvalue())
+
+    def test_doctor_remote_artifacts_disabled_preserves_local_only_fallback(self) -> None:
+        """Validate disabled artifact staging keeps existing local discovery behavior."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root / "bazel-testlogs", "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "BUILD_WORKSPACE_DIRECTORY": str(root),
+                    "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+                },
+                clear=False,
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--artifact-source=bep",
+                    "--remote-artifacts=disabled",
+                    "--freshness-source=bep",
+                    "--freshness-mode=disabled",
+                ])
+
+            self.assertEqual(0, rc)
+
+    def test_doctor_artifact_source_bep_requires_bep_json(self) -> None:
+        """Validate explicit BEP artifact source cannot silently fall back to local mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root / "bazel-testlogs", "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, [])
+            stderr = io.StringIO()
+            with mock.patch.dict(
+                os.environ,
+                {"BUILD_WORKSPACE_DIRECTORY": str(root), "DD_TEST_OPTIMIZATION_BEP_JSON": ""},
+                clear=False,
+            ), mock.patch("sys.stderr", stderr):
+                with self.assertRaises(SystemExit):
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--artifact-source=bep",
+                    ])
+            self.assertIn("--artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON", stderr.getvalue())
 
     def test_doctor_optional_bep_without_configured_file_warns_and_continues(self) -> None:
         """Validate optional BEP source without a file preserves local doctor validation."""
@@ -533,6 +1265,1261 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             "pkg/target/test.outputs",
             self.mod._bep_test_output_key(candidates[-1]),
         )
+
+    def test_bep_output_key_parity_across_python_bash_and_powershell(self) -> None:
+        """Validate all runtimes use the same canonical BEP output-key precedence."""
+        if subprocess.run(["which", "jq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            self.skipTest("jq is required for Bash BEP parser parity")
+        if subprocess.run(["which", "pwsh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            self.skipTest("pwsh is required for PowerShell BEP parser parity")
+
+        cases: list[dict[str, object]] = [
+            {
+                "name": "pathPrefix beats external carrier uri",
+                "output": {
+                    "name": "test.outputs",
+                    "uri": "file:///tmp/workspace/.topt/simulated-remote-artifacts/app/hello_test/test.outputs",
+                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "app", "hello_test"],
+                },
+                "expected": "app/hello_test/test.outputs",
+            },
+            {
+                "name": "path beats external carrier uri",
+                "output": {
+                    "name": "test.outputs",
+                    "uri": "file:///tmp/workspace/.topt/simulated-remote-artifacts/pkg/path_target/test.outputs",
+                    "path": "bazel-out/k8-fastbuild/testlogs/pkg/path_target/test.outputs",
+                },
+                "expected": "pkg/path_target/test.outputs",
+            },
+            {
+                "name": "trusted uri can provide key",
+                "output": {
+                    "name": "test.outputs",
+                    "uri": "file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/from_uri/test.outputs",
+                },
+                "expected": "pkg/from_uri/test.outputs",
+            },
+            {
+                "name": "remote carrier uses canonical pathPrefix",
+                "output": {
+                    "name": "test.outputs",
+                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "remote"],
+                },
+                "expected": "pkg/remote/test.outputs",
+            },
+            {
+                "name": "outputs zip maps to containing test outputs",
+                "output": "file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/zip/outputs.zip",
+                "expected": "pkg/zip/test.outputs",
+            },
+            {
+                "name": "test log maps to sibling test outputs",
+                "output": "file:///tmp/workspace/bazel-testlogs/pkg/log_target/test.log",
+                "expected": "pkg/log_target/test.outputs",
+            },
+            {
+                "name": "arbitrary external carrier has no key",
+                "output": {
+                    "name": "test.outputs",
+                    "uri": "file:///tmp/copied/test.outputs",
+                },
+                "expected": "",
+            },
+            {
+                "name": "bare carrier name has no key",
+                "output": {
+                    "name": "test.outputs",
+                },
+                "expected": "",
+            },
+            {
+                "name": "opaque remote carrier without metadata has no key",
+                "output": {
+                    "name": "test.outputs",
+                    "uri": "bytestream://remote-cas/blobs/no-key/123",
+                },
+                "expected": "",
+            },
+        ]
+
+        expected = {str(case["name"]): str(case["expected"]) for case in cases}
+        python_keys = {
+            str(case["name"]): self._python_canonical_bep_output_key(case["output"])
+            for case in cases
+        }
+        self.assertEqual(expected, python_keys)
+        self.assertEqual(expected, self._bash_jq_canonical_bep_output_keys(cases))
+        self.assertEqual(expected, self._powershell_canonical_bep_output_keys(cases))
+
+    def test_parse_bep_freshness_records_stageable_file_uri_reference(self) -> None:
+        """Validate fresh file:// test.outputs refs are retained for artifact staging."""
+        bep = _runfile("tools/tests/python/fixtures/bep_fresh_test_outputs_file_uri.ndjson")
+
+        freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual([], freshness.remote_only_outputs)
+        self.assertEqual(1, len(freshness.artifact_references))
+        ref = freshness.artifact_references[0]
+        self.assertEqual("//pkg:target", ref.label)
+        self.assertEqual("file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs", ref.fetch_value)
+        self.assertEqual("pkg/target/test.outputs", ref.output_key)
+        self.assertFalse(ref.cached)
+        self.assertFalse(ref.remote_only)
+        self.assertTrue(ref.is_test_outputs_hint)
+        self.assertTrue(ref.fetch_is_stageable_carrier)
+
+    def test_parse_bep_freshness_records_stageable_outputs_zip_reference(self) -> None:
+        """Validate local outputs.zip refs stage as their containing test.outputs key."""
+        bep = _runfile("tools/tests/python/fixtures/bep_fresh_outputs_zip_file_uri.ndjson")
+
+        freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual(1, len(freshness.artifact_references))
+        ref = freshness.artifact_references[0]
+        self.assertEqual("pkg/target/test.outputs", ref.output_key)
+        self.assertTrue(ref.fetch_value.endswith("/pkg/target/test.outputs/outputs.zip"))
+        self.assertFalse(ref.remote_only)
+        self.assertTrue(ref.is_test_outputs_hint)
+        self.assertTrue(ref.fetch_is_stageable_carrier)
+
+    def test_parse_bep_freshness_records_stageable_uri_only_file_reference(self) -> None:
+        """Validate trusted file:// test.outputs URIs do not need duplicate name fields."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "execroot" / "bazel-out" / "k8-fastbuild" / "testlogs" / "pkg" / "uri_only" / "test.outputs"
+            payload_dir = source / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:uri_only", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [{"uri": source.as_uri()}],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+            ref = freshness.artifact_references[0]
+            staged = self.mod._stage_bep_artifacts(
+                freshness,
+                workspace=root,
+                staging_dir=root / ".topt" / "bep-artifacts",
+                remote_artifacts="download",
+            )
+
+            self.assertEqual({("//pkg:uri_only", "pkg/uri_only/test.outputs")}, freshness.eligible_outputs)
+            self.assertEqual("pkg/uri_only/test.outputs", ref.output_key)
+            self.assertTrue(ref.is_test_outputs_hint)
+            self.assertTrue(ref.fetch_is_stageable_carrier)
+            self.assertEqual(1, len(staged))
+            self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "span_events_1.json").is_file())
+
+    def test_parse_bep_freshness_records_stageable_uri_only_outputs_zip_reference(self) -> None:
+        """Validate trusted file:// outputs.zip URIs do not need duplicate name fields."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            zip_path = root / "execroot" / "bazel-out" / "k8-fastbuild" / "testlogs" / "pkg" / "zip_uri_only" / "test.outputs" / "outputs.zip"
+            zip_path.parent.mkdir(parents=True)
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("payloads/tests/span_events_1.json", "{}")
+                archive.writestr(
+                    "bazel_target_metadata.json",
+                    json.dumps({"bazel.target": "//pkg:zip_uri_only"}),
+                )
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:zip_uri_only", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [{"uri": zip_path.as_uri()}],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+            ref = freshness.artifact_references[0]
+            staged = self.mod._stage_bep_artifacts(
+                freshness,
+                workspace=root,
+                staging_dir=root / ".topt" / "bep-artifacts",
+                remote_artifacts="download",
+            )
+
+            self.assertEqual({("//pkg:zip_uri_only", "pkg/zip_uri_only/test.outputs")}, freshness.eligible_outputs)
+            self.assertEqual("pkg/zip_uri_only/test.outputs", ref.output_key)
+            self.assertTrue(ref.is_test_outputs_hint)
+            self.assertTrue(ref.fetch_is_stageable_carrier)
+            self.assertEqual(1, len(staged))
+            self.assertTrue((staged[0].output_dir / "bazel_target_metadata.json").is_file())
+
+    def test_parse_bep_freshness_records_remote_stageable_reference_with_output_key(self) -> None:
+        """Validate remote test.outputs refs carry stable output keys for staging clearance."""
+        bep = _runfile("tools/tests/python/fixtures/bep_fresh_remote_bytestream.ndjson")
+
+        freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual(set(), freshness.eligible_outputs)
+        self.assertEqual(1, len(freshness.remote_only_outputs))
+        remote = freshness.remote_only_outputs[0]
+        self.assertEqual("//pkg:remote_only", remote.label)
+        self.assertEqual("pkg/remote_only/test.outputs", remote.output_key)
+        self.assertEqual("bytestream://remote-cas/blobs/deadbeef/123", remote.artifact)
+        self.assertEqual(1, len(freshness.artifact_references))
+        ref = freshness.artifact_references[0]
+        self.assertEqual("pkg/remote_only/test.outputs", ref.output_key)
+        self.assertTrue(ref.remote_only)
+        self.assertTrue(ref.is_test_outputs_hint)
+        self.assertTrue(ref.fetch_is_stageable_carrier)
+
+    def test_parse_bep_freshness_records_path_prefix_reference(self) -> None:
+        """Validate pathPrefix-only BEP File objects become stageable local references."""
+        bep = _runfile("tools/tests/python/fixtures/bep_fresh_path_prefix.ndjson")
+
+        freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:path_prefix", "pkg/path_prefix/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual(1, len(freshness.artifact_references))
+        ref = freshness.artifact_references[0]
+        self.assertEqual("pkg/path_prefix/test.outputs", ref.output_key)
+        self.assertEqual("/tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/path_prefix/test.outputs", ref.fetch_value)
+        self.assertFalse(ref.remote_only)
+        self.assertTrue(ref.is_test_outputs_hint)
+        self.assertTrue(ref.fetch_is_stageable_carrier)
+
+    def test_parse_bep_freshness_preserves_external_carrier_and_canonical_output_key(self) -> None:
+        """Validate carrier URI does not override the canonical BEP output key."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//app:hello_test", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "file:///tmp/workspace/.topt/simulated-remote-artifacts/app/hello_test/test.outputs",
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "app",
+                                        "hello_test",
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//app:hello_test", "app/hello_test/test.outputs")}, freshness.eligible_outputs)
+        ref = freshness.artifact_references[0]
+        self.assertEqual(
+            "file:///tmp/workspace/.topt/simulated-remote-artifacts/app/hello_test/test.outputs",
+            ref.fetch_value,
+        )
+        self.assertEqual("app/hello_test/test.outputs", ref.output_key)
+
+    def test_parse_bep_freshness_does_not_stage_individual_test_outputs_files(self) -> None:
+        """Validate BEP files inside test.outputs are freshness refs, not staging carriers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//app:hello_test", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs/payloads/tests/span_events_1.json",
+                                    "uri": "file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/app/hello_test/test.outputs/payloads/tests/span_events_1.json",
+                                },
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "file:///tmp/workspace/.topt/simulated-remote-artifacts/app/hello_test/test.outputs",
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "app",
+                                        "hello_test",
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//app:hello_test", "app/hello_test/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual(2, len(freshness.artifact_references))
+        stageable = [ref for ref in freshness.artifact_references if ref.fetch_is_stageable_carrier]
+        self.assertEqual(1, len(stageable))
+        self.assertEqual(
+            "file:///tmp/workspace/.topt/simulated-remote-artifacts/app/hello_test/test.outputs",
+            stageable[0].fetch_value,
+        )
+
+    def test_parse_bep_freshness_rejects_unmappable_carrier_output_keys(self) -> None:
+        """Validate opaque or arbitrary carriers do not create stable output keys."""
+        cases = [
+            {"name": "test.outputs", "uri": "bytestream://remote/test.outputs"},
+            {"name": "test.outputs", "uri": "file:///tmp/copied/test.outputs"},
+            {"name": "test.outputs", "uri": ".topt/simulated-remote-artifacts/app/hello_test/test.outputs"},
+            {"name": "test.outputs"},
+        ]
+        for output in cases:
+            with self.subTest(output=output):
+                with tempfile.TemporaryDirectory() as tmp:
+                    bep = Path(tmp) / "freshness.bep.json"
+                    self._write_bep(
+                        bep,
+                        [
+                            {
+                                "id": {
+                                    "testResult": {
+                                        "label": "//pkg:target",
+                                        "run": 1,
+                                        "shard": 1,
+                                        "attempt": 1,
+                                    }
+                                },
+                                "testResult": {
+                                    "status": "PASSED",
+                                    "testActionOutput": [output],
+                                },
+                            },
+                        ],
+                    )
+
+                    freshness = self.mod._parse_bep_freshness([bep])
+
+                self.assertEqual("", freshness.artifact_references[0].output_key)
+                self.assertEqual(set(), freshness.eligible_outputs)
+
+    def test_parse_bep_freshness_does_not_stage_diagnostic_log_xml_refs(self) -> None:
+        """Validate diagnostic-only outputs authorize freshness but are not carriers."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.log",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.log",
+                                },
+                                {
+                                    "name": "test.xml",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.xml",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual([], freshness.remote_only_outputs)
+        self.assertFalse(any(ref.fetch_is_stageable_carrier for ref in freshness.artifact_references))
+
+    def test_parse_bep_freshness_ignores_remote_diagnostic_ref_when_uploadable_output_exists(self) -> None:
+        """Validate remote diagnostics do not create required-mode staging failures."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                                },
+                                {
+                                    "name": "test.log",
+                                    "uri": "bytestream://remote-cas/blobs/diagnostic/456",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({("//pkg:target", "pkg/target/test.outputs")}, freshness.eligible_outputs)
+        self.assertEqual([], freshness.remote_only_outputs)
+
+    def test_stage_bep_artifacts_copies_local_test_outputs(self) -> None:
+        """Validate local test.outputs directories stage into owned per-run roots."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "execroot" / "bazel-out" / "k8-fastbuild" / "testlogs" / "pkg" / "target" / "test.outputs"
+            payload_dir = source / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            (payload_dir / "tests-1.json").write_text("{}", encoding="utf-8")
+            freshness = self.mod.BepFreshness(
+                eligible_outputs={("//pkg:target", "pkg/target/test.outputs")},
+                cached_outputs=set(),
+                remote_only_outputs=[],
+                missing_output_mappings=set(),
+                artifact_references=[
+                    self.mod.BepArtifactReference(
+                        label="//pkg:target",
+                        uri=source.as_uri(),
+                        name="test.outputs",
+                        path="",
+                        candidates=[source.as_uri(), "test.outputs"],
+                        fetch_value=source.as_uri(),
+                        output_key="pkg/target/test.outputs",
+                        cached=False,
+                        remote_only=False,
+                        is_test_outputs_hint=True,
+                        fetch_is_stageable_carrier=True,
+                    ),
+                ],
+            )
+
+            staged = self.mod._stage_bep_artifacts(
+                freshness,
+                workspace=root,
+                staging_dir=root / ".topt" / "bep-artifacts",
+                remote_artifacts="download",
+            )
+
+            self.assertEqual(1, len(staged))
+            staged_output = staged[0].output_dir
+            self.assertTrue((staged_output / "payloads" / "tests" / "tests-1.json").is_file())
+            self.assertTrue((staged_output / self.mod.STAGING_MARKER).is_file())
+            self.assertIn("__runs", staged[0].staging_root.parts)
+            self.assertTrue((source / "payloads" / "tests" / "tests-1.json").is_file())
+
+    def test_stage_bep_artifacts_extracts_local_outputs_zip(self) -> None:
+        """Validate local outputs.zip artifacts stage as test.outputs contents."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            zip_path = root / "execroot" / "bazel-out" / "k8-fastbuild" / "testlogs" / "pkg" / "target" / "test.outputs" / "outputs.zip"
+            zip_path.parent.mkdir(parents=True)
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("payloads/tests/tests-1.json", "{}")
+                archive.writestr("bazel_target_metadata.json", "{}")
+            freshness = self.mod.BepFreshness(
+                eligible_outputs={("//pkg:target", "pkg/target/test.outputs")},
+                cached_outputs=set(),
+                remote_only_outputs=[],
+                missing_output_mappings=set(),
+                artifact_references=[
+                    self.mod.BepArtifactReference(
+                        label="//pkg:target",
+                        uri=zip_path.as_uri(),
+                        name="outputs.zip",
+                        path="",
+                        candidates=[zip_path.as_uri(), "outputs.zip"],
+                        fetch_value=zip_path.as_uri(),
+                        output_key="pkg/target/test.outputs",
+                        cached=False,
+                        remote_only=False,
+                        is_test_outputs_hint=True,
+                        fetch_is_stageable_carrier=True,
+                    ),
+                ],
+            )
+
+            staged = self.mod._stage_bep_artifacts(
+                freshness,
+                workspace=root,
+                staging_dir=root / ".topt" / "bep-artifacts",
+                remote_artifacts="download",
+            )
+
+            self.assertEqual(1, len(staged))
+            self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "tests-1.json").is_file())
+            self.assertTrue((staged[0].output_dir / "bazel_target_metadata.json").is_file())
+
+    def test_stage_bep_artifacts_rejects_unsafe_outputs_zip_member(self) -> None:
+        """Validate unsafe zip members fail before publishing staged output dirs."""
+        unsafe_members = [
+            "../escape.json",
+            "/abs/path.json",
+            "C:/abs/path.json",
+            "foo/../payload.json",
+        ]
+        for member_name in unsafe_members:
+            with self.subTest(member_name=member_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                zip_path = root / "source" / "outputs.zip"
+                zip_path.parent.mkdir(parents=True)
+                with zipfile.ZipFile(zip_path, "w") as archive:
+                    archive.writestr(member_name, "{}")
+                freshness = self.mod.BepFreshness(
+                    eligible_outputs={("//pkg:target", "pkg/target/test.outputs")},
+                    cached_outputs=set(),
+                    remote_only_outputs=[],
+                    missing_output_mappings=set(),
+                    artifact_references=[
+                        self.mod.BepArtifactReference(
+                            label="//pkg:target",
+                            uri=zip_path.as_uri(),
+                            name="outputs.zip",
+                            path="",
+                            candidates=[zip_path.as_uri(), "outputs.zip"],
+                            fetch_value=zip_path.as_uri(),
+                            output_key="pkg/target/test.outputs",
+                            cached=False,
+                            remote_only=False,
+                            is_test_outputs_hint=True,
+                            fetch_is_stageable_carrier=True,
+                        ),
+                    ],
+                )
+
+                with self.assertRaises(SystemExit):
+                    self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                    )
+
+                runs_root = root / ".topt" / "bep-artifacts" / "__runs"
+                self.assertEqual([], list(runs_root.iterdir()) if runs_root.exists() else [])
+
+    def test_stage_bep_artifacts_rejects_dot_and_empty_outputs_zip_parts(self) -> None:
+        """Validate zip extraction rejects empty and dot path components."""
+        unsafe_members = [
+            "payloads/./tests-1.json",
+            "payloads//tests-1.json",
+            "payloads/tests/.",
+        ]
+        for member_name in unsafe_members:
+            with self.subTest(member_name=member_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                zip_path = root / "source" / "outputs.zip"
+                zip_path.parent.mkdir(parents=True)
+                with zipfile.ZipFile(zip_path, "w") as archive:
+                    archive.writestr(member_name, "{}")
+                freshness = self.mod.BepFreshness(
+                    eligible_outputs={("//pkg:target", "pkg/target/test.outputs")},
+                    cached_outputs=set(),
+                    remote_only_outputs=[],
+                    missing_output_mappings=set(),
+                    artifact_references=[
+                        self.mod.BepArtifactReference(
+                            label="//pkg:target",
+                            uri=zip_path.as_uri(),
+                            name="outputs.zip",
+                            path="",
+                            candidates=[zip_path.as_uri(), "outputs.zip"],
+                            fetch_value=zip_path.as_uri(),
+                            output_key="pkg/target/test.outputs",
+                            cached=False,
+                            remote_only=False,
+                            is_test_outputs_hint=True,
+                            fetch_is_stageable_carrier=True,
+                        ),
+                    ],
+                )
+
+                with self.assertRaises(SystemExit):
+                    self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                    )
+
+    def test_extract_outputs_zip_wraps_unsupported_member_errors(self) -> None:
+        """Validate unsupported zip members use the controlled staging error path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            zip_path = root / "outputs.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("payloads/tests/span_events_1.json", "{}")
+
+            with mock.patch.object(
+                self.mod.zipfile.ZipFile,
+                "open",
+                side_effect=NotImplementedError("unsupported compression method"),
+            ):
+                with self.assertRaises(self.mod.BepArtifactStageError) as raised:
+                    self.mod._extract_outputs_zip(zip_path, root / "staged")
+
+        self.assertIn("invalid BEP outputs.zip", str(raised.exception))
+
+    def test_extract_outputs_zip_rejects_too_many_entries(self) -> None:
+        """Validate outputs.zip entry limits include directory entries."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            zip_path = root / "outputs.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                for index in range(self.mod.MAX_OUTPUTS_TREE_FILES + 1):
+                    archive.writestr(f"dir-{index}/", "")
+
+            with self.assertRaises(self.mod.BepArtifactStageError) as raised:
+                self.mod._extract_outputs_zip(zip_path, root / "staged")
+
+        self.assertIn("too many entries", str(raised.exception))
+
+    def test_extract_outputs_zip_rejects_too_large_archive(self) -> None:
+        """Validate outputs.zip decompressed byte limits fail before publish."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            zip_path = root / "outputs.zip"
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("payloads/tests/tests-1.json", "1234567890")
+
+            with (
+                mock.patch.object(self.mod, "MAX_OUTPUTS_TREE_BYTES", 5),
+                self.assertRaises(self.mod.BepArtifactStageError) as raised,
+            ):
+                self.mod._extract_outputs_zip(zip_path, root / "staged")
+
+        self.assertIn("too large", str(raised.exception))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlink support is required")
+    def test_stage_bep_artifacts_rejects_symlink_source_entries(self) -> None:
+        """Validate local tree staging refuses symlink files and directories."""
+        for entry_kind in ("file", "directory"):
+            with self.subTest(entry_kind=entry_kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "source" / "pkg" / "target" / "test.outputs"
+                payload_dir = source / "payloads" / "tests"
+                payload_dir.mkdir(parents=True)
+                if entry_kind == "file":
+                    target = root / "target.json"
+                    target.write_text("{}", encoding="utf-8")
+                    os.symlink(target, payload_dir / "span_events_1.json")
+                else:
+                    target_dir = root / "target-dir"
+                    target_dir.mkdir()
+                    os.symlink(target_dir, source / "linked-dir")
+                    (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+                freshness = self.mod.BepFreshness(
+                    eligible_outputs={("//pkg:target", "pkg/target/test.outputs")},
+                    cached_outputs=set(),
+                    remote_only_outputs=[],
+                    missing_output_mappings=set(),
+                    artifact_references=[
+                        self.mod.BepArtifactReference(
+                            label="//pkg:target",
+                            uri=source.as_uri(),
+                            name="test.outputs",
+                            path="",
+                            candidates=[source.as_uri(), "test.outputs"],
+                            fetch_value=source.as_uri(),
+                            output_key="pkg/target/test.outputs",
+                            cached=False,
+                            remote_only=False,
+                            is_test_outputs_hint=True,
+                            fetch_is_stageable_carrier=True,
+                        ),
+                    ],
+                )
+
+                with self.assertRaises(SystemExit):
+                    self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                    )
+
+    def test_stage_bep_artifacts_dedupes_same_physical_local_source(self) -> None:
+        """Validate absolute, relative, and file URI carriers for one source dedupe."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            relative_source = source.relative_to(root)
+            freshness = self.mod.BepFreshness(
+                eligible_outputs={("//pkg:target", "pkg/target/test.outputs")},
+                cached_outputs=set(),
+                remote_only_outputs=[],
+                missing_output_mappings=set(),
+                artifact_references=[
+                    self.mod.BepArtifactReference(
+                        label="//pkg:target",
+                        uri=source.as_uri(),
+                        name="test.outputs",
+                        path="",
+                        candidates=[source.as_uri(), "test.outputs"],
+                        fetch_value=source.as_uri(),
+                        output_key="pkg/target/test.outputs",
+                        cached=False,
+                        remote_only=False,
+                        is_test_outputs_hint=True,
+                        fetch_is_stageable_carrier=True,
+                    ),
+                    self.mod.BepArtifactReference(
+                        label="//pkg:target",
+                        uri="",
+                        name="test.outputs",
+                        path=str(relative_source),
+                        candidates=[str(relative_source), "test.outputs"],
+                        fetch_value=str(relative_source),
+                        output_key="pkg/target/test.outputs",
+                        cached=False,
+                        remote_only=False,
+                        is_test_outputs_hint=True,
+                        fetch_is_stageable_carrier=True,
+                    ),
+                ],
+            )
+
+            staged = self.mod._stage_bep_artifacts(
+                freshness,
+                workspace=root,
+                staging_dir=root / ".topt" / "bep-artifacts",
+                remote_artifacts="required",
+            )
+
+            self.assertEqual(1, len(staged))
+            self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "span_events_1.json").is_file())
+
+    def test_stage_bep_artifacts_rejects_ambiguous_carriers_in_required_mode(self) -> None:
+        """Validate duplicate BEP carriers for one output key fail closed in strict mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_a = self._write_doctor_output(root / "source-a", "module", "//pkg:target")
+            source_b = self._write_doctor_output(root / "source-b", "module", "//pkg:target")
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": source_a.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                                {
+                                    "name": "test.outputs",
+                                    "uri": source_b.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            with self.assertRaises(SystemExit):
+                self.mod._stage_bep_artifacts(
+                    freshness,
+                    workspace=root,
+                    staging_dir=root / ".topt" / "bep-artifacts",
+                    remote_artifacts="required",
+                )
+
+    def test_stage_bep_artifacts_downloads_remote_outputs_zip(self) -> None:
+        """Validate remote-only BEP artifacts can be materialized by an external downloader."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_zip = root / "source" / "outputs.zip"
+            source_zip.parent.mkdir(parents=True)
+            with zipfile.ZipFile(source_zip, "w") as archive:
+                archive.writestr("payloads/tests/span_events_1.json", "{}")
+                archive.writestr(
+                    "bazel_target_metadata.json",
+                    json.dumps({
+                        "bazel.target": "//pkg:remote_only",
+                        "bazel.go.payload_selection": "module",
+                    }),
+                )
+            downloader = root / "downloader with space"
+            downloader.write_text(
+                "#!/bin/sh\n"
+                "out=''\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = '--output' ]; then shift; out=\"$1\"; fi\n"
+                "  shift\n"
+                "done\n"
+                "cp \"$SOURCE_ZIP\" \"$out\"\n",
+                encoding="utf-8",
+            )
+            downloader.chmod(0o755)
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:remote_only", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "pkg",
+                                        "remote_only",
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            with mock.patch.dict(os.environ, {"SOURCE_ZIP": str(source_zip)}):
+                staged = self.mod._stage_bep_artifacts(
+                    freshness,
+                    workspace=root,
+                    staging_dir=root / ".topt" / "bep-artifacts",
+                    remote_artifacts="required",
+                    downloader=str(downloader),
+                    downloader_timeout_sec=5,
+                )
+            self.mod._apply_staged_bep_artifacts_to_freshness(freshness, staged)
+
+            self.assertEqual(1, len(staged))
+            self.assertTrue(staged[0].downloaded)
+            self.assertEqual("pkg/remote_only/test.outputs", staged[0].output_key)
+            self.assertEqual([], freshness.remote_only_outputs)
+            self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "span_events_1.json").is_file())
+
+    def test_stage_bep_artifacts_downloader_failure_does_not_reuse_stale_zip(self) -> None:
+        """Validate downloader failures cannot authorize stale outputs.zip files."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            downloader = root / "downloader"
+            downloader.write_text("#!/bin/sh\nexit 42\n", encoding="utf-8")
+            downloader.chmod(0o755)
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:remote_only", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "remote_only"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+            staging_dir = root / ".topt" / "bep-artifacts"
+            stale_dst = (
+                staging_dir
+                / "__runs"
+                / "preexisting"
+                / "__downloads"
+                / "_pkg_remote_only"
+                / "pkg_remote_only_test.outputs"
+                / "outputs.zip"
+            )
+            stale_dst.parent.mkdir(parents=True)
+            stale_dst.write_text("not a real zip", encoding="utf-8")
+
+            staged = self.mod._stage_bep_artifacts(
+                freshness,
+                workspace=root,
+                staging_dir=staging_dir,
+                remote_artifacts="download",
+                downloader=str(downloader),
+                downloader_timeout_sec=5,
+            )
+
+            self.assertEqual([], staged)
+
+    def test_stage_bep_artifacts_downloader_failure_hides_output(self) -> None:
+        """Validate downloader stdout/stderr is not copied into materialization warnings."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            downloader = root / "downloader"
+            downloader.write_text(
+                "#!/bin/sh\n"
+                "echo secret-token-on-stdout\n"
+                "echo secret-token-on-stderr >&2\n"
+                "exit 7\n",
+                encoding="utf-8",
+            )
+            downloader.chmod(0o755)
+            freshness = self._remote_outputs_zip_freshness(root)
+            stderr = io.StringIO()
+
+            with mock.patch("sys.stderr", stderr):
+                staged = self.mod._stage_bep_artifacts(
+                    freshness,
+                    workspace=root,
+                    staging_dir=root / ".topt" / "bep-artifacts",
+                    remote_artifacts="download",
+                    downloader=str(downloader),
+                    downloader_timeout_sec=5,
+                )
+
+            self.assertEqual([], staged)
+            self.assertIn("exit code 7", stderr.getvalue())
+            self.assertNotIn("secret-token", stderr.getvalue())
+
+    def test_stage_bep_artifacts_missing_or_non_executable_downloader_fails_controlled(self) -> None:
+        """Validate downloader startup failures use controlled errors without tracebacks."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            non_executable = root / "downloader"
+            non_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            for downloader in [root / "missing-downloader", non_executable]:
+                with self.subTest(downloader=downloader):
+                    freshness = self._remote_outputs_zip_freshness(root)
+                    stderr = io.StringIO()
+
+                    with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                        self.mod._stage_bep_artifacts(
+                            freshness,
+                            workspace=root,
+                            staging_dir=root / ".topt" / "bep-artifacts",
+                            remote_artifacts="required",
+                            downloader=str(downloader),
+                            downloader_timeout_sec=5,
+                        )
+
+                    self.assertIn("BEP artifact downloader could not start", stderr.getvalue())
+                    self.assertIn("could not be materialized", stderr.getvalue())
+                    self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_stage_bep_artifacts_downloader_timeout_hides_output(self) -> None:
+        """Validate downloader timeout terminates quickly and does not leak output."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            downloader = root / "downloader"
+            downloader.write_text(
+                "#!/bin/sh\n"
+                "echo timeout-secret >&2\n"
+                "sleep 5\n",
+                encoding="utf-8",
+            )
+            downloader.chmod(0o755)
+            freshness = self._remote_outputs_zip_freshness(root)
+            stderr = io.StringIO()
+
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._stage_bep_artifacts(
+                    freshness,
+                    workspace=root,
+                    staging_dir=root / ".topt" / "bep-artifacts",
+                    remote_artifacts="required",
+                    downloader=str(downloader),
+                    downloader_timeout_sec=0.05,
+                )
+
+            self.assertIn("BEP artifact downloader timed out", stderr.getvalue())
+            self.assertIn("could not be materialized", stderr.getvalue())
+            self.assertNotIn("timeout-secret", stderr.getvalue())
+
+    def test_stage_bep_artifacts_rejects_invalid_downloaded_zip(self) -> None:
+        """Validate invalid downloader-produced outputs.zip does not authorize payloads."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            downloader = root / "downloader"
+            downloader.write_text(
+                "#!/bin/sh\n"
+                "out=''\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = '--output' ]; then shift; out=\"$1\"; fi\n"
+                "  shift\n"
+                "done\n"
+                "printf 'not-a-zip' > \"$out\"\n",
+                encoding="utf-8",
+            )
+            downloader.chmod(0o755)
+            freshness = self._remote_outputs_zip_freshness(root)
+            stderr = io.StringIO()
+
+            with mock.patch("sys.stderr", stderr):
+                staged = self.mod._stage_bep_artifacts(
+                    freshness,
+                    workspace=root,
+                    staging_dir=root / ".topt" / "bep-artifacts",
+                    remote_artifacts="download",
+                    downloader=str(downloader),
+                    downloader_timeout_sec=5,
+                )
+
+            self.assertEqual([], staged)
+            self.assertIn("invalid BEP outputs.zip", stderr.getvalue())
+
+    def test_stage_bep_artifacts_rejects_downloaded_outputs_zip_directory(self) -> None:
+        """Validate a downloader cannot satisfy the contract with an outputs.zip directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            downloader = root / "downloader"
+            downloader.write_text(
+                "#!/bin/sh\n"
+                "out=''\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = '--output' ]; then shift; out=\"$1\"; fi\n"
+                "  shift\n"
+                "done\n"
+                "mkdir -p \"$out\"\n",
+                encoding="utf-8",
+            )
+            downloader.chmod(0o755)
+            freshness = self._remote_outputs_zip_freshness(root)
+            stderr = io.StringIO()
+
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._stage_bep_artifacts(
+                    freshness,
+                    workspace=root,
+                    staging_dir=root / ".topt" / "bep-artifacts",
+                    remote_artifacts="required",
+                    downloader=str(downloader),
+                    downloader_timeout_sec=5,
+                )
+
+            self.assertIn("did not produce a file", stderr.getvalue())
+
+    def test_bep_artifact_stage_helper_validates_tsv_before_stdout_and_cleans_up(self) -> None:
+        """Validate helper rejects unsafe TSV fields without publishing partial stdout."""
+        helper = _runfile("tools/core/bep_artifact_stage_helper.py")
+        doctor_runtime = _runfile("tools/core/test_optimization_doctor.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_output = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            staging_base = root / ".topt" / "bep-artifacts"
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:bad\tlabel", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": source_output.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--doctor-runtime",
+                    str(doctor_runtime),
+                    "--staging-dir",
+                    str(staging_base),
+                    "--remote-artifacts=download",
+                    "--artifact-source=bep",
+                    str(bep),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            runs_root = staging_base / "__runs"
+            remaining_roots = list(runs_root.iterdir()) if runs_root.exists() else []
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn("cannot emit BEP artifact staging TSV field", result.stderr)
+        self.assertEqual([], remaining_roots)
+
+    def test_bep_artifact_stage_helper_emits_stable_tsv_protocol(self) -> None:
+        """Validate helper stages local BEP artifacts and emits parseable TSV rows."""
+        helper = _runfile("tools/core/bep_artifact_stage_helper.py")
+        doctor_runtime = _runfile("tools/core/test_optimization_doctor.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_output = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": source_output.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--doctor-runtime",
+                    str(doctor_runtime),
+                    "--staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--remote-artifacts=download",
+                    "--artifact-source=bep",
+                    str(bep),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        stdout_lines = result.stdout.splitlines()
+        self.assertIn("selected\t//pkg:target\tpkg/target/test.outputs", stdout_lines)
+        self.assertTrue(any(line.startswith("root\t") for line in stdout_lines))
+        self.assertTrue(any(line.startswith("staged\t//pkg:target\tpkg/target/test.outputs\t") for line in stdout_lines))
+        self.assertEqual("", result.stderr)
+
+    def test_bep_artifact_stage_helper_selects_remote_without_downloader_in_download_mode(self) -> None:
+        """Validate helper suppresses stale local fallback even when remote staging skips."""
+        helper = _runfile("tools/core/bep_artifact_stage_helper.py")
+        doctor_runtime = _runfile("tools/core/test_optimization_doctor.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:remote_only", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "remote_only"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--doctor-runtime",
+                    str(doctor_runtime),
+                    "--staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--remote-artifacts=download",
+                    "--artifact-source=bep",
+                    str(bep),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("selected\t//pkg:remote_only\tpkg/remote_only/test.outputs", result.stdout)
+        self.assertNotIn("staged\t//pkg:remote_only\tpkg/remote_only/test.outputs", result.stdout)
+        self.assertIn("remote-only and no downloader is configured", result.stderr)
+
+    def test_bep_artifact_stage_helper_blocks_no_key_local_fallback_in_download_mode(self) -> None:
+        """Validate helper marks no-key BEP artifact labels as stale-local blockers."""
+        helper = _runfile("tools/core/bep_artifact_stage_helper.py")
+        doctor_runtime = _runfile("tools/core/test_optimization_doctor.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "file:///tmp/copied/test.outputs",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--doctor-runtime",
+                    str(doctor_runtime),
+                    "--staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--remote-artifacts=download",
+                    "--artifact-source=bep",
+                    str(bep),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("blocked_label\t//pkg:target", result.stdout.splitlines())
+        self.assertNotIn("selected\t//pkg:target", result.stdout)
+        self.assertNotIn("staged\t//pkg:target", result.stdout)
+        self.assertIn("no mappable test.outputs key", result.stderr)
 
     def test_parse_bep_eligible_outputs_skips_cached_results(self) -> None:
         """Validate BEP freshness keeps only non-cached concrete output mappings."""
@@ -1823,6 +3810,13 @@ class LintUploaderTemplatesTests(unittest.TestCase):
 class RuntimeTemplateParityTests(unittest.TestCase):
     """Test case group covering RuntimeTemplateParityTests behaviors."""
     @staticmethod
+    def _extract_text_block(text: str, start: str, end: str) -> str:
+        """Extract a contiguous text block by marker strings."""
+        start_index = text.index(start)
+        end_index = text.index(end, start_index)
+        return text[start_index:end_index]
+
+    @staticmethod
     def _extract_starlark_fingerprint_alphabet(sync_text: str) -> str:
         """Internal helper for extract starlark fingerprint alphabet behavior."""
         match = re.search(
@@ -1864,6 +3858,83 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         if match is None:
             raise AssertionError("unable to locate PowerShell fingerprint alphabet")
         return match.group(1).replace("''", "'")
+
+    @staticmethod
+    def _write_bep_staging_smoke_fixture(root: Path) -> Path:
+        """Create a BEP + outputs.zip fixture for generated uploader smoke tests."""
+        source_zip = root / "remote" / "outputs.zip"
+        source_zip.parent.mkdir()
+        test_payload = {
+            "events": [
+                {
+                    "type": "test",
+                    "content": {
+                        "resource": "pkg.generated",
+                        "meta": {},
+                        "metrics": {},
+                    },
+                },
+            ],
+        }
+        with zipfile.ZipFile(source_zip, "w") as archive:
+            archive.writestr(
+                "payloads/tests/span_events_generated_remote.json",
+                json.dumps(test_payload) + "\n",
+            )
+            archive.writestr(
+                "bazel_target_metadata.json",
+                json.dumps({
+                    "bazel.target": "//pkg:generated",
+                    "bazel.go.payload_selection": "module",
+                }),
+            )
+
+        bep = root / "freshness.bep.json"
+        TestOptimizationDoctorTests._write_bep(
+            bep,
+            [
+                {
+                    "id": {"testResult": {"label": "//pkg:generated", "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [
+                            {
+                                "name": "outputs.zip",
+                                "uri": source_zip.as_uri(),
+                                "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "generated"],
+                            },
+                        ],
+                    },
+                },
+            ],
+        )
+        return bep
+
+    @staticmethod
+    def _write_non_sibling_runtime_runfiles(root: Path) -> Path:
+        """Create runfiles with helper and doctor runtime at independent rlocs."""
+        runfiles_dir = root / "runtime.runfiles"
+        for rloc, source_rloc in [
+            (_BEP_ARTIFACT_STAGE_HELPER_RLOC, _BEP_ARTIFACT_STAGE_HELPER_RLOC),
+            (_NON_SIBLING_DOCTOR_RUNTIME_RLOC, _DOCTOR_RUNTIME_RLOC),
+        ]:
+            dest = runfiles_dir / rloc
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(_runfile(source_rloc).read_bytes())
+        return runfiles_dir
+
+    @staticmethod
+    def _generated_uploader_smoke_env(root: Path, runfiles_dir: Path) -> dict[str, str]:
+        """Build a clean environment for generated uploader smoke tests."""
+        env = os.environ.copy()
+        env.update({
+            "BUILD_WORKSPACE_DIRECTORY": str(root),
+            "DD_TEST_OPTIMIZATION_DEBUG": "1",
+            "RUNFILES_DIR": str(runfiles_dir),
+            "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+        })
+        env.pop("RUNFILES_MANIFEST_FILE", None)
+        return env
 
     def test_runtime_fingerprint_alphabet_matches_sync(self) -> None:
         """Validate runtime fingerprint alphabet matches sync behavior."""
@@ -2000,6 +4071,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn('EndsWith("/outputs.zip"', powershell_text)
         self.assertIn("reported as both fresh and cached", bash_text)
         self.assertIn("reported as both fresh and cached", powershell_text)
+        self.assertIn("FreshnessRemoteOnlyOutputs.ToArray()", powershell_text)
+        self.assertNotIn("@($script:FreshnessRemoteOnlyOutputs)", powershell_text)
         self.assertLess(bash_text.index("--bep-json"), bash_text.index("--execution-log-json"))
         self.assertLess(
             powershell_text.index("--bep-json"),
@@ -2024,11 +4097,306 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             powershell_text.index(expected_log),
             powershell_text.index("Initialize-FreshnessEligibility"),
         )
-        self.assertIn("prepare_freshness_eligibility\nvalidate_bep_remote_only_outputs", bash_text)
         self.assertIn(
-            "Initialize-FreshnessEligibility\n    Assert-NoRequiredRemoteOnlyBepOutputs",
+            "prepare_freshness_eligibility\nmerge_staged_bep_freshness\nvalidate_bep_remote_only_outputs",
+            bash_text,
+        )
+        self.assertIn(
+            "Initialize-FreshnessEligibility\n    Merge-StagedBepFreshness\n    Assert-NoRequiredRemoteOnlyBepOutputs",
             powershell_text,
         )
+
+    def test_uploader_templates_declare_bep_artifact_helper_runfiles(self) -> None:
+        """Validate generated runtimes receive explicit helper and doctor runtime labels."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        rule_text = _runfile("tools/core/test_optimization_uploader.bzl").read_text(encoding="utf-8")
+
+        self.assertIn('BEP_ARTIFACT_STAGE_HELPER_RLOC="__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__"', bash_text)
+        self.assertIn('DOCTOR_RUNTIME_RLOC="__DDTPL_DOCTOR_RUNTIME_RLOC__"', bash_text)
+        self.assertIn('$script:BepArtifactStageHelperRloc = "__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__"', powershell_text)
+        self.assertIn('$script:DoctorRuntimeRloc = "__DDTPL_DOCTOR_RUNTIME_RLOC__"', powershell_text)
+        self.assertIn("bep_artifact_stage_helper_rloc", rule_text)
+        self.assertIn("doctor_runtime_rloc", rule_text)
+        self.assertIn("_bep_artifact_stage_helper", rule_text)
+        self.assertIn("_doctor_runtime", rule_text)
+        self.assertIn("bep_artifact_stage_helper.py", rule_text)
+        self.assertIn("test_optimization_doctor.py", rule_text)
+        self.assertIn("files = depset([bash_file, ps_file, bat_file])", rule_text)
+        self.assertIn("--artifact-source=local|bep|auto", rule_text)
+        self.assertIn("DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE", rule_text)
+        self.assertIn("--remote-artifacts=disabled|download|required", rule_text)
+        self.assertIn("DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER", rule_text)
+        self.assertIn("Artifact staging requires Python at uploader runtime", rule_text)
+
+    def test_generated_uploader_runtime_outputs_are_inspectable(self) -> None:
+        """Validate generated uploader files render helper runfiles without placeholders."""
+        if os.environ.get("TEST_SRCDIR"):
+            base = "tools/tests/python/fixtures/generated_uploader"
+            generated_bash = _runfile(f"{base}/generated_uploader.sh").read_text(encoding="utf-8")
+            generated_ps = _runfile(f"{base}/generated_uploader.ps1").read_text(encoding="utf-8")
+            generated_bat = _runfile(f"{base}/generated_uploader.bat").read_text(encoding="utf-8")
+        else:
+            generated_bash = _render_uploader_runtime_template("tools/core/uploader_bash_runtime.sh.tpl")
+            generated_ps = _render_uploader_runtime_template("tools/core/uploader_powershell_runtime.ps1.tpl")
+            generated_bat = _render_uploader_runtime_template("tools/core/uploader_batch_runtime.bat.tpl")
+
+        for text in (generated_bash, generated_ps, generated_bat):
+            self.assertNotIn("__DDTPL_", text)
+        self.assertIn('BEP_ARTIFACT_STAGE_HELPER_RLOC="tools/core/bep_artifact_stage_helper.py"', generated_bash)
+        self.assertIn('DOCTOR_RUNTIME_RLOC="tools/core/test_optimization_doctor.py"', generated_bash)
+        self.assertIn('$script:BepArtifactStageHelperRloc = "tools/core/bep_artifact_stage_helper.py"', generated_ps)
+        self.assertIn('$script:DoctorRuntimeRloc = "tools/core/test_optimization_doctor.py"', generated_ps)
+        self.assertIn("generated_uploader.ps1", generated_bat)
+
+    def test_bash_uploader_artifact_staging_uses_helper_and_multi_root_cache(self) -> None:
+        """Validate Bash staging delegates to Python helper and dedupes discovery by key."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+
+        for token in [
+            "--artifact-source",
+            "--remote-artifacts",
+            "--artifact-staging-dir",
+            "--bep-artifact-downloader",
+            "--bep-artifact-downloader-timeout-sec",
+            "DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE",
+            "DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS",
+            "DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR",
+            "stage_bep_artifacts()",
+            "parse_bep_artifact_helper_output()",
+            "TESTLOGS_SCAN_DIRS",
+            "SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE",
+            "BLOCKED_BEP_ARTIFACT_LABELS_FILE",
+            "STAGED_REMOTE_CLEARANCES_FILE",
+        ]:
+            self.assertIn(token, bash_text)
+        self.assertIn('python3 "$BEP_ARTIFACT_STAGE_HELPER"', bash_text)
+        self.assertIn('--doctor-runtime "$DOCTOR_RUNTIME"', bash_text)
+        self.assertIn('elif [[ "$ARTIFACT_STAGING_DIR" != /* ]]', bash_text)
+        self.assertIn('ARTIFACT_STAGING_DIR="$BUILD_WORKSPACE_DIRECTORY/$ARTIFACT_STAGING_DIR"', bash_text)
+        self.assertIn('resolved_bep_json="$(resolve_runtime_file_path "$bep_json")"', bash_text)
+        self.assertIn('"${resolved_bep_files[@]}"', bash_text)
+        self.assertNotIn('"${helper_args[@]}" "${BEP_JSON_FILES[@]}"', bash_text)
+        self.assertIn("selected)", bash_text)
+        self.assertIn("blocked_label)", bash_text)
+        self.assertIn("staged)", bash_text)
+        self.assertIn("root)", bash_text)
+        self.assertNotIn("mapfile", bash_text)
+        self.assertNotIn("readarray", bash_text)
+
+    def test_powershell_uploader_artifact_staging_uses_helper_and_multi_root_cache(self) -> None:
+        """Validate PowerShell staging delegates to Python helper and dedupes discovery by key."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        for token in [
+            "--artifact-source",
+            "--remote-artifacts",
+            "--artifact-staging-dir",
+            "--bep-artifact-downloader",
+            "--bep-artifact-downloader-timeout-sec",
+            "DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE",
+            "DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS",
+            "DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR",
+            "function Stage-BepArtifacts",
+            "function Parse-BepArtifactHelperOutput",
+            "$script:TestlogsScanDirs",
+            "$script:SelectedBepArtifactOutputKeys",
+            "$script:BlockedBepArtifactLabels",
+            "$script:StagedRemoteClearances",
+        ]:
+            self.assertIn(token, powershell_text)
+        self.assertIn("& $PythonBin $script:BepArtifactStageHelper", powershell_text)
+        self.assertIn('"--doctor-runtime", $script:DoctorRuntime', powershell_text)
+        self.assertIn("-not [System.IO.Path]::IsPathRooted($ArtifactStagingDir)", powershell_text)
+        self.assertIn("Join-Path $env:BUILD_WORKSPACE_DIRECTORY $ArtifactStagingDir", powershell_text)
+        self.assertIn("$resolvedBepJson = Resolve-RuntimeFilePath $bepJson", powershell_text)
+        self.assertIn("$cmd += @($resolvedBepJsonFiles.ToArray())", powershell_text)
+        self.assertNotIn("$cmd += @($script:BepJsonFiles.ToArray())", powershell_text)
+        self.assertIn('"selected"', powershell_text)
+        self.assertIn('"blocked_label"', powershell_text)
+        self.assertIn('"staged"', powershell_text)
+        self.assertIn('"root"', powershell_text)
+        self.assertIn("$parts = $line.Split([char]9)", powershell_text)
+        self.assertNotIn('$line -split "`t", -1', powershell_text)
+
+    def test_bash_blocked_bep_artifact_labels_work_without_jq_freshness(self) -> None:
+        """Validate no-key BEP artifacts block stale local fallback even without jq."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        function_blocks = "\n".join([
+            self._extract_text_block(
+                bash_text,
+                "test_output_target_label()",
+                "log_execution_skip_once()",
+            ),
+            self._extract_text_block(
+                bash_text,
+                "test_output_dir_is_freshness_eligible()",
+                "test_output_dir_is_execution_eligible()",
+            ),
+        ])
+        script = f"""
+set -euo pipefail
+log() {{ printf '%s\\n' "$*" >&2; }}
+log_freshness_skip_once() {{ return 0; }}
+validate_bep_remote_only_outputs() {{ return 0; }}
+test_output_dir_key() {{ printf 'pkg/target/test.outputs\\n'; }}
+BAZEL_TARGET_METADATA_OUTPUT=bazel_target_metadata.json
+JQ_AVAILABLE=0
+FRESHNESS_ELIGIBILITY_ENABLED=0
+FRESHNESS_SELECTED_SOURCE=bep
+FRESHNESS_MODE=disabled
+FRESHNESS_CACHED_OUTPUTS_FILE=
+FRESHNESS_MISSING_OUTPUT_LABELS_FILE=
+FRESHNESS_ELIGIBLE_OUTPUTS_FILE=/dev/null
+BLOCKED_BEP_ARTIFACT_LABELS_FILE="$1"
+{function_blocks}
+if test_output_dir_is_freshness_eligible "$2"; then
+  echo eligible
+  exit 1
+fi
+echo blocked
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outputs_dir = root / "bazel-testlogs" / "pkg" / "target" / "test.outputs"
+            outputs_dir.mkdir(parents=True)
+            (outputs_dir / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.target": "//pkg:target"}),
+                encoding="utf-8",
+            )
+            blocked_labels = root / "blocked-labels.txt"
+            blocked_labels.write_text("//pkg:target\n", encoding="utf-8")
+
+            result = subprocess.run(
+                ["bash", "-c", script, "bash-test", str(blocked_labels), str(outputs_dir)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+        self.assertIn("blocked", result.stdout)
+
+    def test_generated_bash_uploader_executes_bep_staging_runfiles(self) -> None:
+        """Validate generated Bash uploader resolves non-sibling helper runfiles."""
+        if subprocess.run(["which", "jq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            self.skipTest("jq is required for Bash BEP freshness parsing")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty_testlogs = root / "bazel-testlogs"
+            empty_testlogs.mkdir()
+            bep = self._write_bep_staging_smoke_fixture(root)
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                ),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(generated_bash),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=self._generated_uploader_smoke_env(root, runfiles_dir),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertEqual(0, result.returncode, output)
+        self.assertIn("BEP artifact staging selected output key", output)
+        self.assertIn("dry-run kept test payload", output)
+        self.assertIn("dry-run done", output)
+        self.assertNotIn("BEP artifact stage helper not found in runfiles", output)
+        self.assertNotIn("BEP artifact staging doctor runtime not found in runfiles", output)
+
+    def test_generated_powershell_uploader_executes_bep_staging_runfiles(self) -> None:
+        """Validate generated PowerShell uploader resolves non-sibling helper runfiles."""
+        if subprocess.run(["which", "pwsh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            self.skipTest("pwsh is required for generated PowerShell uploader execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty_testlogs = root / "bazel-testlogs"
+            empty_testlogs.mkdir()
+            bep = self._write_bep_staging_smoke_fixture(root)
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            generated_ps = root / "generated_uploader.ps1"
+            generated_ps.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "pwsh",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-File",
+                    str(generated_ps),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=self._generated_uploader_smoke_env(root, runfiles_dir),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        output = result.stdout + result.stderr
+        self.assertEqual(0, result.returncode, output)
+        self.assertIn("BEP artifact staging selected output key", output)
+        self.assertIn("dry-run kept test payload", output)
+        self.assertIn("dry-run done", output)
+        self.assertNotIn("BEP artifact stage helper not found in runfiles", output)
+        self.assertNotIn("BEP artifact staging doctor runtime not found in runfiles", output)
+
+    def test_uploader_staging_cleanup_normalizes_physical_paths(self) -> None:
+        """Validate staging cleanup tolerates symlink-normalized temp roots."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('full_runs_root="$(cd "$runs_root"', bash_text)
+        self.assertIn('full_staged_root="$(cd "$staged_root"', bash_text)
+        self.assertIn('"$full_runs_root"/*) rm -rf "$full_staged_root"', bash_text)
+        self.assertNotIn('"$runs_root"/*) rm -rf "$staged_root"', bash_text)
+        self.assertIn("(Resolve-Path -LiteralPath $stagedRoot).ProviderPath", powershell_text)
+        self.assertIn("(Resolve-Path -LiteralPath $runsRoot).ProviderPath", powershell_text)
 
     def test_uploader_freshness_flags_have_source_neutral_ci_errors_and_precedence(self) -> None:
         """Validate new freshness flags own precedence and auto-mode CI guidance."""
@@ -2194,7 +4562,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         """Validate bash runtime follows bazel-testlogs symlinks for discovery."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
         self.assertIn('TESTLOGS_SCAN_DIR="$(cd "$TESTLOGS_DIR" 2>/dev/null && pwd -P)"', bash_text)
-        self.assertIn('find "$TESTLOGS_SCAN_DIR"', bash_text)
+        self.assertIn('TESTLOGS_SCAN_DIRS+=("$TESTLOGS_SCAN_DIR")', bash_text)
+        self.assertIn('find "$scan_dir"', bash_text)
 
     def test_powershell_runtime_temp_and_testlogs_guards(self) -> None:
         """Validate PowerShell runtime temp fallback and TESTLOGS_DIR checks."""
@@ -2206,7 +4575,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("Test-Path -LiteralPath $env:TESTLOGS_DIR -PathType Container", powershell_text)
         self.assertIn("TESTLOGS_DIR is set but is not a directory", powershell_text)
         self.assertIn("Resolve-DirectoryPhysicalPath", powershell_text)
-        self.assertIn("Path = $TestlogsScanDir", powershell_text)
+        self.assertIn("$script:TestlogsScanDirs.Add($TestlogsScanDir)", powershell_text)
+        self.assertIn("Path = $scanDir", powershell_text)
 
     def test_powershell_runtime_max_depth_warning(self) -> None:
         """Validate PowerShell runtime emits visible max-depth compatibility warning."""

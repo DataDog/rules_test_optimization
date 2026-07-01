@@ -484,6 +484,8 @@ if ($script:SchemaJson) {
 
 $SchemaValidatorRloc = "__DDTPL_SCHEMA_VALIDATOR_RLOC__"
 $SchemaValidatorPath = "__DDTPL_SCHEMA_VALIDATOR_PATH__"
+$script:BepArtifactStageHelperRloc = "__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__"
+$script:DoctorRuntimeRloc = "__DDTPL_DOCTOR_RUNTIME_RLOC__"
 Dbg "schema validator resolution inputs: validator_path='$SchemaValidatorPath' validator_rloc='$SchemaValidatorRloc'"
 $script:SchemaValidator = Resolve-ArtifactPath $SchemaValidatorPath
 if ($script:SchemaValidator) {
@@ -538,6 +540,18 @@ function Validate-Numeric([string]$name, [string]$val) {
     }
 }
 
+function Validate-PositiveDecimal([string]$name, [string]$val) {
+    if ($val -notmatch '^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)$') {
+        Log "error: invalid ${name}=$val"
+        exit 2
+    }
+    $parsed = 0.0
+    if (-not [double]::TryParse($val, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsed) -or [double]::IsNaN($parsed) -or [double]::IsInfinity($parsed) -or $parsed -le 0) {
+        Log "error: invalid ${name}=$val"
+        exit 2
+    }
+}
+
 # Compute FNV-1a 32-bit hex fingerprint (non-cryptographic, for parity checks only)
 function Get-Fnv1a32Hex([string]$value) {
     if ([string]::IsNullOrEmpty($value)) { return "" }
@@ -586,6 +600,17 @@ $BepJsonFiles = New-Object System.Collections.Generic.List[string]
 if ($env:DD_TEST_OPTIMIZATION_BEP_JSON) {
     $BepJsonFiles.Add($env:DD_TEST_OPTIMIZATION_BEP_JSON) | Out-Null
 }
+$ArtifactSource = if ($env:DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE) { $env:DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE } else { "local" }
+$RemoteArtifacts = if ($env:DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS) { $env:DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS } else { "disabled" }
+$ArtifactStagingDir = $env:DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR
+$BepArtifactDownloader = $env:DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER
+$BepArtifactDownloaderTimeoutSec = if ($env:DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC) { $env:DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC } else { "300" }
+$script:StagedTestlogsDirs = New-Object System.Collections.Generic.List[string]
+$script:TestlogsScanDirs = New-Object System.Collections.Generic.List[string]
+$script:SelectedBepArtifactOutputKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:BlockedBepArtifactLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:StagedOutputKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:StagedRemoteClearances = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $FreshnessMode = if ($env:DD_TEST_OPTIMIZATION_FRESHNESS_MODE) {
     $env:DD_TEST_OPTIMIZATION_FRESHNESS_MODE
 } elseif ($env:DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE) {
@@ -631,6 +656,13 @@ function Show-Usage {
     Write-Host "  --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable."
     Write-Host "  --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto."
     Write-Host "  --freshness-mode MODE        Cache-safety mode: auto, required, optional, or disabled. Default: auto."
+    Write-Host "  --artifact-source SOURCE     Artifact source: local, bep, or auto. Default: local."
+    Write-Host "  --remote-artifacts MODE      Remote artifact mode: disabled, download, or required. Default: disabled."
+    Write-Host "  --artifact-staging-dir PATH  Directory for staged BEP artifacts. Default: .topt/bep-artifacts."
+    Write-Host "  --bep-artifact-downloader PATH"
+    Write-Host "                                Executable that writes remote BEP outputs.zip artifacts."
+    Write-Host "  --bep-artifact-downloader-timeout-sec SECONDS"
+    Write-Host "                                Positive decimal timeout for the BEP artifact downloader."
     Write-Host "  --execution-log-json PATH    Only upload payloads from TestRunner actions that executed in this Bazel execution log."
     Write-Host "  --execution-log-mode MODE    Legacy alias for --freshness-mode."
     Write-Host "  --allow-cached-payload-uploads"
@@ -703,6 +735,71 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         $FreshnessModeHasNewConfig = $true
         continue
     }
+    if ($arg -eq "--artifact-source") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --artifact-source requires one of: local, bep, auto"
+            exit 2
+        }
+        $i++
+        $ArtifactSource = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--artifact-source=")) {
+        $ArtifactSource = $arg.Substring("--artifact-source=".Length)
+        continue
+    }
+    if ($arg -eq "--remote-artifacts") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --remote-artifacts requires one of: disabled, download, required"
+            exit 2
+        }
+        $i++
+        $RemoteArtifacts = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--remote-artifacts=")) {
+        $RemoteArtifacts = $arg.Substring("--remote-artifacts=".Length)
+        continue
+    }
+    if ($arg -eq "--artifact-staging-dir") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --artifact-staging-dir requires a path"
+            exit 2
+        }
+        $i++
+        $ArtifactStagingDir = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--artifact-staging-dir=")) {
+        $ArtifactStagingDir = $arg.Substring("--artifact-staging-dir=".Length)
+        continue
+    }
+    if ($arg -eq "--bep-artifact-downloader") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --bep-artifact-downloader requires an executable path"
+            exit 2
+        }
+        $i++
+        $BepArtifactDownloader = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--bep-artifact-downloader=")) {
+        $BepArtifactDownloader = $arg.Substring("--bep-artifact-downloader=".Length)
+        continue
+    }
+    if ($arg -eq "--bep-artifact-downloader-timeout-sec") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --bep-artifact-downloader-timeout-sec requires a number"
+            exit 2
+        }
+        $i++
+        $BepArtifactDownloaderTimeoutSec = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--bep-artifact-downloader-timeout-sec=")) {
+        $BepArtifactDownloaderTimeoutSec = $arg.Substring("--bep-artifact-downloader-timeout-sec=".Length)
+        continue
+    }
     if ($arg -eq "--execution-log-json") {
         if ($i + 1 -ge $args.Count) {
             Log "error: --execution-log-json requires a file path"
@@ -760,6 +857,8 @@ if ($FreshnessDisabledExplicit) {
 }
 $FreshnessMode = $FreshnessMode.ToLowerInvariant()
 $FreshnessSource = $FreshnessSource.ToLowerInvariant()
+$ArtifactSource = $ArtifactSource.ToLowerInvariant()
+$RemoteArtifacts = $RemoteArtifacts.ToLowerInvariant()
 $ExecutionLogMode = $FreshnessMode
 if (@("auto", "required", "optional", "disabled") -notcontains $FreshnessMode) {
     Log "error: DD_TEST_OPTIMIZATION_FRESHNESS_MODE/--freshness-mode must be one of: auto, required, optional, disabled"
@@ -769,11 +868,38 @@ if (@("auto", "bep", "execution_log") -notcontains $FreshnessSource) {
     Log "error: DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE/--freshness-source must be one of: auto, bep, execution_log"
     exit 2
 }
+if (@("local", "bep", "auto") -notcontains $ArtifactSource) {
+    Log "error: DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE/--artifact-source must be one of: local, bep, auto"
+    exit 2
+}
+if (@("disabled", "download", "required") -notcontains $RemoteArtifacts) {
+    Log "error: DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS/--remote-artifacts must be one of: disabled, download, required"
+    exit 2
+}
+Validate-PositiveDecimal "--bep-artifact-downloader-timeout-sec" $BepArtifactDownloaderTimeoutSec
+if ([string]::IsNullOrWhiteSpace($ArtifactStagingDir)) {
+    if ($env:BUILD_WORKSPACE_DIRECTORY) {
+        $ArtifactStagingDir = Join-Path $env:BUILD_WORKSPACE_DIRECTORY ".topt/bep-artifacts"
+    } else {
+        $ArtifactStagingDir = Join-Path (Get-Location) ".topt/bep-artifacts"
+    }
+} elseif (-not [System.IO.Path]::IsPathRooted($ArtifactStagingDir)) {
+    if ($env:BUILD_WORKSPACE_DIRECTORY) {
+        $ArtifactStagingDir = Join-Path $env:BUILD_WORKSPACE_DIRECTORY $ArtifactStagingDir
+    } else {
+        $ArtifactStagingDir = Join-Path (Get-Location) $ArtifactStagingDir
+    }
+}
 $script:DryRun = $DryRun
 $script:ValidateEnrichment = $ValidateEnrichment
 $script:BepJsonFiles = $BepJsonFiles
 $script:FreshnessMode = $FreshnessMode
 $script:FreshnessSource = $FreshnessSource
+$script:ArtifactSource = $ArtifactSource
+$script:RemoteArtifacts = $RemoteArtifacts
+$script:ArtifactStagingDir = $ArtifactStagingDir
+$script:BepArtifactDownloader = $BepArtifactDownloader
+$script:BepArtifactDownloaderTimeoutSec = $BepArtifactDownloaderTimeoutSec
 $script:DefaultBepJson = $DefaultBepJson
 $script:ExecutionLogJson = $ExecutionLogJson
 $script:ExecutionLogMode = $ExecutionLogMode
@@ -833,6 +959,29 @@ try {
 
 # Cleanup function for lock release
 function Release-Lock {
+    $runsRoot = Join-Path $script:ArtifactStagingDir "__runs"
+    foreach ($stagedRoot in @($script:StagedTestlogsDirs)) {
+        if ([string]::IsNullOrWhiteSpace($stagedRoot)) { continue }
+        try {
+            if (Test-Path -LiteralPath $stagedRoot -PathType Container) {
+                $fullRoot = (Resolve-Path -LiteralPath $stagedRoot).ProviderPath
+            } else {
+                $fullRoot = [System.IO.Path]::GetFullPath($stagedRoot)
+            }
+            if (Test-Path -LiteralPath $runsRoot -PathType Container) {
+                $fullRuns = (Resolve-Path -LiteralPath $runsRoot).ProviderPath
+            } else {
+                $fullRuns = [System.IO.Path]::GetFullPath($runsRoot)
+            }
+            if ($fullRoot.StartsWith($fullRuns + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::Ordinal)) {
+                Remove-Item -LiteralPath $fullRoot -Recurse -Force -ErrorAction SilentlyContinue
+            } else {
+                Log-Stderr "warning: refusing to clean BEP staging root outside owned run directory: $stagedRoot"
+            }
+        } catch {
+            Log-Stderr "warning: failed to clean BEP staging root: $stagedRoot"
+        }
+    }
     # Release lock handle first, then best-effort remove lock file and temp dir.
     if ($script:LockStream) {
         $script:LockStream.Close()
@@ -846,6 +995,143 @@ function Release-Lock {
 
 # Register cleanup on exit (backup for unexpected termination)
 $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Release-Lock }
+
+function Test-ArtifactStagingRequested {
+    if ($script:ArtifactSource -eq "bep") { return [bool]$true }
+    return [bool]($script:ArtifactSource -eq "auto" -and $script:RemoteArtifacts -ne "disabled")
+}
+
+function Get-PythonForBepArtifactStaging {
+    foreach ($candidate in @("python3", "python")) {
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+    }
+    return $null
+}
+
+function Parse-BepArtifactHelperOutput {
+    param([string[]]$Lines)
+
+    $script:SelectedBepArtifactOutputKeys.Clear()
+    $script:BlockedBepArtifactLabels.Clear()
+    $script:StagedOutputKeys.Clear()
+    $script:StagedRemoteClearances.Clear()
+    foreach ($line in @($Lines)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            Log "error: malformed BEP artifact helper output: blank line"
+            exit 2
+        }
+        $parts = $line.Split([char]9)
+        switch ($parts[0]) {
+            "selected" {
+                if ($parts.Count -ne 3 -or [string]::IsNullOrWhiteSpace($parts[1]) -or [string]::IsNullOrWhiteSpace($parts[2])) {
+                    Log "error: malformed BEP artifact helper selected row"
+                    exit 2
+                }
+                Dbg "BEP artifact staging selected output key: $($parts[2])"
+                $script:SelectedBepArtifactOutputKeys.Add($parts[2]) | Out-Null
+            }
+            "blocked_label" {
+                if ($parts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($parts[1])) {
+                    Log "error: malformed BEP artifact helper blocked_label row"
+                    exit 2
+                }
+                Dbg "BEP artifact staging blocked local fallback for unmappable output label: $($parts[1])"
+                $script:BlockedBepArtifactLabels.Add($parts[1]) | Out-Null
+            }
+            "root" {
+                if ($parts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($parts[1]) -or -not (Test-Path -LiteralPath $parts[1] -PathType Container)) {
+                    Log "error: malformed BEP artifact helper root row"
+                    exit 2
+                }
+                $script:StagedTestlogsDirs.Add($parts[1]) | Out-Null
+                $script:TestlogsScanDirs.Add($parts[1]) | Out-Null
+            }
+            "staged" {
+                if ($parts.Count -ne 6 -or [string]::IsNullOrWhiteSpace($parts[1]) -or [string]::IsNullOrWhiteSpace($parts[2]) -or [string]::IsNullOrWhiteSpace($parts[3]) -or [string]::IsNullOrWhiteSpace($parts[5])) {
+                    Log "error: malformed BEP artifact helper staged row"
+                    exit 2
+                }
+                if ($parts[4] -ne "0" -and $parts[4] -ne "1") {
+                    Log "error: malformed BEP artifact helper staged row"
+                    exit 2
+                }
+                $pair = "$($parts[1])`t$($parts[2])"
+                Dbg "BEP artifact staging materialized $($parts[1]) output $($parts[2]) at $($parts[3])"
+                $script:StagedOutputKeys.Add($pair) | Out-Null
+                if ($parts[4] -eq "1") {
+                    $script:StagedRemoteClearances.Add($pair) | Out-Null
+                }
+            }
+            default {
+                Log "error: unknown BEP artifact helper output row kind: $($parts[0])"
+                exit 2
+            }
+        }
+    }
+}
+
+function Stage-BepArtifacts {
+    if (-not (Test-ArtifactStagingRequested)) { return }
+    if ($script:ArtifactSource -eq "bep" -and $script:BepJsonFiles.Count -eq 0) {
+        Log "error: --artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON"
+        exit 2
+    }
+    if ($script:BepJsonFiles.Count -eq 0) { return }
+    $pythonBin = Get-PythonForBepArtifactStaging
+    if (-not $pythonBin) {
+        Log "error: BEP artifact staging requires python3 or python"
+        exit 2
+    }
+    $script:BepArtifactStageHelper = Resolve-Runfile $script:BepArtifactStageHelperRloc
+    $script:DoctorRuntime = Resolve-Runfile $script:DoctorRuntimeRloc
+    if (-not $script:BepArtifactStageHelper -or -not (Test-Path -LiteralPath $script:BepArtifactStageHelper -PathType Leaf)) {
+        Log "error: BEP artifact stage helper not found in runfiles"
+        exit 2
+    }
+    if (-not $script:DoctorRuntime -or -not (Test-Path -LiteralPath $script:DoctorRuntime -PathType Leaf)) {
+        Log "error: BEP artifact staging doctor runtime not found in runfiles"
+        exit 2
+    }
+    $resolvedBepJsonFiles = New-Object System.Collections.Generic.List[string]
+    foreach ($bepJson in @($script:BepJsonFiles)) {
+        $resolvedBepJson = Resolve-RuntimeFilePath $bepJson
+        if ([string]::IsNullOrWhiteSpace($resolvedBepJson) -or -not (Test-Path -LiteralPath $resolvedBepJson -PathType Leaf)) {
+            Log "error: BEP JSON not found for artifact staging: $bepJson"
+            exit 2
+        }
+        $resolvedBepJsonFiles.Add($resolvedBepJson) | Out-Null
+    }
+    if ($resolvedBepJsonFiles.Count -eq 0) { return }
+    $cmd = @(
+        "--doctor-runtime", $script:DoctorRuntime,
+        "--staging-dir", $script:ArtifactStagingDir,
+        "--remote-artifacts", $script:RemoteArtifacts,
+        "--artifact-source", $script:ArtifactSource,
+        "--bep-artifact-downloader-timeout-sec", $script:BepArtifactDownloaderTimeoutSec
+    )
+    if (-not [string]::IsNullOrWhiteSpace($script:BepArtifactDownloader)) {
+        $cmd += @("--bep-artifact-downloader", $script:BepArtifactDownloader)
+    }
+    $cmd += @($resolvedBepJsonFiles.ToArray())
+    $helperOutput = @(& $PythonBin $script:BepArtifactStageHelper @cmd 2>&1)
+    $helperStatus = $LASTEXITCODE
+    if ($helperStatus -ne 0) {
+        foreach ($line in $helperOutput) { Log-Stderr ([string]$line) }
+        Log "error: BEP artifact staging helper failed with exit code $helperStatus"
+        exit $helperStatus
+    }
+    $stdoutLines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $helperOutput) {
+        $text = [string]$line
+        if ($text.StartsWith("[dd-test-optimization")) {
+            Log-Stderr $text
+        } else {
+            $stdoutLines.Add($text) | Out-Null
+        }
+    }
+    Parse-BepArtifactHelperOutput -Lines $stdoutLines.ToArray()
+}
 
 # Determine bazel-testlogs directory
 # Priority: TESTLOGS_DIR env var > BUILD_WORKSPACE_DIRECTORY/bazel-testlogs > ./bazel-testlogs
@@ -891,19 +1177,25 @@ if ($env:TESTLOGS_DIR) {
     }
 
     if (-not $TestlogsDir) {
-        Log "warning: testlogs dir not found (nothing to upload)"
-        Log "hint: set TESTLOGS_DIR env var, or ensure bazel-testlogs symlink exists"
-        # Exit 0 by default (graceful no-op), but respect FailOnError to catch misconfigurations
-        if ($FailOnError) {
-            Log "error: FailOnError is set and no testlogs found - this may indicate misconfiguration"
+        if (Test-ArtifactStagingRequested) {
+            Dbg "testlogs dir not found; deferring no-output decision until after BEP artifact staging"
+        } else {
+            Log "warning: testlogs dir not found (nothing to upload)"
+            Log "hint: set TESTLOGS_DIR env var, or ensure bazel-testlogs symlink exists"
+            # Exit 0 by default (graceful no-op), but respect FailOnError to catch misconfigurations
+            if ($FailOnError) {
+                Log "error: FailOnError is set and no testlogs found - this may indicate misconfiguration"
+                Release-Lock
+                exit 2  # Configuration error
+            }
             Release-Lock
-            exit 2  # Configuration error
+            exit 0
         }
-        Release-Lock
-        exit 0
     }
 
-    Dbg "auto-discovered TestlogsDir=$TestlogsDir"
+    if ($TestlogsDir) {
+        Dbg "auto-discovered TestlogsDir=$TestlogsDir"
+    }
 }
 
 function Resolve-DirectoryPhysicalPath {
@@ -927,30 +1219,73 @@ function Resolve-DirectoryPhysicalPath {
 
 # Keep the logical path for messages/context derivation, but walk the physical
 # directory so a workspace bazel-testlogs symlink is handled consistently.
-$TestlogsScanDir = Resolve-DirectoryPhysicalPath $TestlogsDir
-$script:TestlogsScanDir = $TestlogsScanDir
-Dbg "using TestlogsScanDir=$TestlogsScanDir"
+$TestlogsScanDir = $null
+if ($TestlogsDir) {
+    $TestlogsScanDir = Resolve-DirectoryPhysicalPath $TestlogsDir
+    $script:TestlogsScanDir = $TestlogsScanDir
+    $script:TestlogsScanDirs.Add($TestlogsScanDir) | Out-Null
+    Dbg "using TestlogsScanDir=$TestlogsScanDir"
+}
+Stage-BepArtifacts
 
 # Find all test.outputs directories (supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth)
 # Note: -Depth parameter requires PowerShell 7+; on older versions, depth limiting is ignored
 function Find-TestOutputs {
-    $params = @{
-        Path = $TestlogsScanDir
-        Recurse = $true
-        Directory = $true
-        Filter = "test.outputs"
-        ErrorAction = 'SilentlyContinue'
-    }
-    if ($MaxDepth -gt 0) {
-        # -Depth is only available in PowerShell 7+
-        if ($PSVersionTable.PSVersion.Major -ge 7) {
-            $params['Depth'] = $MaxDepth
-            Dbg "limiting search depth to $MaxDepth"
-        } else {
-            Log "warning: DD_TEST_OPTIMIZATION_MAX_DEPTH ignored (requires PowerShell 7+, have $($PSVersionTable.PSVersion))"
+    $found = New-Object System.Collections.Generic.List[object]
+    foreach ($scanDir in @($script:TestlogsScanDirs)) {
+        if ([string]::IsNullOrWhiteSpace($scanDir) -or -not (Test-Path -LiteralPath $scanDir -PathType Container)) { continue }
+        $params = @{
+            Path = $scanDir
+            Recurse = $true
+            Directory = $true
+            Filter = "test.outputs"
+            ErrorAction = 'SilentlyContinue'
+        }
+        if ($MaxDepth -gt 0) {
+            # -Depth is only available in PowerShell 7+
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $params['Depth'] = $MaxDepth
+                Dbg "limiting search depth to $MaxDepth"
+            } else {
+                Log "warning: DD_TEST_OPTIMIZATION_MAX_DEPTH ignored (requires PowerShell 7+, have $($PSVersionTable.PSVersion))"
+            }
+        }
+        foreach ($dir in @(Get-ChildItem @params)) {
+            $found.Add($dir) | Out-Null
         }
     }
-    Get-ChildItem @params
+    return @($found.ToArray())
+}
+
+function Get-TestOutputDirKey([string]$OutputsDir) {
+  if ([string]::IsNullOrWhiteSpace($OutputsDir)) { return "" }
+  $normalized = $OutputsDir.Replace('\', '/').TrimEnd('/')
+  foreach ($scanDir in @($script:TestlogsScanDirs)) {
+    $scanRoot = ([string]$scanDir).Replace('\', '/').TrimEnd('/')
+    if (-not [string]::IsNullOrWhiteSpace($scanRoot) -and $normalized.StartsWith($scanRoot + "/", [System.StringComparison]::Ordinal)) {
+      return $normalized.Substring($scanRoot.Length + 1)
+    }
+  }
+
+  $marker = "/testlogs/"
+  $markerIndex = $normalized.LastIndexOf($marker, [System.StringComparison]::Ordinal)
+  if ($markerIndex -ge 0) {
+    $normalized = $normalized.Substring($markerIndex + $marker.Length)
+  } else {
+    $normalized = $normalized.TrimStart('/')
+  }
+
+  $insideIndex = $normalized.IndexOf("/test.outputs/", [System.StringComparison]::Ordinal)
+  if ($insideIndex -ge 0) {
+    $normalized = $normalized.Substring(0, $insideIndex) + "/test.outputs"
+  } elseif (-not $normalized.EndsWith("/test.outputs", [System.StringComparison]::Ordinal)) {
+    return ""
+  }
+
+  while ($normalized.StartsWith("./", [System.StringComparison]::Ordinal)) {
+    $normalized = $normalized.Substring(2)
+  }
+  return $normalized.TrimStart('/')
 }
 
 # Cache the list of test.outputs directories for efficiency (avoid rescanning on each loop iteration)
@@ -970,7 +1305,29 @@ function Update-TestOutputsCache {
             )
         )
     }
-    $script:TestOutputsCache = $dirs
+    $deduped = New-Object System.Collections.Generic.List[object]
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($dir in $dirs) {
+        $key = Get-TestOutputDirKey $dir.FullName
+        if ([string]::IsNullOrWhiteSpace($key)) { continue }
+        if ($script:SelectedBepArtifactOutputKeys.Contains($key)) {
+            $isStaged = $false
+            foreach ($stagedRoot in @($script:StagedTestlogsDirs)) {
+                if ($dir.FullName.StartsWith($stagedRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::Ordinal)) {
+                    $isStaged = $true
+                    break
+                }
+            }
+            if (-not $isStaged) {
+                Dbg "suppressing local test.outputs selected for BEP artifact staging: $($dir.FullName)"
+                continue
+            }
+        }
+        if ($seen.Add($key)) {
+            $deduped.Add($dir) | Out-Null
+        }
+    }
+    $script:TestOutputsCache = @($deduped.ToArray())
 }
 
 function Get-LatestMTimeAll {
@@ -1012,8 +1369,12 @@ function Count-PayloadFiles {
 # Detect if tests actually ran by looking for test.log or test.xml files
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 function Test-ExecutedTests {
-    $testFiles = Get-ChildItem -Path $TestlogsScanDir -Recurse -File -Include @("test.log", "test.xml") -ErrorAction SilentlyContinue | Select-Object -First 1
-    return $null -ne $testFiles
+    foreach ($scanDir in @($script:TestlogsScanDirs)) {
+        if ([string]::IsNullOrWhiteSpace($scanDir) -or -not (Test-Path -LiteralPath $scanDir -PathType Container)) { continue }
+        $testFiles = Get-ChildItem -Path $scanDir -Recurse -File -Include @("test.log", "test.xml") -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $testFiles) { return [bool]$true }
+    }
+    return [bool]$false
 }
 
 # Wait for quiescence (filesystem to settle)
@@ -2032,6 +2393,67 @@ function Get-BepTestOutputKey([string]$PathValue) {
   return ""
 }
 
+function Get-BepPathPrefixNameCandidate($FileObject) {
+  if ($null -eq $FileObject -or -not ($FileObject.PSObject.Properties.Name -contains "name")) { return "" }
+  $name = Get-MapValue $FileObject "name"
+  $pathPrefix = Get-MapValue $FileObject "pathPrefix"
+  if ($null -eq $pathPrefix) { $pathPrefix = Get-MapValue $FileObject "path_prefix" }
+  if (-not ($name -is [string]) -or [string]::IsNullOrWhiteSpace($name)) { return "" }
+  if (-not ($pathPrefix -is [System.Collections.IEnumerable]) -or ($pathPrefix -is [string])) { return "" }
+  $parts = New-Object System.Collections.ArrayList
+  foreach ($part in @($pathPrefix)) {
+    if (($part -is [string]) -and -not [string]::IsNullOrWhiteSpace($part)) {
+      $parts.Add([string]$part) | Out-Null
+    }
+  }
+  if ($parts.Count -eq 0) { return "" }
+  $parts.Add([string]$name) | Out-Null
+  return ($parts.ToArray() -join "/")
+}
+
+function Test-TrustedBepOutputKeyCandidate([string]$PathValue) {
+  if ([string]::IsNullOrWhiteSpace($PathValue)) { return $false }
+  $normalized = $PathValue
+  if ($normalized.StartsWith("file://", [System.StringComparison]::OrdinalIgnoreCase)) {
+    try {
+      $uri = [System.Uri]$normalized
+      $normalized = [System.Uri]::UnescapeDataString($uri.LocalPath)
+    } catch {
+      $normalized = $normalized.Substring("file://".Length)
+    }
+  }
+  $normalized = [System.Uri]::UnescapeDataString($normalized).Replace('\', '/').Trim('/')
+  if ([string]::IsNullOrWhiteSpace($normalized) -or -not $normalized.Contains("/")) { return $false }
+  if (Test-BepRemoteOnlyReference $normalized) { return $false }
+  $parts = @($normalized -split "/" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  return [bool](($parts -contains "testlogs") -or ($parts -contains "bazel-testlogs"))
+}
+
+function Get-BepCanonicalOutputKeyCandidates($FileObject, [string[]]$Candidates) {
+  $values = New-Object System.Collections.Generic.List[string]
+  $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  $append = {
+    param([string]$Value)
+    if (-not [string]::IsNullOrWhiteSpace($Value) -and $seen.Add($Value)) {
+      $values.Add($Value) | Out-Null
+    }
+  }
+
+  if ($null -ne $FileObject -and -not ($FileObject -is [string])) {
+    & $append (Get-BepPathPrefixNameCandidate $FileObject)
+    $path = Get-MapValue $FileObject "path"
+    if ($path -is [string]) {
+      & $append ([string]$path)
+    }
+  }
+  foreach ($candidate in @($Candidates)) {
+    if (Test-TrustedBepOutputKeyCandidate $candidate) {
+      & $append ([string]$candidate)
+    }
+  }
+  return $values
+}
+
 function Test-BepRemoteOnlyReference([string]$PathValue) {
   if ([string]::IsNullOrWhiteSpace($PathValue)) { return $false }
   $lowered = $PathValue.ToLowerInvariant()
@@ -2070,19 +2492,9 @@ function Get-BepFileReferenceCandidates($FileObject) {
     }
   }
   $name = Get-MapValue $FileObject "name"
-  $pathPrefix = Get-MapValue $FileObject "pathPrefix"
-  if ($null -eq $pathPrefix) { $pathPrefix = Get-MapValue $FileObject "path_prefix" }
-  if (($name -is [string]) -and -not [string]::IsNullOrWhiteSpace($name) -and $pathPrefix -is [System.Collections.IEnumerable] -and -not ($pathPrefix -is [string])) {
-    $parts = New-Object System.Collections.ArrayList
-    foreach ($part in @($pathPrefix)) {
-      if (($part -is [string]) -and -not [string]::IsNullOrWhiteSpace($part)) {
-        $parts.Add([string]$part) | Out-Null
-      }
-    }
-    if ($parts.Count -gt 0) {
-      $parts.Add([string]$name) | Out-Null
-      $values.Add(($parts.ToArray() -join "/")) | Out-Null
-    }
+  $pathPrefixName = Get-BepPathPrefixNameCandidate $FileObject
+  if (-not [string]::IsNullOrWhiteSpace($pathPrefixName)) {
+    $values.Add($pathPrefixName) | Out-Null
   }
   return $values
 }
@@ -2128,20 +2540,26 @@ function Initialize-BepEligibility {
 	        $eventCachedOutputs = New-Object System.Collections.ArrayList
 	        $remoteOnlyCandidates = New-Object System.Collections.ArrayList
         foreach ($output in @($outputs)) {
-          $outputMappedAny = $false
           $outputHasTestOutputsHint = $false
           $outputRemoteCandidates = New-Object System.Collections.ArrayList
-          foreach ($candidate in @(Get-BepFileReferenceCandidates $output)) {
-            $outputKey = Get-BepTestOutputKey $candidate
-            if (-not [string]::IsNullOrWhiteSpace($outputKey)) {
-	              $mappedAny = $true
-	              $outputMappedAny = $true
-	              if ($cachedLocally -or $cachedRemotely) {
-	                $eventCachedOutputs.Add("$label`t$outputKey") | Out-Null
-	              } else {
-	                $eventEligibleOutputs.Add("$label`t$outputKey") | Out-Null
-	              }
+          $outputCandidates = @(Get-BepFileReferenceCandidates $output)
+          $outputKey = ""
+          foreach ($candidate in @(Get-BepCanonicalOutputKeyCandidates $output $outputCandidates)) {
+            $candidateKey = Get-BepTestOutputKey $candidate
+            if (-not [string]::IsNullOrWhiteSpace($candidateKey)) {
+              $outputKey = $candidateKey
+              break
             }
+          }
+          if (-not [string]::IsNullOrWhiteSpace($outputKey)) {
+            $mappedAny = $true
+            if ($cachedLocally -or $cachedRemotely) {
+              $eventCachedOutputs.Add("$label`t$outputKey") | Out-Null
+            } else {
+              $eventEligibleOutputs.Add("$label`t$outputKey") | Out-Null
+            }
+          }
+          foreach ($candidate in @($outputCandidates)) {
             if (Test-BepTestOutputsArtifactHint $candidate) {
               $outputHasTestOutputsHint = $true
             }
@@ -2153,6 +2571,7 @@ function Initialize-BepEligibility {
             $remoteOnlyCandidates.Add([pscustomobject]@{
               Candidates = @($outputRemoteCandidates.ToArray())
               HasTestOutputsHint = $outputHasTestOutputsHint
+              OutputKey = $outputKey
             }) | Out-Null
           }
         }
@@ -2163,6 +2582,7 @@ function Initialize-BepEligibility {
               $eventRemoteOnlyAny = $true
               $script:FreshnessRemoteOnlyOutputs.Add([pscustomobject]@{
                 Label = $label
+                OutputKey = [string]$remoteRef.OutputKey
                 Artifact = $candidate
                 Reason = "remote_only"
               }) | Out-Null
@@ -2329,14 +2749,37 @@ function Get-TestOutputTargetLabel([string]$OutputsDir) {
   }
 }
 
-function Get-TestOutputDirKey([string]$OutputsDir) {
-  if ([string]::IsNullOrWhiteSpace($OutputsDir)) { return "" }
-  $normalized = $OutputsDir.Replace('\', '/').TrimEnd('/')
-  $scanRoot = ([string]$script:TestlogsScanDir).Replace('\', '/').TrimEnd('/')
-  if (-not [string]::IsNullOrWhiteSpace($scanRoot) -and $normalized.StartsWith($scanRoot + "/", [System.StringComparison]::Ordinal)) {
-    return $normalized.Substring($scanRoot.Length + 1)
+function Merge-StagedBepFreshness {
+  if ($script:FreshnessSelectedSource -ne "bep") { return }
+
+  foreach ($pair in @($script:StagedOutputKeys)) {
+    if ([string]::IsNullOrWhiteSpace($pair)) { continue }
+    $script:FreshnessEligibleOutputs.Add($pair) | Out-Null
+    $parts = $pair -split "`t", 2
+    if ($parts.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($parts[0])) {
+      $script:FreshnessEligibleLabels.Add($parts[0]) | Out-Null
+    }
   }
-  return (Get-ExecutionLogTestOutputKey $normalized)
+
+  if ($script:StagedRemoteClearances.Count -gt 0) {
+    $remaining = New-Object System.Collections.Generic.List[object]
+    foreach ($remote in $script:FreshnessRemoteOnlyOutputs.ToArray()) {
+      $pair = "$($remote.Label)`t$($remote.OutputKey)"
+      if (-not $script:StagedRemoteClearances.Contains($pair)) {
+        $remaining.Add($remote) | Out-Null
+      }
+    }
+    $script:FreshnessRemoteOnlyOutputs.Clear()
+    foreach ($remote in @($remaining.ToArray())) {
+      $script:FreshnessRemoteOnlyOutputs.Add($remote) | Out-Null
+    }
+  }
+
+  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
+  if ($conflictingOutputs.Count -gt 0) {
+    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  }
 }
 
 function Write-ExecutionSkipOnce([string]$OutputsDir, [string]$Reason) {
@@ -2346,9 +2789,17 @@ function Write-ExecutionSkipOnce([string]$OutputsDir, [string]$Reason) {
 }
 
 function Assert-NoRequiredRemoteOnlyBepOutputs {
-  if ($script:FreshnessSelectedSource -ne "bep" -or $script:FreshnessMode -ne "required") { return }
+  if ($script:FreshnessSelectedSource -ne "bep") { return }
   if ($script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
     $first = $script:FreshnessRemoteOnlyOutputs[0]
+    if ($script:FreshnessMode -ne "required" -and $script:RemoteArtifacts -eq "download") {
+      Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); unmaterialized outputs will be skipped."
+      return
+    }
+    if ($script:FreshnessMode -ne "required" -and $script:RemoteArtifacts -eq "disabled") {
+      Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); remote artifact staging is disabled."
+      return
+    }
     Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $($first.Artifact). Rerun with --remote_download_outputs=all or configure a BEP artifact fetcher."
     exit 2
   }
@@ -2364,8 +2815,12 @@ function Write-FreshnessSkipOnce([string]$OutputsDir, [string]$Reason) {
 
 function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
   Assert-NoRequiredRemoteOnlyBepOutputs
-  if (-not $script:FreshnessEligibilityEnabled) { return $true }
   $targetLabel = Get-TestOutputTargetLabel $OutputsDir
+  if ((-not [string]::IsNullOrWhiteSpace($targetLabel)) -and $script:BlockedBepArtifactLabels.Contains($targetLabel)) {
+    Write-FreshnessSkipOnce $OutputsDir "BEP artifact for target $targetLabel did not contain a mappable test.outputs key"
+    return $false
+  }
+  if (-not $script:FreshnessEligibilityEnabled) { return $true }
   if ([string]::IsNullOrWhiteSpace($targetLabel)) {
     if ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
       Log "error: BEP required freshness cannot authorize $OutputsDir because bazel.target metadata is missing"
@@ -3939,6 +4394,7 @@ try {
     # Run tests first, then coverage. This ordering mirrors historical behavior
     # and keeps log/snapshot expectations stable across platforms.
     Initialize-FreshnessEligibility
+    Merge-StagedBepFreshness
     Assert-NoRequiredRemoteOnlyBepOutputs
     Upload-AllTests
     Upload-AllCoverage

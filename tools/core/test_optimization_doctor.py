@@ -11,12 +11,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
+import uuid
+import zipfile
 
 
 FORBIDDEN_TEST_ENV_RE = re.compile(
@@ -38,15 +43,52 @@ DEFAULT_ALLOWED_GO_PAYLOAD_SELECTIONS = {
 DOCTOR_EXECROOT_ENV = "DD_TEST_OPTIMIZATION_DOCTOR_EXECROOT"
 VALID_FRESHNESS_MODES = {"auto", "required", "optional", "disabled"}
 VALID_FRESHNESS_SOURCES = {"auto", "bep", "execution_log"}
+VALID_ARTIFACT_SOURCES = {"auto", "bep", "local"}
+VALID_REMOTE_ARTIFACT_MODES = {"disabled", "download", "required"}
+STAGING_MARKER = ".dd-topt-bep-staged"
+MAX_OUTPUTS_TREE_FILES = 10000
+MAX_OUTPUTS_TREE_BYTES = 512 * 1024 * 1024
 
 
 class BepRemoteOnlyOutput:
     """Fresh BEP output that is not available as a local file in phase 1."""
 
-    def __init__(self, label: str, artifact: str, reason: str) -> None:
+    def __init__(self, label: str, output_key: str, artifact: str, reason: str) -> None:
         self.label = label
+        self.output_key = output_key
         self.artifact = artifact
         self.reason = reason
+
+
+class BepArtifactReference:
+    """One BEP artifact reference associated with a TestResult output."""
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        uri: str,
+        name: str,
+        path: str,
+        candidates: list[str],
+        fetch_value: str,
+        output_key: str,
+        cached: bool,
+        remote_only: bool,
+        is_test_outputs_hint: bool,
+        fetch_is_stageable_carrier: bool,
+    ) -> None:
+        self.label = label
+        self.uri = uri
+        self.name = name
+        self.path = path
+        self.candidates = candidates
+        self.fetch_value = fetch_value
+        self.output_key = output_key
+        self.cached = cached
+        self.remote_only = remote_only
+        self.is_test_outputs_hint = is_test_outputs_hint
+        self.fetch_is_stageable_carrier = fetch_is_stageable_carrier
 
 
 class BepFreshness:
@@ -58,11 +100,40 @@ class BepFreshness:
         cached_outputs: set[tuple[str, str]],
         remote_only_outputs: list[BepRemoteOnlyOutput],
         missing_output_mappings: set[str],
+        artifact_references: list[BepArtifactReference] | None = None,
     ) -> None:
         self.eligible_outputs = eligible_outputs
         self.cached_outputs = cached_outputs
         self.remote_only_outputs = remote_only_outputs
         self.missing_output_mappings = missing_output_mappings
+        self.artifact_references = artifact_references or []
+
+
+class StagedBepArtifact:
+    """A BEP artifact materialized into an owned staging directory."""
+
+    def __init__(
+        self,
+        label: str,
+        output_key: str,
+        output_dir: Path,
+        staging_root: Path,
+        *,
+        downloaded: bool,
+        remote_only: bool,
+        fetch_value: str,
+    ) -> None:
+        self.label = label
+        self.output_key = output_key
+        self.output_dir = output_dir
+        self.staging_root = staging_root
+        self.downloaded = downloaded
+        self.remote_only = remote_only
+        self.fetch_value = fetch_value
+
+
+class BepArtifactStageError(Exception):
+    """A BEP artifact was found but cannot be safely staged."""
 
 
 def _fail(message: str) -> None:
@@ -84,6 +155,35 @@ def _load_json(path: Path) -> Any:
         _fail(f"invalid JSON in {path}: {exc}")
 
 
+def _validate_downloader_timeout_sec(value: object) -> float:
+    text = str(value)
+    if not re.fullmatch(r"[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)", text):
+        _fail("--bep-artifact-downloader-timeout-sec must be a finite number greater than zero")
+    try:
+        timeout = float(text)
+    except (TypeError, ValueError):
+        _fail("--bep-artifact-downloader-timeout-sec must be a finite number greater than zero")
+    if not math.isfinite(timeout) or timeout <= 0:
+        _fail("--bep-artifact-downloader-timeout-sec must be a finite number greater than zero")
+    return timeout
+
+
+def _validate_artifact_resolution_args(args: argparse.Namespace) -> None:
+    if args.artifact_source not in VALID_ARTIFACT_SOURCES:
+        _fail(
+            f"unsupported artifact-source {args.artifact_source!r}; expected one of: "
+            f"{', '.join(sorted(VALID_ARTIFACT_SOURCES))}"
+        )
+    if args.remote_artifacts not in VALID_REMOTE_ARTIFACT_MODES:
+        _fail(
+            f"unsupported remote-artifacts {args.remote_artifacts!r}; expected one of: "
+            f"{', '.join(sorted(VALID_REMOTE_ARTIFACT_MODES))}"
+        )
+    args.bep_artifact_downloader_timeout_sec = _validate_downloader_timeout_sec(
+        args.bep_artifact_downloader_timeout_sec
+    )
+
+
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse doctor runtime arguments, including optional BEP freshness flags."""
     parser = argparse.ArgumentParser()
@@ -99,7 +199,31 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         choices=sorted(VALID_FRESHNESS_MODES),
         default=os.environ.get("DD_TEST_OPTIMIZATION_FRESHNESS_MODE", "auto").lower(),
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--artifact-source",
+        choices=sorted(VALID_ARTIFACT_SOURCES),
+        default=os.environ.get("DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE", "local").lower(),
+    )
+    parser.add_argument(
+        "--remote-artifacts",
+        choices=sorted(VALID_REMOTE_ARTIFACT_MODES),
+        default=os.environ.get("DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS", "disabled").lower(),
+    )
+    parser.add_argument(
+        "--artifact-staging-dir",
+        default=os.environ.get("DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR", ""),
+    )
+    parser.add_argument(
+        "--bep-artifact-downloader",
+        default=os.environ.get("DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER", ""),
+    )
+    parser.add_argument(
+        "--bep-artifact-downloader-timeout-sec",
+        default=os.environ.get("DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC", "300"),
+    )
+    args = parser.parse_args(argv)
+    _validate_artifact_resolution_args(args)
+    return args
 
 
 def _configured_bep_json_files(args: argparse.Namespace) -> list[Path]:
@@ -254,7 +378,7 @@ def _resolve_runfile_path(raw_paths: list[str]) -> Path:
     return Path(raw_paths[0])
 
 
-def _resolve_testlogs_dir(workspace: Path) -> Path:
+def _resolve_testlogs_dir(workspace: Path, *, allow_missing: bool = False) -> Path | None:
     override = os.environ.get("TESTLOGS_DIR")
     if override:
         path = Path(override).expanduser()
@@ -268,6 +392,8 @@ def _resolve_testlogs_dir(workspace: Path) -> Path:
     for candidate in candidates:
         if candidate.exists() and candidate.is_dir():
             return candidate.resolve()
+    if allow_missing:
+        return None
     _fail("could not find bazel-testlogs; set TESTLOGS_DIR or run from the Bazel workspace root")
 
 
@@ -289,18 +415,26 @@ def _expected_target_root(testlogs_dir: Path, label: str) -> Path:
     return testlogs_dir.joinpath(*parts, target)
 
 
-def _expected_target_outputs(testlogs_dir: Path, label: str) -> list[Path]:
+def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_missing: bool = False) -> list[Path]:
     """Return all test.outputs directories for one expected local target.
 
     Bazel can nest outputs under shard/retry directories, so strict expected
     targets discover recursively below the target root instead of assuming only
     `<pkg>/<target>/test.outputs`.
     """
+    if testlogs_dir is None:
+        if allow_missing:
+            return []
+        _fail(f"cannot resolve expected target {label}: bazel-testlogs directory not found")
     target_root = _expected_target_root(testlogs_dir, label)
     if not target_root.exists():
+        if allow_missing:
+            return []
         _fail(_missing_expected_target_message(label, target_root, "output root"))
     output_dirs = _discover_output_dirs(target_root)
     if not output_dirs:
+        if allow_missing:
+            return []
         _fail(_missing_expected_target_message(label, target_root, "test.outputs directory"))
     return output_dirs
 
@@ -348,6 +482,63 @@ def _bep_file_reference_candidates(file_obj: Any) -> list[str]:
     return values
 
 
+def _bep_path_prefix_name_candidate(file_obj: Any) -> str:
+    """Return the BEP pathPrefix/name reconstruction for one File object."""
+    if not isinstance(file_obj, dict):
+        return ""
+    path_prefix = _coalesced_field(file_obj, "pathPrefix", "path_prefix", [])
+    name = file_obj.get("name")
+    if not isinstance(path_prefix, list) or not isinstance(name, str) or not name:
+        return ""
+    path_parts = [part for part in path_prefix if isinstance(part, str) and part]
+    if not path_parts:
+        return ""
+    return "/".join(path_parts + [name])
+
+
+def _trusted_bep_output_key_candidate(value: str) -> bool:
+    """Return true when a fallback BEP value can safely derive an output key."""
+    normalized = _strip_file_uri(value).replace("\\", "/").strip("/")
+    if not normalized or "/" not in normalized:
+        return False
+    if _is_remote_only_bep_reference(normalized):
+        return False
+    parts = [part for part in normalized.split("/") if part]
+    return "testlogs" in parts or "bazel-testlogs" in parts
+
+
+def _bep_canonical_output_key_candidates(file_obj: Any, candidates: list[str]) -> list[str]:
+    """Return BEP values allowed to derive the stable upload output key."""
+    values: list[str] = []
+
+    def append(value: str) -> None:
+        if value and value not in values:
+            values.append(value)
+
+    if isinstance(file_obj, dict):
+        append(_bep_path_prefix_name_candidate(file_obj))
+        path = file_obj.get("path")
+        if isinstance(path, str):
+            append(path)
+    for candidate in candidates:
+        if _trusted_bep_output_key_candidate(candidate):
+            append(candidate)
+    return values
+
+
+def _bep_artifact_fetch_value(file_obj: Any, candidates: list[str]) -> str:
+    """Return the preferred concrete value used to materialize one BEP File."""
+    if isinstance(file_obj, dict):
+        for key in ("uri", "path"):
+            value = file_obj.get(key)
+            if isinstance(value, str) and value:
+                return value
+        reconstructed = _bep_path_prefix_name_candidate(file_obj)
+        if reconstructed:
+            return reconstructed
+    return candidates[0] if candidates else ""
+
+
 def _strip_file_uri(value: str) -> str:
     """Return a local path-like value for `file://` URI references."""
     if not value.lower().startswith("file://"):
@@ -359,6 +550,14 @@ def _strip_file_uri(value: str) -> str:
     if parsed.netloc and parsed.netloc not in {"", "localhost"}:
         path = f"//{parsed.netloc}{path}"
     return path
+
+
+def _local_artifact_path_from_reference(value: str) -> Path:
+    """Return a platform-correct Path for a local BEP artifact reference."""
+    raw = _strip_file_uri(value)
+    if re.match(r"^/[A-Za-z]:[/\\]", raw):
+        raw = raw[1:]
+    return Path(raw)
 
 
 def _bep_test_output_key(path_value: str) -> str:
@@ -421,6 +620,548 @@ def _bep_test_outputs_artifact_hint(path_value: str) -> bool:
     )
 
 
+def _bep_stageable_artifact_carrier_hint(file_obj: Any, candidates: list[str]) -> bool:
+    """Return true when a BEP File can materialize one complete test.outputs tree."""
+    values: list[str] = []
+
+    def append(value: Any) -> None:
+        if isinstance(value, str) and value:
+            values.append(value)
+
+    if isinstance(file_obj, dict):
+        append(file_obj.get("name"))
+        append(file_obj.get("path"))
+        append(_bep_path_prefix_name_candidate(file_obj))
+        uri = file_obj.get("uri")
+        if (
+            isinstance(uri, str)
+            and uri
+            and not _is_remote_only_bep_reference(uri)
+            and _trusted_bep_output_key_candidate(uri)
+        ):
+            append(uri)
+    else:
+        values.extend(candidates)
+
+    for value in values:
+        normalized = _strip_file_uri(value).replace("\\", "/").lower().rstrip("/")
+        if normalized in {"test.outputs", "outputs.zip"}:
+            return True
+        if normalized.endswith("/test.outputs") or normalized.endswith("/outputs.zip"):
+            return True
+    return False
+
+
+def _create_staging_run_dir(staging_dir: Path) -> Path:
+    """Create a per-run staging root below the configured staging directory."""
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = staging_dir / "__runs" / uuid.uuid4().hex
+    run_dir.mkdir(parents=True)
+    return run_dir
+
+
+def _prepare_staging_destination(staging_dir: Path, output_key: str) -> tuple[Path, Path]:
+    """Return temporary and final destinations for one staged test.outputs key."""
+    if not output_key or output_key.startswith("/") or ".." in output_key.split("/"):
+        _fail(f"unsafe BEP output key for staging: {output_key!r}")
+    dst = staging_dir / output_key
+    resolved_staging = staging_dir.resolve()
+    resolved_dst_parent = dst.parent.resolve()
+    if resolved_staging not in [resolved_dst_parent, *resolved_dst_parent.parents]:
+        _fail(f"unsafe BEP staging destination outside staging dir: {dst}")
+    if dst.exists():
+        marker = dst / STAGING_MARKER
+        if not marker.exists():
+            _fail(f"refusing to replace non-owned BEP staging directory: {dst}")
+        shutil.rmtree(dst)
+    tmp = dst.parent / f".{dst.name}.tmp-{uuid.uuid4().hex}"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    return tmp, dst
+
+
+def _commit_staging_destination(tmp: Path, dst: Path) -> None:
+    """Atomically publish a validated staged test.outputs directory."""
+    (tmp / STAGING_MARKER).write_text("owned by dd-test-optimization BEP staging\n", encoding="utf-8")
+    tmp.rename(dst)
+
+
+def _discard_staging_destination(tmp: Path) -> None:
+    """Discard a temporary staging destination if it exists."""
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _copy_tree_contents(src: Path, dst: Path) -> None:
+    """Copy a local test.outputs tree into an empty staging destination."""
+    file_count = 0
+    byte_count = 0
+    for root, dirs, files in os.walk(src):
+        rel_root = Path(root).relative_to(src)
+        for dirname in list(dirs):
+            source_dir = Path(root) / dirname
+            if source_dir.is_symlink():
+                raise BepArtifactStageError(
+                    f"refusing to stage symlink directory from BEP artifact source: {source_dir}"
+                )
+            (dst / rel_root / dirname).mkdir(parents=True, exist_ok=True)
+        for filename in files:
+            file_count += 1
+            if file_count > MAX_OUTPUTS_TREE_FILES:
+                raise BepArtifactStageError(f"BEP test.outputs tree has too many files: {src}")
+            source_file = Path(root) / filename
+            if source_file.is_symlink():
+                raise BepArtifactStageError(f"refusing to stage symlink from BEP artifact source: {source_file}")
+            try:
+                size = source_file.stat().st_size
+            except OSError as exc:
+                raise BepArtifactStageError(f"failed to stat BEP artifact file {source_file}: {exc}") from exc
+            byte_count += size
+            if byte_count > MAX_OUTPUTS_TREE_BYTES:
+                raise BepArtifactStageError(f"BEP test.outputs tree is too large: {src}")
+            target_file = dst / rel_root / filename
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, target_file)
+
+
+def _extract_outputs_zip(zip_path: Path, dst: Path) -> None:
+    """Safely extract an outputs.zip archive into an empty staging destination."""
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            planned_members = []
+            file_count = 0
+            byte_count = 0
+            resolved_dst = dst.resolve()
+            for member in archive.infolist():
+                name = member.filename.replace("\\", "/").rstrip("/")
+                parts = name.split("/") if name else []
+                if (
+                    not name
+                    or name.startswith("/")
+                    or re.match(r"^[A-Za-z]:/", name)
+                    or any(part in ("", ".", "..") for part in parts)
+                ):
+                    raise BepArtifactStageError(f"unsafe path in BEP outputs.zip {zip_path}: {member.filename!r}")
+                target = dst / name
+                resolved_target = target.resolve()
+                if resolved_dst not in [resolved_target, *resolved_target.parents]:
+                    raise BepArtifactStageError(f"unsafe path in BEP outputs.zip {zip_path}: {member.filename!r}")
+                if len(planned_members) + 1 > MAX_OUTPUTS_TREE_FILES:
+                    raise BepArtifactStageError(f"BEP outputs.zip has too many entries: {zip_path}")
+                if not member.is_dir():
+                    file_count += 1
+                    byte_count += member.file_size
+                    if byte_count > MAX_OUTPUTS_TREE_BYTES:
+                        raise BepArtifactStageError(f"BEP outputs.zip is too large after decompression: {zip_path}")
+                planned_members.append((member, target))
+            for member, target in planned_members:
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as src, target.open("wb") as out:
+                    shutil.copyfileobj(src, out, length=1024 * 1024)
+    except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        raise BepArtifactStageError(f"invalid BEP outputs.zip {zip_path}: {exc}") from exc
+
+
+def _output_base_roots() -> list[Path]:
+    """Return Bazel output-base candidates derived from known execroot roots."""
+    roots: list[Path] = []
+    configured = os.environ.get("DD_TEST_OPTIMIZATION_BAZEL_OUTPUT_BASE")
+    if configured:
+        roots.append(Path(configured).expanduser())
+    for root in _execroot_roots():
+        if root.parent.name == "execroot":
+            roots.append(root.parent.parent)
+    return list(dict.fromkeys(root.resolve() for root in roots if root.exists()))
+
+
+def _resolve_bep_local_artifact_path(value: str, workspace: Path) -> Path:
+    """Resolve a local BEP artifact reference from workspace, execroot, or output base."""
+    if not value:
+        raise BepArtifactStageError("BEP artifact reference is empty")
+    path = _local_artifact_path_from_reference(value).expanduser()
+    candidates = [path] if path.is_absolute() else []
+    if not path.is_absolute():
+        candidates.append(workspace / path)
+        candidates.extend(root / path for root in _execroot_roots())
+        candidates.extend(root / path for root in _output_base_roots())
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    raise BepArtifactStageError(f"BEP artifact is not available locally: {value}")
+
+
+def _safe_download_fragment(value: str) -> str:
+    """Return a filesystem-safe fragment for remote downloader scratch paths."""
+    fragment = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-")
+    return fragment or "artifact"
+
+
+def _dedupe_stageable_artifact_references(
+    artifact_references: list[BepArtifactReference],
+    *,
+    workspace: Path,
+    remote_artifacts: str,
+) -> tuple[list[BepArtifactReference], set[tuple[str, str]]]:
+    """Return unambiguous stageable references and keys with conflicting carriers."""
+    by_key: dict[tuple[str, str], list[BepArtifactReference]] = {}
+    pass_through: list[BepArtifactReference] = []
+    for ref in artifact_references:
+        if ref.cached or not ref.fetch_is_stageable_carrier or not ref.output_key:
+            pass_through.append(ref)
+            continue
+        if ref.remote_only and remote_artifacts == "disabled":
+            pass_through.append(ref)
+            continue
+        by_key.setdefault((ref.label, ref.output_key), []).append(ref)
+
+    selected: list[BepArtifactReference] = pass_through[:]
+    ambiguous: set[tuple[str, str]] = set()
+    for key, refs in by_key.items():
+        carrier_groups: dict[tuple[bool, str], list[BepArtifactReference]] = {}
+        for ref in refs:
+            if ref.remote_only:
+                carrier_key = (True, ref.fetch_value)
+            else:
+                try:
+                    resolved = _resolve_bep_local_artifact_path(ref.fetch_value, workspace)
+                    carrier_key = (False, str(resolved))
+                except BepArtifactStageError:
+                    carrier_key = (False, _strip_file_uri(ref.fetch_value).replace("\\", "/"))
+            carrier_groups.setdefault(carrier_key, []).append(ref)
+        carriers = set(carrier_groups)
+        if len(carriers) > 1:
+            ambiguous.add(key)
+            continue
+        selected.append(sorted(next(iter(carrier_groups.values())), key=lambda item: item.fetch_value)[0])
+    return sorted(selected, key=lambda item: (item.label, item.output_key, item.fetch_value)), ambiguous
+
+
+def _download_remote_artifact(
+    ref: BepArtifactReference,
+    staging_dir: Path,
+    downloader: str,
+    *,
+    timeout_sec: float,
+) -> Path | None:
+    """Run the configured downloader and return its produced outputs.zip path."""
+    safe_label = _safe_download_fragment(ref.label)
+    safe_key = _safe_download_fragment(ref.output_key)
+    dst = staging_dir / "__downloads" / safe_label / safe_key / "outputs.zip"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        if dst.is_file():
+            dst.unlink()
+        else:
+            raise BepArtifactStageError(f"refusing to replace non-file BEP downloader destination: {dst}")
+    cmd = [
+        downloader,
+        "--uri",
+        ref.fetch_value,
+        "--name",
+        ref.name,
+        "--output",
+        str(dst),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        _warn(f"BEP artifact downloader timed out for {ref.label} after {timeout_sec:g}s")
+        return None
+    except OSError as exc:
+        _warn(f"BEP artifact downloader could not start for {ref.label}: {exc}")
+        return None
+    if proc.returncode != 0:
+        _warn(f"BEP artifact downloader failed for {ref.label} with exit code {proc.returncode}")
+        return None
+    if not dst.exists():
+        return None
+    if not dst.is_file():
+        raise BepArtifactStageError(f"BEP artifact downloader did not produce a file at {dst}")
+    return dst
+
+
+def _stage_bep_artifacts(
+    freshness: BepFreshness,
+    *,
+    workspace: Path,
+    staging_dir: Path,
+    remote_artifacts: str,
+    downloader: str = "",
+    downloader_timeout_sec: float = 300.0,
+) -> list[StagedBepArtifact]:
+    """Materialize fresh BEP artifacts into local test.outputs directories."""
+    warned: set[str] = set()
+    staged: list[StagedBepArtifact] = []
+    run_staging_dir = _create_staging_run_dir(staging_dir)
+
+    def warn_once(message: str) -> None:
+        if message not in warned:
+            warned.add(message)
+            _warn(message)
+
+    try:
+        refs, ambiguous_output_keys = _dedupe_stageable_artifact_references(
+            freshness.artifact_references,
+            workspace=workspace,
+            remote_artifacts=remote_artifacts,
+        )
+        if ambiguous_output_keys:
+            label, output_key = sorted(ambiguous_output_keys)[0]
+            message = f"BEP has multiple distinct stageable carriers for {label} {output_key}"
+            if remote_artifacts == "required":
+                _fail(message)
+            warn_once(message)
+        for ref in refs:
+            if ref.cached:
+                continue
+            if ref.is_test_outputs_hint and not ref.output_key:
+                message = f"BEP artifact for {ref.label} has no mappable test.outputs key: {ref.fetch_value}"
+                if remote_artifacts == "required":
+                    _fail(message)
+                if remote_artifacts == "download":
+                    warn_once(message)
+                continue
+            if not ref.fetch_is_stageable_carrier:
+                if ref.remote_only and not ref.is_test_outputs_hint:
+                    continue
+                if ref.remote_only and remote_artifacts == "required":
+                    _fail(
+                        f"BEP artifact for {ref.label} is remote-only but not a supported "
+                        f"test.outputs carrier: {ref.fetch_value}"
+                    )
+                if ref.remote_only and remote_artifacts == "download":
+                    warn_once(
+                        f"BEP artifact for {ref.label} is remote-only but not stageable: "
+                        f"{ref.fetch_value}"
+                    )
+                continue
+            if ref.remote_only:
+                if remote_artifacts == "disabled":
+                    warn_once(
+                        f"BEP artifact for {ref.label} is remote-only but remote artifact "
+                        f"download is disabled: {ref.fetch_value}"
+                    )
+                    continue
+                if not downloader:
+                    if remote_artifacts == "required":
+                        _fail(
+                            f"BEP artifact for {ref.label} is remote-only and no downloader is configured: "
+                            f"{ref.fetch_value}"
+                        )
+                    warn_once(
+                        f"BEP artifact for {ref.label} is remote-only and no downloader is configured: "
+                        f"{ref.fetch_value}"
+                    )
+                    continue
+            downloaded = False
+            try:
+                if ref.remote_only:
+                    source = _download_remote_artifact(
+                        ref,
+                        run_staging_dir,
+                        downloader,
+                        timeout_sec=downloader_timeout_sec,
+                    )
+                    downloaded = source is not None
+                else:
+                    source = _resolve_bep_local_artifact_path(ref.fetch_value, workspace)
+            except (BepArtifactStageError, OSError) as exc:
+                if remote_artifacts == "required":
+                    _fail(str(exc))
+                warn_once(str(exc))
+                continue
+            if source is None:
+                if remote_artifacts == "required":
+                    _fail(
+                        f"BEP artifact for {ref.label} could not be materialized as a local test.outputs carrier: "
+                        f"{ref.fetch_value}"
+                    )
+                if remote_artifacts == "download":
+                    warn_once(
+                        f"BEP artifact for {ref.label} could not be materialized and will be skipped: "
+                        f"{ref.fetch_value}"
+                    )
+                continue
+            tmp_dst, dst = _prepare_staging_destination(run_staging_dir, ref.output_key)
+            try:
+                if downloaded:
+                    if not source.is_file() or source.name != "outputs.zip":
+                        raise BepArtifactStageError(
+                            f"BEP downloader for {ref.label} did not produce an outputs.zip archive: {source}"
+                        )
+                    _extract_outputs_zip(source, tmp_dst)
+                elif source.is_dir():
+                    _copy_tree_contents(source, tmp_dst)
+                elif source.name == "outputs.zip":
+                    _extract_outputs_zip(source, tmp_dst)
+                else:
+                    raise BepArtifactStageError(
+                        f"BEP artifact for {ref.label} is not a supported test.outputs carrier: {source}"
+                    )
+                _commit_staging_destination(tmp_dst, dst)
+            except (BepArtifactStageError, OSError) as exc:
+                _discard_staging_destination(tmp_dst)
+                if remote_artifacts == "required":
+                    _fail(str(exc))
+                warn_once(str(exc))
+                continue
+            staged.append(
+                StagedBepArtifact(
+                    ref.label,
+                    ref.output_key,
+                    dst,
+                    run_staging_dir,
+                    downloaded=downloaded,
+                    remote_only=ref.remote_only,
+                    fetch_value=ref.fetch_value,
+                )
+            )
+        if not staged:
+            shutil.rmtree(run_staging_dir, ignore_errors=True)
+        return sorted(staged, key=lambda item: str(item.output_dir))
+    except BaseException:
+        shutil.rmtree(run_staging_dir, ignore_errors=True)
+        raise
+
+
+def _cleanup_staged_bep_run_roots(staged: Iterable[StagedBepArtifact], *, staging_base: Path) -> None:
+    """Remove owned per-run staging roots after staged outputs are no longer needed."""
+    runs_root = (staging_base / "__runs").resolve()
+    roots = sorted({item.staging_root.resolve() for item in staged})
+    for root in roots:
+        if root.parent.resolve() != runs_root:
+            _fail(f"refusing to clean BEP staging root outside run directory: {root}")
+        owned = False
+        for item in staged:
+            if item.staging_root.resolve() != root:
+                continue
+            output_dir = item.output_dir.resolve()
+            if root not in [output_dir, *output_dir.parents]:
+                _fail(f"refusing to clean BEP output outside staging root: {output_dir}")
+            if (output_dir / STAGING_MARKER).exists():
+                owned = True
+        if owned:
+            shutil.rmtree(root, ignore_errors=True)
+
+
+def _artifact_staging_requested(args: argparse.Namespace) -> bool:
+    """Return true when CLI/env requested BEP artifact staging."""
+    return args.artifact_source == "bep" or (
+        args.artifact_source == "auto" and args.remote_artifacts != "disabled"
+    )
+
+
+def _artifact_staging_enabled(args: argparse.Namespace, local_output_keys: set[str]) -> bool:
+    """Return true when this invocation should try to stage BEP artifacts."""
+    del local_output_keys
+    return _artifact_staging_requested(args)
+
+
+def _artifact_staging_dir(args: argparse.Namespace, workspace: Path) -> Path:
+    """Resolve the staging base for BEP artifact materialization."""
+    raw = args.artifact_staging_dir or ".topt/bep-artifacts"
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    return path.resolve()
+
+
+def _selected_bep_artifact_outputs(
+    freshness: BepFreshness,
+    workspace: Path,
+    remote_artifacts: str,
+) -> set[tuple[str, str]]:
+    """Return BEP artifact output keys selected for materialization."""
+    del workspace
+    selected: set[tuple[str, str]] = set()
+    for ref in freshness.artifact_references:
+        if ref.cached or not ref.fetch_is_stageable_carrier or not ref.output_key:
+            continue
+        if ref.remote_only and remote_artifacts == "disabled":
+            continue
+        selected.add((ref.label, ref.output_key))
+    return selected
+
+
+def _blocked_bep_artifact_labels(freshness: BepFreshness, remote_artifacts: str) -> set[str]:
+    """Return labels whose no-key BEP artifact refs must not fall back to local outputs."""
+    if remote_artifacts != "download":
+        return set()
+    return {
+        ref.label
+        for ref in freshness.artifact_references
+        if not ref.cached and ref.is_test_outputs_hint and not ref.output_key
+    }
+
+
+def _apply_staged_bep_artifacts_to_freshness(
+    freshness: BepFreshness,
+    staged: list[StagedBepArtifact],
+) -> None:
+    """Merge successfully staged artifacts into BEP freshness state."""
+    staged_pairs = {(item.label, item.output_key) for item in staged}
+    conflicting = staged_pairs.intersection(freshness.cached_outputs)
+    if conflicting:
+        label, output_key = sorted(conflicting)[0]
+        _fail(
+            "BEP freshness is ambiguous after staging: the same test output is both "
+            f"fresh and cached: {label} {output_key}"
+        )
+    freshness.eligible_outputs.update(staged_pairs)
+    if staged_pairs:
+        freshness.remote_only_outputs = [
+            remote
+            for remote in freshness.remote_only_outputs
+            if (remote.label, remote.output_key) not in staged_pairs
+        ]
+
+
+def _merge_staged_output_dirs(
+    output_dirs: list[Path],
+    staged: list[StagedBepArtifact],
+    selected_bep_artifact_outputs: set[tuple[str, str]],
+    blocked_bep_artifact_labels: set[str],
+    target_by_output_dir: dict[Path, str],
+    testlogs_dir: Path | None,
+) -> tuple[list[Path], dict[Path, str]]:
+    """Prefer staged BEP outputs and suppress selected stale local fallbacks."""
+    selected_keys = {output_key for _, output_key in selected_bep_artifact_outputs}
+    merged_output_dirs: list[Path] = []
+    merged_target_by_output_dir = dict(target_by_output_dir)
+    for output_dir in output_dirs:
+        if _local_test_output_key(output_dir, testlogs_dir=testlogs_dir) in selected_keys:
+            merged_target_by_output_dir.pop(output_dir.resolve(), None)
+            continue
+        if _output_dir_target_label(output_dir, merged_target_by_output_dir) in blocked_bep_artifact_labels:
+            merged_target_by_output_dir.pop(output_dir.resolve(), None)
+            continue
+        merged_output_dirs.append(output_dir)
+    for item in staged:
+        merged_output_dirs.append(item.output_dir)
+        merged_target_by_output_dir[item.output_dir.resolve()] = item.label
+    return merged_output_dirs, merged_target_by_output_dir
+
+
+def _output_dir_target_label(output_dir: Path, target_by_output_dir: dict[Path, str]) -> str | None:
+    """Return the Bazel target label associated with a test.outputs directory."""
+    fallback = target_by_output_dir.get(output_dir.resolve())
+    for metadata_file in _metadata_files(output_dir):
+        metadata = _load_json(metadata_file)
+        if isinstance(metadata, dict):
+            return _metadata_target_label(metadata, fallback)
+    return fallback
+
+
 def _parse_bep_freshness(
     bep_files: list[Path],
     *,
@@ -431,6 +1172,7 @@ def _parse_bep_freshness(
     cached_outputs: set[tuple[str, str]] = set()
     remote_only_outputs: list[BepRemoteOnlyOutput] = []
     missing_output_mappings: set[str] = set()
+    artifact_references: list[BepArtifactReference] = []
 
     for bep_file in bep_files:
         if not bep_file.is_file():
@@ -486,39 +1228,74 @@ def _parse_bep_freshness(
             remote_any = False
             event_fresh_pairs: set[tuple[str, str]] = set()
             event_cached_pairs: set[tuple[str, str]] = set()
-            remote_only_candidates: list[tuple[list[str], bool]] = []
+            remote_only_candidates: list[tuple[list[str], bool, str]] = []
             for output in outputs if isinstance(outputs, list) else []:
                 output_candidates = _bep_file_reference_candidates(output)
+                canonical_candidates = _bep_canonical_output_key_candidates(output, output_candidates)
+                output_keys = [
+                    key
+                    for key in (_bep_test_output_key(candidate) for candidate in canonical_candidates)
+                    if key
+                ]
+                output_key = output_keys[0] if output_keys else ""
                 output_mapped_any = False
                 output_has_test_outputs_hint = False
+                output_has_stageable_carrier_hint = _bep_stageable_artifact_carrier_hint(
+                    output, output_candidates
+                )
                 output_remote_candidates: list[str] = []
+                if output_key:
+                    mapped_any = True
+                    output_mapped_any = True
+                    pair = (label, output_key)
+                    if cached_locally or cached_remotely:
+                        event_cached_pairs.add(pair)
+                    else:
+                        event_fresh_pairs.add(pair)
                 for candidate in output_candidates:
-                    output_key = _bep_test_output_key(candidate)
-                    if output_key:
-                        mapped_any = True
-                        output_mapped_any = True
-                        pair = (label, output_key)
-                        if cached_locally or cached_remotely:
-                            event_cached_pairs.add(pair)
-                        else:
-                            event_fresh_pairs.add(pair)
                     if _bep_test_outputs_artifact_hint(candidate):
                         output_has_test_outputs_hint = True
                     if not (cached_locally or cached_remotely) and _is_remote_only_bep_reference(candidate):
                         output_remote_candidates.append(candidate)
+                fetch_value = _bep_artifact_fetch_value(output, output_candidates)
+                fetch_is_remote_only = _is_remote_only_bep_reference(fetch_value)
+                artifact_references.append(
+                    BepArtifactReference(
+                        label=label,
+                        uri=output.get("uri", "") if isinstance(output, dict) and isinstance(output.get("uri"), str) else "",
+                        name=output.get("name", "") if isinstance(output, dict) and isinstance(output.get("name"), str) else "",
+                        path=output.get("path", "") if isinstance(output, dict) and isinstance(output.get("path"), str) else "",
+                        candidates=output_candidates,
+                        fetch_value=fetch_value,
+                        output_key=output_key,
+                        cached=bool(cached_locally or cached_remotely),
+                        remote_only=fetch_is_remote_only,
+                        is_test_outputs_hint=output_has_test_outputs_hint,
+                        fetch_is_stageable_carrier=(
+                            output_has_stageable_carrier_hint
+                            and (not fetch_is_remote_only or bool(output_key))
+                        ),
+                    )
+                )
                 if output_remote_candidates and not (cached_locally or cached_remotely):
                     remote_only_candidates.append((
                         output_remote_candidates,
                         output_has_test_outputs_hint,
+                        output_key,
                     ))
 
-            for candidates, has_test_outputs_hint in remote_only_candidates:
+            for candidates, has_test_outputs_hint, output_key in remote_only_candidates:
                 if not has_test_outputs_hint and mapped_any:
                     continue
                 for candidate in candidates:
                     remote_any = True
                     remote_only_outputs.append(
-                        BepRemoteOnlyOutput(label=label, artifact=candidate, reason="remote_only")
+                        BepRemoteOnlyOutput(
+                            label=label,
+                            output_key=output_key,
+                            artifact=candidate,
+                            reason="remote_only",
+                        )
                     )
 
             cached_outputs.update(event_cached_pairs)
@@ -542,11 +1319,19 @@ def _parse_bep_freshness(
         cached_outputs=cached_outputs,
         remote_only_outputs=remote_only_outputs,
         missing_output_mappings=missing_output_mappings,
+        artifact_references=artifact_references,
     )
 
 
-def _local_test_output_key(output_dir: Path) -> str:
+def _local_test_output_key(output_dir: Path, *, testlogs_dir: Path | None = None) -> str:
     """Return a stable bazel-testlogs-relative key for a local test.outputs directory."""
+    if testlogs_dir is not None:
+        try:
+            relative = output_dir.resolve().relative_to(testlogs_dir.resolve())
+        except ValueError:
+            pass
+        else:
+            return _bep_test_output_key(str(relative))
     return _bep_test_output_key(str(output_dir))
 
 
@@ -946,6 +1731,13 @@ def _format_selection_summary(summary: dict[str, int]) -> str:
 
 def main(argv: list[str]) -> int:
     args = _parse_args(argv)
+    bep_files = _configured_bep_json_files(args)
+    staging_requested = _artifact_staging_requested(args)
+    if args.artifact_source == "bep" and not bep_files:
+        _fail("--artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON")
+    strict_bep_required = args.freshness_mode == "required"
+    if args.freshness_source == "execution_log" and strict_bep_required:
+        _fail("doctor freshness validation only supports BEP; use --freshness-source=bep")
 
     config_path = Path(args.config).resolve()
     config = _load_json(config_path)
@@ -954,7 +1746,7 @@ def main(argv: list[str]) -> int:
         os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
 
     workspace = _workspace_root()
-    testlogs_dir = _resolve_testlogs_dir(workspace)
+    testlogs_dir = _resolve_testlogs_dir(workspace, allow_missing=staging_requested)
 
     if config["forbid_dd_git_test_env"]:
         _validate_bazelrc(workspace)
@@ -963,45 +1755,39 @@ def main(argv: list[str]) -> int:
         _validate_git_metadata(context_manifest)
 
     expected_targets = config["expected_targets"]
-    if expected_targets:
-        output_dirs = []
-        target_by_output_dir = {}
-        for label in expected_targets:
-            target_output_dirs = _expected_target_outputs(testlogs_dir, label)
-            output_dirs.extend(target_output_dirs)
-            for output_dir in target_output_dirs:
-                target_by_output_dir[output_dir.resolve()] = label
-    else:
-        output_dirs = _discover_candidate_output_dirs(testlogs_dir)
-        target_by_output_dir = {}
-        if not output_dirs:
-            _fail(f"no Test Optimization output directories found under {testlogs_dir}")
+    staged: list[StagedBepArtifact] = []
+    staging_base: Path | None = None
+    output_dirs: list[Path]
+    target_by_output_dir: dict[Path, str]
+    freshness: BepFreshness | None = None
 
-    if args.freshness_mode != "disabled":
-        bep_files = _configured_bep_json_files(args)
-        strict_bep_required = args.freshness_mode == "required"
-        if args.freshness_source == "execution_log" and strict_bep_required:
-            _fail("doctor freshness validation only supports BEP; use --freshness-source=bep")
+    try:
+        if expected_targets:
+            output_dirs = []
+            target_by_output_dir = {}
+            for label in expected_targets:
+                target_output_dirs = _expected_target_outputs(
+                    testlogs_dir,
+                    label,
+                    allow_missing=staging_requested,
+                )
+                output_dirs.extend(target_output_dirs)
+                for output_dir in target_output_dirs:
+                    target_by_output_dir[output_dir.resolve()] = label
+        else:
+            output_dirs = _discover_candidate_output_dirs(testlogs_dir) if testlogs_dir is not None else []
+            target_by_output_dir = {}
+            if not output_dirs and not staging_requested:
+                _fail(f"no Test Optimization output directories found under {testlogs_dir}")
+
+        local_output_keys = {_local_test_output_key(output_dir, testlogs_dir=testlogs_dir) for output_dir in output_dirs}
+        staging_enabled = _artifact_staging_enabled(args, local_output_keys)
         if bep_files:
-            freshness = _parse_bep_freshness(
-                bep_files,
-                unavailable_is_error=args.freshness_mode != "optional",
-            )
-            if freshness is not None:
-                required = strict_bep_required or args.freshness_mode == "auto"
-                if expected_targets:
-                    output_dirs = _validate_expected_target_bep_freshness(
-                        output_dirs,
-                        set(expected_targets),
-                        freshness,
-                        required=required,
-                    )
-                else:
-                    output_dirs = _validate_discovered_bep_freshness(
-                        output_dirs,
-                        freshness,
-                        required=required,
-                    )
+            if args.freshness_mode != "disabled" or staging_enabled:
+                freshness = _parse_bep_freshness(
+                    bep_files,
+                    unavailable_is_error=staging_enabled or args.freshness_mode != "optional",
+                )
         elif strict_bep_required:
             _fail(
                 "BEP freshness validation is required but no BEP JSON file was configured. "
@@ -1016,23 +1802,76 @@ def main(argv: list[str]) -> int:
                 file=sys.stderr,
             )
 
-    allowed_payload_selections = set(config.get("allowed_payload_selections") or [])
-    selection_summary = _validate_outputs(
-        output_dirs,
-        require_json_payloads=config["require_json_payloads"],
-        require_bazel_metadata=config["require_bazel_metadata"],
-        forbid_full_bundle_no_match=config["forbid_full_bundle_no_match"],
-        forbid_msgpack_payloads=config.get("forbid_msgpack_payloads", True),
-        allowed_payload_selections=allowed_payload_selections or None,
-        expected_payload_selection_by_target=config.get("expected_payload_selection_by_target", {}),
-        target_by_output_dir=target_by_output_dir,
-    )
-    print(
-        "[dd-test-optimization-doctor] payload selection summary: "
-        f"{_format_selection_summary(selection_summary)}"
-    )
-    print(f"[dd-test-optimization-doctor] OK: validated {len(output_dirs)} test output directorie(s)")
-    return 0
+        selected_bep_artifact_outputs: set[tuple[str, str]] = set()
+        blocked_bep_artifact_labels: set[str] = set()
+        if staging_enabled and freshness is not None:
+            selected_bep_artifact_outputs = _selected_bep_artifact_outputs(
+                freshness,
+                workspace,
+                args.remote_artifacts,
+            )
+            blocked_bep_artifact_labels = _blocked_bep_artifact_labels(freshness, args.remote_artifacts)
+            staging_base = _artifact_staging_dir(args, workspace)
+            staged = _stage_bep_artifacts(
+                freshness,
+                workspace=workspace,
+                staging_dir=staging_base,
+                remote_artifacts=args.remote_artifacts,
+                downloader=args.bep_artifact_downloader,
+                downloader_timeout_sec=args.bep_artifact_downloader_timeout_sec,
+            )
+            _apply_staged_bep_artifacts_to_freshness(freshness, staged)
+            output_dirs, target_by_output_dir = _merge_staged_output_dirs(
+                output_dirs,
+                staged,
+                selected_bep_artifact_outputs,
+                blocked_bep_artifact_labels,
+                target_by_output_dir,
+                testlogs_dir,
+            )
+
+        if args.freshness_mode != "disabled" and freshness is not None:
+            required = strict_bep_required or args.freshness_mode == "auto"
+            if expected_targets:
+                output_dirs = _validate_expected_target_bep_freshness(
+                    output_dirs,
+                    set(expected_targets),
+                    freshness,
+                    required=required,
+                )
+            else:
+                output_dirs = _validate_discovered_bep_freshness(
+                    output_dirs,
+                    freshness,
+                    required=required,
+                )
+
+        if not output_dirs:
+            if expected_targets:
+                _fail("no Test Optimization output directories found for expected targets after BEP artifact staging")
+            missing_root = testlogs_dir if testlogs_dir is not None else workspace / "bazel-testlogs"
+            _fail(f"no Test Optimization output directories found under {missing_root}")
+
+        allowed_payload_selections = set(config.get("allowed_payload_selections") or [])
+        selection_summary = _validate_outputs(
+            output_dirs,
+            require_json_payloads=config["require_json_payloads"],
+            require_bazel_metadata=config["require_bazel_metadata"],
+            forbid_full_bundle_no_match=config["forbid_full_bundle_no_match"],
+            forbid_msgpack_payloads=config.get("forbid_msgpack_payloads", True),
+            allowed_payload_selections=allowed_payload_selections or None,
+            expected_payload_selection_by_target=config.get("expected_payload_selection_by_target", {}),
+            target_by_output_dir=target_by_output_dir,
+        )
+        print(
+            "[dd-test-optimization-doctor] payload selection summary: "
+            f"{_format_selection_summary(selection_summary)}"
+        )
+        print(f"[dd-test-optimization-doctor] OK: validated {len(output_dirs)} test output directorie(s)")
+        return 0
+    finally:
+        if staged and staging_base is not None:
+            _cleanup_staged_bep_run_roots(staged, staging_base=staging_base)
 
 
 if __name__ == "__main__":

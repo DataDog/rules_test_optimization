@@ -1377,7 +1377,9 @@ tests fail.
 
 1. Use `bazel run` (not `bazel test`) for uploader execution.
 2. Use a single uploader target per workspace (do not run concurrent uploaders).
-3. Tests must run locally, or use `--remote_download_outputs=all`.
+3. Tests must run locally, use `--remote_download_outputs=all`, or explicitly
+   enable BEP artifact resolution for environments that cannot download
+   `test.outputs/` into `bazel-testlogs/`.
 4. Run uploader on the same machine/workspace where tests executed.
 5. `DD_TEST_OPTIMIZATION_CONTEXT_JSON` is a legacy explicit override for
    advanced workflows that already resolved one specific `context.json` path.
@@ -1440,6 +1442,47 @@ files can authorize stale local outputs. To opt out explicitly, set
 `--allow-cached-payload-uploads` after the uploader target's `--` separator. On
 Unix, BEP freshness filtering requires `jq`; if a required BEP file is missing
 or malformed, the uploader exits with a configuration error instead of guessing.
+
+### BEP artifact resolution
+
+BEP freshness and BEP artifact resolution are separate controls. Freshness
+prevents uploads from cached `TestResult` outputs. Artifact resolution lets the
+doctor and uploader materialize fresh `test.outputs` referenced by BEP when
+those files are not already present under `bazel-testlogs/`.
+
+The default remains local discovery. For remote execution environments, start
+with:
+
+```bash
+bazel test --remote_download_outputs=all --build_event_json_file=.topt/bazel-bep.json //...
+```
+
+If your CI cannot use `--remote_download_outputs=all`, enable artifact staging:
+
+```bash
+bazel run //:dd_upload_payloads -- \
+  --bep-json=.topt/bazel-bep.json \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --remote-artifacts=download \
+  --artifact-staging-dir=.topt/bep-artifacts
+```
+
+Remote/CAS artifact download requires a downloader executable configured by the
+consumer environment. `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER` must point
+to one executable file; if the provider needs an interpreter or fixed
+arguments, wrap them in a script and configure the wrapper path. The downloader
+must write an `outputs.zip` archive to the requested `--output` path before
+`--bep-artifact-downloader-timeout-sec` expires. The public rule only defines
+the downloader contract; it does not ship credentials or a Datadog-internal CAS
+client.
+
+Artifact staging requires Python at uploader runtime: Bash invokes `python3`,
+while PowerShell tries `python3` and then `python`. Existing local-only uploader
+flows remain usable without Python except for the pre-existing optional schema
+and telemetry helpers. Bash BEP freshness parsing still requires `jq` whenever
+BEP freshness validation is enabled in the Bash uploader path.
 
 ### Enrichment dry-run
 
@@ -1801,8 +1844,11 @@ Fast checks before diving deep:
     `bazel sync --enable_workspace --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"`
   - Do not add `FETCH_SALT` to normal `bazel test`, doctor, or uploader
     commands.
-- Confirm payload files exist under `bazel-testlogs/*/test.outputs/`
-- For RBE, rerun tests with `--remote_download_outputs=all`
+- Confirm payload files exist under `bazel-testlogs/*/test.outputs/`, or that
+  BEP artifact resolution is configured to stage them before upload.
+- For RBE, prefer rerunning tests with `--remote_download_outputs=all`; if that
+  is not viable, use `--artifact-source=bep` with `--remote-artifacts=download`
+  or `required` and a downloader for remote/CAS artifact references.
 - Enable debug logging on sync/uploader rules for richer diagnostics
 - If needed, file an issue with sanitized logs:
   - open an issue in the repository issue tracker

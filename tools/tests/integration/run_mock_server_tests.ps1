@@ -228,6 +228,8 @@ function Render-UploaderTemplate {
     "__DDTPL_SCHEMA_JSON_PATH__" = ""
     "__DDTPL_SCHEMA_VALIDATOR_RLOC__" = ""
     "__DDTPL_SCHEMA_VALIDATOR_PATH__" = ""
+    "__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__" = "tools/core/bep_artifact_stage_helper.py"
+    "__DDTPL_DOCTOR_RUNTIME_RLOC__" = "tools/core/test_optimization_doctor.py"
     "__DDTPL_RULES_VERSION__" = "integration-test"
   }
   foreach ($entry in $replacements.GetEnumerator()) {
@@ -1103,7 +1105,267 @@ filegroup(
 	    throw "BEP uploader dry-run unexpectedly sent requests to the mock server"
 	  }
 
-	  $bepOptionalFilterTranscript = Join-Path $tempRoot "bep_filter_optional.transcript.txt"
+  $bepStagedTestlogsDir = Join-Path $tempRoot "bazel-testlogs-bep-staged"
+  $bepStagedArtifactOutput = Join-Path $tempRoot "mock-staged-artifacts/same_label/fresh_attempt/test.outputs"
+  $bepStagedLocalFresh = Join-Path $bepStagedTestlogsDir "same_label/fresh_attempt/test.outputs"
+  $bepStagedJson = Join-Path $tempRoot "same_label_bep_staged_artifact.json"
+  Remove-Item -LiteralPath $bepStagedTestlogsDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $tempRoot "mock-staged-artifacts") -Recurse -Force -ErrorAction SilentlyContinue
+  Copy-Item -LiteralPath $bepTestlogsDir -Destination $bepStagedTestlogsDir -Recurse -Force
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $bepStagedArtifactOutput) | Out-Null
+  Copy-Item -LiteralPath $bepFreshOutputs -Destination $bepStagedArtifactOutput -Recurse -Force
+  Remove-Item -LiteralPath $bepStagedLocalFresh -Recurse -Force
+  $bepStagedArtifactUri = ([System.Uri]::new((Resolve-Path -LiteralPath $bepStagedArtifactOutput).Path)).AbsoluteUri
+  if ([string]::IsNullOrWhiteSpace($bepStagedArtifactUri)) {
+    throw "staged BEP scenario failed to build a file URI for $bepStagedArtifactOutput"
+  }
+@"
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"local"},"testActionOutput":[{"name":"test.outputs","uri":"$bepStagedArtifactUri","pathPrefix":["bazel-out","x64_windows-fastbuild","testlogs","same_label","fresh_attempt"]},{"name":"diagnostic.remote","uri":"bytestream://remote-cas/blobs/abcdef/456"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_local_attempt/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_remote_attempt/test.outputs"}]}}
+"@ | Set-Content -LiteralPath $bepStagedJson -Encoding UTF8
+	  if (Test-Path -LiteralPath $bepStagedLocalFresh) {
+	    throw "staged BEP scenario did not remove fresh local test.outputs from copied scan root"
+	  }
+	  New-Item -ItemType Directory -Force -Path (Join-Path $bepStagedLocalFresh "payloads/tests") | Out-Null
+	  Copy-Item -LiteralPath (Join-Path $bepStagedArtifactOutput "bazel_target_metadata.json") -Destination (Join-Path $bepStagedLocalFresh "bazel_target_metadata.json") -Force
+	  "{}" | Set-Content -LiteralPath (Join-Path $bepStagedLocalFresh "payloads/tests/span_events_stale_1.json") -Encoding UTF8
+	  "{}" | Set-Content -LiteralPath (Join-Path $bepStagedLocalFresh "payloads/tests/span_events_stale_2.json") -Encoding UTF8
+
+	  $bepStagedDryRunTranscript = Join-Path $tempRoot "bep_staged_artifact_dry_run.transcript.txt"
+  $bepStagedDryRunStart = @(Read-JsonLog -Path $mockLog).Count
+  $bepStagedDryRunArgs = @(
+    "--dry-run",
+    "--bep-json", $bepStagedJson,
+    "--freshness-source=bep",
+    "--freshness-mode=required",
+    "--artifact-source=bep",
+    "--remote-artifacts=download",
+    "--artifact-staging-dir", (Join-Path $tempRoot "bep-artifacts")
+  )
+  $savedTestlogsDir = $env:TESTLOGS_DIR
+  $savedRunfilesDir = [Environment]::GetEnvironmentVariable("RUNFILES_DIR")
+  $savedDebug = [Environment]::GetEnvironmentVariable("DD_TEST_OPTIMIZATION_DEBUG")
+  try {
+    $env:TESTLOGS_DIR = $bepStagedTestlogsDir
+    $env:RUNFILES_DIR = $repoRoot
+    $env:DD_TEST_OPTIMIZATION_DEBUG = "1"
+    $bepStagedDryRunExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $bepStagedDryRunArgs -TranscriptPath $bepStagedDryRunTranscript
+  } finally {
+    $env:TESTLOGS_DIR = $savedTestlogsDir
+    if ($null -eq $savedRunfilesDir) {
+      Remove-Item Env:RUNFILES_DIR -ErrorAction SilentlyContinue
+    } else {
+      $env:RUNFILES_DIR = $savedRunfilesDir
+    }
+    if ($null -eq $savedDebug) {
+      Remove-Item Env:DD_TEST_OPTIMIZATION_DEBUG -ErrorAction SilentlyContinue
+    } else {
+      $env:DD_TEST_OPTIMIZATION_DEBUG = $savedDebug
+    }
+  }
+  if ($bepStagedDryRunExitCode -ne 0) {
+    throw "BEP staged-artifact dry-run failed with exit code $bepStagedDryRunExitCode`n$(Get-Content -LiteralPath $bepStagedDryRunTranscript -Raw -ErrorAction SilentlyContinue)"
+  }
+  $bepStagedDryRunOutput = Get-Content -LiteralPath $bepStagedDryRunTranscript -Raw -Encoding UTF8
+  if (-not $bepStagedDryRunOutput.Contains("BEP artifact staging selected output key: same_label/fresh_attempt/test.outputs")) {
+    throw "BEP staged-artifact dry-run did not keep the canonical output key`n$bepStagedDryRunOutput"
+  }
+  if ($bepStagedDryRunOutput.Contains("mock-staged-artifacts/same_label/fresh_attempt/test.outputs")) {
+    throw "BEP staged-artifact dry-run derived an output key from the external artifact carrier`n$bepStagedDryRunOutput"
+  }
+	  if (-not $bepStagedDryRunOutput.Contains("dry-run validated 1 test payloads")) {
+	    throw "BEP staged-artifact dry-run did not process exactly one fresh payload`n$bepStagedDryRunOutput"
+	  }
+	  $bepStagedRunsRoot = Join-Path $tempRoot "bep-artifacts/__runs"
+	  if ((Test-Path -LiteralPath $bepStagedRunsRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $bepStagedRunsRoot -Force).Count -ne 0) {
+	    throw "BEP staged-artifact dry-run did not clean helper-emitted per-run roots`n$bepStagedDryRunOutput"
+	  }
+	  if (@(Read-NewLogEntries -Path $mockLog -StartIndex $bepStagedDryRunStart).Count -ne 0) {
+	    throw "BEP staged-artifact dry-run unexpectedly sent requests to the mock server"
+	  }
+
+  $bepStagedDisabledTranscript = Join-Path $tempRoot "bep_staged_artifact_freshness_disabled.transcript.txt"
+  $bepStagedDisabledStart = @(Read-JsonLog -Path $mockLog).Count
+  $bepStagedDisabledArgs = @(
+    "--dry-run",
+    "--bep-json", $bepStagedJson,
+    "--freshness-source=bep",
+    "--freshness-mode=disabled",
+    "--artifact-source=bep",
+    "--remote-artifacts=download",
+    "--artifact-staging-dir", (Join-Path $tempRoot "bep-artifacts-disabled")
+  )
+  $savedTestlogsDir = $env:TESTLOGS_DIR
+  $savedRunfilesDir = [Environment]::GetEnvironmentVariable("RUNFILES_DIR")
+  $savedDebug = [Environment]::GetEnvironmentVariable("DD_TEST_OPTIMIZATION_DEBUG")
+  try {
+    $env:TESTLOGS_DIR = $bepStagedTestlogsDir
+    $env:RUNFILES_DIR = $repoRoot
+    $env:DD_TEST_OPTIMIZATION_DEBUG = "1"
+    $bepStagedDisabledExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $bepStagedDisabledArgs -TranscriptPath $bepStagedDisabledTranscript
+  } finally {
+    $env:TESTLOGS_DIR = $savedTestlogsDir
+    if ($null -eq $savedRunfilesDir) {
+      Remove-Item Env:RUNFILES_DIR -ErrorAction SilentlyContinue
+    } else {
+      $env:RUNFILES_DIR = $savedRunfilesDir
+    }
+    if ($null -eq $savedDebug) {
+      Remove-Item Env:DD_TEST_OPTIMIZATION_DEBUG -ErrorAction SilentlyContinue
+    } else {
+      $env:DD_TEST_OPTIMIZATION_DEBUG = $savedDebug
+    }
+  }
+  if ($bepStagedDisabledExitCode -ne 0) {
+    throw "BEP staged-artifact freshness-disabled run failed with exit code $bepStagedDisabledExitCode`n$(Get-Content -LiteralPath $bepStagedDisabledTranscript -Raw -ErrorAction SilentlyContinue)"
+  }
+  $bepStagedDisabledOutput = Get-Content -LiteralPath $bepStagedDisabledTranscript -Raw -Encoding UTF8
+  if (-not $bepStagedDisabledOutput.Contains("BEP artifact staging selected output key: same_label/fresh_attempt/test.outputs")) {
+    throw "BEP staged-artifact freshness-disabled run did not stage the canonical output key`n$bepStagedDisabledOutput"
+  }
+  if ($bepStagedDisabledOutput -notmatch "dry-run validated [1-9][0-9]* test payloads") {
+    throw "BEP staged-artifact freshness-disabled run did not validate any payloads`n$bepStagedDisabledOutput"
+  }
+	  if (@(Read-NewLogEntries -Path $mockLog -StartIndex $bepStagedDisabledStart).Count -ne 0) {
+	    throw "BEP staged-artifact freshness-disabled run unexpectedly sent requests to the mock server"
+	  }
+
+	  $bepRemoteOnlySkipJson = Join-Path $tempRoot "remote_only_skip_stale_local.json"
+@"
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"remote"},"testActionOutput":[{"name":"test.outputs","uri":"bytestream://remote-cas/blobs/stale-local-suppression/123","pathPrefix":["bazel-out","x64_windows-fastbuild","testlogs","same_label","fresh_attempt"]}]}}
+"@ | Set-Content -LiteralPath $bepRemoteOnlySkipJson -Encoding UTF8
+	  $bepRemoteOnlySkipTestlogsDir = Join-Path $tempRoot "bazel-testlogs-remote-only-skip"
+	  Remove-Item -LiteralPath $bepRemoteOnlySkipTestlogsDir -Recurse -Force -ErrorAction SilentlyContinue
+	  New-Item -ItemType Directory -Force -Path (Join-Path $bepRemoteOnlySkipTestlogsDir "same_label/fresh_attempt") | Out-Null
+	  Copy-Item -LiteralPath $bepStagedLocalFresh -Destination (Join-Path $bepRemoteOnlySkipTestlogsDir "same_label/fresh_attempt/test.outputs") -Recurse -Force
+	  $bepRemoteOnlySkipTranscript = Join-Path $tempRoot "bep_remote_only_skip_stale_local.transcript.txt"
+	  $bepRemoteOnlySkipArgs = @(
+	    "--dry-run",
+	    "--bep-json", $bepRemoteOnlySkipJson,
+	    "--freshness-source=bep",
+	    "--freshness-mode=disabled",
+	    "--artifact-source=bep",
+	    "--remote-artifacts=download",
+	    "--artifact-staging-dir", (Join-Path $tempRoot "bep-artifacts-remote-skip")
+	  )
+	  $savedTestlogsDir = $env:TESTLOGS_DIR
+	  $savedRunfilesDir = [Environment]::GetEnvironmentVariable("RUNFILES_DIR")
+	  $savedDebug = [Environment]::GetEnvironmentVariable("DD_TEST_OPTIMIZATION_DEBUG")
+	  $savedMaxWait = [Environment]::GetEnvironmentVariable("DD_TEST_OPTIMIZATION_MAX_WAIT_SEC")
+	  try {
+	    $env:TESTLOGS_DIR = $bepRemoteOnlySkipTestlogsDir
+	    $env:RUNFILES_DIR = $repoRoot
+	    $env:DD_TEST_OPTIMIZATION_DEBUG = "1"
+	    $env:DD_TEST_OPTIMIZATION_MAX_WAIT_SEC = "0"
+	    $bepRemoteOnlySkipExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $bepRemoteOnlySkipArgs -TranscriptPath $bepRemoteOnlySkipTranscript
+	  } finally {
+	    $env:TESTLOGS_DIR = $savedTestlogsDir
+	    if ($null -eq $savedRunfilesDir) { Remove-Item Env:RUNFILES_DIR -ErrorAction SilentlyContinue } else { $env:RUNFILES_DIR = $savedRunfilesDir }
+	    if ($null -eq $savedDebug) { Remove-Item Env:DD_TEST_OPTIMIZATION_DEBUG -ErrorAction SilentlyContinue } else { $env:DD_TEST_OPTIMIZATION_DEBUG = $savedDebug }
+	    if ($null -eq $savedMaxWait) { Remove-Item Env:DD_TEST_OPTIMIZATION_MAX_WAIT_SEC -ErrorAction SilentlyContinue } else { $env:DD_TEST_OPTIMIZATION_MAX_WAIT_SEC = $savedMaxWait }
+	  }
+	  if ($bepRemoteOnlySkipExitCode -ne 0) {
+	    throw "remote-only BEP artifact skip scenario failed with exit code $bepRemoteOnlySkipExitCode`n$(Get-Content -LiteralPath $bepRemoteOnlySkipTranscript -Raw -ErrorAction SilentlyContinue)"
+	  }
+	  $bepRemoteOnlySkipOutput = Get-Content -LiteralPath $bepRemoteOnlySkipTranscript -Raw -Encoding UTF8
+	  if ($bepRemoteOnlySkipOutput -match "dry-run validated [1-9]") {
+	    throw "remote-only BEP artifact without downloader reused stale local payloads`n$bepRemoteOnlySkipOutput"
+	  }
+	  if (-not $bepRemoteOnlySkipOutput.Contains("BEP artifact staging selected output key: same_label/fresh_attempt/test.outputs")) {
+	    throw "remote-only BEP artifact skip scenario did not select the stale-local suppression key`n$bepRemoteOnlySkipOutput"
+	  }
+
+	  $bepRemoteDownloadJson = Join-Path $tempRoot "remote_downloader.json"
+@"
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"remote"},"testActionOutput":[{"name":"test.outputs","uri":"bytestream://remote-cas/blobs/fake-downloader/456","pathPrefix":["bazel-out","x64_windows-fastbuild","testlogs","same_label","fresh_attempt"]}]}}
+"@ | Set-Content -LiteralPath $bepRemoteDownloadJson -Encoding UTF8
+	  $bepRemoteZip = Join-Path $tempRoot "fake-remote-outputs.zip"
+	  if (Test-Path -LiteralPath $bepRemoteZip) { Remove-Item -LiteralPath $bepRemoteZip -Force }
+	  Add-Type -AssemblyName System.IO.Compression.FileSystem
+	  [System.IO.Compression.ZipFile]::CreateFromDirectory($bepStagedArtifactOutput, $bepRemoteZip)
+	  $fakeDownloaderDir = Join-Path $tempRoot "downloader with spaces"
+	  New-Item -ItemType Directory -Force -Path $fakeDownloaderDir | Out-Null
+	  if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+	    $fakeDownloader = Join-Path $fakeDownloaderDir "fake downloader.cmd"
+@'
+@echo off
+setlocal
+set "out="
+:parse
+if "%~1"=="" goto done
+if "%~1"=="--output" (
+  set "out=%~2"
+  shift
+  shift
+  goto parse
+)
+shift
+goto parse
+:done
+if "%out%"=="" (
+  echo missing --output 1>&2
+  exit /b 2
+)
+copy /Y "%BEP_REMOTE_ZIP_SOURCE%" "%out%" >nul
+'@ | Set-Content -LiteralPath $fakeDownloader -Encoding ASCII
+	  } else {
+	    $fakeDownloader = Join-Path $fakeDownloaderDir "fake downloader.sh"
+@'
+#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while (($#)); do
+  case "$1" in
+    --output) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -z "$out" ]]; then
+  echo "missing --output" >&2
+  exit 2
+fi
+cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
+'@ | Set-Content -LiteralPath $fakeDownloader -Encoding UTF8
+	    chmod +x $fakeDownloader
+	  }
+	  $bepRemoteDownloadTranscript = Join-Path $tempRoot "bep_remote_downloader.transcript.txt"
+	  $bepRemoteDownloadArgs = @(
+	    "--dry-run",
+	    "--bep-json", $bepRemoteDownloadJson,
+	    "--freshness-source=bep",
+	    "--freshness-mode=required",
+	    "--artifact-source", "bep",
+	    "--remote-artifacts", "required",
+	    "--bep-artifact-downloader", $fakeDownloader,
+	    "--bep-artifact-downloader-timeout-sec", "5",
+	    "--artifact-staging-dir", (Join-Path $tempRoot "bep-artifacts-remote-download")
+	  )
+	  $savedTestlogsDir = $env:TESTLOGS_DIR
+	  $savedRunfilesDir = [Environment]::GetEnvironmentVariable("RUNFILES_DIR")
+	  $savedDebug = [Environment]::GetEnvironmentVariable("DD_TEST_OPTIMIZATION_DEBUG")
+	  $savedZipSource = [Environment]::GetEnvironmentVariable("BEP_REMOTE_ZIP_SOURCE")
+	  try {
+	    $env:TESTLOGS_DIR = $bepStagedTestlogsDir
+	    $env:RUNFILES_DIR = $repoRoot
+	    $env:DD_TEST_OPTIMIZATION_DEBUG = "1"
+	    $env:BEP_REMOTE_ZIP_SOURCE = $bepRemoteZip
+	    $bepRemoteDownloadExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $bepRemoteDownloadArgs -TranscriptPath $bepRemoteDownloadTranscript
+	  } finally {
+	    $env:TESTLOGS_DIR = $savedTestlogsDir
+	    if ($null -eq $savedRunfilesDir) { Remove-Item Env:RUNFILES_DIR -ErrorAction SilentlyContinue } else { $env:RUNFILES_DIR = $savedRunfilesDir }
+	    if ($null -eq $savedDebug) { Remove-Item Env:DD_TEST_OPTIMIZATION_DEBUG -ErrorAction SilentlyContinue } else { $env:DD_TEST_OPTIMIZATION_DEBUG = $savedDebug }
+	    if ($null -eq $savedZipSource) { Remove-Item Env:BEP_REMOTE_ZIP_SOURCE -ErrorAction SilentlyContinue } else { $env:BEP_REMOTE_ZIP_SOURCE = $savedZipSource }
+	  }
+	  if ($bepRemoteDownloadExitCode -ne 0) {
+	    throw "remote BEP fake-downloader scenario failed with exit code $bepRemoteDownloadExitCode`n$(Get-Content -LiteralPath $bepRemoteDownloadTranscript -Raw -ErrorAction SilentlyContinue)"
+	  }
+	  $bepRemoteDownloadOutput = Get-Content -LiteralPath $bepRemoteDownloadTranscript -Raw -Encoding UTF8
+	  if (-not $bepRemoteDownloadOutput.Contains("dry-run validated 1 test payloads")) {
+	    throw "remote BEP fake-downloader scenario did not validate the downloaded payload`n$bepRemoteDownloadOutput"
+	  }
+
+		  $bepOptionalFilterTranscript = Join-Path $tempRoot "bep_filter_optional.transcript.txt"
 	  $bepOptionalFilterStart = @(Read-JsonLog -Path $mockLog).Count
 	  $bepOptionalFilterArgs = @("--dry-run", "--bep-json", $bepJson, "--freshness-source=bep", "--freshness-mode=optional")
 	  $bepOptionalFilterExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $bepOptionalFilterArgs -TranscriptPath $bepOptionalFilterTranscript

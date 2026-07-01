@@ -1,0 +1,1 @@
+{"id":{"testResult":{"label":"//pkg:path_prefix","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","testActionOutput":[{"name":"test.outputs","pathPrefix":["/tmp","execroot","main","bazel-out","k8-fastbuild","testlogs","pkg","path_prefix"]}]}}

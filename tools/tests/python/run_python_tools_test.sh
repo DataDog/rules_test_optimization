@@ -17,7 +17,11 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   fi
 fi
 
-TEST_DIR="${TEST_SRCDIR}/${TEST_WORKSPACE}/tools/tests/python"
+if [[ -n "${TEST_SRCDIR:-}" && -n "${TEST_WORKSPACE:-}" ]]; then
+  TEST_DIR="${TEST_SRCDIR}/${TEST_WORKSPACE}/tools/tests/python"
+else
+  TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 
 # Windows often runs tests in manifest mode without a populated runfiles tree.
 if [[ ! -d "$TEST_DIR" ]] && [[ -n "${RUNFILES_MANIFEST_FILE:-}" ]] && [[ -f "$RUNFILES_MANIFEST_FILE" ]]; then

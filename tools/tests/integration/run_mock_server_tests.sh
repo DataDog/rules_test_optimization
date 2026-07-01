@@ -997,6 +997,280 @@ if [[ "$(tail -n "+$((BEP_DRY_RUN_START + 1))" "$LOG_FILE" | wc -l | tr -d '[:sp
   exit 1
 fi
 
+BEP_STAGED_TESTLOGS="$TMP_WS/bazel-testlogs-bep-staged"
+BEP_STAGED_ARTIFACT_OUTPUT="$TMP_WS/mock-staged-artifacts/fresh_attempt/payload_test/test.outputs"
+BEP_STAGED_LOCAL_FRESH="$BEP_STAGED_TESTLOGS/fresh_attempt/payload_test/test.outputs"
+BEP_STAGED_JSON="$TMP_WS/test_bep_staged_artifact.json"
+rm -rf "$BEP_STAGED_TESTLOGS" "$TMP_WS/mock-staged-artifacts"
+cp -R "$BEP_TESTLOGS" "$BEP_STAGED_TESTLOGS"
+mkdir -p "$(dirname "$BEP_STAGED_ARTIFACT_OUTPUT")"
+cp -R "$BEP_FRESH_OUTPUT" "$BEP_STAGED_ARTIFACT_OUTPUT"
+rm -rf "$BEP_STAGED_LOCAL_FRESH"
+"$PYTHON" - "$BEP_JSON" "$BEP_STAGED_JSON" "$BEP_STAGED_ARTIFACT_OUTPUT" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+source = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+artifact_uri = Path(sys.argv[3]).resolve().as_uri()
+canonical_prefix = ["bazel-out", "k8-fastbuild", "testlogs", "fresh_attempt", "payload_test"]
+lines = []
+rewritten = 0
+for raw in source.read_text(encoding="utf-8-sig").splitlines():
+    if not raw.strip():
+        continue
+    event = json.loads(raw)
+    result = event.get("testResult") or event.get("test_result")
+    if isinstance(result, dict):
+        execution_info = result.get("executionInfo") or result.get("execution_info") or {}
+        cached = bool(
+            result.get("cachedLocally")
+            or result.get("cached_locally")
+            or execution_info.get("cachedRemotely")
+            or execution_info.get("cached_remotely")
+        )
+        if not cached:
+            outputs = result.get("testActionOutput") or result.get("test_action_output") or []
+            if "testActionOutput" not in result and "test_action_output" not in result:
+                result["testActionOutput"] = outputs
+            replaced = False
+            for output in outputs:
+                if isinstance(output, dict) and output.get("name") == "test.outputs":
+                    output["uri"] = artifact_uri
+                    output["name"] = "test.outputs"
+                    output["pathPrefix"] = canonical_prefix
+                    output.pop("path", None)
+                    rewritten += 1
+                    replaced = True
+                    break
+            if not replaced:
+                outputs.append({"name": "test.outputs", "uri": artifact_uri, "pathPrefix": canonical_prefix})
+                rewritten += 1
+    lines.append(json.dumps(event, sort_keys=True))
+if rewritten != 1:
+    raise SystemExit(f"expected exactly one fresh uploadable test.outputs rewrite, got {rewritten}")
+dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+if [[ -d "$BEP_STAGED_LOCAL_FRESH" ]]; then
+  echo "error: staged BEP scenario did not remove fresh local test.outputs from copied scan root"
+  exit 1
+fi
+mkdir -p "$BEP_STAGED_LOCAL_FRESH/payloads/tests"
+cp "$BEP_STAGED_ARTIFACT_OUTPUT/bazel_target_metadata.json" "$BEP_STAGED_LOCAL_FRESH/bazel_target_metadata.json"
+printf '{}\n' >"$BEP_STAGED_LOCAL_FRESH/payloads/tests/span_events_stale_1.json"
+printf '{}\n' >"$BEP_STAGED_LOCAL_FRESH/payloads/tests/span_events_stale_2.json"
+
+BEP_STAGED_DRY_RUN_LOG="$TMP_WS/uploader_bep_staged_artifact_dry_run.log"
+BEP_STAGED_DRY_RUN_START="$(log_line_count)"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_STAGED_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG=1 \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- \
+    --bep-json "$BEP_STAGED_JSON" \
+    --freshness-source=bep \
+    --freshness-mode=required \
+    --artifact-source=bep \
+    --remote-artifacts=download \
+    --artifact-staging-dir "$TMP_WS/bep-artifacts" \
+    --dry-run >"$BEP_STAGED_DRY_RUN_LOG" 2>&1; then
+  echo "error: uploader BEP staged-artifact dry-run scenario failed"
+  cat "$BEP_STAGED_DRY_RUN_LOG" || true
+  exit 1
+fi
+if ! grep -q "BEP artifact staging selected output key: fresh_attempt/payload_test/test.outputs" "$BEP_STAGED_DRY_RUN_LOG"; then
+  echo "error: BEP staged-artifact dry-run did not keep the canonical output key"
+  cat "$BEP_STAGED_DRY_RUN_LOG" || true
+  exit 1
+fi
+if grep -q "mock-staged-artifacts/fresh_attempt/payload_test/test.outputs" "$BEP_STAGED_DRY_RUN_LOG"; then
+  echo "error: BEP staged-artifact dry-run derived an output key from the external artifact carrier"
+  cat "$BEP_STAGED_DRY_RUN_LOG" || true
+  exit 1
+fi
+if ! grep -q "dry-run validated 1 test payloads" "$BEP_STAGED_DRY_RUN_LOG"; then
+  echo "error: BEP staged-artifact dry-run did not process exactly one fresh payload"
+  cat "$BEP_STAGED_DRY_RUN_LOG" || true
+  exit 1
+fi
+if [[ -d "$TMP_WS/bep-artifacts/__runs" ]] && find "$TMP_WS/bep-artifacts/__runs" -mindepth 1 -print -quit | grep -q .; then
+  echo "error: BEP staged-artifact dry-run did not clean helper-emitted per-run roots"
+  find "$TMP_WS/bep-artifacts/__runs" -mindepth 1 -maxdepth 2 -print || true
+  cat "$BEP_STAGED_DRY_RUN_LOG" || true
+  exit 1
+fi
+if [[ "$(tail -n "+$((BEP_STAGED_DRY_RUN_START + 1))" "$LOG_FILE" | wc -l | tr -d '[:space:]')" != "0" ]]; then
+  echo "error: BEP staged-artifact dry-run unexpectedly sent requests to the mock server"
+  cat "$BEP_STAGED_DRY_RUN_LOG" || true
+  exit 1
+fi
+
+BEP_STAGED_DISABLED_LOG="$TMP_WS/uploader_bep_staged_artifact_freshness_disabled.log"
+BEP_STAGED_DISABLED_START="$(log_line_count)"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_STAGED_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG=1 \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- \
+    --bep-json "$BEP_STAGED_JSON" \
+    --freshness-source=bep \
+    --freshness-mode=disabled \
+    --artifact-source=bep \
+    --remote-artifacts=download \
+    --artifact-staging-dir "$TMP_WS/bep-artifacts-disabled" \
+    --dry-run >"$BEP_STAGED_DISABLED_LOG" 2>&1; then
+  echo "error: uploader BEP staged-artifact freshness-disabled scenario failed"
+  cat "$BEP_STAGED_DISABLED_LOG" || true
+  exit 1
+fi
+if ! grep -q "BEP artifact staging selected output key: fresh_attempt/payload_test/test.outputs" "$BEP_STAGED_DISABLED_LOG"; then
+  echo "error: BEP staged-artifact freshness-disabled run did not stage the canonical output key"
+  cat "$BEP_STAGED_DISABLED_LOG" || true
+  exit 1
+fi
+if ! grep -Eq "dry-run validated [1-9][0-9]* test payloads" "$BEP_STAGED_DISABLED_LOG"; then
+  echo "error: BEP staged-artifact freshness-disabled run did not validate any payloads"
+  cat "$BEP_STAGED_DISABLED_LOG" || true
+  exit 1
+fi
+if [[ "$(tail -n "+$((BEP_STAGED_DISABLED_START + 1))" "$LOG_FILE" | wc -l | tr -d '[:space:]')" != "0" ]]; then
+  echo "error: BEP staged-artifact freshness-disabled run unexpectedly sent requests to the mock server"
+  cat "$BEP_STAGED_DISABLED_LOG" || true
+  exit 1
+fi
+
+BEP_REMOTE_ONLY_SKIP_JSON="$TMP_WS/test_bep_remote_only_artifact_skip.json"
+cat >"$BEP_REMOTE_ONLY_SKIP_JSON" <<'JSON'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"remote"},"testActionOutput":[{"name":"test.outputs","uri":"bytestream://remote-cas/blobs/stale-local-suppression/123","pathPrefix":["bazel-out","k8-fastbuild","testlogs","fresh_attempt","payload_test"]}]}}
+JSON
+BEP_REMOTE_ONLY_SKIP_TESTLOGS="$TMP_WS/bazel-testlogs-remote-only-skip"
+rm -rf "$BEP_REMOTE_ONLY_SKIP_TESTLOGS"
+mkdir -p "$BEP_REMOTE_ONLY_SKIP_TESTLOGS/fresh_attempt/payload_test"
+cp -R "$BEP_STAGED_LOCAL_FRESH" "$BEP_REMOTE_ONLY_SKIP_TESTLOGS/fresh_attempt/payload_test/test.outputs"
+BEP_REMOTE_ONLY_SKIP_LOG="$TMP_WS/uploader_bep_remote_only_skip_stale_local.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_REMOTE_ONLY_SKIP_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG=1 \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=0 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=0 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- \
+    --bep-json "$BEP_REMOTE_ONLY_SKIP_JSON" \
+    --freshness-source=bep \
+    --freshness-mode=disabled \
+    --artifact-source=bep \
+    --remote-artifacts=download \
+    --artifact-staging-dir "$TMP_WS/bep-artifacts-remote-skip" \
+    --dry-run >"$BEP_REMOTE_ONLY_SKIP_LOG" 2>&1; then
+  echo "error: remote-only BEP artifact skip scenario failed"
+  cat "$BEP_REMOTE_ONLY_SKIP_LOG" || true
+  exit 1
+fi
+if grep -q "dry-run validated [1-9]" "$BEP_REMOTE_ONLY_SKIP_LOG"; then
+  echo "error: remote-only BEP artifact without downloader reused stale local payloads"
+  cat "$BEP_REMOTE_ONLY_SKIP_LOG" || true
+  exit 1
+fi
+if ! grep -q "BEP artifact staging selected output key: fresh_attempt/payload_test/test.outputs" "$BEP_REMOTE_ONLY_SKIP_LOG"; then
+  echo "error: remote-only BEP artifact skip scenario did not select the stale-local suppression key"
+  cat "$BEP_REMOTE_ONLY_SKIP_LOG" || true
+  exit 1
+fi
+
+BEP_REMOTE_DOWNLOAD_JSON="$TMP_WS/test_bep_remote_downloader.json"
+cat >"$BEP_REMOTE_DOWNLOAD_JSON" <<'JSON'
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"remote"},"testActionOutput":[{"name":"test.outputs","uri":"bytestream://remote-cas/blobs/fake-downloader/456","pathPrefix":["bazel-out","k8-fastbuild","testlogs","fresh_attempt","payload_test"]}]}}
+JSON
+BEP_REMOTE_ZIP="$TMP_WS/fake-remote-outputs.zip"
+python3 - "$BEP_STAGED_ARTIFACT_OUTPUT" "$BEP_REMOTE_ZIP" <<'PY'
+import sys
+import zipfile
+from pathlib import Path
+
+source = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+with zipfile.ZipFile(dest, "w") as archive:
+    for path in sorted(source.rglob("*")):
+        if path.is_file():
+            archive.write(path, path.relative_to(source).as_posix())
+PY
+FAKE_DOWNLOADER_DIR="$TMP_WS/downloader with spaces"
+FAKE_DOWNLOADER="$FAKE_DOWNLOADER_DIR/fake downloader.sh"
+mkdir -p "$FAKE_DOWNLOADER_DIR"
+cat >"$FAKE_DOWNLOADER" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while (($#)); do
+  case "$1" in
+    --output) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -z "$out" ]]; then
+  echo "missing --output" >&2
+  exit 2
+fi
+cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
+SH
+chmod +x "$FAKE_DOWNLOADER"
+BEP_REMOTE_DOWNLOAD_LOG="$TMP_WS/uploader_bep_remote_downloader.log"
+if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
+  TESTLOGS_DIR="$BEP_STAGED_TESTLOGS" \
+  BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+  DD_TEST_OPTIMIZATION_DEBUG=1 \
+  DD_API_KEY=mock \
+  DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+  DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+  DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+  DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+  DD_TEST_OPTIMIZATION_AGENT_URL= \
+  BEP_REMOTE_ZIP_SOURCE="$BEP_REMOTE_ZIP" \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
+    "${REPO_ENVS[@]}" -- \
+    --bep-json "$BEP_REMOTE_DOWNLOAD_JSON" \
+    --freshness-source=bep \
+    --freshness-mode=required \
+    --artifact-source bep \
+    --remote-artifacts required \
+    --bep-artifact-downloader "$FAKE_DOWNLOADER" \
+    --bep-artifact-downloader-timeout-sec 5 \
+    --artifact-staging-dir "$TMP_WS/bep-artifacts-remote-download" \
+    --dry-run >"$BEP_REMOTE_DOWNLOAD_LOG" 2>&1; then
+  echo "error: remote BEP fake-downloader scenario failed"
+  cat "$BEP_REMOTE_DOWNLOAD_LOG" || true
+  exit 1
+fi
+if ! grep -q "dry-run validated 1 test payloads" "$BEP_REMOTE_DOWNLOAD_LOG"; then
+  echo "error: remote BEP fake-downloader scenario did not validate the downloaded payload"
+  cat "$BEP_REMOTE_DOWNLOAD_LOG" || true
+  exit 1
+fi
+
 BEP_OPTIONAL_FILTER_LOG="$TMP_WS/uploader_bep_filter_optional.log"
 BEP_OPTIONAL_FILTER_START="$(log_line_count)"
 if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \

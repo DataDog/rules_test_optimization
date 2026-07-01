@@ -46,6 +46,7 @@ This product includes software developed at Datadog
 - Verify core/companion module version alignment:
   - `python3 tools/dev/check_module_versions.py`
 - Python tooling tests:
+  - `bash tools/tests/python/run_python_tools_test.sh`
   - `./bazelw test //tools/tests/python:python_tools_test`
 - rules_go variant verification:
   - `python3 tools/dev/generate_rules_go_fork_maps.py --check`
@@ -66,12 +67,16 @@ This product includes software developed at Datadog
 - Integration harness:
   - Prerequisites: `jq` (Linux/macOS). Windows harness is PowerShell-only.
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
-  - Windows primary entrypoint: `tools/tests/integration/run_mock_server_tests.ps1`
+  - Windows primary entrypoint: `pwsh -File tools/tests/integration/run_mock_server_tests.ps1`
   - Windows convenience wrapper: `tools/tests/integration/run_mock_server_tests.cmd`
   - Mixed-runtime uploader changes are not done until both harnesses still pass:
     they cover single-context, explicit override, multi-context repo selection,
     and no-match fallback behavior.
 - Go consumer integration harnesses:
+  - Bzlmod default smoke:
+    `tools/tests/integration/run_bzlmod_go_integration.sh`
+  - WORKSPACE default smoke:
+    `tools/tests/integration/run_workspace_go_integration.sh`
   - WORKSPACE base, rules_go v0_60_0:
     `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_60_0:
@@ -108,6 +113,13 @@ This product includes software developed at Datadog
     bootstrap/orchestrion wiring, also add a temporary
     `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/<registry-resolved-tree-path>")`
     there so the sibling repo resolves the selected local fork.
+  - For BEP artifact-resolution changes, run the Go fixture scripts with
+    `RTO_LOCAL_ARCHIVE=1 RTO_BEP_ARTIFACT_STAGING=1` so the fixture validates
+    staged BEP artifacts instead of only the pinned release/local-output path:
+    - `cd ../rules_test_optimization_tests/fixtures/bzlmod-go && RTO_LOCAL_ARCHIVE=1 RTO_BEP_ARTIFACT_STAGING=1 ./runtests`
+    - `cd ../rules_test_optimization_tests/fixtures/workspace-go && RTO_LOCAL_ARCHIVE=1 RTO_BEP_ARTIFACT_STAGING=1 ./runtests`
+    - `cd ../rules_test_optimization_tests/fixtures/bzlmod-go && RTO_LOCAL_ARCHIVE=1 RTO_BEP_ARTIFACT_STAGING=1 ./runtests-hermetic`
+    - `cd ../rules_test_optimization_tests/fixtures/workspace-go && RTO_LOCAL_ARCHIVE=1 RTO_BEP_ARTIFACT_STAGING=1 ./runtests-hermetic`
   - Run the relevant fixture entrypoints there before calling the work done.
   - Restore the fixture repo to `git_override(...)` pins before pushing its PR.
 

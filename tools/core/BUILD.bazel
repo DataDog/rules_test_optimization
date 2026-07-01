@@ -5,6 +5,7 @@
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
 exports_files([
+    "bep_artifact_stage_helper.py",
     "common_utils.bzl",
     "schemas/agentless-schema.json",
     "schemas/agentless-schema.yaml",

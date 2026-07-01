@@ -302,8 +302,77 @@ fails before upload.
 
 6. **Expected target output missing**: Run the exact target listed in
    `expected_targets` before the doctor. With remote execution or remote cache,
-   run tests with `--remote_download_outputs=all` or the doctor will not see
-   `test.outputs` locally.
+   run tests with `--remote_download_outputs=all` or enable BEP artifact
+   resolution with `--artifact-source=bep --remote-artifacts=download`.
+
+## BEP artifact resolution failures
+
+**Symptom**: The doctor or uploader is configured with BEP freshness, but
+`test.outputs/` is not present under `bazel-testlogs/` because the Bazel
+invocation used remote execution or remote cache without downloading outputs.
+
+**Solutions**:
+
+1. Prefer `--remote_download_outputs=all` when CI can afford it. This keeps the
+   default local discovery path and avoids an extra artifact resolver.
+
+2. If CI cannot download all test outputs, pass the same BEP file to doctor and
+   uploader and enable staging:
+   ```bash
+   bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
+     --bep-json=.topt/bazel-bep.json \
+     --freshness-source=bep \
+     --freshness-mode=required \
+     --artifact-source=bep \
+     --remote-artifacts=download \
+     --artifact-staging-dir=.topt/bep-artifacts
+
+   bazel run --config=test-optimization //:dd_upload_payloads -- \
+     --bep-json=.topt/bazel-bep.json \
+     --freshness-source=bep \
+     --freshness-mode=required \
+     --artifact-source=bep \
+     --remote-artifacts=download \
+     --artifact-staging-dir=.topt/bep-artifacts \
+     --dry-run \
+     --validate-enrichment
+   ```
+
+3. For remote/CAS BEP artifact references, configure one downloader executable:
+   ```bash
+   export DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER=/path/to/download-outputs-zip
+   ```
+   The executable receives `--uri`, `--name`, and `--output` arguments and must
+   write an `outputs.zip` archive to `--output` before
+   `--bep-artifact-downloader-timeout-sec` expires. If your provider needs an
+   interpreter or fixed arguments, wrap it in a script and configure the wrapper
+   path. The public rule does not ship credentials or a Datadog-internal CAS
+   client.
+
+Common messages:
+
+- `--artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON`:
+  pass the BEP JSON produced by the matching `bazel test` invocation.
+- `BEP artifact is remote-only and no downloader is configured`: either use
+  `--remote_download_outputs=all`, configure
+  `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER`, or use
+  `--remote-artifacts=disabled` outside required freshness mode.
+- `BEP artifact is not available locally`: the BEP points at a local path or
+  `file://` URI that does not exist in this workspace. Check that the BEP file
+  matches the current test invocation and machine.
+- `remote-artifacts=required`: strict artifact mode is all-or-nothing. Missing,
+  ambiguous, unsafe, or undownloadable selected BEP artifacts fail the command
+  instead of falling back to local payloads.
+- `unsafe path in BEP outputs.zip`: the archive contains an absolute path or
+  parent traversal entry. Regenerate the archive or fix the downloader.
+- `BEP outputs.zip has too many entries`: the archive exceeds the staging entry
+  limit and is rejected before extraction.
+- `BEP outputs.zip is too large after decompression`: the archive exceeds the
+  staging decompressed-size limit.
+- `BEP artifact staging requires python3`: the Bash uploader needs `python3`
+  only when artifact staging is enabled.
+- `BEP artifact staging requires python3 or python`: the PowerShell uploader
+  needs `python3` or `python` only when artifact staging is enabled.
 
 ## Uploader enrichment dry-run
 
