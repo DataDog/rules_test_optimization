@@ -3989,9 +3989,11 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         env = os.environ.copy()
         env.update({
             "BUILD_WORKSPACE_DIRECTORY": str(root),
+            "DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE": "bep",
             "DD_TEST_OPTIMIZATION_DEBUG": "1",
             "DD_TEST_OPTIMIZATION_MAX_WAIT_SEC": "0",
             "DD_TEST_OPTIMIZATION_QUIESCENT_SEC": "0",
+            "DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS": "download",
             "PYTHON": sys.executable,
             "RUNFILES_DIR": str(runfiles_dir),
             "TESTLOGS_DIR": str(root / "bazel-testlogs"),
