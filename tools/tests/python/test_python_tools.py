@@ -4373,6 +4373,8 @@ echo blocked
                 encoding="utf-8",
             )
             generated_bash.chmod(0o755)
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+            env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
             result = subprocess.run(
                 [
                     bash,
@@ -4388,7 +4390,7 @@ echo blocked
                     "--dry-run",
                 ],
                 cwd=root,
-                env=self._generated_uploader_smoke_env(root, runfiles_dir),
+                env=env,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -4421,6 +4423,8 @@ echo blocked
                 ),
                 encoding="utf-8",
             )
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+            env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
             result = subprocess.run(
                 [
                     pwsh,
@@ -4439,7 +4443,7 @@ echo blocked
                     "--dry-run",
                 ],
                 cwd=root,
-                env=self._generated_uploader_smoke_env(root, runfiles_dir),
+                env=env,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
