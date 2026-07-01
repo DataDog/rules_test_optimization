@@ -4407,6 +4407,8 @@ echo blocked
 
     def test_generated_powershell_uploader_executes_bep_staging_runfiles(self) -> None:
         """Validate generated PowerShell uploader resolves non-sibling helper runfiles."""
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
         pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell uploader execution")
 
         root = Path(tempfile.mkdtemp())
