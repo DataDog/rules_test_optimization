@@ -4279,6 +4279,9 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         ]:
             self.assertIn(token, powershell_text)
         self.assertIn("& $PythonBin $script:BepArtifactStageHelper", powershell_text)
+        self.assertIn("$previousErrorActionPreference = $ErrorActionPreference", powershell_text)
+        self.assertIn("$ErrorActionPreference = 'Continue'", powershell_text)
+        self.assertIn("$ErrorActionPreference = $previousErrorActionPreference", powershell_text)
         self.assertIn('2> $helperStderr', powershell_text)
         self.assertIn("Get-Content -LiteralPath $helperStderr", powershell_text)
         self.assertNotIn("$script:BepArtifactStageHelper @cmd 2>&1", powershell_text)

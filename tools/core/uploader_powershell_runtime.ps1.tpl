@@ -1116,8 +1116,14 @@ function Stage-BepArtifacts {
     }
     $cmd += @($resolvedBepJsonFiles.ToArray())
     $helperStderr = Join-Path $script:TmpPayloadDir ("bep_artifacts_stderr_" + [System.Guid]::NewGuid().ToString("N") + ".txt")
-    $helperOutput = @(& $PythonBin $script:BepArtifactStageHelper @cmd 2> $helperStderr)
-    $helperStatus = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $helperOutput = @(& $PythonBin $script:BepArtifactStageHelper @cmd 2> $helperStderr)
+        $helperStatus = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if (Test-Path -LiteralPath $helperStderr -PathType Leaf) {
         foreach ($line in @(Get-Content -LiteralPath $helperStderr -ErrorAction SilentlyContinue)) {
             if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
