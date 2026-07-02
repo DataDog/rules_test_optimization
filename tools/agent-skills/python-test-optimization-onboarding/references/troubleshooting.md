@@ -92,10 +92,13 @@ If tests use remote execution or remote cache, add:
 ```text
 test:test-optimization --remote_download_minimal
 test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 ```
 
-If tests use `--zip_undeclared_test_outputs`, add `--artifact-source=bep` to
-the matching doctor and uploader commands.
+Pass the matching BEP files to doctor/uploader with repeatable
+`--bep-json=<path>` plus `--freshness-source=bep`,
+`--freshness-mode=required`, `--artifact-source=bep`, and
+`--artifact-staging-dir=<temp-dir>`.
 
 If BEP still points at remote/CAS artifacts, add
 `--artifact-source=bep --remote-artifacts=download` and configure

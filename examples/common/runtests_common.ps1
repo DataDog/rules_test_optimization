@@ -41,28 +41,31 @@ function Invoke-ExampleRunTests {
     [string]$ScriptDir
   )
 
+  $tmpRoot = $null
   Push-Location $ScriptDir
   try {
     $bazelCmd = Get-BazelCommand
     $testStatus = 0
-    $bepDir = ".topt"
-    New-Item -ItemType Directory -Force -Path $bepDir | Out-Null
-    $nonHermeticBep = Join-Path $bepDir "non-hermetic.bep.json"
-    $hermeticBep = Join-Path $bepDir "hermetic.bep.json"
-    Remove-Item -LiteralPath $nonHermeticBep, $hermeticBep -Force -ErrorAction SilentlyContinue
+    $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dd-topt-example-" + [System.Guid]::NewGuid().ToString("N"))
+    $artifactStagingDir = Join-Path $tmpRoot "bep-artifacts"
+    New-Item -ItemType Directory -Force -Path $artifactStagingDir | Out-Null
+    $nonHermeticBep = Join-Path $tmpRoot "non-hermetic.bep.json"
+    $hermeticBep = Join-Path $tmpRoot "hermetic.bep.json"
     $bepArgs = @(
       "--bep-json=$nonHermeticBep",
       "--bep-json=$hermeticBep",
       "--freshness-source=bep",
-      "--freshness-mode=required"
+      "--freshness-mode=required",
+      "--artifact-source=bep",
+      "--artifact-staging-dir=$artifactStagingDir"
     )
 
     Write-Output "--- non-hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--build_event_json_file=$nonHermeticBep")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$nonHermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--build_event_json_file=$hermeticBep")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$hermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- validating payloads"
@@ -86,6 +89,9 @@ function Invoke-ExampleRunTests {
     if ($testStatus -ne 0) { exit $testStatus }
     exit $uploadRc
   } finally {
+    if ($tmpRoot) {
+      Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
   }
 }

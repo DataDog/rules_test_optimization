@@ -30,9 +30,11 @@ Checks:
   service repository, for example `@test_optimization_data_<service>//:export.bzl`?
 - Is `DD_CIVISIBILITY_ENABLED` or equivalent tracer setup enabled by the macro?
 - With remote execution/cache, did the test config use
-  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`?
-- If tests used `--zip_undeclared_test_outputs`, did doctor/uploader use
-  `--artifact-source=bep`?
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
+  plus `--zip_undeclared_test_outputs`?
+- Did doctor/uploader run with repeatable `--bep-json=<path>`,
+  `--freshness-source=bep`, `--freshness-mode=required`,
+  `--artifact-source=bep`, and `--artifact-staging-dir=<temp-dir>`?
 - If BEP still points at remote/CAS artifacts, did doctor/uploader use
   `--artifact-source=bep --remote-artifacts=download` with a configured
   `--bep-artifact-downloader`? Use `--remote-artifacts=required` only when the

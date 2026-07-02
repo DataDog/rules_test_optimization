@@ -396,6 +396,74 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
         self.assertEqual(0, rc)
 
 
+class TestOptimizationCiWrapperTests(unittest.TestCase):
+    """Test case group covering checked-in CI wrapper script contracts."""
+
+    def test_bash_and_powershell_wrappers_use_per_run_bep_files(self) -> None:
+        """Validate wrappers avoid shared BEP paths and pass BEP args explicitly."""
+        bash_text = _runfile("tools/test_optimization/run_test_optimization_ci.sh").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/test_optimization/run_test_optimization_ci.ps1").read_text(encoding="utf-8")
+
+        for text in (bash_text, powershell_text):
+            self.assertIn("--build_event_json_file", text)
+            self.assertIn("--bep-json", text)
+            self.assertIn("--freshness-source=bep", text)
+            self.assertIn("--freshness-mode=required", text)
+            self.assertIn("--artifact-source=bep", text)
+            self.assertIn("--artifact-staging-dir", text)
+            self.assertIn("--dry-run", text)
+            self.assertIn("--validate-enrichment", text)
+            self.assertNotIn(".topt/bazel-bep.json", text)
+            self.assertNotIn("DD_TEST_OPTIMIZATION_BEP_JSON=", text)
+
+        self.assertIn("mktemp -d", bash_text)
+        self.assertIn("DD_TEST_OPTIMIZATION_KEEP_TMP", bash_text)
+        self.assertIn("NewGuid", powershell_text)
+        self.assertIn("DD_TEST_OPTIMIZATION_KEEP_TMP", powershell_text)
+
+    def test_bash_wrapper_preserves_failed_test_status(self) -> None:
+        """Validate Bash wrapper reports the original bazel test exit code."""
+        bash = _require_functional_bash(self)
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {str(log_path)!r}
+case "$1" in
+  test) exit 7 ;;
+  run) exit 0 ;;
+  *) exit 99 ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["BAZEL"] = str(fake_bazel)
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+
+            result = subprocess.run(
+                [bash, str(wrapper), "--keep-tmp", "//pkg:target"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(7, result.returncode, result.stderr)
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("test --config=test-optimization", log_text)
+            self.assertIn("--build_event_json_file=", log_text)
+            self.assertIn("run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=", log_text)
+            self.assertIn("--artifact-staging-dir=", log_text)
+
+
 class TestOptimizationDoctorTests(unittest.TestCase):
     """Test case group covering TestOptimizationDoctor behaviors."""
 
@@ -946,6 +1014,55 @@ $rows | ConvertTo-Json -Compress
             self.assertTrue((stale_local / "payloads" / "tests" / "span_events_1.json").is_file())
             runs_root = root / ".topt" / "bep-artifacts" / "__runs"
             self.assertEqual([], list(runs_root.iterdir()) if runs_root.exists() else [])
+
+    def test_doctor_staged_freshness_uses_bep_label_over_payload_metadata(self) -> None:
+        """Validate staged freshness is authorized by the BEP test label."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_doctor_output(root / "bazel-testlogs", "module", "//pkg:stale")
+            fresh_external = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:public")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:raw", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": fresh_external.as_uri(),
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "BUILD_WORKSPACE_DIRECTORY": str(root),
+                    "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+                },
+                clear=False,
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                ])
+
+            self.assertEqual(0, rc)
 
     def test_doctor_expected_target_validation_uses_staged_target_mapping(self) -> None:
         """Validate staged expected targets still enforce per-target payload selection."""

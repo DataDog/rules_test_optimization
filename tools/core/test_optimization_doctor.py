@@ -1352,10 +1352,14 @@ def _validate_expected_target_bep_freshness(
     freshness: BepFreshness,
     *,
     required: bool,
+    output_key_by_output_dir: dict[Path, str] | None = None,
+    label_by_output_dir: dict[Path, str] | None = None,
 ) -> list[Path]:
     """Return expected target output dirs proven fresh by matching BEP TestResult outputs."""
     if not required:
         return output_dirs
+    output_key_by_output_dir = output_key_by_output_dir or {}
+    label_by_output_dir = label_by_output_dir or {}
     for remote in freshness.remote_only_outputs:
         if not expected_targets or remote.label in expected_targets:
             _fail(
@@ -1367,10 +1371,15 @@ def _validate_expected_target_bep_freshness(
     fresh_output_dirs = []
     fresh_labels = set()
     for output_dir in output_dirs:
+        explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
         candidate_labels = {
             candidate_label
             for candidate_label, candidate_key in freshness.eligible_outputs
-            if _local_output_matches_bep_key(output_dir, candidate_key)
+            if (
+                explicit_output_key == candidate_key
+                if explicit_output_key
+                else _local_output_matches_bep_key(output_dir, candidate_key)
+            )
         }
         if not candidate_labels:
             continue
@@ -1384,6 +1393,7 @@ def _validate_expected_target_bep_freshness(
         metadata = _load_json(metadata_files[0])
         if isinstance(metadata, dict):
             label = _metadata_target_label(metadata, None) or ""
+        label = label_by_output_dir.get(output_dir.resolve(), label)
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
@@ -1418,13 +1428,21 @@ def _validate_discovered_bep_freshness(
     freshness: BepFreshness,
     *,
     required: bool,
+    output_key_by_output_dir: dict[Path, str] | None = None,
+    label_by_output_dir: dict[Path, str] | None = None,
 ) -> list[Path]:
     """Return discovered output dirs proven fresh by matching BEP TestResult outputs."""
     if not required:
         return output_dirs
+    output_key_by_output_dir = output_key_by_output_dir or {}
+    label_by_output_dir = label_by_output_dir or {}
 
     local_labels: set[str] = set()
     for output_dir in output_dirs:
+        explicit_label = label_by_output_dir.get(output_dir.resolve())
+        if explicit_label:
+            local_labels.add(explicit_label)
+            continue
         for metadata_file in _metadata_files(output_dir):
             metadata = _load_json(metadata_file)
             if isinstance(metadata, dict):
@@ -1451,10 +1469,15 @@ def _validate_discovered_bep_freshness(
 
     fresh_output_dirs = []
     for output_dir in output_dirs:
+        explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
         candidate_labels = {
             candidate_label
             for candidate_label, candidate_key in freshness.eligible_outputs
-            if _local_output_matches_bep_key(output_dir, candidate_key)
+            if (
+                explicit_output_key == candidate_key
+                if explicit_output_key
+                else _local_output_matches_bep_key(output_dir, candidate_key)
+            )
         }
         if not candidate_labels:
             continue
@@ -1466,6 +1489,7 @@ def _validate_discovered_bep_freshness(
             )
         metadata = _load_json(metadata_files[0])
         label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
+        label = label_by_output_dir.get(output_dir.resolve(), label)
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
@@ -1837,18 +1861,24 @@ def main(argv: list[str]) -> int:
 
         if args.freshness_mode != "disabled" and freshness is not None:
             required = strict_bep_required or args.freshness_mode == "auto"
+            output_key_by_output_dir = {item.output_dir.resolve(): item.output_key for item in staged}
+            label_by_output_dir = {item.output_dir.resolve(): item.label for item in staged}
             if expected_targets:
                 output_dirs = _validate_expected_target_bep_freshness(
                     output_dirs,
                     set(expected_targets),
                     freshness,
                     required=required,
+                    output_key_by_output_dir=output_key_by_output_dir,
+                    label_by_output_dir=label_by_output_dir,
                 )
             else:
                 output_dirs = _validate_discovered_bep_freshness(
                     output_dirs,
                     freshness,
                     required=required,
+                    output_key_by_output_dir=output_key_by_output_dir,
+                    label_by_output_dir=label_by_output_dir,
                 )
 
         if not output_dirs:

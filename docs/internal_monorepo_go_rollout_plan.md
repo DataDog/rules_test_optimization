@@ -69,10 +69,13 @@ SHA256, and archive prefix generated from the same published commit.
   doctor `expected_targets`.
 - Add one root `dd_test_optimization_doctor` target.
 - Add one root `dd_upload_payloads` target.
-- Use `.bazelrc` or CLI flags to activate
-  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` for
-  test commands. If a test command uses `--zip_undeclared_test_outputs`, pass
-  `--artifact-source=bep` to the matching doctor/uploader commands.
+- Use `.bazelrc` to activate
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` and
+  `--zip_undeclared_test_outputs` for test commands. Pass a fresh
+  `--build_event_json_file=...` per Bazel test invocation and pass matching
+  doctor/uploader `--bep-json=<path>` flags with `--freshness-source=bep`,
+  `--freshness-mode=required`, `--artifact-source=bep`, and
+  `--artifact-staging-dir=<temp-dir>`.
 - Pass `DD_GIT_*` only through `--repo_env`, never through `--test_env`.
 - Pass uploader credentials at `bazel run` time, not into test actions.
 

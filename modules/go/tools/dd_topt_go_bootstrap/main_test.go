@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -654,7 +655,9 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`DOCTOR_TARGET='//:dd_test_optimization_doctor'`,
 		`UPLOAD_TARGET='//:dd_upload_payloads'`,
 		`WORKSPACE_DIR="$(pwd -P)"`,
-		`BEP_JSON_DIR="${WORKSPACE_DIR}/.topt/bep"`,
+		`BEP_TMP_ROOT=""`,
+		`BEP_JSON_DIR=""`,
+		`ARTIFACT_STAGING_DIR=""`,
 		`MIN_FREE_DISK_GB=35`,
 		`LARGE_MONOREPO=1`,
 		`SHUTDOWN_BAZEL_ON_EXIT=1`,
@@ -670,6 +673,9 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`--bep-json=${bep_json_path}`,
 		`--freshness-source=bep`,
 		`--freshness-mode=required`,
+		`--artifact-source=bep`,
+		`--artifact-staging-dir=${ARTIFACT_STAGING_DIR}`,
+		`mktemp -d "${tmp_parent%/}/dd-go-topt.XXXXXX"`,
 		`sync -> controls -> instrumented tests -> doctor -> optional upload`,
 		`upload skipped; rerun with --upload`,
 		`${BAZEL}" shutdown`,
@@ -776,7 +782,8 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 	}
 	cmd := exec.Command("bash", scriptPath, "--no-upload")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath)
+	tmpParent := filepath.Join(dir, "tmp")
+	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath, "DD_TEST_OPTIMIZATION_TMPDIR="+tmpParent)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("validation script failed: %v\n%s", err, output)
@@ -786,16 +793,19 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 		t.Fatalf("read fake bazel log: %v", err)
 	}
 	logText := string(logBytes)
-	bepPath := shellPwdPath(t, dir, ".topt", "bep", "__pkg_go_default_test.json")
 	for _, want := range []string{
 		"sync --config=test-optimization --repo_env=FETCH_SALT=",
-		"test --config=test-optimization --build_event_json_file=" + bepPath + " //pkg:go_default_test",
+		"test --config=test-optimization --build_event_json_file=",
 		"//pkg:go_default_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + bepPath + " --freshness-source=bep --freshness-mode=required",
+		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=",
+		"--freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
 		}
+	}
+	if strings.Contains(logText, filepath.Join(dir, ".topt", "bep")) {
+		t.Fatalf("validation script reused the workspace .topt BEP directory:\n%s", logText)
 	}
 	if strings.Contains(logText, "dd_upload_payloads") {
 		t.Fatalf("validation script uploaded without --upload:\n%s", logText)
@@ -855,7 +865,8 @@ set -euo pipefail
 
 	cmd := exec.Command("bash", scriptPath, "--upload")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath)
+	tmpParent := filepath.Join(dir, "tmp")
+	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath, "DD_TEST_OPTIMIZATION_TMPDIR="+tmpParent, "DD_TEST_OPTIMIZATION_KEEP_TMP=1")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("validation script failed: %v\n%s", err, output)
@@ -866,15 +877,27 @@ set -euo pipefail
 		t.Fatalf("read fake bazel log: %v", err)
 	}
 	logText := string(logBytes)
-	controlBEPPath := shellPwdPath(t, dir, ".topt", "bep", "__control_go_default_test.json")
-	oneBEPPath := shellPwdPath(t, dir, ".topt", "bep", "__pkg_one_test.json")
-	twoBEPPath := shellPwdPath(t, dir, ".topt", "bep", "__pkg_two_test.json")
+	bepByTarget := map[string]string{}
+	for _, match := range regexp.MustCompile(`test --config=test-optimization --build_event_json_file=([^ ]+) (//[^ \n]+)`).FindAllStringSubmatch(logText, -1) {
+		bepByTarget[match[2]] = match[1]
+	}
+	controlBEPPath := bepByTarget["//control:go_default_test"]
+	oneBEPPath := bepByTarget["//pkg:one_test"]
+	twoBEPPath := bepByTarget["//pkg:two_test"]
+	if controlBEPPath == "" || oneBEPPath == "" || twoBEPPath == "" {
+		t.Fatalf("could not extract all BEP paths from fake bazel log:\n%s", logText)
+	}
+	for _, bepPath := range []string{controlBEPPath, oneBEPPath, twoBEPPath} {
+		if !strings.HasPrefix(bepPath, tmpParent) {
+			t.Fatalf("BEP path %q does not use configured temporary parent %q", bepPath, tmpParent)
+		}
+	}
 	for _, want := range []string{
 		"test --config=test-optimization --build_event_json_file=" + controlBEPPath + " //control:go_default_test",
 		"test --config=test-optimization --build_event_json_file=" + oneBEPPath + " //pkg:one_test",
 		"test --config=test-optimization --build_event_json_file=" + twoBEPPath + " //pkg:two_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required",
-		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required",
+		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
+		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
@@ -890,9 +913,9 @@ set -euo pipefail
 		path  string
 		label string
 	}{
-		{filepath.Join(dir, ".topt", "bep", "__control_go_default_test.json"), "//control:go_default_test"},
-		{filepath.Join(dir, ".topt", "bep", "__pkg_one_test.json"), "//pkg:one_test"},
-		{filepath.Join(dir, ".topt", "bep", "__pkg_two_test.json"), "//pkg:two_test"},
+		{controlBEPPath, "//control:go_default_test"},
+		{oneBEPPath, "//pkg:one_test"},
+		{twoBEPPath, "//pkg:two_test"},
 	} {
 		bepBytes, err := os.ReadFile(entry.path)
 		if err != nil {

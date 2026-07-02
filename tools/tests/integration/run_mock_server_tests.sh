@@ -3698,7 +3698,7 @@ if grep -q -- '--test_env=DD_TEST_OPTIMIZATION_AGENT' "$GUIDED_BOOT_WS/.bazelrc"
   cat "$GUIDED_BOOT_WS/.bazelrc" || true
   exit 1
 fi
-if ! grep -q -- 'test:test-optimization --remote_download_minimal' "$GUIDED_BOOT_WS/.bazelrc" || ! grep -Fq -- 'test:test-optimization --remote_download_regex=.*test[.]outputs.*' "$GUIDED_BOOT_WS/.bazelrc"; then
+if ! grep -q -- 'test:test-optimization --remote_download_minimal' "$GUIDED_BOOT_WS/.bazelrc" || ! grep -Fq -- 'test:test-optimization --remote_download_regex=.*test[.]outputs.*' "$GUIDED_BOOT_WS/.bazelrc" || ! grep -q -- 'test:test-optimization --zip_undeclared_test_outputs' "$GUIDED_BOOT_WS/.bazelrc"; then
   echo "error: guided bootstrap .bazelrc did not configure selective remote downloads"
   cat "$GUIDED_BOOT_WS/.bazelrc" || true
   exit 1
@@ -3729,9 +3729,14 @@ fi
 # smoke so the integration still validates generated Bazel wiring, staged
 # sources, metadata shape, doctor behavior, and payload discovery without
 # depending on unreleased tracer internals.
+GUIDED_BEP_JSON="$GUIDED_BOOT_WS/.topt/guided-bootstrap.bep.json"
+mkdir -p "$(dirname "$GUIDED_BEP_JSON")"
+rm -f "$GUIDED_BEP_JSON"
 (
   cd "$GUIDED_BOOT_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization //src/go-project:hello_test__raw_go_test "${REPO_ENVS[@]}"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization \
+    --build_event_json_file="$GUIDED_BEP_JSON" \
+    //src/go-project:hello_test__raw_go_test "${REPO_ENVS[@]}"
 )
 
 GUIDED_TESTLOGS_DIR="$(
@@ -3740,23 +3745,49 @@ GUIDED_TESTLOGS_DIR="$(
 )"
 (
   cd "$GUIDED_BOOT_WS"
-  TESTLOGS_DIR="$GUIDED_TESTLOGS_DIR/src/go-project" "$BAZEL" "${BAZEL_FLAGS[@]}" run --config=test-optimization //:dd_test_optimization_doctor "${REPO_ENVS[@]}"
+  TESTLOGS_DIR="$GUIDED_TESTLOGS_DIR" "$BAZEL" "${BAZEL_FLAGS[@]}" run --config=test-optimization //:dd_test_optimization_doctor "${REPO_ENVS[@]}" -- \
+    --bep-json "$GUIDED_BEP_JSON" \
+    --freshness-source=bep \
+    --freshness-mode=required \
+    --artifact-source=bep
 )
-GUIDED_BAZEL_METADATA_PATH="$GUIDED_TESTLOGS_DIR/src/go-project/hello_test__raw_go_test/test.outputs/bazel_target_metadata.json"
-if [[ ! -f "$GUIDED_BAZEL_METADATA_PATH" ]]; then
-  echo "error: guided bootstrap go test did not emit bazel_target_metadata.json"
-  find "$GUIDED_TESTLOGS_DIR/src/go-project/hello_test" -maxdepth 3 -type f 2>/dev/null | sort || true
-  exit 1
-fi
 
-GUIDED_BAZEL_METADATA_PATH="$GUIDED_BAZEL_METADATA_PATH" "$PYTHON" - <<'PY'
+GUIDED_TESTLOGS_DIR="$GUIDED_TESTLOGS_DIR" "$PYTHON" - <<'PY'
 import json
 import os
 import sys
+import zipfile
+from pathlib import Path
 
-path = os.environ["GUIDED_BAZEL_METADATA_PATH"]
-with open(path, "r", encoding = "utf-8") as handle:
-    payload = json.load(handle)
+root = Path(os.environ["GUIDED_TESTLOGS_DIR"]) / "src" / "go-project" / "hello_test__raw_go_test"
+direct_path = root / "test.outputs" / "bazel_target_metadata.json"
+payload = None
+source = ""
+if direct_path.is_file():
+    with direct_path.open("r", encoding = "utf-8") as handle:
+        payload = json.load(handle)
+    source = str(direct_path)
+else:
+    for zip_path in sorted(root.rglob("*.zip")):
+        try:
+            with zipfile.ZipFile(zip_path) as archive:
+                for name in archive.namelist():
+                    if name.endswith("bazel_target_metadata.json"):
+                        with archive.open(name) as handle:
+                            payload = json.load(handle)
+                        source = f"{zip_path}!{name}"
+                        break
+        except zipfile.BadZipFile:
+            continue
+        if payload is not None:
+            break
+
+if payload is None:
+    print("error: guided bootstrap go test did not emit bazel_target_metadata.json")
+    print(f"searched under: {root}")
+    for path in sorted(root.rglob("*")):
+        print(path)
+    sys.exit(1)
 
 required_keys = [
     "bazel.package",
@@ -3775,6 +3806,7 @@ required_keys = [
 missing = [key for key in required_keys if key not in payload]
 if missing:
     print("error: guided bootstrap go test metadata is missing keys: %s" % ", ".join(missing))
+    print(f"metadata source: {source}")
     sys.exit(1)
 PY
 

@@ -38,6 +38,7 @@ sh_test(
         "//tools/core:uploader_batch_runtime.bat.tpl",
         "//tools/core:uploader_powershell_runtime.ps1.tpl",
         "//tools/core:validate_payload_schema.py",
+        "//tools/test_optimization:ci_wrappers",
         "//tools/dev:check_bazelversion_sync.py",
         "//tools/dev:check_module_versions.py",
         "//tools/dev:check_release_archive_contents.py",

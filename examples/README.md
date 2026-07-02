@@ -311,81 +311,25 @@ Running tests, validating payloads, and uploading payloads:
 
 ```bash
 # Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
-mkdir -p .topt
-rm -f .topt/bazel-bep.json
-bazel test //... --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json || test_status=$?; test_status=${test_status:-0}
-bazel run //:dd_test_optimization_doctor -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required || doctor_status=$?; doctor_status=${doctor_status:-0}
-if [ "$doctor_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$doctor_status"
-fi
-bazel run //:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required \
-  --dry-run \
-  --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-if [ "$dry_run_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$dry_run_status"
-fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required
-upload_status=$?
-if [ "$test_status" -ne 0 ]; then
-  exit "$test_status"
-fi
-exit "$upload_status"
+tools/test_optimization/run_test_optimization_ci.sh --config test-optimization //...
+
+# Add --upload only when the real upload should run after doctor and dry-run pass.
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+  tools/test_optimization/run_test_optimization_ci.sh --config test-optimization --upload //...
 ```
 
 ```powershell
 # Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
-New-Item -ItemType Directory -Force .topt | Out-Null
-Remove-Item .topt/bazel-bep.json -ErrorAction SilentlyContinue
-bazel test //... --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/bazel-bep.json
-$testStatus = $LASTEXITCODE
-if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run //:dd_test_optimization_doctor -- `
-  --bep-json=.topt/bazel-bep.json `
-  --freshness-source=bep `
-  --freshness-mode=required
-$doctorStatus = $LASTEXITCODE
-if ($null -eq $doctorStatus) { $doctorStatus = 0 }
-if ($doctorStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $doctorStatus
-}
-bazel run //:dd_upload_payloads -- `
-  --bep-json=.topt/bazel-bep.json `
-  --freshness-source=bep `
-  --freshness-mode=required `
-  --dry-run `
-  --validate-enrichment
-$dryRunStatus = $LASTEXITCODE
-if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
-if ($dryRunStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $dryRunStatus
-}
-# Set once per shell session before first run:
-# $env:DD_API_KEY = "<your-api-key>"
-# $env:DD_SITE = "datadoghq.com"
-bazel run //:dd_upload_payloads -- `
-  --bep-json=.topt/bazel-bep.json `
-  --freshness-source=bep `
-  --freshness-mode=required
-$uploadStatus = $LASTEXITCODE
-if ($testStatus -ne 0) { exit $testStatus }
-exit $uploadStatus
+.\tools\test_optimization\run_test_optimization_ci.ps1 -Config test-optimization //...
+
+# Add -Upload only when the real upload should run after doctor and dry-run pass.
+$env:DD_API_KEY = "<your-api-key>"
+$env:DD_SITE = "datadoghq.com"
+.\tools\test_optimization\run_test_optimization_ci.ps1 -Config test-optimization -Upload //...
 ```
 
 Notes:
-- The sequence above preserves test failures, blocks upload success when doctor
+- The wrapper preserves test failures, blocks upload success when doctor
   or dry-run enrichment fails, and still fails on uploader errors when the
   earlier steps passed.
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.

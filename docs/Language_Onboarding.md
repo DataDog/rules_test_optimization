@@ -80,38 +80,18 @@ test, doctor, or uploader commands.
 Shared upload command:
 
 ```bash
-mkdir -p .topt
-rm -f .topt/bazel-bep.json
-export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
-export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
-export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
-export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
+tools/test_optimization/run_test_optimization_ci.sh \
+  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+  --upload-target //tools/test_optimization:dd_upload_payloads \
+  //...
 
-bazel test --config=test-optimization --build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON" //... || test_status=$?; test_status=${test_status:-0}
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-if [ "$doctor_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$doctor_status"
-fi
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required \
-  --dry-run \
-  --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-if [ "$dry_run_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$dry_run_status"
-fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required
-upload_status=$?
-if [ "$test_status" -ne 0 ]; then
-  exit "$test_status"
-fi
-exit "$upload_status"
+# Add --upload only when the real upload should run after doctor and dry-run pass.
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+    --upload-target //tools/test_optimization:dd_upload_payloads \
+    --upload \
+    //...
 ```
 
 ## Go
@@ -378,14 +358,13 @@ Validate in this order:
 1. Run `bazel sync --config=test-optimization --only=test_optimization_data`
    with a fresh `FETCH_SALT` when metadata should be refetched.
 2. Run plain and build-only controls first.
-3. Run the instrumented targets in small batches with
-   `--build_event_json_file=.topt/<batch>.bep.json`, serially if disk or cache
-   pressure is high.
-4. Export `DD_TEST_OPTIMIZATION_BEP_JSON=.topt/<batch>.bep.json`,
-   `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep`,
-   `DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required`, and
-   `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep`, then run
-   `bazel run --config=test-optimization //:dd_test_optimization_doctor`.
+3. Run the instrumented targets in small batches with a fresh
+   `--build_event_json_file=<temp-batch-bep-json>` per Bazel invocation,
+   serially if disk or cache pressure is high.
+4. Pass every batch file to doctor/uploader with repeatable
+   `--bep-json=<temp-batch-bep-json>` plus
+   `--freshness-source=bep --freshness-mode=required --artifact-source=bep`;
+   the checked-in CI wrappers do this automatically.
 5. Run
    `bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment`.
 6. Run the real uploader with `DD_API_KEY` and `DD_SITE` in the command
@@ -398,9 +377,10 @@ For remote execution or remote cache setups, keep
 `test:test-optimization --zip_undeclared_test_outputs` in the
 active `.bazelrc` config. Without local undeclared outputs, the doctor and
 uploader cannot inspect or enrich the payloads after `bazel test`.
-`DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` makes local `outputs.zip` carriers
-extract through BEP artifact staging. Use a unique BEP file per Bazel test
-invocation and remove stale BEP files before reuse.
+`--artifact-source=bep` makes local `outputs.zip` carriers extract through BEP
+artifact staging. Use a unique BEP file per Bazel test invocation; the
+checked-in CI wrappers create those paths under a temporary directory instead of
+reusing or deleting a shared workspace file.
 
 If the doctor reports missing Git metadata, missing Bazel metadata,
 `full_bundle_no_match`, or msgpack payloads, fix the sync, wrapper, tracer, or

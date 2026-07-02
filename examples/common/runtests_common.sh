@@ -18,19 +18,25 @@ run_example_runtests() {
   local doctor_status=0
   local dry_run_status=0
   local upload_status=0
+  local tmp_root
+  local artifact_staging_dir
   bazelw="${script_dir}/../../bazelw"
 
   cd "$script_dir"
-  mkdir -p .topt
-  local non_hermetic_bep=".topt/non-hermetic.bep.json"
-  local hermetic_bep=".topt/hermetic.bep.json"
-  rm -f "$non_hermetic_bep" "$hermetic_bep"
+  tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-example.XXXXXX")"
+  artifact_staging_dir="${tmp_root}/bep-artifacts"
+  mkdir -p "$artifact_staging_dir"
+  local non_hermetic_bep="${tmp_root}/non-hermetic.bep.json"
+  local hermetic_bep="${tmp_root}/hermetic.bep.json"
   local bep_args=(
     "--bep-json=${non_hermetic_bep}"
     "--bep-json=${hermetic_bep}"
     "--freshness-source=bep"
     "--freshness-mode=required"
+    "--artifact-source=bep"
+    "--artifact-staging-dir=${artifact_staging_dir}"
   )
+  trap "rm -rf $(printf '%q' "$tmp_root")" EXIT
 
   # Handle run cmd behavior.
   run_cmd() {
@@ -42,10 +48,10 @@ run_example_runtests() {
   }
 
   echo "--- non-hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file="$non_hermetic_bep" || test_status=$?
+  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs --build_event_json_file="$non_hermetic_bep" || test_status=$?
 
   echo "--- hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file="$hermetic_bep" || test_status=$?
+  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs --build_event_json_file="$hermetic_bep" || test_status=$?
 
   echo "--- validating payloads"
   run_cmd "${bazelw}" run //:dd_test_optimization_doctor -- "${bep_args[@]}" || doctor_status=$?

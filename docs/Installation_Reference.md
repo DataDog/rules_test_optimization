@@ -364,10 +364,9 @@ It captures one BEP JSON file per Bazel test invocation and passes those files
 to doctor/uploader with `--freshness-source=bep --freshness-mode=required`. It
 uploads only when called with `--upload`; the default is `--no-upload`. It does
 not delete caches, print secrets, proxy payloads, or pass `DD_GIT_*` through
-`--test_env`. If the generated test command is configured with
-`--zip_undeclared_test_outputs`, the script also passes `--artifact-source=bep`
-to doctor/uploader so local `outputs.zip` carriers are extracted through BEP
-artifact staging.
+`--test_env`. The generated test config uses `--zip_undeclared_test_outputs`,
+and the script passes `--artifact-source=bep` to doctor/uploader so local
+`outputs.zip` carriers are extracted through BEP artifact staging.
 
 ### Go Bazel config
 
@@ -398,11 +397,11 @@ sync metadata fetch through `--repo_env`, and uploader credentials/endpoints are
 read later by `bazel run`.
 
 The generated config intentionally does not include a fixed
-`--build_event_json_file`. Simple one-shot CI wrappers may pass
-`--build_event_json_file=.topt/bazel-bep.json` after creating `.topt/`.
-Wrappers that run multiple Bazel test invocations should pass a unique BEP path
-per invocation and export the matching `DD_TEST_OPTIMIZATION_BEP_JSON` before
-doctor/uploader.
+`--build_event_json_file`. CI wrappers should create a unique BEP path for each
+Bazel test invocation, pass it to `bazel test` with
+`--build_event_json_file=<path>`, and pass the same path to doctor/uploader with
+repeatable `--bep-json=<path>` flags. This keeps parallel CI jobs and repeated
+local runs from overwriting or reusing stale BEP files.
 
 `FETCH_SALT` is intentionally not part of the generated default config. Use it
 only in a separate force-refresh `bazel sync --only=<repo>` command when you
@@ -411,22 +410,11 @@ deliberately want fresh backend metadata.
 Run Go onboarding commands with this config:
 
 ```bash
-mkdir -p .topt
-rm -f .topt/bazel-bep.json
-export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
-export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
-export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
-export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
+tools/test_optimization/run_test_optimization_ci.sh //...
 
-bazel test \
-  --config=test-optimization \
-  --build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON" \
-  //...
-bazel run --config=test-optimization //:dd_test_optimization_doctor
-bazel run --config=test-optimization //:dd_upload_payloads -- \
-  --dry-run \
-  --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+# Add --upload only when the real upload should run after doctor and dry-run pass.
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+  tools/test_optimization/run_test_optimization_ci.sh --upload //...
 ```
 
 Do not run the real uploader if the doctor or dry-run enrichment step fails.
@@ -740,11 +728,13 @@ dd_payload_uploader(
 ```
 
 After tests and doctor pass, you can validate the exact enriched outbound test
-payload without uploading or deleting files:
+payload without uploading or deleting files. If you invoke this manually instead
+of using the CI wrapper, reuse the BEP file created by the matching
+`bazel test --build_event_json_file=...` invocation:
 
 ```bash
 bazel run --config=test-optimization //:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
+  --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
   --dry-run \
@@ -824,11 +814,12 @@ common:test-optimization --repo_env=DOTNET_MODULE_PATH
 # Optional: provide Ruby module path hint for export.bzl
 common:test-optimization --repo_env=RUBY_MODULE_PATH
 
-# Doctor/uploader runtime (export in CI or in the wrapper before bazel run)
-#   export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
-#   export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
-#   export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
-#   export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
+# Doctor/uploader runtime is passed by the CI wrapper after bazel run's `--`:
+#   --bep-json=<per-test-invocation-bep-json>
+#   --freshness-source=bep
+#   --freshness-mode=required
+#   --artifact-source=bep
+#   --artifact-staging-dir=<per-run-temp-dir>
 #
 # Uploader credentials (pass inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
@@ -837,10 +828,9 @@ common:test-optimization --repo_env=RUBY_MODULE_PATH
 #   # Set once per shell session before first run:
 #   # $env:DD_API_KEY = "<your-api-key>"
 #   # $env:DD_SITE = "datadoghq.com"
-#   # $env:DD_TEST_OPTIMIZATION_BEP_JSON = ".topt/bazel-bep.json"
-#   # $env:DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE = "bep"
-#   # $env:DD_TEST_OPTIMIZATION_FRESHNESS_MODE = "required"
-#   # $env:DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE = "bep"
+#   # The PowerShell wrapper passes --bep-json, --freshness-source=bep,
+#   # --freshness-mode=required, --artifact-source=bep, and
+#   # --artifact-staging-dir after bazel run's `--`.
 #   bazel run --config=test-optimization //:dd_upload_payloads
 
 # Tests (runtime)

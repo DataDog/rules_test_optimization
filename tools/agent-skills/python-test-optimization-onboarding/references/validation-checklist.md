@@ -74,15 +74,18 @@ bazel sync --enable_workspace --config=test-optimization \
 Preserve test failure priority:
 
 ```bash
-mkdir -p .topt
-rm -f .topt/pilot.bep.json
-bazel test --config=test-optimization --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=.topt/pilot.bep.json //path/to:python_test || test_status=$?
+bep_json="$(mktemp "${TMPDIR:-/tmp}/dd-topt-python.XXXXXX.bep.json")"
+artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
+
+bazel test --config=test-optimization --build_event_json_file="$bep_json" //path/to:python_test || test_status=$?
 test_status=${test_status:-0}
 
 bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
-  --bep-json=.topt/pilot.bep.json \
+  --bep-json="$bep_json" \
   --freshness-source=bep \
-  --freshness-mode=required || doctor_status=$?
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" || doctor_status=$?
 doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -90,9 +93,11 @@ if [ "$doctor_status" -ne 0 ]; then
 fi
 
 bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-  --bep-json=.topt/pilot.bep.json \
+  --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
   --dry-run \
   --validate-enrichment || dry_run_status=$?
 dry_run_status=${dry_run_status:-0}
@@ -103,9 +108,11 @@ fi
 
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-    --bep-json=.topt/pilot.bep.json \
+    --bep-json="$bep_json" \
     --freshness-source=bep \
-    --freshness-mode=required
+    --freshness-mode=required \
+    --artifact-source=bep \
+    --artifact-staging-dir="$artifact_staging_dir"
 upload_status=$?
 
 if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -136,21 +143,19 @@ If tests use remote execution or remote cache, the test config must include:
 ```text
 test:test-optimization --remote_download_minimal
 test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 ```
-
-If the pilot test command uses `--zip_undeclared_test_outputs`, include
-`--artifact-source=bep` in the matching doctor and uploader commands.
 
 Rules cannot force this client behavior. Without it, tests may pass while the
 doctor and uploader cannot see local payload files. Use a unique
-`--build_event_json_file` for each Bazel test invocation and pass the same BEP
-file to doctor/uploader with `--freshness-source=bep --freshness-mode=required`.
+`--build_event_json_file` for each Bazel test invocation and pass the matching
+paths to doctor/uploader with repeatable `--bep-json` flags.
 
 Artifact mode choices:
 
 | Situation | Doctor/uploader flags |
 |-----------|-----------------------|
-| Loose `test.outputs/payloads/...` exists locally | `--bep-json ... --freshness-source=bep --freshness-mode=required` |
-| Tests used `--zip_undeclared_test_outputs` and local `outputs.zip` exists | Add `--artifact-source=bep` |
+| Recommended zipped CI | `--bep-json=<path> --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=<temp-dir>` |
+| Loose `test.outputs/payloads/...` exists locally without zip | BEP freshness flags are enough; `--artifact-source=bep` remains valid |
 | BEP references remote/CAS `test.outputs` or `outputs.zip` artifacts | Add `--artifact-source=bep --remote-artifacts=download --bep-artifact-downloader=/path/to/downloader`; use `--remote-artifacts=required` for strict all-or-nothing validation |
 | Mixed migration where local outputs may be stale but BEP can stage fresh carriers | Use `--artifact-source=auto --remote-artifacts=download` so staged BEP outputs win for matching output keys |

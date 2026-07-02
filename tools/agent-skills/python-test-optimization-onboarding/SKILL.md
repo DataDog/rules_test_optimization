@@ -31,14 +31,17 @@ Keep the RFC contract intact:
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync
   metadata.
 - Do not pass uploader credentials or upload endpoints into the test sandbox.
-- Use `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
-  when remote execution or remote cache can leave test outputs remote-only.
-  If the test run uses `--zip_undeclared_test_outputs`, pass
-  `--artifact-source=bep` to doctor and uploader.
+- Put `--remote_download_minimal`,
+  `--remote_download_regex=.*test[.]outputs.*`, and
+  `--zip_undeclared_test_outputs` in the active test `.bazelrc` config when
+  remote execution or remote cache can leave test outputs remote-only.
+- Configure doctor/uploader with repeatable `--bep-json=<path>` flags,
+  `--freshness-source=bep`, `--freshness-mode=required`,
+  `--artifact-source=bep`, and `--artifact-staging-dir=<temp-dir>`.
   If BEP still points at remote/CAS artifacts, use BEP artifact resolution with
   `--remote-artifacts=download` or `required` and a downloader.
-- Run pilot tests with `--build_event_json_file` and pass the same BEP file to
-  doctor/uploader with `--freshness-source=bep --freshness-mode=required`.
+- Run pilot tests with a fresh `--build_event_json_file` path per Bazel test
+  invocation; pass the same paths to doctor/uploader with `--bep-json`.
 
 ## First Actions
 
@@ -90,9 +93,10 @@ Every successful Python onboarding should end with these pieces:
 - `.bazelrc` or CLI commands provide sync metadata with `--repo_env`.
 - Test commands use a named config such as `--config=test-optimization`.
 - Remote-output-sensitive test configs include
-  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`.
-- Validation commands pass the matching BEP file to doctor and uploader in
-  required BEP freshness mode.
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
+  and `--zip_undeclared_test_outputs`.
+- Validation commands export the matching BEP file and required BEP freshness
+  through `DD_TEST_OPTIMIZATION_*` environment variables.
 - `FETCH_SALT` is used only for a separate, explicit
   `bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.

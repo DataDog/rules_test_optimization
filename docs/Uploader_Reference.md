@@ -31,93 +31,41 @@ small repositories.
 
 ## Basic usage
 
+The `test-optimization` config should contain the recommended Bazel test flags:
+`--remote_download_minimal`, `--remote_download_regex=.*test[.]outputs.*`, and
+`--zip_undeclared_test_outputs`.
+
 ```bash
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
-mkdir -p .topt
-rm -f .topt/bazel-bep.json
-bazel test \
-  --config=test-optimization \
-  --remote_download_minimal \
-  --remote_download_regex=.*test[.]outputs.* \
-  --build_event_json_file=.topt/bazel-bep.json \
-  //... || test_status=$?; test_status=${test_status:-0}
+tools/test_optimization/run_test_optimization_ci.sh \
+  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+  --upload-target //tools/test_optimization:dd_upload_payloads \
+  //...
 
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required || doctor_status=$?; doctor_status=${doctor_status:-0}
-if [ "$doctor_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$doctor_status"
-fi
-
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required \
-  --dry-run \
-  --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-if [ "$dry_run_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$dry_run_status"
-fi
-
+# Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-    --bep-json=.topt/bazel-bep.json \
-    --freshness-source=bep \
-    --freshness-mode=required
-upload_status=$?
-if [ "$test_status" -ne 0 ]; then
-  exit "$test_status"
-fi
-exit "$upload_status"
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+    --upload-target //tools/test_optimization:dd_upload_payloads \
+    --upload \
+    //...
 ```
 
 ```powershell
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
-New-Item -ItemType Directory -Force .topt | Out-Null
-Remove-Item .topt/bazel-bep.json -ErrorAction SilentlyContinue
-bazel test `
-  --config=test-optimization `
-  --remote_download_minimal `
-  --remote_download_regex=.*test[.]outputs.* `
-  --build_event_json_file=.topt/bazel-bep.json `
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
+  -UploadTarget //tools/test_optimization:dd_upload_payloads `
   //...
-$testStatus = $LASTEXITCODE
-if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- `
-  --bep-json=.topt/bazel-bep.json `
-  --freshness-source=bep `
-  --freshness-mode=required
-$doctorStatus = $LASTEXITCODE
-if ($null -eq $doctorStatus) { $doctorStatus = 0 }
-if ($doctorStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $doctorStatus
-}
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- `
-  --bep-json=.topt/bazel-bep.json `
-  --freshness-source=bep `
-  --freshness-mode=required `
-  --dry-run `
-  --validate-enrichment
-$dryRunStatus = $LASTEXITCODE
-if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
-if ($dryRunStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $dryRunStatus
-}
-# Set once per shell session before first run:
-# $env:DD_API_KEY = "<your-api-key>"
-# $env:DD_SITE = "datadoghq.com"
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- `
-  --bep-json=.topt/bazel-bep.json `
-  --freshness-source=bep `
-  --freshness-mode=required
-$uploadStatus = $LASTEXITCODE
-if ($testStatus -ne 0) { exit $testStatus }
-exit $uploadStatus
+
+# Add -Upload only when the real upload should run after doctor and dry-run pass.
+$env:DD_API_KEY = "<your-api-key>"
+$env:DD_SITE = "datadoghq.com"
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
+  -UploadTarget //tools/test_optimization:dd_upload_payloads `
+  -Upload `
+  //...
 ```
 
 Always preserve all statuses. Test failures should win, doctor failures should
@@ -126,8 +74,10 @@ uploader failures must still fail the job when tests and validations passed.
 
 Dry-run enrichment validation:
 
-- `bazel run //tools/test_optimization:dd_upload_payloads -- --bep-json=.topt/bazel-bep.json --freshness-source=bep --freshness-mode=required --dry-run --validate-enrichment`
-  performs the same test-payload enrichment path used by real uploads.
+- The CI wrappers always run `--dry-run --validate-enrichment` before a real
+  upload. Manual invocations should pass the matching `--bep-json=<path>`
+  together with `--freshness-source=bep --freshness-mode=required
+  --artifact-source=bep`.
 - Dry-run mode does not upload data, does not require `DD_API_KEY` in
   agentless mode, and does not delete payload files.
 - Raw files under `bazel-testlogs` are not expected to contain every final tag.
@@ -280,14 +230,14 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
 | `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` | auto | Explicit path to a CODEOWNERS file for enrichment fallback/discovery edge cases |
 | `DD_TEST_OPTIMIZATION_CONTEXT_JSON` | unset | Legacy explicit override for one readable `context.json` path. It still wins when set, but mixed-runtime workspaces should prefer bundling all context targets in uploader `data`. |
-| `DD_TEST_OPTIMIZATION_BEP_JSON` | unset | Optional explicit path to the BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation. Pass `DD_TEST_OPTIMIZATION_BEP_JSON` or `--bep-json`; the uploader does not auto-discover `.topt/bazel-bep.json` because stale BEP files can authorize stale local outputs. |
+| `DD_TEST_OPTIMIZATION_BEP_JSON` | unset | Optional explicit path to one BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation. Prefer repeatable `--bep-json` flags when a wrapper runs multiple Bazel test invocations. The uploader does not auto-discover default BEP paths because stale BEP files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE` | `auto` | Cache-safety source: `auto`, `bep`, or `execution_log`. `auto` prefers BEP and uses execution-log filtering only as a legacy fallback when configured. |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | `auto` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | unset | Optional explicit legacy execution-log fallback path. Prefer BEP for new CI integrations. The uploader does not auto-discover `.topt/bazel-execution-log.json` because stale execution-log files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | `local` | Artifact source for `test.outputs` materialization: `local`, `bep`, or `auto`. `local` preserves existing discovery. `bep` requires an explicit BEP JSON file and stages BEP-referenced artifacts. |
 | `DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS` | `disabled` | Remote artifact mode: `disabled`, `download`, or `required`. `download` uses local/file BEP carriers and a configured downloader when needed; `required` fails if any selected BEP artifact cannot be materialized. |
-| `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | `.topt/bep-artifacts` | Base directory for per-run staged BEP artifacts. The uploader cleans only staging run roots that it owns. |
+| `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | `.topt/bep-artifacts` | Base directory for per-run staged BEP artifacts. CI wrappers should pass a per-run temporary directory with `--artifact-staging-dir`. The uploader cleans only staging run roots that it owns. |
 | `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER` | unset | Optional executable path used for remote/CAS BEP artifact references. The executable must write an `outputs.zip` archive to the requested `--output` path. |
 | `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC` | `300` | Positive decimal timeout, in seconds, for each downloader invocation. Scientific notation is rejected. |
 | `TESTLOGS_DIR` | auto | Explicit path to `bazel-testlogs` (for non-standard setups) |
@@ -313,9 +263,9 @@ disk, remote, or sandbox cache. Those cached payloads describe the original test
 execution, not necessarily the current commit.
 
 To keep test caching enabled without uploading cached payloads, generate Bazel's
-BEP JSON file during the same test invocation. Keep Bazel download behavior in
-`.bazelrc`, and configure doctor/uploader runtime behavior through environment
-variables or a wrapper:
+BEP JSON file during the same test invocation. Keep stable Bazel download
+behavior in `.bazelrc`, and let the wrapper pass per-run BEP and
+artifact-staging paths to doctor/uploader:
 
 ```text
 test:test-optimization --remote_download_minimal
@@ -324,28 +274,17 @@ test:test-optimization --zip_undeclared_test_outputs
 ```
 
 ```bash
-mkdir -p .topt
-rm -f .topt/bazel-bep.json
-export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
-export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
-export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
-export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
-
-bazel test \
-  --config=test-optimization \
-  --build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON" \
+tools/test_optimization/run_test_optimization_ci.sh \
+  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+  --upload-target //tools/test_optimization:dd_upload_payloads \
   //...
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-  --dry-run \
-  --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
 ```
 
-Use `DD_TEST_OPTIMIZATION_BEP_JSON` or `--bep-json=.topt/bazel-bep.json` after
-the doctor/uploader target's `--` separator. Use a unique BEP file per Bazel
-test invocation; stale BEP files can authorize the wrong local outputs.
+Use repeatable `--bep-json=<path>` flags after the doctor/uploader target's `--`
+separator. `DD_TEST_OPTIMIZATION_BEP_JSON` remains available for one-shot
+manual flows, but wrappers should prefer CLI flags so multiple test invocations
+can pass multiple BEP files without sharing a path. Use a unique BEP file per
+Bazel test invocation; stale BEP files can authorize the wrong local outputs.
 
 Cache-safety modes:
 
@@ -367,9 +306,9 @@ When BEP filtering is active, the uploader:
   `bazel-testlogs/.../test.outputs`.
 - Fails in `required` mode when BEP references fresh remote-only outputs that are
   not materialized locally or staged; rerun with
-  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`, or
-  enable BEP artifact resolution with a downloader when local materialization is
-  not viable.
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`
+  and `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep`, or enable BEP artifact
+  resolution with a downloader when local materialization is not viable.
 - Compares each eligible target label and normalized `test.outputs` path to the
   local payload directory before upload.
 
@@ -403,22 +342,26 @@ artifact staging so the doctor/uploader extracts the local zip before payload
 discovery:
 
 ```bash
+bep_json="$(mktemp "${TMPDIR:-/tmp}/dd-topt-bep.XXXXXX.json")"
+artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
 bazel test \
   --config=test-optimization \
-  --build_event_json_file=.topt/bazel-bep.json \
+  --build_event_json_file="$bep_json" \
   //...
 
 bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
-  --bep-json=.topt/bazel-bep.json \
-  --freshness-source=bep \
-  --freshness-mode=required \
-  --artifact-source=bep
-
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
+  --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
   --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir"
+
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
   --dry-run \
   --validate-enrichment
 ```
@@ -433,12 +376,12 @@ staging:
 
 ```bash
 bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
+  --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
   --artifact-source=bep \
   --remote-artifacts=download \
-  --artifact-staging-dir=.topt/bep-artifacts \
+  --artifact-staging-dir="$artifact_staging_dir" \
   --dry-run \
   --validate-enrichment
 ```
@@ -448,7 +391,7 @@ Customer-facing mode summary:
 | Mode | When to use | Required flags |
 |------|-------------|----------------|
 | Local discovery | Local development or CI where loose `test.outputs/payloads/...` files are already present | No artifact flags; for cache safety still use `--bep-json --freshness-source=bep --freshness-mode=required` |
-| Recommended CI | Remote cache/RBE default when outputs can be downloaded from Bazel | `.bazelrc` test config has `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`; wrapper exports `DD_TEST_OPTIMIZATION_BEP_JSON`, `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep`, `DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required`, and `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` |
+| Recommended CI | Remote cache/RBE default when outputs can be downloaded from Bazel | `.bazelrc` test config has `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`; wrapper passes `--build_event_json_file=<temp>` to each `bazel test`, then passes repeatable `--bep-json=<temp> --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=<temp-dir>` to doctor/uploader |
 | CI without zipped outputs | Test command leaves loose payload files under local `test.outputs` | Same BEP freshness env; `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` remains valid but is not required for zip extraction |
 | Remote/CAS artifact staging | BEP references remote-only `test.outputs`/`outputs.zip` carriers | Add `--artifact-source=bep --remote-artifacts=download|required` plus `--bep-artifact-downloader` |
 | Auto staging | Migration path when local outputs may exist but BEP-stageable outputs should win for matching output keys | `--artifact-source=auto --remote-artifacts=download|required` |
@@ -571,7 +514,7 @@ DD_API_KEY="$DD_API_KEY" \
 DD_SITE="$DD_SITE" \
 DD_TEST_OPTIMIZATION_CONTEXT_JSON="/abs/path/to/context.json" \
 bazel run --config=test-optimization //:dd_upload_payloads -- \
-  --bep-json=.topt/bazel-bep.json \
+  --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required
 ```
@@ -602,16 +545,17 @@ tests. Custom wrappers for other languages should set the same contract:
 
 1. Use `bazel run` (not `bazel test`) for uploader execution
 2. Use a single uploader target per workspace (no concurrent uploaders)
-3. Tests must run locally, use
-   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`, or
-   enable BEP artifact resolution with an explicit BEP file. If tests use
-   `--zip_undeclared_test_outputs`, include `--artifact-source=bep` in doctor
-   and uploader commands.
+3. Tests must run locally or use the recommended remote-cache/RBE test config:
+   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`.
+   Doctor/uploader should use `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` so
+   local `outputs.zip` carriers are staged through BEP.
 4. Run uploader on the same machine/workspace where tests executed
-5. When using downloaded test outputs from any cache, generate the matching BEP
-   file with `--build_event_json_file=.topt/bazel-bep.json` and pass it to the
-   doctor and uploader with `--freshness-source=bep --freshness-mode=required`
-   so cached payloads are skipped.
+5. When using downloaded test outputs from any cache, generate a fresh matching
+   BEP file with `--build_event_json_file=<path>` for each Bazel test
+   invocation and pass those paths to doctor/uploader with repeatable
+   `--bep-json=<path>` plus
+   `--freshness-source=bep --freshness-mode=required` so cached payloads are
+   skipped.
 
 For Go onboarding, the bootstrap validation script follows the same rule. It
 runs upload only when the operator passes `--upload`:

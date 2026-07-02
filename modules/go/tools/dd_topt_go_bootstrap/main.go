@@ -1421,7 +1421,9 @@ func validationScript(cfg config) (string, error) {
 	fmt.Fprintf(&buf, "DOCTOR_TARGET=%s\n", shellQuote(cfg.validationDoctorTarget))
 	fmt.Fprintf(&buf, "UPLOAD_TARGET=%s\n", shellQuote(cfg.validationUploadTarget))
 	buf.WriteString("WORKSPACE_DIR=\"$(pwd -P)\"\n")
-	buf.WriteString("BEP_JSON_DIR=\"${WORKSPACE_DIR}/.topt/bep\"\n")
+	buf.WriteString("BEP_TMP_ROOT=\"\"\n")
+	buf.WriteString("BEP_JSON_DIR=\"\"\n")
+	buf.WriteString("ARTIFACT_STAGING_DIR=\"\"\n")
 	fmt.Fprintf(&buf, "MIN_FREE_DISK_GB=%d\n", cfg.minFreeDiskGB)
 	fmt.Fprintf(&buf, "LARGE_MONOREPO=%s\n", shellBool(cfg.largeMonorepo))
 	fmt.Fprintf(&buf, "SHUTDOWN_BAZEL_ON_EXIT=%s\n", shellBool(cfg.shutdownBazelOnExit))
@@ -1481,14 +1483,26 @@ check_disk() {
 }
 
 cleanup() {
+  if [[ -n "${BEP_TMP_ROOT:-}" ]]; then
+    if [[ "${DD_TEST_OPTIMIZATION_KEEP_TMP:-0}" == "1" ]]; then
+      log "keeping Test Optimization temporary files: ${BEP_TMP_ROOT}"
+    else
+      rm -r -- "${BEP_TMP_ROOT}" >/dev/null 2>&1 || true
+    fi
+  fi
   if [[ "${SHUTDOWN_BAZEL_ON_EXIT}" == "1" ]]; then
     "${BAZEL}" shutdown >/dev/null 2>&1 || true
   fi
 }
 
 prepare_bep_files() {
-  mkdir -p "${BEP_JSON_DIR}"
-  find "${BEP_JSON_DIR}" -type f -name '*.json' -delete
+  local tmp_parent="${DD_TEST_OPTIMIZATION_TMPDIR:-${TMPDIR:-/tmp}}"
+  mkdir -p "${tmp_parent}"
+  BEP_TMP_ROOT="$(mktemp -d "${tmp_parent%/}/dd-go-topt.XXXXXX")"
+  BEP_JSON_DIR="${BEP_TMP_ROOT}/bep"
+  ARTIFACT_STAGING_DIR="${BEP_TMP_ROOT}/bep-artifacts"
+  mkdir -p "${BEP_JSON_DIR}" "${ARTIFACT_STAGING_DIR}"
+  BEP_RUN_ARGS+=("--artifact-staging-dir=${ARTIFACT_STAGING_DIR}")
 }
 
 bep_json_path_for_target() {
