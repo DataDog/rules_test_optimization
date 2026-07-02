@@ -417,6 +417,15 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh --upload //...
 ```
 
+During rollout debugging, add `--doctor-report-json=<path>` to the wrapper or
+set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` so CI archives the doctor's
+machine-readable report. For upload-phase diagnostics, pass
+`--report-json=<path>` to manual uploader invocations or set
+`DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`. When the wrapper runs both dry-run
+and real upload, the wrapper-level uploader report path is shared by both
+uploader invocations and the final invocation wins; use manual uploader commands
+with distinct `--report-json` paths if CI must archive both reports.
+
 Do not run the real uploader if the doctor or dry-run enrichment step fails.
 
 For manual Go extension wiring, set `module_path` to the Go module path from

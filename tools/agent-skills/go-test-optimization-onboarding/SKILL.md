@@ -97,8 +97,10 @@ Every successful Go onboarding should end with these pieces:
 - Remote-output-sensitive test configs include
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
   and `--zip_undeclared_test_outputs`.
-- Validation commands export the matching BEP file and required BEP freshness
-  through `DD_TEST_OPTIMIZATION_*` environment variables.
+- Validation commands pass each matching BEP file with repeatable `--bep-json`
+  flags and required BEP freshness/artifact flags. Use
+  `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
+  manual flows where one BEP file is sufficient.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a

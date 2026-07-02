@@ -100,8 +100,10 @@ Every successful Java onboarding should end with these pieces:
 - Remote-output-sensitive test configs include
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
   and `--zip_undeclared_test_outputs`.
-- Validation commands export the matching BEP file and required BEP freshness
-  through `DD_TEST_OPTIMIZATION_*` environment variables.
+- Validation commands pass each matching BEP file with repeatable `--bep-json`
+  flags and required BEP freshness/artifact flags. Use
+  `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
+  manual flows where one BEP file is sufficient.
 - `FETCH_SALT` is used only for a separate, explicit
   `bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.

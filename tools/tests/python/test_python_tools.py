@@ -411,6 +411,8 @@ class TestOptimizationCiWrapperTests(unittest.TestCase):
             self.assertIn("--freshness-mode=required", text)
             self.assertIn("--artifact-source=bep", text)
             self.assertIn("--artifact-staging-dir", text)
+            self.assertIn("--report-json", text)
+            self.assertIn("DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON", text)
             self.assertIn("--dry-run", text)
             self.assertIn("--validate-enrichment", text)
             self.assertNotIn(".topt/bazel-bep.json", text)
@@ -448,7 +450,14 @@ esac
             env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
 
             result = subprocess.run(
-                [bash, str(wrapper), "--keep-tmp", "//pkg:target"],
+                [
+                    bash,
+                    str(wrapper),
+                    "--keep-tmp",
+                    "--doctor-report-json",
+                    str(root / "doctor-report.json"),
+                    "//pkg:target",
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -462,6 +471,7 @@ esac
             self.assertIn("--build_event_json_file=", log_text)
             self.assertIn("run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=", log_text)
             self.assertIn("--artifact-staging-dir=", log_text)
+            self.assertIn(f"--report-json={root / 'doctor-report.json'}", log_text)
 
 
 class TestOptimizationDoctorTests(unittest.TestCase):
@@ -810,6 +820,160 @@ $rows | ConvertTo-Json -Compress
         self.assertEqual(".topt/custom-bep-artifacts", args.artifact_staging_dir)
         self.assertEqual("/tmp/fetcher", args.bep_artifact_downloader)
         self.assertEqual(1.5, args.bep_artifact_downloader_timeout_sec)
+
+    def test_doctor_report_json_success_includes_payload_diagnostics(self) -> None:
+        """Validate doctor writes a machine-readable report for successful local validation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = self._write_doctor_output(root, "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            report_path = root / "doctor-report.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)},
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--report-json",
+                    str(report_path),
+                ])
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, rc)
+        self.assertEqual(1, report["schema_version"])
+        self.assertEqual("dd-test-optimization-doctor", report["tool"])
+        self.assertEqual("ok", report["status"])
+        self.assertEqual(["//pkg:target"], report["config"]["expected_targets"])
+        self.assertEqual(1, report["summary"]["validated_output_dirs"])
+        self.assertEqual(1, report["summary"]["payloads"]["json"])
+        self.assertEqual({"module": 1}, report["summary"]["payload_selection"])
+        self.assertEqual([], report["errors"])
+        self.assertEqual(1, len(report["outputs"]))
+        output_report = report["outputs"][0]
+        self.assertEqual(str(output.resolve()), output_report["path"])
+        self.assertEqual("//pkg:target", output_report["label"])
+        self.assertEqual("local", output_report["source"])
+        self.assertEqual(1, output_report["payloads"]["json"])
+        self.assertEqual(1, output_report["payloads"]["tests"])
+        self.assertEqual(1, output_report["metadata"]["count"])
+        self.assertEqual("module", output_report["metadata"]["payload_selection"])
+
+    def test_doctor_report_json_failure_includes_error_and_partial_outputs(self) -> None:
+        """Validate doctor writes partial diagnostics before raising controlled failures."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = self._write_doctor_output(root, "module", "//pkg:target")
+            shutil.rmtree(output / "payloads")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            report_path = root / "doctor-report.json"
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)}),
+                mock.patch("sys.stderr", stderr),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--report-json",
+                        str(report_path),
+                    ])
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(1, raised.exception.code)
+        self.assertIn("missing JSON payloads", stderr.getvalue())
+        self.assertEqual("fail", report["status"])
+        self.assertTrue(report["errors"])
+        self.assertIn("missing JSON payloads", report["errors"][0])
+        self.assertEqual(1, report["summary"]["validated_output_dirs"])
+        self.assertEqual(0, report["summary"]["payloads"]["json"])
+        self.assertEqual(1, len(report["outputs"]))
+        self.assertEqual(str(output.resolve()), report["outputs"][0]["path"])
+        self.assertEqual(0, report["outputs"][0]["payloads"]["json"])
+
+    def test_doctor_report_json_includes_bep_staged_outputs_zip(self) -> None:
+        """Validate report records BEP-selected outputs.zip staging diagnostics."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            zip_path = (
+                root
+                / "execroot"
+                / "bazel-out"
+                / "k8-fastbuild"
+                / "testlogs"
+                / "pkg"
+                / "zip_target"
+                / "test.outputs"
+                / "outputs.zip"
+            )
+            zip_path.parent.mkdir(parents=True)
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("payloads/tests/span_events_1.json", "{}")
+                archive.writestr(
+                    "bazel_target_metadata.json",
+                    json.dumps({
+                        "bazel.target": "//pkg:zip_target",
+                        "bazel.go.payload_selection": "module",
+                    }),
+                )
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:zip_target", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [{"uri": zip_path.as_uri()}],
+                        },
+                    },
+                ],
+            )
+            report_path = root / "doctor-report.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": ""},
+                clear=False,
+            ):
+                os.environ.pop("TESTLOGS_DIR", None)
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--report-json",
+                    str(report_path),
+                ])
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, rc)
+        self.assertEqual("ok", report["status"])
+        self.assertEqual([str(bep.resolve())], report["bep"]["files"])
+        self.assertEqual(1, report["bep"]["eligible_outputs"])
+        self.assertEqual(0, report["bep"]["cached_outputs"])
+        self.assertEqual([], report["bep"]["remote_only_outputs"])
+        self.assertEqual([["//pkg:zip_target", "pkg/zip_target/test.outputs"]], report["bep"]["selected_artifact_outputs"])
+        self.assertEqual(1, report["artifacts"]["staged_count"])
+        self.assertEqual(1, len(report["artifacts"]["staged"]))
+        self.assertFalse(report["artifacts"]["staged"][0]["downloaded"])
+        self.assertEqual("outputs_zip", report["artifacts"]["staged"][0]["carrier"])
+        self.assertEqual(1, len(report["outputs"]))
+        self.assertEqual("staged", report["outputs"][0]["source"])
+        self.assertEqual("//pkg:zip_target", report["outputs"][0]["label"])
+        self.assertEqual(1, report["outputs"][0]["payloads"]["json"])
 
     def test_parse_args_rejects_scientific_downloader_timeout(self) -> None:
         """Validate downloader timeout rejects scientific notation before staging."""
@@ -4120,6 +4284,48 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         env.pop("RUNFILES_MANIFEST_FILE", None)
         return env
 
+    def _assert_uploader_report_success(self, report_path: Path, bep_path: Path, staging_dir: Path) -> None:
+        """Validate a successful generated uploader machine-readable report."""
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(1, report["schema_version"])
+        self.assertEqual("dd-test-optimization-uploader", report["tool"])
+        self.assertEqual("ok", report["status"])
+        self.assertEqual(0, report["exit_code"])
+        self.assertTrue(report["config"]["dry_run"])
+        self.assertEqual("bep", report["config"]["artifact_source"])
+        self.assertEqual("download", report["config"]["remote_artifacts"])
+        self.assertEqual("bep", report["config"]["freshness_source"])
+        self.assertEqual("required", report["config"]["freshness_mode"])
+        self.assertEqual([str(bep_path)], report["bep"]["files"])
+        self.assertEqual("bep", report["bep"]["freshness_selected_source"])
+        self.assertEqual(1, report["bep"]["eligible_outputs"])
+        self.assertEqual(str(staging_dir), report["artifacts"]["staging_dir"])
+        self.assertEqual(1, report["artifacts"]["selected_remote_artifacts"])
+        self.assertEqual(1, report["artifacts"]["staged_remote_artifacts"])
+        self.assertEqual(1, report["artifacts"]["staged_testlogs_dirs"])
+        self.assertEqual(1, report["payloads"]["test_outputs_dirs"])
+        self.assertEqual(1, report["payloads"]["tests"]["processed"])
+        self.assertEqual(0, report["payloads"]["tests"]["failed"])
+        self.assertEqual(0, report["payloads"]["tests"]["skipped"])
+        self.assertEqual(0, report["payloads"]["coverage"]["processed"])
+        self.assertEqual(0, report["payloads"]["telemetry"]["processed"])
+        self.assertEqual(0, report["upload_failures"])
+
+    def _assert_uploader_report_failure(self, report_path: Path, bep_path: Path) -> None:
+        """Validate a failed generated uploader machine-readable report."""
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(1, report["schema_version"])
+        self.assertEqual("dd-test-optimization-uploader", report["tool"])
+        self.assertEqual("fail", report["status"])
+        self.assertEqual(1, report["exit_code"])
+        self.assertTrue(report["config"]["dry_run"])
+        self.assertTrue(report["config"]["validate_enrichment"])
+        self.assertEqual([str(bep_path)], report["bep"]["files"])
+        self.assertEqual(1, report["payloads"]["test_outputs_dirs"])
+        self.assertEqual(0, report["payloads"]["tests"]["processed"])
+        self.assertEqual(1, report["payloads"]["tests"]["failed"])
+        self.assertEqual(1, report["upload_failures"])
+
     def test_runtime_fingerprint_alphabet_matches_sync(self) -> None:
         """Validate runtime fingerprint alphabet matches sync behavior."""
         sync_text = _runfile("tools/core/test_optimization_sync.bzl").read_text(encoding="utf-8")
@@ -4500,6 +4706,65 @@ echo blocked
             generated_bash.chmod(0o755)
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
             env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            report = root / "uploader-report.json"
+            staging_dir = root / ".topt" / "bep-artifacts"
+            result = subprocess.run(
+                [
+                    bash,
+                    str(generated_bash),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(staging_dir),
+                    "--report-json",
+                    str(report),
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            output = result.stdout + result.stderr
+            self.assertEqual(0, result.returncode, output)
+            self.assertIn("BEP artifact staging selected output key", output)
+            self.assertIn("dry-run kept test payload", output)
+            self.assertIn("dry-run done", output)
+            self.assertNotIn("BEP artifact stage helper not found in runfiles", output)
+            self.assertNotIn("BEP artifact staging doctor runtime not found in runfiles", output)
+            self._assert_uploader_report_success(report, bep, staging_dir)
+
+    def test_generated_bash_uploader_writes_failure_report(self) -> None:
+        """Validate generated Bash uploader writes a report for controlled upload failures."""
+        _require_command(self, "jq", "jq is required for Bash dry-run enrichment validation")
+        bash = _require_functional_bash(self)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty_testlogs = root / "bazel-testlogs"
+            empty_testlogs.mkdir()
+            bep = self._write_bep_staging_smoke_fixture(root)
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                ),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+            env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            report = root / "uploader-report.json"
+            env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(report)
             result = subprocess.run(
                 [
                     bash,
@@ -4513,6 +4778,8 @@ echo blocked
                     "--artifact-staging-dir",
                     str(root / ".topt" / "bep-artifacts"),
                     "--dry-run",
+                    "--validate-enrichment",
+                    "--expected-enriched-tag=missing.required.tag",
                 ],
                 cwd=root,
                 env=env,
@@ -4522,13 +4789,10 @@ echo blocked
                 check=False,
             )
 
-        output = result.stdout + result.stderr
-        self.assertEqual(0, result.returncode, output)
-        self.assertIn("BEP artifact staging selected output key", output)
-        self.assertIn("dry-run kept test payload", output)
-        self.assertIn("dry-run done", output)
-        self.assertNotIn("BEP artifact stage helper not found in runfiles", output)
-        self.assertNotIn("BEP artifact staging doctor runtime not found in runfiles", output)
+            output = result.stdout + result.stderr
+            self.assertEqual(1, result.returncode, output)
+            self.assertIn("missing expected tag", output)
+            self._assert_uploader_report_failure(report, bep)
 
     def test_generated_powershell_uploader_executes_bep_staging_runfiles(self) -> None:
         """Validate generated PowerShell uploader resolves non-sibling helper runfiles."""
@@ -4552,6 +4816,69 @@ echo blocked
             )
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
             env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            report = root / "uploader-report.json"
+            staging_dir = root / ".topt" / "bep-artifacts"
+            result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-File",
+                    str(generated_ps),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(staging_dir),
+                    "--report-json",
+                    str(report),
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            self.assertEqual(0, result.returncode, output)
+            self.assertIn("BEP artifact staging selected output key", output)
+            self.assertIn("dry-run kept test payload", output)
+            self.assertIn("dry-run done", output)
+            self.assertNotIn("BEP artifact stage helper not found in runfiles", output)
+            self.assertNotIn("BEP artifact staging doctor runtime not found in runfiles", output)
+            self._assert_uploader_report_success(report, bep, staging_dir)
+        finally:
+            _cleanup_tempdir_with_windows_retry(root)
+
+    def test_generated_powershell_uploader_writes_failure_report(self) -> None:
+        """Validate generated PowerShell uploader writes a report for controlled upload failures."""
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell uploader execution")
+
+        root = Path(tempfile.mkdtemp())
+        try:
+            empty_testlogs = root / "bazel-testlogs"
+            empty_testlogs.mkdir()
+            bep = self._write_bep_staging_smoke_fixture(root)
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            generated_ps = root / "generated_uploader.ps1"
+            generated_ps.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                ),
+                encoding="utf-8",
+            )
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+            env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            report = root / "uploader-report.json"
+            env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(report)
             result = subprocess.run(
                 [
                     pwsh,
@@ -4568,6 +4895,8 @@ echo blocked
                     "--artifact-staging-dir",
                     str(root / ".topt" / "bep-artifacts"),
                     "--dry-run",
+                    "--validate-enrichment",
+                    "--expected-enriched-tag=missing.required.tag",
                 ],
                 cwd=root,
                 env=env,
@@ -4576,16 +4905,12 @@ echo blocked
                 stderr=subprocess.PIPE,
                 check=False,
             )
+            output = result.stdout + result.stderr
+            self.assertEqual(1, result.returncode, output)
+            self.assertIn("missing expected tag", output)
+            self._assert_uploader_report_failure(report, bep)
         finally:
             _cleanup_tempdir_with_windows_retry(root)
-
-        output = result.stdout + result.stderr
-        self.assertEqual(0, result.returncode, output)
-        self.assertIn("BEP artifact staging selected output key", output)
-        self.assertIn("dry-run kept test payload", output)
-        self.assertIn("dry-run done", output)
-        self.assertNotIn("BEP artifact stage helper not found in runfiles", output)
-        self.assertNotIn("BEP artifact staging doctor runtime not found in runfiles", output)
 
     def test_uploader_staging_cleanup_normalizes_physical_paths(self) -> None:
         """Validate staging cleanup tolerates symlink-normalized temp roots."""

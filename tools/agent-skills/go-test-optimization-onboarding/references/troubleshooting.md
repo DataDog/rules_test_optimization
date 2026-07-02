@@ -141,6 +141,21 @@ Valid alternatives are `module`, `module_override`, and
 `full_bundle_disabled`. `full_bundle_disabled` is acceptable only when the setup
 intentionally lacks backend full-bundle data.
 
+## Diagnostic Reports
+
+When CI logs are long or ambiguous, archive machine-readable reports from the
+same failing run:
+
+- Doctor: pass `--report-json=<path>` after the doctor target's `--` separator,
+  or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`.
+- Uploader: pass `--report-json=<path>` after the uploader target's `--`
+  separator, or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`.
+
+Use these reports to compare expected targets, BEP freshness, artifact staging,
+payload directories, payload counts, upload failures, status, and exit code
+without reading the full CI log. Review reports for internal paths and target
+names before sharing outside the trusted project boundary.
+
 ## Fingerprint Or Linker Mismatches
 
 Symptoms:

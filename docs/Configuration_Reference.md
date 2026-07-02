@@ -231,8 +231,9 @@ Rule: `dd_payload_uploader(...)`
 
 Rule: `dd_test_optimization_doctor(...)`
 
-Run this target after `bazel test` and before `dd_payload_uploader`. It checks
-local files only; it does not upload, delete, or rewrite payloads.
+Run this target after `bazel test` and before `dd_payload_uploader`. It
+validates local or BEP-staged payload files and metadata; it does not upload,
+delete, or rewrite source payloads.
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -250,8 +251,10 @@ local files only; it does not upload, delete, or rewrite payloads.
 
 Doctor notes:
 
-- The doctor checks local files only. It does not upload, delete, or rewrite
-  payloads.
+- The doctor validates local files by default. When configured with
+  `--artifact-source=bep`, it may stage BEP-referenced local files or
+  downloader-provided remote artifacts into a temporary staging directory before
+  validation. It does not upload, delete, or rewrite source payloads.
 - When `expected_targets` is set, each listed test must have run before the
   doctor. If tests ran remotely, prefer
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` plus
@@ -487,7 +490,7 @@ Additional mapped metadata inputs include:
 
 ## Uploader runtime environment variables
 
-The uploader rule reads these variables at `bazel run` time:
+The doctor and/or uploader runtimes read these variables at `bazel run` time:
 
 | Variable | Purpose |
 |----------|---------|
@@ -506,6 +509,8 @@ The uploader rule reads these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_BEP_JSON` | BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE` | Freshness source: `auto`, `bep`, or `execution_log` |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
+| `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Optional path for the doctor machine-readable diagnostic report |
+| `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Optional path for the uploader machine-readable diagnostic report |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | Artifact discovery source: `local`, `bep`, or `auto`. Recommended CI with zipped undeclared outputs should set `bep` |
 | `DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS` | Remote BEP artifact handling: `disabled`, `download`, or `required` |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | Directory used for per-run staged BEP artifacts |
@@ -521,7 +526,7 @@ Uploader CLI flags:
 |------|---------|
 | `--dry-run` | Enrich and validate discovered payloads without uploading or deleting files |
 | `--validate-enrichment` | In dry-run mode, require key Git and Bazel tags to exist after enrichment |
-| `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, `bazel.package`, and `bazel.go.payload_selection` |
+| `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package`. Add `bazel.go.payload_selection` explicitly when a Go rollout must prove per-module selection |
 | `--bep-json=<path>` | BEP JSON file from the matching Bazel test invocation; repeat for multiple invocations |
 | `--freshness-source=<source>` | Freshness source: `auto`, `bep`, or `execution_log` |
 | `--freshness-mode=<mode>` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
@@ -529,10 +534,25 @@ Uploader CLI flags:
 | `--execution-log-json=<path>` | Explicit legacy execution-log fallback path |
 | `--execution-log-mode=<mode>` | Legacy alias for freshness mode |
 | `--artifact-source=<source>` | Artifact discovery source: `local`, `bep`, or `auto`. Default `local` scans local `bazel-testlogs`; `bep` stages BEP-referenced `test.outputs` directories or local `outputs.zip` carriers before discovery; `auto` can stage BEP artifacts while preserving local discovery fallback |
-| `--remote-artifacts=<mode>` | Remote BEP artifact handling: `disabled`, `download`, or `required`. Default `disabled` never downloads remote/CAS artifacts. `download` stages what it can and skips unresolved remote artifacts. `required` fails if any selected fresh BEP artifact cannot be materialized |
+| `--remote-artifacts=<mode>` | Remote BEP artifact handling: `disabled`, `download`, or `required`. Default `disabled` never downloads remote/CAS artifacts. `download` stages what it can; unresolved remote artifacts are skipped only outside required BEP freshness. In the recommended `--freshness-mode=required` CI flow, every selected fresh remote-only artifact must be materialized or the command fails. `required` fails if any selected fresh BEP artifact cannot be materialized |
 | `--artifact-staging-dir=<path>` | Directory used for per-run staged BEP artifacts; wrapper examples create a temporary staging directory per run |
 | `--bep-artifact-downloader=<path>` | Executable used to download remote/CAS BEP artifacts. It receives `--uri`, `--name`, and `--output`, and must write an `outputs.zip` archive to `--output` |
 | `--bep-artifact-downloader-timeout-sec=<seconds>` | Timeout for the BEP artifact downloader |
+| `--report-json=<path>` | Write a machine-readable uploader diagnostic report on success, no-op, or controlled uploader failure |
+
+Doctor CLI flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--bep-json=<path>` | BEP JSON file from the matching Bazel test invocation; repeat for multiple invocations |
+| `--freshness-source=<source>` | Freshness source: `auto`, `bep`, or `execution_log`. Use `bep` in CI; the doctor only performs BEP freshness validation and rejects required execution-log validation |
+| `--freshness-mode=<mode>` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
+| `--artifact-source=<source>` | Artifact discovery source: `local`, `bep`, or `auto` |
+| `--remote-artifacts=<mode>` | Remote BEP artifact handling: `disabled`, `download`, or `required` |
+| `--artifact-staging-dir=<path>` | Directory used for per-run staged BEP artifacts |
+| `--bep-artifact-downloader=<path>` | Executable used to download remote/CAS BEP artifacts |
+| `--bep-artifact-downloader-timeout-sec=<seconds>` | Timeout for the BEP artifact downloader |
+| `--report-json=<path>` | Write a machine-readable doctor diagnostic report on success or controlled doctor failure |
 
 Uploader execution modes:
 

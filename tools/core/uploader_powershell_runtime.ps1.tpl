@@ -596,6 +596,8 @@ Dbg "gzip enabled: $GzipPayloads"
 
 $DryRun = $false
 $ValidateEnrichment = $false
+$ReportJson = $env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON
+$script:UploaderReportWritten = $false
 $BepJsonFiles = New-Object System.Collections.Generic.List[string]
 if ($env:DD_TEST_OPTIMIZATION_BEP_JSON) {
     $BepJsonFiles.Add($env:DD_TEST_OPTIMIZATION_BEP_JSON) | Out-Null
@@ -667,6 +669,7 @@ function Show-Usage {
     Write-Host "  --execution-log-mode MODE    Legacy alias for --freshness-mode."
     Write-Host "  --allow-cached-payload-uploads"
     Write-Host "                                Disable BEP and execution-log cache filtering for this uploader run."
+    Write-Host "  --report-json PATH           Write a machine-readable uploader diagnostic report."
 }
 
 for ($i = 0; $i -lt $args.Count; $i++) {
@@ -838,6 +841,19 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         $ExecutionLogMode = "disabled"
         continue
     }
+    if ($arg -eq "--report-json") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: --report-json requires a file path"
+            exit 2
+        }
+        $i++
+        $ReportJson = [string]$args[$i]
+        continue
+    }
+    if ($arg.StartsWith("--report-json=")) {
+        $ReportJson = $arg.Substring("--report-json=".Length)
+        continue
+    }
     if ($arg -eq "--help" -or $arg -eq "-h") {
         Show-Usage
         exit 0
@@ -895,11 +911,13 @@ $script:ValidateEnrichment = $ValidateEnrichment
 $script:BepJsonFiles = $BepJsonFiles
 $script:FreshnessMode = $FreshnessMode
 $script:FreshnessSource = $FreshnessSource
+$script:FreshnessDisabledExplicit = $FreshnessDisabledExplicit
 $script:ArtifactSource = $ArtifactSource
 $script:RemoteArtifacts = $RemoteArtifacts
 $script:ArtifactStagingDir = $ArtifactStagingDir
 $script:BepArtifactDownloader = $BepArtifactDownloader
 $script:BepArtifactDownloaderTimeoutSec = $BepArtifactDownloaderTimeoutSec
+$script:ReportJson = $ReportJson
 $script:DefaultBepJson = $DefaultBepJson
 $script:ExecutionLogJson = $ExecutionLogJson
 $script:ExecutionLogMode = $ExecutionLogMode
@@ -983,6 +1001,105 @@ function Release-Lock {
     if ($script:TmpPayloadDir -and (Test-Path -LiteralPath $script:TmpPayloadDir)) {
         Remove-Item -LiteralPath $script:TmpPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Get-ReportCollectionCount($Value) {
+    if ($null -eq $Value) { return 0 }
+    if ($Value.PSObject.Properties['Count']) { return [int]$Value.Count }
+    return @($Value).Count
+}
+
+function Get-ReportUniqueStrings($Values) {
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $unique = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @($Values)) {
+        $text = [string]$value
+        if ($seen.Add($text)) {
+            $unique.Add($text) | Out-Null
+        }
+    }
+    return @($unique.ToArray())
+}
+
+function Write-UploaderReport([string]$Status, [int]$ExitCode) {
+    if ([string]::IsNullOrWhiteSpace($script:ReportJson)) { return }
+
+    $report = [ordered]@{
+        schema_version = 1
+        tool = "dd-test-optimization-uploader"
+        status = $Status
+        exit_code = $ExitCode
+        config = [ordered]@{
+            dry_run = [bool]$script:DryRun
+            validate_enrichment = [bool]$script:ValidateEnrichment
+            artifact_source = [string]$script:ArtifactSource
+            remote_artifacts = [string]$script:RemoteArtifacts
+            freshness_source = [string]$script:FreshnessSource
+            freshness_mode = [string]$script:FreshnessMode
+            allow_cached_payload_uploads = [bool]$script:FreshnessDisabledExplicit
+        }
+        bep = [ordered]@{
+            files = @(Get-ReportUniqueStrings @($script:BepJsonFiles.ToArray()))
+            freshness_selected_source = [string]$script:FreshnessSelectedSource
+            eligible_outputs = Get-ReportCollectionCount $script:FreshnessEligibleOutputs
+            cached_outputs = Get-ReportCollectionCount $script:FreshnessCachedOutputs
+            remote_only_outputs = Get-ReportCollectionCount $script:FreshnessRemoteOnlyOutputs
+            skipped_outputs = Get-ReportCollectionCount $script:FreshnessSkippedOutputs
+            missing_output_labels = Get-ReportCollectionCount $script:FreshnessMissingOutputLabels
+        }
+        artifacts = [ordered]@{
+            source = [string]$script:ArtifactSource
+            staging_dir = [string]$script:ArtifactStagingDir
+            staged_testlogs_dirs = Get-ReportCollectionCount $script:StagedTestlogsDirs
+            selected_remote_artifacts = Get-ReportCollectionCount $script:SelectedBepArtifactOutputKeys
+            staged_remote_artifacts = Get-ReportCollectionCount $script:StagedOutputKeys
+            remote_artifacts_ignored = Get-ReportCollectionCount $script:BlockedBepArtifactLabels
+        }
+        payloads = [ordered]@{
+            test_outputs_dirs = @($script:TestOutputsCache).Count
+            tests = [ordered]@{
+                processed = [int]$script:ReportTestsProcessed
+                failed = [int]$script:ReportTestsFailed
+                skipped = [int]$script:ReportTestsSkipped
+            }
+            coverage = [ordered]@{
+                processed = [int]$script:ReportCoverageProcessed
+                failed = [int]$script:ReportCoverageFailed
+                skipped = [int]$script:ReportCoverageSkipped
+            }
+            telemetry = [ordered]@{
+                processed = [int]$script:ReportTelemetryProcessed
+                failed = [int]$script:ReportTelemetryFailed
+                skipped = [int]$script:ReportTelemetrySkipped
+            }
+        }
+        upload_failures = [int]$script:UploadFailures
+    }
+
+    try {
+        $reportDir = Split-Path -Parent $script:ReportJson
+        if (-not [string]::IsNullOrWhiteSpace($reportDir)) {
+            New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+        }
+        $tmpReport = "$($script:ReportJson).tmp.$PID"
+        Write-Utf8NoBomFile -Path $tmpReport -Content (($report | ConvertTo-Json -Depth 20) + "`n")
+        Move-Item -LiteralPath $tmpReport -Destination $script:ReportJson -Force
+    } catch {
+        Log-Stderr "warning: failed to write uploader report '$($script:ReportJson)': $_"
+    }
+}
+
+function Complete-UploaderReport([int]$ExitCode) {
+    if ($script:UploaderReportWritten) { return }
+    $status = if ($ExitCode -eq 0) { "ok" } else { "fail" }
+    Write-UploaderReport $status $ExitCode
+    $script:UploaderReportWritten = $true
+}
+
+function Exit-WithUploaderReport([int]$ExitCode) {
+    Complete-UploaderReport $ExitCode
+    Release-Lock
+    exit $ExitCode
 }
 
 # Register cleanup on exit (backup for unexpected termination)
@@ -1442,8 +1559,7 @@ while ($true) {
                 Log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
                 if ($FailOnError) {
                     Log "error: FailOnError is set; failing due to missing payloads"
-                    Release-Lock
-                    exit 1
+                    Exit-WithUploaderReport 1
                 }
             } else {
                 Log "no payload files found and no test execution detected; nothing to upload"
@@ -1452,8 +1568,7 @@ while ($true) {
                 Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
                 break
             }
-            Release-Lock
-            exit 0
+            Exit-WithUploaderReport 0
         }
         if ($elapsed -gt $MaxWaitSec) {
             if (Test-ExecutedTests) {
@@ -1461,8 +1576,7 @@ while ($true) {
                 Log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
                 if ($FailOnError) {
                     Log "error: FailOnError is set; failing due to missing payloads"
-                    Release-Lock
-                    exit 1
+                    Exit-WithUploaderReport 1
                 }
             } else {
                 Log "no payload files found and no test execution detected; nothing to upload"
@@ -1471,8 +1585,7 @@ while ($true) {
                 Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
                 break
             }
-            Release-Lock
-            exit 0
+            Exit-WithUploaderReport 0
         }
         Dbg "no payload files yet; waiting"
         Start-Sleep -Seconds 2
@@ -3305,6 +3418,15 @@ function Remove-PayloadFile([string]$FilePath) {
 
 # Track upload failures globally
 $script:UploadFailures = 0
+$script:ReportTestsProcessed = 0
+$script:ReportTestsFailed = 0
+$script:ReportTestsSkipped = 0
+$script:ReportCoverageProcessed = 0
+$script:ReportCoverageFailed = 0
+$script:ReportCoverageSkipped = 0
+$script:ReportTelemetryProcessed = 0
+$script:ReportTelemetryFailed = 0
+$script:ReportTelemetrySkipped = 0
 
 function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
   $maxRetries = 3
@@ -4248,6 +4370,7 @@ function Upload-AllTests {
         foreach ($f in @(Get-SortedRawTestMsgpackFiles $testsDir)) {
             Log "error: raw msgpack test payload is not supported in Bazel file mode: $($f.FullName)"
             $failed++
+            $script:ReportTestsFailed++
             $script:UploadFailures++
         }
         $files = Get-SortedTestPayloadFiles $testsDir
@@ -4255,11 +4378,13 @@ function Upload-AllTests {
             if (-not (Test-PrefixFilter $f.FullName "span_events_")) {
                 Dbg "skipping (prefix filter): $($f.FullName)"
                 $skipped++
+                $script:ReportTestsSkipped++
                 continue
             }
             if (-not (Test-TestPayloadHasEvents $f.FullName)) {
                 Log "skipping test payload with no events: $($f.FullName)"
                 $skipped++
+                $script:ReportTestsSkipped++
                 continue
             }
             if ($script:DryRun) {
@@ -4277,9 +4402,11 @@ function Upload-AllTests {
                 if ($validated) {
                     Log "dry-run kept test payload: $($f.FullName)"
                     $total++
+                    $script:ReportTestsProcessed++
                 } else {
                     Log "warning: failed to dry-run validate $($f.FullName)"
                     $failed++
+                    $script:ReportTestsFailed++
                     $script:UploadFailures++
                 }
                 continue
@@ -4293,10 +4420,12 @@ function Upload-AllTests {
                 Log "uploaded test payload: $($f.FullName)"
                 Remove-PayloadFile $f.FullName
                 $total++
+                $script:ReportTestsProcessed++
             } else {
                 # Continue best-effort upload and report aggregate failures at end.
                 Log "warning: failed to upload $($f.FullName)"
                 $failed++
+                $script:ReportTestsFailed++
                 $script:UploadFailures++
             }
         }
@@ -4323,11 +4452,13 @@ function Upload-AllCoverage {
             if (-not (Test-PrefixFilter $f.FullName "coverage_")) {
                 Dbg "skipping (prefix filter): $($f.FullName)"
                 $skipped++
+                $script:ReportCoverageSkipped++
                 continue
             }
             if ($script:DryRun) {
                 Log "dry-run kept coverage payload: $($f.FullName)"
                 $total++
+                $script:ReportCoverageProcessed++
                 continue
             }
             $uploadedResult = @(Upload-SingleCoverage $f.FullName)
@@ -4339,10 +4470,12 @@ function Upload-AllCoverage {
                 Log "uploaded coverage payload: $($f.FullName)"
                 Remove-PayloadFile $f.FullName
                 $total++
+                $script:ReportCoverageProcessed++
             } else {
                 # Preserve symmetry with test uploads: keep going, count failures.
                 Log "warning: failed to upload $($f.FullName)"
                 $failed++
+                $script:ReportCoverageFailed++
                 $script:UploadFailures++
             }
         }
@@ -4376,6 +4509,7 @@ function Upload-AllTelemetry {
                 if ($script:DryRun) {
                     Log "dry-run kept telemetry payload: $($f.FullName)"
                     $total++
+                    $script:ReportTelemetryProcessed++
                     continue
                 }
                 $uploadedResult = @(Upload-SingleTelemetry $f.FullName $bodyPath)
@@ -4387,9 +4521,11 @@ function Upload-AllTelemetry {
                     Log "uploaded telemetry payload: $($f.FullName)"
                     Remove-PayloadFile $f.FullName
                     $total++
+                    $script:ReportTelemetryProcessed++
                 } else {
                     Log "warning: failed to upload $($f.FullName)"
                     $failed++
+                    $script:ReportTelemetryFailed++
                     $script:UploadFailures++
                 }
             }
@@ -4403,6 +4539,7 @@ function Upload-AllTelemetry {
             if ($script:DryRun) {
                 Log "dry-run validated synthetic telemetry augmentation for: $($entry.AnchorPath)"
                 $total++
+                $script:ReportTelemetryProcessed++
                 continue
             }
             $uploadedResult = @(Upload-SingleTelemetry $entry.AnchorPath $entry.BodyPath)
@@ -4413,9 +4550,11 @@ function Upload-AllTelemetry {
             if ($uploaded) {
                 Log "uploaded telemetry payload: $($entry.AnchorPath)"
                 $total++
+                $script:ReportTelemetryProcessed++
             } else {
                 Log "warning: failed to upload synthetic telemetry augmentation for $($entry.AnchorPath)"
                 $failed++
+                $script:ReportTelemetryFailed++
                 $script:UploadFailures++
             }
         }
@@ -4444,14 +4583,14 @@ try {
     # Exit with appropriate code based on upload results
     if ($script:UploadFailures -gt 0) {
         Log "done with $($script:UploadFailures) upload failures"
-        exit 1
+        Exit-WithUploaderReport 1
     } else {
         if ($script:DryRun) {
             Log "dry-run done"
         } else {
             Log "done"
         }
-        exit 0
+        Exit-WithUploaderReport 0
     }
 } finally {
     Release-Lock

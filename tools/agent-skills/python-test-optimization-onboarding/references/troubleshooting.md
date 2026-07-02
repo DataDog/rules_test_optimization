@@ -111,3 +111,18 @@ If local outputs may be stale while BEP can stage fresh carriers, consider
 matching BEP output keys.
 
 Then re-run tests before running doctor and uploader.
+
+## Diagnostic Reports
+
+When CI logs are long or ambiguous, archive machine-readable reports from the
+same failing run:
+
+- Doctor: pass `--report-json=<path>` after the doctor target's `--` separator,
+  or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`.
+- Uploader: pass `--report-json=<path>` after the uploader target's `--`
+  separator, or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`.
+
+Use these reports to compare expected targets, BEP freshness, artifact staging,
+payload directories, payload counts, upload failures, status, and exit code
+without reading the full CI log. Review reports for internal paths and target
+names before sharing outside the trusted project boundary.

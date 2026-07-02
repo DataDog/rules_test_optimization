@@ -568,6 +568,8 @@ RUNTIME_ID=$(generate_uuid)
 TELEMETRY_SESSION_FALLBACK=$(generate_uuid)
 DRY_RUN=0
 VALIDATE_ENRICHMENT=0
+REPORT_JSON="${DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON:-}"
+UPLOADER_REPORT_WRITTEN=0
 BEP_JSON_FILES=()
 if [[ -n "${DD_TEST_OPTIMIZATION_BEP_JSON:-}" ]]; then
     BEP_JSON_FILES+=("$DD_TEST_OPTIMIZATION_BEP_JSON")
@@ -580,6 +582,7 @@ BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC="${DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOA
 STAGED_TESTLOGS_DIRS=()
 TESTLOGS_SCAN_DIRS=()
 SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE=""
+BLOCKED_BEP_ARTIFACT_LABELS_FILE=""
 STAGED_OUTPUT_KEYS_FILE=""
 STAGED_REMOTE_CLEARANCES_FILE=""
 FRESHNESS_MODE="${DD_TEST_OPTIMIZATION_FRESHNESS_MODE:-${DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE:-auto}}"
@@ -636,6 +639,7 @@ Options:
   --execution-log-mode MODE    Legacy alias for --freshness-mode.
   --allow-cached-payload-uploads
                                 Disable BEP and execution-log cache filtering for this uploader run.
+  --report-json PATH           Write a machine-readable uploader diagnostic report.
 EOF
 }
 
@@ -795,6 +799,18 @@ while (($# > 0)); do
             FRESHNESS_DISABLED_EXPLICIT=1
             FRESHNESS_MODE="disabled"
             EXECUTION_LOG_MODE="disabled"
+            shift
+            ;;
+        --report-json)
+            if (($# < 2)); then
+                log "error: --report-json requires a file path"
+                exit 2
+            fi
+            REPORT_JSON="$2"
+            shift 2
+            ;;
+        --report-json=*)
+            REPORT_JSON="${1#--report-json=}"
             shift
             ;;
         --help|-h)
@@ -1038,7 +1054,152 @@ cleanup() {
     fi
     rm -rf "$TMP_PAYLOAD_DIR" 2>/dev/null || true
 }
-trap cleanup EXIT
+
+report_json_string() {
+    local value="${1:-}"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "$value"
+}
+
+report_json_array() {
+    local first=1 value existing duplicate
+    local values=()
+    printf '['
+    for value in "$@"; do
+        duplicate=0
+        for existing in "${values[@]+${values[@]}}"; do
+            if [[ "$existing" == "$value" ]]; then
+                duplicate=1
+                break
+            fi
+        done
+        if (( duplicate == 1 )); then
+            continue
+        fi
+        values+=("$value")
+        if (( first == 0 )); then
+            printf ','
+        fi
+        report_json_string "$value"
+        first=0
+    done
+    printf ']'
+}
+
+report_bool() {
+    case "${1:-0}" in
+        1|true|TRUE|yes|YES) printf 'true' ;;
+        *) printf 'false' ;;
+    esac
+}
+
+report_count_lines_file() {
+    local path="${1:-}"
+    if [[ -n "$path" && -s "$path" ]]; then
+        wc -l <"$path" | tr -d '[:space:]'
+    else
+        printf '0'
+    fi
+}
+
+report_count_lines_text() {
+    local text="${1:-}"
+    if [[ -z "$text" ]]; then
+        printf '0'
+    else
+        printf '%s\n' "$text" | sed '/^$/d' | wc -l | tr -d '[:space:]'
+    fi
+}
+
+write_uploader_report() {
+    local status="$1"
+    local exit_code="$2"
+    if [[ -z "${REPORT_JSON:-}" ]]; then
+        return 0
+    fi
+
+    local report_dir report_tmp
+    report_dir="$(dirname "$REPORT_JSON")"
+    if ! mkdir -p "$report_dir" 2>/dev/null; then
+        log_stderr "warning: failed to create uploader report directory: $report_dir"
+        return 0
+    fi
+    report_tmp="${REPORT_JSON}.tmp.$$"
+    if ! {
+        printf '{\n'
+        printf '  "schema_version": 1,\n'
+        printf '  "tool": "dd-test-optimization-uploader",\n'
+        printf '  "status": %s,\n' "$(report_json_string "$status")"
+        printf '  "exit_code": %s,\n' "$exit_code"
+        printf '  "config": {\n'
+        printf '    "dry_run": %s,\n' "$(report_bool "${DRY_RUN:-0}")"
+        printf '    "validate_enrichment": %s,\n' "$(report_bool "${VALIDATE_ENRICHMENT:-0}")"
+        printf '    "artifact_source": %s,\n' "$(report_json_string "${ARTIFACT_SOURCE:-}")"
+        printf '    "remote_artifacts": %s,\n' "$(report_json_string "${REMOTE_ARTIFACTS:-}")"
+        printf '    "freshness_source": %s,\n' "$(report_json_string "${FRESHNESS_SOURCE:-}")"
+        printf '    "freshness_mode": %s,\n' "$(report_json_string "${FRESHNESS_MODE:-}")"
+        printf '    "allow_cached_payload_uploads": %s\n' "$(report_bool "${FRESHNESS_DISABLED_EXPLICIT:-0}")"
+        printf '  },\n'
+        printf '  "bep": {\n'
+        printf '    "files": %s,\n' "$(report_json_array "${BEP_JSON_FILES[@]+${BEP_JSON_FILES[@]}}")"
+        printf '    "freshness_selected_source": %s,\n' "$(report_json_string "${FRESHNESS_SELECTED_SOURCE:-none}")"
+        printf '    "eligible_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_ELIGIBLE_OUTPUTS_FILE:-}")"
+        printf '    "cached_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_CACHED_OUTPUTS_FILE:-}")"
+        printf '    "remote_only_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE:-}")"
+        printf '    "skipped_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_SKIPPED_OUTPUTS_FILE:-}")"
+        printf '    "missing_output_labels": %s\n' "$(report_count_lines_file "${FRESHNESS_MISSING_OUTPUT_LABELS_FILE:-}")"
+        printf '  },\n'
+        printf '  "artifacts": {\n'
+        printf '    "source": %s,\n' "$(report_json_string "${ARTIFACT_SOURCE:-}")"
+        printf '    "staging_dir": %s,\n' "$(report_json_string "${ARTIFACT_STAGING_DIR:-}")"
+        printf '    "staged_testlogs_dirs": %s,\n' "${#STAGED_TESTLOGS_DIRS[@]}"
+        printf '    "selected_remote_artifacts": %s,\n' "$(report_count_lines_file "${SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE:-}")"
+        printf '    "staged_remote_artifacts": %s,\n' "$(report_count_lines_file "${STAGED_OUTPUT_KEYS_FILE:-}")"
+        printf '    "remote_artifacts_ignored": %s\n' "$(report_count_lines_file "${BLOCKED_BEP_ARTIFACT_LABELS_FILE:-}")"
+        printf '  },\n'
+        printf '  "payloads": {\n'
+        printf '    "test_outputs_dirs": %s,\n' "$(report_count_lines_text "${TEST_OUTPUTS_CACHE:-}")"
+        printf '    "tests": {"processed": %s, "failed": %s, "skipped": %s},\n' "${REPORT_TESTS_PROCESSED:-0}" "${REPORT_TESTS_FAILED:-0}" "${REPORT_TESTS_SKIPPED:-0}"
+        printf '    "coverage": {"processed": %s, "failed": %s, "skipped": %s},\n' "${REPORT_COVERAGE_PROCESSED:-0}" "${REPORT_COVERAGE_FAILED:-0}" "${REPORT_COVERAGE_SKIPPED:-0}"
+        printf '    "telemetry": {"processed": %s, "failed": %s, "skipped": %s}\n' "${REPORT_TELEMETRY_PROCESSED:-0}" "${REPORT_TELEMETRY_FAILED:-0}" "${REPORT_TELEMETRY_SKIPPED:-0}"
+        printf '  },\n'
+        printf '  "upload_failures": %s\n' "${UPLOAD_FAILURES:-0}"
+        printf '}\n'
+    } >"$report_tmp"; then
+        rm -f "$report_tmp" 2>/dev/null || true
+        log_stderr "warning: failed to write uploader report: $REPORT_JSON"
+        return 0
+    fi
+    if ! mv "$report_tmp" "$REPORT_JSON" 2>/dev/null; then
+        rm -f "$report_tmp" 2>/dev/null || true
+        log_stderr "warning: failed to move uploader report into place: $REPORT_JSON"
+    fi
+}
+
+finalize_uploader_report() {
+    local exit_code="${1:-0}"
+    local status="ok"
+    if (( exit_code != 0 )); then
+        status="fail"
+    fi
+    if (( UPLOADER_REPORT_WRITTEN == 0 )); then
+        write_uploader_report "$status" "$exit_code" || true
+        UPLOADER_REPORT_WRITTEN=1
+    fi
+}
+
+uploader_on_exit() {
+    local rc=$?
+    set +e
+    finalize_uploader_report "$rc"
+    cleanup
+    return "$rc"
+}
+trap uploader_on_exit EXIT
 
 artifact_staging_requested() {
     if [[ "$ARTIFACT_SOURCE" == "bep" ]]; then
@@ -4133,6 +4294,15 @@ PY
 
 # Track upload failures globally
 UPLOAD_FAILURES=0
+REPORT_TESTS_PROCESSED=0
+REPORT_TESTS_FAILED=0
+REPORT_TESTS_SKIPPED=0
+REPORT_COVERAGE_PROCESSED=0
+REPORT_COVERAGE_FAILED=0
+REPORT_COVERAGE_SKIPPED=0
+REPORT_TELEMETRY_PROCESSED=0
+REPORT_TELEMETRY_FAILED=0
+REPORT_TELEMETRY_SKIPPED=0
 
 expected_enriched_tags() {
     if (( ${#EXPECTED_ENRICHED_TAGS[@]} > 0 )); then
@@ -4436,6 +4606,7 @@ upload_all_tests() {
             [[ -f "$f" ]] || continue
             log "error: raw msgpack test payload is not supported in Bazel file mode: $f"
             ((++failed))
+            ((++REPORT_TESTS_FAILED))
             ((++UPLOAD_FAILURES))
         done < <(list_sorted_raw_test_msgpack_files "$tests_dir")
 
@@ -4445,20 +4616,24 @@ upload_all_tests() {
             if ! matches_filter "$f" "span_events_"; then
                 dbg "skipping (prefix filter): $f"
                 ((++skipped))
+                ((++REPORT_TESTS_SKIPPED))
                 continue
             fi
             if ! test_payload_has_events "$f"; then
                 log "skipping test payload with no events: $f"
                 ((++skipped))
+                ((++REPORT_TESTS_SKIPPED))
                 continue
             fi
             if (( DRY_RUN == 1 )); then
                 if dry_run_single_test "$f"; then
                     log "dry-run kept test payload: $f"
                     ((++total))
+                    ((++REPORT_TESTS_PROCESSED))
                 else
                     log "warning: failed to dry-run validate $f"
                     ((++failed))
+                    ((++REPORT_TESTS_FAILED))
                     ((++UPLOAD_FAILURES))
                 fi
                 continue
@@ -4467,11 +4642,13 @@ upload_all_tests() {
                 log "uploaded test payload: $f"
                 cleanup_file "$f"
                 ((++total))
+                ((++REPORT_TESTS_PROCESSED))
             else
                 # Keep uploading subsequent files to maximize successful delivery
                 # even when one payload is malformed or temporarily rejected.
                 log "warning: failed to upload $f"
                 ((++failed))
+                ((++REPORT_TESTS_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done < <(list_sorted_test_payload_files "$tests_dir")
@@ -4507,22 +4684,26 @@ upload_all_coverage() {
             if ! matches_filter "$f" "coverage_"; then
                 dbg "skipping (prefix filter): $f"
                 ((++skipped))
+                ((++REPORT_COVERAGE_SKIPPED))
                 continue
             fi
             if (( DRY_RUN == 1 )); then
                 log "dry-run kept coverage payload: $f"
                 ((++total))
+                ((++REPORT_COVERAGE_PROCESSED))
                 continue
             fi
             if upload_single_coverage "$f"; then
                 log "uploaded coverage payload: $f"
                 cleanup_file "$f"
                 ((++total))
+                ((++REPORT_COVERAGE_PROCESSED))
             else
                 # Coverage failures are tracked but non-fatal per-file; final
                 # exit code reflects aggregate failure count after both passes.
                 log "warning: failed to upload $f"
                 ((++failed))
+                ((++REPORT_COVERAGE_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done < <(list_sorted_payload_files "$cov_dir")
@@ -4566,15 +4747,18 @@ upload_all_telemetry() {
             if (( DRY_RUN == 1 )); then
                 log "dry-run kept telemetry payload: $f"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
             if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
                 cleanup_file "$f"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
             else
                 log "warning: failed to upload $f"
                 ((++failed))
+                ((++REPORT_TELEMETRY_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done < <(list_sorted_payload_files "$telemetry_dir")
@@ -4587,14 +4771,17 @@ upload_all_telemetry() {
             if (( DRY_RUN == 1 )); then
                 log "dry-run validated synthetic telemetry augmentation for: $anchor_path"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
             if upload_single_telemetry "$anchor_path" "$synthetic_body"; then
                 log "uploaded telemetry payload: $anchor_path"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
             else
                 log "warning: failed to upload synthetic telemetry augmentation for $anchor_path"
                 ((++failed))
+                ((++REPORT_TELEMETRY_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done <"$plan_file"

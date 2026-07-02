@@ -11,6 +11,7 @@ BAZEL="${BAZEL:-bazel}"
 BAZEL_CONFIG="${DD_TEST_OPTIMIZATION_BAZEL_CONFIG:-test-optimization}"
 DOCTOR_TARGET="${DD_TEST_OPTIMIZATION_DOCTOR_TARGET:-//:dd_test_optimization_doctor}"
 UPLOAD_TARGET="${DD_TEST_OPTIMIZATION_UPLOAD_TARGET:-//:dd_upload_payloads}"
+DOCTOR_REPORT_JSON="${DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON:-}"
 DO_UPLOAD=0
 KEEP_TMP="${DD_TEST_OPTIMIZATION_KEEP_TMP:-0}"
 TARGETS=()
@@ -27,6 +28,8 @@ Options:
   --bazel PATH             Bazel/Bazelisk executable. Defaults to $BAZEL or bazel.
   --config NAME            Bazel config name. Defaults to test-optimization.
   --doctor-target LABEL    Doctor target. Defaults to //:dd_test_optimization_doctor.
+  --doctor-report-json PATH
+                           Write the doctor machine-readable report to PATH.
   --upload-target LABEL    Uploader target. Defaults to //:dd_upload_payloads.
   --test-flag FLAG         Extra flag passed to every bazel test invocation.
   --upload                 Run the real upload after dry-run enrichment validation.
@@ -62,6 +65,14 @@ while (($#)); do
       ;;
     --doctor-target=*)
       DOCTOR_TARGET="${1#--doctor-target=}"
+      shift
+      ;;
+    --doctor-report-json)
+      DOCTOR_REPORT_JSON="${2:?--doctor-report-json requires a value}"
+      shift 2
+      ;;
+    --doctor-report-json=*)
+      DOCTOR_REPORT_JSON="${1#--doctor-report-json=}"
       shift
       ;;
     --upload-target)
@@ -182,8 +193,12 @@ runtime_args=(
 )
 
 final_status="$test_status"
+doctor_runtime_args=("${runtime_args[@]}")
+if [[ -n "$DOCTOR_REPORT_JSON" ]]; then
+  doctor_runtime_args+=("--report-json=$DOCTOR_REPORT_JSON")
+fi
 
-if run_bazel run "--config=$BAZEL_CONFIG" "$DOCTOR_TARGET" -- "${runtime_args[@]}"; then
+if run_bazel run "--config=$BAZEL_CONFIG" "$DOCTOR_TARGET" -- "${doctor_runtime_args[@]}"; then
   doctor_status=0
 else
   doctor_status=$?

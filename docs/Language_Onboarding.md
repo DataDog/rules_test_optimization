@@ -376,11 +376,11 @@ For remote execution or remote cache setups, keep
 `test:test-optimization --remote_download_regex=.*test[.]outputs.*` plus
 `test:test-optimization --zip_undeclared_test_outputs` in the
 active `.bazelrc` config. Without local undeclared outputs, the doctor and
-uploader cannot inspect or enrich the payloads after `bazel test`.
-`--artifact-source=bep` makes local `outputs.zip` carriers extract through BEP
-artifact staging. Use a unique BEP file per Bazel test invocation; the
-checked-in CI wrappers create those paths under a temporary directory instead of
-reusing or deleting a shared workspace file.
+uploader need BEP artifact staging, and remote-only BEP artifacts need a
+configured downloader. `--artifact-source=bep` makes local `outputs.zip`
+carriers extract through BEP artifact staging. Use a unique BEP file per Bazel
+test invocation; the checked-in CI wrappers create those paths under a temporary
+directory instead of reusing or deleting a shared workspace file.
 
 If the doctor reports missing Git metadata, missing Bazel metadata,
 `full_bundle_no_match`, or msgpack payloads, fix the sync, wrapper, tracer, or

@@ -54,6 +54,7 @@ REMOTE_TEST_OUTPUT_DOWNLOAD_HINT = (
 STAGING_MARKER = ".dd-topt-bep-staged"
 MAX_OUTPUTS_TREE_FILES = 10000
 MAX_OUTPUTS_TREE_BYTES = 512 * 1024 * 1024
+_LAST_FAILURE_MESSAGE: str | None = None
 
 
 class BepRemoteOnlyOutput:
@@ -143,6 +144,8 @@ class BepArtifactStageError(Exception):
 
 
 def _fail(message: str) -> None:
+    global _LAST_FAILURE_MESSAGE
+    _LAST_FAILURE_MESSAGE = message
     print(f"[dd-test-optimization-doctor] {message}", file=sys.stderr)
     raise SystemExit(1)
 
@@ -226,6 +229,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--bep-artifact-downloader-timeout-sec",
         default=os.environ.get("DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC", "300"),
+    )
+    parser.add_argument(
+        "--report-json",
+        default=os.environ.get("DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON", ""),
+        help="Optional path for a machine-readable doctor diagnostic report.",
     )
     args = parser.parse_args(argv)
     _validate_artifact_resolution_args(args)
@@ -1758,8 +1766,347 @@ def _format_selection_summary(summary: dict[str, int]) -> str:
     return ", ".join(f"{selection}={summary[selection]}" for selection in sorted(summary))
 
 
+def _sorted_pairs(pairs: Iterable[tuple[str, str]]) -> list[list[str]]:
+    """Return deterministic JSON-friendly label/output-key pairs."""
+    return [[label, output_key] for label, output_key in sorted(pairs)]
+
+
+def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
+    """Create the base machine-readable doctor report."""
+    return {
+        "schema_version": 1,
+        "tool": "dd-test-optimization-doctor",
+        "status": "running",
+        "config": {
+            "config_path": "",
+            "workspace": "",
+            "testlogs_dir": "",
+            "expected_targets": [],
+            "freshness_source": args.freshness_source,
+            "freshness_mode": args.freshness_mode,
+            "artifact_source": args.artifact_source,
+            "remote_artifacts": args.remote_artifacts,
+        },
+        "bep": {
+            "files": [],
+            "seen_targets": [],
+            "eligible_outputs": 0,
+            "eligible_output_keys": [],
+            "cached_outputs": 0,
+            "cached_output_keys": [],
+            "remote_only_outputs": [],
+            "missing_output_mappings": [],
+            "artifact_references": 0,
+            "selected_artifact_outputs": [],
+            "blocked_artifact_labels": [],
+        },
+        "artifacts": {
+            "staging_requested": False,
+            "staging_enabled": False,
+            "staging_dir": "",
+            "staged_count": 0,
+            "staged": [],
+        },
+        "outputs": [],
+        "summary": {
+            "expected_targets": 0,
+            "validated_output_dirs": 0,
+            "upload_candidates": 0,
+            "payloads": {
+                "json": 0,
+                "msgpack": 0,
+                "tests": 0,
+                "coverage": 0,
+                "telemetry": 0,
+            },
+            "metadata_files": 0,
+            "payload_selection": {},
+        },
+        "errors": [],
+        "warnings": [],
+    }
+
+
+def _diagnostic_payload_counts(output_dir: Path) -> dict[str, int]:
+    """Return payload file counts used by the machine-readable report."""
+    payload_root = output_dir / "payloads"
+    payloads = _payload_files(output_dir)
+    counts = {
+        "json": len(payloads),
+        "msgpack": len(_msgpack_payload_files(output_dir)),
+        "tests": 0,
+        "coverage": 0,
+        "telemetry": 0,
+    }
+    for payload in payloads:
+        try:
+            relative = payload.relative_to(payload_root)
+        except ValueError:
+            continue
+        if relative.parts:
+            bucket = relative.parts[0]
+            if bucket in {"tests", "coverage", "telemetry"}:
+                counts[bucket] += 1
+    return counts
+
+
+def _read_json_for_report(path: Path) -> Any:
+    """Best-effort JSON loader for diagnostics that must not change validation."""
+    try:
+        with path.open("r", encoding="utf-8-sig") as fh:
+            return json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _diagnostic_metadata(output_dir: Path, fallback_label: str | None) -> dict[str, Any]:
+    """Return Bazel metadata details for one output directory without failing validation."""
+    metadata_files = _metadata_files(output_dir)
+    metadata = {
+        "count": len(metadata_files),
+        "files": [str(path) for path in metadata_files],
+        "target": fallback_label or "",
+        "payload_selection": "",
+    }
+    for metadata_file in metadata_files:
+        doc = _read_json_for_report(metadata_file)
+        if not isinstance(doc, dict):
+            continue
+        target = _metadata_target_label(doc, fallback_label)
+        if target:
+            metadata["target"] = target
+        selection = doc.get("bazel.go.payload_selection")
+        if isinstance(selection, str):
+            metadata["payload_selection"] = selection
+        break
+    return metadata
+
+
+def _diagnostic_output_entries(
+    output_dirs: list[Path],
+    *,
+    target_by_output_dir: dict[Path, str],
+    staged: list[StagedBepArtifact],
+    testlogs_dir: Path | None,
+) -> list[dict[str, Any]]:
+    """Build report entries for local and staged test output directories."""
+    staged_by_dir = {item.output_dir.resolve(): item for item in staged}
+    entries = []
+    for output_dir in output_dirs:
+        resolved = output_dir.resolve()
+        staged_item = staged_by_dir.get(resolved)
+        fallback_label = target_by_output_dir.get(resolved)
+        metadata = _diagnostic_metadata(output_dir, fallback_label)
+        label = metadata.get("target") or fallback_label or ""
+        output_key = staged_item.output_key if staged_item is not None else _local_test_output_key(
+            output_dir,
+            testlogs_dir=testlogs_dir,
+        )
+        payloads = _diagnostic_payload_counts(output_dir)
+        entries.append(
+            {
+                "path": str(resolved),
+                "label": label,
+                "source": "staged" if staged_item is not None else "local",
+                "output_key": output_key,
+                "payloads": payloads,
+                "metadata": metadata,
+                "upload_candidate": payloads["json"] > 0,
+            }
+        )
+    return entries
+
+
+def _update_diagnostic_output_summary(report: dict[str, Any], output_entries: list[dict[str, Any]]) -> None:
+    """Update report summary counts from output entries."""
+    payload_totals = {
+        "json": 0,
+        "msgpack": 0,
+        "tests": 0,
+        "coverage": 0,
+        "telemetry": 0,
+    }
+    metadata_count = 0
+    upload_candidates = 0
+    for entry in output_entries:
+        payloads = entry.get("payloads", {})
+        for key in payload_totals:
+            payload_totals[key] += int(payloads.get(key, 0))
+        metadata = entry.get("metadata", {})
+        metadata_count += int(metadata.get("count", 0))
+        if entry.get("upload_candidate"):
+            upload_candidates += 1
+    report["outputs"] = output_entries
+    report["summary"]["validated_output_dirs"] = len(output_entries)
+    report["summary"]["upload_candidates"] = upload_candidates
+    report["summary"]["payloads"] = payload_totals
+    report["summary"]["metadata_files"] = metadata_count
+
+
+def _update_diagnostic_config(
+    report: dict[str, Any],
+    *,
+    config_path: Path,
+    workspace: Path,
+    testlogs_dir: Path | None,
+    expected_targets: list[str],
+    bep_files: list[Path],
+    staging_requested: bool,
+) -> None:
+    """Record resolved runtime configuration in the report."""
+    report["config"].update(
+        {
+            "config_path": str(config_path),
+            "workspace": str(workspace),
+            "testlogs_dir": str(testlogs_dir) if testlogs_dir is not None else "",
+            "expected_targets": list(expected_targets),
+        }
+    )
+    report["summary"]["expected_targets"] = len(expected_targets)
+    report["bep"]["files"] = [str(path) for path in bep_files]
+    report["artifacts"]["staging_requested"] = staging_requested
+
+
+def _update_diagnostic_bep(
+    report: dict[str, Any],
+    freshness: BepFreshness | None,
+    *,
+    selected_bep_artifact_outputs: set[tuple[str, str]] | None = None,
+    blocked_bep_artifact_labels: set[str] | None = None,
+) -> None:
+    """Record parsed BEP freshness and artifact-selection diagnostics."""
+    if freshness is None:
+        return
+    seen_targets = {
+        label
+        for label, _ in freshness.eligible_outputs.union(freshness.cached_outputs)
+    }
+    seen_targets.update(item.label for item in freshness.remote_only_outputs)
+    seen_targets.update(ref.label for ref in freshness.artifact_references)
+    report["bep"].update(
+        {
+            "seen_targets": sorted(seen_targets),
+            "eligible_outputs": len(freshness.eligible_outputs),
+            "eligible_output_keys": _sorted_pairs(freshness.eligible_outputs),
+            "cached_outputs": len(freshness.cached_outputs),
+            "cached_output_keys": _sorted_pairs(freshness.cached_outputs),
+            "remote_only_outputs": [
+                {
+                    "label": item.label,
+                    "output_key": item.output_key,
+                    "artifact": item.artifact,
+                    "reason": item.reason,
+                }
+                for item in freshness.remote_only_outputs
+            ],
+            "missing_output_mappings": sorted(freshness.missing_output_mappings),
+            "artifact_references": len(freshness.artifact_references),
+            "selected_artifact_outputs": _sorted_pairs(selected_bep_artifact_outputs or set()),
+            "blocked_artifact_labels": sorted(blocked_bep_artifact_labels or set()),
+        }
+    )
+
+
+def _diagnostic_staged_carrier(item: StagedBepArtifact) -> str:
+    """Return a stable carrier type for staged BEP artifacts."""
+    if item.downloaded:
+        return "downloaded_outputs_zip"
+    normalized = _strip_file_uri(item.fetch_value).replace("\\", "/").lower().rstrip("/")
+    if normalized == "outputs.zip" or normalized.endswith("/outputs.zip"):
+        return "outputs_zip"
+    if normalized == "test.outputs" or normalized.endswith("/test.outputs"):
+        return "test_outputs"
+    return "unknown"
+
+
+def _update_diagnostic_artifacts(
+    report: dict[str, Any],
+    *,
+    staging_enabled: bool,
+    staging_base: Path | None,
+    staged: list[StagedBepArtifact],
+) -> None:
+    """Record BEP artifact staging diagnostics."""
+    report["artifacts"].update(
+        {
+            "staging_enabled": staging_enabled,
+            "staging_dir": str(staging_base) if staging_base is not None else "",
+            "staged_count": len(staged),
+            "staged": [
+                {
+                    "label": item.label,
+                    "output_key": item.output_key,
+                    "path": str(item.output_dir),
+                    "downloaded": item.downloaded,
+                    "remote_only": item.remote_only,
+                    "fetch_value": item.fetch_value,
+                    "carrier": _diagnostic_staged_carrier(item),
+                }
+                for item in staged
+            ],
+        }
+    )
+
+
+def _write_diagnostic_report(args: argparse.Namespace, report: dict[str, Any]) -> None:
+    """Write the requested machine-readable doctor report."""
+    if not args.report_json:
+        return
+    report_path = Path(args.report_json).expanduser()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _exit_code(exc: SystemExit) -> int:
+    """Return a numeric code for SystemExit values."""
+    if exc.code is None:
+        return 0
+    if isinstance(exc.code, int):
+        return exc.code
+    return 1
+
+
+def _record_diagnostic_failure(report: dict[str, Any], exc: BaseException) -> None:
+    """Record a failure in the machine-readable report."""
+    status = "fail"
+    message = _LAST_FAILURE_MESSAGE or str(exc)
+    if isinstance(exc, SystemExit):
+        code = _exit_code(exc)
+        if code == 0:
+            status = "ok"
+        report["exit_code"] = code
+        if not message and code != 0:
+            message = f"doctor exited with status {code}"
+    else:
+        status = "error"
+        report["exit_code"] = 1
+    report["status"] = status
+    if message and status != "ok":
+        report["errors"].append(message)
+
+
 def main(argv: list[str]) -> int:
+    global _LAST_FAILURE_MESSAGE
+    _LAST_FAILURE_MESSAGE = None
     args = _parse_args(argv)
+    report = _new_diagnostic_report(args)
+    try:
+        rc = _run_doctor(args, report)
+    except SystemExit as exc:
+        _record_diagnostic_failure(report, exc)
+        _write_diagnostic_report(args, report)
+        raise
+    except Exception as exc:
+        _record_diagnostic_failure(report, exc)
+        _write_diagnostic_report(args, report)
+        raise
+    report["status"] = "ok" if rc == 0 else "fail"
+    report["exit_code"] = rc
+    _write_diagnostic_report(args, report)
+    return rc
+
+
+def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
     bep_files = _configured_bep_json_files(args)
     staging_requested = _artifact_staging_requested(args)
     if args.artifact_source == "bep" and not bep_files:
@@ -1784,6 +2131,15 @@ def main(argv: list[str]) -> int:
         _validate_git_metadata(context_manifest)
 
     expected_targets = config["expected_targets"]
+    _update_diagnostic_config(
+        report,
+        config_path=config_path,
+        workspace=workspace,
+        testlogs_dir=testlogs_dir,
+        expected_targets=expected_targets,
+        bep_files=bep_files,
+        staging_requested=staging_requested,
+    )
     staged: list[StagedBepArtifact] = []
     staging_base: Path | None = None
     output_dirs: list[Path]
@@ -1817,6 +2173,7 @@ def main(argv: list[str]) -> int:
                     bep_files,
                     unavailable_is_error=staging_enabled or args.freshness_mode != "optional",
                 )
+                _update_diagnostic_bep(report, freshness)
         elif strict_bep_required:
             _fail(
                 "BEP freshness validation is required but no BEP JSON file was configured. "
@@ -1833,6 +2190,12 @@ def main(argv: list[str]) -> int:
 
         selected_bep_artifact_outputs: set[tuple[str, str]] = set()
         blocked_bep_artifact_labels: set[str] = set()
+        _update_diagnostic_artifacts(
+            report,
+            staging_enabled=staging_enabled,
+            staging_base=staging_base,
+            staged=staged,
+        )
         if staging_enabled and freshness is not None:
             selected_bep_artifact_outputs = _selected_bep_artifact_outputs(
                 freshness,
@@ -1840,6 +2203,12 @@ def main(argv: list[str]) -> int:
                 args.remote_artifacts,
             )
             blocked_bep_artifact_labels = _blocked_bep_artifact_labels(freshness, args.remote_artifacts)
+            _update_diagnostic_bep(
+                report,
+                freshness,
+                selected_bep_artifact_outputs=selected_bep_artifact_outputs,
+                blocked_bep_artifact_labels=blocked_bep_artifact_labels,
+            )
             staging_base = _artifact_staging_dir(args, workspace)
             staged = _stage_bep_artifacts(
                 freshness,
@@ -1850,6 +2219,18 @@ def main(argv: list[str]) -> int:
                 downloader_timeout_sec=args.bep_artifact_downloader_timeout_sec,
             )
             _apply_staged_bep_artifacts_to_freshness(freshness, staged)
+            _update_diagnostic_bep(
+                report,
+                freshness,
+                selected_bep_artifact_outputs=selected_bep_artifact_outputs,
+                blocked_bep_artifact_labels=blocked_bep_artifact_labels,
+            )
+            _update_diagnostic_artifacts(
+                report,
+                staging_enabled=staging_enabled,
+                staging_base=staging_base,
+                staged=staged,
+            )
             output_dirs, target_by_output_dir = _merge_staged_output_dirs(
                 output_dirs,
                 staged,
@@ -1887,6 +2268,15 @@ def main(argv: list[str]) -> int:
             missing_root = testlogs_dir if testlogs_dir is not None else workspace / "bazel-testlogs"
             _fail(f"no Test Optimization output directories found under {missing_root}")
 
+        _update_diagnostic_output_summary(
+            report,
+            _diagnostic_output_entries(
+                output_dirs,
+                target_by_output_dir=target_by_output_dir,
+                staged=staged,
+                testlogs_dir=testlogs_dir,
+            ),
+        )
         allowed_payload_selections = set(config.get("allowed_payload_selections") or [])
         selection_summary = _validate_outputs(
             output_dirs,
@@ -1898,6 +2288,7 @@ def main(argv: list[str]) -> int:
             expected_payload_selection_by_target=config.get("expected_payload_selection_by_target", {}),
             target_by_output_dir=target_by_output_dir,
         )
+        report["summary"]["payload_selection"] = dict(sorted(selection_summary.items()))
         print(
             "[dd-test-optimization-doctor] payload selection summary: "
             f"{_format_selection_summary(selection_summary)}"

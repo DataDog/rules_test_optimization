@@ -42,6 +42,12 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   //...
 
+# Optional: add --doctor-report-json .topt/doctor-report.json to keep a
+# machine-readable doctor diagnostic report as a CI artifact.
+# Optional: set DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON to keep the uploader
+# diagnostic report from the dry-run step, or from the real upload when
+# --upload is also set.
+
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
@@ -57,6 +63,12 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
   //...
+
+# Optional: add -DoctorReportJson .topt/doctor-report.json to keep a
+# machine-readable doctor diagnostic report as a CI artifact.
+# Optional: set $env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON to keep the
+# uploader diagnostic report from the dry-run step, or from the real upload
+# when -Upload is also set.
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
@@ -233,6 +245,8 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_BEP_JSON` | unset | Optional explicit path to one BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation. Prefer repeatable `--bep-json` flags when a wrapper runs multiple Bazel test invocations. The uploader does not auto-discover default BEP paths because stale BEP files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE` | `auto` | Cache-safety source: `auto`, `bep`, or `execution_log`. `auto` prefers BEP and uses execution-log filtering only as a legacy fallback when configured. |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. |
+| `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | unset | Optional path for the doctor machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the doctor target's `--` separator. |
+| `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | unset | Optional path for the uploader machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the uploader target's `--` separator. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | `auto` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | unset | Optional explicit legacy execution-log fallback path. Prefer BEP for new CI integrations. The uploader does not auto-discover `.topt/bazel-execution-log.json` because stale execution-log files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | `local` | Artifact source for `test.outputs` materialization: `local`, `bep`, or `auto`. `local` preserves existing discovery. `bep` requires an explicit BEP JSON file and stages BEP-referenced artifacts. |
@@ -253,6 +267,64 @@ prefixes:
 
 Leave it at `0` for normal repositories where uploader-managed payload
 directories contain only Datadog files.
+
+### Doctor diagnostic report
+
+Pass `--doctor-report-json=<path>` to the Bash wrapper,
+`-DoctorReportJson <path>` to the PowerShell wrapper, `--report-json=<path>` to
+a manual doctor invocation, or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`
+when CI needs a machine-readable debug artifact. The doctor writes the report
+on success and on controlled doctor failures. The report includes resolved
+config, expected targets, BEP files and seen targets, fresh/cached/remote-only
+BEP outputs, selected and blocked BEP artifact carriers, staged `outputs.zip`
+or `test.outputs` artifacts, local/staged payload directories, payload counts,
+Bazel metadata, payload-selection counts, and failure messages.
+
+Example:
+
+```bash
+doctor_report="$(mktemp "${TMPDIR:-/tmp}/dd-topt-doctor.XXXXXX.json")"
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --report-json="$doctor_report"
+```
+
+### Uploader diagnostic report
+
+Pass `--report-json=<path>` to a manual uploader invocation or set
+`DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` when CI needs a machine-readable
+artifact from the upload phase. After report initialization, the uploader writes
+the report on success, no-op, and controlled uploader failures. Early
+argument/configuration validation failures that happen before report
+initialization may exit without writing a report. The report includes effective
+config, BEP files, selected freshness source, BEP freshness counts, artifact
+staging counts, discovered payload directories, per-payload-type
+processed/failed/skipped counts, aggregate upload failures, final status, and
+exit code.
+
+The CI wrapper's uploader report path is shared by its dry-run and optional
+real-upload invocations. If `--upload`/`-Upload` is used, the final uploader
+invocation writes the final report to that path. Use manual uploader commands
+with different `--report-json` values when CI needs to archive both reports.
+
+Example:
+
+```bash
+uploader_report="$(mktemp "${TMPDIR:-/tmp}/dd-topt-uploader.XXXXXX.json")"
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --dry-run \
+  --validate-enrichment \
+  --report-json="$uploader_report"
+```
 
 ### BEP cache filtering behavior
 
@@ -408,11 +480,12 @@ script and configure the wrapper path. The downloader must write an
 the downloader contract; it does not ship credentials or a Datadog-internal CAS
 client.
 
-Artifact staging requires Python at uploader runtime: Bash invokes `python3`,
-while PowerShell tries `python3` and then `python`. Existing local-only uploader
-flows remain usable without Python except for the pre-existing optional schema
-and telemetry helpers. Bash BEP freshness parsing still requires `jq` whenever
-BEP freshness validation is enabled in the Bash uploader path.
+Artifact staging requires Python at uploader runtime. Bash resolves
+`DD_TEST_OPTIMIZATION_PYTHON`, then `PYTHON`, then `python3`, then `python`;
+PowerShell tries `python3` and then `python`. Existing local-only uploader flows
+remain usable without Python except for the pre-existing optional schema and
+telemetry helpers. Bash BEP freshness parsing still requires `jq` whenever BEP
+freshness validation is enabled in the Bash uploader path.
 
 ### Legacy execution-log fallback
 

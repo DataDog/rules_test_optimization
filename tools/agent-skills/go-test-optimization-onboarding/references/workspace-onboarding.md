@@ -328,7 +328,6 @@ common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL
 common:test-optimization --repo_env=DD_SERVICE
 common:test-optimization --repo_env=DD_ENV
-common:test-optimization --repo_env=FETCH_SALT
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
 common:test-optimization --repo_env=DD_GIT_BRANCH
 common:test-optimization --repo_env=DD_GIT_TAG
@@ -365,6 +364,11 @@ optional and should be used only when the checked-in sync configuration cannot
 carry the module path. Keeping extra values as `--repo_env` is safe for the
 test action cache because they affect repository/module resolution, not the
 test sandbox.
+
+Do not add `FETCH_SALT` to the normal config. Use it only in a separate,
+explicit force-refresh command such as
+`bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` when rollout
+owners intentionally need fresh backend metadata.
 
 Never add:
 

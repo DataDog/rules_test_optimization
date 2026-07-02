@@ -1307,10 +1307,12 @@ tools/test_optimization/run_test_optimization_ci.sh //...
 
 The wrapper creates a temporary BEP file for each Bazel test invocation and
 passes those files to doctor/uploader as repeatable `--bep-json` flags. The
-default uploader mode is `auto`: it prefers explicitly configured BEP, then
-uses the legacy execution-log fallback when configured. In CI, uploads fail
-closed unless an explicit freshness source is available; outside CI the
-uploader preserves historical behavior with a warning. The uploader does not
+default freshness source/mode is `auto`: when BEP is explicitly configured the
+uploader uses it, otherwise it can use an explicitly configured legacy
+execution-log fallback. Artifact discovery defaults to local `bazel-testlogs`
+unless the wrapper or CLI sets `--artifact-source=bep`. In CI, uploads fail
+closed unless an explicit freshness source is available; outside CI the uploader
+preserves historical behavior with a warning. The uploader does not
 auto-discover default BEP paths because stale BEP files can authorize stale
 local outputs. To opt out explicitly, set
 `DD_TEST_OPTIMIZATION_FRESHNESS_MODE=disabled` or pass
@@ -1364,6 +1366,23 @@ bazel run //:dd_upload_payloads -- \
   --artifact-staging-dir="$artifact_staging_dir"
 ```
 
+For CI diagnostics, add `--doctor-report-json=<path>` to the wrapper, pass
+`--report-json=<path>` to a manual doctor command, or set
+`DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`. The report is written on success and
+on controlled doctor failures, and includes expected targets, BEP freshness,
+artifact staging, payload directories, payload counts, metadata, and error
+messages.
+
+For upload-phase diagnostics, pass `--report-json=<path>` to the uploader
+command or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`. The uploader report
+records effective config, BEP freshness counts, artifact staging counts,
+payload directory counts, per-type processed/failed/skipped payload totals,
+aggregate upload failures, status, and exit code.
+When the CI wrapper also runs the real upload, the wrapper-level uploader report
+path is shared by the dry-run and real-upload invocations, so the final
+invocation wins. Use manual uploader commands with different `--report-json`
+paths when both reports must be archived.
+
 If your CI cannot materialize `test.outputs/` or `outputs.zip` with the
 selective remote download flags, enable remote BEP artifact staging:
 
@@ -1396,11 +1415,12 @@ must write an `outputs.zip` archive to the requested `--output` path before
 the downloader contract; it does not ship credentials or a Datadog-internal CAS
 client.
 
-Artifact staging requires Python at uploader runtime: Bash invokes `python3`,
-while PowerShell tries `python3` and then `python`. Existing local-only uploader
-flows remain usable without Python except for the pre-existing optional schema
-and telemetry helpers. Bash BEP freshness parsing still requires `jq` whenever
-BEP freshness validation is enabled in the Bash uploader path.
+Artifact staging requires Python at uploader runtime. Bash resolves
+`DD_TEST_OPTIMIZATION_PYTHON`, then `PYTHON`, then `python3`, then `python`;
+PowerShell tries `python3` and then `python`. Existing local-only uploader flows
+remain usable without Python except for the pre-existing optional schema and
+telemetry helpers. Bash BEP freshness parsing still requires `jq` whenever BEP
+freshness validation is enabled in the Bash uploader path.
 
 ### Enrichment dry-run
 
@@ -1424,10 +1444,10 @@ bazel run --config=test-optimization //:dd_upload_payloads -- \
 ```
 
 By default this validates that the enriched test payload has
-`git.repository_url`, `git.commit.sha`, `bazel.target`, `bazel.package`, and
-`bazel.go.payload_selection`. Add repeatable
-`--expected-enriched-tag=<tag-name>` arguments when a repository needs extra
-tags validated before upload.
+`git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package`.
+Add repeatable `--expected-enriched-tag=<tag-name>` arguments when a repository
+needs extra tags validated before upload. Go rollouts that need to prove
+per-module selection can add `--expected-enriched-tag=bazel.go.payload_selection`.
 
 ### Full uploader reference
 

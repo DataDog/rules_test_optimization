@@ -25,6 +25,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Doctor reports missing Git or Bazel metadata | sync metadata context or sidecar metadata is absent | Doctor failures |
 | Uploaded tests miss Git or Bazel tags | run uploader dry-run enrichment validation | Uploader enrichment dry-run |
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
+| CI failure requires log archaeology | archive doctor and uploader JSON reports from the failing run | Collect diagnostic reports |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
 | Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
 | Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
@@ -32,6 +33,63 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Private/internal WORKSPACE fetch returns 404 | SSH git or authenticated archive access | Private repository fetch |
 | Bazel downloads unrelated toolchains or analyzes unrelated packages | cold monorepo state or root-package doctor/uploader placement | Monorepo analysis cost |
 | Windows path/policy failures | PowerShell policy + path separators | Windows-specific issues |
+
+## Collect diagnostic reports
+
+When a CI failure is hard to classify from logs alone, archive the doctor and
+uploader JSON reports from the same run. They are designed to summarize the
+decision state that otherwise requires reading long logs: expected targets,
+BEP freshness, artifact staging, discovered payload directories, payload
+counts, upload candidates, skip/failure counts, status, and exit code.
+
+Wrapper flow:
+
+```bash
+DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON=.topt/uploader-report.json \
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --doctor-report-json .topt/doctor-report.json \
+    //...
+```
+
+```powershell
+$env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON = ".topt/uploader-report.json"
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -DoctorReportJson .topt\doctor-report.json `
+  //...
+```
+
+The wrapper-level uploader report path is inherited by each uploader invocation.
+If the wrapper also runs the real upload, the final uploader invocation writes
+the final report to that path. Use manual uploader invocations with different
+`--report-json` paths when CI needs to keep both dry-run and real-upload
+reports.
+
+Manual doctor/uploader flow:
+
+```bash
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --report-json=.topt/doctor-report.json
+
+bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --dry-run \
+  --validate-enrichment \
+  --report-json=.topt/uploader-report.json
+```
+
+Archive both JSON files as CI artifacts. Before sharing reports outside the
+trusted project boundary, review them for repository paths, target names, and
+service metadata. They must not contain API keys, but they can contain internal
+labels and filesystem paths.
 
 ## Repository rule not fetching data
 
@@ -450,8 +508,10 @@ bazel run --config=test-optimization //:dd_upload_payloads -- `
 
 Dry-run mode does not upload, does not delete payload files, and does not need
 `DD_API_KEY` for agentless mode. By default it requires
-`git.repository_url`, `git.commit.sha`, `bazel.target`, `bazel.package`, and
-`bazel.go.payload_selection` in the enriched test payload. If this fails:
+`git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package` in
+the enriched test payload. Add
+`--expected-enriched-tag=bazel.go.payload_selection` when a Go rollout must
+prove per-module selection. If this fails:
 
 1. Ensure the uploader target has the right `data = ["@...//:test_optimization_context"]`.
 2. Ensure `bazel_target_metadata.json` exists beside the payloads.
@@ -711,6 +771,7 @@ If issues persist:
    - Bazel version: `bazel version`
    - OS: `uname -a` (Linux/macOS) or `systeminfo` (Windows)
    - Repository rule outputs (as shown above)
+   - Doctor and uploader JSON reports, if the failing run produced them
    - Sanitized logs (remove API keys before sharing)
 
 3. **File an issue**:

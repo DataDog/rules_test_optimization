@@ -56,8 +56,16 @@ bootstrap wrote the setup, this is in the Datadog-managed module block.
 
 ## Sync
 
-Force a fresh metadata fetch when validating a new setup. Replace
+Normal sync should not use `FETCH_SALT`. Replace
 `test_optimization_data_<service_key>` with the actual sync repository name:
+
+```bash
+bazel sync --config=test-optimization \
+  --only=test_optimization_data_<service_key>
+```
+
+Force a fresh metadata fetch only when debugging stale backend data or when an
+operator explicitly asks for a refresh:
 
 ```bash
 bazel sync --config=test-optimization \
@@ -187,10 +195,21 @@ test:test-optimization --remote_download_regex=.*test[.]outputs.*
 test:test-optimization --zip_undeclared_test_outputs
 ```
 
-Rules cannot force this client behavior. Without it, tests may pass while the
-doctor and uploader cannot see local payload files. Use a unique
-`--build_event_json_file` for each Bazel test invocation and pass the matching
-paths to doctor/uploader with repeatable `--bep-json` flags.
+Rules cannot force this client behavior. Without local materialization or BEP
+artifact staging/downloader configuration, tests may pass while the doctor and
+uploader cannot see payload files. Use a unique `--build_event_json_file` for
+each Bazel test invocation and pass the matching paths to doctor/uploader with
+repeatable `--bep-json` flags.
+
+When debugging CI rollout failures, pass `--report-json=<path>` to the doctor
+or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`, pass `--report-json=<path>`
+to the uploader or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`, and archive
+both reports. The doctor report records expected targets, BEP freshness,
+artifact staging, payload directories, payload counts, metadata, and controlled
+doctor failure messages. The uploader report records effective config, BEP
+freshness counts, artifact staging counts, payload directory counts,
+per-type processed/failed/skipped payload totals, aggregate upload failures,
+status, and exit code.
 
 Artifact mode choices:
 

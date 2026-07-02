@@ -10,6 +10,7 @@ param(
   [string]$Config = $(if ($env:DD_TEST_OPTIMIZATION_BAZEL_CONFIG) { $env:DD_TEST_OPTIMIZATION_BAZEL_CONFIG } else { "test-optimization" }),
   [string]$DoctorTarget = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET) { $env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET } else { "//:dd_test_optimization_doctor" }),
   [string]$UploadTarget = $(if ($env:DD_TEST_OPTIMIZATION_UPLOAD_TARGET) { $env:DD_TEST_OPTIMIZATION_UPLOAD_TARGET } else { "//:dd_upload_payloads" }),
+  [string]$DoctorReportJson = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON) { $env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON } else { "" }),
   [string[]]$TestFlag = @(),
   [switch]$Upload,
   [switch]$KeepTmp,
@@ -99,7 +100,12 @@ try {
 
   $finalStatus = $testStatus
 
-  $doctorStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $DoctorTarget, "--") + $runtimeArgs)
+  $doctorRuntimeArgs = $runtimeArgs
+  if (-not [string]::IsNullOrWhiteSpace($DoctorReportJson)) {
+    $doctorRuntimeArgs += "--report-json=$DoctorReportJson"
+  }
+
+  $doctorStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $DoctorTarget, "--") + $doctorRuntimeArgs)
   if ($doctorStatus -ne 0 -and $finalStatus -eq 0) {
     $finalStatus = $doctorStatus
   }
@@ -127,4 +133,3 @@ try {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
-
