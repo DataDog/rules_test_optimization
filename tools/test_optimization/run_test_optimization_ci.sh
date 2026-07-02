@@ -157,7 +157,13 @@ for target in "${TARGETS[@]}"; do
   bep_json="$bep_dir/${idx}_${safe_target}.bep.json"
   bep_args+=("--bep-json=$bep_json")
 
-  if run_bazel test "--config=$BAZEL_CONFIG" "${TEST_ARGS[@]}" "--build_event_json_file=$bep_json" "$target"; then
+  test_command=(test "--config=$BAZEL_CONFIG")
+  if ((${#TEST_ARGS[@]} > 0)); then
+    test_command+=("${TEST_ARGS[@]}")
+  fi
+  test_command+=("--build_event_json_file=$bep_json" "$target")
+
+  if run_bazel "${test_command[@]}"; then
     :
   else
     rc=$?
