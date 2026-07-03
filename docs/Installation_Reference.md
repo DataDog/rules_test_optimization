@@ -369,7 +369,11 @@ doctor, and uploads only when called with `--upload`; the default is
 `DD_GIT_*` through `--test_env`. The generated test config uses
 `--zip_undeclared_test_outputs`, and the script passes `--artifact-source=bep`
 to doctor/uploader so local `outputs.zip` carriers are extracted through BEP
-artifact staging. Set `DD_TEST_OPTIMIZATION_REPORT_DIR` to choose where the
+artifact staging. If BEP points at remote-only HTTP/HTTPS `outputs.zip`
+carriers, doctor/uploader can stage them natively with
+`--remote-artifacts=download` or `required`; bytestream/CAS/custom-auth
+providers still need `--bep-artifact-downloader`. Set
+`DD_TEST_OPTIMIZATION_REPORT_DIR` to choose where the
 generated script writes `doctor-report.json`, `uploader-dry-run-report.json`,
 and, when upload is enabled, `uploader-upload-report.json`; otherwise it writes
 those reports under its per-run temporary directory and logs that path.
@@ -847,6 +851,10 @@ common:test-optimization --repo_env=RUBY_MODULE_PATH
 #   --freshness-mode=required
 #   --artifact-source=bep
 #   --artifact-staging-dir=<per-run-temp-dir>
+#   # If BEP points at remote-only HTTP/HTTPS outputs.zip carriers, add:
+#   # --remote-artifacts=download
+#   # If BEP points at bytestream/CAS/custom-auth providers, also add:
+#   # --bep-artifact-downloader=<path-to-downloader>
 #
 # Uploader credentials (pass inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:

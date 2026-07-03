@@ -38,8 +38,9 @@ Keep the RFC contract intact:
 - Configure doctor/uploader with repeatable `--bep-json=<path>` flags,
   `--freshness-source=bep`, `--freshness-mode=required`,
   `--artifact-source=bep`, and `--artifact-staging-dir=<temp-dir>`.
-  If BEP still points at remote/CAS artifacts, use BEP artifact resolution with
-  `--remote-artifacts=download` or `required` and a downloader.
+  If BEP still points at HTTP/HTTPS `outputs.zip` artifacts, use
+  `--remote-artifacts=download` or `required` without a downloader. Use a
+  downloader only for bytestream/CAS/custom-auth artifact providers.
 - Run pilot tests with a fresh `--build_event_json_file` path per Bazel test
   invocation; pass the same paths to doctor/uploader with `--bep-json`.
 - In CI, keep a per-job diagnostic report directory with

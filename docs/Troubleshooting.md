@@ -425,7 +425,8 @@ outputs, or left the selected BEP artifacts remote-only.
    `--remote-artifacts` is not required for local `outputs.zip` files.
 
 3. If CI cannot download `test.outputs` or `outputs.zip` locally, pass the same
-   BEP file to doctor and uploader and enable remote staging:
+   BEP file to doctor and uploader and enable remote staging. HTTP/HTTPS
+   `outputs.zip` carriers can be staged without a downloader:
    ```bash
    artifact_staging_dir="${artifact_staging_dir:-$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")}"
    bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
@@ -447,16 +448,24 @@ outputs, or left the selected BEP artifacts remote-only.
      --validate-enrichment
    ```
 
-4. For remote/CAS BEP artifact references, configure one downloader executable:
+4. For bytestream/CAS/custom provider BEP artifact references, or HTTP/HTTPS
+   endpoints that require custom auth, configure one downloader executable:
    ```bash
    export DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER=/path/to/download-outputs-zip
    ```
    The executable receives `--uri`, `--name`, and `--output` arguments and must
    write an `outputs.zip` archive to `--output` before
    `--bep-artifact-downloader-timeout-sec` expires. If your provider needs an
-   interpreter or fixed arguments, wrap it in a script and configure the wrapper
-   path. The public rule does not ship credentials or a Datadog-internal CAS
-   client.
+   interpreter, fixed arguments, custom auth headers, mTLS, signed header
+   refresh, or a CAS client, wrap it in a script and configure the wrapper path.
+   The public rule does not ship credentials or a Datadog-internal CAS client.
+
+Native HTTP/HTTPS staging is unauthenticated. It retries transient network
+failures, truncated responses, HTTP 408, HTTP 429, and HTTP 5xx responses three
+times with exponential backoff. It does not add custom headers, read
+credentials, use cookies, or consult netrc. Query strings, fragments,
+usernames, and passwords are redacted from doctor/uploader warnings and JSON
+reports.
 
 Common messages:
 
@@ -464,9 +473,24 @@ Common messages:
   pass the BEP JSON produced by the matching `bazel test` invocation.
 - `BEP artifact is remote-only and no downloader is configured`: either use
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`
-  with `--artifact-source=bep`, configure
-  `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER`, or use
-  `--remote-artifacts=disabled` outside required freshness mode.
+  with `--artifact-source=bep`, enable `--remote-artifacts=download` for
+  HTTP/HTTPS `outputs.zip` carriers, configure
+  `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER` for bytestream/CAS/custom-auth
+  providers, or use `--remote-artifacts=disabled` outside required freshness
+  mode.
+- `BEP HTTP artifact download failed ... HTTP Error 401` or `403`: the endpoint
+  likely requires auth. Use a downloader wrapper that injects the required
+  credentials or headers.
+- `BEP HTTP artifact download failed ... HTTP Error 404`: confirm the BEP URI
+  still exists for the current job and has not expired.
+- `BEP HTTP artifact download failed ... timed out`: native HTTP retries
+  transient failures three times; raise `--bep-artifact-downloader-timeout-sec`
+  only when each request attempt needs more time.
+- `invalid BEP outputs.zip`: confirm the URL serves Bazel's `outputs.zip`, not
+  HTML, JSON, or an error page.
+- `BEP HTTP artifact is too large`: inspect undeclared test outputs for
+  unexpected files; the compressed download and extracted tree both have size
+  guards.
 - `BEP artifact is not available locally`: the BEP points at a local path or
   `file://` URI that does not exist in this workspace. Check that the BEP file
   matches the current test invocation and machine.

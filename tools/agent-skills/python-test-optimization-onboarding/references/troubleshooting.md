@@ -100,9 +100,10 @@ Pass the matching BEP files to doctor/uploader with repeatable
 `--freshness-mode=required`, `--artifact-source=bep`, and
 `--artifact-staging-dir=<temp-dir>`.
 
-If BEP still points at remote/CAS artifacts, add
-`--artifact-source=bep --remote-artifacts=download` and configure
-`--bep-artifact-downloader=/path/to/downloader`. Use
+If BEP still points at HTTP/HTTPS `outputs.zip` artifacts, add
+`--artifact-source=bep --remote-artifacts=download`; no downloader is required
+unless the endpoint needs custom auth. For bytestream/CAS/custom-auth artifact
+providers, also configure `--bep-artifact-downloader=/path/to/downloader`. Use
 `--remote-artifacts=required` only when the rollout should fail if any selected
 artifact cannot be materialized.
 

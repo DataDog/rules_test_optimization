@@ -10,6 +10,9 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import functools
+import http.server
 import importlib.util
 import io
 import json
@@ -20,9 +23,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
-from typing import Optional
+from typing import Iterator, Optional
 import unittest
 import zipfile
 from unittest import mock
@@ -126,6 +130,51 @@ def _require_command(testcase: unittest.TestCase, command: str, reason: str) -> 
 _BEP_ARTIFACT_STAGE_HELPER_RLOC = "tools/core/bep_artifact_stage_helper.py"
 _DOCTOR_RUNTIME_RLOC = "tools/core/test_optimization_doctor.py"
 _NON_SIBLING_DOCTOR_RUNTIME_RLOC = "tools/tests/python/fixtures/runtime_doctor/test_optimization_doctor.py"
+
+
+class QuietSimpleHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
+    """HTTP handler that keeps unit test stderr deterministic."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+class QuietBaseHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Base HTTP handler that keeps unit test stderr deterministic."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+@contextlib.contextmanager
+def _serve_directory(root: Path) -> Iterator[str]:
+    """Serve a directory over local HTTP for BEP artifact staging tests."""
+    handler = functools.partial(QuietSimpleHTTPRequestHandler, directory=str(root))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@contextlib.contextmanager
+def _serve_handler(handler: type[http.server.BaseHTTPRequestHandler]) -> Iterator[str]:
+    """Serve a custom local HTTP handler for BEP artifact staging tests."""
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def _render_uploader_runtime_template(
@@ -583,6 +632,50 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             "".join(json.dumps(event) + "\n" for event in events),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _write_outputs_zip(
+        zip_path: Path,
+        *,
+        target: str = "//pkg:remote_only",
+        payload_name: str = "span_events_1.json",
+        payload_content: str = "{}",
+    ) -> None:
+        """Create a minimal Bazel outputs.zip carrier for staging tests."""
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr(f"payloads/tests/{payload_name}", payload_content)
+            archive.writestr(
+                "bazel_target_metadata.json",
+                json.dumps({
+                    "bazel.target": target,
+                    "bazel.go.payload_selection": "module",
+                }),
+            )
+
+    def _http_outputs_zip_freshness(self, root: Path, url: str, *, label: str = "//pkg:remote_only") -> object:
+        """Create BEP freshness for one HTTP outputs.zip carrier."""
+        bep = root / "freshness.bep.json"
+        target = label.split(":")[-1]
+        self._write_bep(
+            bep,
+            [
+                {
+                    "id": {"testResult": {"label": label, "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [
+                            {
+                                "name": "test.outputs",
+                                "uri": url,
+                                "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", target],
+                            },
+                        ],
+                    },
+                },
+            ],
+        )
+        return self.mod._parse_bep_freshness([bep])
 
     @staticmethod
     def _bep_test_result(
@@ -1135,6 +1228,116 @@ $rows | ConvertTo-Json -Compress
         self.assertEqual("staged", report["outputs"][0]["source"])
         self.assertEqual("//pkg:zip_target", report["outputs"][0]["label"])
         self.assertEqual(1, report["outputs"][0]["payloads"]["json"])
+
+    def test_doctor_report_redacts_http_remote_only_artifact(self) -> None:
+        """Validate doctor report redacts signed HTTP remote-only artifact URIs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_doctor_config(root, ["//pkg:remote_only"])
+            bep = root / "remote-only.ndjson"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {"testResult": {"label": "//pkg:remote_only", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {
+                            "status": "PASSED",
+                            "executionInfo": {"strategy": "remote"},
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": "https://user:pass@example.test/outputs.zip?sig=secret-token#fragment",
+                                    "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "remote_only"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+            report_path = root / "doctor-report.json"
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root)}, clear=False),
+                mock.patch("sys.stderr", stderr),
+            ):
+                os.environ.pop("TESTLOGS_DIR", None)
+                with self.assertRaises(SystemExit):
+                    self.mod.main([
+                        "--config",
+                        str(config),
+                        "--bep-json",
+                        str(bep),
+                        "--freshness-source=bep",
+                        "--freshness-mode=required",
+                        "--artifact-source=bep",
+                        "--remote-artifacts=disabled",
+                        "--report-json",
+                        str(report_path),
+                    ])
+
+            report_text = report_path.read_text(encoding="utf-8")
+            report = json.loads(report_text)
+
+        self.assertEqual("https://example.test/outputs.zip", report["bep"]["remote_only_outputs"][0]["artifact"])
+        for sensitive in ("secret-token", "fragment", "user", "pass"):
+            self.assertNotIn(sensitive, report_text)
+            self.assertNotIn(sensitive, stderr.getvalue())
+
+    def test_doctor_report_redacts_http_staged_fetch_value(self) -> None:
+        """Validate doctor staged artifact diagnostics redact signed HTTP fetch values."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            served_root = root / "http"
+            self._write_outputs_zip(served_root / "outputs.zip", target="//pkg:remote_only")
+            config_path = self._write_doctor_config(root, [])
+            bep = root / "freshness.bep.json"
+            with _serve_directory(served_root) as base_url:
+                self._write_bep(
+                    bep,
+                    [
+                        {
+                            "id": {"testResult": {"label": "//pkg:remote_only", "run": 1, "shard": 1, "attempt": 1}},
+                            "testResult": {
+                                "status": "PASSED",
+                                "testActionOutput": [
+                                    {
+                                        "name": "test.outputs",
+                                        "uri": f"{base_url}/outputs.zip?sig=secret-token#fragment",
+                                        "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "remote_only"],
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                )
+                report_path = root / "doctor-report.json"
+                with mock.patch.dict(
+                    os.environ,
+                    {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": ""},
+                    clear=False,
+                ):
+                    os.environ.pop("TESTLOGS_DIR", None)
+                    rc = self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--bep-json",
+                        str(bep),
+                        "--freshness-source=bep",
+                        "--freshness-mode=required",
+                        "--artifact-source=bep",
+                        "--remote-artifacts=required",
+                        "--report-json",
+                        str(report_path),
+                    ])
+                expected = f"{base_url}/outputs.zip"
+                report_text = report_path.read_text(encoding="utf-8")
+                report = json.loads(report_text)
+
+        self.assertEqual(0, rc)
+        self.assertEqual(expected, report["artifacts"]["staged"][0]["fetch_value"])
+        self.assertNotIn("secret-token", report_text)
+        self.assertNotIn("fragment", report_text)
 
     def test_parse_args_rejects_scientific_downloader_timeout(self) -> None:
         """Validate downloader timeout rejects scientific notation before staging."""
@@ -2541,6 +2744,288 @@ $rows | ConvertTo-Json -Compress
                     staging_dir=root / ".topt" / "bep-artifacts",
                     remote_artifacts="required",
                 )
+
+    def test_stage_bep_artifacts_downloads_http_outputs_zip_without_downloader(self) -> None:
+        """Validate native HTTP outputs.zip staging works without external downloader."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            served_root = root / "http"
+            source_zip = served_root / "outputs.zip"
+            self._write_outputs_zip(source_zip)
+            with _serve_directory(served_root) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/outputs.zip")
+
+                staged = self.mod._stage_bep_artifacts(
+                    freshness,
+                    workspace=root,
+                    staging_dir=root / ".topt" / "bep-artifacts",
+                    remote_artifacts="required",
+                    downloader="",
+                    downloader_timeout_sec=5,
+                )
+
+            self.assertEqual(1, len(staged))
+            self.assertTrue(staged[0].downloaded)
+            self.assertTrue(staged[0].remote_only)
+            self.assertEqual("pkg/remote_only/test.outputs", staged[0].output_key)
+            self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "span_events_1.json").is_file())
+            self.assertTrue((staged[0].output_dir / "bazel_target_metadata.json").is_file())
+
+    def test_stage_bep_artifacts_http_failure_skips_in_download_mode(self) -> None:
+        """Validate failed native HTTP staging skips in download mode without traceback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            served_root = root / "http"
+            served_root.mkdir()
+            with _serve_directory(served_root) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/missing.zip")
+                stderr = io.StringIO()
+                with mock.patch("sys.stderr", stderr):
+                    staged = self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="download",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertEqual([], staged)
+            self.assertIn("BEP HTTP artifact download failed", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_stage_bep_artifacts_http_failure_fails_required_mode(self) -> None:
+        """Validate failed native HTTP staging fails closed in required mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            served_root = root / "http"
+            served_root.mkdir()
+            with _serve_directory(served_root) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/missing.zip")
+                stderr = io.StringIO()
+                with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                    self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertIn("could not be materialized", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_stage_bep_artifacts_http_retry_succeeds_after_transient_failure(self) -> None:
+        """Validate native HTTP staging retries 5xx responses with exponential backoff."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_zip = root / "source" / "outputs.zip"
+            self._write_outputs_zip(source_zip)
+            zip_bytes = source_zip.read_bytes()
+
+            class FlakyHandler(QuietBaseHTTPRequestHandler):
+                attempts = 0
+
+                def do_GET(self) -> None:
+                    type(self).attempts += 1
+                    if type(self).attempts < 3:
+                        self.send_response(500)
+                        self.end_headers()
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(zip_bytes)))
+                    self.end_headers()
+                    self.wfile.write(zip_bytes)
+
+            with _serve_handler(FlakyHandler) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/outputs.zip")
+                sleeps: list[float] = []
+                with mock.patch.object(self.mod.time, "sleep", side_effect=sleeps.append):
+                    staged = self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertEqual(1, len(staged))
+            self.assertEqual(3, FlakyHandler.attempts)
+            self.assertEqual([0.25, 0.5], sleeps)
+
+    def test_stage_bep_artifacts_http_retry_exhaustion_warns_once(self) -> None:
+        """Validate native HTTP staging warns once when retries are exhausted."""
+        class AlwaysFailHandler(QuietBaseHTTPRequestHandler):
+            attempts = 0
+
+            def do_GET(self) -> None:
+                type(self).attempts += 1
+                self.send_response(500)
+                self.end_headers()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with _serve_handler(AlwaysFailHandler) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/outputs.zip")
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(self.mod.time, "sleep"),
+                    mock.patch("sys.stderr", stderr),
+                ):
+                    staged = self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="download",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertEqual([], staged)
+            self.assertEqual(3, AlwaysFailHandler.attempts)
+            self.assertEqual(1, stderr.getvalue().count("BEP HTTP artifact download failed"))
+            self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_stage_bep_artifacts_http_retry_succeeds_after_truncated_response(self) -> None:
+        """Validate native HTTP staging retries truncated responses before zip extraction."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_zip = root / "source" / "outputs.zip"
+            self._write_outputs_zip(source_zip)
+            zip_bytes = source_zip.read_bytes()
+
+            class TruncatedHandler(QuietBaseHTTPRequestHandler):
+                attempts = 0
+
+                def do_GET(self) -> None:
+                    type(self).attempts += 1
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(zip_bytes)))
+                    self.end_headers()
+                    if type(self).attempts == 1:
+                        self.wfile.write(zip_bytes[: max(1, len(zip_bytes) // 3)])
+                        self.wfile.flush()
+                        self.connection.close()
+                        return
+                    self.wfile.write(zip_bytes)
+
+            with _serve_handler(TruncatedHandler) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/outputs.zip")
+                sleeps: list[float] = []
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(self.mod.time, "sleep", side_effect=sleeps.append),
+                    mock.patch("sys.stderr", stderr),
+                ):
+                    staged = self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertEqual(1, len(staged))
+            self.assertEqual(2, TruncatedHandler.attempts)
+            self.assertEqual([0.25], sleeps)
+            self.assertNotIn("invalid BEP outputs.zip", stderr.getvalue())
+
+    def test_stage_bep_artifacts_explicit_downloader_overrides_http_builtin(self) -> None:
+        """Validate explicit downloader wins even for HTTP BEP artifact references."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            served_root = root / "http"
+            self._write_outputs_zip(served_root / "outputs.zip", payload_name="from_http.json")
+            downloader_zip = root / "downloader" / "outputs.zip"
+            self._write_outputs_zip(downloader_zip, payload_name="from_downloader.json")
+            downloader = self._write_python_downloader(
+                root / "downloader-script",
+                """
+import os
+import shutil
+import sys
+
+out = ""
+args = iter(sys.argv[1:])
+for arg in args:
+    if arg == "--output":
+        out = next(args)
+shutil.copyfile(os.environ["DOWNLOADER_ZIP"], out)
+""",
+            )
+            with _serve_directory(served_root) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/outputs.zip")
+                with mock.patch.dict(os.environ, {"DOWNLOADER_ZIP": str(downloader_zip)}):
+                    staged = self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                        downloader=str(downloader),
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertEqual(1, len(staged))
+            self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "from_downloader.json").is_file())
+            self.assertFalse((staged[0].output_dir / "payloads" / "tests" / "from_http.json").exists())
+
+    def test_stage_bep_artifacts_http_logs_redact_query_and_fragment(self) -> None:
+        """Validate native HTTP staging diagnostics redact signed URL components."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            served_root = root / "http"
+            served_root.mkdir()
+            with _serve_directory(served_root) as base_url:
+                url = f"{base_url}/missing.zip?sig=secret-token#fragment"
+                freshness = self._http_outputs_zip_freshness(root, url)
+                stderr = io.StringIO()
+                with mock.patch("sys.stderr", stderr):
+                    staged = self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="download",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertEqual([], staged)
+            self.assertNotIn("secret-token", stderr.getvalue())
+            self.assertNotIn("fragment", stderr.getvalue())
+            self.assertIn("/missing.zip", stderr.getvalue())
+
+    def test_stage_bep_artifacts_http_content_length_limit_is_enforced(self) -> None:
+        """Validate native HTTP staging enforces the compressed artifact byte limit."""
+        class OversizedHandler(QuietBaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(200)
+                self.send_header("Content-Length", "9")
+                self.end_headers()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with _serve_handler(OversizedHandler) as base_url:
+                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/outputs.zip")
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(self.mod, "MAX_OUTPUTS_TREE_BYTES", 8),
+                    mock.patch("sys.stderr", stderr),
+                    self.assertRaises(SystemExit),
+                ):
+                    self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
+
+            self.assertIn("too large", stderr.getvalue())
+            self.assertEqual([], list((root / ".topt" / "bep-artifacts").rglob("outputs.zip")))
 
     def test_stage_bep_artifacts_downloads_remote_outputs_zip(self) -> None:
         """Validate remote-only BEP artifacts can be materialized by an external downloader."""
@@ -4415,6 +4900,30 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         return bep
 
     @staticmethod
+    def _write_signed_http_remote_only_bep(root: Path) -> Path:
+        """Create a BEP fixture whose remote-only artifact URL contains secrets."""
+        bep = root / "signed-http-remote-only.bep.json"
+        TestOptimizationDoctorTests._write_bep(
+            bep,
+            [
+                {
+                    "id": {"testResult": {"label": "//pkg:remote_only", "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [
+                            {
+                                "name": "test.outputs",
+                                "uri": "https://user:supersecret@example.test/outputs.zip?sig=secret-token#fragment",
+                                "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "remote_only"],
+                            },
+                        ],
+                    },
+                },
+            ],
+        )
+        return bep
+
+    @staticmethod
     def _write_non_sibling_runtime_runfiles(root: Path) -> Path:
         """Create runfiles with helper and doctor runtime at independent rlocs."""
         runfiles_dir = root / "runtime.runfiles"
@@ -4665,6 +5174,152 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             "Initialize-FreshnessEligibility\n    Merge-StagedBepFreshness\n    Assert-NoRequiredRemoteOnlyBepOutputs",
             powershell_text,
         )
+
+    def test_uploader_remote_only_logs_redact_http_artifact_references(self) -> None:
+        """Validate uploader remote-only warnings render redacted HTTP artifact references."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("display_artifact_reference()", bash_text)
+        self.assertIn('display_artifact_reference "$first_artifact"', bash_text)
+        self.assertNotIn(": ${first_artifact:-<unknown>}; skipping", bash_text)
+        self.assertNotIn(": ${first_artifact:-<unknown>}. Rerun", bash_text)
+        self.assertNotIn(": ${first_artifact:-<unknown>}; remote artifact", bash_text)
+
+        self.assertIn("function Format-ArtifactReferenceForLog", powershell_text)
+        self.assertIn("Format-ArtifactReferenceForLog $first.Artifact", powershell_text)
+        self.assertNotIn(": $($first.Artifact); skipping", powershell_text)
+        self.assertNotIn(": $($first.Artifact). Rerun", powershell_text)
+        self.assertNotIn(": $($first.Artifact); remote artifact", powershell_text)
+
+    def test_generated_bash_uploader_redacts_http_remote_only_warning(self) -> None:
+        """Validate generated Bash uploader logs/report redact signed HTTP artifacts."""
+        _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
+        bash = _require_functional_bash(self)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bazel-testlogs").mkdir()
+            bep = self._write_signed_http_remote_only_bep(root)
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template("tools/core/uploader_bash_runtime.sh.tpl"),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+            report = root / "uploader-report.json"
+            env = os.environ.copy()
+            env.update({
+                "BUILD_WORKSPACE_DIRECTORY": str(root),
+                "DD_TEST_OPTIMIZATION_MAX_WAIT_SEC": "0",
+                "DD_TEST_OPTIMIZATION_QUIESCENT_SEC": "0",
+                "RUNFILES_DIR": str(root / "empty.runfiles"),
+                "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+            })
+            (root / "empty.runfiles").mkdir()
+
+            result = subprocess.run(
+                [
+                    bash,
+                    str(generated_bash),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                    "--remote-artifacts=disabled",
+                    "--report-json",
+                    str(report),
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+            output = result.stdout + result.stderr
+            self.assertTrue(report.is_file(), output)
+            report_text = report.read_text(encoding="utf-8")
+            report_doc = json.loads(report_text)
+
+        self.assertEqual(0, result.returncode, output)
+        self.assertIn("https://example.test/outputs.zip", output)
+        for sensitive in ("secret-token", "fragment", "user:supersecret", "sig=secret-token"):
+            self.assertNotIn(sensitive, output)
+            self.assertNotIn(sensitive, report_text)
+        self.assertEqual(1, report_doc["bep"]["remote_only_outputs"])
+        self.assertNotIn("artifact", report_doc["bep"])
+
+    def test_generated_powershell_uploader_redacts_http_remote_only_warning(self) -> None:
+        """Validate generated PowerShell uploader logs/report redact signed HTTP artifacts."""
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell uploader execution")
+
+        root = Path(tempfile.mkdtemp())
+        try:
+            (root / "bazel-testlogs").mkdir()
+            bep = self._write_signed_http_remote_only_bep(root)
+            generated_ps = root / "generated_uploader.ps1"
+            generated_ps.write_text(
+                _render_uploader_runtime_template("tools/core/uploader_powershell_runtime.ps1.tpl"),
+                encoding="utf-8",
+            )
+            report = root / "uploader-report.json"
+            env = os.environ.copy()
+            env.update({
+                "BUILD_WORKSPACE_DIRECTORY": str(root),
+                "DD_TEST_OPTIMIZATION_MAX_WAIT_SEC": "0",
+                "DD_TEST_OPTIMIZATION_QUIESCENT_SEC": "0",
+                "RUNFILES_DIR": str(root / "empty.runfiles"),
+                "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+            })
+            (root / "empty.runfiles").mkdir()
+
+            result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-File",
+                    str(generated_ps),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                    "--remote-artifacts=disabled",
+                    "--report-json",
+                    str(report),
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+            output = result.stdout + result.stderr
+            self.assertTrue(report.is_file(), output)
+            report_text = report.read_text(encoding="utf-8")
+            report_doc = json.loads(report_text)
+        finally:
+            _cleanup_tempdir_with_windows_retry(root)
+
+        self.assertEqual(0, result.returncode, output)
+        self.assertIn("https://example.test/outputs.zip", output)
+        for sensitive in ("secret-token", "fragment", "user:supersecret", "sig=secret-token"):
+            self.assertNotIn(sensitive, output)
+            self.assertNotIn(sensitive, report_text)
+        self.assertEqual(1, report_doc["bep"]["remote_only_outputs"])
+        self.assertNotIn("artifact", report_doc["bep"])
 
     def test_uploader_templates_declare_bep_artifact_helper_runfiles(self) -> None:
         """Validate generated runtimes receive explicit helper and doctor runtime labels."""

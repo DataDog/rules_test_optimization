@@ -153,8 +153,10 @@ Use this checklist before your first CI rollout:
    - `--freshness-mode=required`
    - `--artifact-source=bep`
    - `--artifact-staging-dir=<per-run-temp-dir>`
-   Keep `--remote-artifacts=disabled` unless BEP references remote/CAS
-   artifacts that Bazel did not materialize locally.
+   Keep `--remote-artifacts=disabled` unless BEP references remote-only
+   artifacts that Bazel did not materialize locally. HTTP/HTTPS `outputs.zip`
+   carriers can use native staging; bytestream/CAS/custom-auth providers need a
+   downloader.
 
 ## Published Go onboarding pins
 
@@ -1286,9 +1288,10 @@ tests fail.
 2. Use a single uploader target per workspace (do not run concurrent uploaders).
 3. Tests must run locally or use
    `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`
-   with BEP artifact staging. Explicitly enable remote BEP artifact resolution
-   for environments that cannot download `test.outputs/` or `outputs.zip` into
-   `bazel-testlogs/`.
+   with BEP artifact staging. Enable remote BEP artifact resolution when BEP
+   points at remote-only carriers; HTTP/HTTPS `outputs.zip` carriers can be
+   staged natively, while bytestream/CAS/custom-auth providers still need a
+   downloader executable.
 4. Run uploader on the same machine/workspace where tests executed.
 5. `DD_TEST_OPTIMIZATION_CONTEXT_JSON` is a legacy explicit override for
    advanced workflows that already resolved one specific `context.json` path.
@@ -1399,7 +1402,8 @@ python3 tools/test_optimization/render_report_summary.py \
 ```
 
 If your CI cannot materialize `test.outputs/` or `outputs.zip` with the
-selective remote download flags, enable remote BEP artifact staging:
+selective remote download flags, enable remote BEP artifact staging. Plain
+HTTP/HTTPS `outputs.zip` BEP carriers do not need a downloader:
 
 ```bash
 bazel run //:dd_upload_payloads -- \
@@ -1418,14 +1422,24 @@ Customer-facing mode summary:
 | Local discovery | `bazel-testlogs/**/test.outputs/payloads/...` exists locally | No artifact flags; use BEP freshness in CI |
 | Recommended CI | Remote cache/RBE can download test outputs locally | `.bazelrc` test config has `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`; wrapper passes `--build_event_json_file=<temp>` to each `bazel test`, then passes repeatable `--bep-json=<temp> --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=<temp-dir>` to doctor/uploader |
 | CI without zipped outputs | Tests leave loose payload files under local `test.outputs` | Same BEP freshness env; `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` is valid but not required for zip extraction |
-| Remote/CAS staging | BEP points at remote-only artifacts | Add `--artifact-source=bep --remote-artifacts=download|required` and configure `--bep-artifact-downloader` |
+| HTTP/HTTPS BEP staging | BEP points at an `http://` or `https://` `outputs.zip` carrier and no custom auth is needed | `--artifact-source=bep --remote-artifacts=download|required`; no downloader flag |
+| Custom remote/CAS staging | BEP points at `bytestream://`, CAS, internal artifact APIs, or HTTP endpoints requiring custom auth | `--artifact-source=bep --remote-artifacts=download|required --bep-artifact-downloader=/usr/local/bin/bep-artifact-downloader` |
 | Auto staging | Mixed local/staged migration path | `--artifact-source=auto --remote-artifacts=download|required` |
 
-Remote/CAS artifact download requires a downloader executable configured by the
-consumer environment. `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER` must point
-to one executable file; if the provider needs an interpreter or fixed
-arguments, wrap them in a script and configure the wrapper path. The downloader
-must write an `outputs.zip` archive to the requested `--output` path before
+Native HTTP/HTTPS staging is unauthenticated: it does not add custom headers,
+read credentials, use cookies, or consult netrc. It retries transient network
+failures, truncated responses, HTTP 408, HTTP 429, and HTTP 5xx responses three
+times with exponential backoff before applying the selected
+`download`/`required` failure behavior. HTTP query strings, fragments,
+usernames, and passwords are redacted from doctor/uploader warnings and JSON
+reports.
+
+Custom remote/CAS artifact download requires a downloader executable configured
+by the consumer environment. `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER` must
+point to one executable file; if the provider needs an interpreter, fixed
+arguments, custom auth headers, mTLS, signed header refresh, or a CAS client,
+wrap them in a script and configure the wrapper path. The downloader must write
+an `outputs.zip` archive to the requested `--output` path before
 `--bep-artifact-downloader-timeout-sec` expires. The public rule only defines
 the downloader contract; it does not ship credentials or a Datadog-internal CAS
 client.
@@ -1805,8 +1819,9 @@ Fast checks before diving deep:
 - For RBE, prefer the recommended test config:
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs`,
   plus `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep` for doctor/uploader. If BEP
-  references remote/CAS artifacts, use `--artifact-source=bep` with
-  `--remote-artifacts=download` or `required` and a downloader.
+  references HTTP/HTTPS `outputs.zip` artifacts, use `--artifact-source=bep`
+  with `--remote-artifacts=download` or `required`. For bytestream/CAS or
+  HTTP endpoints requiring custom auth, also configure a downloader.
 - Enable debug logging on sync/uploader rules for richer diagnostics
 - If needed, file an issue with sanitized logs:
   - open an issue in the repository issue tracker

@@ -392,7 +392,10 @@ remote-only. Pass the matching BEP files to doctor/uploader with repeatable
 `--bep-json=<path>` plus `--freshness-source=bep`,
 `--freshness-mode=required`, `--artifact-source=bep`, and
 `--artifact-staging-dir=<temp-dir>` so zipped
-undeclared outputs are staged from BEP before local discovery.
+undeclared outputs are staged from BEP before local discovery. If BEP points at
+remote-only HTTP/HTTPS `outputs.zip` carriers, add
+`--remote-artifacts=download` or `required`; bytestream/CAS/custom-auth
+providers also need `--bep-artifact-downloader=<path>`.
 
 ## Root Targets
 

@@ -35,10 +35,12 @@ Checks:
 - Did doctor/uploader run with repeatable `--bep-json=<path>`,
   `--freshness-source=bep`, `--freshness-mode=required`,
   `--artifact-source=bep`, and `--artifact-staging-dir=<temp-dir>`?
-- If BEP still points at remote/CAS artifacts, did doctor/uploader use
-  `--artifact-source=bep --remote-artifacts=download` with a configured
-  `--bep-artifact-downloader`? Use `--remote-artifacts=required` only when the
-  rollout should fail if any selected artifact cannot be materialized.
+- If BEP still points at HTTP/HTTPS `outputs.zip` artifacts, did
+  doctor/uploader use `--artifact-source=bep --remote-artifacts=download`
+  without a downloader? If BEP points at bytestream/CAS/custom-auth artifacts,
+  did it also configure `--bep-artifact-downloader`? Use
+  `--remote-artifacts=required` only when the rollout should fail if any
+  selected artifact cannot be materialized.
 - If local outputs may be stale while BEP can stage fresh carriers, consider
   `--artifact-source=auto --remote-artifacts=download` so staged outputs win for
   matching BEP output keys.

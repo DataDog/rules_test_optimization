@@ -7,6 +7,58 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Format-ArtifactReferenceForLog {
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    if (-not (
+        $Value.StartsWith("http://", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $Value.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)
+    )) {
+        return $Value
+    }
+    try {
+        $uri = [System.Uri]::new($Value)
+        if (
+            -not $uri.IsAbsoluteUri -or
+            [string]::IsNullOrWhiteSpace($uri.Host) -or
+            ($uri.Scheme -ne "http" -and $uri.Scheme -ne "https")
+        ) {
+            return "$($uri.Scheme)://redacted-invalid-url"
+        }
+        $host = $uri.IdnHost
+        if ($host.Contains(":") -and -not $host.StartsWith("[")) {
+            $host = "[$host]"
+        }
+        $port = ""
+        if (-not $uri.IsDefaultPort) {
+            $port = ":$($uri.Port)"
+        }
+        return "$($uri.Scheme)://$host$port$($uri.AbsolutePath)"
+    } catch {
+        $scheme = "http"
+        if ($Value.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $scheme = "https"
+        }
+        $rest = $Value.Substring($scheme.Length + 3)
+        $hashIndex = $rest.IndexOf("#")
+        if ($hashIndex -ge 0) {
+            $rest = $rest.Substring(0, $hashIndex)
+        }
+        $queryIndex = $rest.IndexOf("?")
+        if ($queryIndex -ge 0) {
+            $rest = $rest.Substring(0, $queryIndex)
+        }
+        $atIndex = $rest.LastIndexOf("@")
+        if ($atIndex -ge 0) {
+            $rest = $rest.Substring($atIndex + 1)
+        }
+        if ([string]::IsNullOrWhiteSpace($rest)) {
+            return "${scheme}://redacted-invalid-url"
+        }
+        return "${scheme}://$rest"
+    }
+}
+
 # Resolve runfile path for context.json lookup
 # Since `bazel run` does NOT set TEST_SRCDIR, we use RUNFILES_DIR or RUNFILES_MANIFEST_FILE
 function Resolve-Runfile {
@@ -2911,7 +2963,8 @@ function Initialize-BepEligibility {
 	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count)"
 	  if ($script:FreshnessMode -eq "optional" -and $script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
 	    $first = $script:FreshnessRemoteOnlyOutputs[0]
-	    Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); skipping those outputs. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* to materialize payloads locally. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+	    $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
+	    Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; skipping those outputs. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* to materialize payloads locally. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
 	  }
 	}
 
@@ -3081,15 +3134,16 @@ function Assert-NoRequiredRemoteOnlyBepOutputs {
   if ($script:FreshnessSelectedSource -ne "bep") { return }
   if ($script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
     $first = $script:FreshnessRemoteOnlyOutputs[0]
+    $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
     if ($script:FreshnessMode -ne "required" -and $script:RemoteArtifacts -eq "download") {
-      Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); unmaterialized outputs will be skipped."
+      Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; unmaterialized outputs will be skipped."
       return
     }
     if ($script:FreshnessMode -ne "required" -and $script:RemoteArtifacts -eq "disabled") {
-      Log "warning: BEP references remote-only test outputs for $($first.Label): $($first.Artifact); remote artifact staging is disabled."
+      Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; remote artifact staging is disabled."
       return
     }
-    Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $($first.Artifact). Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+    Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $firstArtifact. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
     exit 2
   }
 }

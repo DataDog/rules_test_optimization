@@ -10,15 +10,21 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import math
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import time
 from typing import Any, Iterable
+import urllib.error
+import urllib.parse
+import urllib.request
 from urllib.parse import unquote, urlparse
 import uuid
 import zipfile
@@ -54,6 +60,9 @@ REMOTE_TEST_OUTPUT_DOWNLOAD_HINT = (
 STAGING_MARKER = ".dd-topt-bep-staged"
 MAX_OUTPUTS_TREE_FILES = 10000
 MAX_OUTPUTS_TREE_BYTES = 512 * 1024 * 1024
+HTTP_DOWNLOAD_ATTEMPTS = 3
+HTTP_DOWNLOAD_BACKOFF_INITIAL_SEC = 0.25
+HTTP_DOWNLOAD_BACKOFF_MULTIPLIER = 2.0
 _LAST_FAILURE_MESSAGE: str | None = None
 
 
@@ -619,6 +628,41 @@ def _is_remote_only_bep_reference(path_value: str) -> bool:
     return False
 
 
+def _is_http_artifact_reference(value: str) -> bool:
+    """Return true when a BEP artifact reference is an HTTP(S) URI."""
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+def _display_artifact_reference(value: str) -> str:
+    """Return a customer-facing artifact reference without URL secrets."""
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        lowered = value.lower()
+        if lowered.startswith("http://") or lowered.startswith("https://"):
+            return f"{lowered.split('://', 1)[0]}://redacted-invalid-url"
+        return value
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return value
+    host = parsed.hostname or ""
+    if not host:
+        return f"{parsed.scheme}://redacted-invalid-url"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port is not None:
+        host = f"{host}:{port}"
+    redacted = urllib.parse.urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+    return redacted or f"{parsed.scheme}://redacted-host"
+
+
 def _bep_test_outputs_artifact_hint(path_value: str) -> bool:
     """Return true when a BEP reference appears to describe undeclared test outputs."""
     if not path_value:
@@ -903,6 +947,108 @@ def _download_remote_artifact(
     return dst
 
 
+def _http_download_backoff_seconds(attempt_index: int) -> float:
+    return HTTP_DOWNLOAD_BACKOFF_INITIAL_SEC * (HTTP_DOWNLOAD_BACKOFF_MULTIPLIER ** attempt_index)
+
+
+def _is_retryable_http_download_error(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in {408, 429} or 500 <= exc.code <= 599
+    return isinstance(
+        exc,
+        (
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            ConnectionResetError,
+            BrokenPipeError,
+            TimeoutError,
+            socket.timeout,
+        ),
+    )
+
+
+def _download_http_artifact(
+    ref: BepArtifactReference,
+    staging_dir: Path,
+    *,
+    timeout_sec: float,
+) -> Path | None:
+    """Download an unauthenticated HTTP(S) BEP outputs.zip artifact."""
+    safe_label = _safe_download_fragment(ref.label)
+    safe_key = _safe_download_fragment(ref.output_key)
+    dst = staging_dir / "__downloads" / safe_label / safe_key / "outputs.zip"
+    tmp = dst.with_name("outputs.zip.tmp")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    for path in (dst, tmp):
+        if path.exists():
+            if path.is_file():
+                path.unlink()
+            else:
+                raise BepArtifactStageError(f"refusing to replace non-file BEP HTTP download destination: {path}")
+
+    display_uri = _display_artifact_reference(ref.fetch_value)
+    last_error: BaseException | None = None
+    attempt_count = 0
+    for attempt_index in range(HTTP_DOWNLOAD_ATTEMPTS):
+        attempt_count = attempt_index + 1
+        tmp.unlink(missing_ok=True)
+        try:
+            request = urllib.request.Request(
+                ref.fetch_value,
+                headers={"User-Agent": "datadog-rules-test-optimization"},
+            )
+            with urllib.request.urlopen(request, timeout=timeout_sec) as response, tmp.open("wb") as out:
+                length = response.headers.get("Content-Length")
+                expected_length: int | None = None
+                if length is not None:
+                    expected_length = int(length)
+                    if expected_length < 0:
+                        raise ValueError(f"negative Content-Length: {length}")
+                    if expected_length > MAX_OUTPUTS_TREE_BYTES:
+                        raise BepArtifactStageError(f"BEP HTTP artifact is too large: {display_uri}")
+                total = 0
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_OUTPUTS_TREE_BYTES:
+                        raise BepArtifactStageError(f"BEP HTTP artifact is too large: {display_uri}")
+                    out.write(chunk)
+                if expected_length is not None and total < expected_length:
+                    raise http.client.IncompleteRead(b"", expected_length - total)
+            tmp.replace(dst)
+            return dst
+        except BepArtifactStageError:
+            tmp.unlink(missing_ok=True)
+            raise
+        except (
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            ConnectionResetError,
+            BrokenPipeError,
+            TimeoutError,
+            socket.timeout,
+            ValueError,
+        ) as exc:
+            tmp.unlink(missing_ok=True)
+            last_error = exc
+            if not _is_retryable_http_download_error(exc) or attempt_index + 1 >= HTTP_DOWNLOAD_ATTEMPTS:
+                break
+            time.sleep(_http_download_backoff_seconds(attempt_index))
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            raise BepArtifactStageError(f"failed to write BEP HTTP artifact download {tmp}: {exc}") from exc
+
+    if last_error is not None:
+        _warn(
+            f"BEP HTTP artifact download failed for {ref.label} after "
+            f"{attempt_count} attempts: {display_uri}: {last_error}"
+        )
+        return None
+    return None
+
+
 def _stage_bep_artifacts(
     freshness: BepFreshness,
     *,
@@ -937,8 +1083,9 @@ def _stage_bep_artifacts(
         for ref in refs:
             if ref.cached:
                 continue
+            display_fetch_value = _display_artifact_reference(ref.fetch_value)
             if ref.is_test_outputs_hint and not ref.output_key:
-                message = f"BEP artifact for {ref.label} has no mappable test.outputs key: {ref.fetch_value}"
+                message = f"BEP artifact for {ref.label} has no mappable test.outputs key: {display_fetch_value}"
                 if remote_artifacts == "required":
                     _fail(message)
                 if remote_artifacts == "download":
@@ -950,41 +1097,48 @@ def _stage_bep_artifacts(
                 if ref.remote_only and remote_artifacts == "required":
                     _fail(
                         f"BEP artifact for {ref.label} is remote-only but not a supported "
-                        f"test.outputs carrier: {ref.fetch_value}"
+                        f"test.outputs carrier: {display_fetch_value}"
                     )
                 if ref.remote_only and remote_artifacts == "download":
                     warn_once(
                         f"BEP artifact for {ref.label} is remote-only but not stageable: "
-                        f"{ref.fetch_value}"
+                        f"{display_fetch_value}"
                     )
                 continue
             if ref.remote_only:
                 if remote_artifacts == "disabled":
                     warn_once(
                         f"BEP artifact for {ref.label} is remote-only but remote artifact "
-                        f"download is disabled: {ref.fetch_value}"
+                        f"download is disabled: {display_fetch_value}"
                     )
                     continue
-                if not downloader:
+                if not downloader and not _is_http_artifact_reference(ref.fetch_value):
                     if remote_artifacts == "required":
                         _fail(
                             f"BEP artifact for {ref.label} is remote-only and no downloader is configured: "
-                            f"{ref.fetch_value}"
+                            f"{display_fetch_value}"
                         )
                     warn_once(
                         f"BEP artifact for {ref.label} is remote-only and no downloader is configured: "
-                        f"{ref.fetch_value}"
+                        f"{display_fetch_value}"
                     )
                     continue
             downloaded = False
             try:
                 if ref.remote_only:
-                    source = _download_remote_artifact(
-                        ref,
-                        run_staging_dir,
-                        downloader,
-                        timeout_sec=downloader_timeout_sec,
-                    )
+                    if downloader:
+                        source = _download_remote_artifact(
+                            ref,
+                            run_staging_dir,
+                            downloader,
+                            timeout_sec=downloader_timeout_sec,
+                        )
+                    else:
+                        source = _download_http_artifact(
+                            ref,
+                            run_staging_dir,
+                            timeout_sec=downloader_timeout_sec,
+                        )
                     downloaded = source is not None
                 else:
                     source = _resolve_bep_local_artifact_path(ref.fetch_value, workspace)
@@ -997,12 +1151,12 @@ def _stage_bep_artifacts(
                 if remote_artifacts == "required":
                     _fail(
                         f"BEP artifact for {ref.label} could not be materialized as a local test.outputs carrier: "
-                        f"{ref.fetch_value}"
+                        f"{display_fetch_value}"
                     )
                 if remote_artifacts == "download":
                     warn_once(
                         f"BEP artifact for {ref.label} could not be materialized and will be skipped: "
-                        f"{ref.fetch_value}"
+                        f"{display_fetch_value}"
                     )
                 continue
             tmp_dst, dst = _prepare_staging_destination(run_staging_dir, ref.output_key)
@@ -1372,7 +1526,7 @@ def _validate_expected_target_bep_freshness(
         if not expected_targets or remote.label in expected_targets:
             _fail(
                 "BEP references remote-only test outputs for "
-                f"{remote.label}: {remote.artifact}. Rerun bazel test with "
+                f"{remote.label}: {_display_artifact_reference(remote.artifact)}. Rerun bazel test with "
                 f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
             )
 
@@ -1462,7 +1616,7 @@ def _validate_discovered_bep_freshness(
         if remote.label in local_labels:
             _fail(
                 "BEP references remote-only test outputs for "
-                f"{remote.label}: {remote.artifact}. Rerun bazel test with "
+                f"{remote.label}: {_display_artifact_reference(remote.artifact)}. Rerun bazel test with "
                 f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
             )
 
@@ -2035,7 +2189,7 @@ def _update_diagnostic_bep(
                 {
                     "label": item.label,
                     "output_key": item.output_key,
-                    "artifact": item.artifact,
+                    "artifact": _display_artifact_reference(item.artifact),
                     "reason": item.reason,
                 }
                 for item in freshness.remote_only_outputs
@@ -2089,7 +2243,7 @@ def _update_diagnostic_artifacts(
                     "path": str(item.output_dir),
                     "downloaded": item.downloaded,
                     "remote_only": item.remote_only,
-                    "fetch_value": item.fetch_value,
+                    "fetch_value": _display_artifact_reference(item.fetch_value),
                     "carrier": _diagnostic_staged_carrier(item),
                 }
                 for item in staged
@@ -2150,7 +2304,7 @@ def _classify_diagnostic_failure(report: dict[str, Any], message: str) -> tuple[
             "bep_output_remote_only_without_downloader",
             "BEP selected remote-only outputs that could not be materialized locally.",
             [
-                "Enable --remote-artifacts=download with --bep-artifact-downloader, or adjust Bazel remote download settings."
+                "Enable --remote-artifacts=download; configure --bep-artifact-downloader for non-HTTP remote providers or HTTP endpoints requiring custom auth."
             ],
         )
     if "no Test Optimization output directories found" in message:

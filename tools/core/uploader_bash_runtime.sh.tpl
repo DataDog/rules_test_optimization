@@ -49,6 +49,41 @@ trim_ascii_whitespace() {
 ' "$value"
 }
 
+display_artifact_reference() {
+    local value="$1"
+    local lowered scheme rest
+    lowered="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+    case "$lowered" in
+        http://*|https://*) ;;
+        *)
+            printf '%s
+' "$value"
+            return 0
+            ;;
+    esac
+    if [[ "$value" != *"://"* ]]; then
+        scheme="${lowered%%://*}"
+        printf '%s://redacted-invalid-url
+' "$scheme"
+        return 0
+    fi
+    scheme="${value%%://*}"
+    scheme="$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')"
+    rest="${value#*://}"
+    rest="${rest%%#*}"
+    rest="${rest%%\?*}"
+    if [[ "$rest" == *"@"* ]]; then
+        rest="${rest##*@}"
+    fi
+    if [[ -z "$rest" ]]; then
+        printf '%s://redacted-invalid-url
+' "$scheme"
+        return 0
+    fi
+    printf '%s://%s
+' "$scheme" "$rest"
+}
+
 # Handle normalize dd site or fail behavior.
 normalize_dd_site_or_fail() {
     local raw="$1"
@@ -3067,10 +3102,11 @@ prepare_bep_eligibility() {
   remote_count="$(wc -l <"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" | tr -d ' ')"
   log "freshness filtering enabled: source=bep files=${#BEP_JSON_FILES[@]} eligible_outputs=$eligible_count remote_only_outputs=$remote_count"
   if [[ "$FRESHNESS_MODE" == "optional" && "$remote_count" != "0" ]]; then
-    local first_label first_artifact
+    local first_label first_artifact first_artifact_display
     first_label="$(awk -F '\t' 'NR == 1 { print $1 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
     first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
-    log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>}: ${first_artifact:-<unknown>}; skipping those outputs. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* to materialize payloads locally. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+    first_artifact_display="$(display_artifact_reference "$first_artifact")"
+    log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>}: ${first_artifact_display:-<unknown>}; skipping those outputs. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* to materialize payloads locally. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
   fi
 }
 
@@ -3109,17 +3145,18 @@ validate_bep_remote_only_outputs() {
     return 0
   fi
   if [[ -n "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" && -s "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" ]]; then
-    local first_label first_artifact
+    local first_label first_artifact first_artifact_display
     first_label="$(awk -F '\t' 'NR == 1 { print $1 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
     first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
+    first_artifact_display="$(display_artifact_reference "$first_artifact")"
     if [[ "$FRESHNESS_MODE" == "required" ]]; then
-      log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact:-<unknown>}. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+      log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact_display:-<unknown>}. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
       exit 2
     fi
     if [[ "$REMOTE_ARTIFACTS" == "download" ]]; then
-      log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} and they were not materialized: ${first_artifact:-<unknown>}; skipping those outputs."
+      log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} and they were not materialized: ${first_artifact_display:-<unknown>}; skipping those outputs."
     elif [[ "$REMOTE_ARTIFACTS" == "disabled" ]]; then
-      log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} but remote artifact download is disabled: ${first_artifact:-<unknown>}"
+      log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} but remote artifact download is disabled: ${first_artifact_display:-<unknown>}"
     fi
   fi
 }
