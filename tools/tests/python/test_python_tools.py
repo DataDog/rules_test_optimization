@@ -474,8 +474,12 @@ esac
             self.assertIn("--build_event_json_file=", log_text)
             self.assertIn("run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=", log_text)
             self.assertIn("--artifact-staging-dir=", log_text)
-            self.assertIn(f"--report-json={root / 'reports' / 'doctor-report.json'}", log_text)
-            self.assertIn(f"--report-json={root / 'reports' / 'uploader-dry-run-report.json'}", log_text)
+            normalized_log_text = log_text.replace("\\", "/")
+            self.assertIn(f"--report-json={(root / 'reports' / 'doctor-report.json').as_posix()}", normalized_log_text)
+            self.assertIn(
+                f"--report-json={(root / 'reports' / 'uploader-dry-run-report.json').as_posix()}",
+                normalized_log_text,
+            )
 
 
 class ReportSummaryRendererTests(unittest.TestCase):
