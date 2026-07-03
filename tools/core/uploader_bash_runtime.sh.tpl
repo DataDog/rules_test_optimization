@@ -570,6 +570,23 @@ DRY_RUN=0
 VALIDATE_ENRICHMENT=0
 REPORT_JSON="${DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON:-}"
 UPLOADER_REPORT_WRITTEN=0
+REPORT_REASON_CODE="running"
+REPORT_REASON="Uploader is still running."
+REPORT_NEXT_STEPS=()
+REPORT_UPLOAD_ATTEMPTED=0
+REPORT_PAYLOADS_DISCOVERED_TESTS=0
+REPORT_PAYLOADS_DISCOVERED_COVERAGE=0
+REPORT_PAYLOADS_DISCOVERED_TELEMETRY=0
+UPLOAD_FAILURES=0
+REPORT_TESTS_PROCESSED=0
+REPORT_TESTS_FAILED=0
+REPORT_TESTS_SKIPPED=0
+REPORT_COVERAGE_PROCESSED=0
+REPORT_COVERAGE_FAILED=0
+REPORT_COVERAGE_SKIPPED=0
+REPORT_TELEMETRY_PROCESSED=0
+REPORT_TELEMETRY_FAILED=0
+REPORT_TELEMETRY_SKIPPED=0
 BEP_JSON_FILES=()
 if [[ -n "${DD_TEST_OPTIMIZATION_BEP_JSON:-}" ]]; then
     BEP_JSON_FILES+=("$DD_TEST_OPTIMIZATION_BEP_JSON")
@@ -1115,14 +1132,97 @@ report_count_lines_text() {
     fi
 }
 
+set_report_result() {
+    REPORT_REASON_CODE="$1"
+    REPORT_REASON="$2"
+    shift 2
+    REPORT_NEXT_STEPS=("$@")
+}
+
+classify_uploader_result() {
+    local exit_code="$1"
+    local test_outputs_dirs discovered_total
+    test_outputs_dirs="$(report_count_lines_text "${TEST_OUTPUTS_CACHE:-}")"
+    discovered_total=$((REPORT_PAYLOADS_DISCOVERED_TESTS + REPORT_PAYLOADS_DISCOVERED_COVERAGE + REPORT_PAYLOADS_DISCOVERED_TELEMETRY))
+    if [[ "$REPORT_REASON_CODE" != "running" ]]; then
+        return
+    fi
+    if (( exit_code != 0 && ${#BEP_JSON_FILES[@]} == 0 )) && {
+        [[ "${FRESHNESS_SOURCE:-}" == "bep" ]] ||
+        [[ "${ARTIFACT_SOURCE:-}" == "bep" ]] ||
+        [[ "${FRESHNESS_MODE:-}" == "required" ]]
+    }; then
+        set_report_result "missing_bep_json" \
+            "BEP freshness or artifact staging was required, but no BEP JSON was configured." \
+            "Pass --bep-json from the matching bazel test invocation."
+        return
+    fi
+    if (( exit_code != 0 && $(report_count_lines_file "${FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE:-}") > 0 )); then
+        set_report_result "bep_output_remote_only_without_downloader" \
+            "BEP selected remote-only outputs that could not be materialized locally." \
+            "Enable --remote-artifacts=download with --bep-artifact-downloader, or adjust Bazel remote download settings."
+        return
+    fi
+    if (( exit_code != 0 && $(report_count_lines_file "${FRESHNESS_CACHED_OUTPUTS_FILE:-}") > 0 )); then
+        set_report_result "target_cached_by_bazel" \
+            "Required BEP freshness rejected cached Bazel test outputs." \
+            "Run tests with --nocache_test_results or select targets that executed in this invocation."
+        return
+    fi
+    if (( exit_code != 0 && DRY_RUN == 0 && REPORT_UPLOAD_ATTEMPTED > 0 && ${UPLOAD_FAILURES:-0} > 0 )); then
+        set_report_result "upload_failed_http" \
+            "One or more payload uploads failed." \
+            "Check HTTP status diagnostics and Datadog credentials/site configuration."
+        return
+    fi
+    if (( exit_code != 0 && (${REPORT_TESTS_FAILED:-0} + ${REPORT_COVERAGE_FAILED:-0} + ${REPORT_TELEMETRY_FAILED:-0}) > 0 )); then
+        set_report_result "payload_enrichment_failed" \
+            "Dry-run or payload processing failed for at least one payload." \
+            "Inspect uploader logs for the first payload validation failure."
+        return
+    fi
+    if (( test_outputs_dirs == 0 )); then
+        set_report_result "no_test_outputs_found" \
+            "No local or staged test.outputs directories were found." \
+            "Use --artifact-source=bep with the matching --bep-json, or configure Bazel to materialize test outputs."
+        return
+    fi
+    if (( discovered_total == 0 )); then
+        set_report_result "no_payload_json_found" \
+            "Test output directories were found, but no JSON payloads were available." \
+            "Inspect TEST_UNDECLARED_OUTPUTS_DIR and outputs.zip for payloads/tests, payloads/coverage, or payloads/telemetry files."
+        return
+    fi
+    if (( exit_code == 0 && DRY_RUN == 1 )); then
+        set_report_result "upload_skipped_dry_run" \
+            "Dry-run completed successfully; real upload was not requested." \
+            "Run again with --upload or without --dry-run to send payloads."
+        return
+    fi
+    if (( exit_code == 0 )); then
+        set_report_result "ok" "Uploader completed successfully."
+        return
+    fi
+    set_report_result "upload_failed_unknown" \
+        "Uploader failed without a more specific report reason." \
+        "Inspect uploader logs and report counters."
+}
+
 write_uploader_report() {
     local status="$1"
     local exit_code="$2"
     if [[ -z "${REPORT_JSON:-}" ]]; then
         return 0
     fi
+    classify_uploader_result "$exit_code"
 
-    local report_dir report_tmp
+    local report_dir report_tmp report_payloads_attempted report_payloads_uploaded
+    report_payloads_attempted=0
+    report_payloads_uploaded=0
+    if (( REPORT_UPLOAD_ATTEMPTED == 1 )); then
+        report_payloads_attempted=$((REPORT_TESTS_PROCESSED + REPORT_COVERAGE_PROCESSED + REPORT_TELEMETRY_PROCESSED + UPLOAD_FAILURES))
+        report_payloads_uploaded=$((REPORT_TESTS_PROCESSED + REPORT_COVERAGE_PROCESSED + REPORT_TELEMETRY_PROCESSED))
+    fi
     report_dir="$(dirname "$REPORT_JSON")"
     if ! mkdir -p "$report_dir" 2>/dev/null; then
         log_stderr "warning: failed to create uploader report directory: $report_dir"
@@ -1135,6 +1235,12 @@ write_uploader_report() {
         printf '  "tool": "dd-test-optimization-uploader",\n'
         printf '  "status": %s,\n' "$(report_json_string "$status")"
         printf '  "exit_code": %s,\n' "$exit_code"
+        printf '  "result": {\n'
+        printf '    "status": %s,\n' "$(report_json_string "$status")"
+        printf '    "reason_code": %s,\n' "$(report_json_string "$REPORT_REASON_CODE")"
+        printf '    "reason": %s,\n' "$(report_json_string "$REPORT_REASON")"
+        printf '    "next_steps": %s\n' "$(report_json_array "${REPORT_NEXT_STEPS[@]+${REPORT_NEXT_STEPS[@]}}")"
+        printf '  },\n'
         printf '  "config": {\n'
         printf '    "dry_run": %s,\n' "$(report_bool "${DRY_RUN:-0}")"
         printf '    "validate_enrichment": %s,\n' "$(report_bool "${VALIDATE_ENRICHMENT:-0}")"
@@ -1161,8 +1267,19 @@ write_uploader_report() {
         printf '    "staged_remote_artifacts": %s,\n' "$(report_count_lines_file "${STAGED_OUTPUT_KEYS_FILE:-}")"
         printf '    "remote_artifacts_ignored": %s\n' "$(report_count_lines_file "${BLOCKED_BEP_ARTIFACT_LABELS_FILE:-}")"
         printf '  },\n'
+        printf '  "upload": {\n'
+        printf '    "attempted": %s,\n' "$(report_bool "${REPORT_UPLOAD_ATTEMPTED:-0}")"
+        printf '    "dry_run": %s,\n' "$(report_bool "${DRY_RUN:-0}")"
+        printf '    "payloads_attempted": %s,\n' "$report_payloads_attempted"
+        printf '    "payloads_uploaded": %s,\n' "$report_payloads_uploaded"
+        printf '    "payloads_failed": %s\n' "${UPLOAD_FAILURES:-0}"
+        printf '  },\n'
         printf '  "payloads": {\n'
         printf '    "test_outputs_dirs": %s,\n' "$(report_count_lines_text "${TEST_OUTPUTS_CACHE:-}")"
+        printf '    "discovered": {"tests": %s, "coverage": %s, "telemetry": %s},\n' \
+            "${REPORT_PAYLOADS_DISCOVERED_TESTS:-0}" \
+            "${REPORT_PAYLOADS_DISCOVERED_COVERAGE:-0}" \
+            "${REPORT_PAYLOADS_DISCOVERED_TELEMETRY:-0}"
         printf '    "tests": {"processed": %s, "failed": %s, "skipped": %s},\n' "${REPORT_TESTS_PROCESSED:-0}" "${REPORT_TESTS_FAILED:-0}" "${REPORT_TESTS_SKIPPED:-0}"
         printf '    "coverage": {"processed": %s, "failed": %s, "skipped": %s},\n' "${REPORT_COVERAGE_PROCESSED:-0}" "${REPORT_COVERAGE_FAILED:-0}" "${REPORT_COVERAGE_SKIPPED:-0}"
         printf '    "telemetry": {"processed": %s, "failed": %s, "skipped": %s}\n' "${REPORT_TELEMETRY_PROCESSED:-0}" "${REPORT_TELEMETRY_FAILED:-0}" "${REPORT_TELEMETRY_SKIPPED:-0}"
@@ -1523,6 +1640,33 @@ count_payload_files() {
     echo "$count"
 }
 
+update_discovered_payload_counts() {
+    REPORT_PAYLOADS_DISCOVERED_TESTS=0
+    REPORT_PAYLOADS_DISCOVERED_COVERAGE=0
+    REPORT_PAYLOADS_DISCOVERED_TELEMETRY=0
+    while IFS= read -r outputs_dir; do
+        [[ -z "$outputs_dir" ]] && continue
+        local tests_dir="$outputs_dir/payloads/tests"
+        local cov_dir="$outputs_dir/payloads/coverage"
+        local telemetry_dir="$outputs_dir/payloads/telemetry"
+        if [[ -d "$tests_dir" ]]; then
+            local tests_count
+            tests_count=$(find "$tests_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
+            REPORT_PAYLOADS_DISCOVERED_TESTS=$((REPORT_PAYLOADS_DISCOVERED_TESTS + tests_count))
+        fi
+        if [[ -d "$cov_dir" ]]; then
+            local cov_count
+            cov_count=$(find "$cov_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
+            REPORT_PAYLOADS_DISCOVERED_COVERAGE=$((REPORT_PAYLOADS_DISCOVERED_COVERAGE + cov_count))
+        fi
+        if [[ -d "$telemetry_dir" ]]; then
+            local telemetry_count
+            telemetry_count=$(find "$telemetry_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
+            REPORT_PAYLOADS_DISCOVERED_TELEMETRY=$((REPORT_PAYLOADS_DISCOVERED_TELEMETRY + telemetry_count))
+        fi
+    done < <(echo "$TEST_OUTPUTS_CACHE")
+}
+
 start_ts=$(date +%s)
 dbg "Uploader start time: $start_ts"
 
@@ -1615,6 +1759,7 @@ cache_test_outputs() {
     TEST_OUTPUTS_CACHE="$(cat "$filtered_cache")"
 }
 cache_test_outputs
+update_discovered_payload_counts
 check_depth_warning  # Warn if MAX_DEPTH may be too shallow
 
 while true; do
@@ -1623,6 +1768,7 @@ while true; do
 
     # Refresh cache in case new test.outputs dirs appeared (e.g., remote downloads)
     cache_test_outputs
+    update_discovered_payload_counts
     total_files=$(count_payload_files)
 
     if (( total_files == 0 )); then
@@ -4638,6 +4784,7 @@ upload_all_tests() {
                 fi
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_test "$f"; then
                 log "uploaded test payload: $f"
                 cleanup_file "$f"
@@ -4693,6 +4840,7 @@ upload_all_coverage() {
                 ((++REPORT_COVERAGE_PROCESSED))
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_coverage "$f"; then
                 log "uploaded coverage payload: $f"
                 cleanup_file "$f"
@@ -4750,6 +4898,7 @@ upload_all_telemetry() {
                 ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
                 cleanup_file "$f"
@@ -4774,6 +4923,7 @@ upload_all_telemetry() {
                 ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$anchor_path" "$synthetic_body"; then
                 log "uploaded telemetry payload: $anchor_path"
                 ((++total))

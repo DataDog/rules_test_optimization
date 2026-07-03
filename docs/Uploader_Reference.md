@@ -40,13 +40,11 @@ The `test-optimization` config should contain the recommended Bazel test flags:
 tools/test_optimization/run_test_optimization_ci.sh \
   --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
+  --report-dir .topt/reports \
   //...
 
-# Optional: add --doctor-report-json .topt/doctor-report.json to keep a
-# machine-readable doctor diagnostic report as a CI artifact.
-# Optional: set DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON to keep the uploader
-# diagnostic report from the dry-run step, or from the real upload when
-# --upload is also set.
+# Optional: --report-dir writes doctor-report.json and uploader-dry-run-report.json.
+# With --upload it also writes uploader-upload-report.json.
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
@@ -62,13 +60,11 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
   -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
+  -ReportDir .topt\reports `
   //...
 
-# Optional: add -DoctorReportJson .topt/doctor-report.json to keep a
-# machine-readable doctor diagnostic report as a CI artifact.
-# Optional: set $env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON to keep the
-# uploader diagnostic report from the dry-run step, or from the real upload
-# when -Upload is also set.
+# Optional: -ReportDir writes doctor-report.json and uploader-dry-run-report.json.
+# With -Upload it also writes uploader-upload-report.json.
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
@@ -247,6 +243,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. |
 | `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | unset | Optional path for the doctor machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the doctor target's `--` separator. |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | unset | Optional path for the uploader machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the uploader target's `--` separator. |
+| `DD_TEST_OPTIMIZATION_REPORT_DIR` | unset | Optional wrapper report directory. CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`, and optional `uploader-upload-report.json` under this directory. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | `auto` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | unset | Optional explicit legacy execution-log fallback path. Prefer BEP for new CI integrations. The uploader does not auto-discover `.topt/bazel-execution-log.json` because stale execution-log files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | `local` | Artifact source for `test.outputs` materialization: `local`, `bep`, or `auto`. `local` preserves existing discovery. `bep` requires an explicit BEP JSON file and stages BEP-referenced artifacts. |
@@ -268,13 +265,49 @@ prefixes:
 Leave it at `0` for normal repositories where uploader-managed payload
 directories contain only Datadog files.
 
+### Diagnostic report directory
+
+For CI, prefer one report directory per job:
+
+```bash
+tools/test_optimization/run_test_optimization_ci.sh \
+  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+  --upload-target //tools/test_optimization:dd_upload_payloads \
+  --report-dir .topt/reports \
+  //...
+```
+
+```powershell
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
+  -UploadTarget //tools/test_optimization:dd_upload_payloads `
+  -ReportDir .topt\reports `
+  //...
+```
+
+The wrapper writes `.topt/reports/doctor-report.json` and
+`.topt/reports/uploader-dry-run-report.json`. If upload is enabled, it writes
+`.topt/reports/uploader-upload-report.json` for the real upload so the dry-run
+report is preserved.
+
+Render a concise Markdown summary when the JSON reports need to be attached to
+a support ticket or CI artifact:
+
+```bash
+python3 tools/test_optimization/render_report_summary.py \
+  .topt/reports/doctor-report.json \
+  .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/upload-diagnostics.md
+```
+
 ### Doctor diagnostic report
 
 Pass `--doctor-report-json=<path>` to the Bash wrapper,
 `-DoctorReportJson <path>` to the PowerShell wrapper, `--report-json=<path>` to
 a manual doctor invocation, or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`
 when CI needs a machine-readable debug artifact. The doctor writes the report
-on success and on controlled doctor failures. The report includes resolved
+on success and on controlled doctor failures. The report includes a `result`
+block with `status`, `reason_code`, `reason`, and `next_steps`, plus resolved
 config, expected targets, BEP files and seen targets, fresh/cached/remote-only
 BEP outputs, selected and blocked BEP artifact carriers, staged `outputs.zip`
 or `test.outputs` artifacts, local/staged payload directories, payload counts,
@@ -302,14 +335,17 @@ the report on success, no-op, and controlled uploader failures. Early
 argument/configuration validation failures that happen before report
 initialization may exit without writing a report. The report includes effective
 config, BEP files, selected freshness source, BEP freshness counts, artifact
-staging counts, discovered payload directories, per-payload-type
-processed/failed/skipped counts, aggregate upload failures, final status, and
-exit code.
+staging counts, discovered payload directories, per-payload-type discovered,
+processed, failed, and skipped counts, aggregate upload failures, upload
+attempt status, final status, and exit code. The `result.reason_code` explains
+common no-upload cases such as `target_cached_by_bazel`,
+`bep_output_remote_only_without_downloader`, `no_payload_json_found`,
+`payload_enrichment_failed`, and `upload_skipped_dry_run`.
 
-The CI wrapper's uploader report path is shared by its dry-run and optional
-real-upload invocations. If `--upload`/`-Upload` is used, the final uploader
-invocation writes the final report to that path. Use manual uploader commands
-with different `--report-json` values when CI needs to archive both reports.
+The CI wrapper writes a separate dry-run uploader report when `--report-dir` is
+used. If only `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` or
+`--uploader-report-json` is configured and `--report-dir` is not set, that
+single path is used by the dry-run invocation only.
 
 Example:
 

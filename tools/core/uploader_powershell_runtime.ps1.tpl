@@ -598,6 +598,23 @@ $DryRun = $false
 $ValidateEnrichment = $false
 $ReportJson = $env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON
 $script:UploaderReportWritten = $false
+$script:ReportReasonCode = "running"
+$script:ReportReason = "Uploader is still running."
+$script:ReportNextSteps = [System.Collections.Generic.List[string]]::new()
+$script:ReportUploadAttempted = $false
+$script:ReportPayloadsDiscoveredTests = 0
+$script:ReportPayloadsDiscoveredCoverage = 0
+$script:ReportPayloadsDiscoveredTelemetry = 0
+$script:UploadFailures = 0
+$script:ReportTestsProcessed = 0
+$script:ReportTestsFailed = 0
+$script:ReportTestsSkipped = 0
+$script:ReportCoverageProcessed = 0
+$script:ReportCoverageFailed = 0
+$script:ReportCoverageSkipped = 0
+$script:ReportTelemetryProcessed = 0
+$script:ReportTelemetryFailed = 0
+$script:ReportTelemetrySkipped = 0
 $BepJsonFiles = New-Object System.Collections.Generic.List[string]
 if ($env:DD_TEST_OPTIMIZATION_BEP_JSON) {
     $BepJsonFiles.Add($env:DD_TEST_OPTIMIZATION_BEP_JSON) | Out-Null
@@ -1021,14 +1038,98 @@ function Get-ReportUniqueStrings($Values) {
     return @($unique.ToArray())
 }
 
+function Set-ReportResult([string]$ReasonCode, [string]$Reason, [string[]]$NextSteps = @()) {
+    $script:ReportReasonCode = $ReasonCode
+    $script:ReportReason = $Reason
+    $script:ReportNextSteps.Clear()
+    foreach ($step in $NextSteps) {
+        [void]$script:ReportNextSteps.Add($step)
+    }
+}
+
+function Set-ClassifiedUploaderResult([int]$ExitCode) {
+    if ($script:ReportReasonCode -ne "running") { return }
+    $testOutputsDirs = @($script:TestOutputsCache).Count
+    $discoveredTotal = [int]$script:ReportPayloadsDiscoveredTests + [int]$script:ReportPayloadsDiscoveredCoverage + [int]$script:ReportPayloadsDiscoveredTelemetry
+    if ($ExitCode -ne 0 -and $script:BepJsonFiles.Count -eq 0 -and ($script:FreshnessSource -eq "bep" -or $script:ArtifactSource -eq "bep" -or $script:FreshnessMode -eq "required")) {
+        Set-ReportResult "missing_bep_json" `
+            "BEP freshness or artifact staging was required, but no BEP JSON was configured." `
+            @("Pass --bep-json from the matching bazel test invocation.")
+        return
+    }
+    if ($ExitCode -ne 0 -and (Get-ReportCollectionCount $script:FreshnessRemoteOnlyOutputs) -gt 0) {
+        Set-ReportResult "bep_output_remote_only_without_downloader" `
+            "BEP selected remote-only outputs that could not be materialized locally." `
+            @("Enable --remote-artifacts=download with --bep-artifact-downloader, or adjust Bazel remote download settings.")
+        return
+    }
+    if ($ExitCode -ne 0 -and (Get-ReportCollectionCount $script:FreshnessCachedOutputs) -gt 0) {
+        Set-ReportResult "target_cached_by_bazel" `
+            "Required BEP freshness rejected cached Bazel test outputs." `
+            @("Run tests with --nocache_test_results or select targets that executed in this invocation.")
+        return
+    }
+    if ($ExitCode -ne 0 -and -not $script:DryRun -and $script:ReportUploadAttempted -and $script:UploadFailures -gt 0) {
+        Set-ReportResult "upload_failed_http" `
+            "One or more payload uploads failed." `
+            @("Check HTTP status diagnostics and Datadog credentials/site configuration.")
+        return
+    }
+    if ($ExitCode -ne 0 -and (($script:ReportTestsFailed + $script:ReportCoverageFailed + $script:ReportTelemetryFailed) -gt 0)) {
+        Set-ReportResult "payload_enrichment_failed" `
+            "Dry-run or payload processing failed for at least one payload." `
+            @("Inspect uploader logs for the first payload validation failure.")
+        return
+    }
+    if ($testOutputsDirs -eq 0) {
+        Set-ReportResult "no_test_outputs_found" `
+            "No local or staged test.outputs directories were found." `
+            @("Use --artifact-source=bep with the matching --bep-json, or configure Bazel to materialize test outputs.")
+        return
+    }
+    if ($discoveredTotal -eq 0) {
+        Set-ReportResult "no_payload_json_found" `
+            "Test output directories were found, but no JSON payloads were available." `
+            @("Inspect TEST_UNDECLARED_OUTPUTS_DIR and outputs.zip for payloads/tests, payloads/coverage, or payloads/telemetry files.")
+        return
+    }
+    if ($ExitCode -eq 0 -and $script:DryRun) {
+        Set-ReportResult "upload_skipped_dry_run" `
+            "Dry-run completed successfully; real upload was not requested." `
+            @("Run again with -Upload or without --dry-run to send payloads.")
+        return
+    }
+    if ($ExitCode -eq 0) {
+        Set-ReportResult "ok" "Uploader completed successfully." @()
+        return
+    }
+    Set-ReportResult "upload_failed_unknown" `
+        "Uploader failed without a more specific report reason." `
+        @("Inspect uploader logs and report counters.")
+}
+
 function Write-UploaderReport([string]$Status, [int]$ExitCode) {
     if ([string]::IsNullOrWhiteSpace($script:ReportJson)) { return }
+    Set-ClassifiedUploaderResult $ExitCode
+
+    $payloadsUploaded = 0
+    $payloadsAttempted = 0
+    if ($script:ReportUploadAttempted) {
+        $payloadsUploaded = [int]($script:ReportTestsProcessed + $script:ReportCoverageProcessed + $script:ReportTelemetryProcessed)
+        $payloadsAttempted = [int]($payloadsUploaded + $script:UploadFailures)
+    }
 
     $report = [ordered]@{
         schema_version = 1
         tool = "dd-test-optimization-uploader"
         status = $Status
         exit_code = $ExitCode
+        result = [ordered]@{
+            status = [string]$Status
+            reason_code = [string]$script:ReportReasonCode
+            reason = [string]$script:ReportReason
+            next_steps = @($script:ReportNextSteps.ToArray())
+        }
         config = [ordered]@{
             dry_run = [bool]$script:DryRun
             validate_enrichment = [bool]$script:ValidateEnrichment
@@ -1055,8 +1156,20 @@ function Write-UploaderReport([string]$Status, [int]$ExitCode) {
             staged_remote_artifacts = Get-ReportCollectionCount $script:StagedOutputKeys
             remote_artifacts_ignored = Get-ReportCollectionCount $script:BlockedBepArtifactLabels
         }
+        upload = [ordered]@{
+            attempted = [bool]$script:ReportUploadAttempted
+            dry_run = [bool]$script:DryRun
+            payloads_attempted = [int]$payloadsAttempted
+            payloads_uploaded = [int]$payloadsUploaded
+            payloads_failed = [int]$script:UploadFailures
+        }
         payloads = [ordered]@{
             test_outputs_dirs = @($script:TestOutputsCache).Count
+            discovered = [ordered]@{
+                tests = [int]$script:ReportPayloadsDiscoveredTests
+                coverage = [int]$script:ReportPayloadsDiscoveredCoverage
+                telemetry = [int]$script:ReportPayloadsDiscoveredTelemetry
+            }
             tests = [ordered]@{
                 processed = [int]$script:ReportTestsProcessed
                 failed = [int]$script:ReportTestsFailed
@@ -1193,7 +1306,7 @@ function Stage-BepArtifacts {
     if (-not (Test-ArtifactStagingRequested)) { return }
     if ($script:ArtifactSource -eq "bep" -and $script:BepJsonFiles.Count -eq 0) {
         Log "error: --artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON"
-        exit 2
+        Exit-WithUploaderReport 2
     }
     if ($script:BepJsonFiles.Count -eq 0) { return }
     $pythonBin = Get-PythonForBepArtifactStaging
@@ -1524,6 +1637,26 @@ function Count-PayloadFiles {
     return $count
 }
 
+function Update-DiscoveredPayloadCounts {
+    $script:ReportPayloadsDiscoveredTests = 0
+    $script:ReportPayloadsDiscoveredCoverage = 0
+    $script:ReportPayloadsDiscoveredTelemetry = 0
+    foreach ($outputsDir in $script:TestOutputsCache) {
+        $testsDir = Join-Path $outputsDir.FullName "payloads/tests"
+        $covDir = Join-Path $outputsDir.FullName "payloads/coverage"
+        $telemetryDir = Join-Path $outputsDir.FullName "payloads/telemetry"
+        if (Test-Path -LiteralPath $testsDir) {
+            $script:ReportPayloadsDiscoveredTests += @(Get-ChildItem -Path $testsDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
+        }
+        if (Test-Path -LiteralPath $covDir) {
+            $script:ReportPayloadsDiscoveredCoverage += @(Get-ChildItem -Path $covDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
+        }
+        if (Test-Path -LiteralPath $telemetryDir) {
+            $script:ReportPayloadsDiscoveredTelemetry += @(Get-ChildItem -Path $telemetryDir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @(".json", ".msgpack") }).Count
+        }
+    }
+}
+
 # Detect if tests actually ran by looking for test.log or test.xml files
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 function Test-ExecutedTests {
@@ -1543,12 +1676,14 @@ Dbg "Uploader start time: $start"
 
 # Initialize the cache
 Update-TestOutputsCache
+Update-DiscoveredPayloadCounts
 
 while ($true) {
     $elapsed = ((Get-Date) - $start).TotalSeconds
 
     # Refresh cache in case new test.outputs dirs appeared (e.g., remote downloads)
     Update-TestOutputsCache
+    Update-DiscoveredPayloadCounts
     $totalFiles = Count-PayloadFiles
 
     if ($totalFiles -eq 0) {
@@ -2857,7 +2992,7 @@ function Initialize-FreshnessEligibility {
     if ($script:BepJsonFiles.Count -eq 0) {
       if ($script:FreshnessMode -eq "required" -or ($script:FreshnessMode -eq "auto" -and (Test-CiEnvironment))) {
         Log "error: BEP freshness filtering is required but no BEP JSON file was configured. Run bazel test with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson), or opt out explicitly with --allow-cached-payload-uploads."
-        exit 2
+        Exit-WithUploaderReport 2
       }
       Log "warning: BEP freshness source was selected but no BEP JSON file was configured; cached test outputs may be uploaded. Rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
       return
@@ -2874,7 +3009,7 @@ function Initialize-FreshnessEligibility {
     if ([string]::IsNullOrWhiteSpace($script:ExecutionLogJson)) {
       if ($script:FreshnessMode -eq "required" -or ($script:FreshnessMode -eq "auto" -and (Test-CiEnvironment))) {
         Log "error: freshness filtering is required in CI or required mode, but no BEP or execution log was found. Run bazel test with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$($script:DefaultBepJson), then rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
-        exit 2
+        Exit-WithUploaderReport 2
       }
       Log "warning: freshness filtering is not configured; cached test outputs may be uploaded. Prefer bazel test --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$($script:DefaultBepJson) and rerun the uploader with --bep-json=$($script:DefaultBepJson) --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
       return
@@ -4411,6 +4546,7 @@ function Upload-AllTests {
                 }
                 continue
             }
+            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleTest $f.FullName)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -4461,6 +4597,7 @@ function Upload-AllCoverage {
                 $script:ReportCoverageProcessed++
                 continue
             }
+            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleCoverage $f.FullName)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -4512,6 +4649,7 @@ function Upload-AllTelemetry {
                     $script:ReportTelemetryProcessed++
                     continue
                 }
+                $script:ReportUploadAttempted = $true
                 $uploadedResult = @(Upload-SingleTelemetry $f.FullName $bodyPath)
                 $uploaded = $false
                 if ($uploadedResult.Count -gt 0) {
@@ -4542,6 +4680,7 @@ function Upload-AllTelemetry {
                 $script:ReportTelemetryProcessed++
                 continue
             }
+            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleTelemetry $entry.AnchorPath $entry.BodyPath)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {

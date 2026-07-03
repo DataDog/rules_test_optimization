@@ -511,6 +511,7 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
 | `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Optional path for the doctor machine-readable diagnostic report |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Optional path for the uploader machine-readable diagnostic report |
+| `DD_TEST_OPTIMIZATION_REPORT_DIR` | Optional wrapper/report-script directory. CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`, and, when upload is enabled, `uploader-upload-report.json` under this directory unless explicit report paths override the doctor or dry-run uploader path |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | Artifact discovery source: `local`, `bep`, or `auto`. Recommended CI with zipped undeclared outputs should set `bep` |
 | `DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS` | Remote BEP artifact handling: `disabled`, `download`, or `required` |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | Directory used for per-run staged BEP artifacts |
@@ -553,6 +554,19 @@ Doctor CLI flags:
 | `--bep-artifact-downloader=<path>` | Executable used to download remote/CAS BEP artifacts |
 | `--bep-artifact-downloader-timeout-sec=<seconds>` | Timeout for the BEP artifact downloader |
 | `--report-json=<path>` | Write a machine-readable doctor diagnostic report on success or controlled doctor failure |
+
+Wrapper report options:
+
+| Option / variable | Purpose |
+|-------------------|---------|
+| `--report-dir=<path>` / `-ReportDir <path>` / `DD_TEST_OPTIMIZATION_REPORT_DIR` | Recommended CI artifact directory. Bash and PowerShell wrappers write separate doctor, dry-run uploader, and upload reports under this directory |
+| `--doctor-report-json=<path>` / `-DoctorReportJson <path>` / `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Override only the wrapper doctor report path |
+| `--uploader-report-json=<path>` / `-UploaderReportJson <path>` / `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Override only the wrapper dry-run uploader report path. Real upload still uses `<report-dir>/uploader-upload-report.json` when `--report-dir` is set |
+
+`tools/test_optimization/render_report_summary.py` accepts one or more doctor or
+uploader JSON reports and writes a concise Markdown summary with the
+`result.reason_code`, next steps, payload discovery, BEP freshness, artifact
+staging, and upload-attempt status.
 
 Uploader execution modes:
 

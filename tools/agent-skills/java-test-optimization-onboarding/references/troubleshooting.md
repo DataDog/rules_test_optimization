@@ -140,8 +140,14 @@ same failing run:
   or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`.
 - Uploader: pass `--report-json=<path>` after the uploader target's `--`
   separator, or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`.
+- Wrapper: prefer `--report-dir=<path>` or
+  `DD_TEST_OPTIMIZATION_REPORT_DIR` so CI archives `doctor-report.json`,
+  `uploader-dry-run-report.json`, and optional `uploader-upload-report.json`
+  separately.
 
-Use these reports to compare expected targets, BEP freshness, artifact staging,
-payload directories, payload counts, upload failures, status, and exit code
-without reading the full CI log. Review reports for internal paths and target
-names before sharing outside the trusted project boundary.
+Use these reports to compare `result.reason_code`, next steps, expected
+targets, BEP freshness, artifact staging, payload directories, payload counts,
+upload attempts, upload failures, status, and exit code without reading the
+full CI log. `tools/test_optimization/render_report_summary.py` can render the
+JSON files as a short Markdown summary. Review reports for internal paths and
+target names before sharing outside the trusted project boundary.

@@ -11,6 +11,8 @@ param(
   [string]$DoctorTarget = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET) { $env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET } else { "//:dd_test_optimization_doctor" }),
   [string]$UploadTarget = $(if ($env:DD_TEST_OPTIMIZATION_UPLOAD_TARGET) { $env:DD_TEST_OPTIMIZATION_UPLOAD_TARGET } else { "//:dd_upload_payloads" }),
   [string]$DoctorReportJson = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON) { $env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON } else { "" }),
+  [string]$UploaderReportJson = $(if ($env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON) { $env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON } else { "" }),
+  [string]$ReportDir = $(if ($env:DD_TEST_OPTIMIZATION_REPORT_DIR) { $env:DD_TEST_OPTIMIZATION_REPORT_DIR } else { "" }),
   [string[]]$TestFlag = @(),
   [switch]$Upload,
   [switch]$KeepTmp,
@@ -70,6 +72,15 @@ $tmpRoot = Join-Path $tmpParent ("dd-topt-" + [System.Guid]::NewGuid().ToString(
 $bepDir = Join-Path $tmpRoot "bep"
 $artifactStagingDir = Join-Path $tmpRoot "bep-artifacts"
 New-Item -ItemType Directory -Force -Path $bepDir, $artifactStagingDir | Out-Null
+if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
+  New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
+  if ([string]::IsNullOrWhiteSpace($DoctorReportJson)) {
+    $DoctorReportJson = Join-Path $ReportDir "doctor-report.json"
+  }
+  if ([string]::IsNullOrWhiteSpace($UploaderReportJson)) {
+    $UploaderReportJson = Join-Path $ReportDir "uploader-dry-run-report.json"
+  }
+}
 
 $keepGeneratedFiles = $KeepTmp.IsPresent -or $env:DD_TEST_OPTIMIZATION_KEEP_TMP -eq "1"
 
@@ -112,14 +123,22 @@ try {
 
   $dryRunStatus = 0
   if ($doctorStatus -eq 0) {
-    $dryRunStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $runtimeArgs + @("--dry-run", "--validate-enrichment"))
+    $dryRunRuntimeArgs = $runtimeArgs
+    if (-not [string]::IsNullOrWhiteSpace($UploaderReportJson)) {
+      $dryRunRuntimeArgs += "--report-json=$UploaderReportJson"
+    }
+    $dryRunStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $dryRunRuntimeArgs + @("--dry-run", "--validate-enrichment"))
     if ($dryRunStatus -ne 0 -and $finalStatus -eq 0) {
       $finalStatus = $dryRunStatus
     }
   }
 
   if ($doctorStatus -eq 0 -and $dryRunStatus -eq 0 -and $Upload.IsPresent) {
-    $uploadStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $runtimeArgs)
+    $uploadRuntimeArgs = $runtimeArgs
+    if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
+      $uploadRuntimeArgs += "--report-json=$(Join-Path $ReportDir 'uploader-upload-report.json')"
+    }
+    $uploadStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $uploadRuntimeArgs)
     if ($uploadStatus -ne 0 -and $finalStatus -eq 0) {
       $finalStatus = $uploadStatus
     }

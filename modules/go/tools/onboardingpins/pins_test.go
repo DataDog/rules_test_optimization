@@ -297,6 +297,16 @@ func TestSummaryContainsCurrentCommitOnly(t *testing.T) {
 	if strings.Contains(got, staleCommit) {
 		t.Fatalf("summary contains stale commit %s:\n%s", staleCommit, got)
 	}
+	for _, want := range []string{
+		"uploader dry-run with enrichment validation",
+		"DD_TEST_OPTIMIZATION_REPORT_DIR",
+		"uploader-dry-run-report.json",
+		"uploader-upload-report.json",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func variantWorkspace(t *testing.T) string {

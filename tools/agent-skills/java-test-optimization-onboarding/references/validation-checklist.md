@@ -89,6 +89,8 @@ Preserve test failure priority:
 ```bash
 bep_json="$(mktemp "${TMPDIR:-/tmp}/dd-topt-java.XXXXXX.bep.json")"
 artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
+report_dir="${REPORT_DIR:-.topt/reports}"
+mkdir -p "$report_dir"
 
 bazel test --config=test-optimization --build_event_json_file="$bep_json" //path/to:java_test || test_status=$?
 test_status=${test_status:-0}
@@ -98,7 +100,8 @@ bazel run --config=test-optimization //tools/test_optimization:dd_test_optimizat
   --freshness-source=bep \
   --freshness-mode=required \
   --artifact-source=bep \
-  --artifact-staging-dir="$artifact_staging_dir" || doctor_status=$?
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --report-json="$report_dir/doctor-report.json" || doctor_status=$?
 doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -112,7 +115,8 @@ bazel run --config=test-optimization //tools/test_optimization:dd_upload_payload
   --artifact-source=bep \
   --artifact-staging-dir="$artifact_staging_dir" \
   --dry-run \
-  --validate-enrichment || dry_run_status=$?
+  --validate-enrichment \
+  --report-json="$report_dir/uploader-dry-run-report.json" || dry_run_status=$?
 dry_run_status=${dry_run_status:-0}
 if [ "$dry_run_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -125,7 +129,8 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
     --freshness-source=bep \
     --freshness-mode=required \
     --artifact-source=bep \
-    --artifact-staging-dir="$artifact_staging_dir"
+    --artifact-staging-dir="$artifact_staging_dir" \
+    --report-json="$report_dir/uploader-upload-report.json"
 upload_status=$?
 
 if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -169,15 +174,15 @@ uploader cannot see payload files. Use a unique `--build_event_json_file` for
 each Bazel test invocation and pass the matching paths to doctor/uploader with
 repeatable `--bep-json` flags.
 
-When debugging CI rollout failures, pass `--report-json=<path>` to the doctor
-or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`, pass `--report-json=<path>`
-to the uploader or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`, and archive
-both reports. The doctor report records expected targets, BEP freshness,
-artifact staging, payload directories, payload counts, metadata, and controlled
-doctor failure messages. The uploader report records effective config, BEP
-freshness counts, artifact staging counts, payload directory counts,
-per-type processed/failed/skipped payload totals, aggregate upload failures,
-status, and exit code.
+When debugging CI rollout failures, prefer a wrapper `--report-dir` or
+`DD_TEST_OPTIMIZATION_REPORT_DIR` so CI archives `doctor-report.json`,
+`uploader-dry-run-report.json`, and optional `uploader-upload-report.json`
+separately. Manual flows can pass `--report-json=<path>` to doctor/uploader.
+Reports include `result.reason_code`, `result.next_steps`, expected targets,
+BEP freshness, artifact staging, payload discovery, payload processing,
+upload-attempt status, aggregate failures, and exit code. Use
+`tools/test_optimization/render_report_summary.py` to turn the JSON reports
+into a concise Markdown summary.
 
 Artifact mode choices:
 

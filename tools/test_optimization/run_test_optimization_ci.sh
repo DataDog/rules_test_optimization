@@ -12,6 +12,8 @@ BAZEL_CONFIG="${DD_TEST_OPTIMIZATION_BAZEL_CONFIG:-test-optimization}"
 DOCTOR_TARGET="${DD_TEST_OPTIMIZATION_DOCTOR_TARGET:-//:dd_test_optimization_doctor}"
 UPLOAD_TARGET="${DD_TEST_OPTIMIZATION_UPLOAD_TARGET:-//:dd_upload_payloads}"
 DOCTOR_REPORT_JSON="${DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON:-}"
+UPLOADER_REPORT_JSON="${DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON:-}"
+REPORT_DIR="${DD_TEST_OPTIMIZATION_REPORT_DIR:-}"
 DO_UPLOAD=0
 KEEP_TMP="${DD_TEST_OPTIMIZATION_KEEP_TMP:-0}"
 TARGETS=()
@@ -30,6 +32,9 @@ Options:
   --doctor-target LABEL    Doctor target. Defaults to //:dd_test_optimization_doctor.
   --doctor-report-json PATH
                            Write the doctor machine-readable report to PATH.
+  --uploader-report-json PATH
+                           Write the dry-run uploader machine-readable report to PATH.
+  --report-dir PATH        Write doctor/uploader reports under PATH.
   --upload-target LABEL    Uploader target. Defaults to //:dd_upload_payloads.
   --test-flag FLAG         Extra flag passed to every bazel test invocation.
   --upload                 Run the real upload after dry-run enrichment validation.
@@ -73,6 +78,22 @@ while (($#)); do
       ;;
     --doctor-report-json=*)
       DOCTOR_REPORT_JSON="${1#--doctor-report-json=}"
+      shift
+      ;;
+    --uploader-report-json)
+      UPLOADER_REPORT_JSON="${2:?--uploader-report-json requires a value}"
+      shift 2
+      ;;
+    --uploader-report-json=*)
+      UPLOADER_REPORT_JSON="${1#--uploader-report-json=}"
+      shift
+      ;;
+    --report-dir)
+      REPORT_DIR="${2:?--report-dir requires a value}"
+      shift 2
+      ;;
+    --report-dir=*)
+      REPORT_DIR="${1#--report-dir=}"
       shift
       ;;
     --upload-target)
@@ -134,6 +155,15 @@ tmp_root="$(mktemp -d "${tmp_parent%/}/dd-topt.XXXXXX")"
 bep_dir="$tmp_root/bep"
 artifact_staging_dir="$tmp_root/bep-artifacts"
 mkdir -p "$bep_dir" "$artifact_staging_dir"
+if [[ -n "$REPORT_DIR" ]]; then
+  mkdir -p "$REPORT_DIR"
+  if [[ -z "$DOCTOR_REPORT_JSON" ]]; then
+    DOCTOR_REPORT_JSON="$REPORT_DIR/doctor-report.json"
+  fi
+  if [[ -z "$UPLOADER_REPORT_JSON" ]]; then
+    UPLOADER_REPORT_JSON="$REPORT_DIR/uploader-dry-run-report.json"
+  fi
+fi
 
 cleanup() {
   if [[ "$KEEP_TMP" == "1" ]]; then
@@ -208,7 +238,11 @@ else
 fi
 
 if [[ "$doctor_status" -eq 0 ]]; then
-  if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${runtime_args[@]}" --dry-run --validate-enrichment; then
+  dry_run_runtime_args=("${runtime_args[@]}")
+  if [[ -n "$UPLOADER_REPORT_JSON" ]]; then
+    dry_run_runtime_args+=("--report-json=$UPLOADER_REPORT_JSON")
+  fi
+  if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${dry_run_runtime_args[@]}" --dry-run --validate-enrichment; then
     dry_run_status=0
   else
     dry_run_status=$?
@@ -221,7 +255,11 @@ else
 fi
 
 if [[ "$doctor_status" -eq 0 && "$dry_run_status" -eq 0 && "$DO_UPLOAD" -eq 1 ]]; then
-  if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${runtime_args[@]}"; then
+  upload_runtime_args=("${runtime_args[@]}")
+  if [[ -n "$REPORT_DIR" ]]; then
+    upload_runtime_args+=("--report-json=$REPORT_DIR/uploader-upload-report.json")
+  fi
+  if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${upload_runtime_args[@]}"; then
     :
   else
     upload_status=$?

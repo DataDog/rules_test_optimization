@@ -83,6 +83,7 @@ Shared upload command:
 tools/test_optimization/run_test_optimization_ci.sh \
   --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
+  --report-dir .topt/reports \
   //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
@@ -90,6 +91,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
     --upload-target //tools/test_optimization:dd_upload_payloads \
+    --report-dir .topt/reports \
     --upload \
     //...
 ```

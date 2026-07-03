@@ -1771,12 +1771,40 @@ def _sorted_pairs(pairs: Iterable[tuple[str, str]]) -> list[list[str]]:
     return [[label, output_key] for label, output_key in sorted(pairs)]
 
 
+def _set_report_result(
+    report: dict[str, Any],
+    *,
+    status: str,
+    reason_code: str,
+    reason: str,
+    next_steps: list[str] | None = None,
+) -> None:
+    """Set the report's customer-facing result block."""
+    report["result"] = {
+        "status": status,
+        "reason_code": reason_code,
+        "reason": reason,
+        "next_steps": list(next_steps or []),
+    }
+
+
+def _target_labels_from_pairs(pairs: set[tuple[str, str]]) -> list[str]:
+    """Return deterministic labels from BEP `(label, output_key)` pairs."""
+    return sorted({label for label, _ in pairs})
+
+
 def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
     """Create the base machine-readable doctor report."""
     return {
         "schema_version": 1,
         "tool": "dd-test-optimization-doctor",
         "status": "running",
+        "result": {
+            "status": "running",
+            "reason_code": "running",
+            "reason": "Doctor validation is still running.",
+            "next_steps": [],
+        },
         "config": {
             "config_path": "",
             "workspace": "",
@@ -1806,6 +1834,14 @@ def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
             "staging_dir": "",
             "staged_count": 0,
             "staged": [],
+        },
+        "targets": {
+            "expected": [],
+            "seen_in_bep": [],
+            "fresh": [],
+            "cached": [],
+            "missing": [],
+            "remote_only": [],
         },
         "outputs": [],
         "summary": {
@@ -1965,6 +2001,7 @@ def _update_diagnostic_config(
     report["summary"]["expected_targets"] = len(expected_targets)
     report["bep"]["files"] = [str(path) for path in bep_files]
     report["artifacts"]["staging_requested"] = staging_requested
+    report["targets"]["expected"] = list(expected_targets)
 
 
 def _update_diagnostic_bep(
@@ -1983,6 +2020,10 @@ def _update_diagnostic_bep(
     }
     seen_targets.update(item.label for item in freshness.remote_only_outputs)
     seen_targets.update(ref.label for ref in freshness.artifact_references)
+    expected = set(report.get("targets", {}).get("expected", []))
+    cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
+    fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
+    remote_only_labels = {item.label for item in freshness.remote_only_outputs}
     report["bep"].update(
         {
             "seen_targets": sorted(seen_targets),
@@ -2003,6 +2044,15 @@ def _update_diagnostic_bep(
             "artifact_references": len(freshness.artifact_references),
             "selected_artifact_outputs": _sorted_pairs(selected_bep_artifact_outputs or set()),
             "blocked_artifact_labels": sorted(blocked_bep_artifact_labels or set()),
+        }
+    )
+    report["targets"].update(
+        {
+            "seen_in_bep": sorted(seen_targets),
+            "fresh": sorted(fresh_labels),
+            "cached": sorted(cached_labels),
+            "missing": sorted(expected.difference(seen_targets)),
+            "remote_only": sorted(remote_only_labels),
         }
     )
 
@@ -2066,6 +2116,72 @@ def _exit_code(exc: SystemExit) -> int:
     return 1
 
 
+def _classify_diagnostic_failure(report: dict[str, Any], message: str) -> tuple[str, str, list[str]]:
+    """Map known doctor failures to stable reason codes."""
+    targets = report.get("targets", {})
+    if (
+        "BEP freshness validation is required but no BEP JSON file was configured" in message
+        or "BEP freshness source was selected but no BEP JSON file was configured" in message
+        or "--artifact-source=bep requires --bep-json" in message
+    ):
+        return (
+            "missing_bep_json",
+            "BEP freshness or artifact staging was required, but no BEP JSON was configured.",
+            ["Pass --bep-json from the matching bazel test invocation."],
+        )
+    if targets.get("cached") and (
+        "not fresh in BEP" in message
+        or "did not authorize" in message
+        or "only cached results" in message
+    ):
+        return (
+            "target_cached_by_bazel",
+            "Required BEP freshness rejected cached Bazel test outputs.",
+            ["Run tests with --nocache_test_results or select targets that executed in this invocation."],
+        )
+    if targets.get("missing"):
+        return (
+            "expected_target_not_seen_in_bep",
+            "At least one expected target was not present in the BEP file.",
+            ["Use the BEP file produced by the same bazel test command that ran the expected target."],
+        )
+    if targets.get("remote_only") or "remote-only" in message:
+        return (
+            "bep_output_remote_only_without_downloader",
+            "BEP selected remote-only outputs that could not be materialized locally.",
+            [
+                "Enable --remote-artifacts=download with --bep-artifact-downloader, or adjust Bazel remote download settings."
+            ],
+        )
+    if "no Test Optimization output directories found" in message:
+        return (
+            "no_test_outputs_found",
+            "No local or staged test.outputs directories were found.",
+            ["Use --artifact-source=bep with the matching --bep-json, or configure Bazel to materialize test outputs."],
+        )
+    if "outputs.zip" in message and "payload" in message and "json" in message.lower():
+        return (
+            "zip_contains_no_payloads",
+            "outputs.zip was found, but it did not contain payload JSON files.",
+            [
+                "Inspect the archive for payloads/tests, payloads/coverage, or payloads/telemetry JSON files."
+            ],
+        )
+    if "payload" in message and "json" in message.lower():
+        return (
+            "no_payload_json_found",
+            "Test output directories were found, but no JSON payloads were available.",
+            [
+                "Inspect TEST_UNDECLARED_OUTPUTS_DIR and outputs.zip for payloads/tests, payloads/coverage, or payloads/telemetry files."
+            ],
+        )
+    return (
+        "doctor_failed",
+        "Doctor validation failed before upload.",
+        ["Inspect the doctor errors array and command logs."],
+    )
+
+
 def _record_diagnostic_failure(report: dict[str, Any], exc: BaseException) -> None:
     """Record a failure in the machine-readable report."""
     status = "fail"
@@ -2083,6 +2199,30 @@ def _record_diagnostic_failure(report: dict[str, Any], exc: BaseException) -> No
     report["status"] = status
     if message and status != "ok":
         report["errors"].append(message)
+    if status == "ok":
+        _set_report_result(
+            report,
+            status="ok",
+            reason_code="ok",
+            reason="Doctor validation succeeded.",
+        )
+    elif status == "error":
+        _set_report_result(
+            report,
+            status="error",
+            reason_code="doctor_failed",
+            reason="Doctor validation failed with an unexpected error.",
+            next_steps=["Inspect the doctor errors array and command logs."],
+        )
+    else:
+        reason_code, reason, next_steps = _classify_diagnostic_failure(report, message)
+        _set_report_result(
+            report,
+            status="fail",
+            reason_code=reason_code,
+            reason=reason,
+            next_steps=next_steps,
+        )
 
 
 def main(argv: list[str]) -> int:
@@ -2102,6 +2242,22 @@ def main(argv: list[str]) -> int:
         raise
     report["status"] = "ok" if rc == 0 else "fail"
     report["exit_code"] = rc
+    if rc == 0:
+        _set_report_result(
+            report,
+            status="ok",
+            reason_code="ok",
+            reason="Doctor validation succeeded.",
+        )
+    else:
+        reason_code, reason, next_steps = _classify_diagnostic_failure(report, "")
+        _set_report_result(
+            report,
+            status="fail",
+            reason_code=reason_code,
+            reason=reason,
+            next_steps=next_steps,
+        )
     _write_diagnostic_report(args, report)
     return rc
 

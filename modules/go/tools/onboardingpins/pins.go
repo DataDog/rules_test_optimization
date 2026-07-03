@@ -204,8 +204,9 @@ func FormatMarkdownSummary(pins Pins) string {
 	buf.WriteString("## Recommended Flow\n\n")
 	buf.WriteString("1. Wire the published repositories using the tuple above.\n")
 	buf.WriteString("2. Run tests with the Test Optimization Bazel config so JSON payloads are downloaded locally.\n")
-	buf.WriteString("3. Run the doctor target before uploading payloads.\n")
-	buf.WriteString("4. Run the uploader with credentials available only to `bazel run`.\n")
+	buf.WriteString("3. Run the doctor target, then the uploader dry-run with enrichment validation.\n")
+	buf.WriteString("4. Upload only after tests, doctor, and dry-run pass, with credentials available only to `bazel run`.\n")
+	buf.WriteString("5. In CI, set `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir` so `doctor-report.json`, `uploader-dry-run-report.json`, and optional `uploader-upload-report.json` are archived separately.\n")
 	return buf.String()
 }
 

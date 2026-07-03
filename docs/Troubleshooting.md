@@ -45,24 +45,24 @@ counts, upload candidates, skip/failure counts, status, and exit code.
 Wrapper flow:
 
 ```bash
-DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON=.topt/uploader-report.json \
-  tools/test_optimization/run_test_optimization_ci.sh \
-    --doctor-report-json .topt/doctor-report.json \
-    //...
-```
-
-```powershell
-$env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON = ".topt/uploader-report.json"
-.\tools\test_optimization\run_test_optimization_ci.ps1 `
-  -DoctorReportJson .topt\doctor-report.json `
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
   //...
 ```
 
-The wrapper-level uploader report path is inherited by each uploader invocation.
-If the wrapper also runs the real upload, the final uploader invocation writes
-the final report to that path. Use manual uploader invocations with different
-`--report-json` paths when CI needs to keep both dry-run and real-upload
-reports.
+```powershell
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  //...
+```
+
+The wrapper writes `doctor-report.json` and `uploader-dry-run-report.json`
+under the report directory. If the same wrapper run includes the real upload,
+it also writes `uploader-upload-report.json`, preserving the dry-run report.
+Each report has a `result.reason_code`, human-readable `result.reason`, and
+`result.next_steps` so support can distinguish cached tests, remote-only BEP
+artifacts, missing payloads, enrichment failures, dry-run no-upload, and real
+upload failures without reading the full log.
 
 Manual doctor/uploader flow:
 
@@ -86,10 +86,19 @@ bazel run --config=test-optimization //:dd_upload_payloads -- \
   --report-json=.topt/uploader-report.json
 ```
 
-Archive both JSON files as CI artifacts. Before sharing reports outside the
-trusted project boundary, review them for repository paths, target names, and
-service metadata. They must not contain API keys, but they can contain internal
-labels and filesystem paths.
+Archive the JSON files as CI artifacts. Optionally render a short Markdown
+summary:
+
+```bash
+python3 tools/test_optimization/render_report_summary.py \
+  .topt/reports/doctor-report.json \
+  .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/upload-diagnostics.md
+```
+
+Before sharing reports outside the trusted project boundary, review them for
+repository paths, target names, and service metadata. They must not contain API
+keys, but they can contain internal labels and filesystem paths.
 
 ## Repository rule not fetching data
 

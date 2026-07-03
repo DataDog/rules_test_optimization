@@ -265,22 +265,22 @@ dd_payload_uploader(
 ```bash
 # Copy or vendor tools/test_optimization/run_test_optimization_ci.sh into the
 # consumer repo, then run tests, doctor, and dry-run enrichment validation.
-tools/test_optimization/run_test_optimization_ci.sh //...
+tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  tools/test_optimization/run_test_optimization_ci.sh --upload //...
+  tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports --upload //...
 ```
 
 ```powershell
 # Copy or vendor tools/test_optimization/run_test_optimization_ci.ps1 into the
 # consumer repo, then run tests, doctor, and dry-run enrichment validation.
-.\tools\test_optimization\run_test_optimization_ci.ps1 //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports //...
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
-.\tools\test_optimization\run_test_optimization_ci.ps1 -Upload //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports -Upload //...
 ```
 
 ### Bzlmod + Go companion (`dd_topt_go_test`)
@@ -1078,8 +1078,11 @@ the fact that the repo still owns the actual refresh command.
 
 Bootstrap can also generate an operator-owned validation script for large
 repositories. The script repeats the RFC flow without hiding Bazel behavior:
-`sync -> controls -> instrumented tests -> doctor -> optional upload`. Upload is
-disabled unless the operator passes `--upload`.
+`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`.
+Upload is disabled unless the operator passes `--upload`. Set
+`DD_TEST_OPTIMIZATION_REPORT_DIR` to keep its `doctor-report.json`,
+`uploader-dry-run-report.json`, and optional `uploader-upload-report.json`
+outside the script's temporary directory.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
@@ -1255,21 +1258,21 @@ Telemetry-specific notes:
 
 ```bash
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
-tools/test_optimization/run_test_optimization_ci.sh //...
+tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  tools/test_optimization/run_test_optimization_ci.sh --upload //...
+  tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports --upload //...
 ```
 
 ```powershell
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
-.\tools\test_optimization\run_test_optimization_ci.ps1 //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports //...
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
-.\tools\test_optimization\run_test_optimization_ci.ps1 -Upload //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports -Upload //...
 ```
 
 **IMPORTANT**: Always preserve the test exit code. Upload failed-test payloads
@@ -1366,22 +1369,34 @@ bazel run //:dd_upload_payloads -- \
   --artifact-staging-dir="$artifact_staging_dir"
 ```
 
-For CI diagnostics, add `--doctor-report-json=<path>` to the wrapper, pass
-`--report-json=<path>` to a manual doctor command, or set
-`DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`. The report is written on success and
-on controlled doctor failures, and includes expected targets, BEP freshness,
-artifact staging, payload directories, payload counts, metadata, and error
-messages.
+For CI diagnostics, prefer one report directory per CI job:
 
-For upload-phase diagnostics, pass `--report-json=<path>` to the uploader
-command or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`. The uploader report
-records effective config, BEP freshness counts, artifact staging counts,
-payload directory counts, per-type processed/failed/skipped payload totals,
-aggregate upload failures, status, and exit code.
-When the CI wrapper also runs the real upload, the wrapper-level uploader report
-path is shared by the dry-run and real-upload invocations, so the final
-invocation wins. Use manual uploader commands with different `--report-json`
-paths when both reports must be archived.
+```bash
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
+  //...
+```
+
+The wrapper writes `.topt/reports/doctor-report.json` and
+`.topt/reports/uploader-dry-run-report.json`. When `--upload` is also used, it
+writes the real upload result to `.topt/reports/uploader-upload-report.json`
+instead of overwriting the dry-run report. Reports include a `result` block with
+`status`, `reason_code`, `reason`, `next_steps`, and the exact counts needed to
+answer why payloads were or were not uploaded: expected/seen targets, BEP
+fresh/cached/remote-only outputs, artifact staging, discovered payloads,
+processed/skipped/failed payloads, and upload attempts.
+
+Manual flows can still pass `--report-json=<path>` to the doctor or uploader,
+or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` /
+`DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`. To turn archived JSON reports into
+a short customer-facing summary, run:
+
+```bash
+python3 tools/test_optimization/render_report_summary.py \
+  .topt/reports/doctor-report.json \
+  .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/upload-diagnostics.md
+```
 
 If your CI cannot materialize `test.outputs/` or `outputs.zip` with the
 selective remote download flags, enable remote BEP artifact staging:

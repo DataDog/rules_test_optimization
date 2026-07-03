@@ -1424,6 +1424,10 @@ func validationScript(cfg config) (string, error) {
 	buf.WriteString("BEP_TMP_ROOT=\"\"\n")
 	buf.WriteString("BEP_JSON_DIR=\"\"\n")
 	buf.WriteString("ARTIFACT_STAGING_DIR=\"\"\n")
+	buf.WriteString("REPORT_DIR=\"${DD_TEST_OPTIMIZATION_REPORT_DIR:-}\"\n")
+	buf.WriteString("DOCTOR_REPORT_JSON=\"\"\n")
+	buf.WriteString("UPLOADER_DRY_RUN_REPORT_JSON=\"\"\n")
+	buf.WriteString("UPLOADER_UPLOAD_REPORT_JSON=\"\"\n")
 	fmt.Fprintf(&buf, "MIN_FREE_DISK_GB=%d\n", cfg.minFreeDiskGB)
 	fmt.Fprintf(&buf, "LARGE_MONOREPO=%s\n", shellBool(cfg.largeMonorepo))
 	fmt.Fprintf(&buf, "SHUTDOWN_BAZEL_ON_EXIT=%s\n", shellBool(cfg.shutdownBazelOnExit))
@@ -1450,10 +1454,12 @@ usage() {
 Usage: validate_go_pilot.sh [--upload|--no-upload]
 
 Runs the Datadog Go Test Optimization validation flow:
-  sync -> controls -> instrumented tests -> doctor -> optional upload
+  sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload
 
 Upload is disabled by default. Pass --upload only when local Datadog
 credentials are already available in the environment.
+
+Set DD_TEST_OPTIMIZATION_REPORT_DIR to persist doctor/uploader reports in CI.
 EOF
 }
 
@@ -1501,8 +1507,20 @@ prepare_bep_files() {
   BEP_TMP_ROOT="$(mktemp -d "${tmp_parent%/}/dd-go-topt.XXXXXX")"
   BEP_JSON_DIR="${BEP_TMP_ROOT}/bep"
   ARTIFACT_STAGING_DIR="${BEP_TMP_ROOT}/bep-artifacts"
-  mkdir -p "${BEP_JSON_DIR}" "${ARTIFACT_STAGING_DIR}"
+  if [[ -z "${REPORT_DIR}" ]]; then
+    REPORT_DIR="${BEP_TMP_ROOT}/reports"
+  fi
+  mkdir -p "${BEP_JSON_DIR}" "${ARTIFACT_STAGING_DIR}" "${REPORT_DIR}"
+  DOCTOR_REPORT_JSON="${REPORT_DIR}/doctor-report.json"
+  UPLOADER_DRY_RUN_REPORT_JSON="${REPORT_DIR}/uploader-dry-run-report.json"
+  UPLOADER_UPLOAD_REPORT_JSON="${REPORT_DIR}/uploader-upload-report.json"
   BEP_RUN_ARGS+=("--artifact-staging-dir=${ARTIFACT_STAGING_DIR}")
+}
+
+log_report_dir() {
+  if [[ -n "${REPORT_DIR:-}" ]]; then
+    log "Test Optimization reports: ${REPORT_DIR}"
+  fi
 }
 
 bep_json_path_for_target() {
@@ -1587,21 +1605,34 @@ if (( test_status != 0 )); then
 fi
 
 check_disk
-run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}"
+run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${DOCTOR_REPORT_JSON}"
 doctor_status=$?
 if (( doctor_status != 0 )); then
   warn "doctor failed; skipping upload"
+  log_report_dir
   exit "${doctor_status}"
+fi
+
+check_disk
+run_step "dry-run upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_DRY_RUN_REPORT_JSON}" --dry-run --validate-enrichment
+dry_run_status=$?
+if (( dry_run_status != 0 )); then
+  warn "dry-run uploader failed; skipping upload"
+  log_report_dir
+  exit "${dry_run_status}"
 fi
 
 if (( upload == 0 )); then
   log "upload skipped; rerun with --upload to run ${UPLOAD_TARGET}"
+  log_report_dir
   exit 0
 fi
 
 check_disk
-run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}"
-exit $?
+run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_UPLOAD_REPORT_JSON}"
+upload_status=$?
+log_report_dir
+exit "${upload_status}"
 `)
 	return buf.String(), nil
 }
