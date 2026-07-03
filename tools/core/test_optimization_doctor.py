@@ -163,6 +163,10 @@ def _warn(message: str) -> None:
     print(f"[dd-test-optimization-doctor] warning: {message}", file=sys.stderr)
 
 
+def _info(message: str) -> None:
+    print(f"[dd-test-optimization-doctor] {message}", file=sys.stderr)
+
+
 def _load_json(path: Path) -> Any:
     try:
         with path.open("r", encoding="utf-8-sig") as fh:
@@ -1018,6 +1022,10 @@ def _download_http_artifact(
                 if expected_length is not None and total < expected_length:
                     raise http.client.IncompleteRead(b"", expected_length - total)
             tmp.replace(dst)
+            _info(
+                f"BEP HTTP artifact downloaded for {ref.label} output {ref.output_key}: "
+                f"{display_uri} ({total} bytes)"
+            )
             return dst
         except BepArtifactStageError:
             tmp.unlink(missing_ok=True)

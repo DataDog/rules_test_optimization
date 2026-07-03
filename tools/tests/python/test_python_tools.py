@@ -2746,23 +2746,26 @@ $rows | ConvertTo-Json -Compress
                 )
 
     def test_stage_bep_artifacts_downloads_http_outputs_zip_without_downloader(self) -> None:
-        """Validate native HTTP outputs.zip staging works without external downloader."""
+        """Validate native HTTP outputs.zip staging logs a redacted successful download."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             served_root = root / "http"
             source_zip = served_root / "outputs.zip"
             self._write_outputs_zip(source_zip)
             with _serve_directory(served_root) as base_url:
-                freshness = self._http_outputs_zip_freshness(root, f"{base_url}/outputs.zip")
+                url = f"{base_url}/outputs.zip?sig=secret-token#fragment"
+                freshness = self._http_outputs_zip_freshness(root, url)
+                stderr = io.StringIO()
 
-                staged = self.mod._stage_bep_artifacts(
-                    freshness,
-                    workspace=root,
-                    staging_dir=root / ".topt" / "bep-artifacts",
-                    remote_artifacts="required",
-                    downloader="",
-                    downloader_timeout_sec=5,
-                )
+                with mock.patch("sys.stderr", stderr):
+                    staged = self.mod._stage_bep_artifacts(
+                        freshness,
+                        workspace=root,
+                        staging_dir=root / ".topt" / "bep-artifacts",
+                        remote_artifacts="required",
+                        downloader="",
+                        downloader_timeout_sec=5,
+                    )
 
             self.assertEqual(1, len(staged))
             self.assertTrue(staged[0].downloaded)
@@ -2770,6 +2773,10 @@ $rows | ConvertTo-Json -Compress
             self.assertEqual("pkg/remote_only/test.outputs", staged[0].output_key)
             self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "span_events_1.json").is_file())
             self.assertTrue((staged[0].output_dir / "bazel_target_metadata.json").is_file())
+            self.assertIn("BEP HTTP artifact downloaded", stderr.getvalue())
+            self.assertIn("/outputs.zip", stderr.getvalue())
+            self.assertNotIn("secret-token", stderr.getvalue())
+            self.assertNotIn("fragment", stderr.getvalue())
 
     def test_stage_bep_artifacts_http_failure_skips_in_download_mode(self) -> None:
         """Validate failed native HTTP staging skips in download mode without traceback."""
