@@ -541,6 +541,8 @@ esac
 
     def test_bash_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate Bash support bundle path preserves the original test status."""
+        if os.name == "nt":
+            self.skipTest("Windows support bundle execution is covered by the PowerShell wrapper")
         bash = _require_functional_bash(self)
         wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.sh")
         with tempfile.TemporaryDirectory() as tmp:
@@ -643,6 +645,8 @@ exec {sys.executable!r} "$@"
 
     def test_bash_wrapper_support_bundle_with_real_collector_writes_zip(self) -> None:
         """Validate Bash wrapper can create a real support bundle archive."""
+        if os.name == "nt":
+            self.skipTest("Windows support bundle execution is covered by the PowerShell wrapper")
         bash = _require_functional_bash(self)
         wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.sh")
         with tempfile.TemporaryDirectory() as tmp:
@@ -1025,7 +1029,7 @@ class SupportBundleTests(unittest.TestCase):
         self.assertIn("...<truncated", summary)
         self.assertNotIn(str(root), summary)
         self.assertNotIn(str(root), runtime)
-        self.assertEqual("<tmp>/bep-artifacts", flags["artifact_staging_dir"])
+        self.assertEqual(str(Path("<tmp>") / "bep-artifacts"), flags["artifact_staging_dir"])
         self.assertEqual(
             [
                 "--remote_download_regex=.*test\\.outputs.*",
@@ -1311,28 +1315,30 @@ class SupportBundleTests(unittest.TestCase):
 
     def test_redact_json_scrubs_secret_like_keys(self) -> None:
         """Validate support bundle redaction scrubs secrets, URLs, and local paths."""
-        data = {
-            "DD_API_KEY": "abc",
-            "safe": "value",
-            "nested": {"token": "secret", "path": "/work/repo/file.txt"},
-            "url": "https://user:pass@example.test/outputs.zip?sig=secret#fragment",
-            "message": "remote bytestream://remote-cas/blobs/deadbeef/123?token=secret",
-            "flags": [
-                "--test_env=DD_API_KEY=abc",
-                "--repo_env=TOKEN=secret",
-                "--test_env=DD_AUTHORIZATION=Bearer abc",
-                "SAFE=value",
-            ],
-        }
-        redacted = self.mod.redact_json(
-            data,
-            workspace_root=Path("/work/repo"),
-            output_base=None,
-            tmp_root=None,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "repo"
+            data = {
+                "DD_API_KEY": "abc",
+                "safe": "value",
+                "nested": {"token": "secret", "path": str(workspace_root / "file.txt")},
+                "url": "https://user:pass@example.test/outputs.zip?sig=secret#fragment",
+                "message": "remote bytestream://remote-cas/blobs/deadbeef/123?token=secret",
+                "flags": [
+                    "--test_env=DD_API_KEY=abc",
+                    "--repo_env=TOKEN=secret",
+                    "--test_env=DD_AUTHORIZATION=Bearer abc",
+                    "SAFE=value",
+                ],
+            }
+            redacted = self.mod.redact_json(
+                data,
+                workspace_root=workspace_root,
+                output_base=None,
+                tmp_root=None,
+            )
         self.assertEqual("<redacted>", redacted["DD_API_KEY"])
         self.assertEqual("<redacted>", redacted["nested"]["token"])
-        self.assertEqual("<workspace>/file.txt", redacted["nested"]["path"])
+        self.assertEqual(str(Path("<workspace>") / "file.txt"), redacted["nested"]["path"])
         self.assertEqual("https://example.test/outputs.zip", redacted["url"])
         self.assertIn("token=<redacted>", redacted["message"])
         self.assertEqual(
@@ -1844,7 +1850,10 @@ $rows | ConvertTo-Json -Compress
         self.assertEqual(1, diagnostics["summary"]["report_count"])
         self.assertEqual("dd-test-optimization-doctor", doctor_report["tool"])
         self.assertEqual("ok", doctor_report["result"]["status"])
-        self.assertEqual("<workspace>/pkg/target/test.outputs", doctor_report["outputs"][0]["path"])
+        self.assertEqual(
+            str(Path("<workspace>") / "pkg" / "target" / "test.outputs"),
+            doctor_report["outputs"][0]["path"],
+        )
         self.assertNotIn(str(root), json.dumps(doctor_report, sort_keys=True))
         self.assertEqual("doctor", command["source"])
         self.assertEqual("doctor_only_no_uploader", command["upload_mode"])
