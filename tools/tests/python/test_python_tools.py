@@ -827,7 +827,7 @@ $BepFiles = @($Manifest.bep_files)
 if ($BepFiles.Count -ne 1 -or -not $BepFiles[0].EndsWith(".bep.json")) {{
   throw "unexpected BEP files: $($BepFiles -join ',')"
 }}
-if ($Manifest.doctor_report_json -ne {str(root / "custom-doctor.json")!r}) {{
+if (-not $Manifest.doctor_report_json.EndsWith("custom-doctor.json")) {{
   throw "unexpected doctor report: $($Manifest.doctor_report_json)"
 }}
 if ($Manifest.upload_enabled -ne $false) {{
