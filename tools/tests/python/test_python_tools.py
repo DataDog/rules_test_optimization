@@ -776,45 +776,77 @@ exit 99
             fake_bazel.chmod(0o755)
             fake_collector = root / "create_support_bundle.py"
             collector_log = root / "collector.log"
+            fake_python = root / "fake_python.ps1"
             fake_collector.write_text(
-                f"""#!/usr/bin/env python3
-import json
-import pathlib
-import sys
-
-args = sys.argv[1:]
-pathlib.Path({str(collector_log)!r}).write_text("\\n".join(args), encoding="utf-8")
-manifest_path = next(arg.split("=", 1)[1] for arg in args if arg.startswith("--command-manifest-json="))
-manifest = json.loads(pathlib.Path(manifest_path).read_text(encoding="utf-8"))
-assert manifest["targets"] == ["//pkg:target"], manifest
-assert manifest["test_flags"] == ["--remote_download_regex=.*test[.]outputs.*"], manifest
-assert len(manifest["bep_files"]) == 1 and manifest["bep_files"][0].endswith(".bep.json"), manifest
-assert manifest["doctor_report_json"] == {str(root / "custom-doctor.json")!r}, manifest
-assert manifest["upload_enabled"] is False, manifest
-assert manifest["artifact_staging_dir"], manifest
-for arg in args:
-    if arg.startswith("--output="):
-        pathlib.Path(arg.split("=", 1)[1]).write_bytes(b"fake support bundle")
-        break
-sys.exit(0)
-""",
+                "# Placeholder collector path. fake_python.ps1 validates the forwarded arguments.\n",
                 encoding="utf-8",
             )
             fake_collector.chmod(0o755)
+            fake_python.write_text(
+                f"""
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ShimArgs)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+if ($ShimArgs.Count -lt 1) {{
+  throw "missing collector path"
+}}
+if ($ShimArgs[0] -ne {str(fake_collector)!r}) {{
+  throw "unexpected collector path: $($ShimArgs[0])"
+}}
+$CollectorArgs = @()
+if ($ShimArgs.Count -gt 1) {{
+  $CollectorArgs = $ShimArgs[1..($ShimArgs.Count - 1)]
+}}
+Set-Content -LiteralPath {str(collector_log)!r} -Value ($CollectorArgs -join "`n") -Encoding UTF8
+$ManifestPath = ""
+$OutputPath = ""
+foreach ($Arg in $CollectorArgs) {{
+  if ($Arg.StartsWith("--command-manifest-json=")) {{
+    $ManifestPath = $Arg.Substring("--command-manifest-json=".Length)
+  }}
+  if ($Arg.StartsWith("--output=")) {{
+    $OutputPath = $Arg.Substring("--output=".Length)
+  }}
+}}
+if ([string]::IsNullOrWhiteSpace($ManifestPath)) {{
+  throw "missing --command-manifest-json argument: $($CollectorArgs -join ' ')"
+}}
+if ([string]::IsNullOrWhiteSpace($OutputPath)) {{
+  throw "missing --output argument: $($CollectorArgs -join ' ')"
+}}
+$Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+$Targets = @($Manifest.targets)
+if ($Targets.Count -ne 1 -or $Targets[0] -ne "//pkg:target") {{
+  throw "unexpected targets: $($Targets -join ',')"
+}}
+$TestFlags = @($Manifest.test_flags)
+if ($TestFlags.Count -ne 1 -or $TestFlags[0] -ne "--remote_download_regex=.*test[.]outputs.*") {{
+  throw "unexpected test flags: $($TestFlags -join ',')"
+}}
+$BepFiles = @($Manifest.bep_files)
+if ($BepFiles.Count -ne 1 -or -not $BepFiles[0].EndsWith(".bep.json")) {{
+  throw "unexpected BEP files: $($BepFiles -join ',')"
+}}
+if ($Manifest.doctor_report_json -ne {str(root / "custom-doctor.json")!r}) {{
+  throw "unexpected doctor report: $($Manifest.doctor_report_json)"
+}}
+if ($Manifest.upload_enabled -ne $false) {{
+  throw "unexpected upload flag: $($Manifest.upload_enabled)"
+}}
+if ([string]::IsNullOrWhiteSpace($Manifest.artifact_staging_dir)) {{
+  throw "missing artifact staging dir"
+}}
+[System.IO.File]::WriteAllBytes($OutputPath, [System.Text.Encoding]::UTF8.GetBytes("fake support bundle"))
+exit 0
+""",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
             tmpdir = root / "tmp"
             tmpdir.mkdir()
             env = os.environ.copy()
             env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
-            python_executable = getattr(sys, "_base_executable", sys.executable)
-            if os.name == "nt":
-                python_shim = root / "python-shim.cmd"
-                python_shim.write_text(
-                    f'@echo off\r\n"{python_executable}" %*\r\nexit /b %ERRORLEVEL%\r\n',
-                    encoding="utf-8",
-                )
-                env["DD_TEST_OPTIMIZATION_PYTHON"] = str(python_shim)
-            else:
-                env["DD_TEST_OPTIMIZATION_PYTHON"] = python_executable
+            env["DD_TEST_OPTIMIZATION_PYTHON"] = str(fake_python)
 
             result = subprocess.run(
                 [
