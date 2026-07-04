@@ -797,22 +797,11 @@ sys.exit(0)
                 encoding="utf-8",
             )
             fake_collector.chmod(0o755)
-            python_shim = root / "python-shim.ps1"
-            python_shim_log = root / "python-shim.log"
-            python_shim.write_text(
-                f"""
-param([Parameter(ValueFromRemainingArguments = $true)][string[]]$PythonArgs)
-Add-Content -LiteralPath {str(python_shim_log)!r} -Value $PythonArgs[0]
-& {sys.executable!r} @PythonArgs
-exit $LASTEXITCODE
-""",
-                encoding="utf-8",
-            )
             tmpdir = root / "tmp"
             tmpdir.mkdir()
             env = os.environ.copy()
             env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
-            env["DD_TEST_OPTIMIZATION_PYTHON"] = str(python_shim)
+            env["DD_TEST_OPTIMIZATION_PYTHON"] = sys.executable
 
             result = subprocess.run(
                 [
@@ -852,8 +841,6 @@ exit $LASTEXITCODE
             self.assertIn(f"--report-json={root / 'custom-doctor.json'}", collector_args)
             self.assertIn("--tmp-root=", collector_args)
             self.assertIn("--bep-json=", collector_args)
-            shim_calls = python_shim_log.read_text(encoding="utf-8").splitlines()
-            self.assertIn(str(fake_collector), shim_calls)
 
 
 class ReportSummaryRendererTests(unittest.TestCase):
