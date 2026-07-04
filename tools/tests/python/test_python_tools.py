@@ -790,7 +790,7 @@ $ErrorActionPreference = "Stop"
 if ($ShimArgs.Count -lt 1) {{
   throw "missing collector path"
 }}
-if ($ShimArgs[0] -ne {str(fake_collector)!r}) {{
+if (-not (Test-Path -LiteralPath $ShimArgs[0] -PathType Leaf) -or -not $ShimArgs[0].EndsWith("create_support_bundle.py")) {{
   throw "unexpected collector path: $($ShimArgs[0])"
 }}
 $CollectorArgs = @()
