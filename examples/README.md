@@ -310,28 +310,55 @@ runtime/service repo so uploader enrichment stays aligned with each payload.
 Running tests, validating payloads, and uploading payloads:
 
 ```bash
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 # Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
-tools/test_optimization/run_test_optimization_ci.sh --config test-optimization //...
+tools/test_optimization/run_test_optimization_ci.sh \
+  --config test-optimization \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  tools/test_optimization/run_test_optimization_ci.sh --config test-optimization --upload //...
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --config test-optimization \
+    --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
+    --upload \
+    //...
 ```
 
 ```powershell
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 # Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
-.\tools\test_optimization\run_test_optimization_ci.ps1 -Config test-optimization //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -Config test-optimization `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  //...
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
-.\tools\test_optimization\run_test_optimization_ci.ps1 -Config test-optimization -Upload //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -Config test-optimization `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  -Upload `
+  //...
 ```
 
 Notes:
 - The wrapper preserves test failures, blocks upload success when doctor
   or dry-run enrichment fails, and still fails on uploader errors when the
   earlier steps passed.
+- For first-pass support after tests have run, the doctor
+  `--support-bundle=.topt/reports/dd-test-optimization-support.zip` option
+  creates a doctor-only bundle without vendoring the wrapper helper directory.
+- For the support escalation ladder and bundle triage order, see
+  [`docs/Troubleshooting.md`](../docs/Troubleshooting.md#collect-diagnostic-reports).
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
 - Windows-friendly wrappers are provided as `examples/*/runtests.ps1` and use
   native PowerShell + Bazel (no Git Bash dependency).

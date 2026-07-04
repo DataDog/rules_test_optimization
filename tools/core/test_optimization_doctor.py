@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import importlib.util
 import json
 import math
 import os
@@ -20,6 +21,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any, Iterable
 import urllib.error
@@ -247,6 +249,21 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--report-json",
         default=os.environ.get("DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON", ""),
         help="Optional path for a machine-readable doctor diagnostic report.",
+    )
+    parser.add_argument(
+        "--support-bundle",
+        default=os.environ.get("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE", ""),
+        help="Optional path for a redacted doctor-only support diagnostics zip.",
+    )
+    parser.add_argument(
+        "--support-bundle-collector",
+        default=os.environ.get("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR", ""),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--support-bundle-renderer",
+        default=os.environ.get("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER", ""),
+        help=argparse.SUPPRESS,
     )
     args = parser.parse_args(argv)
     _validate_artifact_resolution_args(args)
@@ -2269,6 +2286,153 @@ def _write_diagnostic_report(args: argparse.Namespace, report: dict[str, Any]) -
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _default_support_bundle_collector() -> Path:
+    """Return the source-tree default collector path for direct runtime execution."""
+    return Path(__file__).resolve().parents[1] / "test_optimization" / "create_support_bundle.py"
+
+
+def _support_bundle_collector_path(args: argparse.Namespace) -> Path | None:
+    """Return the configured or default support bundle collector path."""
+    candidates = []
+    if args.support_bundle_collector:
+        candidates.append(Path(args.support_bundle_collector).expanduser())
+    candidates.extend([
+        _default_support_bundle_collector(),
+        Path.cwd() / "tools" / "test_optimization" / "create_support_bundle.py",
+    ])
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _load_support_bundle_collector(path: Path) -> Any:
+    """Load the support-bundle collector module from a file path."""
+    spec = importlib.util.spec_from_file_location("dd_topt_create_support_bundle", str(path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load support bundle collector: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _support_bundle_output_base(config_path: Path) -> Path | None:
+    """Infer Bazel output_base from the generated config path when available."""
+    execroot = _infer_bazel_execroot(config_path)
+    if execroot is None:
+        return None
+    # output_base/execroot/<workspace>
+    if execroot.parent.name == "execroot":
+        return execroot.parent.parent
+    return None
+
+
+def _doctor_command_manifest(
+    *,
+    args: argparse.Namespace,
+    report: dict[str, Any],
+    report_path: Path,
+    config_path: Path,
+    workspace: Path,
+    bep_files: list[Path],
+) -> dict[str, Any]:
+    """Return effective doctor flags for the support bundle."""
+    return {
+        "source": "doctor",
+        "config": str(config_path),
+        "workspace_root": str(workspace),
+        "doctor_report_json": str(report_path),
+        "uploader_report_json": "",
+        "upload_report_json": "",
+        "upload_mode": "doctor_only_no_uploader",
+        "bep_files": [str(path) for path in bep_files],
+        "freshness_source": args.freshness_source,
+        "freshness_mode": args.freshness_mode,
+        "artifact_source": args.artifact_source,
+        "remote_artifacts": args.remote_artifacts,
+        "artifact_staging_dir": args.artifact_staging_dir,
+        "bep_artifact_downloader": args.bep_artifact_downloader,
+        "bep_artifact_downloader_timeout_sec": args.bep_artifact_downloader_timeout_sec,
+        "targets": list(report.get("targets", {}).get("expected", [])),
+    }
+
+
+def _write_doctor_support_bundle(args: argparse.Namespace, report: dict[str, Any]) -> None:
+    """Write a doctor-only support bundle when requested, without changing doctor status."""
+    if not args.support_bundle:
+        return
+    collector_path = _support_bundle_collector_path(args)
+    if collector_path is None:
+        print("[dd-test-optimization-doctor] warning: support bundle collector not found", file=sys.stderr)
+        return
+    output = Path(args.support_bundle).expanduser()
+    previous_renderer = os.environ.get("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER")
+    try:
+        if args.support_bundle_renderer:
+            os.environ["DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER"] = args.support_bundle_renderer
+        collector = _load_support_bundle_collector(collector_path)
+        workspace = _workspace_root()
+        config_path = Path(args.config).resolve()
+        bep_files = _configured_bep_json_files(args)
+        with tempfile.TemporaryDirectory(prefix="dd-topt-doctor-support-") as tmp:
+            tmp_root = Path(tmp)
+            report_path = tmp_root / "doctor-report.json"
+            report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            command_manifest_path = tmp_root / "doctor-command-manifest.json"
+            command_manifest_path.write_text(
+                json.dumps(
+                    _doctor_command_manifest(
+                        args=args,
+                        report=report,
+                        report_path=report_path,
+                        config_path=config_path,
+                        workspace=workspace,
+                        bep_files=bep_files,
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            collector_args = [
+                "--report-dir",
+                str(tmp_root),
+                "--report-json",
+                str(report_path),
+                "--output",
+                str(output),
+                "--command-manifest-json",
+                str(command_manifest_path),
+                "--workspace-root",
+                str(workspace),
+                "--tmp-root",
+                str(tmp_root),
+            ]
+            output_base = _support_bundle_output_base(config_path)
+            if output_base is not None:
+                collector_args.extend(["--output-base", str(output_base)])
+            for bep_file in bep_files:
+                collector_args.extend(["--bep-json", str(bep_file)])
+            collector.main(collector_args)
+    except Exception as exc:
+        print(
+            f"[dd-test-optimization-doctor] warning: failed to create support bundle {output}: {exc}",
+            file=sys.stderr,
+        )
+    finally:
+        if previous_renderer is None:
+            os.environ.pop("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER", None)
+        else:
+            os.environ["DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER"] = previous_renderer
+
+
+def _write_requested_diagnostics(args: argparse.Namespace, report: dict[str, Any]) -> None:
+    """Write requested doctor diagnostics and support artifacts."""
+    _write_diagnostic_report(args, report)
+    _write_doctor_support_bundle(args, report)
+
+
 def _exit_code(exc: SystemExit) -> int:
     """Return a numeric code for SystemExit values."""
     if exc.code is None:
@@ -2396,11 +2560,11 @@ def main(argv: list[str]) -> int:
         rc = _run_doctor(args, report)
     except SystemExit as exc:
         _record_diagnostic_failure(report, exc)
-        _write_diagnostic_report(args, report)
+        _write_requested_diagnostics(args, report)
         raise
     except Exception as exc:
         _record_diagnostic_failure(report, exc)
-        _write_diagnostic_report(args, report)
+        _write_requested_diagnostics(args, report)
         raise
     report["status"] = "ok" if rc == 0 else "fail"
     report["exit_code"] = rc
@@ -2420,7 +2584,7 @@ def main(argv: list[str]) -> int:
             reason=reason,
             next_steps=next_steps,
         )
-    _write_diagnostic_report(args, report)
+    _write_requested_diagnostics(args, report)
     return rc
 
 

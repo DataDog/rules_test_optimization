@@ -264,25 +264,56 @@ dd_payload_uploader(
 )
 ```
 
+For first-pass troubleshooting after a test run, ask the customer for the
+doctor bundle:
+
 ```bash
-# Copy or vendor tools/test_optimization/run_test_optimization_ci.sh into the
-# consumer repo, then run tests, doctor, and dry-run enrichment validation.
-tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports //...
+bazel run //:dd_test_optimization_doctor -- \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip
+```
+
+When diagnosing BEP/BwoB CI behavior, pass the same `--bep-json`,
+`--freshness-*`, and `--artifact-*` flags you would pass to the doctor manually.
+The doctor bundle is doctor-only; it does not prove uploader dry-run,
+enrichment, or upload behavior.
+For the full escalation ladder and the order to inspect files inside the zip,
+see [Collect diagnostic reports](docs/Troubleshooting.md#collect-diagnostic-reports).
+
+```bash
+# Copy or vendor the full tools/test_optimization/ helper directory into the
+# consumer repo. The support bundle option needs create_support_bundle.py beside
+# the wrapper, or DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR pointing to it.
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports --upload //...
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
+    --upload \
+    //...
 ```
 
 ```powershell
-# Copy or vendor tools/test_optimization/run_test_optimization_ci.ps1 into the
-# consumer repo, then run tests, doctor, and dry-run enrichment validation.
-.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports //...
+# Copy or vendor the full tools/test_optimization/ helper directory into the
+# consumer repo. The support bundle option needs create_support_bundle.py beside
+# the wrapper, or DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR pointing to it.
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  //...
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
-.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports -Upload //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  -Upload `
+  //...
 ```
 
 ### Bzlmod + Go companion (`dd_topt_go_test`)
@@ -1260,21 +1291,35 @@ Telemetry-specific notes:
 
 ```bash
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
-tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports //...
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  tools/test_optimization/run_test_optimization_ci.sh --report-dir .topt/reports --upload //...
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
+    --upload \
+    //...
 ```
 
 ```powershell
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
-.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  //...
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
-.\tools\test_optimization\run_test_optimization_ci.ps1 -ReportDir .topt\reports -Upload //...
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  -Upload `
+  //...
 ```
 
 **IMPORTANT**: Always preserve the test exit code. Upload failed-test payloads
@@ -1377,6 +1422,7 @@ For CI diagnostics, prefer one report directory per CI job:
 ```bash
 tools/test_optimization/run_test_optimization_ci.sh \
   --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 ```
 
@@ -1389,10 +1435,36 @@ answer why payloads were or were not uploaded: expected/seen targets, BEP
 fresh/cached/remote-only outputs, artifact staging, discovered payloads,
 processed/skipped/failed payloads, and upload attempts.
 
+For support tickets, prefer
+`.topt/reports/dd-test-optimization-support.zip`. For the simplest customer ask,
+run the doctor with `--support-bundle=<path>` and attach the resulting doctor-only
+bundle. In CI, prefer the wrapper `--support-bundle=<path>` because it also
+includes uploader dry-run and optional upload reports. Bundles are redacted and
+bounded by default and include `summary.md`, selected BEP summaries, effective
+flags, runtime metadata, and a redaction manifest. They do not include raw
+payloads, raw CI logs, raw environment variables, or raw BEP files.
+The support runbook in
+[docs/Troubleshooting.md](docs/Troubleshooting.md#collect-diagnostic-reports)
+describes which bundle to request and which files to inspect first.
+
 Manual flows can still pass `--report-json=<path>` to the doctor or uploader,
 or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` /
-`DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`. To turn archived JSON reports into
-a short customer-facing summary, run:
+`DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`. If a repository cannot use the
+doctor or wrapper support-bundle entrypoints but has the helper script, create
+the redacted zip manually:
+
+```bash
+python3 tools/test_optimization/create_support_bundle.py \
+  --report-dir .topt/reports \
+  --report-json .topt/reports/doctor-report.json \
+  --report-json .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/dd-test-optimization-support.zip \
+  --workspace-root "$PWD" \
+  --output-base "$(bazel info output_base)"
+```
+
+When only Markdown is possible, turn archived JSON reports into a short
+customer-facing fallback summary:
 
 ```bash
 python3 tools/test_optimization/render_report_summary.py \
@@ -1446,10 +1518,11 @@ client.
 
 Artifact staging requires Python at uploader runtime. Bash resolves
 `DD_TEST_OPTIMIZATION_PYTHON`, then `PYTHON`, then `python3`, then `python`;
-PowerShell tries `python3` and then `python`. Existing local-only uploader flows
-remain usable without Python except for the pre-existing optional schema and
-telemetry helpers. Bash BEP freshness parsing still requires `jq` whenever BEP
-freshness validation is enabled in the Bash uploader path.
+PowerShell uses the same discovery order. Existing local-only uploader flows
+remain usable without Python except for support bundle generation and the
+pre-existing optional schema and telemetry helpers. Bash BEP freshness parsing
+still requires `jq` whenever BEP freshness validation is enabled in the Bash
+uploader path.
 
 ### Enrichment dry-run
 

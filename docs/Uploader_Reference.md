@@ -36,35 +36,45 @@ The `test-optimization` config should contain the recommended Bazel test flags:
 `--zip_undeclared_test_outputs`.
 
 ```bash
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
 tools/test_optimization/run_test_optimization_ci.sh \
   --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
 # Optional: --report-dir writes doctor-report.json and uploader-dry-run-report.json.
-# With --upload it also writes uploader-upload-report.json.
+# With --upload it also writes uploader-upload-report.json. --support-bundle
+# adds dd-test-optimization-support.zip for escalation.
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
     --upload-target //tools/test_optimization:dd_upload_payloads \
+    --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
     --upload \
     //...
 ```
 
 ```powershell
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 # RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
   -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
   -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
 # Optional: -ReportDir writes doctor-report.json and uploader-dry-run-report.json.
-# With -Upload it also writes uploader-upload-report.json.
+# With -Upload it also writes uploader-upload-report.json. -SupportBundle
+# adds dd-test-optimization-support.zip for escalation.
 
 # Add -Upload only when the real upload should run after doctor and dry-run pass.
 $env:DD_API_KEY = "<your-api-key>"
@@ -72,6 +82,8 @@ $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
   -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   -Upload `
   //...
 ```
@@ -274,6 +286,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 ```
 
@@ -282,6 +295,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
   -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 ```
 
@@ -290,8 +304,33 @@ The wrapper writes `.topt/reports/doctor-report.json` and
 `.topt/reports/uploader-upload-report.json` for the real upload so the dry-run
 report is preserved.
 
-Render a concise Markdown summary when the JSON reports need to be attached to
-a support ticket or CI artifact:
+For first-pass support, the doctor can create a doctor-only bundle without the
+wrapper:
+
+```bash
+bazel run //:dd_test_optimization_doctor -- \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip
+```
+
+For CI support artifacts that need uploader dry-run or upload details, prefer
+the wrapper support bundle: `.topt/reports/dd-test-optimization-support.zip`.
+The bundle contains redacted and bounded doctor/uploader reports, selected BEP
+summaries, effective wrapper flags, runtime metadata, and `summary.md`. If a
+repository cannot use either bundle mode, keep the manual
+`create_support_bundle.py` flow as the fallback when the helper script is
+available:
+
+```bash
+python3 tools/test_optimization/create_support_bundle.py \
+  --report-dir .topt/reports \
+  --report-json .topt/reports/doctor-report.json \
+  --report-json .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/dd-test-optimization-support.zip \
+  --workspace-root "$PWD" \
+  --output-base "$(bazel info output_base)"
+```
+
+If only a Markdown summary is possible, use `render_report_summary.py`:
 
 ```bash
 python3 tools/test_optimization/render_report_summary.py \
@@ -299,6 +338,22 @@ python3 tools/test_optimization/render_report_summary.py \
   .topt/reports/uploader-dry-run-report.json \
   --output .topt/reports/upload-diagnostics.md
 ```
+
+Support bundle contents:
+
+| Bundle file | Purpose |
+| --- | --- |
+| `diagnostics.json` | Machine-readable index and primary reason code |
+| `summary.md` | Human-readable support summary |
+| `reports/*.json` | Redacted and bounded doctor-only or doctor/uploader reports |
+| `bep/*.summary.json` | Redacted BEP test-result summaries; raw BEP is not included |
+| `command/flags.json` | Effective doctor or wrapper targets and Test Optimization flags |
+| `environment/runtime.json` | OS, Python, and Bazel version metadata |
+| `redaction-manifest.json` | Description of redaction rules applied |
+
+For the customer escalation ladder and the order to inspect `summary.md`,
+`diagnostics.json`, `reports/*.json`, and `command/flags.json`, see
+[`docs/Troubleshooting.md`](Troubleshooting.md#collect-diagnostic-reports).
 
 ### Doctor diagnostic report
 
@@ -526,10 +581,11 @@ credentials or a Datadog-internal CAS client.
 
 Artifact staging requires Python at uploader runtime. Bash resolves
 `DD_TEST_OPTIMIZATION_PYTHON`, then `PYTHON`, then `python3`, then `python`;
-PowerShell tries `python3` and then `python`. Existing local-only uploader flows
-remain usable without Python except for the pre-existing optional schema and
-telemetry helpers. Bash BEP freshness parsing still requires `jq` whenever BEP
-freshness validation is enabled in the Bash uploader path.
+PowerShell uses the same discovery order. Existing local-only uploader flows
+remain usable without Python except for support bundle generation and the
+pre-existing optional schema and telemetry helpers. Bash BEP freshness parsing
+still requires `jq` whenever BEP freshness validation is enabled in the Bash
+uploader path.
 
 ### Legacy execution-log fallback
 

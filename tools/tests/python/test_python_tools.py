@@ -467,13 +467,22 @@ class TestOptimizationCiWrapperTests(unittest.TestCase):
             self.assertIn("uploader-upload-report.json", text)
             self.assertIn("--dry-run", text)
             self.assertIn("--validate-enrichment", text)
+            self.assertIn("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE", text)
+            self.assertIn("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR", text)
+            self.assertIn("DD_TEST_OPTIMIZATION_PYTHON", text)
+            self.assertIn("create_support_bundle.py", text)
+            self.assertIn("--tmp-root", text)
             self.assertNotIn(".topt/bazel-bep.json", text)
             self.assertNotIn("DD_TEST_OPTIMIZATION_BEP_JSON=", text)
 
         self.assertIn("mktemp -d", bash_text)
         self.assertIn("DD_TEST_OPTIMIZATION_KEEP_TMP", bash_text)
+        self.assertIn("resolve_python", bash_text)
+        self.assertIn("resolve_output_base", bash_text)
         self.assertIn("NewGuid", powershell_text)
         self.assertIn("DD_TEST_OPTIMIZATION_KEEP_TMP", powershell_text)
+        self.assertIn("Get-PythonForSupportBundle", powershell_text)
+        self.assertIn("Get-OutputBase", powershell_text)
 
     def test_bash_wrapper_preserves_failed_test_status(self) -> None:
         """Validate Bash wrapper reports the original bazel test exit code."""
@@ -530,6 +539,318 @@ esac
                 normalized_log_text,
             )
 
+    def test_bash_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
+        """Validate Bash support bundle path preserves the original test status."""
+        bash = _require_functional_bash(self)
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> {str(log_path)!r}
+case "$1 $2" in
+  "info output_base") printf '%s\n' {str(root / 'output-base')!r}; exit 0 ;;
+esac
+case "$1" in
+  test) exit 7 ;;
+  run) exit 0 ;;
+  *) exit 99 ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            fake_collector = root / "create_support_bundle.py"
+            collector_log = root / "collector.log"
+            fake_collector.write_text(
+                f"""#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+args = sys.argv[1:]
+pathlib.Path({str(collector_log)!r}).write_text("\\n".join(args), encoding="utf-8")
+manifest_path = next(arg.split("=", 1)[1] for arg in args if arg.startswith("--command-manifest-json="))
+manifest = json.loads(pathlib.Path(manifest_path).read_text(encoding="utf-8"))
+assert manifest["targets"] == ["//pkg:target"], manifest
+assert manifest["test_flags"] == ["--remote_download_regex=.*test[.]outputs.*"], manifest
+assert len(manifest["bep_files"]) == 1 and manifest["bep_files"][0].endswith(".bep.json"), manifest
+assert manifest["doctor_report_json"] == {str(root / "custom-doctor.json")!r}, manifest
+assert manifest["upload_enabled"] is False, manifest
+assert manifest["artifact_staging_dir"], manifest
+for arg in args:
+    if arg.startswith("--output="):
+        pathlib.Path(arg.split("=", 1)[1]).write_bytes(b"fake support bundle")
+        break
+sys.exit(0)
+""",
+                encoding="utf-8",
+            )
+            fake_collector.chmod(0o755)
+            python_shim = root / "python-shim"
+            python_shim_log = root / "python-shim.log"
+            python_shim.write_text(
+                f"""#!/usr/bin/env bash
+printf '%s\n' "$1" >> {str(python_shim_log)!r}
+exec {sys.executable!r} "$@"
+""",
+                encoding="utf-8",
+            )
+            python_shim.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["BAZEL"] = str(fake_bazel)
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+            env["DD_TEST_OPTIMIZATION_PYTHON"] = str(python_shim)
+
+            result = subprocess.run(
+                [
+                    bash,
+                    str(wrapper),
+                    "--keep-tmp",
+                    "--report-dir",
+                    str(root / "reports"),
+                    "--doctor-report-json",
+                    str(root / "custom-doctor.json"),
+                    "--test-flag",
+                    "--remote_download_regex=.*test[.]outputs.*",
+                    "--support-bundle",
+                    str(root / "support.zip"),
+                    "--support-bundle-collector",
+                    str(fake_collector),
+                    "//pkg:target",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(7, result.returncode, result.stderr)
+            self.assertTrue((root / "support.zip").exists())
+            collector_args = collector_log.read_text(encoding="utf-8")
+            self.assertIn("--command-manifest-json=", collector_args)
+            self.assertIn(f"--report-json={root / 'custom-doctor.json'}", collector_args)
+            self.assertIn("--tmp-root=", collector_args)
+            self.assertIn("--bep-json=", collector_args)
+            shim_calls = python_shim_log.read_text(encoding="utf-8").splitlines()
+            self.assertIn("-", shim_calls)
+            self.assertIn(str(fake_collector), shim_calls)
+
+    def test_bash_wrapper_support_bundle_with_real_collector_writes_zip(self) -> None:
+        """Validate Bash wrapper can create a real support bundle archive."""
+        bash = _require_functional_bash(self)
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> {str(log_path)!r}
+case "$1 $2" in
+  "info output_base") printf '%s\\n' {str(root / 'output-base')!r}; exit 0 ;;
+esac
+if [[ "$1" == "test" ]]; then
+  bep_json=""
+  target=""
+  for arg in "$@"; do
+    case "$arg" in
+      --build_event_json_file=*) bep_json="${{arg#--build_event_json_file=}}" ;;
+      //*) target="$arg" ;;
+    esac
+  done
+  mkdir -p "$(dirname "$bep_json")"
+  cat > "$bep_json" <<JSON
+{{"id":{{"testResult":{{"label":"$target","run":1,"shard":1,"attempt":1}}}},"testResult":{{"cachedLocally":false,"testActionOutput":[{{"name":"outputs.zip","uri":"file://{str(root / 'outputs.zip')}"}}]}}}}
+JSON
+  exit 0
+fi
+if [[ "$1" == "run" ]]; then
+  report_json=""
+  for arg in "$@"; do
+    case "$arg" in
+      --report-json=*) report_json="${{arg#--report-json=}}" ;;
+    esac
+  done
+  if [[ -n "$report_json" ]]; then
+    mkdir -p "$(dirname "$report_json")"
+    case "$3" in
+      *dd_test_optimization_doctor*) tool="dd-test-optimization-doctor" ;;
+      *) tool="dd-test-optimization-uploader" ;;
+    esac
+    cat > "$report_json" <<JSON
+{{"tool":"$tool","result":{{"status":"ok","reason_code":"ok","reason":"","next_steps":[]}},"summary":{{"payloads":{{"tests":1,"coverage":0,"telemetry":0}}}}}}
+JSON
+  fi
+  exit 0
+fi
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            support_bundle = root / "reports" / "support.zip"
+            env = os.environ.copy()
+            env["BAZEL"] = str(fake_bazel)
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+            env["DD_TEST_OPTIMIZATION_PYTHON"] = sys.executable
+
+            result = subprocess.run(
+                [
+                    bash,
+                    str(wrapper),
+                    "--keep-tmp",
+                    "--report-dir",
+                    str(root / "reports"),
+                    "--test-flag",
+                    "--remote_download_regex=.*test[.]outputs.*",
+                    "--support-bundle",
+                    str(support_bundle),
+                    "//pkg:target",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            with zipfile.ZipFile(support_bundle) as zf:
+                names = set(zf.namelist())
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+                command = json.loads(zf.read("command/flags.json").decode("utf-8"))
+
+        self.assertIn("summary.md", names)
+        self.assertIn("environment/runtime.json", names)
+        self.assertIn("reports/doctor-report.json", names)
+        self.assertIn("reports/uploader-dry-run-report.json", names)
+        self.assertIn("command/flags.json", names)
+        self.assertEqual("ok", diagnostics["summary"]["status"])
+        self.assertEqual(2, diagnostics["summary"]["report_count"])
+        self.assertEqual(1, diagnostics["summary"]["bep_summary_count"])
+        self.assertEqual("ok", diagnostics["summary"]["primary_reason_code"])
+        self.assertEqual(["//pkg:target"], command["targets"])
+        self.assertEqual(["--remote_download_regex=.*test[.]outputs.*"], command["test_flags"])
+        self.assertEqual("dd-test-optimization-doctor", diagnostics["reports"][0]["tool"])
+        self.assertEqual("dd-test-optimization-uploader", diagnostics["reports"][1]["tool"])
+
+    def test_powershell_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
+        """Validate PowerShell support bundle path preserves the original test status."""
+        pwsh = _require_command(self, "pwsh", "pwsh is required for PowerShell support bundle smoke")
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.ps1")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel.ps1"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$BazelArgs)
+Add-Content -LiteralPath {str(log_path)!r} -Value ($BazelArgs -join ' ')
+if ($BazelArgs.Count -gt 1 -and $BazelArgs[0] -eq 'info' -and $BazelArgs[1] -eq 'output_base') {{
+  Write-Output {str(root / 'output-base')!r}
+  exit 0
+}}
+if ($BazelArgs.Count -gt 0 -and $BazelArgs[0] -eq 'test') {{ exit 7 }}
+if ($BazelArgs.Count -gt 0 -and $BazelArgs[0] -eq 'run') {{ exit 0 }}
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            fake_collector = root / "create_support_bundle.py"
+            collector_log = root / "collector.log"
+            fake_collector.write_text(
+                f"""#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+args = sys.argv[1:]
+pathlib.Path({str(collector_log)!r}).write_text("\\n".join(args), encoding="utf-8")
+manifest_path = next(arg.split("=", 1)[1] for arg in args if arg.startswith("--command-manifest-json="))
+manifest = json.loads(pathlib.Path(manifest_path).read_text(encoding="utf-8"))
+assert manifest["targets"] == ["//pkg:target"], manifest
+assert manifest["test_flags"] == ["--remote_download_regex=.*test[.]outputs.*"], manifest
+assert len(manifest["bep_files"]) == 1 and manifest["bep_files"][0].endswith(".bep.json"), manifest
+assert manifest["doctor_report_json"] == {str(root / "custom-doctor.json")!r}, manifest
+assert manifest["upload_enabled"] is False, manifest
+assert manifest["artifact_staging_dir"], manifest
+for arg in args:
+    if arg.startswith("--output="):
+        pathlib.Path(arg.split("=", 1)[1]).write_bytes(b"fake support bundle")
+        break
+sys.exit(0)
+""",
+                encoding="utf-8",
+            )
+            fake_collector.chmod(0o755)
+            python_shim = root / "python-shim.ps1"
+            python_shim_log = root / "python-shim.log"
+            python_shim.write_text(
+                f"""
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$PythonArgs)
+Add-Content -LiteralPath {str(python_shim_log)!r} -Value $PythonArgs[0]
+& {sys.executable!r} @PythonArgs
+exit $LASTEXITCODE
+""",
+                encoding="utf-8",
+            )
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+            env["DD_TEST_OPTIMIZATION_PYTHON"] = str(python_shim)
+
+            result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                    "-Bazel",
+                    str(fake_bazel),
+                    "-KeepTmp",
+                    "-ReportDir",
+                    str(root / "reports"),
+                    "-DoctorReportJson",
+                    str(root / "custom-doctor.json"),
+                    "-TestFlag",
+                    "--remote_download_regex=.*test[.]outputs.*",
+                    "-SupportBundle",
+                    str(root / "support.zip"),
+                    "-SupportBundleCollector",
+                    str(fake_collector),
+                    "//pkg:target",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(7, result.returncode, result.stderr)
+            self.assertTrue((root / "support.zip").exists())
+            collector_args = collector_log.read_text(encoding="utf-8")
+            self.assertIn("--command-manifest-json=", collector_args)
+            self.assertIn(f"--report-json={root / 'custom-doctor.json'}", collector_args)
+            self.assertIn("--tmp-root=", collector_args)
+            self.assertIn("--bep-json=", collector_args)
+            shim_calls = python_shim_log.read_text(encoding="utf-8").splitlines()
+            self.assertIn(str(fake_collector), shim_calls)
+
 
 class ReportSummaryRendererTests(unittest.TestCase):
     """Test case group covering customer-facing diagnostic summary rendering."""
@@ -576,6 +897,471 @@ class ReportSummaryRendererTests(unittest.TestCase):
         self.assertIn("Reason: upload_skipped_dry_run", text)
         self.assertIn("Payloads discovered: tests=5, coverage=0, telemetry=8", text)
         self.assertIn("Run again with --upload", text)
+
+
+class SupportBundleTests(unittest.TestCase):
+    """Test case group covering support bundle collection."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = _load_module(
+            "create_support_bundle",
+            "tools/test_optimization/create_support_bundle.py",
+        )
+
+    def test_create_support_bundle_writes_redacted_zip(self) -> None:
+        """Validate support bundle zip content and redaction behavior."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "reports"
+            report_dir.mkdir()
+            long_reason = "remote bytestream://remote-cas/blobs/abc/123?token=secret " + ("x" * 20005)
+            doctor_report = report_dir / "doctor-report.json"
+            doctor_report.write_text(
+                json.dumps({
+                    "tool": "dd-test-optimization-doctor",
+                    "result": {
+                        "status": "fail",
+                        "reason_code": "bep_output_remote_only_without_downloader",
+                        "reason": long_reason,
+                        "next_steps": ["Use --remote_download_regex to materialize outputs."],
+                    },
+                    "summary": {"payloads": {"tests": 2, "coverage": 0, "telemetry": 1}},
+                    "config": {"workspace": str(root), "testlogs_dir": str(root / "bazel-testlogs")},
+                    "outputs": [{"path": str(root / "bazel-testlogs" / "pkg" / "target" / "test.outputs")}],
+                    "bep": {"remote_only_outputs": [{"uri": "https://example.invalid/a?X-Amz-Signature=abc"}]},
+                }),
+                encoding="utf-8",
+            )
+            bep = root / "one.bep.json"
+            bep.write_text(
+                json.dumps({
+                    "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "cachedLocally": False,
+                        "testActionOutput": [
+                            {
+                                "name": "outputs.zip",
+                                "uri": "bytestream://remote-cas/blobs/deadbeef/123",
+                                "pathPrefix": [
+                                    "bazel-out",
+                                    "darwin_arm64-fastbuild",
+                                    "testlogs",
+                                    "pkg",
+                                    "target",
+                                    "test.outputs",
+                                ],
+                            }
+                        ],
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+            command_manifest = root / "flags.json"
+            command_manifest.write_text(
+                json.dumps({
+                    "bazel": "/opt/homebrew/bin/bazel",
+                    "targets": ["//pkg:target"],
+                    "test_flags": [
+                        "--remote_download_regex=.*test\\.outputs.*",
+                        "--test_env=DD_API_KEY=abc123",
+                        "--test_env=DD_AUTHORIZATION=Bearer abc",
+                    ],
+                    "bep_files": [str(bep)],
+                    "artifact_staging_dir": str(root / "tmp" / "bep-artifacts"),
+                    "workspace_root": str(root),
+                    "output_base": str(root / "output-base"),
+                }),
+                encoding="utf-8",
+            )
+            output = root / "support.zip"
+
+            rc = self.mod.main([
+                "--report-dir",
+                str(report_dir),
+                "--bep-json",
+                str(bep),
+                "--command-manifest-json",
+                str(command_manifest),
+                "--workspace-root",
+                str(root),
+                "--output-base",
+                str(root / "output-base"),
+                "--tmp-root",
+                str(root / "tmp"),
+                "--output",
+                str(output),
+            ])
+
+            self.assertEqual(0, rc)
+            with zipfile.ZipFile(output) as zf:
+                names = set(zf.namelist())
+                self.assertIn("diagnostics.json", names)
+                self.assertIn("summary.md", names)
+                self.assertIn("reports/doctor-report.json", names)
+                self.assertIn("bep/1_one.bep.summary.json", names)
+                self.assertIn("command/flags.json", names)
+                self.assertIn("environment/runtime.json", names)
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+                report_text = zf.read("reports/doctor-report.json").decode("utf-8")
+                flags = json.loads(zf.read("command/flags.json").decode("utf-8"))
+                summary = zf.read("summary.md").decode("utf-8")
+                runtime = zf.read("environment/runtime.json").decode("utf-8")
+
+        self.assertEqual(sorted(names), diagnostics["bundle"]["files"])
+        self.assertEqual(
+            "bep_output_remote_only_without_downloader",
+            diagnostics["summary"]["primary_reason_code"],
+        )
+        self.assertEqual("fail", diagnostics["summary"]["status"])
+        self.assertEqual("bep/1_one.bep.summary.json", diagnostics["bep"][0]["path"])
+        self.assertIn("# Datadog Test Optimization Upload Diagnostics", summary)
+        self.assertIn("## Support bundle", summary)
+        self.assertIn("Primary reason: bep_output_remote_only_without_downloader", summary)
+        self.assertNotIn(str(root), report_text)
+        self.assertNotIn("X-Amz-Signature=abc", report_text)
+        self.assertIn("<workspace>", report_text)
+        self.assertNotIn("token=secret", summary)
+        self.assertIn("...<truncated", summary)
+        self.assertNotIn(str(root), summary)
+        self.assertNotIn(str(root), runtime)
+        self.assertEqual("<tmp>/bep-artifacts", flags["artifact_staging_dir"])
+        self.assertEqual(
+            [
+                "--remote_download_regex=.*test\\.outputs.*",
+                "--test_env=DD_API_KEY=<redacted>",
+                "--test_env=DD_AUTHORIZATION=<redacted>",
+            ],
+            flags["test_flags"],
+        )
+        self.assertNotIn("abc123", json.dumps(flags, sort_keys=True))
+        self.assertNotIn("Bearer abc", json.dumps(flags, sort_keys=True))
+
+    def test_create_support_bundle_includes_explicit_report_paths(self) -> None:
+        """Validate explicit reports are included before standard report names."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "reports"
+            report_dir.mkdir()
+            explicit_report = root / "custom-doctor-report.json"
+            explicit_report.write_text(
+                json.dumps({
+                    "tool": "dd-test-optimization-doctor",
+                    "result": {"status": "ok", "reason_code": "ok", "reason": "", "next_steps": []},
+                    "summary": {"payloads": {"tests": 1, "coverage": 0, "telemetry": 0}},
+                }),
+                encoding="utf-8",
+            )
+            second_dir = root / "other"
+            second_dir.mkdir()
+            second_report = second_dir / "custom-doctor-report.json"
+            second_report.write_text(
+                json.dumps({
+                    "tool": "dd-test-optimization-uploader",
+                    "result": {"status": "ok", "reason_code": "ok", "reason": "", "next_steps": []},
+                    "summary": {"payloads": {"tests": 1, "coverage": 0, "telemetry": 0}},
+                }),
+                encoding="utf-8",
+            )
+            output = root / "support.zip"
+
+            rc = self.mod.main([
+                "--report-dir",
+                str(report_dir),
+                "--report-json",
+                str(explicit_report),
+                "--report-json",
+                str(second_report),
+                "--workspace-root",
+                str(root),
+                "--output",
+                str(output),
+            ])
+
+            self.assertEqual(0, rc)
+            with zipfile.ZipFile(output) as zf:
+                names = set(zf.namelist())
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+
+        self.assertIn("reports/custom-doctor-report.json", names)
+        self.assertIn("reports/custom-doctor-report_2.json", names)
+        self.assertEqual(2, diagnostics["summary"]["report_count"])
+        self.assertEqual("dd-test-optimization-doctor", diagnostics["reports"][0]["tool"])
+        self.assertEqual("dd-test-optimization-uploader", diagnostics["reports"][1]["tool"])
+
+    def test_create_support_bundle_keeps_success_status_with_remote_only_warning(self) -> None:
+        """Validate remote-only BEP warnings do not override successful reports."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "reports"
+            report_dir.mkdir()
+            (report_dir / "doctor-report.json").write_text(
+                json.dumps({
+                    "tool": "dd-test-optimization-doctor",
+                    "result": {"status": "ok", "reason_code": "ok", "reason": "", "next_steps": []},
+                    "summary": {"payloads": {"tests": 1, "coverage": 0, "telemetry": 0}},
+                }),
+                encoding="utf-8",
+            )
+            bep = root / "remote.bep.json"
+            bep.write_text(
+                json.dumps({
+                    "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "cachedLocally": False,
+                        "testActionOutput": [
+                            {"name": "outputs.zip", "uri": "bytestream://remote-cas/blobs/deadbeef/123"}
+                        ],
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+            output = root / "support.zip"
+
+            self.mod.main([
+                "--report-dir",
+                str(report_dir),
+                "--bep-json",
+                str(bep),
+                "--workspace-root",
+                str(root),
+                "--output",
+                str(output),
+            ])
+
+            with zipfile.ZipFile(output) as zf:
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+
+        self.assertEqual("ok", diagnostics["summary"]["status"])
+        self.assertEqual(["BEP file 1 contained 1 remote-only uploadable outputs."], diagnostics["summary"]["warnings"])
+
+    def test_create_support_bundle_skips_missing_bep_with_warning(self) -> None:
+        """Validate missing BEP paths are warnings, not fatal errors."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "reports"
+            report_dir.mkdir()
+            (report_dir / "doctor-report.json").write_text(
+                json.dumps({
+                    "tool": "dd-test-optimization-doctor",
+                    "result": {"status": "ok", "reason_code": "ok", "reason": "", "next_steps": []},
+                    "summary": {"payloads": {"tests": 1, "coverage": 0, "telemetry": 0}},
+                }),
+                encoding="utf-8",
+            )
+            missing_bep = root / "missing.bep.json"
+            output = root / "support.zip"
+
+            rc = self.mod.main([
+                "--report-dir",
+                str(report_dir),
+                "--bep-json",
+                str(missing_bep),
+                "--workspace-root",
+                str(root),
+                "--output",
+                str(output),
+            ])
+
+            self.assertEqual(0, rc)
+            with zipfile.ZipFile(output) as zf:
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+
+        self.assertEqual("ok", diagnostics["summary"]["status"])
+        self.assertEqual(0, diagnostics["summary"]["bep_summary_count"])
+        self.assertEqual(
+            ["BEP file 1 was missing or unreadable and was skipped: missing.bep.json"],
+            diagnostics["summary"]["warnings"],
+        )
+
+    def test_create_support_bundle_marks_missing_reports_as_failure(self) -> None:
+        """Validate a bundle with no usable reports is not reported as ok."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "reports"
+            report_dir.mkdir()
+            output = root / "support.zip"
+
+            rc = self.mod.main([
+                "--report-dir",
+                str(report_dir),
+                "--workspace-root",
+                str(root),
+                "--output",
+                str(output),
+            ])
+
+            self.assertEqual(0, rc)
+            with zipfile.ZipFile(output) as zf:
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+
+        self.assertEqual("fail", diagnostics["summary"]["status"])
+        self.assertEqual("missing_reports", diagnostics["summary"]["primary_reason_code"])
+        self.assertEqual(0, diagnostics["summary"]["report_count"])
+        self.assertIn(
+            "No usable doctor or uploader reports were included.",
+            diagnostics["summary"]["warnings"],
+        )
+
+    def test_create_support_bundle_skips_malformed_report_with_warning(self) -> None:
+        """Validate malformed reports are skipped without losing usable reports."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "reports"
+            report_dir.mkdir()
+            (report_dir / "doctor-report.json").write_text("{not-json", encoding="utf-8")
+            (report_dir / "uploader-dry-run-report.json").write_text(
+                json.dumps({
+                    "tool": "dd-test-optimization-uploader",
+                    "result": {"status": "ok", "reason_code": "ok", "reason": "", "next_steps": []},
+                    "summary": {"payloads": {"tests": 1, "coverage": 0, "telemetry": 0}},
+                }),
+                encoding="utf-8",
+            )
+            output = root / "support.zip"
+
+            rc = self.mod.main([
+                "--report-dir",
+                str(report_dir),
+                "--workspace-root",
+                str(root),
+                "--output",
+                str(output),
+            ])
+
+            self.assertEqual(0, rc)
+            with zipfile.ZipFile(output) as zf:
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+                names = set(zf.namelist())
+
+        self.assertEqual("ok", diagnostics["summary"]["status"])
+        self.assertEqual(1, diagnostics["summary"]["report_count"])
+        self.assertIn("reports/uploader-dry-run-report.json", names)
+        self.assertNotIn("reports/doctor-report.json", names)
+        self.assertIn(
+            "Report file doctor-report.json was unreadable or malformed and was skipped (JSONDecodeError)",
+            diagnostics["summary"]["warnings"],
+        )
+
+    def test_summarize_bep_supports_snake_case_and_cached_remote_events(self) -> None:
+        """Validate BEP summary supports snake_case and cached remote events."""
+        summary = self.mod.summarize_bep(
+            _runfile("tools/tests/python/fixtures/bep_snake_case_remote_cached.ndjson")
+        )
+
+        self.assertEqual(2, summary["test_result_events"])
+        self.assertEqual(["//pkg:remote_only", "//pkg:target"], summary["labels"])
+        self.assertEqual(2, summary["labels_total"])
+        self.assertFalse(summary["labels_truncated"])
+        self.assertEqual(2, summary["uploadable_outputs"])
+        self.assertEqual(1, summary["cached_outputs"])
+        self.assertEqual(1, summary["remote_only_outputs"])
+        self.assertEqual({"test.outputs": 2}, summary["outputs_by_name"])
+
+    def test_summarize_bep_maps_log_xml_outputs_to_test_outputs(self) -> None:
+        """Validate log and XML BEP outputs authorize sibling test.outputs."""
+        summary = self.mod.summarize_bep(
+            _runfile("tools/tests/python/fixtures/bep_captured_bazelw_wrapper_fresh.ndjson")
+        )
+
+        self.assertEqual(1, summary["test_result_events"])
+        self.assertEqual(["//tools/tests/python:bazelw_wrapper_test"], summary["labels"])
+        self.assertEqual(2, summary["uploadable_outputs"])
+        self.assertEqual(0, summary["cached_outputs"])
+        self.assertEqual(0, summary["remote_only_outputs"])
+        self.assertEqual({"test.outputs": 2}, summary["outputs_by_name"])
+
+    def test_summarize_bep_counts_http_and_opaque_remote_artifacts(self) -> None:
+        """Validate HTTP and opaque CAS artifacts count as remote-only outputs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep = root / "remote-artifacts.bep.json"
+            events = [
+                {
+                    "id": {"testResult": {"label": "//pkg:http", "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "testActionOutput": [
+                            {
+                                "name": "outputs.zip",
+                                "uri": "https://user:pass@example.test/outputs.zip?sig=secret#fragment",
+                                "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "http", "test.outputs"],
+                            }
+                        ]
+                    },
+                },
+                {
+                    "id": {"test_result": {"label": "//pkg:cas", "run": 1, "shard": 1, "attempt": 1}},
+                    "test_result": {
+                        "test_action_output": [
+                            {"name": "outputs.zip", "uri": "blobs/deadbeef/123"}
+                        ]
+                    },
+                },
+            ]
+            bep.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+            summary = self.mod.summarize_bep(bep)
+
+        self.assertEqual(2, summary["test_result_events"])
+        self.assertEqual(["//pkg:cas", "//pkg:http"], summary["labels"])
+        self.assertEqual(2, summary["uploadable_outputs"])
+        self.assertEqual(0, summary["cached_outputs"])
+        self.assertEqual(2, summary["remote_only_outputs"])
+        self.assertEqual({"outputs.zip": 2}, summary["outputs_by_name"])
+
+    def test_redact_json_scrubs_secret_like_keys(self) -> None:
+        """Validate support bundle redaction scrubs secrets, URLs, and local paths."""
+        data = {
+            "DD_API_KEY": "abc",
+            "safe": "value",
+            "nested": {"token": "secret", "path": "/work/repo/file.txt"},
+            "url": "https://user:pass@example.test/outputs.zip?sig=secret#fragment",
+            "message": "remote bytestream://remote-cas/blobs/deadbeef/123?token=secret",
+            "flags": [
+                "--test_env=DD_API_KEY=abc",
+                "--repo_env=TOKEN=secret",
+                "--test_env=DD_AUTHORIZATION=Bearer abc",
+                "SAFE=value",
+            ],
+        }
+        redacted = self.mod.redact_json(
+            data,
+            workspace_root=Path("/work/repo"),
+            output_base=None,
+            tmp_root=None,
+        )
+        self.assertEqual("<redacted>", redacted["DD_API_KEY"])
+        self.assertEqual("<redacted>", redacted["nested"]["token"])
+        self.assertEqual("<workspace>/file.txt", redacted["nested"]["path"])
+        self.assertEqual("https://example.test/outputs.zip", redacted["url"])
+        self.assertIn("token=<redacted>", redacted["message"])
+        self.assertEqual(
+            [
+                "--test_env=DD_API_KEY=<redacted>",
+                "--repo_env=TOKEN=<redacted>",
+                "--test_env=DD_AUTHORIZATION=<redacted>",
+                "SAFE=value",
+            ],
+            redacted["flags"],
+        )
+        self.assertEqual("value", redacted["safe"])
+        rendered = json.dumps(redacted, sort_keys=True)
+        for sensitive in ("abc", "secret", "user", "pass", "fragment"):
+            self.assertNotIn(sensitive, rendered)
+
+    def test_bound_json_truncates_large_lists_and_strings(self) -> None:
+        """Validate bounded JSON truncates oversized lists and strings."""
+        bounded = self.mod.bound_json({
+            "items": list(range(105)),
+            "message": "x" * 20005,
+        })
+
+        self.assertEqual(101, len(bounded["items"]))
+        self.assertEqual(
+            {"truncated": True, "total_items": 105, "omitted_items": 5},
+            bounded["items"][-1],
+        )
+        self.assertTrue(bounded["message"].endswith("...<truncated 5 chars>"))
 
 
 class TestOptimizationDoctorTests(unittest.TestCase):
@@ -969,6 +1755,17 @@ $rows | ConvertTo-Json -Compress
         self.assertEqual("/tmp/fetcher", args.bep_artifact_downloader)
         self.assertEqual(1.5, args.bep_artifact_downloader_timeout_sec)
 
+    def test_parse_args_accepts_support_bundle_flag(self) -> None:
+        """Validate doctor accepts a first-class support bundle output path."""
+        args = self.mod._parse_args([
+            "--config",
+            "doctor.config.json",
+            "--support-bundle",
+            ".topt/reports/dd-test-optimization-support.zip",
+        ])
+
+        self.assertEqual(".topt/reports/dd-test-optimization-support.zip", args.support_bundle)
+
     def test_doctor_report_json_success_includes_payload_diagnostics(self) -> None:
         """Validate doctor writes a machine-readable report for successful local validation."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1014,6 +1811,45 @@ $rows | ConvertTo-Json -Compress
         self.assertEqual(1, output_report["metadata"]["count"])
         self.assertEqual("module", output_report["metadata"]["payload_selection"])
 
+    def test_doctor_support_bundle_success_includes_doctor_report_without_report_json(self) -> None:
+        """Validate doctor-only support bundle creation does not require a report-json path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = self._write_doctor_output(root, "module", "//pkg:target")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            bundle_path = root / "dd-test-optimization-support.zip"
+
+            with mock.patch.dict(
+                os.environ,
+                {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)},
+            ):
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--support-bundle",
+                    str(bundle_path),
+                ])
+
+            with zipfile.ZipFile(bundle_path) as zf:
+                names = set(zf.namelist())
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+                doctor_report = json.loads(zf.read("reports/doctor-report.json").decode("utf-8"))
+                command = json.loads(zf.read("command/flags.json").decode("utf-8"))
+
+        self.assertEqual(0, rc)
+        self.assertIn("summary.md", names)
+        self.assertIn("environment/runtime.json", names)
+        self.assertEqual("ok", diagnostics["summary"]["status"])
+        self.assertEqual("ok", diagnostics["summary"]["primary_reason_code"])
+        self.assertEqual(1, diagnostics["summary"]["report_count"])
+        self.assertEqual("dd-test-optimization-doctor", doctor_report["tool"])
+        self.assertEqual("ok", doctor_report["result"]["status"])
+        self.assertEqual("<workspace>/pkg/target/test.outputs", doctor_report["outputs"][0]["path"])
+        self.assertNotIn(str(root), json.dumps(doctor_report, sort_keys=True))
+        self.assertEqual("doctor", command["source"])
+        self.assertEqual("doctor_only_no_uploader", command["upload_mode"])
+        self.assertEqual(["//pkg:target"], command["targets"])
+
     def test_doctor_report_json_failure_includes_error_and_partial_outputs(self) -> None:
         """Validate doctor writes partial diagnostics before raising controlled failures."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1048,6 +1884,39 @@ $rows | ConvertTo-Json -Compress
         self.assertEqual(1, len(report["outputs"]))
         self.assertEqual(str(output.resolve()), report["outputs"][0]["path"])
         self.assertEqual(0, report["outputs"][0]["payloads"]["json"])
+
+    def test_doctor_support_bundle_failure_preserves_exit_and_writes_bundle(self) -> None:
+        """Validate support bundle creation does not mask doctor validation failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = self._write_doctor_output(root, "module", "//pkg:target")
+            shutil.rmtree(output / "payloads")
+            config_path = self._write_doctor_config(root, ["//pkg:target"])
+            bundle_path = root / "dd-test-optimization-support.zip"
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root), "BUILD_WORKSPACE_DIRECTORY": str(root)}),
+                mock.patch("sys.stderr", stderr),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    self.mod.main([
+                        "--config",
+                        str(config_path),
+                        "--support-bundle",
+                        str(bundle_path),
+                    ])
+
+            with zipfile.ZipFile(bundle_path) as zf:
+                diagnostics = json.loads(zf.read("diagnostics.json").decode("utf-8"))
+                doctor_report = json.loads(zf.read("reports/doctor-report.json").decode("utf-8"))
+
+        self.assertEqual(1, raised.exception.code)
+        self.assertIn("missing JSON payloads", stderr.getvalue())
+        self.assertEqual("fail", diagnostics["summary"]["status"])
+        self.assertEqual("no_payload_json_found", diagnostics["summary"]["primary_reason_code"])
+        self.assertEqual("fail", doctor_report["result"]["status"])
+        self.assertEqual("no_payload_json_found", doctor_report["result"]["reason_code"])
 
     def test_doctor_report_json_classifies_cached_bep_outputs(self) -> None:
         """Validate doctor reports cached BEP outputs as the primary no-upload reason."""
@@ -4265,6 +5134,17 @@ class TestOptimizationDoctorLauncherTests(unittest.TestCase):
         self.assertIn('Join-Path $runfilesDir "MANIFEST"', doctor_rule)
         self.assertNotIn("RUNFILES_MANIFEST_FILE -and (Test-Path", doctor_rule)
         self.assertNotIn("% ps_file.path,\n    )\n\n    is_windows", doctor_rule)
+
+    def test_launchers_expose_support_bundle_collector_runfiles(self) -> None:
+        """Validate doctor launchers make the bundled collector available to the runtime."""
+        doctor_rule = _runfile("tools/core/test_optimization_doctor.bzl").read_text(encoding="utf-8")
+
+        self.assertIn("_support_bundle_collector", doctor_rule)
+        self.assertIn("_support_bundle_renderer", doctor_rule)
+        self.assertIn("create_support_bundle.py", doctor_rule)
+        self.assertIn("render_report_summary.py", doctor_rule)
+        self.assertIn("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR", doctor_rule)
+        self.assertIn("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER", doctor_rule)
 
 
 class TestOptimizationDoctorRuntimeTests(unittest.TestCase):

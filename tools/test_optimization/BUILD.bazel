@@ -6,11 +6,16 @@
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["render_report_summary.py"])
+exports_files([
+    "create_support_bundle.py",
+    "render_report_summary.py",
+])
 
 filegroup(
     name = "ci_wrappers",
     srcs = [
+        "create_support_bundle.py",
+        "render_report_summary.py",
         "run_test_optimization_ci.ps1",
         "run_test_optimization_ci.sh",
     ],

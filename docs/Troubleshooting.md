@@ -25,7 +25,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Doctor reports missing Git or Bazel metadata | sync metadata context or sidecar metadata is absent | Doctor failures |
 | Uploaded tests miss Git or Bazel tags | run uploader dry-run enrichment validation | Uploader enrichment dry-run |
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
-| CI failure requires log archaeology | archive doctor and uploader JSON reports from the failing run | Collect diagnostic reports |
+| CI failure requires log archaeology | archive the support bundle from the failing run | Collect diagnostic reports |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
 | Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
 | Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
@@ -36,33 +36,100 @@ If Bazel reports that sync requires WORKSPACE support, add
 
 ## Collect diagnostic reports
 
-When a CI failure is hard to classify from logs alone, archive the doctor and
-uploader JSON reports from the same run. They are designed to summarize the
-decision state that otherwise requires reading long logs: expected targets,
-BEP freshness, artifact staging, discovered payload directories, payload
-counts, upload candidates, skip/failure counts, status, and exit code.
-
-Wrapper flow:
+When a failure is hard to classify from logs alone, archive a support bundle
+from the same run. For the simplest customer ask after tests have already run,
+use the doctor directly:
 
 ```bash
+bazel run //:dd_test_optimization_doctor -- \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip
+```
+
+For BEP/BwoB CI investigations, include the same BEP and artifact flags used by
+the failing job:
+
+```bash
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --support-bundle=.topt/reports/dd-test-optimization-support.zip
+```
+
+The doctor bundle is doctor-only: it captures expected targets, BEP freshness,
+artifact staging, discovered payload directories, payload counts, status, exit
+code, effective doctor flags, runtime metadata, and selected BEP summaries. It
+does not prove uploader dry-run, enrichment, API-key, or upload behavior.
+
+Use this escalation ladder:
+
+| Situation | Ask for | Why |
+| --- | --- | --- |
+| First customer response after tests already ran | Doctor `--support-bundle=<path>` | Smallest command; built into the doctor target; no helper scripts required |
+| CI failure where upload, enrichment, or dry-run behavior matters | Wrapper `--report-dir=<path> --support-bundle=<path>` | Includes doctor, uploader dry-run, optional upload report, BEP summaries, and effective wrapper flags |
+| Repository cannot run the wrapper or doctor bundle | Raw `--report-json` files plus manual `create_support_bundle.py` output | Fallback only; raw reports may include internal paths until the redacted zip is created |
+
+Ask the customer to attach the zip, not screenshots of terminal output. If the
+bundle is not available, ask for the individual JSON reports and the exact
+`bazel test`, doctor, and uploader commands.
+
+Use the wrapper flow when the CI job should also validate uploader dry-run or
+perform the real upload:
+
+```bash
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 tools/test_optimization/run_test_optimization_ci.sh \
   --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 ```
 
 ```powershell
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
   -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 ```
 
 The wrapper writes `doctor-report.json` and `uploader-dry-run-report.json`
 under the report directory. If the same wrapper run includes the real upload,
 it also writes `uploader-upload-report.json`, preserving the dry-run report.
+When `--support-bundle` or `-SupportBundle` is configured, it also writes
+`dd-test-optimization-support.zip`.
 Each report has a `result.reason_code`, human-readable `result.reason`, and
 `result.next_steps` so support can distinguish cached tests, remote-only BEP
 artifacts, missing payloads, enrichment failures, dry-run no-upload, and real
 upload failures without reading the full log.
+
+When opening a support ticket, attach
+`.topt/reports/dd-test-optimization-support.zip`. The bundle is redacted by
+default and does not contain raw payload files, raw CI logs, raw environment
+variables, or the raw BEP. Depending on whether the doctor or wrapper created
+it, it contains bounded doctor-only or doctor/uploader reports, selected BEP
+summaries, `command/flags.json`, `environment/runtime.json`, `summary.md`, and
+`diagnostics.json`.
+
+Triage the bundle in this order:
+
+1. Open `summary.md` for the human-readable failure classification.
+2. Check `diagnostics.json` for `summary.status`,
+   `summary.primary_reason_code`, payload counts, and included report paths.
+3. Check `reports/doctor-report.json` for expected targets, seen targets,
+   fresh/cached/remote-only BEP outputs, artifact staging, and doctor errors.
+4. If the wrapper created the bundle, check `reports/uploader-dry-run-report.json`
+   for payload discovery, enrichment validation, skipped payloads, and
+   no-upload reasons.
+5. If upload was enabled, check `reports/uploader-upload-report.json` for the
+   real upload attempt count, HTTP status, and terminal upload failure.
+6. Check `command/flags.json` to confirm the test run used a unique BEP file
+   and that doctor/uploader ran with the matching `--bep-json`,
+   `--freshness-source=bep`, `--freshness-mode=required`,
+   `--artifact-source=bep`, and artifact staging flags.
 
 Manual doctor/uploader flow:
 
@@ -86,8 +153,23 @@ bazel run --config=test-optimization //:dd_upload_payloads -- \
   --report-json=.topt/uploader-report.json
 ```
 
-Archive the JSON files as CI artifacts. Optionally render a short Markdown
-summary:
+Archive the JSON files as CI artifacts when a repository cannot use the wrapper
+support bundle. If the repository has the helper script available, create the
+same redacted zip from existing reports:
+
+```bash
+python3 tools/test_optimization/create_support_bundle.py \
+  --report-dir .topt/reports \
+  --report-json .topt/reports/doctor-report.json \
+  --report-json .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/dd-test-optimization-support.zip \
+  --workspace-root "$PWD" \
+  --output-base "$(bazel info output_base)"
+```
+
+Use repeatable `--bep-json=<path>` flags with that command when the reports came
+from BEP/BwoB runs. If only a Markdown summary is possible, render a short
+fallback summary:
 
 ```bash
 python3 tools/test_optimization/render_report_summary.py \
@@ -96,9 +178,11 @@ python3 tools/test_optimization/render_report_summary.py \
   --output .topt/reports/upload-diagnostics.md
 ```
 
-Before sharing reports outside the trusted project boundary, review them for
-repository paths, target names, and service metadata. They must not contain API
-keys, but they can contain internal labels and filesystem paths.
+Before sharing raw reports outside the trusted project boundary, review them
+for repository paths, target names, and service metadata. They must not contain
+API keys, but they can contain internal labels and filesystem paths. Prefer a
+support bundle for external escalation because it redacts and bounds those
+values automatically.
 
 ## Repository rule not fetching data
 

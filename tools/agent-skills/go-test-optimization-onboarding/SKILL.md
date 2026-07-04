@@ -44,8 +44,14 @@ Keep the RFC contract intact:
 - Run pilot tests with a fresh `--build_event_json_file` path per Bazel test
   invocation; pass the same paths to doctor/uploader with `--bep-json`.
 - In CI, keep a per-job diagnostic report directory with
-  `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir` so doctor,
-  dry-run uploader, and real upload reports are archived separately.
+  `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir`, and configure
+  wrapper `--support-bundle` or `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` for
+  complete escalation artifacts. For first-pass customer troubleshooting after
+  tests have run, ask for `bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>`
+  with any matching BEP/artifact flags.
+  For bundle triage, inspect `summary.md`, `diagnostics.json`,
+  `reports/doctor-report.json`, optional uploader reports, and
+  `command/flags.json` in that order.
 
 ## First Actions
 
@@ -105,8 +111,12 @@ Every successful Go onboarding should end with these pieces:
   flags and required BEP freshness/artifact flags. Use
   `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
   manual flows where one BEP file is sufficient.
-- CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`, and
-  optional `uploader-upload-report.json` under a per-job report directory.
+- CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`,
+  optional `uploader-upload-report.json`, and, when configured,
+  `dd-test-optimization-support.zip` under a per-job report directory.
+  Prefer the wrapper support bundle for full CI escalation; use the doctor-only
+  support bundle for the simplest initial customer request. Keep individual
+  reports for local inspection and manual fallback flows.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a

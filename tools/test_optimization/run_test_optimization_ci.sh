@@ -14,10 +14,13 @@ UPLOAD_TARGET="${DD_TEST_OPTIMIZATION_UPLOAD_TARGET:-//:dd_upload_payloads}"
 DOCTOR_REPORT_JSON="${DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON:-}"
 UPLOADER_REPORT_JSON="${DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON:-}"
 REPORT_DIR="${DD_TEST_OPTIMIZATION_REPORT_DIR:-}"
+SUPPORT_BUNDLE="${DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE:-}"
+SUPPORT_BUNDLE_COLLECTOR="${DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR:-}"
 DO_UPLOAD=0
 KEEP_TMP="${DD_TEST_OPTIMIZATION_KEEP_TMP:-0}"
 TARGETS=()
 TEST_ARGS=()
+UPLOAD_REPORT_JSON=""
 
 usage() {
   cat <<'EOF'
@@ -36,6 +39,9 @@ Options:
                            Write the dry-run uploader machine-readable report to PATH.
   --report-dir PATH        Write doctor/uploader reports under PATH.
   --upload-target LABEL    Uploader target. Defaults to //:dd_upload_payloads.
+  --support-bundle PATH    Write a redacted support diagnostics zip to PATH.
+  --support-bundle-collector PATH
+                           Collector script path. Defaults to create_support_bundle.py beside this wrapper.
   --test-flag FLAG         Extra flag passed to every bazel test invocation.
   --upload                 Run the real upload after dry-run enrichment validation.
   --no-upload              Skip the real upload. This is the default.
@@ -104,6 +110,22 @@ while (($#)); do
       UPLOAD_TARGET="${1#--upload-target=}"
       shift
       ;;
+    --support-bundle)
+      SUPPORT_BUNDLE="${2:?--support-bundle requires a value}"
+      shift 2
+      ;;
+    --support-bundle=*)
+      SUPPORT_BUNDLE="${1#--support-bundle=}"
+      shift
+      ;;
+    --support-bundle-collector)
+      SUPPORT_BUNDLE_COLLECTOR="${2:?--support-bundle-collector requires a value}"
+      shift 2
+      ;;
+    --support-bundle-collector=*)
+      SUPPORT_BUNDLE_COLLECTOR="${1#--support-bundle-collector=}"
+      shift
+      ;;
     --test-flag)
       TEST_ARGS+=("${2:?--test-flag requires a value}")
       shift 2
@@ -155,6 +177,9 @@ tmp_root="$(mktemp -d "${tmp_parent%/}/dd-topt.XXXXXX")"
 bep_dir="$tmp_root/bep"
 artifact_staging_dir="$tmp_root/bep-artifacts"
 mkdir -p "$bep_dir" "$artifact_staging_dir"
+if [[ -n "$SUPPORT_BUNDLE" && -z "$REPORT_DIR" ]]; then
+  REPORT_DIR="$tmp_root/reports"
+fi
 if [[ -n "$REPORT_DIR" ]]; then
   mkdir -p "$REPORT_DIR"
   if [[ -z "$DOCTOR_REPORT_JSON" ]]; then
@@ -163,9 +188,12 @@ if [[ -n "$REPORT_DIR" ]]; then
   if [[ -z "$UPLOADER_REPORT_JSON" ]]; then
     UPLOADER_REPORT_JSON="$REPORT_DIR/uploader-dry-run-report.json"
   fi
+  UPLOAD_REPORT_JSON="$REPORT_DIR/uploader-upload-report.json"
 fi
+command_manifest_json="$tmp_root/support-command-manifest.json"
 
 cleanup() {
+  create_support_bundle
   if [[ "$KEEP_TMP" == "1" ]]; then
     echo "keeping Test Optimization temporary files: $tmp_root" >&2
     return
@@ -186,6 +214,135 @@ sanitize_target() {
 run_bazel() {
   echo "+ $BAZEL $*" >&2
   "$BAZEL" "$@"
+}
+
+resolve_python() {
+  local candidate
+  for candidate in "${DD_TEST_OPTIMIZATION_PYTHON:-}" "${PYTHON:-}" python3 python; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -f "$candidate" || -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_output_base() {
+  "$BAZEL" info output_base 2>/dev/null || true
+}
+
+resolve_support_bundle_collector() {
+  if [[ -n "$SUPPORT_BUNDLE_COLLECTOR" ]]; then
+    printf '%s\n' "$SUPPORT_BUNDLE_COLLECTOR"
+    return 0
+  fi
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  printf '%s\n' "$script_dir/create_support_bundle.py"
+}
+
+write_command_manifest() {
+  local python="${1:?python required}"
+  local bep_files=()
+  local bep_arg
+  for bep_arg in "${bep_args[@]}"; do
+    bep_files+=("${bep_arg#--bep-json=}")
+  done
+  "$python" - "$command_manifest_json" "$BAZEL" "$BAZEL_CONFIG" "$DOCTOR_TARGET" "$UPLOAD_TARGET" "$artifact_staging_dir" "$REPORT_DIR" "$DOCTOR_REPORT_JSON" "$UPLOADER_REPORT_JSON" "$UPLOAD_REPORT_JSON" "$DO_UPLOAD" "${#TEST_ARGS[@]}" "${TEST_ARGS[@]}" "${#bep_files[@]}" "${bep_files[@]}" "${TARGETS[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    output,
+    bazel,
+    bazel_config,
+    doctor_target,
+    upload_target,
+    artifact_staging_dir,
+    report_dir,
+    doctor_report_json,
+    uploader_report_json,
+    upload_report_json,
+    do_upload,
+    test_arg_count,
+    *rest,
+) = sys.argv[1:]
+test_arg_count = int(test_arg_count)
+test_args = rest[:test_arg_count]
+rest = rest[test_arg_count:]
+bep_file_count = int(rest[0])
+bep_files = rest[1:1 + bep_file_count]
+targets = rest[1 + bep_file_count:]
+
+Path(output).write_text(json.dumps({
+    "bazel": bazel,
+    "config": bazel_config,
+    "doctor_target": doctor_target,
+    "upload_target": upload_target,
+    "artifact_staging_dir": artifact_staging_dir,
+    "report_dir": report_dir,
+    "doctor_report_json": doctor_report_json,
+    "uploader_report_json": uploader_report_json,
+    "upload_report_json": upload_report_json,
+    "upload_enabled": do_upload == "1",
+    "bep_files": bep_files,
+    "test_flags": test_args,
+    "runtime_flags": [
+        "--freshness-source=bep",
+        "--freshness-mode=required",
+        "--artifact-source=bep",
+        "--artifact-staging-dir=" + artifact_staging_dir,
+    ],
+    "targets": targets,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+create_support_bundle() {
+  if [[ -z "$SUPPORT_BUNDLE" ]]; then
+    return 0
+  fi
+  local collector output_base python
+  collector="$(resolve_support_bundle_collector)"
+  if [[ ! -f "$collector" ]]; then
+    echo "warning: support bundle collector not found: $collector" >&2
+    return 0
+  fi
+  if ! python="$(resolve_python)"; then
+    echo "warning: Python interpreter not found; skipping Test Optimization support bundle: $SUPPORT_BUNDLE" >&2
+    return 0
+  fi
+  write_command_manifest "$python" || echo "warning: failed to write support bundle command manifest" >&2
+  output_base="$(resolve_output_base)"
+  local args=(
+    "$collector"
+    "--report-dir=$REPORT_DIR"
+    "--output=$SUPPORT_BUNDLE"
+    "--command-manifest-json=$command_manifest_json"
+    "--workspace-root=$(pwd)"
+    "--tmp-root=$tmp_root"
+    "--bazel=$BAZEL"
+  )
+  if [[ -n "$output_base" ]]; then
+    args+=("--output-base=$output_base")
+  fi
+  for report_path in "$DOCTOR_REPORT_JSON" "$UPLOADER_REPORT_JSON" "$UPLOAD_REPORT_JSON"; do
+    if [[ -n "$report_path" ]]; then
+      args+=("--report-json=$report_path")
+    fi
+  done
+  for bep_arg in "${bep_args[@]}"; do
+    args+=("--bep-json=${bep_arg#--bep-json=}")
+  done
+  if ! "$python" "${args[@]}"; then
+    echo "warning: failed to create Test Optimization support bundle: $SUPPORT_BUNDLE" >&2
+  fi
 }
 
 bep_args=()
@@ -256,8 +413,8 @@ fi
 
 if [[ "$doctor_status" -eq 0 && "$dry_run_status" -eq 0 && "$DO_UPLOAD" -eq 1 ]]; then
   upload_runtime_args=("${runtime_args[@]}")
-  if [[ -n "$REPORT_DIR" ]]; then
-    upload_runtime_args+=("--report-json=$REPORT_DIR/uploader-upload-report.json")
+  if [[ -n "$UPLOAD_REPORT_JSON" ]]; then
+    upload_runtime_args+=("--report-json=$UPLOAD_REPORT_JSON")
   fi
   if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${upload_runtime_args[@]}"; then
     :

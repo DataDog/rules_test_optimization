@@ -80,10 +80,13 @@ test, doctor, or uploader commands.
 Shared upload command:
 
 ```bash
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 tools/test_optimization/run_test_optimization_ci.sh \
   --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
@@ -92,6 +95,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
     --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
     --upload-target //tools/test_optimization:dd_upload_payloads \
     --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
     --upload \
     //...
 ```
@@ -366,7 +370,10 @@ Validate in this order:
 4. Pass every batch file to doctor/uploader with repeatable
    `--bep-json=<temp-batch-bep-json>` plus
    `--freshness-source=bep --freshness-mode=required --artifact-source=bep`;
-   the checked-in CI wrappers do this automatically.
+   the checked-in CI wrappers do this automatically and also write a complete
+   redacted support bundle when `--support-bundle` is configured. For an initial
+   support request, the doctor itself can write a doctor-only bundle with
+   `--support-bundle=<path>`.
 5. Run
    `bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment`.
 6. Run the real uploader with `DD_API_KEY` and `DD_SITE` in the command
@@ -384,7 +391,11 @@ bytestream/CAS/custom-auth artifacts need a configured downloader.
 `--artifact-source=bep` makes local `outputs.zip` carriers extract through BEP
 artifact staging. Use a unique BEP file per Bazel test invocation; the
 checked-in CI wrappers create those paths under a temporary directory instead
-of reusing or deleting a shared workspace file.
+of reusing or deleting a shared workspace file. When support-bundle output is
+configured, the wrappers package those BEP summaries, doctor/uploader reports,
+effective wrapper flags, runtime metadata, and `summary.md` into one redacted
+zip for escalation. Doctor-only bundles are simpler to request from a customer,
+but they do not include uploader dry-run or upload results.
 
 If the doctor reports missing Git metadata, missing Bazel metadata,
 `full_bundle_no_match`, or msgpack payloads, fix the sync, wrapper, tracer, or

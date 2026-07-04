@@ -90,6 +90,21 @@ cat "$(bazel info output_base)/external/test_optimization_data_<service_key>/exp
 
 ## Test, Doctor, Dry-Run, Upload
 
+For the simplest customer troubleshooting request after tests have run, use
+`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` with any
+matching BEP/artifact flags. Prefer the CI wrapper when the repository can
+vendor the helper directory and you need uploader dry-run or upload coverage:
+
+```bash
+# Vendor the full tools/test_optimization/ helper directory when using the
+# wrapper support bundle option. If CI only installs the wrapper script, set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //path/to:pilot_test
+```
+
 Use this command shape and preserve test failure priority:
 
 ```bash
@@ -206,15 +221,23 @@ uploader cannot see payload files. Use a unique `--build_event_json_file` for
 each Bazel test invocation and pass the matching paths to doctor/uploader with
 repeatable `--bep-json` flags.
 
-When debugging CI rollout failures, prefer a wrapper `--report-dir` or
-`DD_TEST_OPTIMIZATION_REPORT_DIR` so CI archives `doctor-report.json`,
-`uploader-dry-run-report.json`, and optional `uploader-upload-report.json`
-separately. Manual flows can pass `--report-json=<path>` to doctor/uploader.
+When debugging CI rollout failures, prefer doctor `--support-bundle` for the
+first support artifact. Use wrapper `--report-dir` plus `--support-bundle`, or
+set `DD_TEST_OPTIMIZATION_REPORT_DIR` and `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE`,
+when CI should archive
+`doctor-report.json`, `uploader-dry-run-report.json`, optional
+`uploader-upload-report.json`, and `dd-test-optimization-support.zip`.
+Manual flows can pass `--report-json=<path>` to doctor/uploader.
 Reports include `result.reason_code`, `result.next_steps`, expected targets,
 BEP freshness, artifact staging, payload discovery, payload processing,
 upload-attempt status, aggregate failures, and exit code. Use
-`tools/test_optimization/render_report_summary.py` to turn the JSON reports
-into a concise Markdown summary.
+`tools/test_optimization/create_support_bundle.py` manually if the wrapper and
+doctor bundle entrypoints are unavailable but the helper script is present.
+Use `tools/test_optimization/render_report_summary.py` only as a Markdown
+fallback.
+When a support bundle is present, inspect `summary.md`, `diagnostics.json`,
+`reports/doctor-report.json`, optional uploader reports, and
+`command/flags.json` in that order before drawing conclusions.
 
 Artifact mode choices:
 

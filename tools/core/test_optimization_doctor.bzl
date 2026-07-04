@@ -168,9 +168,27 @@ CONFIG_PATH="$(resolve_runfile "%s" "%s")" || {
   echo "[dd-test-optimization-doctor] could not resolve doctor config from runfiles" >&2
   exit 2
 }
+SUPPORT_BUNDLE_COLLECTOR_PATH="$(resolve_runfile "%s" "%s")" || SUPPORT_BUNDLE_COLLECTOR_PATH=""
+SUPPORT_BUNDLE_RENDERER_PATH="$(resolve_runfile "%s" "%s")" || SUPPORT_BUNDLE_RENDERER_PATH=""
+if [[ -n "$SUPPORT_BUNDLE_COLLECTOR_PATH" && -z "${DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR:-}" ]]; then
+  export DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR="$SUPPORT_BUNDLE_COLLECTOR_PATH"
+fi
+if [[ -n "$SUPPORT_BUNDLE_RENDERER_PATH" && -z "${DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER:-}" ]]; then
+  export DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER="$SUPPORT_BUNDLE_RENDERER_PATH"
+fi
 export DD_TEST_OPTIMIZATION_DOCTOR_RUNFILES_WORKSPACE="$RUNFILES_WORKSPACE"
 exec "$PYTHON_BIN" "$RUNTIME_PATH" --config "$CONFIG_PATH" "$@"
-""" % (ctx.workspace_name, ctx.file._runtime.path, ctx.file._runtime.short_path, config_file.path, config_file.short_path),
+""" % (
+            ctx.workspace_name,
+            ctx.file._runtime.path,
+            ctx.file._runtime.short_path,
+            config_file.path,
+            config_file.short_path,
+            ctx.file._support_bundle_collector.path,
+            ctx.file._support_bundle_collector.short_path,
+            ctx.file._support_bundle_renderer.path,
+            ctx.file._support_bundle_renderer.short_path,
+        ),
     )
 
     ps_file = ctx.actions.declare_file(ctx.label.name + ".ps1")
@@ -318,6 +336,14 @@ if (-not $ConfigPath) {
   Write-Error "[dd-test-optimization-doctor] could not resolve doctor config from runfiles"
   exit 2
 }
+$SupportBundleCollectorPath = Resolve-Runfile @("%s", "%s")
+$SupportBundleRendererPath = Resolve-Runfile @("%s", "%s")
+if ($SupportBundleCollectorPath -and -not $env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR) {
+  $env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR = $SupportBundleCollectorPath
+}
+if ($SupportBundleRendererPath -and -not $env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER) {
+  $env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER = $SupportBundleRendererPath
+}
 $env:DD_TEST_OPTIMIZATION_DOCTOR_RUNFILES_WORKSPACE = $RunfilesWorkspace
 & $PythonBin $RuntimePath --config $ConfigPath @args
 exit $LASTEXITCODE
@@ -327,6 +353,10 @@ exit $LASTEXITCODE
             ctx.file._runtime.short_path.replace("\\", "\\\\"),
             config_file.path.replace("\\", "\\\\"),
             config_file.short_path.replace("\\", "\\\\"),
+            ctx.file._support_bundle_collector.path.replace("\\", "\\\\"),
+            ctx.file._support_bundle_collector.short_path.replace("\\", "\\\\"),
+            ctx.file._support_bundle_renderer.path.replace("\\", "\\\\"),
+            ctx.file._support_bundle_renderer.short_path.replace("\\", "\\\\"),
         ),
     )
 
@@ -344,7 +374,17 @@ exit /b %%ERRORLEVEL%%
 
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     executable = bat_file if is_windows else bash_file
-    runfiles = ctx.runfiles(files = [ctx.file._runtime, context_manifest, config_file, ps_file, bat_file] + ctx.files.data)
+    runfiles = ctx.runfiles(
+        files = [
+            ctx.file._runtime,
+            ctx.file._support_bundle_collector,
+            ctx.file._support_bundle_renderer,
+            context_manifest,
+            config_file,
+            ps_file,
+            bat_file,
+        ] + ctx.files.data,
+    )
     return [DefaultInfo(executable = executable, runfiles = runfiles)]
 
 dd_test_optimization_doctor = rule(
@@ -362,6 +402,8 @@ dd_test_optimization_doctor = rule(
         "allowed_payload_selections": attr.string_list(default = [], doc = "Optional explicit allowlist for bazel.go.payload_selection values."),
         "expected_payload_selection_by_target": attr.string_dict(default = {}, doc = "Optional map of local target labels to their expected bazel.go.payload_selection value."),
         "_runtime": attr.label(default = "//tools/core:test_optimization_doctor.py", allow_single_file = True),
+        "_support_bundle_collector": attr.label(default = "//tools/test_optimization:create_support_bundle.py", allow_single_file = True),
+        "_support_bundle_renderer": attr.label(default = "//tools/test_optimization:render_report_summary.py", allow_single_file = True),
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
     doc = "Validate local Test Optimization payloads and metadata before running the uploader.",

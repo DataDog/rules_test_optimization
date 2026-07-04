@@ -420,26 +420,85 @@ deliberately want fresh backend metadata.
 Run Go onboarding commands with this config:
 
 ```bash
-tools/test_optimization/run_test_optimization_ci.sh //...
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //...
 
 # Add --upload only when the real upload should run after doctor and dry-run pass.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  tools/test_optimization/run_test_optimization_ci.sh --upload //...
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
+    --upload \
+    //...
 ```
 
-During rollout debugging, prefer `--report-dir <path>` on the CI wrapper or set
-`DD_TEST_OPTIMIZATION_REPORT_DIR`. The wrapper writes separate
+```powershell
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  //...
+
+# Add -Upload only when the real upload should run after doctor and dry-run pass.
+$env:DD_API_KEY = "<your-api-key>"
+$env:DD_SITE = "datadoghq.com"
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  -Upload `
+  //...
+```
+
+During rollout debugging, prefer `--report-dir <path>` plus
+`--support-bundle <path>` on the CI wrapper, or set
+`DD_TEST_OPTIMIZATION_REPORT_DIR` and `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE`.
+The wrapper writes separate
 `doctor-report.json`, `uploader-dry-run-report.json`, and, when `--upload` is
-enabled, `uploader-upload-report.json` files. Use `--doctor-report-json` or
+enabled, `uploader-upload-report.json` files. When support bundle output is
+configured, it also writes `dd-test-optimization-support.zip` with redacted
+reports, selected BEP summaries, effective wrapper flags, runtime metadata, and
+`summary.md`. Use `--doctor-report-json` or
 `--uploader-report-json` only when CI needs one explicitly named report; manual
 doctor/uploader commands can pass `--report-json=<path>` after the target's
 `--` separator.
 
+For a first-pass support request after tests have run, the customer can run only
+the doctor:
+
+```bash
+bazel run //:dd_test_optimization_doctor -- \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip
+```
+
+Add the matching `--bep-json`, `--freshness-*`, and `--artifact-*` flags when
+the failing job uses BEP/BwoB. This doctor-only bundle does not include uploader
+dry-run or upload results.
+For a complete support handoff, follow the escalation ladder in
+[`docs/Troubleshooting.md`](Troubleshooting.md#collect-diagnostic-reports).
+
 Reports include `result.status`, `result.reason_code`, human-readable
 `result.reason`, and `result.next_steps`, plus expected targets, BEP
 fresh/cached/remote-only outputs, artifact staging, payload discovery, payload
-processing, and upload counters. To generate a short Markdown summary for
-support tickets or customer-facing CI artifacts:
+processing, and upload counters. If a repository cannot use the doctor or
+wrapper support-bundle entrypoints but has the helper script, create the
+redacted zip manually:
+
+```bash
+python3 tools/test_optimization/create_support_bundle.py \
+  --report-dir .topt/reports \
+  --report-json .topt/reports/doctor-report.json \
+  --report-json .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/dd-test-optimization-support.zip \
+  --workspace-root "$PWD" \
+  --output-base "$(bazel info output_base)"
+```
+
+When only Markdown is possible, generate a short fallback summary with:
 
 ```bash
 python3 tools/test_optimization/render_report_summary.py \

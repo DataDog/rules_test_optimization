@@ -42,8 +42,7 @@ def _remote_only_count(value: Any) -> int:
         return 0
 
 
-def render_summary(paths: list[Path]) -> str:
-    reports = [_load(path) for path in paths]
+def render_summary_from_reports(reports: list[dict[str, Any]]) -> str:
     lines = ["# Datadog Test Optimization Upload Diagnostics", ""]
     for report in reports:
         tool = report.get("tool", "unknown")
@@ -81,6 +80,10 @@ def render_summary(paths: list[Path]) -> str:
                 lines.append(f"- {step}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_summary(paths: list[Path]) -> str:
+    return render_summary_from_reports([_load(path) for path in paths])
 
 
 def main(argv: list[str] | None = None) -> int:
