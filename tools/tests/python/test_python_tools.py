@@ -801,7 +801,7 @@ sys.exit(0)
             tmpdir.mkdir()
             env = os.environ.copy()
             env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
-            env["DD_TEST_OPTIMIZATION_PYTHON"] = sys.executable
+            env["DD_TEST_OPTIMIZATION_PYTHON"] = "python" if os.name == "nt" else sys.executable
 
             result = subprocess.run(
                 [
@@ -835,7 +835,7 @@ sys.exit(0)
             )
 
             self.assertEqual(7, result.returncode, result.stderr)
-            self.assertTrue((root / "support.zip").exists())
+            self.assertTrue((root / "support.zip").exists(), result.stderr + result.stdout)
             collector_args = collector_log.read_text(encoding="utf-8")
             self.assertIn("--command-manifest-json=", collector_args)
             self.assertIn(f"--report-json={root / 'custom-doctor.json'}", collector_args)
