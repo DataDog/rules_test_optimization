@@ -582,10 +582,14 @@ assert len(manifest["bep_files"]) == 1 and manifest["bep_files"][0].endswith(".b
 assert manifest["doctor_report_json"] == {str(root / "custom-doctor.json")!r}, manifest
 assert manifest["upload_enabled"] is False, manifest
 assert manifest["artifact_staging_dir"], manifest
+output_path = None
 for arg in args:
     if arg.startswith("--output="):
-        pathlib.Path(arg.split("=", 1)[1]).write_bytes(b"fake support bundle")
+        output_path = arg.split("=", 1)[1]
         break
+if output_path is None:
+    raise AssertionError(f"missing --output argument: {{args!r}}")
+pathlib.Path(output_path).write_bytes(b"fake support bundle")
 sys.exit(0)
 """,
                 encoding="utf-8",
@@ -844,8 +848,10 @@ sys.exit(0)
             )
 
             self.assertEqual(7, result.returncode, result.stderr)
-            self.assertTrue((root / "support.zip").exists(), result.stderr + result.stdout)
+            failure_output = result.stderr + result.stdout
+            self.assertTrue(collector_log.exists(), failure_output)
             collector_args = collector_log.read_text(encoding="utf-8")
+            self.assertTrue((root / "support.zip").exists(), failure_output + "\n" + collector_args)
             self.assertIn("--command-manifest-json=", collector_args)
             self.assertIn(f"--report-json={root / 'custom-doctor.json'}", collector_args)
             self.assertIn("--tmp-root=", collector_args)
