@@ -801,7 +801,16 @@ sys.exit(0)
             tmpdir.mkdir()
             env = os.environ.copy()
             env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
-            env["DD_TEST_OPTIMIZATION_PYTHON"] = "python" if os.name == "nt" else sys.executable
+            python_executable = getattr(sys, "_base_executable", sys.executable)
+            if os.name == "nt":
+                python_shim = root / "python-shim.cmd"
+                python_shim.write_text(
+                    f'@echo off\r\n"{python_executable}" %*\r\nexit /b %ERRORLEVEL%\r\n',
+                    encoding="utf-8",
+                )
+                env["DD_TEST_OPTIMIZATION_PYTHON"] = str(python_shim)
+            else:
+                env["DD_TEST_OPTIMIZATION_PYTHON"] = python_executable
 
             result = subprocess.run(
                 [
