@@ -36,6 +36,9 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 
 Use a commit that is reachable from `origin/main`. Do not publish branch-only
 commits in consumer snippets because squash merges can make them disappear.
+The `rules_go` version must match the selected Datadog-managed fork support
+line. The current default support line is `rules_go_upstream = "v0_60_0"`,
+which uses `rules_go` `0.60.0`.
 
 This prerequisite block is enough to run guided bootstrap. If you do not run
 guided bootstrap, you must also add the Datadog-managed `rules_go` override and
@@ -50,24 +53,27 @@ git_override(
     module_name = "rules_go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<published-main-commit>",
-    strip_prefix = "third_party/rules_go_orchestrion_base",
+    strip_prefix = "third_party/rgo/v0_60_0/base",
 )
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0-rc.2",
+    dd_trace_go_version = "v2.9.0",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
 
-Use `third_party/rules_go_orchestrion_complete` instead of
-`third_party/rules_go_orchestrion_base` only when the repository needs the
-extended monorepo compatibility variant. Do not set both `dd_trace_go_version`
-and `dd_trace_go_versions` in the same `orchestrion.from_source(...)` call. If
-the repository resolves Datadog tracer modules to different exact versions, use
-guided bootstrap or its onboarding summary to generate the exact
-`dd_trace_go_versions` block.
+For newer support lines such as `v0_61_1`, use the base strip prefix printed by
+the bootstrap or onboarding pins summary, for example
+`third_party/rgo/v0_61_1/base`. Repositories that
+already own a private `rules_go` patch stack should generate a public consumer
+patch profile and rebase or merge it locally inside that repository instead of
+using a second complete tree. Do not set both
+`dd_trace_go_version` and `dd_trace_go_versions` in the same
+`orchestrion.from_source(...)` call. If the repository resolves Datadog tracer
+modules to different exact versions, use guided bootstrap or its onboarding
+summary to generate the exact `dd_trace_go_versions` block.
 
 ## Recommended Bootstrap
 

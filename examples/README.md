@@ -142,11 +142,11 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-rc.2
+  --dd-trace-go-version v2.9.0
 ```
 
 `--dd-trace-go-version` is optional. If omitted, bootstrap uses the default
-`v2.9.0-rc.2`. It accepts a tag,
+`v2.9.0`. It accepts a tag,
 pseudo-version, branch, or commit SHA. Bootstrap resolves that input to exact
 versions and repins the local Go module to match what Bazel will use.
 
@@ -310,100 +310,55 @@ runtime/service repo so uploader enrichment stays aligned with each payload.
 Running tests, validating payloads, and uploading payloads:
 
 ```bash
-# Run tests, doctor, enrichment dry-run, then upload payloads.
-bazel test //... || test_status=$?; test_status=${test_status:-0}
-bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-if [ "$doctor_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$doctor_status"
-fi
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-if [ "$dry_run_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$dry_run_status"
-fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-upload_status=$?
-if [ "$test_status" -ne 0 ]; then
-  exit "$test_status"
-fi
-exit "$upload_status"
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+# Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
+tools/test_optimization/run_test_optimization_ci.sh \
+  --config test-optimization \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //...
 
-# RBE users: download outputs so uploader can discover payload files
-bazel test //... --remote_download_outputs=all || test_status=$?; test_status=${test_status:-0}
-bazel run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-if [ "$doctor_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$doctor_status"
-fi
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-if [ "$dry_run_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$dry_run_status"
-fi
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads
-upload_status=$?
-if [ "$test_status" -ne 0 ]; then
-  exit "$test_status"
-fi
-exit "$upload_status"
+# Add --upload only when the real upload should run after doctor and dry-run pass.
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --config test-optimization \
+    --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
+    --upload \
+    //...
 ```
 
 ```powershell
-# Run tests, doctor, enrichment dry-run, then upload payloads.
-bazel test //...
-$testStatus = $LASTEXITCODE
-if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run //:dd_test_optimization_doctor
-$doctorStatus = $LASTEXITCODE
-if ($null -eq $doctorStatus) { $doctorStatus = 0 }
-if ($doctorStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $doctorStatus
-}
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment
-$dryRunStatus = $LASTEXITCODE
-if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
-if ($dryRunStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $dryRunStatus
-}
-# Set once per shell session before first run:
-# $env:DD_API_KEY = "<your-api-key>"
-# $env:DD_SITE = "datadoghq.com"
-bazel run //:dd_upload_payloads
-$uploadStatus = $LASTEXITCODE
-if ($testStatus -ne 0) { exit $testStatus }
-exit $uploadStatus
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+# Run tests with BEP, doctor, enrichment dry-run, then upload payloads.
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -Config test-optimization `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  //...
 
-# RBE users: download outputs so uploader can discover payload files
-bazel test //... --remote_download_outputs=all
-$testStatus = $LASTEXITCODE
-if ($null -eq $testStatus) { $testStatus = 0 }
-bazel run //:dd_test_optimization_doctor
-$doctorStatus = $LASTEXITCODE
-if ($null -eq $doctorStatus) { $doctorStatus = 0 }
-if ($doctorStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $doctorStatus
-}
-bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment
-$dryRunStatus = $LASTEXITCODE
-if ($null -eq $dryRunStatus) { $dryRunStatus = 0 }
-if ($dryRunStatus -ne 0) {
-  if ($testStatus -ne 0) { exit $testStatus }
-  exit $dryRunStatus
-}
-bazel run //:dd_upload_payloads
-$uploadStatus = $LASTEXITCODE
-if ($testStatus -ne 0) { exit $testStatus }
-exit $uploadStatus
+# Add -Upload only when the real upload should run after doctor and dry-run pass.
+$env:DD_API_KEY = "<your-api-key>"
+$env:DD_SITE = "datadoghq.com"
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -Config test-optimization `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  -Upload `
+  //...
 ```
 
 Notes:
-- The sequence above preserves test failures, blocks upload success when doctor
+- The wrapper preserves test failures, blocks upload success when doctor
   or dry-run enrichment fails, and still fails on uploader errors when the
   earlier steps passed.
+- For first-pass support after tests have run, the doctor
+  `--support-bundle=.topt/reports/dd-test-optimization-support.zip` option
+  creates a doctor-only bundle without vendoring the wrapper helper directory.
+- For the support escalation ladder and bundle triage order, see
+  [`docs/Troubleshooting.md`](../docs/Troubleshooting.md#collect-diagnostic-reports).
 - Example `runtests.sh` scripts default `DD_SITE` to `datadoghq.com` when not set.
 - Windows-friendly wrappers are provided as `examples/*/runtests.ps1` and use
   native PowerShell + Bazel (no Git Bash dependency).
@@ -458,11 +413,11 @@ Bootstrap once after adding the Go module files:
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --go-module-dir src/go-project \
-  --dd-trace-go-version v2.9.0-rc.2
+  --dd-trace-go-version v2.9.0
 ```
 
 As in the single-service flow, `--dd-trace-go-version` is optional and defaults
-to `v2.9.0-rc.2`. It may resolve to one shared tracer version or to separate exact
+to `v2.9.0`. It may resolve to one shared tracer version or to separate exact
 versions for the traced Go modules when you pass a branch or commit SHA.
 
 This multi-service path stays on the lower-level/manual API. Guided bootstrap is

@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "default_upstream": "v0_60_0",
+  "default_variant": "base",
+  "upstreams": {
+    "v0_60_0": {
+      "rules_go_version": "0.60.0",
+      "upstream": {
+        "repository": "https://github.com/bazel-contrib/rules_go.git",
+        "commit": "fbbafef6e737fe18d3cdedfff4f8f060ac71d5f3",
+        "tag": "v0.60.0",
+        "archive_sha256": "81da046a7e06954de7257d1d3ad20f76a3c79a1a4840b5a0c1e84037f084f64e"
+      },
+      "patch_root": "third_party/rules_go_orchestrion/patches/v0_60_0",
+      "variants": {
+        "base": {
+          "tree_path": "third_party/rgo/v0_60_0/base",
+          "metadata_path": "third_party/rgo/v0_60_0/base.METADATA.json",
+          "changed_files_report": "third_party/rgo/v0_60_0/base.CHANGED_FILES.md",
+          "series": "third_party/rules_go_orchestrion/patches/v0_60_0/base.series"
+        }
+      }
+    },
+    "v0_61_1": {
+      "rules_go_version": "0.61.1",
+      "upstream": {
+        "repository": "https://github.com/bazel-contrib/rules_go.git",
+        "commit": "4b05ddfe19b4d2afa8d7d5f4ba9e4e4c0037e9e5",
+        "tag": "v0.61.1",
+        "archive_sha256": "a6351b1c9627d873eada5ed1af8fcc3930fdad55ae9d871411a1e6d823ed6de8"
+      },
+      "patch_root": "third_party/rules_go_orchestrion/patches/v0_61_1",
+      "variants": {
+        "base": {
+          "tree_path": "third_party/rgo/v0_61_1/base",
+          "metadata_path": "third_party/rgo/v0_61_1/base.METADATA.json",
+          "changed_files_report": "third_party/rgo/v0_61_1/base.CHANGED_FILES.md",
+          "series": "third_party/rules_go_orchestrion/patches/v0_61_1/base.series"
+        }
+      }
+    }
+  }
+}

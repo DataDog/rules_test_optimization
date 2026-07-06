@@ -56,8 +56,16 @@ bootstrap wrote the setup, this is in the Datadog-managed module block.
 
 ## Sync
 
-Force a fresh metadata fetch when validating a new setup. Replace
+Normal sync should not use `FETCH_SALT`. Replace
 `test_optimization_data_<service_key>` with the actual sync repository name:
+
+```bash
+bazel sync --config=test-optimization \
+  --only=test_optimization_data_<service_key>
+```
+
+Force a fresh metadata fetch only when debugging stale backend data or when an
+operator explicitly asks for a refresh:
 
 ```bash
 bazel sync --config=test-optimization \
@@ -82,20 +90,54 @@ cat "$(bazel info output_base)/external/test_optimization_data_<service_key>/exp
 
 ## Test, Doctor, Dry-Run, Upload
 
+For the simplest customer troubleshooting request after tests have run, use
+`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` with any
+matching BEP/artifact flags. Prefer the CI wrapper when the repository can
+vendor the helper directory and you need uploader dry-run or upload coverage:
+
+```bash
+# Vendor the full tools/test_optimization/ helper directory when using the
+# wrapper support bundle option. If CI only installs the wrapper script, set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //path/to:pilot_test
+```
+
 Use this command shape and preserve test failure priority:
 
 ```bash
-bazel test --config=test-optimization //path/to:pilot_test || test_status=$?
+bep_json="$(mktemp "${TMPDIR:-/tmp}/dd-topt-go.XXXXXX.bep.json")"
+artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
+report_dir="${REPORT_DIR:-.topt/reports}"
+mkdir -p "$report_dir"
+
+bazel test --config=test-optimization --build_event_json_file="$bep_json" //path/to:pilot_test || test_status=$?
 test_status=${test_status:-0}
 
-bazel run --config=test-optimization //:dd_test_optimization_doctor || doctor_status=$?
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --report-json="$report_dir/doctor-report.json" || doctor_status=$?
 doctor_status=${doctor_status:-0}
 if [ "$doctor_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$doctor_status"
 fi
 
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
+bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --artifact-source=bep \
+  --artifact-staging-dir="$artifact_staging_dir" \
+  --dry-run \
+  --validate-enrichment \
+  --report-json="$report_dir/uploader-dry-run-report.json" || dry_run_status=$?
 dry_run_status=${dry_run_status:-0}
 if [ "$dry_run_status" -ne 0 ]; then
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -103,7 +145,13 @@ if [ "$dry_run_status" -ne 0 ]; then
 fi
 
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  bazel run --config=test-optimization //:dd_upload_payloads
+  bazel run --config=test-optimization //:dd_upload_payloads -- \
+    --bep-json="$bep_json" \
+    --freshness-source=bep \
+    --freshness-mode=required \
+    --artifact-source=bep \
+    --artifact-staging-dir="$artifact_staging_dir" \
+    --report-json="$report_dir/uploader-upload-report.json"
 upload_status=$?
 
 if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
@@ -119,12 +167,13 @@ After tests, inspect `bazel-testlogs`:
 
 ```bash
 find bazel-testlogs -path "*/test.outputs/payloads/*" -type f | sort
+find bazel-testlogs -path "*/test.outputs/outputs.zip" -type f | sort
 find bazel-testlogs -name "bazel_target_metadata.json" -type f | sort
 ```
 
 Expected:
 
-- JSON payload files exist.
+- JSON payload files exist either as loose files or inside `outputs.zip`.
 - `bazel_target_metadata.json` exists for instrumented runtime tests.
 - No `.msgpack` or `.msgpack.gz` payloads exist.
 - Go payload metadata does not contain `bazel.go.payload_selection =
@@ -161,11 +210,44 @@ on the default allowlist:
 If tests use remote execution or remote cache, make sure the test config uses:
 
 ```text
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 ```
 
-Rules cannot force this client behavior. Without it, tests may pass while the
-doctor and uploader cannot see local payload files.
+Rules cannot force this client behavior. Without local materialization or BEP
+artifact staging/downloader configuration, tests may pass while the doctor and
+uploader cannot see payload files. Use a unique `--build_event_json_file` for
+each Bazel test invocation and pass the matching paths to doctor/uploader with
+repeatable `--bep-json` flags.
+
+When debugging CI rollout failures, prefer doctor `--support-bundle` for the
+first support artifact. Use wrapper `--report-dir` plus `--support-bundle`, or
+set `DD_TEST_OPTIMIZATION_REPORT_DIR` and `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE`,
+when CI should archive
+`doctor-report.json`, `uploader-dry-run-report.json`, optional
+`uploader-upload-report.json`, and `dd-test-optimization-support.zip`.
+Manual flows can pass `--report-json=<path>` to doctor/uploader.
+Reports include `result.reason_code`, `result.next_steps`, expected targets,
+BEP freshness, artifact staging, payload discovery, payload processing,
+upload-attempt status, aggregate failures, and exit code. Use
+`tools/test_optimization/create_support_bundle.py` manually if the wrapper and
+doctor bundle entrypoints are unavailable but the helper script is present.
+Use `tools/test_optimization/render_report_summary.py` only as a Markdown
+fallback.
+When a support bundle is present, inspect `summary.md`, `diagnostics.json`,
+`reports/doctor-report.json`, optional uploader reports, and
+`command/flags.json` in that order before drawing conclusions.
+
+Artifact mode choices:
+
+| Situation | Doctor/uploader flags |
+|-----------|-----------------------|
+| Recommended zipped CI | `--bep-json=<path> --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=<temp-dir>` |
+| Loose `test.outputs/payloads/...` exists locally without zip | BEP freshness flags are enough; `--artifact-source=bep` remains valid |
+| BEP references HTTP/HTTPS `outputs.zip` artifacts | Add `--artifact-source=bep --remote-artifacts=download`; use `--remote-artifacts=required` for strict all-or-nothing validation |
+| BEP references bytestream/CAS/custom-auth `test.outputs` or `outputs.zip` artifacts | Add `--artifact-source=bep --remote-artifacts=download --bep-artifact-downloader=/path/to/downloader`; use `--remote-artifacts=required` for strict all-or-nothing validation |
+| Mixed migration where local outputs may be stale but BEP can stage fresh carriers | Use `--artifact-source=auto --remote-artifacts=download` so staged BEP outputs win for matching output keys |
 
 ## Final Consumer Checks
 

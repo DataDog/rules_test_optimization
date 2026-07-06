@@ -12,39 +12,41 @@ Use this checklist before calling a `rules_go` upstream migration complete.
 
 ## Metadata And Inventory
 
-Run these checks after editing either variant:
+Run these checks after editing any `rules_go` support line:
 
 ```bash
-python3 tools/dev/verify_rules_go_variants.py
-python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_base.METADATA.json
-python3 tools/dev/diff_rules_go_fork.py --metadata third_party/rules_go_orchestrion_complete.METADATA.json
-git diff -- third_party/rules_go_orchestrion_base.CHANGED_FILES.md
-git diff -- third_party/rules_go_orchestrion_complete.CHANGED_FILES.md
-git diff -- third_party/rules_go_orchestrion_variants.json
+python3 tools/dev/generate_rules_go_fork_maps.py --check
+python3 tools/dev/materialize_rules_go_fork.py check --all
+python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt
+python3 tools/dev/check_release_archive_contents.py
+python3 tools/dev/diff_rules_go_fork.py --all
+git diff -- third_party/rules_go_orchestrion
+git diff -- third_party/rgo
 ```
 
 Expected:
 
-- variant verification passes
-- both diff commands report the same counts as the regenerated reports
+- generated fork maps are current
+- patch series recreate checked-in materialized trees
+- profile verification passes
+- release archive contents include the registry, profiles, metadata, changed
+  files, patch series, and materialized base trees
+- diff commands report the same counts as the regenerated reports
 - generated reports name the new upstream tag or commit
-- every `complete`-only difference is declared
 - no generated report was edited manually
 
 ## Fast Variant Smoke
 
-Run both published variants:
+Run the published base variant:
 
 ```bash
-RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh
-RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_smoke.sh
+RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh
 ```
 
 If the migration changes slow or platform-sensitive areas, also run:
 
 ```bash
-RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_extended.sh
-RULES_GO_VARIANT=complete tools/dev/run_rules_go_variant_extended.sh
+RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_extended.sh
 ```
 
 ## Go Consumer Integration
@@ -54,13 +56,9 @@ Orchestrion wiring, module proxy handling, stdlib behavior, transitions, or
 builder actions:
 
 ```bash
-USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
+USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base \
   tools/tests/integration/run_workspace_go_integration.sh
-USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
-  tools/tests/integration/run_workspace_go_integration.sh
-USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=base \
-  tools/tests/integration/run_bzlmod_go_integration.sh
-USE_BAZEL_VERSION=8.4.1 RULES_GO_VARIANT=complete \
+USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base \
   tools/tests/integration/run_bzlmod_go_integration.sh
 ```
 
@@ -98,9 +96,8 @@ called done, run the sibling fixture repository with local overrides:
 1. In `../rules_test_optimization_tests/MODULE.bazel`, enable the documented
    `local_path_override(...)` entries for this repository and affected
    companion modules.
-2. Add a temporary `rules_go` override pointing to the migrated local variant:
-   `../rules_test_optimization/third_party/rules_go_orchestrion_base` or
-   `../rules_test_optimization/third_party/rules_go_orchestrion_complete`.
+2. Add a temporary `rules_go` override pointing to the registry-resolved local
+   tree for the migrated upstream and `base` variant.
 3. Run the fixture's documented entrypoint, such as:
 
 ```bash

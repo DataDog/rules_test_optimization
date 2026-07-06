@@ -1,0 +1,29 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cgo_dep",
+    srcs = ["cgo_dep.go"],
+    cgo = True,
+    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/transitive_mode_regression/cgo_dep",
+    visibility = ["//visibility:private"],
+)
+
+go_library(
+    name = "middle",
+    srcs = ["middle.go"],
+    importpath = "github.com/bazelbuild/rules_go/tests/core/cgo/transitive_mode_regression/middle",
+    visibility = ["//visibility:private"],
+    deps = [":cgo_dep"],
+)
+
+go_test(
+    name = "transitive_cgo_mode_test",
+    srcs = ["transitive_cgo_mode_test.go"],
+    deps = [":middle"],
+)

@@ -264,6 +264,7 @@ jobs:
       run_schema_validation: true
       run_fixture_json_validation: false
       run_schema_parser_parity: true
+      run_rules_go_fork_drift: true
 
   release-docs-links:
     timeout-minutes: 10

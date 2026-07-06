@@ -1,0 +1,1 @@
+{"id":{"testResult":{"label":"//pkg:target","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"remote"},"testActionOutput":[{"name":"outputs.zip","uri":"file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs/outputs.zip"}]}}

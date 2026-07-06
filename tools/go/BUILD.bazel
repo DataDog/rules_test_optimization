@@ -6,6 +6,7 @@
 
 exports_files(
     [
+        "rules_go_forks.bzl",
         "workspace_repositories.bzl",
     ],
     visibility = ["//visibility:public"],

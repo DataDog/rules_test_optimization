@@ -31,8 +31,27 @@ Keep the RFC contract intact:
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync
   metadata.
 - Do not pass uploader credentials or upload endpoints into the test sandbox.
-- Use `--remote_download_outputs=all` when remote execution or remote cache can
-  leave test outputs remote-only.
+- Put `--remote_download_minimal`,
+  `--remote_download_regex=.*test[.]outputs.*`, and
+  `--zip_undeclared_test_outputs` in the active test `.bazelrc` config when
+  remote execution or remote cache can leave test outputs remote-only.
+- Configure doctor/uploader with repeatable `--bep-json=<path>` flags,
+  `--freshness-source=bep`, `--freshness-mode=required`,
+  `--artifact-source=bep`, and `--artifact-staging-dir=<temp-dir>`.
+  If BEP still points at HTTP/HTTPS `outputs.zip` artifacts, use
+  `--remote-artifacts=download` or `required` without a downloader. Use a
+  downloader only for bytestream/CAS/custom-auth artifact providers.
+- Run pilot tests with a fresh `--build_event_json_file` path per Bazel test
+  invocation; pass the same paths to doctor/uploader with `--bep-json`.
+- In CI, keep a per-job diagnostic report directory with
+  `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir`, and configure
+  wrapper `--support-bundle` or `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` for
+  complete escalation artifacts. For first-pass customer troubleshooting after
+  tests have run, ask for `bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>`
+  with any matching BEP/artifact flags.
+  For bundle triage, inspect `summary.md`, `diagnostics.json`,
+  `reports/doctor-report.json`, optional uploader reports, and
+  `command/flags.json` in that order.
 
 ## First Actions
 
@@ -83,7 +102,19 @@ Every successful Python onboarding should end with these pieces:
   labels are still fine for small repositories.
 - `.bazelrc` or CLI commands provide sync metadata with `--repo_env`.
 - Test commands use a named config such as `--config=test-optimization`.
-- Remote-output-sensitive test configs include `--remote_download_outputs=all`.
+- Remote-output-sensitive test configs include
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
+  and `--zip_undeclared_test_outputs`.
+- Validation commands pass each matching BEP file with repeatable `--bep-json`
+  flags and required BEP freshness/artifact flags. Use
+  `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
+  manual flows where one BEP file is sufficient.
+- CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`,
+  optional `uploader-upload-report.json`, and, when configured,
+  `dd-test-optimization-support.zip` under a per-job report directory.
+  Prefer the wrapper support bundle for full CI escalation; use the doctor-only
+  support bundle for the simplest initial customer request. Keep individual
+  reports for local inspection and manual fallback flows.
 - `FETCH_SALT` is used only for a separate, explicit
   `bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.

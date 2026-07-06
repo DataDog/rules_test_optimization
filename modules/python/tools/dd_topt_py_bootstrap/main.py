@@ -166,7 +166,9 @@ def render_bazelrc_snippet(args: argparse.Namespace) -> str:
         "# These values are repo_env, not test_env, so tests do not receive secrets.",
     ]
     lines.extend(f"common:{args.bazelrc_config} --repo_env={key}" for key in SYNC_REPO_ENV_KEYS)
-    lines.append(f"test:{args.bazelrc_config} --remote_download_outputs=all")
+    lines.append(f"test:{args.bazelrc_config} --remote_download_minimal")
+    lines.append(f"test:{args.bazelrc_config} --remote_download_regex=.*test[.]outputs.*")
+    lines.append(f"test:{args.bazelrc_config} --zip_undeclared_test_outputs")
     return "\n".join(lines) + "\n"
 
 
@@ -408,9 +410,15 @@ def render_command_snippet(args: argparse.Namespace) -> str:
         doctor_status=0
         dry_run_status=0
         upload_status=0
+        export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
+        export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
+        export DD_TEST_OPTIMIZATION_FRESHNESS_MODE=required
+        export DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE=bep
 
+        mkdir -p .topt
+        rm -f "$DD_TEST_OPTIMIZATION_BEP_JSON"
         {args.bazel_command} sync --config={args.bazelrc_config} --only={args.sync_repo_name}
-        {args.bazel_command} test --config={args.bazelrc_config} {target_args} || test_status=$?
+        {args.bazel_command} test --config={args.bazelrc_config} --build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON" {target_args} || test_status=$?
 
         {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.doctor_name} || doctor_status=$?
         if [ "$doctor_status" -ne 0 ]; then

@@ -16,7 +16,7 @@ bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
 local_path_override(
     module_name = "rules_go",
-    path = "../../third_party/rules_go_orchestrion_base",
+    path = "../../third_party/rgo/v0_60_0/base",
 )
 
 # Dev-only stub repository so companion-module tests can resolve

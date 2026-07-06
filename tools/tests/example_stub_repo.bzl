@@ -35,6 +35,20 @@ def _render_stub_telemetry_facts(service_name):
         ', "counts": [], "distributions": []}\n'
     )
 
+def _render_stub_context(service_name):
+    """Render context.json content required by doctor/uploader fixtures."""
+    return json.encode({
+        "bazel.arch": "stub",
+        "bazel.os": "stub",
+        "bazel.rule_name": "datadog-rules-test-optimization",
+        "bazel.rule_version": "stub",
+        "env": "CI",
+        "git.branch": "main",
+        "git.commit.sha": "1234567890abcdef1234567890abcdef12345678",
+        "git.repository_url": "https://github.com/DataDog/rules-test-optimization-fixture.git",
+        "service.name": service_name,
+    }) + "\n"
+
 def _stub_manifest_content():
     """Render manifest.txt content matching the real sync repository contract."""
     return "version=1\n"
@@ -179,6 +193,7 @@ def _render_stub_build(
 render_stub_build_for_tests = _render_stub_build
 bzl_string_literal_for_tests = _bzl_string_literal
 stub_manifest_content_for_tests = _stub_manifest_content
+render_stub_context_for_tests = _render_stub_context
 render_stub_telemetry_facts_for_tests = _render_stub_telemetry_facts
 render_stub_export_for_tests = _render_stub_export
 
@@ -197,7 +212,7 @@ def _example_stub_repo_impl(ctx):
     ctx.file(settings, "{}\n")
     ctx.file(known_tests, '{"data": {"attributes": {"tests": {}}}}\n')
     ctx.file(test_management, '{"data": {"attributes": {"modules": {}}}}\n')
-    ctx.file(context, "{}\n")
+    ctx.file(context, _render_stub_context(ctx.attr.service_name))
     ctx.file(telemetry_facts, _render_stub_telemetry_facts(ctx.attr.service_name))
 
     service_keys = list(ctx.attr.service_keys or [])

@@ -1,0 +1,1 @@
+{"id":{"testResult":{"label":"//pkg:target","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///tmp/execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/pkg/target/test.outputs"}]}}

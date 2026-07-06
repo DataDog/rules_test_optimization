@@ -48,6 +48,10 @@ on:
         required: false
         type: boolean
         default: false
+      run_rules_go_fork_drift:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -103,7 +107,8 @@ jobs:
         run: |
           mapfile -t starlark_files < <(
             git ls-files -- \
-              '*.bzl' 'BUILD' 'BUILD.bazel' 'WORKSPACE' 'MODULE.bazel'
+              '*.bzl' 'BUILD' 'BUILD.bazel' 'WORKSPACE' 'MODULE.bazel' \
+              ':(exclude)third_party/rgo/**'
           )
           if (( ${#starlark_files[@]} == 0 )); then
             echo "No Starlark files found."
@@ -193,6 +198,43 @@ jobs:
         if: ${{ inputs.run_schema_parser_parity }}
         shell: bash
         run: python3 tools/core/schemas/check_schema_parser_parity.py
+
+  rules-go-fork-drift:
+    if: ${{ !inputs.docs_only && inputs.run_rules_go_fork_drift }}
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.25.0"
+
+      - name: Verify Go toolchain for generated rules_go maps
+        shell: bash
+        run: |
+          go version
+          command -v gofmt
+
+      - name: Verify rules_go fork registry and materialized trees
+        shell: bash
+        run: |
+          python3 tools/dev/generate_rules_go_fork_maps.py --check
+          RULES_GO_ORCHESTRION_CACHE="${RUNNER_TEMP}/rules_go_orchestrion_cache" \
+            python3 tools/dev/materialize_rules_go_fork.py check --all
+          python3 tools/dev/verify_rules_go_profiles.py \
+            --public-denylist tools/dev/private_leak_public_denylist.txt
+
+      - name: Verify rules_go fork release archive contents
+        shell: bash
+        run: python3 tools/dev/check_release_archive_contents.py
 
   powershell-lint:
     if: ${{ !inputs.docs_only && inputs.run_powershell_lint }}

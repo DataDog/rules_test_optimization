@@ -41,28 +41,42 @@ function Invoke-ExampleRunTests {
     [string]$ScriptDir
   )
 
+  $tmpRoot = $null
   Push-Location $ScriptDir
   try {
     $bazelCmd = Get-BazelCommand
     $testStatus = 0
+    $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dd-topt-example-" + [System.Guid]::NewGuid().ToString("N"))
+    $artifactStagingDir = Join-Path $tmpRoot "bep-artifacts"
+    New-Item -ItemType Directory -Force -Path $artifactStagingDir | Out-Null
+    $nonHermeticBep = Join-Path $tmpRoot "non-hermetic.bep.json"
+    $hermeticBep = Join-Path $tmpRoot "hermetic.bep.json"
+    $bepArgs = @(
+      "--bep-json=$nonHermeticBep",
+      "--bep-json=$hermeticBep",
+      "--freshness-source=bep",
+      "--freshness-mode=required",
+      "--artifact-source=bep",
+      "--artifact-staging-dir=$artifactStagingDir"
+    )
 
     Write-Output "--- non-hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$nonHermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$hermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- validating payloads"
-    $doctorStatus = Invoke-RunCmd -Command $bazelCmd -Args @("run", "//:dd_test_optimization_doctor")
+    $doctorStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "//:dd_test_optimization_doctor", "--") + $bepArgs)
     if ($doctorStatus -ne 0) {
       if ($testStatus -ne 0) { exit $testStatus }
       exit $doctorStatus
     }
 
     Write-Output "--- validating upload enrichment"
-    $dryRunStatus = Invoke-RunCmd -Command $bazelCmd -Args @("run", "//:dd_upload_payloads", "--", "--dry-run", "--validate-enrichment")
+    $dryRunStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "//:dd_upload_payloads", "--") + $bepArgs + @("--dry-run", "--validate-enrichment"))
     if ($dryRunStatus -ne 0) {
       if ($testStatus -ne 0) { exit $testStatus }
       exit $dryRunStatus
@@ -70,11 +84,14 @@ function Invoke-ExampleRunTests {
 
     Write-Output "--- uploading payloads"
     if (-not $env:DD_SITE) { $env:DD_SITE = "datadoghq.com" }
-    $uploadRc = Invoke-RunCmd -Command $bazelCmd -Args @("run", "//:dd_upload_payloads")
+    $uploadRc = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "//:dd_upload_payloads", "--") + $bepArgs)
 
     if ($testStatus -ne 0) { exit $testStatus }
     exit $uploadRc
   } finally {
+    if ($tmpRoot) {
+      Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
   }
 }

@@ -30,7 +30,20 @@ Checks:
   service repository, for example `@test_optimization_data_<service>//:export.bzl`?
 - Is `DD_CIVISIBILITY_ENABLED` or equivalent tracer setup enabled by the macro?
 - With remote execution/cache, did the test config use
-  `--remote_download_outputs=all`?
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
+  plus `--zip_undeclared_test_outputs`?
+- Did doctor/uploader run with repeatable `--bep-json=<path>`,
+  `--freshness-source=bep`, `--freshness-mode=required`,
+  `--artifact-source=bep`, and `--artifact-staging-dir=<temp-dir>`?
+- If BEP still points at HTTP/HTTPS `outputs.zip` artifacts, did
+  doctor/uploader use `--artifact-source=bep --remote-artifacts=download`
+  without a downloader? If BEP points at bytestream/CAS/custom-auth artifacts,
+  did it also configure `--bep-artifact-downloader`? Use
+  `--remote-artifacts=required` only when the rollout should fail if any
+  selected artifact cannot be materialized.
+- If local outputs may be stale while BEP can stage fresh carriers, consider
+  `--artifact-source=auto --remote-artifacts=download` so staged outputs win for
+  matching BEP output keys.
 
 Fix the target selection or wrapper first. Do not work around missing payloads
 by adding a proxy or uploading from inside the test sandbox.
@@ -130,6 +143,56 @@ Valid alternatives are `module`, `module_override`, and
 `full_bundle_disabled`. `full_bundle_disabled` is acceptable only when the setup
 intentionally lacks backend full-bundle data.
 
+## Diagnostic Reports
+
+When logs are long or ambiguous, first ask for a doctor-only support bundle with
+`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
+matching BEP/artifact flags. Use the CI wrapper bundle when uploader dry-run or
+upload results matter. If a repository cannot use either bundle mode, collect
+`doctor-report.json`, `uploader-dry-run-report.json`, optional
+`uploader-upload-report.json`, then use `create_support_bundle.py` manually if
+the helper is available. Render `upload-diagnostics.md` only as a Markdown
+fallback.
+
+- Doctor: pass `--support-bundle=<path>` for the redacted doctor-only zip, or
+  `--report-json=<path>` for the raw machine-readable doctor report.
+- Uploader: pass `--report-json=<path>` after the uploader target's `--`
+  separator, or set `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON`.
+- Wrapper: prefer `--report-dir=<path>` plus `--support-bundle=<path>`, or set
+  `DD_TEST_OPTIMIZATION_REPORT_DIR` and
+  `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE`, so CI archives both individual reports
+  and `dd-test-optimization-support.zip`.
+
+Use the support bundle to compare `result.reason_code`, next steps, expected
+targets, BEP freshness, artifact staging, payload directories, payload counts,
+status, exit code, effective flags, runtime metadata, and selected BEP summaries
+without reading the full CI log. Wrapper bundles also include upload attempts
+and upload failures.
+`tools/test_optimization/render_report_summary.py` can render raw JSON files as
+a short Markdown fallback summary. Review raw reports for internal paths and
+target names before sharing outside the trusted project boundary.
+
+Support bundle intake order:
+
+1. Read `summary.md` for the support-facing failure classification.
+2. Read `diagnostics.json` for `summary.status`,
+   `summary.primary_reason_code`, report count, BEP summary count, and payload
+   counts.
+3. Read `reports/doctor-report.json` for expected targets, seen targets,
+   missing target roots, fresh/cached/remote-only BEP outputs, and artifact
+   staging results.
+4. If present, read `reports/uploader-dry-run-report.json` before any upload
+   report. It proves payload discovery and enrichment without sending data.
+5. If present, read `reports/uploader-upload-report.json` for real upload
+   attempts and terminal upload failures.
+6. Read `command/flags.json` to verify the test run used a unique BEP file and
+   doctor/uploader used the matching `--bep-json`, freshness, artifact-source,
+   artifact-staging, and remote-artifact flags.
+
+If `command/flags.json` shows `upload_mode=doctor_only_no_uploader`, do not
+claim uploader or Datadog intake behavior was validated. Ask for the wrapper
+support bundle when dry-run, enrichment, or real upload behavior matters.
+
 ## Fingerprint Or Linker Mismatches
 
 Symptoms:
@@ -141,8 +204,8 @@ Symptoms:
 Checks:
 
 - The consumer uses a current published commit from this repository.
-- The consumer resolves `rules_go` to `rules_go_orchestrion_base` or
-  `rules_go_orchestrion_complete`, not upstream plain `rules_go`.
+- The consumer resolves `rules_go` to the versioned Orchestrion base tree or another
+  versioned base tree, not upstream plain `rules_go`.
 - The WORKSPACE helper or Bzlmod override points at the correct variant.
 - `go_orchestrion_tool_repo` is loaded from the same `rules_go` repository name
   used by the consumer, not from an undeclared default alias.

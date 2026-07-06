@@ -1,0 +1,22 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "create_support_bundle.py",
+    "render_report_summary.py",
+])
+
+filegroup(
+    name = "ci_wrappers",
+    srcs = [
+        "create_support_bundle.py",
+        "render_report_summary.py",
+        "run_test_optimization_ci.ps1",
+        "run_test_optimization_ci.sh",
+    ],
+)

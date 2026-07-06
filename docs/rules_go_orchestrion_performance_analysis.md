@@ -9,13 +9,13 @@ This product includes software developed at Datadog
 # rules_go Orchestrion Fork Performance Analysis
 
 > Scope note: this document analyzes the generic base variant under
-> `third_party/rules_go_orchestrion_base`. Consumers that need the extended
-> monorepo compatibility layer use `third_party/rules_go_orchestrion_complete`.
+> `third_party/rgo/v0_60_0/base`. Consumers that already own a
+> `rules_go` patch stack can use a generated public consumer patch profile.
 
 ## Purpose
 
 This document captures a code-reading analysis of the vendored
-`third_party/rules_go_orchestrion_base` fork and explains:
+`third_party/rgo/v0_60_0/base` fork and explains:
 
 - what was changed to make Orchestrion work under Bazel and `rules_go`
 - which parts of the implementation are likely on the performance hot path
@@ -40,7 +40,7 @@ For the current state:
 This analysis is based on:
 
 - the checked-in fork metadata and changed-files report
-- the vendored fork source under `third_party/rules_go_orchestrion_base/`
+- the vendored fork source under `third_party/rgo/v0_60_0/base/`
 - Datadog's public Orchestrion documentation
 - the public Orchestrion source entrypoint
 
@@ -53,18 +53,18 @@ Analysis date: `2026-03-25`
 
 ## Primary References
 
-- [third_party/rules_go_orchestrion_base.METADATA.json](../third_party/rules_go_orchestrion_base.METADATA.json)
-- [third_party/rules_go_orchestrion_base.CHANGED_FILES.md](../third_party/rules_go_orchestrion_base.CHANGED_FILES.md)
-- [third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl)
-- [third_party/rules_go_orchestrion_base/go/private/context.bzl](../third_party/rules_go_orchestrion_base/go/private/context.bzl)
-- [third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl)
-- [third_party/rules_go_orchestrion_base/go/private/actions/link.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/link.bzl)
-- [third_party/rules_go_orchestrion_base/go/private/actions/stdlib.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/stdlib.bzl)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/link.go](../third_party/rules_go_orchestrion_base/go/tools/builders/link.go)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go](../third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go)
+- [third_party/rgo/v0_60_0/base.METADATA.json](../third_party/rgo/v0_60_0/base.METADATA.json)
+- [third_party/rgo/v0_60_0/base.CHANGED_FILES.md](../third_party/rgo/v0_60_0/base.CHANGED_FILES.md)
+- [third_party/rgo/v0_60_0/base/go/private/orchestrion/extensions.bzl](../third_party/rgo/v0_60_0/base/go/private/orchestrion/extensions.bzl)
+- [third_party/rgo/v0_60_0/base/go/private/context.bzl](../third_party/rgo/v0_60_0/base/go/private/context.bzl)
+- [third_party/rgo/v0_60_0/base/go/private/actions/compilepkg.bzl](../third_party/rgo/v0_60_0/base/go/private/actions/compilepkg.bzl)
+- [third_party/rgo/v0_60_0/base/go/private/actions/link.bzl](../third_party/rgo/v0_60_0/base/go/private/actions/link.bzl)
+- [third_party/rgo/v0_60_0/base/go/private/actions/stdlib.bzl](../third_party/rgo/v0_60_0/base/go/private/actions/stdlib.bzl)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go](../third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/link.go](../third_party/rgo/v0_60_0/base/go/tools/builders/link.go)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go](../third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go)
 - [Orchestrion docs](https://datadoghq.dev/orchestrion/)
 - [Orchestrion contributor guide](https://datadoghq.dev/orchestrion/contributing/)
 - [Orchestrion main.go](https://github.com/DataDog/orchestrion/blob/main/main.go)
@@ -91,7 +91,7 @@ path, not from one isolated bootstrap helper.
 ### 1. A custom Orchestrion binary is built during module/repository resolution
 
 The fork adds a dedicated module-extension layer in
-[go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl).
+[go/private/orchestrion/extensions.bzl](../third_party/rgo/v0_60_0/base/go/private/orchestrion/extensions.bzl).
 
 At the time of this analysis, that layer:
 
@@ -121,7 +121,7 @@ Instead, it modifies `rules_go` internals so the toolchain knows about:
 - which extra inputs must be staged for Orchestrion to work in a Bazel sandbox
 
 This starts in
-[go/private/context.bzl](../third_party/rules_go_orchestrion_base/go/private/context.bzl#L705)
+[go/private/context.bzl](../third_party/rgo/v0_60_0/base/go/private/context.bzl#L705)
 where `GoContextInfo` gains Orchestrion-related fields that become available to
 common Go actions.
 
@@ -138,9 +138,9 @@ When Orchestrion is enabled, the action wrappers add:
 
 Relevant entry points:
 
-- [compilepkg.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/compilepkg.bzl#L215)
-- [link.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/link.bzl#L204)
-- [stdlib.bzl](../third_party/rules_go_orchestrion_base/go/private/actions/stdlib.bzl#L179)
+- [compilepkg.bzl](../third_party/rgo/v0_60_0/base/go/private/actions/compilepkg.bzl#L215)
+- [link.bzl](../third_party/rgo/v0_60_0/base/go/private/actions/link.bzl#L204)
+- [stdlib.bzl](../third_party/rgo/v0_60_0/base/go/private/actions/stdlib.bzl#L179)
 
 This is necessary because Orchestrion shells out to `go` and expects a Go
 module-shaped environment, even under Bazel sandboxing.
@@ -148,7 +148,7 @@ module-shaped environment, even under Bazel sandboxing.
 ### 4. The builder wraps real Go tools with `orchestrion toolexec`
 
 The builder runtime in
-[env.go](../third_party/rules_go_orchestrion_base/go/tools/builders/env.go#L144)
+[env.go](../third_party/rgo/v0_60_0/base/go/tools/builders/env.go#L144)
 switches from direct tool execution to:
 
 ```text
@@ -175,17 +175,17 @@ Two areas clearly required extra integration work:
 
 Those behaviors live mostly in:
 
-- [compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go#L596)
-- [link.go](../third_party/rules_go_orchestrion_base/go/tools/builders/link.go#L123)
-- [stdlib.go](../third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go#L43)
-- [importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
+- [compilepkg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go#L596)
+- [link.go](../third_party/rgo/v0_60_0/base/go/tools/builders/link.go#L123)
+- [stdlib.go](../third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go#L43)
+- [importcfg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go)
 
 ## Likely Performance Hot Paths
 
 ### 1. Per-action jobserver startup and dependency warmup
 
 The strongest suspected hot path is repeated jobserver and dependency setup in
-[orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go).
+[orchestrion.go](../third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go).
 
 The relevant behavior is:
 
@@ -205,7 +205,7 @@ be expensive.
 ### 2. Repeated temporary module preparation
 
 The next likely hotspot is `ensureGoModExists(...)` in
-[orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go#L268).
+[orchestrion.go](../third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go#L268).
 
 It may:
 
@@ -222,7 +222,7 @@ cost here can become multiplicative.
 ### 3. Importcfg rewriting and export discovery
 
 The importcfg path in
-[importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go#L565)
+[importcfg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go#L565)
 looks expensive because it repeatedly resolves export archives through
 `go list -export -deps`.
 
@@ -239,7 +239,7 @@ calls can be costly even if compilation itself is cached.
 ### 4. Synthetic testmain cold-miss behavior
 
 Synthetic testmain support in
-[compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go#L596)
+[compilepkg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go#L596)
 looks like a major cold-path cost.
 
 When cache misses happen, the code may:
@@ -259,7 +259,7 @@ to deserve separate attention from ordinary package compilation.
 The stdlib path appears to have the largest I/O footprint.
 
 After weaving, `persistOrchestrionStdlibExports(...)` and related helpers in
-[stdlib.go](../third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go#L338):
+[stdlib.go](../third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go#L338):
 
 - walk the stdlib archive tree
 - copy archives into a persisted export tree

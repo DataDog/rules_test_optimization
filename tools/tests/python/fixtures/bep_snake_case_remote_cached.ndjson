@@ -1,0 +1,2 @@
+{"id":{"test_result":{"label":"//pkg:target","run":1,"shard":1,"attempt":1}},"test_result":{"status":"PASSED","execution_info":{"cached_remotely":true},"test_action_output":[{"name":"test.outputs","uri":"file:///tmp/execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/remote_cached/test.outputs"}]}}
+{"id":{"test_result":{"label":"//pkg:remote_only","run":1,"shard":1,"attempt":1}},"test_result":{"status":"PASSED","execution_info":{"strategy":"remote"},"test_action_output":[{"name":"test.outputs","uri":"bytestream://remote-cas/blobs/deadbeef/123"}]}}

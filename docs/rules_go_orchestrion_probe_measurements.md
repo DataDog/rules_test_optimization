@@ -9,13 +9,13 @@ This product includes software developed at Datadog
 # rules_go Orchestrion Probe Measurements
 
 > Scope note: measurements in this document describe the generic base variant
-> under `third_party/rules_go_orchestrion_base`. The complete variant is tracked
-> separately through `third_party/rules_go_orchestrion_variants.json`.
+> under `third_party/rgo/v0_60_0/base`. Public consumer patch profiles
+> are verified separately by `tools/dev/verify_rules_go_profiles.py`.
 
 ## Purpose
 
 This note captures the first real timing pass for the vendored
-`third_party/rules_go_orchestrion_base` fork using the probe instrumentation added
+`third_party/rgo/v0_60_0/base` fork using the probe instrumentation added
 to the builder and Orchestrion extension paths.
 
 Unlike
@@ -119,7 +119,7 @@ useful:
 ```bash
 GIT_CONFIG_GLOBAL=/dev/null \
 GIT_TERMINAL_PROMPT=0 \
-PATH=/Users/tony.redondo/sdk/go1.24.0/bin:$PATH \
+PATH=$HOME/sdk/go1.24.0/bin:$PATH \
 RULES_GO_ORCHESTRION_PROBE=1 \
 ./bazelw \
   --output_base=/tmp/rto_phase12_cold/output_base \
@@ -140,7 +140,7 @@ module-export cache using the Phase 1/2 code.
 ```bash
 GIT_CONFIG_GLOBAL=/dev/null \
 GIT_TERMINAL_PROMPT=0 \
-PATH=/Users/tony.redondo/sdk/go1.24.0/bin:$PATH \
+PATH=$HOME/sdk/go1.24.0/bin:$PATH \
 RULES_GO_ORCHESTRION_PROBE=1 \
 ./bazelw \
   --output_base=/tmp/rto_phase12_post_export_seed/output_base \
@@ -169,7 +169,7 @@ rm -rf \
 
 GIT_CONFIG_GLOBAL=/dev/null \
 GIT_TERMINAL_PROMPT=0 \
-PATH=/Users/tony.redondo/sdk/go1.24.0/bin:$PATH \
+PATH=$HOME/sdk/go1.24.0/bin:$PATH \
 RULES_GO_ORCHESTRION_PROBE=1 \
 ./bazelw \
   --output_base=/tmp/rto_phase12_post_export_verify/output_base \
@@ -278,7 +278,7 @@ mkdir -p "$BASE/cold" "$BASE/warm" "$BASE/cache_home"
 cd ../rules_test_optimization_tests
 source "$HOME/ddtrace.sh" >/dev/null 2>&1 || true
 
-PATH=/Users/tony.redondo/sdk/go1.24.0/bin:$PATH \
+PATH=$HOME/sdk/go1.24.0/bin:$PATH \
 RULES_GO_ORCHESTRION_PROBE=1 \
 XDG_CACHE_HOME="$BASE/cache_home" \
 RULES_GO_ORCHESTRION_PROBE_FILE="$BASE/cold/builder-probes.log" \
@@ -296,7 +296,7 @@ Warm verification:
 cd ../rules_test_optimization_tests
 source "$HOME/ddtrace.sh" >/dev/null 2>&1 || true
 
-PATH=/Users/tony.redondo/sdk/go1.24.0/bin:$PATH \
+PATH=$HOME/sdk/go1.24.0/bin:$PATH \
 RULES_GO_ORCHESTRION_PROBE=1 \
 XDG_CACHE_HOME=/tmp/rto_bootstrap_eval7/cache_home \
 RULES_GO_ORCHESTRION_PROBE_FILE=/tmp/rto_bootstrap_eval7/warm/builder-probes.log \
@@ -624,7 +624,7 @@ Because the synthetic testmain path does not stop at the small fixed Datadog
 root helper set.
 
 The flow in
-[compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
+[compilepkg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go)
 starts from:
 
 - `syntheticTestmainRootPackages`
@@ -705,7 +705,7 @@ Yes.
 
 The code already has most of the right key material through
 `moduleExportRequestKey(...)` in
-[importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go).
+[importcfg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go).
 
 That key already includes:
 
@@ -828,8 +828,8 @@ The second optimization pass should then focus on:
 ## Related References
 
 - [docs/rules_go_orchestrion_performance_analysis.md](./rules_go_orchestrion_performance_analysis.md)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/compilepkg.go)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go](../third_party/rules_go_orchestrion_base/go/tools/builders/importcfg.go)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go](../third_party/rules_go_orchestrion_base/go/tools/builders/stdlib.go)
-- [third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go](../third_party/rules_go_orchestrion_base/go/tools/builders/orchestrion.go)
-- [third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl](../third_party/rules_go_orchestrion_base/go/private/orchestrion/extensions.bzl)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go](../third_party/rgo/v0_60_0/base/go/tools/builders/stdlib.go)
+- [third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go](../third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go)
+- [third_party/rgo/v0_60_0/base/go/private/orchestrion/extensions.bzl](../third_party/rgo/v0_60_0/base/go/private/orchestrion/extensions.bzl)

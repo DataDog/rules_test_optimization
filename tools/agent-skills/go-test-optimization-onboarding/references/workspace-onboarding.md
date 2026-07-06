@@ -45,13 +45,14 @@ From this repository, generate published pins with:
 ```bash
 ./bazelw run //tools/dev:print_go_onboarding_pins -- \
   --commit "$(git rev-parse origin/main)" \
-  --variant complete \
+  --rules-go-upstream v0_60_0 \
+  --variant base \
   --verify-main-reachable
 ```
 
-Use `--variant base` for normal repositories and `--variant complete` for large
-monorepos that need the compatibility layer. The current published release
-tuple is tracked in
+Use `--variant base`. When multiple upstream `rules_go` versions are supported,
+use `--rules-go-upstream` to choose the upstream support line; omit it to
+preserve the repository default. The current published release tuple is tracked in
 [`docs/Installation_Reference.md`](../../../../docs/Installation_Reference.md#current-v120-published-tuple).
 
 ```bzl
@@ -68,14 +69,14 @@ load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "d
 datadog_go_test_optimization_workspace_repositories(
     rto_commit = "<published-main-commit>",
     rules_go_repo_name = "io_bazel_rules_go",
-    rules_go_variant = "complete",
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
 )
 ```
 
-Choose the variant deliberately:
-
-- `base`: normal Go repositories that need generic Orchestrion support.
-- `complete`: large monorepos that need the extended compatibility layer.
+Omit `rules_go_upstream` to preserve the repository default. The default is
+currently `v0_60_0`, which preserves the existing
+`third_party/rgo/v0_60_0/base` path.
 
 Use the repository's existing `rules_go` repo name when it is already
 established. The Go companion maps its `@rules_go` dependency to that name.
@@ -93,7 +94,8 @@ datadog_go_test_optimization_workspace_repositories(
     rto_remote = "https://github.com/DataDog/rules_test_optimization.git",
     rules_go_fetch = "archive",
     rules_go_repo_name = "io_bazel_rules_go",
-    rules_go_variant = "complete",
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
 )
 ```
 
@@ -129,7 +131,8 @@ Use print modes first:
   --runtime-version <go-version> \
   --sync-repo-name test_optimization_data_<service_key> \
   --rto-commit <published-main-commit> \
-  --rules-go-variant complete \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
   --rules-go-repo-name io_bazel_rules_go \
   --bazel-command <bazel-command> \
   --bazel-config test-optimization \
@@ -153,7 +156,8 @@ Then use write modes only for files the repository should actually own:
   --runtime-version <go-version> \
   --sync-repo-name test_optimization_data_<service_key> \
   --rto-commit <published-main-commit> \
-  --rules-go-variant complete \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
   --rules-go-repo-name io_bazel_rules_go \
   --bazel-command <bazel-command> \
   --bazel-config test-optimization \
@@ -226,7 +230,7 @@ load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_re
 load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
 
 go_orchestrion_tool_repo(
-    dd_trace_go_version = "v2.9.0-rc.2",
+    dd_trace_go_version = "v2.9.0",
     version = "v1.9.0",
 )
 
@@ -324,7 +328,6 @@ common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL
 common:test-optimization --repo_env=DD_SERVICE
 common:test-optimization --repo_env=DD_ENV
-common:test-optimization --repo_env=FETCH_SALT
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
 common:test-optimization --repo_env=DD_GIT_BRANCH
 common:test-optimization --repo_env=DD_GIT_TAG
@@ -348,7 +351,9 @@ common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 # Optional for local experiments when runtime_module_path is not checked in.
 common:test-optimization --repo_env=GO_MODULE_PATH
 ```
@@ -359,6 +364,11 @@ optional and should be used only when the checked-in sync configuration cannot
 carry the module path. Keeping extra values as `--repo_env` is safe for the
 test action cache because they affect repository/module resolution, not the
 test sandbox.
+
+Do not add `FETCH_SALT` to the normal config. Use it only in a separate,
+explicit force-refresh command such as
+`bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` when rollout
+owners intentionally need fresh backend metadata.
 
 Never add:
 
@@ -375,8 +385,17 @@ sandbox.
 
 If the repository already uses a service-specific config name, keep it. The
 important part is that sync, test, doctor, and uploader commands all use the
-same config, and that the test config includes `--remote_download_outputs=all`
-when remote outputs may otherwise stay remote-only.
+same config, and that the test config includes
+`--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` and
+`--zip_undeclared_test_outputs` when remote outputs may otherwise stay
+remote-only. Pass the matching BEP files to doctor/uploader with repeatable
+`--bep-json=<path>` plus `--freshness-source=bep`,
+`--freshness-mode=required`, `--artifact-source=bep`, and
+`--artifact-staging-dir=<temp-dir>` so zipped
+undeclared outputs are staged from BEP before local discovery. If BEP points at
+remote-only HTTP/HTTPS `outputs.zip` carriers, add
+`--remote-artifacts=download` or `required`; bytestream/CAS/custom-auth
+providers also need `--bep-artifact-downloader=<path>`.
 
 ## Root Targets
 
@@ -442,18 +461,18 @@ topt_data = topt_data
 If the repository has multiple Go modules, use the pin files that correspond to
 the module owning the target.
 
-### dd-source Wrapper Shape
+### Large WORKSPACE Monorepo Wrapper Shape
 
-For `dd-source`, use this guide's large WORKSPACE monorepo path and keep the
-Test Optimization policy in `rules/go/dd_topt_go_test.bzl`. The repo-local
-wrapper should call the public Go macro with the existing dd-source Go wrapper
+For a large WORKSPACE monorepo, use this guide's monorepo path and keep the
+Test Optimization policy in a repository-local optimized Go wrapper. That
+wrapper should call the public Go macro with the existing repository Go wrapper
 as the underlying `go_test_rule`, the aggregate service data, and the optimized
 standard Go `testing` Orchestrion mode:
 
 ```bzl
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", _rto_dd_topt_go_test = "dd_topt_go_test")
 load("@test_optimization_data_go//:aggregate.bzl", "topt_data_by_service")
-load("//rules/go:dd_go_test.bzl", "go_test")
+load("//path/to/repo/go:go_test.bzl", "go_test")
 
 _rto_dd_topt_go_test(
     name = name,
@@ -469,13 +488,14 @@ _rto_dd_topt_go_test(
 )
 ```
 
-The dd-source wrapper should own and reject caller overrides for `go_test_rule`,
-`orchestrion_pin_files`, and `topt_data`, so individual BUILD files cannot drift
-away from the centrally validated Test Optimization setup. Declare pilot
-services in `tools/test_optimization/repositories.bzl`, and keep the expected
-runtime targets for doctor/uploader validation in `tools/test_optimization/BUILD.bazel`.
-Use `orchestrion_mode = "general"` only for explicit compatibility validation,
-not for the normal dd-source Test Optimization onboarding path.
+The repository-local wrapper should own and reject caller overrides for
+`go_test_rule`, `orchestrion_pin_files`, and `topt_data`, so individual BUILD
+files cannot drift away from the centrally validated Test Optimization setup.
+Declare pilot services in the repository's Test Optimization metadata file, and
+keep the expected runtime targets for doctor/uploader validation in the
+repository's root Test Optimization BUILD file. Use
+`orchestrion_mode = "general"` only for explicit compatibility validation, not
+for the normal Test Optimization onboarding path.
 
 ## Target Conversion
 

@@ -6,9 +6,16 @@
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+exports_files([
+    "rules_go_forks_gen.go",
+], visibility = ["//visibility:public"])
+
 go_library(
     name = "onboardingpins",
-    srcs = ["pins.go"],
+    srcs = [
+        "pins.go",
+        "rules_go_forks_gen.go",
+    ],
     importpath = "github.com/DataDog/rules_test_optimization/modules/go/tools/onboardingpins",
     visibility = ["//visibility:public"],
 )

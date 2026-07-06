@@ -4,23 +4,32 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
-exports_files([
-    "benchmark_go_orchestrion_perf.py",
-    "check_bazelversion_sync.py",
-    "check_module_versions.py",
-    "diff_rules_go_fork.py",
-    "dotnet_bootstrap.bzl",
-    "go_bootstrap.bzl",
-    "java_bootstrap.bzl",
-    "lint_uploader_templates.py",
-    "nodejs_bootstrap.bzl",
-    "orchestrion_stub.bzl",
-    "python_bootstrap.bzl",
-    "ruby_bootstrap.bzl",
-    "verify_rules_go_variants.py",
-], visibility = ["//visibility:public"])
+exports_files(
+    [
+        "benchmark_go_orchestrion_perf.py",
+        "check_bazelversion_sync.py",
+        "check_module_versions.py",
+        "check_release_archive_contents.py",
+        "diff_rules_go_fork.py",
+        "dotnet_bootstrap.bzl",
+        "generate_rules_go_consumer_patch.py",
+        "generate_rules_go_fork_maps.py",
+        "go_bootstrap.bzl",
+        "java_bootstrap.bzl",
+        "lint_uploader_templates.py",
+        "materialize_rules_go_fork.py",
+        "nodejs_bootstrap.bzl",
+        "orchestrion_stub.bzl",
+        "private_leak_public_denylist.txt",
+        "python_bootstrap.bzl",
+        "rules_go_fork_registry.py",
+        "ruby_bootstrap.bzl",
+        "verify_rules_go_profiles.py",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 go_library(
     name = "print_go_onboarding_pins_lib",
@@ -34,4 +43,10 @@ go_binary(
     name = "print_go_onboarding_pins",
     embed = [":print_go_onboarding_pins_lib"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "print_go_onboarding_pins_test",
+    srcs = ["print_go_onboarding_pins_test.go"],
+    embed = [":print_go_onboarding_pins_lib"],
 )

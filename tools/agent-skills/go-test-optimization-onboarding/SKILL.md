@@ -31,8 +31,27 @@ Keep the RFC contract intact:
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync metadata.
 - Do not pass uploader endpoints or credentials into the test sandbox.
 - Do not copy or apply `rules_go` patch bundles manually.
-- Use `--remote_download_outputs=all` when remote execution or remote cache can
-  leave test outputs remote-only.
+- Put `--remote_download_minimal`,
+  `--remote_download_regex=.*test[.]outputs.*`, and
+  `--zip_undeclared_test_outputs` in the active test `.bazelrc` config when
+  remote execution or remote cache can leave test outputs remote-only.
+- Configure doctor/uploader with repeatable `--bep-json=<path>` flags,
+  `--freshness-source=bep`, `--freshness-mode=required`,
+  `--artifact-source=bep`, and `--artifact-staging-dir=<temp-dir>`.
+  If BEP still points at HTTP/HTTPS `outputs.zip` artifacts, use
+  `--remote-artifacts=download` or `required` without a downloader. Use a
+  downloader only for bytestream/CAS/custom-auth artifact providers.
+- Run pilot tests with a fresh `--build_event_json_file` path per Bazel test
+  invocation; pass the same paths to doctor/uploader with `--bep-json`.
+- In CI, keep a per-job diagnostic report directory with
+  `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir`, and configure
+  wrapper `--support-bundle` or `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` for
+  complete escalation artifacts. For first-pass customer troubleshooting after
+  tests have run, ask for `bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>`
+  with any matching BEP/artifact flags.
+  For bundle triage, inspect `summary.md`, `diagnostics.json`,
+  `reports/doctor-report.json`, optional uploader reports, and
+  `command/flags.json` in that order.
 
 ## First Actions
 
@@ -85,7 +104,19 @@ Every successful Go onboarding should end with these pieces:
   declarations when they exist, and agents do not run broad `go mod tidy`
   unless the repository explicitly wants that behavior.
 - Test commands use a named config such as `--config=test-optimization`.
-- Remote-output-sensitive test configs include `--remote_download_outputs=all`.
+- Remote-output-sensitive test configs include
+  `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
+  and `--zip_undeclared_test_outputs`.
+- Validation commands pass each matching BEP file with repeatable `--bep-json`
+  flags and required BEP freshness/artifact flags. Use
+  `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
+  manual flows where one BEP file is sufficient.
+- CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`,
+  optional `uploader-upload-report.json`, and, when configured,
+  `dd-test-optimization-support.zip` under a per-job report directory.
+  Prefer the wrapper support bundle for full CI escalation; use the doctor-only
+  support bundle for the simplest initial customer request. Keep individual
+  reports for local inspection and manual fallback flows.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
@@ -99,20 +130,22 @@ review snippets first, then `--write-bazelrc`, `--write-root-targets`,
 `--write-validation-script` only when those generated files match the
 repository's local policy.
 
-## dd-source Onboarding Policy
+## Large WORKSPACE Monorepo Policy
 
-When applying this guide to `dd-source`, treat it as a large WORKSPACE monorepo:
+When applying this guide to a large WORKSPACE monorepo with a repository-local
+Go wrapper, treat it as a consumer-specific integration:
 
 - Use the WORKSPACE onboarding path, not the Bzlmod guided flow.
 - Keep Test Optimization policy in the repo-local optimized Go wrapper instead
   of changing every BUILD file to call the public macro directly.
 - The optimized Go wrapper should pass
   `orchestrion_mode = "test_optimization"` for standard Go `testing` targets.
-  Do not rely on the public macro's default `general` mode for dd-source Test
+  Do not rely on the public macro's default `general` mode for Test
   Optimization onboarding. Use `general` only for explicit compatibility
   validation.
-- Preserve dd-source wrapper policy such as tags, scheduling, Docker defaults,
-  platform constraints, and flaky-test behavior in the local helper layer.
+- Preserve repository-local wrapper policy such as tags, scheduling, Docker
+  defaults, platform constraints, and flaky-test behavior in the local helper
+  layer.
 - Validate with fresh `bazel-testlogs/<target>/test.outputs/`, inspect
   `bazel_target_metadata.json` for
   `bazel.go.orchestrion.mode = "test_optimization"` on Go targets, then run

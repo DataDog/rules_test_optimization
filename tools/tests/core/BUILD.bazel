@@ -64,6 +64,7 @@ load(
     "render_multi_aggregate_bzl_contains_expected_targets_test",
     "render_multi_aggregate_bzl_mismatch_failure_test",
     "render_multi_aggregate_bzl_mismatch_target_rule",
+    "render_multi_aggregate_export_bzl_reexports_mapping_test",
 )
 load(
     "//tools/tests/core:test_python_workspace_repositories_utils.bzl",
@@ -112,6 +113,7 @@ load(
     "decode_json_object_valid_test",
     "dirname_test",
     "example_stub_custom_out_dir_test",
+    "example_stub_context_contains_doctor_metadata_test",
     "example_stub_export_manifest_path_test",
     "example_stub_export_string_escaping_test",
     "example_stub_includes_manifest_in_files_test",
@@ -232,14 +234,18 @@ load(
     "//tools/tests/core:test_workspace_repositories_utils.bzl",
     "archive_archive_specs_test",
     "base_git_specs_test",
-    "complete_git_archive_specs_test",
     "custom_rules_go_repo_name_test",
     "existing_repo_failure_test",
     "existing_repo_target_rule",
+    "explicit_upstream_base_specs_test",
+    "invalid_upstream_failure_test",
+    "invalid_upstream_rule",
     "invalid_variant_failure_test",
     "invalid_variant_target_rule",
     "missing_archive_failure_test",
     "missing_archive_target_rule",
+    "removed_complete_variant_failure_test",
+    "removed_complete_variant_target_rule",
 )
 
 filegroup(
@@ -261,6 +267,16 @@ legacy_context_capture_rule(
 
 invalid_variant_target_rule(
     name = "invalid_variant_target",
+    tags = ["manual"],
+)
+
+removed_complete_variant_target_rule(
+    name = "removed_complete_variant_target",
+    tags = ["manual"],
+)
+
+invalid_upstream_rule(
+    name = "invalid_upstream_target",
     tags = ["manual"],
 )
 
@@ -385,12 +401,6 @@ base_git_specs_test(
     timeout = "short",
 )
 
-complete_git_archive_specs_test(
-    name = "complete_git_archive_specs_test",
-    size = "small",
-    timeout = "short",
-)
-
 archive_archive_specs_test(
     name = "archive_archive_specs_test",
     size = "small",
@@ -399,6 +409,12 @@ archive_archive_specs_test(
 
 custom_rules_go_repo_name_test(
     name = "custom_rules_go_repo_name_test",
+    size = "small",
+    timeout = "short",
+)
+
+explicit_upstream_base_specs_test(
+    name = "explicit_upstream_base_specs_test",
     size = "small",
     timeout = "short",
 )
@@ -442,6 +458,16 @@ java_custom_repo_names_test(
 invalid_variant_failure_test(
     name = "invalid_variant_failure_test",
     target_under_test = ":invalid_variant_target",
+)
+
+removed_complete_variant_failure_test(
+    name = "removed_complete_variant_failure_test",
+    target_under_test = ":removed_complete_variant_target",
+)
+
+invalid_upstream_failure_test(
+    name = "invalid_upstream_failure_test",
+    target_under_test = ":invalid_upstream_target",
 )
 
 missing_archive_failure_test(
@@ -837,6 +863,12 @@ example_stub_manifest_content_matches_sync_contract_test(
     timeout = "short",
 )
 
+example_stub_context_contains_doctor_metadata_test(
+    name = "example_stub_context_contains_doctor_metadata_test",
+    size = "small",
+    timeout = "short",
+)
+
 example_stub_service_keys_targets_test(
     name = "example_stub_service_keys_targets_test",
     size = "small",
@@ -1033,6 +1065,12 @@ record_multi_repo_owner_success_test(
 
 render_multi_aggregate_bzl_contains_expected_targets_test(
     name = "render_multi_aggregate_bzl_contains_expected_targets_test",
+    size = "small",
+    timeout = "short",
+)
+
+render_multi_aggregate_export_bzl_reexports_mapping_test(
+    name = "render_multi_aggregate_export_bzl_reexports_mapping_test",
     size = "small",
     timeout = "short",
 )
@@ -1422,7 +1460,6 @@ test_suite(
         ":collect_flaky_tests_modules_defensive_shape_test",
         ":collect_known_tests_modules_defensive_shape_test",
         ":collect_test_management_modules_defensive_shape_test",
-        ":complete_git_archive_specs_test",
         ":compute_repo_names_test",
         ":compute_service_keys_dedups_collisions_test",
         ":compute_service_keys_edge_cases_test",
@@ -1448,6 +1485,7 @@ test_suite(
         ":example_stub_custom_out_dir_test",
         ":example_stub_export_manifest_path_test",
         ":example_stub_export_string_escaping_test",
+        ":example_stub_context_contains_doctor_metadata_test",
         ":example_stub_includes_manifest_in_files_test",
         ":example_stub_manifest_content_matches_sync_contract_test",
         ":example_stub_module_targets_test",
@@ -1456,12 +1494,14 @@ test_suite(
         ":existing_repo_failure_test",
         ":expected_targets_test",
         ":explicit_context_data_test",
+        ":explicit_upstream_base_specs_test",
         ":export_bzl_escaping_test",
         ":export_bzl_manifest_path_test",
         ":first_env_ctx_test",
         ":first_env_from_environ_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",
         ":http_execute_timeout_seconds_test",
+        ":invalid_upstream_failure_test",
         ":invalid_variant_failure_test",
         ":load_github_event_payload_ctx_test",
         ":local_git_metadata_detached_head_has_no_branch_test",
@@ -1496,10 +1536,12 @@ test_suite(
         ":record_multi_repo_owner_success_test",
         ":record_sync_extension_repo_owner_duplicate_failure_test",
         ":record_sync_extension_repo_owner_success_test",
+        ":removed_complete_variant_failure_test",
         ":render_module_runfiles_bzl_escaping_test",
         ":render_module_runfiles_bzl_respects_manifest_root_test",
         ":render_multi_aggregate_bzl_contains_expected_targets_test",
         ":render_multi_aggregate_bzl_mismatch_failure_test",
+        ":render_multi_aggregate_export_bzl_reexports_mapping_test",
         ":render_template_missing_placeholder_test",
         ":render_template_no_recursive_substitution_test",
         ":render_template_substitution_test",

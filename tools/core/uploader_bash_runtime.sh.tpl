@@ -17,6 +17,16 @@ log() { echo "[dd-uploader] $1"; }
 # Selector helpers sometimes run under command substitution, so warnings that
 # must stay visible need an explicit stderr path instead of stdout.
 log_stderr() { echo "[dd-uploader] $1" >&2; }
+optional_bep_unavailable() {
+    local message="$1"
+    if [[ "${FRESHNESS_MODE:-}" != "optional" ]]; then
+        return 1
+    fi
+    log "warning: $message; BEP freshness filtering skipped and cached test outputs may be uploaded"
+    FRESHNESS_SELECTED_SOURCE="none"
+    FRESHNESS_ELIGIBILITY_ENABLED=0
+    return 0
+}
 DEBUG_BOOTSTRAP=$(echo "${DD_TEST_OPTIMIZATION_DEBUG:-0}" | tr '[:upper:]' '[:lower:]')
 # Handle dbg behavior.
 dbg() {
@@ -37,6 +47,41 @@ trim_ascii_whitespace() {
 ']}"}"
     printf '%s
 ' "$value"
+}
+
+display_artifact_reference() {
+    local value="$1"
+    local lowered scheme rest
+    lowered="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+    case "$lowered" in
+        http://*|https://*) ;;
+        *)
+            printf '%s
+' "$value"
+            return 0
+            ;;
+    esac
+    if [[ "$value" != *"://"* ]]; then
+        scheme="${lowered%%://*}"
+        printf '%s://redacted-invalid-url
+' "$scheme"
+        return 0
+    fi
+    scheme="${value%%://*}"
+    scheme="$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')"
+    rest="${value#*://}"
+    rest="${rest%%#*}"
+    rest="${rest%%\?*}"
+    if [[ "$rest" == *"@"* ]]; then
+        rest="${rest##*@}"
+    fi
+    if [[ -z "$rest" ]]; then
+        printf '%s://redacted-invalid-url
+' "$scheme"
+        return 0
+    fi
+    printf '%s://%s
+' "$scheme" "$rest"
 }
 
 # Handle normalize dd site or fail behavior.
@@ -243,6 +288,23 @@ resolve_artifact_path() {
     echo ""
 }
 
+resolve_runtime_file_path() {
+    local input_path="$1"
+    if [[ -z "$input_path" ]]; then
+        echo ""
+        return
+    fi
+    if [[ -f "$input_path" ]]; then
+        echo "$input_path"
+        return
+    fi
+    if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" && -f "$BUILD_WORKSPACE_DIRECTORY/$input_path" ]]; then
+        echo "$BUILD_WORKSPACE_DIRECTORY/$input_path"
+        return
+    fi
+    resolve_artifact_path "$input_path"
+}
+
 # Resolve bundled context inputs used for payload enrichment.
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without making `bazel run //:dd_upload_payloads` depend on sync labels.
@@ -378,6 +440,8 @@ SCHEMA_JSON_RLOC="__DDTPL_SCHEMA_JSON_RLOC__"
 SCHEMA_JSON_PATH="__DDTPL_SCHEMA_JSON_PATH__"
 SCHEMA_VALIDATOR_RLOC="__DDTPL_SCHEMA_VALIDATOR_RLOC__"
 SCHEMA_VALIDATOR_PATH="__DDTPL_SCHEMA_VALIDATOR_PATH__"
+BEP_ARTIFACT_STAGE_HELPER_RLOC="__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__"
+DOCTOR_RUNTIME_RLOC="__DDTPL_DOCTOR_RUNTIME_RLOC__"
 dbg "schema resolution inputs: schema_path='$SCHEMA_JSON_PATH' schema_rloc='$SCHEMA_JSON_RLOC' validator_path='$SCHEMA_VALIDATOR_PATH' validator_rloc='$SCHEMA_VALIDATOR_RLOC'"
 SCHEMA_JSON=$(resolve_artifact_path "$SCHEMA_JSON_PATH")
 if [[ -n "$SCHEMA_JSON" ]]; then
@@ -429,6 +493,42 @@ validate_numeric() {
         log "error: $name must be a non-negative integer, got: '$val'"
         exit 2  # Configuration error
     fi
+}
+
+validate_positive_decimal() {
+    local name="$1"
+    local val="$2"
+    if ! [[ "$val" =~ ^[+]?[0-9]+([.][0-9]*)?$|^[+]?[.][0-9]+$ ]]; then
+        log "error: invalid $name=$val"
+        exit 2
+    fi
+    if ! awk -v v="$val" 'BEGIN { exit !(v > 0) }'; then
+        log "error: invalid $name=$val"
+        exit 2
+    fi
+}
+
+is_absolute_path() {
+    case "$1" in
+        /*|[A-Za-z]:/*|[A-Za-z]:\\*|\\\\*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+bep_artifact_staging_python() {
+    local candidate
+    for candidate in "${DD_TEST_OPTIMIZATION_PYTHON:-}" "${PYTHON:-}" python3 python; do
+        [[ -n "$candidate" ]] || continue
+        if [[ -f "$candidate" || -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+        if command -v "$candidate" >/dev/null 2>&1; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Generate UUID (best effort). Uses uuidgen, python3, or /dev/urandom.
@@ -503,6 +603,64 @@ RUNTIME_ID=$(generate_uuid)
 TELEMETRY_SESSION_FALLBACK=$(generate_uuid)
 DRY_RUN=0
 VALIDATE_ENRICHMENT=0
+REPORT_JSON="${DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON:-}"
+UPLOADER_REPORT_WRITTEN=0
+REPORT_REASON_CODE="running"
+REPORT_REASON="Uploader is still running."
+REPORT_NEXT_STEPS=()
+REPORT_UPLOAD_ATTEMPTED=0
+REPORT_PAYLOADS_DISCOVERED_TESTS=0
+REPORT_PAYLOADS_DISCOVERED_COVERAGE=0
+REPORT_PAYLOADS_DISCOVERED_TELEMETRY=0
+UPLOAD_FAILURES=0
+REPORT_TESTS_PROCESSED=0
+REPORT_TESTS_FAILED=0
+REPORT_TESTS_SKIPPED=0
+REPORT_COVERAGE_PROCESSED=0
+REPORT_COVERAGE_FAILED=0
+REPORT_COVERAGE_SKIPPED=0
+REPORT_TELEMETRY_PROCESSED=0
+REPORT_TELEMETRY_FAILED=0
+REPORT_TELEMETRY_SKIPPED=0
+BEP_JSON_FILES=()
+if [[ -n "${DD_TEST_OPTIMIZATION_BEP_JSON:-}" ]]; then
+    BEP_JSON_FILES+=("$DD_TEST_OPTIMIZATION_BEP_JSON")
+fi
+ARTIFACT_SOURCE="${DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE:-local}"
+REMOTE_ARTIFACTS="${DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS:-disabled}"
+ARTIFACT_STAGING_DIR="${DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR:-}"
+BEP_ARTIFACT_DOWNLOADER="${DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER:-}"
+BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC="${DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC:-300}"
+STAGED_TESTLOGS_DIRS=()
+TESTLOGS_SCAN_DIRS=()
+SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE=""
+BLOCKED_BEP_ARTIFACT_LABELS_FILE=""
+STAGED_OUTPUT_KEYS_FILE=""
+STAGED_REMOTE_CLEARANCES_FILE=""
+FRESHNESS_MODE="${DD_TEST_OPTIMIZATION_FRESHNESS_MODE:-${DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE:-auto}}"
+FRESHNESS_MODE_HAS_NEW_CONFIG=0
+if [[ -n "${DD_TEST_OPTIMIZATION_FRESHNESS_MODE:-}" ]]; then
+    FRESHNESS_MODE_HAS_NEW_CONFIG=1
+fi
+FRESHNESS_DISABLED_EXPLICIT=0
+FRESHNESS_SOURCE="${DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE:-auto}"
+EXECUTION_LOG_JSON="${DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON:-}"
+EXECUTION_LOG_MODE="$FRESHNESS_MODE"
+DEFAULT_BEP_JSON=".topt/bazel-bep.json"
+DEFAULT_EXECUTION_LOG_JSON=".topt/bazel-execution-log.json"
+FRESHNESS_ELIGIBILITY_ENABLED=0
+FRESHNESS_SELECTED_SOURCE="none"
+FRESHNESS_ELIGIBLE_LABELS_FILE=""
+FRESHNESS_ELIGIBLE_OUTPUTS_FILE=""
+FRESHNESS_CACHED_OUTPUTS_FILE=""
+FRESHNESS_SKIPPED_OUTPUTS_FILE=""
+FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE=""
+FRESHNESS_MISSING_OUTPUT_LABELS_FILE=""
+FRESHNESS_SKIP_WAS_EMITTED=0
+EXECUTION_ELIGIBILITY_ENABLED=0
+EXECUTION_ELIGIBLE_LABELS_FILE=""
+EXECUTION_ELIGIBLE_OUTPUTS_FILE=""
+EXECUTION_SKIPPED_OUTPUTS_FILE=""
 EXPECTED_ENRICHED_TAGS=()
 DEFAULT_EXPECTED_ENRICHED_TAGS=(
     "git.repository_url"
@@ -519,6 +677,21 @@ Options:
   --dry-run                    Enrich and validate payloads without uploading or deleting files.
   --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment.
   --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags.
+  --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable.
+  --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto.
+  --freshness-mode MODE        Cache-safety mode: auto, required, optional, or disabled. Default: auto.
+  --artifact-source SOURCE     Artifact source: local, bep, or auto. Default: local.
+  --remote-artifacts MODE      Remote artifact mode: disabled, download, or required. Default: disabled.
+  --artifact-staging-dir PATH  Directory for staged BEP artifacts. Default: .topt/bep-artifacts.
+  --bep-artifact-downloader PATH
+                                Executable that writes remote BEP outputs.zip artifacts.
+  --bep-artifact-downloader-timeout-sec SECONDS
+                                Positive decimal timeout for the BEP artifact downloader.
+  --execution-log-json PATH    Only upload payloads from TestRunner actions that executed in this Bazel execution log.
+  --execution-log-mode MODE    Legacy alias for --freshness-mode.
+  --allow-cached-payload-uploads
+                                Disable BEP and execution-log cache filtering for this uploader run.
+  --report-json PATH           Write a machine-readable uploader diagnostic report.
 EOF
 }
 
@@ -544,6 +717,154 @@ while (($# > 0)); do
             EXPECTED_ENRICHED_TAGS+=("${1#--expected-enriched-tag=}")
             shift
             ;;
+        --bep-json)
+            if (($# < 2)); then
+                log "error: --bep-json requires a file path"
+                exit 2
+            fi
+            BEP_JSON_FILES+=("$2")
+            shift 2
+            ;;
+        --bep-json=*)
+            BEP_JSON_FILES+=("${1#--bep-json=}")
+            shift
+            ;;
+        --freshness-source)
+            if (($# < 2)); then
+                log "error: --freshness-source requires one of: auto, bep, execution_log"
+                exit 2
+            fi
+            FRESHNESS_SOURCE="$2"
+            shift 2
+            ;;
+        --freshness-source=*)
+            FRESHNESS_SOURCE="${1#--freshness-source=}"
+            shift
+            ;;
+        --freshness-mode)
+            if (($# < 2)); then
+                log "error: --freshness-mode requires one of: auto, required, optional, disabled"
+                exit 2
+            fi
+            FRESHNESS_MODE="$2"
+            EXECUTION_LOG_MODE="$2"
+            FRESHNESS_MODE_HAS_NEW_CONFIG=1
+            shift 2
+            ;;
+        --freshness-mode=*)
+            FRESHNESS_MODE="${1#--freshness-mode=}"
+            EXECUTION_LOG_MODE="$FRESHNESS_MODE"
+            FRESHNESS_MODE_HAS_NEW_CONFIG=1
+            shift
+            ;;
+        --artifact-source)
+            if (($# < 2)); then
+                log "error: --artifact-source requires one of: local, bep, auto"
+                exit 2
+            fi
+            ARTIFACT_SOURCE="$2"
+            shift 2
+            ;;
+        --artifact-source=*)
+            ARTIFACT_SOURCE="${1#--artifact-source=}"
+            shift
+            ;;
+        --remote-artifacts)
+            if (($# < 2)); then
+                log "error: --remote-artifacts requires one of: disabled, download, required"
+                exit 2
+            fi
+            REMOTE_ARTIFACTS="$2"
+            shift 2
+            ;;
+        --remote-artifacts=*)
+            REMOTE_ARTIFACTS="${1#--remote-artifacts=}"
+            shift
+            ;;
+        --artifact-staging-dir)
+            if (($# < 2)); then
+                log "error: --artifact-staging-dir requires a path"
+                exit 2
+            fi
+            ARTIFACT_STAGING_DIR="$2"
+            shift 2
+            ;;
+        --artifact-staging-dir=*)
+            ARTIFACT_STAGING_DIR="${1#--artifact-staging-dir=}"
+            shift
+            ;;
+        --bep-artifact-downloader)
+            if (($# < 2)); then
+                log "error: --bep-artifact-downloader requires an executable path"
+                exit 2
+            fi
+            BEP_ARTIFACT_DOWNLOADER="$2"
+            shift 2
+            ;;
+        --bep-artifact-downloader=*)
+            BEP_ARTIFACT_DOWNLOADER="${1#--bep-artifact-downloader=}"
+            shift
+            ;;
+        --bep-artifact-downloader-timeout-sec)
+            if (($# < 2)); then
+                log "error: --bep-artifact-downloader-timeout-sec requires a number"
+                exit 2
+            fi
+            BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC="$2"
+            shift 2
+            ;;
+        --bep-artifact-downloader-timeout-sec=*)
+            BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC="${1#--bep-artifact-downloader-timeout-sec=}"
+            shift
+            ;;
+        --execution-log-json)
+            if (($# < 2)); then
+                log "error: --execution-log-json requires a file path"
+                exit 2
+            fi
+            EXECUTION_LOG_JSON="$2"
+            shift 2
+            ;;
+        --execution-log-json=*)
+            EXECUTION_LOG_JSON="${1#--execution-log-json=}"
+            shift
+            ;;
+        --execution-log-mode)
+            if (($# < 2)); then
+                log "error: --execution-log-mode requires one of: auto, required, optional, disabled"
+                exit 2
+            fi
+            EXECUTION_LOG_MODE="$2"
+            if (( FRESHNESS_MODE_HAS_NEW_CONFIG == 0 )); then
+                FRESHNESS_MODE="$2"
+            fi
+            shift 2
+            ;;
+        --execution-log-mode=*)
+            EXECUTION_LOG_MODE="${1#--execution-log-mode=}"
+            if (( FRESHNESS_MODE_HAS_NEW_CONFIG == 0 )); then
+                FRESHNESS_MODE="$EXECUTION_LOG_MODE"
+            fi
+            shift
+            ;;
+        --allow-cached-payload-uploads)
+            FRESHNESS_DISABLED_EXPLICIT=1
+            FRESHNESS_MODE="disabled"
+            EXECUTION_LOG_MODE="disabled"
+            shift
+            ;;
+        --report-json)
+            if (($# < 2)); then
+                log "error: --report-json requires a file path"
+                exit 2
+            fi
+            REPORT_JSON="$2"
+            shift 2
+            ;;
+        --report-json=*)
+            REPORT_JSON="${1#--report-json=}"
+            shift
+            ;;
         --help|-h)
             print_usage
             exit 0
@@ -556,9 +877,62 @@ while (($# > 0)); do
     esac
 done
 
+if (( FRESHNESS_DISABLED_EXPLICIT == 1 )); then
+    FRESHNESS_MODE="disabled"
+    EXECUTION_LOG_MODE="disabled"
+fi
+
 if (( VALIDATE_ENRICHMENT == 1 && DRY_RUN == 0 )); then
     log "error: --validate-enrichment requires --dry-run"
     exit 2
+fi
+
+FRESHNESS_MODE="$(echo "$FRESHNESS_MODE" | tr '[:upper:]' '[:lower:]')"
+FRESHNESS_SOURCE="$(echo "$FRESHNESS_SOURCE" | tr '[:upper:]' '[:lower:]')"
+ARTIFACT_SOURCE="$(echo "$ARTIFACT_SOURCE" | tr '[:upper:]' '[:lower:]')"
+REMOTE_ARTIFACTS="$(echo "$REMOTE_ARTIFACTS" | tr '[:upper:]' '[:lower:]')"
+EXECUTION_LOG_MODE="$FRESHNESS_MODE"
+case "$FRESHNESS_MODE" in
+    auto|required|optional|disabled) ;;
+    *)
+        log "error: DD_TEST_OPTIMIZATION_FRESHNESS_MODE/--freshness-mode must be one of: auto, required, optional, disabled"
+        exit 2
+        ;;
+esac
+case "$FRESHNESS_SOURCE" in
+    auto|bep|execution_log) ;;
+    *)
+        log "error: DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE/--freshness-source must be one of: auto, bep, execution_log"
+        exit 2
+        ;;
+esac
+case "$ARTIFACT_SOURCE" in
+    local|bep|auto) ;;
+    *)
+        log "error: DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE/--artifact-source must be one of: local, bep, auto"
+        exit 2
+        ;;
+esac
+case "$REMOTE_ARTIFACTS" in
+    disabled|download|required) ;;
+    *)
+        log "error: DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS/--remote-artifacts must be one of: disabled, download, required"
+        exit 2
+        ;;
+esac
+validate_positive_decimal "--bep-artifact-downloader-timeout-sec" "$BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC"
+if [[ -z "$ARTIFACT_STAGING_DIR" ]]; then
+    if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
+        ARTIFACT_STAGING_DIR="$BUILD_WORKSPACE_DIRECTORY/.topt/bep-artifacts"
+    else
+        ARTIFACT_STAGING_DIR="$(pwd)/.topt/bep-artifacts"
+    fi
+elif ! is_absolute_path "$ARTIFACT_STAGING_DIR"; then
+    if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
+        ARTIFACT_STAGING_DIR="$BUILD_WORKSPACE_DIRECTORY/$ARTIFACT_STAGING_DIR"
+    else
+        ARTIFACT_STAGING_DIR="$(pwd)/$ARTIFACT_STAGING_DIR"
+    fi
 fi
 
 # Validate numeric environment variables
@@ -706,6 +1080,25 @@ fi
 
 # Cleanup lock on exit
 cleanup() {
+    local staged_root runs_root full_runs_root full_staged_root
+    runs_root="$ARTIFACT_STAGING_DIR/__runs"
+    if [[ -d "$runs_root" ]]; then
+        full_runs_root="$(cd "$runs_root" 2>/dev/null && pwd -P || printf '%s\n' "$runs_root")"
+    else
+        full_runs_root="$runs_root"
+    fi
+    for staged_root in "${STAGED_TESTLOGS_DIRS[@]+${STAGED_TESTLOGS_DIRS[@]}}"; do
+        [[ -n "$staged_root" ]] || continue
+        if [[ -d "$staged_root" ]]; then
+            full_staged_root="$(cd "$staged_root" 2>/dev/null && pwd -P || printf '%s\n' "$staged_root")"
+        else
+            full_staged_root="$staged_root"
+        fi
+        case "$full_staged_root" in
+            "$full_runs_root"/*) rm -rf "$full_staged_root" 2>/dev/null || true ;;
+            *) log_stderr "warning: refusing to clean BEP staging root outside owned run directory: $staged_root" ;;
+        esac
+    done
     # Only the lock owner may remove LOCK_DIR. This avoids deleting an active
     # uploader's lock when the current process failed to acquire it.
     if [[ "$LOCK_ACQUIRED" == "1" ]]; then
@@ -713,7 +1106,420 @@ cleanup() {
     fi
     rm -rf "$TMP_PAYLOAD_DIR" 2>/dev/null || true
 }
-trap cleanup EXIT
+
+report_json_string() {
+    local value="${1:-}"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "$value"
+}
+
+report_json_array() {
+    local first=1 value existing duplicate
+    local values=()
+    printf '['
+    for value in "$@"; do
+        duplicate=0
+        for existing in "${values[@]+${values[@]}}"; do
+            if [[ "$existing" == "$value" ]]; then
+                duplicate=1
+                break
+            fi
+        done
+        if (( duplicate == 1 )); then
+            continue
+        fi
+        values+=("$value")
+        if (( first == 0 )); then
+            printf ','
+        fi
+        report_json_string "$value"
+        first=0
+    done
+    printf ']'
+}
+
+report_bool() {
+    case "${1:-0}" in
+        1|true|TRUE|yes|YES) printf 'true' ;;
+        *) printf 'false' ;;
+    esac
+}
+
+report_count_lines_file() {
+    local path="${1:-}"
+    if [[ -n "$path" && -s "$path" ]]; then
+        wc -l <"$path" | tr -d '[:space:]'
+    else
+        printf '0'
+    fi
+}
+
+report_count_lines_text() {
+    local text="${1:-}"
+    if [[ -z "$text" ]]; then
+        printf '0'
+    else
+        printf '%s\n' "$text" | sed '/^$/d' | wc -l | tr -d '[:space:]'
+    fi
+}
+
+set_report_result() {
+    REPORT_REASON_CODE="$1"
+    REPORT_REASON="$2"
+    shift 2
+    REPORT_NEXT_STEPS=("$@")
+}
+
+classify_uploader_result() {
+    local exit_code="$1"
+    local test_outputs_dirs discovered_total
+    test_outputs_dirs="$(report_count_lines_text "${TEST_OUTPUTS_CACHE:-}")"
+    discovered_total=$((REPORT_PAYLOADS_DISCOVERED_TESTS + REPORT_PAYLOADS_DISCOVERED_COVERAGE + REPORT_PAYLOADS_DISCOVERED_TELEMETRY))
+    if [[ "$REPORT_REASON_CODE" != "running" ]]; then
+        return
+    fi
+    if (( exit_code != 0 && ${#BEP_JSON_FILES[@]} == 0 )) && {
+        [[ "${FRESHNESS_SOURCE:-}" == "bep" ]] ||
+        [[ "${ARTIFACT_SOURCE:-}" == "bep" ]] ||
+        [[ "${FRESHNESS_MODE:-}" == "required" ]]
+    }; then
+        set_report_result "missing_bep_json" \
+            "BEP freshness or artifact staging was required, but no BEP JSON was configured." \
+            "Pass --bep-json from the matching bazel test invocation."
+        return
+    fi
+    if (( exit_code != 0 && $(report_count_lines_file "${FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE:-}") > 0 )); then
+        set_report_result "bep_output_remote_only_without_downloader" \
+            "BEP selected remote-only outputs that could not be materialized locally." \
+            "Enable --remote-artifacts=download with --bep-artifact-downloader, or adjust Bazel remote download settings."
+        return
+    fi
+    if (( exit_code != 0 && $(report_count_lines_file "${FRESHNESS_CACHED_OUTPUTS_FILE:-}") > 0 )); then
+        set_report_result "target_cached_by_bazel" \
+            "Required BEP freshness rejected cached Bazel test outputs." \
+            "Run tests with --nocache_test_results or select targets that executed in this invocation."
+        return
+    fi
+    if (( exit_code != 0 && DRY_RUN == 0 && REPORT_UPLOAD_ATTEMPTED > 0 && ${UPLOAD_FAILURES:-0} > 0 )); then
+        set_report_result "upload_failed_http" \
+            "One or more payload uploads failed." \
+            "Check HTTP status diagnostics and Datadog credentials/site configuration."
+        return
+    fi
+    if (( exit_code != 0 && (${REPORT_TESTS_FAILED:-0} + ${REPORT_COVERAGE_FAILED:-0} + ${REPORT_TELEMETRY_FAILED:-0}) > 0 )); then
+        set_report_result "payload_enrichment_failed" \
+            "Dry-run or payload processing failed for at least one payload." \
+            "Inspect uploader logs for the first payload validation failure."
+        return
+    fi
+    if (( test_outputs_dirs == 0 )); then
+        set_report_result "no_test_outputs_found" \
+            "No local or staged test.outputs directories were found." \
+            "Use --artifact-source=bep with the matching --bep-json, or configure Bazel to materialize test outputs."
+        return
+    fi
+    if (( discovered_total == 0 )); then
+        set_report_result "no_payload_json_found" \
+            "Test output directories were found, but no JSON payloads were available." \
+            "Inspect TEST_UNDECLARED_OUTPUTS_DIR and outputs.zip for payloads/tests, payloads/coverage, or payloads/telemetry files."
+        return
+    fi
+    if (( exit_code == 0 && DRY_RUN == 1 )); then
+        set_report_result "upload_skipped_dry_run" \
+            "Dry-run completed successfully; real upload was not requested." \
+            "Run again with --upload or without --dry-run to send payloads."
+        return
+    fi
+    if (( exit_code == 0 )); then
+        set_report_result "ok" "Uploader completed successfully."
+        return
+    fi
+    set_report_result "upload_failed_unknown" \
+        "Uploader failed without a more specific report reason." \
+        "Inspect uploader logs and report counters."
+}
+
+write_uploader_report() {
+    local status="$1"
+    local exit_code="$2"
+    if [[ -z "${REPORT_JSON:-}" ]]; then
+        return 0
+    fi
+    classify_uploader_result "$exit_code"
+
+    local report_dir report_tmp report_payloads_attempted report_payloads_uploaded
+    report_payloads_attempted=0
+    report_payloads_uploaded=0
+    if (( REPORT_UPLOAD_ATTEMPTED == 1 )); then
+        report_payloads_attempted=$((REPORT_TESTS_PROCESSED + REPORT_COVERAGE_PROCESSED + REPORT_TELEMETRY_PROCESSED + UPLOAD_FAILURES))
+        report_payloads_uploaded=$((REPORT_TESTS_PROCESSED + REPORT_COVERAGE_PROCESSED + REPORT_TELEMETRY_PROCESSED))
+    fi
+    report_dir="$(dirname "$REPORT_JSON")"
+    if ! mkdir -p "$report_dir" 2>/dev/null; then
+        log_stderr "warning: failed to create uploader report directory: $report_dir"
+        return 0
+    fi
+    report_tmp="${REPORT_JSON}.tmp.$$"
+    if ! {
+        printf '{\n'
+        printf '  "schema_version": 1,\n'
+        printf '  "tool": "dd-test-optimization-uploader",\n'
+        printf '  "status": %s,\n' "$(report_json_string "$status")"
+        printf '  "exit_code": %s,\n' "$exit_code"
+        printf '  "result": {\n'
+        printf '    "status": %s,\n' "$(report_json_string "$status")"
+        printf '    "reason_code": %s,\n' "$(report_json_string "$REPORT_REASON_CODE")"
+        printf '    "reason": %s,\n' "$(report_json_string "$REPORT_REASON")"
+        printf '    "next_steps": %s\n' "$(report_json_array "${REPORT_NEXT_STEPS[@]+${REPORT_NEXT_STEPS[@]}}")"
+        printf '  },\n'
+        printf '  "config": {\n'
+        printf '    "dry_run": %s,\n' "$(report_bool "${DRY_RUN:-0}")"
+        printf '    "validate_enrichment": %s,\n' "$(report_bool "${VALIDATE_ENRICHMENT:-0}")"
+        printf '    "artifact_source": %s,\n' "$(report_json_string "${ARTIFACT_SOURCE:-}")"
+        printf '    "remote_artifacts": %s,\n' "$(report_json_string "${REMOTE_ARTIFACTS:-}")"
+        printf '    "freshness_source": %s,\n' "$(report_json_string "${FRESHNESS_SOURCE:-}")"
+        printf '    "freshness_mode": %s,\n' "$(report_json_string "${FRESHNESS_MODE:-}")"
+        printf '    "allow_cached_payload_uploads": %s\n' "$(report_bool "${FRESHNESS_DISABLED_EXPLICIT:-0}")"
+        printf '  },\n'
+        printf '  "bep": {\n'
+        printf '    "files": %s,\n' "$(report_json_array "${BEP_JSON_FILES[@]+${BEP_JSON_FILES[@]}}")"
+        printf '    "freshness_selected_source": %s,\n' "$(report_json_string "${FRESHNESS_SELECTED_SOURCE:-none}")"
+        printf '    "eligible_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_ELIGIBLE_OUTPUTS_FILE:-}")"
+        printf '    "cached_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_CACHED_OUTPUTS_FILE:-}")"
+        printf '    "remote_only_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE:-}")"
+        printf '    "skipped_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_SKIPPED_OUTPUTS_FILE:-}")"
+        printf '    "missing_output_labels": %s\n' "$(report_count_lines_file "${FRESHNESS_MISSING_OUTPUT_LABELS_FILE:-}")"
+        printf '  },\n'
+        printf '  "artifacts": {\n'
+        printf '    "source": %s,\n' "$(report_json_string "${ARTIFACT_SOURCE:-}")"
+        printf '    "staging_dir": %s,\n' "$(report_json_string "${ARTIFACT_STAGING_DIR:-}")"
+        printf '    "staged_testlogs_dirs": %s,\n' "${#STAGED_TESTLOGS_DIRS[@]}"
+        printf '    "selected_remote_artifacts": %s,\n' "$(report_count_lines_file "${SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE:-}")"
+        printf '    "staged_remote_artifacts": %s,\n' "$(report_count_lines_file "${STAGED_OUTPUT_KEYS_FILE:-}")"
+        printf '    "remote_artifacts_ignored": %s\n' "$(report_count_lines_file "${BLOCKED_BEP_ARTIFACT_LABELS_FILE:-}")"
+        printf '  },\n'
+        printf '  "upload": {\n'
+        printf '    "attempted": %s,\n' "$(report_bool "${REPORT_UPLOAD_ATTEMPTED:-0}")"
+        printf '    "dry_run": %s,\n' "$(report_bool "${DRY_RUN:-0}")"
+        printf '    "payloads_attempted": %s,\n' "$report_payloads_attempted"
+        printf '    "payloads_uploaded": %s,\n' "$report_payloads_uploaded"
+        printf '    "payloads_failed": %s\n' "${UPLOAD_FAILURES:-0}"
+        printf '  },\n'
+        printf '  "payloads": {\n'
+        printf '    "test_outputs_dirs": %s,\n' "$(report_count_lines_text "${TEST_OUTPUTS_CACHE:-}")"
+        printf '    "discovered": {"tests": %s, "coverage": %s, "telemetry": %s},\n' \
+            "${REPORT_PAYLOADS_DISCOVERED_TESTS:-0}" \
+            "${REPORT_PAYLOADS_DISCOVERED_COVERAGE:-0}" \
+            "${REPORT_PAYLOADS_DISCOVERED_TELEMETRY:-0}"
+        printf '    "tests": {"processed": %s, "failed": %s, "skipped": %s},\n' "${REPORT_TESTS_PROCESSED:-0}" "${REPORT_TESTS_FAILED:-0}" "${REPORT_TESTS_SKIPPED:-0}"
+        printf '    "coverage": {"processed": %s, "failed": %s, "skipped": %s},\n' "${REPORT_COVERAGE_PROCESSED:-0}" "${REPORT_COVERAGE_FAILED:-0}" "${REPORT_COVERAGE_SKIPPED:-0}"
+        printf '    "telemetry": {"processed": %s, "failed": %s, "skipped": %s}\n' "${REPORT_TELEMETRY_PROCESSED:-0}" "${REPORT_TELEMETRY_FAILED:-0}" "${REPORT_TELEMETRY_SKIPPED:-0}"
+        printf '  },\n'
+        printf '  "upload_failures": %s\n' "${UPLOAD_FAILURES:-0}"
+        printf '}\n'
+    } >"$report_tmp"; then
+        rm -f "$report_tmp" 2>/dev/null || true
+        log_stderr "warning: failed to write uploader report: $REPORT_JSON"
+        return 0
+    fi
+    if ! mv "$report_tmp" "$REPORT_JSON" 2>/dev/null; then
+        rm -f "$report_tmp" 2>/dev/null || true
+        log_stderr "warning: failed to move uploader report into place: $REPORT_JSON"
+    fi
+}
+
+finalize_uploader_report() {
+    local exit_code="${1:-0}"
+    local status="ok"
+    if (( exit_code != 0 )); then
+        status="fail"
+    fi
+    if (( UPLOADER_REPORT_WRITTEN == 0 )); then
+        write_uploader_report "$status" "$exit_code" || true
+        UPLOADER_REPORT_WRITTEN=1
+    fi
+}
+
+uploader_on_exit() {
+    local rc=$?
+    set +e
+    finalize_uploader_report "$rc"
+    cleanup
+    return "$rc"
+}
+trap uploader_on_exit EXIT
+
+artifact_staging_requested() {
+    if [[ "$ARTIFACT_SOURCE" == "bep" ]]; then
+        return 0
+    fi
+    [[ "$ARTIFACT_SOURCE" == "auto" && "$REMOTE_ARTIFACTS" != "disabled" ]]
+}
+
+parse_bep_artifact_helper_output() {
+    local output_file="$1"
+    SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE="$TMP_PAYLOAD_DIR/bep_selected_artifact_output_keys.txt"
+    BLOCKED_BEP_ARTIFACT_LABELS_FILE="$TMP_PAYLOAD_DIR/bep_blocked_artifact_labels.txt"
+    STAGED_OUTPUT_KEYS_FILE="$TMP_PAYLOAD_DIR/bep_staged_output_keys.txt"
+    STAGED_REMOTE_CLEARANCES_FILE="$TMP_PAYLOAD_DIR/bep_staged_remote_clearances.txt"
+    : >"$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE"
+    : >"$BLOCKED_BEP_ARTIFACT_LABELS_FILE"
+    : >"$STAGED_OUTPUT_KEYS_FILE"
+    : >"$STAGED_REMOTE_CLEARANCES_FILE"
+
+    local line kind fields label output_key output_dir remote_flag root fetch_value
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ -z "$line" ]]; then
+            log "error: malformed BEP artifact helper output: blank line"
+            exit 2
+        fi
+        fields="$(printf '%s\n' "$line" | awk -F '\t' '{ print NF }')"
+        kind="$(printf '%s\n' "$line" | cut -f1)"
+        case "$kind" in
+            selected)
+                if [[ "$fields" != "3" ]]; then
+                    log "error: malformed BEP artifact helper selected row"
+                    exit 2
+                fi
+                label="$(printf '%s\n' "$line" | cut -f2)"
+                output_key="$(printf '%s\n' "$line" | cut -f3)"
+                if [[ -z "$label" || -z "$output_key" ]]; then
+                    log "error: malformed BEP artifact helper selected row"
+                    exit 2
+                fi
+                dbg "BEP artifact staging selected output key: $output_key"
+                printf '%s\n' "$output_key" >>"$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE"
+                ;;
+            blocked_label)
+                if [[ "$fields" != "2" ]]; then
+                    log "error: malformed BEP artifact helper blocked_label row"
+                    exit 2
+                fi
+                label="$(printf '%s\n' "$line" | cut -f2)"
+                if [[ -z "$label" ]]; then
+                    log "error: malformed BEP artifact helper blocked_label row"
+                    exit 2
+                fi
+                dbg "BEP artifact staging blocked local fallback for unmappable output label: $label"
+                printf '%s\n' "$label" >>"$BLOCKED_BEP_ARTIFACT_LABELS_FILE"
+                ;;
+            root)
+                if [[ "$fields" != "2" ]]; then
+                    log "error: malformed BEP artifact helper root row"
+                    exit 2
+                fi
+                root="$(printf '%s\n' "$line" | cut -f2)"
+                if [[ -z "$root" || ! -d "$root" ]]; then
+                    log "error: malformed BEP artifact helper root row"
+                    exit 2
+                fi
+                STAGED_TESTLOGS_DIRS+=("$root")
+                TESTLOGS_SCAN_DIRS+=("$root")
+                ;;
+            staged)
+                if [[ "$fields" != "6" ]]; then
+                    log "error: malformed BEP artifact helper staged row"
+                    exit 2
+                fi
+                label="$(printf '%s\n' "$line" | cut -f2)"
+                output_key="$(printf '%s\n' "$line" | cut -f3)"
+                output_dir="$(printf '%s\n' "$line" | cut -f4)"
+                remote_flag="$(printf '%s\n' "$line" | cut -f5)"
+                fetch_value="$(printf '%s\n' "$line" | cut -f6)"
+                if [[ -z "$label" || -z "$output_key" || -z "$output_dir" || -z "$fetch_value" ]]; then
+                    log "error: malformed BEP artifact helper staged row"
+                    exit 2
+                fi
+                case "$remote_flag" in 0|1) ;; *) log "error: malformed BEP artifact helper staged row"; exit 2 ;; esac
+                dbg "BEP artifact staging materialized $label output $output_key at $output_dir"
+                printf '%s\t%s\n' "$label" "$output_key" >>"$STAGED_OUTPUT_KEYS_FILE"
+                if [[ "$remote_flag" == "1" ]]; then
+                    printf '%s\t%s\n' "$label" "$output_key" >>"$STAGED_REMOTE_CLEARANCES_FILE"
+                fi
+                ;;
+            *)
+                log "error: unknown BEP artifact helper output row kind: $kind"
+                exit 2
+                ;;
+        esac
+    done < "$output_file"
+
+    LC_ALL=C sort -u -o "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE" "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE"
+    LC_ALL=C sort -u -o "$BLOCKED_BEP_ARTIFACT_LABELS_FILE" "$BLOCKED_BEP_ARTIFACT_LABELS_FILE"
+    LC_ALL=C sort -u -o "$STAGED_OUTPUT_KEYS_FILE" "$STAGED_OUTPUT_KEYS_FILE"
+    LC_ALL=C sort -u -o "$STAGED_REMOTE_CLEARANCES_FILE" "$STAGED_REMOTE_CLEARANCES_FILE"
+}
+
+stage_bep_artifacts() {
+    artifact_staging_requested || return 0
+    if [[ "$ARTIFACT_SOURCE" == "bep" && ${#BEP_JSON_FILES[@]} -eq 0 ]]; then
+        log "error: --artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON"
+        exit 2
+    fi
+    if [[ ${#BEP_JSON_FILES[@]} -eq 0 ]]; then
+        return 0
+    fi
+    local python_bin
+    if ! python_bin="$(bep_artifact_staging_python)"; then
+        log "error: BEP artifact staging requires PYTHON, python3, or python"
+        exit 2
+    fi
+
+    local helper_out helper_err helper_status=0
+    helper_out="$(mktemp "$TMP_PAYLOAD_DIR/bep_artifacts_stdout.XXXXXX" 2>/dev/null || true)"
+    helper_err="$(mktemp "$TMP_PAYLOAD_DIR/bep_artifacts_stderr.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$helper_out" || -z "$helper_err" ]]; then
+        log "error: failed to create BEP artifact helper temp files"
+        exit 2
+    fi
+    BEP_ARTIFACT_STAGE_HELPER="$(resolve_runfile "$BEP_ARTIFACT_STAGE_HELPER_RLOC")"
+    DOCTOR_RUNTIME="$(resolve_runfile "$DOCTOR_RUNTIME_RLOC")"
+    if [[ -z "$BEP_ARTIFACT_STAGE_HELPER" || ! -f "$BEP_ARTIFACT_STAGE_HELPER" ]]; then
+        log "error: BEP artifact stage helper not found in runfiles"
+        exit 2
+    fi
+    if [[ -z "$DOCTOR_RUNTIME" || ! -f "$DOCTOR_RUNTIME" ]]; then
+        log "error: BEP artifact staging doctor runtime not found in runfiles"
+        exit 2
+    fi
+
+    local resolved_bep_json resolved_bep_files=()
+    for bep_json in "${BEP_JSON_FILES[@]+"${BEP_JSON_FILES[@]}"}"; do
+        resolved_bep_json="$(resolve_runtime_file_path "$bep_json")"
+        if [[ -z "$resolved_bep_json" || ! -f "$resolved_bep_json" ]]; then
+            log "error: BEP JSON not found for artifact staging: $bep_json"
+            exit 2
+        fi
+        resolved_bep_files+=("$resolved_bep_json")
+    done
+    if [[ ${#resolved_bep_files[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    local helper_args=(
+        --doctor-runtime "$DOCTOR_RUNTIME"
+        --staging-dir "$ARTIFACT_STAGING_DIR"
+        --remote-artifacts "$REMOTE_ARTIFACTS"
+        --artifact-source "$ARTIFACT_SOURCE"
+        --bep-artifact-downloader-timeout-sec "$BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC"
+    )
+    if [[ -n "$BEP_ARTIFACT_DOWNLOADER" ]]; then
+        helper_args+=(--bep-artifact-downloader "$BEP_ARTIFACT_DOWNLOADER")
+    fi
+    "$python_bin" "$BEP_ARTIFACT_STAGE_HELPER" "${helper_args[@]}" "${resolved_bep_files[@]}" >"$helper_out" 2>"$helper_err" || helper_status=$?
+    if [[ -s "$helper_err" ]]; then
+        cat "$helper_err" >&2
+    fi
+    if (( helper_status != 0 )); then
+        log "error: BEP artifact staging helper failed with exit code $helper_status"
+        exit "$helper_status"
+    fi
+    parse_bep_artifact_helper_output "$helper_out"
+}
 
 # Determine bazel-testlogs directory
 # Priority: TESTLOGS_DIR env var > BUILD_WORKSPACE_DIRECTORY/bazel-testlogs > ./bazel-testlogs
@@ -752,27 +1558,36 @@ else
     fi
 
     if [[ -z "${TESTLOGS_DIR:-}" ]]; then
-        log "warning: testlogs dir not found (nothing to upload)"
-        log "hint: set TESTLOGS_DIR env var, or ensure bazel-testlogs symlink exists"
-        # Exit 0 by default (graceful no-op), but respect FAIL_ON_ERROR to catch misconfigurations
-        if [[ "$FAIL_ON_ERROR" == "1" ]]; then
-            log "error: FAIL_ON_ERROR is set and no testlogs found - this may indicate misconfiguration"
-            exit 2  # Configuration error
+        if artifact_staging_requested; then
+            dbg "testlogs dir not found; deferring no-output decision until after BEP artifact staging"
+        else
+            log "warning: testlogs dir not found (nothing to upload)"
+            log "hint: set TESTLOGS_DIR env var, or ensure bazel-testlogs symlink exists"
+            # Exit 0 by default (graceful no-op), but respect FAIL_ON_ERROR to catch misconfigurations
+            if [[ "$FAIL_ON_ERROR" == "1" ]]; then
+                log "error: FAIL_ON_ERROR is set and no testlogs found - this may indicate misconfiguration"
+                exit 2  # Configuration error
+            fi
+            exit 0
         fi
-        exit 0
     fi
 
-    dbg "auto-discovered TESTLOGS_DIR=$TESTLOGS_DIR"
+    if [[ -n "${TESTLOGS_DIR:-}" ]]; then
+        dbg "auto-discovered TESTLOGS_DIR=$TESTLOGS_DIR"
+    fi
 fi
 
 # Keep the logical path for messages/context derivation, but walk the physical
 # directory so a workspace `bazel-testlogs` symlink is handled consistently.
-if TESTLOGS_SCAN_DIR="$(cd "$TESTLOGS_DIR" 2>/dev/null && pwd -P)"; then
+TESTLOGS_SCAN_DIR=""
+if [[ -n "${TESTLOGS_DIR:-}" ]] && TESTLOGS_SCAN_DIR="$(cd "$TESTLOGS_DIR" 2>/dev/null && pwd -P)"; then
     dbg "using TESTLOGS_SCAN_DIR=$TESTLOGS_SCAN_DIR"
-else
+    TESTLOGS_SCAN_DIRS+=("$TESTLOGS_SCAN_DIR")
+elif [[ -n "${TESTLOGS_DIR:-}" ]]; then
     log "error: failed to resolve testlogs directory for scanning: $TESTLOGS_DIR"
     exit 2
 fi
+stage_bep_artifacts
 
 # Find all test.outputs directories
 # Supports DD_TEST_OPTIMIZATION_MAX_DEPTH to limit search depth for large testlogs trees
@@ -784,7 +1599,11 @@ find_test_outputs() {
         depth_args=(-maxdepth "$MAX_DEPTH")
         dbg "limiting find depth to $MAX_DEPTH"
     fi
-    find "$TESTLOGS_SCAN_DIR" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null | LC_ALL=C sort || true
+    local scan_dir
+    for scan_dir in "${TESTLOGS_SCAN_DIRS[@]+${TESTLOGS_SCAN_DIRS[@]}}"; do
+        [[ -n "$scan_dir" && -d "$scan_dir" ]] || continue
+        find "$scan_dir" "${depth_args[@]+"${depth_args[@]}"}" -type d -name "test.outputs" 2>/dev/null || true
+    done | LC_ALL=C sort -u
 }
 
 # Warn if MAX_DEPTH is set and no test.outputs found (likely depth too shallow)
@@ -856,15 +1675,46 @@ count_payload_files() {
     echo "$count"
 }
 
+update_discovered_payload_counts() {
+    REPORT_PAYLOADS_DISCOVERED_TESTS=0
+    REPORT_PAYLOADS_DISCOVERED_COVERAGE=0
+    REPORT_PAYLOADS_DISCOVERED_TELEMETRY=0
+    while IFS= read -r outputs_dir; do
+        [[ -z "$outputs_dir" ]] && continue
+        local tests_dir="$outputs_dir/payloads/tests"
+        local cov_dir="$outputs_dir/payloads/coverage"
+        local telemetry_dir="$outputs_dir/payloads/telemetry"
+        if [[ -d "$tests_dir" ]]; then
+            local tests_count
+            tests_count=$(find "$tests_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
+            REPORT_PAYLOADS_DISCOVERED_TESTS=$((REPORT_PAYLOADS_DISCOVERED_TESTS + tests_count))
+        fi
+        if [[ -d "$cov_dir" ]]; then
+            local cov_count
+            cov_count=$(find "$cov_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
+            REPORT_PAYLOADS_DISCOVERED_COVERAGE=$((REPORT_PAYLOADS_DISCOVERED_COVERAGE + cov_count))
+        fi
+        if [[ -d "$telemetry_dir" ]]; then
+            local telemetry_count
+            telemetry_count=$(find "$telemetry_dir" -type f \( -name "*.json" -o -name "*.msgpack" \) 2>/dev/null | wc -l)
+            REPORT_PAYLOADS_DISCOVERED_TELEMETRY=$((REPORT_PAYLOADS_DISCOVERED_TELEMETRY + telemetry_count))
+        fi
+    done < <(echo "$TEST_OUTPUTS_CACHE")
+}
+
 start_ts=$(date +%s)
 dbg "Uploader start time: $start_ts"
 
 # Detect if tests actually ran by looking for test.log or test.xml files
 # This helps distinguish "no payloads because tests didn't run" from "tests ran but dd-trace-go is misconfigured"
 tests_executed() {
-    local found
-    found=$(find "$TESTLOGS_SCAN_DIR" \( -name "test.log" -o -name "test.xml" \) -type f -print -quit 2>/dev/null)
-    [[ -n "$found" ]]
+    local scan_dir found
+    for scan_dir in "${TESTLOGS_SCAN_DIRS[@]+${TESTLOGS_SCAN_DIRS[@]}}"; do
+        [[ -n "$scan_dir" && -d "$scan_dir" ]] || continue
+        found=$(find "$scan_dir" \( -name "test.log" -o -name "test.xml" \) -type f -print -quit 2>/dev/null)
+        [[ -n "$found" ]] && return 0
+    done
+    return 1
 }
 
 # Wait for quiescence (filesystem to settle)
@@ -872,13 +1722,79 @@ tests_executed() {
 # we just need a short quiescence period to ensure all files are written.
 dbg "Waiting for test outputs to quiesce..."
 
+test_output_dir_key() {
+  local outputs_dir="${1%/}"
+  local scan_root
+  outputs_dir="${outputs_dir//\\//}"
+  for scan_root in "${TESTLOGS_SCAN_DIRS[@]+${TESTLOGS_SCAN_DIRS[@]}}"; do
+    scan_root="${scan_root%/}"
+    scan_root="${scan_root//\\//}"
+    if [[ -n "$scan_root" && "$outputs_dir" == "$scan_root/"* ]]; then
+      echo "${outputs_dir#$scan_root/}"
+      return 0
+    fi
+  done
+  if [[ "$outputs_dir" == *"/testlogs/"* ]]; then
+    outputs_dir="${outputs_dir##*/testlogs/}"
+  fi
+  if [[ "$outputs_dir" == *"/test.outputs/"* ]]; then
+    outputs_dir="${outputs_dir%%/test.outputs/*}/test.outputs"
+  fi
+  outputs_dir="${outputs_dir#/}"
+  outputs_dir="${outputs_dir#./}"
+  if [[ "$outputs_dir" == *"/test.outputs" ]]; then
+    echo "$outputs_dir"
+    return 0
+  fi
+  echo ""
+}
+
 # Cache the list of test.outputs directories for efficiency (avoid rescanning on each loop iteration)
 TEST_OUTPUTS_CACHE=""
 # Handle cache test outputs behavior.
 cache_test_outputs() {
-    TEST_OUTPUTS_CACHE=$(find_test_outputs)
+    local raw_cache filtered_cache seen_keys key outputs_dir
+    raw_cache="$(mktemp "$TMP_PAYLOAD_DIR/test_outputs_raw.XXXXXX" 2>/dev/null || true)"
+    filtered_cache="$(mktemp "$TMP_PAYLOAD_DIR/test_outputs_filtered.XXXXXX" 2>/dev/null || true)"
+    seen_keys="$(mktemp "$TMP_PAYLOAD_DIR/test_outputs_seen.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$raw_cache" || -z "$filtered_cache" || -z "$seen_keys" ]]; then
+        log "error: failed to create test.outputs cache temp files"
+        exit 2
+    fi
+    find_test_outputs >"$raw_cache"
+    : >"$filtered_cache"
+    : >"$seen_keys"
+    while IFS= read -r outputs_dir || [[ -n "$outputs_dir" ]]; do
+        [[ -n "$outputs_dir" ]] || continue
+        key="$(test_output_dir_key "$outputs_dir")"
+        if [[ -z "$key" ]]; then
+            continue
+        fi
+        if [[ -n "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE" && -s "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE" ]]; then
+            if grep -Fxq "$key" "$SELECTED_BEP_ARTIFACT_OUTPUT_KEYS_FILE" 2>/dev/null; then
+                local staged_match=0 staged_root normalized_outputs_dir normalized_staged_root
+                normalized_outputs_dir="${outputs_dir//\\//}"
+                for staged_root in "${STAGED_TESTLOGS_DIRS[@]+${STAGED_TESTLOGS_DIRS[@]}}"; do
+                    normalized_staged_root="${staged_root%/}"
+                    normalized_staged_root="${normalized_staged_root//\\//}"
+                    case "$normalized_outputs_dir" in "$normalized_staged_root"/*) staged_match=1 ;; esac
+                done
+                if (( staged_match == 0 )); then
+                    dbg "suppressing local test.outputs selected for BEP artifact staging: $outputs_dir"
+                    continue
+                fi
+            fi
+        fi
+        if grep -Fxq "$key" "$seen_keys" 2>/dev/null; then
+            continue
+        fi
+        printf '%s\n' "$key" >>"$seen_keys"
+        printf '%s\n' "$outputs_dir" >>"$filtered_cache"
+    done <"$raw_cache"
+    TEST_OUTPUTS_CACHE="$(cat "$filtered_cache")"
 }
 cache_test_outputs
+update_discovered_payload_counts
 check_depth_warning  # Warn if MAX_DEPTH may be too shallow
 
 while true; do
@@ -887,6 +1803,7 @@ while true; do
 
     # Refresh cache in case new test.outputs dirs appeared (e.g., remote downloads)
     cache_test_outputs
+    update_discovered_payload_counts
     total_files=$(count_payload_files)
 
     if (( total_files == 0 )); then
@@ -904,6 +1821,10 @@ while true; do
             else
                 log "no payload files found and no test execution detected; nothing to upload"
             fi
+            if [[ "$FRESHNESS_MODE" != "disabled" && ( "$FRESHNESS_SOURCE" == "bep" || ${#BEP_JSON_FILES[@]} -gt 0 ) ]]; then
+                log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
+            fi
             exit 0
         fi
         if (( elapsed > MAX_WAIT_SEC )); then
@@ -916,6 +1837,10 @@ while true; do
                 fi
             else
                 log "no payload files found and no test execution detected; nothing to upload"
+            fi
+            if [[ "$FRESHNESS_MODE" != "disabled" && ( "$FRESHNESS_SOURCE" == "bep" || ${#BEP_JSON_FILES[@]} -gt 0 ) ]]; then
+                log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
             fi
             exit 0
         fi
@@ -1884,6 +2809,631 @@ find_bazel_target_metadata() {
   return 1
 }
 
+is_ci_environment() {
+  local ci
+  ci="$(echo "${CI:-}" | tr '[:upper:]' '[:lower:]')"
+  [[ -n "$ci" && "$ci" != "0" && "$ci" != "false" && "$ci" != "no" ]]
+}
+
+bep_test_output_key_jq='
+	  def test_outputs_key:
+	    tostring
+	    | gsub("\\\\"; "/")
+	    | sub("^file://"; "")
+	    | if contains("/testlogs/") then split("/testlogs/")[-1]
+	      elif contains("/bazel-testlogs/") then split("/bazel-testlogs/")[-1]
+	      else .
+	      end
+	    | sub("^/+"; "")
+	    | sub("^\\./"; "")
+		    | if contains("/test.outputs/") then (split("/test.outputs/")[0] + "/test.outputs")
+		      elif endswith("/test.outputs") then .
+		      elif endswith("/outputs.zip") then ((split("/")[:-1] | join("/")) + "/test.outputs")
+		      elif endswith("/test.log") or endswith("/test.xml") then ((split("/")[:-1] | join("/")) + "/test.outputs")
+		      else empty
+		      end
+	    | sub("^/+"; "");
+	  def bep_path_prefix_name_candidate($output):
+	    if ($output | type) != "object" then ""
+	    else
+	      ($output.name // "") as $name
+	      | ($output.pathPrefix // $output.path_prefix // []) as $path_prefix
+	      | if (($path_prefix | type) == "array" and ($name | type) == "string" and $name != "")
+	        then (($path_prefix + [$name]) | map(select(type == "string" and . != "")) | join("/"))
+	        else ""
+	        end
+	    end;
+	  def bep_remote_only_reference_for_key:
+	    tostring
+	    | ascii_downcase
+	    | ((startswith("file://") | not) and test("^[a-z][a-z0-9+.-]*://"))
+	      or startswith("blobs/")
+	      or test("^[0-9a-f]{32,}/[0-9]+$");
+	  def trusted_bep_output_key_candidate:
+	    tostring
+	    | gsub("\\\\"; "/")
+	    | sub("^file://"; "")
+	    | sub("^/+"; "")
+	    | select(. != "" and contains("/") and (bep_remote_only_reference_for_key | not))
+	    | split("/")
+	    | any(. == "testlogs" or . == "bazel-testlogs");
+	  def distinct_nonempty_strings:
+	    reduce .[] as $value ([];
+	      if (($value | type) == "string") and $value != "" and (index($value) | not)
+	      then . + [$value]
+	      else .
+	      end);
+	  def bep_canonical_output_key_candidates($output; $candidates):
+	    [
+	      bep_path_prefix_name_candidate($output),
+	      (if ($output | type) == "object" then ($output.path // "") else "" end),
+	      ($candidates[]? | select(trusted_bep_output_key_candidate))
+	    ] | distinct_nonempty_strings;
+	'
+
+is_remote_only_bep_reference_jq='
+  def remote_only_reference:
+    tostring
+    | ascii_downcase
+    | ((startswith("file://") | not) and test("^[a-z][a-z0-9+.-]*://"))
+      or startswith("blobs/")
+      or test("^[0-9a-f]{32,}/[0-9]+$");
+  def test_outputs_artifact_hint:
+    tostring
+    | gsub("\\\\"; "/")
+    | sub("^file://"; "")
+    | ascii_downcase
+    | (. == "test.outputs" or . == "outputs.zip" or contains("/test.outputs/") or endswith("/test.outputs") or endswith("/outputs.zip"));
+'
+
+prepare_bep_eligibility() {
+  if (( JQ_AVAILABLE == 0 )); then
+    if optional_bep_unavailable "BEP JSON parsing requires jq"; then
+      return 0
+    fi
+    log "error: DD_TEST_OPTIMIZATION_BEP_JSON/--bep-json requires jq to parse Bazel BEP JSON"
+    exit 2
+  fi
+
+  FRESHNESS_ELIGIBLE_LABELS_FILE="$TMP_PAYLOAD_DIR/freshness_eligible_targets.txt"
+  FRESHNESS_ELIGIBLE_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_eligible_outputs.txt"
+  FRESHNESS_CACHED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_cached_outputs.txt"
+  FRESHNESS_SKIPPED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_skipped_outputs.txt"
+  FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_remote_only_outputs.txt"
+  FRESHNESS_MISSING_OUTPUT_LABELS_FILE="$TMP_PAYLOAD_DIR/freshness_missing_output_labels.txt"
+  : >"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+  : >"$FRESHNESS_CACHED_OUTPUTS_FILE"
+  : >"$FRESHNESS_SKIPPED_OUTPUTS_FILE"
+  : >"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
+  : >"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
+
+  local bep_json resolved_bep tmp_records tmp_remote tmp_missing
+  for bep_json in "${BEP_JSON_FILES[@]}"; do
+    resolved_bep="$(resolve_runtime_file_path "$bep_json")"
+    if [[ -z "$resolved_bep" || ! -f "$resolved_bep" ]]; then
+      if optional_bep_unavailable "BEP JSON not found: $bep_json"; then
+        return 0
+      fi
+      log "error: BEP JSON not found: $bep_json"
+      exit 2
+    fi
+    tmp_records="$(mktemp "$TMP_PAYLOAD_DIR/bep_records.XXXXXX" 2>/dev/null || true)"
+    tmp_remote="$(mktemp "$TMP_PAYLOAD_DIR/bep_remote.XXXXXX" 2>/dev/null || true)"
+    tmp_missing="$(mktemp "$TMP_PAYLOAD_DIR/bep_missing.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$tmp_records" || -z "$tmp_remote" || -z "$tmp_missing" ]]; then
+      log "error: failed to create BEP freshness temp files"
+      exit 2
+    fi
+
+	    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
+	      def field($obj; $camel; $snake):
+	        ($obj[$camel] // $obj[$snake]);
+	      def candidates($output):
+	        if ($output | type) == "string" then [$output]
+	        else
+	          ($output.name // "") as $name
+	          | (field($output; "pathPrefix"; "path_prefix") // []) as $path_prefix
+	          | [
+	              ($output.uri // ""),
+	              ($output.path // ""),
+	              $name,
+	              (if (($path_prefix | type) == "array" and ($name | type) == "string" and $name != "")
+	               then (($path_prefix + [$name]) | map(select(type == "string" and . != "")) | join("/"))
+	               else ""
+	               end)
+	            ]
+	        end
+	        | map(select(type == "string" and . != ""));
+	      select(.id.testResult? != null or .id.test_result? != null)
+	      | (.testResult // .test_result // {}) as $result
+	      | (.id.testResult // .id.test_result // {}) as $id
+      | ($id.label // empty) as $label
+	      | select($label != "")
+	      | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
+	      | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
+	      | [
+	          (field($result; "testActionOutput"; "test_action_output") // [])[]? as $output
+	          | (candidates($output)) as $candidates
+	          | (bep_canonical_output_key_candidates($output; $candidates)) as $key_candidates
+	          | {
+	              keys: [ $key_candidates[]? | test_outputs_key | select(. != "") ],
+	              hinted: ([ $candidates[]? | test_outputs_artifact_hint | select(.) ] | length > 0),
+	              remote: [ $candidates[]? | select(remote_only_reference) ]
+	            }
+	        ] as $output_refs
+	      | ([ $output_refs[]? | select((.keys | length) > 0) ] | length > 0) as $event_has_mappable_output
+	      | ([ $output_refs[]? | select((.remote | length) > 0 and (.hinted or ($event_has_mappable_output | not))) ] | length > 0) as $event_has_blocking_remote
+	      | select(($cached_local or $cached_remote) or ($event_has_blocking_remote | not))
+	      | $output_refs[]?.keys[]? as $output_key
+	      | select($output_key != "")
+	      | "\($label)\t\($output_key)\t\(if ($cached_local or $cached_remote) then "cached" else "eligible" end)"
+	    ' "$resolved_bep" >"$tmp_records"; then
+      if optional_bep_unavailable "failed to parse BEP JSON: $resolved_bep"; then
+        return 0
+      fi
+      log "error: failed to parse BEP JSON: $resolved_bep"
+      exit 2
+    fi
+    awk -F '\t' '$3 == "eligible" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+    awk -F '\t' '$3 == "cached" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_CACHED_OUTPUTS_FILE"
+
+    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
+      def field($obj; $camel; $snake):
+        ($obj[$camel] // $obj[$snake]);
+	      def candidates($output):
+	        if ($output | type) == "string" then [$output]
+	        else
+	          ($output.name // "") as $name
+	          | (field($output; "pathPrefix"; "path_prefix") // []) as $path_prefix
+	          | [
+	              ($output.uri // ""),
+	              ($output.path // ""),
+	              $name,
+	              (if (($path_prefix | type) == "array" and ($name | type) == "string" and $name != "")
+	               then (($path_prefix + [$name]) | map(select(type == "string" and . != "")) | join("/"))
+	               else ""
+	               end)
+	            ]
+	        end
+	        | map(select(type == "string" and . != ""));
+      select(.id.testResult? != null or .id.test_result? != null)
+      | (.testResult // .test_result // {}) as $result
+      | (.id.testResult // .id.test_result // {}) as $id
+      | ($id.label // empty) as $label
+      | select($label != "")
+      | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
+      | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
+      | select(($cached_local or $cached_remote) | not)
+      | [
+          (field($result; "testActionOutput"; "test_action_output") // [])[]? as $output
+          | (candidates($output)) as $candidates
+          | (bep_canonical_output_key_candidates($output; $candidates)) as $key_candidates
+          | {
+	              keys: [ $key_candidates[]? | test_outputs_key | select(. != "") ],
+	              mapped: ([ $key_candidates[]? | test_outputs_key | select(. != "") ] | length > 0),
+	              hinted: ([ $candidates[]? | test_outputs_artifact_hint | select(.) ] | length > 0),
+	              remote: [ $candidates[]? | select(remote_only_reference) ]
+	            }
+        ] as $output_refs
+      | ([ $output_refs[]? | select(.mapped) ] | length > 0) as $event_has_mappable_output
+      | $output_refs[]?
+      | select((.remote | length) > 0)
+      | select(.hinted or ($event_has_mappable_output | not))
+	      | . as $ref
+	      | .remote[]?
+	      | "\($label)\t\(($ref.keys[0] // ""))\t\(.)\tremote_only"
+		    ' "$resolved_bep" >"$tmp_remote"; then
+      if optional_bep_unavailable "failed to parse BEP remote-only outputs: $resolved_bep"; then
+        return 0
+      fi
+      log "error: failed to parse BEP remote-only outputs: $resolved_bep"
+      exit 2
+    fi
+    cat "$tmp_remote" >>"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
+
+    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
+	      def field($obj; $camel; $snake):
+	        ($obj[$camel] // $obj[$snake]);
+	      def candidates($output):
+	        if ($output | type) == "string" then [$output]
+	        else
+	          ($output.name // "") as $name
+	          | (field($output; "pathPrefix"; "path_prefix") // []) as $path_prefix
+	          | [
+	              ($output.uri // ""),
+	              ($output.path // ""),
+	              $name,
+	              (if (($path_prefix | type) == "array" and ($name | type) == "string" and $name != "")
+	               then (($path_prefix + [$name]) | map(select(type == "string" and . != "")) | join("/"))
+	               else ""
+	               end)
+	            ]
+	        end
+	        | map(select(type == "string" and . != ""));
+	      select(.id.testResult? != null or .id.test_result? != null)
+      | (.testResult // .test_result // {}) as $result
+      | (.id.testResult // .id.test_result // {}) as $id
+      | ($id.label // empty) as $label
+      | select($label != "")
+      | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
+      | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
+      | select(($cached_local or $cached_remote) | not)
+	      | (field($result; "testActionOutput"; "test_action_output") // []) as $outputs
+	      | [
+	          $outputs[]? as $output
+	          | (candidates($output)) as $output_candidates
+	          | bep_canonical_output_key_candidates($output; $output_candidates)[]?
+	        ] as $key_candidates
+	      | [
+	          $outputs[]?
+	          | candidates(.)[]?
+	        ] as $raw_candidates
+      | select(
+          ([ $key_candidates[]? | test_outputs_key | select(. != "") ] | length) == 0 and
+          ([ $raw_candidates[]? | select(remote_only_reference) ] | length) == 0
+        )
+      | $label
+	    ' "$resolved_bep" >"$tmp_missing"; then
+      if optional_bep_unavailable "failed to parse BEP missing output mappings: $resolved_bep"; then
+        return 0
+      fi
+      log "error: failed to parse BEP missing output mappings: $resolved_bep"
+      exit 2
+    fi
+    cat "$tmp_missing" >>"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
+  done
+
+	  LC_ALL=C sort -u -o "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+	  LC_ALL=C sort -u -o "$FRESHNESS_CACHED_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE"
+	  LC_ALL=C sort -u -o "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
+	  LC_ALL=C sort -u -o "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
+	  local conflicting_output
+	  conflicting_output="$(comm -12 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE" | head -n 1 || true)"
+	  if [[ -n "$conflicting_output" ]]; then
+	    log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $conflicting_output. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+	    exit 2
+	  fi
+	  cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
+
+  FRESHNESS_SELECTED_SOURCE="bep"
+  FRESHNESS_ELIGIBILITY_ENABLED=1
+  local eligible_count remote_count
+  eligible_count="$(wc -l <"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | tr -d ' ')"
+  remote_count="$(wc -l <"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" | tr -d ' ')"
+  log "freshness filtering enabled: source=bep files=${#BEP_JSON_FILES[@]} eligible_outputs=$eligible_count remote_only_outputs=$remote_count"
+  if [[ "$FRESHNESS_MODE" == "optional" && "$REMOTE_ARTIFACTS" != "required" && "$remote_count" != "0" ]]; then
+    local first_label first_artifact first_artifact_display
+    first_label="$(awk -F '\t' 'NR == 1 { print $1 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
+    first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
+    first_artifact_display="$(display_artifact_reference "$first_artifact")"
+    log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>}: ${first_artifact_display:-<unknown>}; skipping those outputs. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* to materialize payloads locally. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+  fi
+}
+
+merge_staged_bep_freshness() {
+  if [[ "$FRESHNESS_SELECTED_SOURCE" != "bep" ]]; then
+    return 0
+  fi
+  if [[ -n "$STAGED_OUTPUT_KEYS_FILE" && -s "$STAGED_OUTPUT_KEYS_FILE" ]]; then
+    cat "$STAGED_OUTPUT_KEYS_FILE" >>"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+    LC_ALL=C sort -u -o "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+    cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
+  fi
+  if [[ -n "$STAGED_REMOTE_CLEARANCES_FILE" && -s "$STAGED_REMOTE_CLEARANCES_FILE" && -s "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" ]]; then
+    local filtered_remote
+    filtered_remote="$(mktemp "$TMP_PAYLOAD_DIR/freshness_remote_filtered.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$filtered_remote" ]]; then
+      log "error: failed to create BEP remote-only filter temp file"
+      exit 2
+    fi
+    awk -F '\t' 'NR == FNR { clear[$1 "\t" $2] = 1; next } !(($1 "\t" $2) in clear)' \
+      "$STAGED_REMOTE_CLEARANCES_FILE" "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" >"$filtered_remote"
+    mv "$filtered_remote" "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
+  fi
+  if [[ -s "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" && -s "$FRESHNESS_CACHED_OUTPUTS_FILE" ]]; then
+    local conflicting_output
+    conflicting_output="$(comm -12 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE" | head -n 1 || true)"
+    if [[ -n "$conflicting_output" ]]; then
+      log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $conflicting_output. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+      exit 2
+    fi
+  fi
+}
+
+validate_bep_remote_only_outputs() {
+  if [[ "$FRESHNESS_SELECTED_SOURCE" != "bep" ]]; then
+    return 0
+  fi
+  if [[ -n "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" && -s "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" ]]; then
+    local first_label first_artifact first_artifact_display
+    first_label="$(awk -F '\t' 'NR == 1 { print $1 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
+    first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
+    first_artifact_display="$(display_artifact_reference "$first_artifact")"
+    if [[ "$FRESHNESS_MODE" == "required" || "$REMOTE_ARTIFACTS" == "required" ]]; then
+      log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact_display:-<unknown>}. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+      exit 2
+    fi
+    if [[ "$REMOTE_ARTIFACTS" == "download" ]]; then
+      log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} and they were not materialized: ${first_artifact_display:-<unknown>}; skipping those outputs."
+    elif [[ "$REMOTE_ARTIFACTS" == "disabled" ]]; then
+      log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} but remote artifact download is disabled: ${first_artifact_display:-<unknown>}"
+    fi
+  fi
+}
+
+prepare_execution_log_eligibility() {
+  if [[ "$EXECUTION_LOG_MODE" == "disabled" ]]; then
+    if [[ -n "$EXECUTION_LOG_JSON" ]]; then
+      log "warning: execution-log filtering disabled; ignoring configured execution log: $EXECUTION_LOG_JSON"
+    fi
+    return 0
+  fi
+
+  if [[ -z "$EXECUTION_LOG_JSON" ]]; then
+    local require_execution_log=0
+    if [[ "$EXECUTION_LOG_MODE" == "required" ]]; then
+      require_execution_log=1
+    elif [[ "$EXECUTION_LOG_MODE" == "auto" ]] && is_ci_environment; then
+      require_execution_log=1
+    fi
+
+    if (( require_execution_log == 1 )); then
+      if [[ "$EXECUTION_LOG_MODE" == "required" ]]; then
+        log "error: execution-log cache filtering is required by DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=required / --execution-log-mode=required. Run bazel test with --execution_log_json_file=$DEFAULT_EXECUTION_LOG_JSON, then rerun the uploader with --execution-log-json=$DEFAULT_EXECUTION_LOG_JSON, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+      else
+        log "error: execution-log cache filtering is required in CI. Run bazel test with --execution_log_json_file=$DEFAULT_EXECUTION_LOG_JSON, then rerun the uploader with --execution-log-json=$DEFAULT_EXECUTION_LOG_JSON, or opt out explicitly with DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled / --allow-cached-payload-uploads."
+      fi
+      exit 2
+    fi
+    if [[ "$EXECUTION_LOG_MODE" == "auto" ]]; then
+      log "warning: execution-log cache filtering is not configured; cached test outputs may be uploaded. Add --execution_log_json_file=$DEFAULT_EXECUTION_LOG_JSON to bazel test and --execution-log-json=$DEFAULT_EXECUTION_LOG_JSON to the uploader, or set DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE=disabled to opt out explicitly."
+    fi
+    return 0
+  fi
+  if (( JQ_AVAILABLE == 0 )); then
+    log "error: DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON/--execution-log-json requires jq to parse Bazel execution logs"
+    exit 2
+  fi
+
+  local resolved_log
+  resolved_log="$(resolve_runtime_file_path "$EXECUTION_LOG_JSON")"
+  if [[ -z "$resolved_log" || ! -f "$resolved_log" ]]; then
+    log "error: execution log JSON not found: $EXECUTION_LOG_JSON"
+    exit 2
+  fi
+
+  EXECUTION_ELIGIBLE_LABELS_FILE="$TMP_PAYLOAD_DIR/execution_eligible_targets.txt"
+  EXECUTION_ELIGIBLE_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/execution_eligible_outputs.txt"
+  EXECUTION_SKIPPED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/execution_skipped_outputs.txt"
+  : >"$EXECUTION_SKIPPED_OUTPUTS_FILE"
+
+  if ! jq -r '
+    def outputs:
+      ((.listedOutputs // []) + ((.actualOutputs // []) | map(.path // "")));
+    def test_output_key:
+      gsub("\\\\"; "/")
+      | if contains("/testlogs/") then split("/testlogs/")[-1] else sub("^/+"; "") end
+      | if contains("/test.outputs/") then (split("/test.outputs/")[0] + "/test.outputs")
+        elif endswith("/test.outputs") then .
+        else empty
+        end
+      | sub("^\\./"; "")
+      | sub("^/+"; "");
+    select((.mnemonic // "") == "TestRunner")
+    | select((.cacheHit // false) != true)
+    | select((((.runner // "") | ascii_downcase | contains("cache hit"))) | not)
+    | (.targetLabel // empty) as $label
+    | select($label != "")
+    | outputs[]?
+    | select(type == "string")
+    | test_output_key as $output_key
+    | select($output_key != "")
+    | "\($label)\t\($output_key)"
+  ' "$resolved_log" | LC_ALL=C sort -u >"$EXECUTION_ELIGIBLE_OUTPUTS_FILE"; then
+    log "error: failed to parse execution log JSON: $resolved_log"
+    exit 2
+  fi
+  cut -f1 "$EXECUTION_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$EXECUTION_ELIGIBLE_LABELS_FILE"
+
+  EXECUTION_ELIGIBILITY_ENABLED=1
+  dbg "execution-log freshness filter enabled: $resolved_log ($(wc -l <"$EXECUTION_ELIGIBLE_OUTPUTS_FILE" | tr -d ' ') eligible test outputs)"
+}
+
+prepare_freshness_eligibility() {
+  if [[ "$FRESHNESS_MODE" == "disabled" ]]; then
+    if (( ${#BEP_JSON_FILES[@]} > 0 )); then
+      log "warning: freshness filtering disabled; ignoring configured BEP JSON"
+    fi
+    if [[ -n "$EXECUTION_LOG_JSON" ]]; then
+      log "warning: freshness filtering disabled; ignoring configured execution log: $EXECUTION_LOG_JSON"
+    fi
+    FRESHNESS_SELECTED_SOURCE="none"
+    FRESHNESS_ELIGIBILITY_ENABLED=0
+    log "freshness filtering disabled"
+    return 0
+  fi
+
+  if [[ "$FRESHNESS_SOURCE" == "bep" ]]; then
+    if (( ${#BEP_JSON_FILES[@]} == 0 )); then
+      if [[ "$FRESHNESS_MODE" == "required" ]] || { [[ "$FRESHNESS_MODE" == "auto" ]] && is_ci_environment; }; then
+        log "error: BEP freshness filtering is required but no BEP JSON file was configured. Run bazel test with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$DEFAULT_BEP_JSON, then rerun the uploader with --bep-json=$DEFAULT_BEP_JSON, or opt out explicitly with --allow-cached-payload-uploads."
+        exit 2
+      fi
+      log "warning: BEP freshness source was selected but no BEP JSON file was configured; cached test outputs may be uploaded. Rerun the uploader with --bep-json=$DEFAULT_BEP_JSON --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+      return 0
+    fi
+    prepare_bep_eligibility
+    return 0
+  fi
+
+  if [[ "$FRESHNESS_SOURCE" == "execution_log" ]]; then
+    prepare_execution_log_eligibility
+  elif (( ${#BEP_JSON_FILES[@]} > 0 )); then
+    prepare_bep_eligibility
+  else
+    if [[ -z "$EXECUTION_LOG_JSON" ]]; then
+      if [[ "$FRESHNESS_MODE" == "required" ]] || { [[ "$FRESHNESS_MODE" == "auto" ]] && is_ci_environment; }; then
+        log "error: freshness filtering is required in CI or required mode, but no BEP or execution log was found. Run bazel test with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$DEFAULT_BEP_JSON, then rerun the uploader with --bep-json=$DEFAULT_BEP_JSON --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+        exit 2
+      fi
+      log "warning: freshness filtering is not configured; cached test outputs may be uploaded. Prefer bazel test --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --build_event_json_file=$DEFAULT_BEP_JSON and rerun the uploader with --bep-json=$DEFAULT_BEP_JSON --freshness-source=bep --freshness-mode=required, or opt out explicitly with --allow-cached-payload-uploads."
+      return 0
+    fi
+    prepare_execution_log_eligibility
+  fi
+
+  if (( EXECUTION_ELIGIBILITY_ENABLED == 1 )); then
+    FRESHNESS_SELECTED_SOURCE="execution_log"
+    FRESHNESS_ELIGIBILITY_ENABLED=1
+    FRESHNESS_ELIGIBLE_LABELS_FILE="$EXECUTION_ELIGIBLE_LABELS_FILE"
+    FRESHNESS_ELIGIBLE_OUTPUTS_FILE="$EXECUTION_ELIGIBLE_OUTPUTS_FILE"
+    FRESHNESS_SKIPPED_OUTPUTS_FILE="$EXECUTION_SKIPPED_OUTPUTS_FILE"
+    log "freshness filtering enabled: source=execution_log"
+  fi
+}
+
+test_output_target_label() {
+  local outputs_dir="$1"
+  local metadata_file="$outputs_dir/$BAZEL_TARGET_METADATA_OUTPUT"
+  if [[ ! -f "$metadata_file" ]]; then
+    echo ""
+    return 0
+  fi
+  if (( JQ_AVAILABLE == 0 )); then
+    if command -v python3 >/dev/null 2>&1; then
+      python3 - "$metadata_file" 2>/dev/null <<'PY' || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        value = json.load(handle).get("bazel.target", "")
+except Exception:
+    value = ""
+if isinstance(value, str):
+    print(value)
+PY
+      return 0
+    fi
+    echo ""
+    return 0
+  fi
+  jq -r '."bazel.target" // empty' "$metadata_file" 2>/dev/null || true
+}
+
+log_execution_skip_once() {
+  local outputs_dir="$1"
+  local reason="$2"
+  if [[ -n "$EXECUTION_SKIPPED_OUTPUTS_FILE" && -f "$EXECUTION_SKIPPED_OUTPUTS_FILE" ]]; then
+    if grep -Fxq "$outputs_dir" "$EXECUTION_SKIPPED_OUTPUTS_FILE" 2>/dev/null; then
+      return 0
+    fi
+    printf '%s\n' "$outputs_dir" >>"$EXECUTION_SKIPPED_OUTPUTS_FILE"
+  fi
+  log "skipping cached test output: $outputs_dir ($reason)"
+}
+
+log_freshness_skip_once() {
+  local outputs_dir="$1"
+  local reason="$2"
+  FRESHNESS_SKIP_WAS_EMITTED=0
+  if [[ -n "$FRESHNESS_SKIPPED_OUTPUTS_FILE" && -f "$FRESHNESS_SKIPPED_OUTPUTS_FILE" ]]; then
+    if grep -Fxq "$outputs_dir" "$FRESHNESS_SKIPPED_OUTPUTS_FILE" 2>/dev/null; then
+      return 0
+    fi
+    printf '%s\n' "$outputs_dir" >>"$FRESHNESS_SKIPPED_OUTPUTS_FILE"
+  fi
+  log "skipping cached or non-current test output: $outputs_dir ($reason)"
+  FRESHNESS_SKIP_WAS_EMITTED=1
+  return 0
+}
+
+test_output_dir_is_freshness_eligible() {
+  local outputs_dir="$1"
+  validate_bep_remote_only_outputs
+  local target_label
+  target_label="$(test_output_target_label "$outputs_dir")"
+  if [[ -n "$target_label" && -n "${BLOCKED_BEP_ARTIFACT_LABELS_FILE:-}" && -f "$BLOCKED_BEP_ARTIFACT_LABELS_FILE" ]] &&
+      grep -Fxq "$target_label" "$BLOCKED_BEP_ARTIFACT_LABELS_FILE" 2>/dev/null; then
+    log_freshness_skip_once "$outputs_dir" "BEP artifact for target $target_label did not contain a mappable test.outputs key"
+    return 1
+  fi
+  if (( FRESHNESS_ELIGIBILITY_ENABLED == 0 )); then
+    return 0
+  fi
+
+  if [[ -z "$target_label" ]]; then
+    if [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" && "$FRESHNESS_MODE" == "required" ]]; then
+      log "error: BEP required freshness cannot authorize $outputs_dir because bazel.target metadata is missing"
+      exit 2
+    fi
+    log_freshness_skip_once "$outputs_dir" "missing bazel.target metadata"
+    return 1
+  fi
+
+  local output_key
+  output_key="$(test_output_dir_key "$outputs_dir")"
+  if [[ -z "$output_key" ]]; then
+    if [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" && "$FRESHNESS_MODE" == "required" ]]; then
+      log "error: BEP required freshness cannot authorize $outputs_dir because the test.outputs path could not be mapped"
+      exit 2
+    fi
+    log_freshness_skip_once "$outputs_dir" "could not map test.outputs path"
+    return 1
+  fi
+
+  if grep -Fxq "$target_label"$'\t'"$output_key" "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" 2>/dev/null; then
+    return 0
+  fi
+
+  if [[ -n "$FRESHNESS_CACHED_OUTPUTS_FILE" ]] && grep -Fxq "$target_label"$'\t'"$output_key" "$FRESHNESS_CACHED_OUTPUTS_FILE" 2>/dev/null; then
+    log_freshness_skip_once "$outputs_dir" "BEP reported cached result for target $target_label output $output_key"
+	  elif [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" && "$FRESHNESS_MODE" == "required" ]]; then
+	    if [[ -n "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" ]] && grep -Fxq "$target_label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
+	      log "error: BEP required freshness cannot authorize $outputs_dir because the fresh TestResult for $target_label did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+	      exit 2
+	    else
+	      log_freshness_skip_once "$outputs_dir" "no fresh BEP TestResult matched target $target_label output $output_key"
+	    fi
+  elif [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" && "$FRESHNESS_MODE" == "optional" && -n "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" ]] && grep -Fxq "$target_label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
+    log_freshness_skip_once "$outputs_dir" "fresh BEP TestResult for $target_label did not contain a mappable test.outputs reference"
+    if (( FRESHNESS_SKIP_WAS_EMITTED == 1 )); then
+      log "warning: BEP optional freshness skipped $outputs_dir because the fresh TestResult for $target_label did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+    fi
+	  else
+	    log_freshness_skip_once "$outputs_dir" "no fresh $FRESHNESS_SELECTED_SOURCE result matched target $target_label output $output_key"
+	  fi
+  return 1
+}
+
+test_output_dir_is_execution_eligible() {
+  local outputs_dir="$1"
+  if (( EXECUTION_ELIGIBILITY_ENABLED == 0 )); then
+    return 0
+  fi
+
+  local target_label
+  target_label="$(test_output_target_label "$outputs_dir")"
+  if [[ -z "$target_label" ]]; then
+    log_execution_skip_once "$outputs_dir" "missing bazel.target metadata"
+    return 1
+  fi
+
+  local output_key
+  output_key="$(test_output_dir_key "$outputs_dir")"
+  if [[ -z "$output_key" ]]; then
+    log_execution_skip_once "$outputs_dir" "could not map test.outputs path"
+    return 1
+  fi
+
+  if grep -Fxq "$target_label"$'\t'"$output_key" "$EXECUTION_ELIGIBLE_OUTPUTS_FILE" 2>/dev/null; then
+    return 0
+  fi
+
+  log_execution_skip_once "$outputs_dir" "target $target_label output $output_key was not freshly executed"
+  return 1
+}
+
 payload_repo_name_from_metadata() {
   local metadata_file="$1"
   [[ -n "$metadata_file" && -f "$metadata_file" ]] || return 0
@@ -2119,6 +3669,18 @@ list_sorted_test_payload_files() {
 list_sorted_raw_test_msgpack_files() {
     local dir="$1"
     find "$dir" -maxdepth 1 -type f -name "*.msgpack" -print 2>/dev/null | LC_ALL=C sort
+}
+
+payload_dir_has_replayable_files() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    [[ -n "$(find "$dir" -maxdepth 1 -type f \( -name "*.json" -o -name "*.msgpack" \) -print -quit 2>/dev/null)" ]]
+}
+
+test_payload_dir_has_candidate_files() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    [[ -n "$(find "$dir" -maxdepth 1 -type f \( -name "*.json" -o -name "*.msgpack" \) -print -quit 2>/dev/null)" ]]
 }
 
 # Return true when a JSON test payload has at least one uploadable event. Some
@@ -2380,7 +3942,8 @@ list_all_sorted_telemetry_files() {
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
         local telemetry_dir="$outputs_dir/payloads/telemetry"
-        [[ -d "$telemetry_dir" ]] || continue
+        payload_dir_has_replayable_files "$telemetry_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
         list_sorted_payload_files "$telemetry_dir"
     done < <(printf '%s\n' "$TEST_OUTPUTS_CACHE")
 }
@@ -2914,6 +4477,15 @@ PY
 
 # Track upload failures globally
 UPLOAD_FAILURES=0
+REPORT_TESTS_PROCESSED=0
+REPORT_TESTS_FAILED=0
+REPORT_TESTS_SKIPPED=0
+REPORT_COVERAGE_PROCESSED=0
+REPORT_COVERAGE_FAILED=0
+REPORT_COVERAGE_SKIPPED=0
+REPORT_TELEMETRY_PROCESSED=0
+REPORT_TELEMETRY_FAILED=0
+REPORT_TELEMETRY_SKIPPED=0
 
 expected_enriched_tags() {
     if (( ${#EXPECTED_ENRICHED_TAGS[@]} > 0 )); then
@@ -3210,12 +4782,14 @@ upload_all_tests() {
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
         local tests_dir="$outputs_dir/payloads/tests"
-        [[ -d "$tests_dir" ]] || continue
+        test_payload_dir_has_candidate_files "$tests_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
             log "error: raw msgpack test payload is not supported in Bazel file mode: $f"
             ((++failed))
+            ((++REPORT_TESTS_FAILED))
             ((++UPLOAD_FAILURES))
         done < <(list_sorted_raw_test_msgpack_files "$tests_dir")
 
@@ -3225,33 +4799,40 @@ upload_all_tests() {
             if ! matches_filter "$f" "span_events_"; then
                 dbg "skipping (prefix filter): $f"
                 ((++skipped))
+                ((++REPORT_TESTS_SKIPPED))
                 continue
             fi
             if ! test_payload_has_events "$f"; then
                 log "skipping test payload with no events: $f"
                 ((++skipped))
+                ((++REPORT_TESTS_SKIPPED))
                 continue
             fi
             if (( DRY_RUN == 1 )); then
                 if dry_run_single_test "$f"; then
                     log "dry-run kept test payload: $f"
                     ((++total))
+                    ((++REPORT_TESTS_PROCESSED))
                 else
                     log "warning: failed to dry-run validate $f"
                     ((++failed))
+                    ((++REPORT_TESTS_FAILED))
                     ((++UPLOAD_FAILURES))
                 fi
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_test "$f"; then
                 log "uploaded test payload: $f"
                 cleanup_file "$f"
                 ((++total))
+                ((++REPORT_TESTS_PROCESSED))
             else
                 # Keep uploading subsequent files to maximize successful delivery
                 # even when one payload is malformed or temporarily rejected.
                 log "warning: failed to upload $f"
                 ((++failed))
+                ((++REPORT_TESTS_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done < <(list_sorted_test_payload_files "$tests_dir")
@@ -3278,7 +4859,8 @@ upload_all_coverage() {
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
         local cov_dir="$outputs_dir/payloads/coverage"
-        [[ -d "$cov_dir" ]] || continue
+        payload_dir_has_replayable_files "$cov_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
@@ -3286,22 +4868,27 @@ upload_all_coverage() {
             if ! matches_filter "$f" "coverage_"; then
                 dbg "skipping (prefix filter): $f"
                 ((++skipped))
+                ((++REPORT_COVERAGE_SKIPPED))
                 continue
             fi
             if (( DRY_RUN == 1 )); then
                 log "dry-run kept coverage payload: $f"
                 ((++total))
+                ((++REPORT_COVERAGE_PROCESSED))
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_coverage "$f"; then
                 log "uploaded coverage payload: $f"
                 cleanup_file "$f"
                 ((++total))
+                ((++REPORT_COVERAGE_PROCESSED))
             else
                 # Coverage failures are tracked but non-fatal per-file; final
                 # exit code reflects aggregate failure count after both passes.
                 log "warning: failed to upload $f"
                 ((++failed))
+                ((++REPORT_COVERAGE_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done < <(list_sorted_payload_files "$cov_dir")
@@ -3333,7 +4920,8 @@ upload_all_telemetry() {
     while IFS= read -r outputs_dir; do
         [[ -z "$outputs_dir" ]] && continue
         local telemetry_dir="$outputs_dir/payloads/telemetry"
-        [[ -d "$telemetry_dir" ]] || continue
+        payload_dir_has_replayable_files "$telemetry_dir" || continue
+        test_output_dir_is_freshness_eligible "$outputs_dir" || continue
 
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
@@ -3344,15 +4932,19 @@ upload_all_telemetry() {
             if (( DRY_RUN == 1 )); then
                 log "dry-run kept telemetry payload: $f"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
                 cleanup_file "$f"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
             else
                 log "warning: failed to upload $f"
                 ((++failed))
+                ((++REPORT_TELEMETRY_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done < <(list_sorted_payload_files "$telemetry_dir")
@@ -3365,14 +4957,18 @@ upload_all_telemetry() {
             if (( DRY_RUN == 1 )); then
                 log "dry-run validated synthetic telemetry augmentation for: $anchor_path"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
+            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$anchor_path" "$synthetic_body"; then
                 log "uploaded telemetry payload: $anchor_path"
                 ((++total))
+                ((++REPORT_TELEMETRY_PROCESSED))
             else
                 log "warning: failed to upload synthetic telemetry augmentation for $anchor_path"
                 ((++failed))
+                ((++REPORT_TELEMETRY_FAILED))
                 ((++UPLOAD_FAILURES))
             fi
         done <"$plan_file"
@@ -3389,6 +4985,9 @@ upload_all_telemetry() {
     fi
 }
 
+prepare_freshness_eligibility
+merge_staged_bep_freshness
+validate_bep_remote_only_outputs
 upload_all_tests
 upload_all_coverage
 upload_all_telemetry

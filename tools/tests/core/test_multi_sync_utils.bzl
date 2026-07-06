@@ -12,6 +12,7 @@ load(
     "compute_multi_service_keys_for_tests",
     "record_multi_repo_owner_or_fail_for_tests",
     "render_multi_aggregate_bzl_for_tests",
+    "render_multi_aggregate_export_bzl_for_tests",
 )
 
 def _compute_service_keys_dedups_collisions_test(ctx):
@@ -73,6 +74,17 @@ def _render_multi_aggregate_bzl_contains_expected_targets_test(ctx):
     asserts.true(env, 'name = "module_go_service_" + _lab,' in content)
     return unittest.end(env)
 
+def _render_multi_aggregate_export_bzl_reexports_mapping_test(ctx):
+    """Validate export.bzl re-exports the aggregate service mapping."""
+    env = unittest.begin(ctx)
+    content = render_multi_aggregate_export_bzl_for_tests()
+    asserts.true(
+        env,
+        'load(":aggregate.bzl", _topt_data_by_service = "topt_data_by_service")' in content,
+    )
+    asserts.true(env, "topt_data_by_service = _topt_data_by_service" in content)
+    return unittest.end(env)
+
 def _render_multi_aggregate_bzl_mismatch_target_impl(_ctx):
     """Target expected to fail on keys/repos length mismatch."""
     render_multi_aggregate_bzl_for_tests(["go_service"], ["repo_a", "repo_b"])
@@ -109,6 +121,7 @@ compute_service_keys_edge_cases_test = unittest.make(_compute_service_keys_edge_
 compute_repo_names_test = unittest.make(_compute_repo_names_test)
 record_multi_repo_owner_success_test = unittest.make(_record_multi_repo_owner_success_test)
 render_multi_aggregate_bzl_contains_expected_targets_test = unittest.make(_render_multi_aggregate_bzl_contains_expected_targets_test)
+render_multi_aggregate_export_bzl_reexports_mapping_test = unittest.make(_render_multi_aggregate_export_bzl_reexports_mapping_test)
 render_multi_aggregate_bzl_mismatch_failure_test = analysistest.make(
     _render_multi_aggregate_bzl_mismatch_failure_test_impl,
     expect_failure = True,

@@ -132,7 +132,9 @@ def _base_template_substitutions(
         schema_json_rloc,
         schema_json_path,
         schema_validator_rloc,
-        schema_validator_path):
+        schema_validator_path,
+        bep_artifact_stage_helper_rloc,
+        doctor_runtime_rloc):
     """Build shared template substitutions for Bash/PowerShell scripts."""
     return {
         "quiescent_sec": quiescent_sec,
@@ -153,6 +155,8 @@ def _base_template_substitutions(
         "schema_json_path": schema_json_path,
         "schema_validator_rloc": schema_validator_rloc,
         "schema_validator_path": schema_validator_path,
+        "bep_artifact_stage_helper_rloc": bep_artifact_stage_helper_rloc,
+        "doctor_runtime_rloc": doctor_runtime_rloc,
         "rules_version": RULES_VERSION,
     }
 
@@ -757,6 +761,8 @@ def _uploader_impl(ctx):
         schema_json_path,
         schema_validator_rloc,
         schema_validator_path,
+        ctx.file._bep_artifact_stage_helper.short_path,
+        ctx.file._doctor_runtime.short_path,
     )
     bash_substitutions["curl_retry_flags"] = " ".join(_bash_curl_retry_flags_for_tests())
     bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
@@ -794,6 +800,8 @@ def _uploader_impl(ctx):
                 schema_json_path,
                 schema_validator_rloc,
                 schema_validator_path,
+                ctx.file._bep_artifact_stage_helper.short_path,
+                ctx.file._doctor_runtime.short_path,
             ),
         ),
         is_executable = False,
@@ -823,14 +831,23 @@ def _uploader_impl(ctx):
         extra_files.append(ctx.file._schema)
     if ctx.file._schema_validator:
         extra_files.append(ctx.file._schema_validator)
-    runfiles = ctx.runfiles(files = [ps_file, bat_file, context_manifest, telemetry_facts_manifest] + ctx.files.data + extra_files)
+    runfiles = ctx.runfiles(
+        files = [
+            ps_file,
+            bat_file,
+            context_manifest,
+            telemetry_facts_manifest,
+            ctx.file._bep_artifact_stage_helper,
+            ctx.file._doctor_runtime,
+        ] + ctx.files.data + extra_files,
+    )
     log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
     # Use target-platform constraints (ConstraintValueInfo) so executable
     # selection is analysis-time deterministic across host operating systems.
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     executable = bat_file if is_windows else bash_file
-    return [DefaultInfo(executable = executable, runfiles = runfiles)]
+    return [DefaultInfo(files = depset([bash_file, ps_file, bat_file]), executable = executable, runfiles = runfiles)]
 
 _dd_payload_uploader_rule = rule(
     implementation = _uploader_impl,
@@ -848,6 +865,8 @@ _dd_payload_uploader_rule = rule(
         # Schema + validator bundled for best-effort payload validation
         "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
         "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),
+        "_bep_artifact_stage_helper": attr.label(default = "//tools/core:bep_artifact_stage_helper.py", allow_single_file = True),
+        "_doctor_runtime": attr.label(default = "//tools/core:test_optimization_doctor.py", allow_single_file = True),
         # Runtime templates (kept as standalone files, not inline Starlark strings)
         "_bash_runtime_template": attr.label(default = "//tools/core:uploader_bash_runtime.sh.tpl", allow_single_file = True),
         "_powershell_runtime_template": attr.label(default = "//tools/core:uploader_powershell_runtime.ps1.tpl", allow_single_file = True),
@@ -888,6 +907,36 @@ Path resolution notes:
     - Runtime scripts resolve optional artifacts (context/schema/validator)
       via direct artifact path first, then runfiles lookup.
     - Runfiles lookup supports both directory runfiles and manifest-only mode.
+    - BEP artifact staging resolves its shared Python helper and doctor runtime
+      from uploader runfiles, then scans only helper-emitted per-run staging
+      roots.
+
+BEP artifact resolution:
+    - By default, uploader discovery remains local-only
+      (`--artifact-source=local`, `--remote-artifacts=disabled`).
+    - `--artifact-source=bep` stages fresh BEP-referenced `test.outputs` or
+      local `outputs.zip` carriers before upload discovery. It requires
+      `--bep-json` or `DD_TEST_OPTIMIZATION_BEP_JSON`.
+    - `--artifact-source=auto --remote-artifacts=download|required` can stage
+      BEP carriers while keeping local discovery as a fallback. Staged outputs
+      win over stale local directories with the same BEP output key.
+    - Remote/CAS carriers require `--bep-artifact-downloader` or
+      `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER`; the value must be one
+      executable path that writes an `outputs.zip` archive to `--output`.
+    - Artifact staging requires Python at uploader runtime. Bash and PowerShell
+      accept `DD_TEST_OPTIMIZATION_PYTHON`, `PYTHON`, `python3`, or `python`.
+
+New artifact flags and env aliases:
+    --artifact-source=local|bep|auto
+        DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE
+    --remote-artifacts=disabled|download|required
+        DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS
+    --artifact-staging-dir=<path>
+        DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR
+    --bep-artifact-downloader=<path>
+        DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER
+    --bep-artifact-downloader-timeout-sec=<seconds>
+        DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC
 
 Usage:
     # In BUILD.bazel at workspace root

@@ -102,14 +102,15 @@ From a `rules_test_optimization` checkout:
 ```bash
 ./bazelw run //tools/dev:print_go_onboarding_pins -- \
   --commit "$(git rev-parse origin/main)" \
-  --variant complete \
+  --rules-go-upstream v0_60_0 \
+  --variant base \
   --verify-main-reachable
 ```
 
 The command prints the full tuple used by WORKSPACE archive mode:
 `RTO_COMMIT`, `RTO_REMOTE`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
-`RTO_ARCHIVE_PREFIX`, `RTO_ARCHIVE_TYPE`, `RULES_GO_VARIANT`,
-`RULES_GO_STRIP_PREFIX`, `DD_TRACE_GO_VERSION`, and
+`RTO_ARCHIVE_PREFIX`, `RTO_ARCHIVE_TYPE`, `RULES_GO_UPSTREAM`,
+`RULES_GO_VARIANT`, `RULES_GO_STRIP_PREFIX`, `DD_TRACE_GO_VERSION`, and
 `ORCHESTRION_VERSION`. Published GitHub codeload pins are `tar.gz`; use a
 separate repository-owned mirror process for any other archive format.
 
@@ -122,16 +123,14 @@ RTO_ARCHIVE_URL="https://codeload.github.com/DataDog/rules_test_optimization/tar
 RTO_ARCHIVE_SHA256="fd54d1871fc01ff0bb3db190dfaadaa8256edd68a4f3bb85ecc08b315fbf5bd4"
 RTO_ARCHIVE_PREFIX="rules_test_optimization-69953536d4ef1252c8181c267d16c61263f0aa4c"
 RTO_ARCHIVE_TYPE="tar.gz"
-RULES_GO_VARIANT="complete"
-RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_complete"
-DD_TRACE_GO_VERSION="v2.9.0-rc.2"
+RULES_GO_UPSTREAM="v0_60_0"
+RULES_GO_VARIANT="base"
+RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
+DD_TRACE_GO_VERSION="v2.9.0"
 ORCHESTRION_VERSION="v1.9.0"
 ```
 
-The archive URL, SHA256, and prefix are tied to the repository commit. Use the
-same values with `RULES_GO_VARIANT="base"` and
-`RULES_GO_STRIP_PREFIX="third_party/rules_go_orchestrion_base"` when a
-consumer should use the base variant instead of the complete variant.
+The archive URL, SHA256, and prefix are tied to the repository commit.
 
 From a consumer that already has the Go companion available, the bootstrap can
 print the same tuple or write a checked-in Markdown summary:
@@ -140,12 +139,14 @@ print the same tuple or write a checked-in Markdown summary:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --print-published-pins \
   --rto-commit <published-origin-main-sha> \
-  --rules-go-variant complete
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base
 
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
   --rto-commit <published-origin-main-sha> \
-  --rules-go-variant complete
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base
 ```
 
 The bootstrap summary command does not inspect `MODULE.bazel` or `go.mod`; it
@@ -230,7 +231,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-rc.2 \
+  --dd-trace-go-version v2.9.0 \
   --write-bazelrc
 ```
 
@@ -241,13 +242,13 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0-rc.2 \
+  --dd-trace-go-version v2.9.0 \
   --go-module-dir path/to/go-module \
   --write-bazelrc
 ```
 
 `--dd-trace-go-version` is optional. If omitted, the workspace uses the default
-`v2.9.0-rc.2`. It accepts a tag, pseudo-version,
+`v2.9.0`. It accepts a tag, pseudo-version,
 branch, or commit SHA. Bootstrap resolves that input to exact tracer versions,
 keeps the local Go module pins on those same versions, and prevents Bazel and
 the Go module from silently drifting apart.
@@ -289,7 +290,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --runtime-version 1.25.0 \
   --sync-repo-name test_optimization_data \
   --rto-commit <commit-sha> \
-  --rules-go-variant complete \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
   --rules-go-repo-name io_bazel_rules_go
 ```
 
@@ -301,7 +303,8 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service go-service \
   --runtime-version 1.25.0 \
   --sync-repo-name test_optimization_data \
-  --rules-go-variant complete \
+  --rules-go-upstream v0_60_0 \
+  --rules-go-variant base \
   --rules-go-repo-name io_bazel_rules_go \
   --write-bazelrc \
   --write-root-targets \
@@ -356,10 +359,24 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --shutdown-bazel-on-exit
 ```
 
-The generated script runs `sync -> controls -> instrumented tests -> doctor`.
-It uploads only when called with `--upload`; the default is `--no-upload`. It
-does not delete caches, print secrets, use BES/BEP, proxy payloads, or pass
-`DD_GIT_*` through `--test_env`.
+The generated script runs
+`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`.
+It captures one BEP JSON file per Bazel test invocation and passes those files
+to doctor/uploader with `--freshness-source=bep --freshness-mode=required`. It
+always runs the uploader dry-run with enrichment validation after a successful
+doctor, and uploads only when called with `--upload`; the default is
+`--no-upload`. It does not delete caches, print secrets, proxy payloads, or pass
+`DD_GIT_*` through `--test_env`. The generated test config uses
+`--zip_undeclared_test_outputs`, and the script passes `--artifact-source=bep`
+to doctor/uploader so local `outputs.zip` carriers are extracted through BEP
+artifact staging. If BEP points at remote-only HTTP/HTTPS `outputs.zip`
+carriers, doctor/uploader can stage them natively with
+`--remote-artifacts=download` or `required`; bytestream/CAS/custom-auth
+providers still need `--bep-artifact-downloader`. Set
+`DD_TEST_OPTIMIZATION_REPORT_DIR` to choose where the
+generated script writes `doctor-report.json`, `uploader-dry-run-report.json`,
+and, when upload is enabled, `uploader-upload-report.json`; otherwise it writes
+those reports under its per-run temporary directory and logs that path.
 
 ### Go Bazel config
 
@@ -377,7 +394,9 @@ common:test-optimization --repo_env=DD_GIT_BRANCH
 common:test-optimization --repo_env=DD_GIT_TAG
 common:test-optimization --repo_env=DD_GIT_COMMIT_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 ```
 
 The full generated block includes all sync metadata inputs from the repository
@@ -387,6 +406,13 @@ rule. It intentionally does not include `--test_env=DD_GIT_*`,
 sync metadata fetch through `--repo_env`, and uploader credentials/endpoints are
 read later by `bazel run`.
 
+The generated config intentionally does not include a fixed
+`--build_event_json_file`. CI wrappers should create a unique BEP path for each
+Bazel test invocation, pass it to `bazel test` with
+`--build_event_json_file=<path>`, and pass the same path to doctor/uploader with
+repeatable `--bep-json=<path>` flags. This keeps parallel CI jobs and repeated
+local runs from overwriting or reusing stale BEP files.
+
 `FETCH_SALT` is intentionally not part of the generated default config. Use it
 only in a separate force-refresh `bazel sync --only=<repo>` command when you
 deliberately want fresh backend metadata.
@@ -394,10 +420,91 @@ deliberately want fresh backend metadata.
 Run Go onboarding commands with this config:
 
 ```bash
-bazel test --config=test-optimization //...
-bazel run --config=test-optimization //:dd_test_optimization_doctor
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+tools/test_optimization/run_test_optimization_ci.sh \
+  --report-dir .topt/reports \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip \
+  //...
+
+# Add --upload only when the real upload should run after doctor and dry-run pass.
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+  tools/test_optimization/run_test_optimization_ci.sh \
+    --report-dir .topt/reports \
+    --support-bundle .topt/reports/dd-test-optimization-support.zip \
+    --upload \
+    //...
+```
+
+```powershell
+# Vendor the full tools/test_optimization/ helper directory, or set
+# DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  //...
+
+# Add -Upload only when the real upload should run after doctor and dry-run pass.
+$env:DD_API_KEY = "<your-api-key>"
+$env:DD_SITE = "datadoghq.com"
+.\tools\test_optimization\run_test_optimization_ci.ps1 `
+  -ReportDir .topt\reports `
+  -SupportBundle .topt\reports\dd-test-optimization-support.zip `
+  -Upload `
+  //...
+```
+
+During rollout debugging, prefer `--report-dir <path>` plus
+`--support-bundle <path>` on the CI wrapper, or set
+`DD_TEST_OPTIMIZATION_REPORT_DIR` and `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE`.
+The wrapper writes separate
+`doctor-report.json`, `uploader-dry-run-report.json`, and, when `--upload` is
+enabled, `uploader-upload-report.json` files. When support bundle output is
+configured, it also writes `dd-test-optimization-support.zip` with redacted
+reports, selected BEP summaries, effective wrapper flags, runtime metadata, and
+`summary.md`. Use `--doctor-report-json` or
+`--uploader-report-json` only when CI needs one explicitly named report; manual
+doctor/uploader commands can pass `--report-json=<path>` after the target's
+`--` separator.
+
+For a first-pass support request after tests have run, the customer can run only
+the doctor:
+
+```bash
+bazel run //:dd_test_optimization_doctor -- \
+  --support-bundle .topt/reports/dd-test-optimization-support.zip
+```
+
+Add the matching `--bep-json`, `--freshness-*`, and `--artifact-*` flags when
+the failing job uses BEP/BwoB. This doctor-only bundle does not include uploader
+dry-run or upload results.
+For a complete support handoff, follow the escalation ladder in
+[`docs/Troubleshooting.md`](Troubleshooting.md#collect-diagnostic-reports).
+
+Reports include `result.status`, `result.reason_code`, human-readable
+`result.reason`, and `result.next_steps`, plus expected targets, BEP
+fresh/cached/remote-only outputs, artifact staging, payload discovery, payload
+processing, and upload counters. If a repository cannot use the doctor or
+wrapper support-bundle entrypoints but has the helper script, create the
+redacted zip manually:
+
+```bash
+python3 tools/test_optimization/create_support_bundle.py \
+  --report-dir .topt/reports \
+  --report-json .topt/reports/doctor-report.json \
+  --report-json .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/dd-test-optimization-support.zip \
+  --workspace-root "$PWD" \
+  --output-base "$(bazel info output_base)"
+```
+
+When only Markdown is possible, generate a short fallback summary with:
+
+```bash
+python3 tools/test_optimization/render_report_summary.py \
+  .topt/reports/doctor-report.json \
+  .topt/reports/uploader-dry-run-report.json \
+  --output .topt/reports/upload-diagnostics.md
 ```
 
 Do not run the real uploader if the doctor or dry-run enrichment step fails.
@@ -711,10 +818,17 @@ dd_payload_uploader(
 ```
 
 After tests and doctor pass, you can validate the exact enriched outbound test
-payload without uploading or deleting files:
+payload without uploading or deleting files. If you invoke this manually instead
+of using the CI wrapper, reuse the BEP file created by the matching
+`bazel test --build_event_json_file=...` invocation:
 
 ```bash
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
+bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --dry-run \
+  --validate-enrichment
 ```
 
 Multi-service aggregator variant:
@@ -774,7 +888,9 @@ common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-test:test-optimization --remote_download_outputs=all
+test:test-optimization --remote_download_minimal
+test:test-optimization --remote_download_regex=.*test[.]outputs.*
+test:test-optimization --zip_undeclared_test_outputs
 # Optional: override detected Go module path for export.bzl
 common:test-optimization --repo_env=GO_MODULE_PATH
 # Optional: provide Python module path hint for export.bzl
@@ -788,13 +904,27 @@ common:test-optimization --repo_env=DOTNET_MODULE_PATH
 # Optional: provide Ruby module path hint for export.bzl
 common:test-optimization --repo_env=RUBY_MODULE_PATH
 
-# Uploader (bazel run, pass credentials inline or export before run)
+# Doctor/uploader runtime is passed by the CI wrapper after bazel run's `--`:
+#   --bep-json=<per-test-invocation-bep-json>
+#   --freshness-source=bep
+#   --freshness-mode=required
+#   --artifact-source=bep
+#   --artifact-staging-dir=<per-run-temp-dir>
+#   # If BEP points at remote-only HTTP/HTTPS outputs.zip carriers, add:
+#   # --remote-artifacts=download
+#   # If BEP points at bytestream/CAS/custom-auth providers, also add:
+#   # --bep-artifact-downloader=<path-to-downloader>
+#
+# Uploader credentials (pass inline or export before run)
 # DD_API_KEY and DD_SITE are passed when running the uploader:
 #   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
 # PowerShell equivalent:
 #   # Set once per shell session before first run:
 #   # $env:DD_API_KEY = "<your-api-key>"
 #   # $env:DD_SITE = "datadoghq.com"
+#   # The PowerShell wrapper passes --bep-json, --freshness-source=bep,
+#   # --freshness-mode=required, --artifact-source=bep, and
+#   # --artifact-staging-dir after bazel run's `--`.
 #   bazel run --config=test-optimization //:dd_upload_payloads
 
 # Tests (runtime)
@@ -1059,7 +1189,8 @@ load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "d
 datadog_go_test_optimization_workspace_repositories(
     rto_commit = "<commit-sha>",
     rules_go_repo_name = "io_bazel_rules_go",
-    rules_go_variant = "base",  # or "complete" for extended monorepo compatibility
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
 )
 ```
 
@@ -1073,7 +1204,8 @@ datadog_go_test_optimization_workspace_repositories(
     datadog_fetch = "archive",
     rules_go_fetch = "archive",
     rules_go_repo_name = "io_bazel_rules_go",
-    rules_go_variant = "complete",
+    rules_go_upstream = "v0_60_0",
+    rules_go_variant = "base",
     rto_archive_url = "https://artifacts.example.internal/bazel-mirror/datadog/rules_test_optimization/<commit-sha>.tar.gz",
     rto_archive_sha256 = "<sha256-for-archive>",
     rto_archive_prefix = "rules_test_optimization-<commit-sha>",
@@ -1081,10 +1213,13 @@ datadog_go_test_optimization_workspace_repositories(
 ```
 
 Supported helper combinations are `git/git`, `git/archive`, and
-`archive/archive`. Use `rules_go_variant = "base"` for normal consumers and
-`rules_go_variant = "complete"` for repositories that need the declared extended
-monorepo compatibility layer. The helper never applies `patches`, `patch_tool`,
-or `patch_args`; both variants are complete `rules_go` trees.
+`archive/archive`. Use `rules_go_variant = "base"` for supported consumers.
+When multiple upstream `rules_go` versions are supported, use
+`rules_go_upstream` to select the upstream support line; omit it to preserve
+the repository default. The default `rules_go_upstream` is currently `v0_60_0`,
+which preserves the existing `third_party/rgo/v0_60_0/base` path. The
+helper never applies `patches`, `patch_tool`, or `patch_args`; it points
+consumers at a complete base `rules_go` tree.
 
 Then configure Go, Gazelle, and the Orchestrion tool repository:
 
@@ -1122,7 +1257,8 @@ Notes for the helper:
 - Keep the default tool-repo name `rules_go_orchestrion_tool`; the current fork
   resolves that name internally.
 - Do not configure `patches`, `patch_tool`, or `patch_args` for this integration;
-  choose the complete variant instead when the base variant is not enough.
+  repositories that already own their `rules_go` patch stack should generate the
+  public consumer patch profile and rebase or merge it locally.
 
 Then in your Go package `BUILD.bazel`:
 
