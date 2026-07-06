@@ -45,11 +45,12 @@ function Invoke-BazelCommand {
   )
 
   Write-Host ("+ {0} {1}" -f $Bazel, ($Args -join " "))
-  & $Bazel @Args
-  if ($null -eq $LASTEXITCODE) {
+  & $Bazel @Args | ForEach-Object { Write-Host $_ }
+  $exitCode = $LASTEXITCODE
+  if ($null -eq $exitCode) {
     return 0
   }
-  return [int]$LASTEXITCODE
+  return [int]$exitCode
 }
 
 if ($Targets.Count -gt 0 -and $Targets[0] -eq "--") {

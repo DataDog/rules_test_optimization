@@ -751,6 +751,92 @@ exit 99
         self.assertEqual("dd-test-optimization-doctor", diagnostics["reports"][0]["tool"])
         self.assertEqual("dd-test-optimization-uploader", diagnostics["reports"][1]["tool"])
 
+    def test_powershell_wrapper_reaches_uploader_when_bazel_writes_stdout(self) -> None:
+        """Validate PowerShell wrapper keeps command statuses separate from Bazel stdout."""
+        pwsh = _require_command(self, "pwsh", "pwsh is required for PowerShell wrapper smoke")
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.ps1")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel.ps1"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$BazelArgs)
+Write-Output ("fake bazel stdout: " + ($BazelArgs -join ' '))
+Add-Content -LiteralPath {str(log_path)!r} -Value ($BazelArgs -join ' ')
+if ($BazelArgs.Count -gt 1 -and $BazelArgs[0] -eq 'info' -and $BazelArgs[1] -eq 'output_base') {{
+  Write-Output {str(root / 'output-base')!r}
+  exit 0
+}}
+if ($BazelArgs.Count -gt 0 -and $BazelArgs[0] -eq 'test') {{
+  foreach ($Arg in $BazelArgs) {{
+    if ($Arg.StartsWith("--build_event_json_file=")) {{
+      $BepJson = $Arg.Substring("--build_event_json_file=".Length)
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $BepJson) | Out-Null
+      Set-Content -LiteralPath $BepJson -Encoding UTF8 -Value '{{"id":{{"testResult":{{"label":"//pkg:target","run":1,"shard":1,"attempt":1}}}},"testResult":{{"cachedLocally":false,"testActionOutput":[{{"name":"outputs.zip","uri":"file:///tmp/outputs.zip"}}]}}}}'
+    }}
+  }}
+  exit 0
+}}
+if ($BazelArgs.Count -gt 0 -and $BazelArgs[0] -eq 'run') {{
+  $ReportJson = ""
+  foreach ($Arg in $BazelArgs) {{
+    if ($Arg.StartsWith("--report-json=")) {{
+      $ReportJson = $Arg.Substring("--report-json=".Length)
+    }}
+  }}
+  if (-not [string]::IsNullOrWhiteSpace($ReportJson)) {{
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ReportJson) | Out-Null
+    if (($BazelArgs -join ' ') -like '*dd_test_optimization_doctor*') {{
+      Set-Content -LiteralPath $ReportJson -Encoding UTF8 -Value '{{"tool":"dd-test-optimization-doctor","status":"ok","result":{{"status":"ok","reason_code":"ok","reason":"","next_steps":[]}}}}'
+    }} else {{
+      Set-Content -LiteralPath $ReportJson -Encoding UTF8 -Value '{{"tool":"dd-test-optimization-uploader","config":{{"artifact_source":"bep"}},"payloads":{{"tests":{{"processed":1}}}}}}'
+    }}
+  }}
+  exit 0
+}}
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+
+            result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                    "-Bazel",
+                    str(fake_bazel),
+                    "-ReportDir",
+                    str(root / "reports"),
+                    "-TestFlag",
+                    "--remote_download_regex=.*test[.]outputs.*",
+                    "//pkg:target",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            self.assertTrue((root / "reports" / "doctor-report.json").exists(), result.stderr + result.stdout)
+            self.assertTrue((root / "reports" / "uploader-dry-run-report.json").exists(), result.stderr + result.stdout)
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertIn("//:dd_upload_payloads", log_text)
+        self.assertIn("--dry-run --validate-enrichment", log_text)
+
     def test_powershell_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate PowerShell support bundle path preserves the original test status."""
         pwsh = _require_command(self, "pwsh", "pwsh is required for PowerShell support bundle smoke")
