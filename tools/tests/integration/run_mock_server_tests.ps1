@@ -1285,28 +1285,53 @@ filegroup(
 	  Add-Type -AssemblyName System.IO.Compression.FileSystem
 	  [System.IO.Compression.ZipFile]::CreateFromDirectory($bepStagedArtifactOutput, $bepRemoteZip)
 	  $fakeDownloaderDir = Join-Path $tempRoot "downloader with spaces"
+	  $bepRemoteDownloaderLog = Join-Path $tempRoot "fake-downloader-invocations.tsv"
+	  if (Test-Path -LiteralPath $bepRemoteDownloaderLog) { Remove-Item -LiteralPath $bepRemoteDownloaderLog -Force }
 	  New-Item -ItemType Directory -Force -Path $fakeDownloaderDir | Out-Null
 	  if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
 	    $fakeDownloader = Join-Path $fakeDownloaderDir "fake downloader.cmd"
 @'
 @echo off
 setlocal
+set "uri="
+set "name="
 set "out="
 :parse
 if "%~1"=="" goto done
+if "%~1"=="--uri" (
+  set "uri=%~2"
+  shift
+  shift
+  goto parse
+)
+if "%~1"=="--name" (
+  set "name=%~2"
+  shift
+  shift
+  goto parse
+)
 if "%~1"=="--output" (
   set "out=%~2"
   shift
   shift
   goto parse
 )
-shift
-goto parse
+echo unexpected argument: %~1 1>&2
+exit /b 2
 :done
-if "%out%"=="" (
-  echo missing --output 1>&2
+if "%uri%"=="" (
+  echo missing required downloader arguments 1>&2
   exit /b 2
 )
+if "%name%"=="" (
+  echo missing required downloader arguments 1>&2
+  exit /b 2
+)
+if "%out%"=="" (
+  echo missing required downloader arguments 1>&2
+  exit /b 2
+)
+>>"%BEP_REMOTE_DOWNLOADER_LOG%" echo %uri%	%name%	%out%
 copy /Y "%BEP_REMOTE_ZIP_SOURCE%" "%out%" >nul
 '@ | Set-Content -LiteralPath $fakeDownloader -Encoding ASCII
 	  } else {
@@ -1314,17 +1339,25 @@ copy /Y "%BEP_REMOTE_ZIP_SOURCE%" "%out%" >nul
 @'
 #!/usr/bin/env bash
 set -euo pipefail
+uri=""
+name=""
 out=""
 while (($#)); do
   case "$1" in
+    --uri) uri="$2"; shift 2 ;;
+    --name) name="$2"; shift 2 ;;
     --output) out="$2"; shift 2 ;;
-    *) shift ;;
+    *)
+      echo "unexpected argument: $1" >&2
+      exit 2
+      ;;
   esac
 done
-if [[ -z "$out" ]]; then
-  echo "missing --output" >&2
+if [[ -z "$uri" || -z "$name" || -z "$out" ]]; then
+  echo "missing required downloader arguments" >&2
   exit 2
 fi
+printf '%s\t%s\t%s\n' "$uri" "$name" "$out" >>"$BEP_REMOTE_DOWNLOADER_LOG"
 cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 '@ | Set-Content -LiteralPath $fakeDownloader -Encoding UTF8
 	    chmod +x $fakeDownloader
@@ -1345,17 +1378,20 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	  $savedRunfilesDir = [Environment]::GetEnvironmentVariable("RUNFILES_DIR")
 	  $savedDebug = [Environment]::GetEnvironmentVariable("DD_TEST_OPTIMIZATION_DEBUG")
 	  $savedZipSource = [Environment]::GetEnvironmentVariable("BEP_REMOTE_ZIP_SOURCE")
+	  $savedDownloaderLog = [Environment]::GetEnvironmentVariable("BEP_REMOTE_DOWNLOADER_LOG")
 	  try {
 	    $env:TESTLOGS_DIR = $bepStagedTestlogsDir
 	    $env:RUNFILES_DIR = $repoRoot
 	    $env:DD_TEST_OPTIMIZATION_DEBUG = "1"
 	    $env:BEP_REMOTE_ZIP_SOURCE = $bepRemoteZip
+	    $env:BEP_REMOTE_DOWNLOADER_LOG = $bepRemoteDownloaderLog
 	    $bepRemoteDownloadExitCode = Invoke-UploaderScriptWithTranscript -PowerShellPath $powerShellHost -ScriptPath $renderedUploader -ForwardedArgs $bepRemoteDownloadArgs -TranscriptPath $bepRemoteDownloadTranscript
 	  } finally {
 	    $env:TESTLOGS_DIR = $savedTestlogsDir
 	    if ($null -eq $savedRunfilesDir) { Remove-Item Env:RUNFILES_DIR -ErrorAction SilentlyContinue } else { $env:RUNFILES_DIR = $savedRunfilesDir }
 	    if ($null -eq $savedDebug) { Remove-Item Env:DD_TEST_OPTIMIZATION_DEBUG -ErrorAction SilentlyContinue } else { $env:DD_TEST_OPTIMIZATION_DEBUG = $savedDebug }
 	    if ($null -eq $savedZipSource) { Remove-Item Env:BEP_REMOTE_ZIP_SOURCE -ErrorAction SilentlyContinue } else { $env:BEP_REMOTE_ZIP_SOURCE = $savedZipSource }
+	    if ($null -eq $savedDownloaderLog) { Remove-Item Env:BEP_REMOTE_DOWNLOADER_LOG -ErrorAction SilentlyContinue } else { $env:BEP_REMOTE_DOWNLOADER_LOG = $savedDownloaderLog }
 	  }
 	  if ($bepRemoteDownloadExitCode -ne 0) {
 	    throw "remote BEP fake-downloader scenario failed with exit code $bepRemoteDownloadExitCode`n$(Get-Content -LiteralPath $bepRemoteDownloadTranscript -Raw -ErrorAction SilentlyContinue)"
@@ -1363,6 +1399,13 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	  $bepRemoteDownloadOutput = Get-Content -LiteralPath $bepRemoteDownloadTranscript -Raw -Encoding UTF8
 	  if (-not $bepRemoteDownloadOutput.Contains("dry-run validated 1 test payloads")) {
 	    throw "remote BEP fake-downloader scenario did not validate the downloaded payload`n$bepRemoteDownloadOutput"
+	  }
+	  $downloaderLog = Get-Content -LiteralPath $bepRemoteDownloaderLog -Raw -ErrorAction Stop
+	  if (-not ($downloaderLog -like "*bytestream://remote-cas/blobs/fake-downloader/456`ttest.outputs`t*")) {
+	    throw "remote BEP fake-downloader scenario did not pass the expected URI/name contract`n$downloaderLog"
+	  }
+	  if ($downloaderLog -notmatch "outputs[.]zip(\r?\n)?$") {
+	    throw "remote BEP fake-downloader scenario did not request an outputs.zip destination`n$downloaderLog"
 	  }
 
 		  $bepOptionalFilterTranscript = Join-Path $tempRoot "bep_filter_optional.transcript.txt"

@@ -1219,21 +1219,30 @@ with zipfile.ZipFile(dest, "w") as archive:
 PY
 FAKE_DOWNLOADER_DIR="$TMP_WS/downloader with spaces"
 FAKE_DOWNLOADER="$FAKE_DOWNLOADER_DIR/fake downloader.sh"
+FAKE_DOWNLOADER_LOG="$TMP_WS/fake-downloader-invocations.tsv"
 mkdir -p "$FAKE_DOWNLOADER_DIR"
 cat >"$FAKE_DOWNLOADER" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+uri=""
+name=""
 out=""
 while (($#)); do
   case "$1" in
+    --uri) uri="$2"; shift 2 ;;
+    --name) name="$2"; shift 2 ;;
     --output) out="$2"; shift 2 ;;
-    *) shift ;;
+    *)
+      echo "unexpected argument: $1" >&2
+      exit 2
+      ;;
   esac
 done
-if [[ -z "$out" ]]; then
-  echo "missing --output" >&2
+if [[ -z "$uri" || -z "$name" || -z "$out" ]]; then
+  echo "missing required downloader arguments" >&2
   exit 2
 fi
+printf '%s\t%s\t%s\n' "$uri" "$name" "$out" >>"$BEP_REMOTE_DOWNLOADER_LOG"
 cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 SH
 chmod +x "$FAKE_DOWNLOADER"
@@ -1250,6 +1259,7 @@ if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
   DD_TEST_OPTIMIZATION_AGENT_URL= \
   BEP_REMOTE_ZIP_SOURCE="$BEP_REMOTE_ZIP" \
+  BEP_REMOTE_DOWNLOADER_LOG="$FAKE_DOWNLOADER_LOG" \
   "$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads \
     "${REPO_ENVS[@]}" -- \
     --bep-json "$BEP_REMOTE_DOWNLOAD_JSON" \
@@ -1268,6 +1278,16 @@ fi
 if ! grep -q "dry-run validated 1 test payloads" "$BEP_REMOTE_DOWNLOAD_LOG"; then
   echo "error: remote BEP fake-downloader scenario did not validate the downloaded payload"
   cat "$BEP_REMOTE_DOWNLOAD_LOG" || true
+  exit 1
+fi
+if ! grep -Fq $'bytestream://remote-cas/blobs/fake-downloader/456\ttest.outputs\t' "$FAKE_DOWNLOADER_LOG"; then
+  echo "error: remote BEP fake-downloader scenario did not pass the expected URI/name contract"
+  cat "$FAKE_DOWNLOADER_LOG" || true
+  exit 1
+fi
+if ! awk -F '\t' '{ if ($3 !~ /\/outputs[.]zip$/) exit 1 }' "$FAKE_DOWNLOADER_LOG"; then
+  echo "error: remote BEP fake-downloader scenario did not request an outputs.zip destination"
+  cat "$FAKE_DOWNLOADER_LOG" || true
   exit 1
 fi
 
