@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Large WORKSPACE Go Rollout Plan
+# Large WORKSPACE Go Rollout Guide
 
 This document is the maintained rollout checklist for large WORKSPACE
 monorepos that need Go Test Optimization with Orchestrion. It is intentionally

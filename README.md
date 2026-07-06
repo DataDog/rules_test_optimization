@@ -70,14 +70,14 @@ are informative and may lag temporarily.
 - [`tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md`](tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md):
   neutral Codex-compatible agent workflow for porting the vendored
   Orchestrion-enabled `rules_go` fork to a new upstream tag or commit.
-- [`docs/internal_monorepo_go_rollout_plan.md`](docs/internal_monorepo_go_rollout_plan.md):
+- [`docs/internal_monorepo_go_rollout_guide.md`](docs/internal_monorepo_go_rollout_guide.md):
   operator checklist for large WORKSPACE Go pilot rollouts.
 - [`docs/go_orchestrion_bazel_deep_dive.md`](docs/go_orchestrion_bazel_deep_dive.md):
   maintainer deep dive for the Go + Orchestrion Bazel pipeline.
 - [`docs/go_orchestrion_maintainer_state.md`](docs/go_orchestrion_maintainer_state.md):
   current Go/Orchestrion maintainer state, kept optimizations, reverted
   experiments, and next performance directions.
-- [`docs/rules_go_variant_selection_plan.md`](docs/rules_go_variant_selection_plan.md)
+- [`docs/rules_go_orchestrion_support_selection.md`](docs/rules_go_orchestrion_support_selection.md)
   and [`docs/rules_go_variant_maintenance_guide.md`](docs/rules_go_variant_maintenance_guide.md):
   how to maintain supported `rules_go` upstream versions and generated
   consumer patch profiles.

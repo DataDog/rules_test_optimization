@@ -56,7 +56,7 @@ Preserve the maintained fork contract:
    - the target upstream's `*.CHANGED_FILES.md`
    - `third_party/rules_go_orchestrion/profiles/workspace_runtime.json`
 3. Read the maintainer docs that define the current fork model:
-   - `docs/rules_go_variant_selection_plan.md`
+   - `docs/rules_go_orchestrion_support_selection.md`
    - `docs/rules_go_variant_maintenance_guide.md`
    - `docs/go_orchestrion_maintainer_state.md`
    - `docs/go_orchestrion_bazel_deep_dive.md`
