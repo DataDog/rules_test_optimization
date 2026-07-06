@@ -11,7 +11,7 @@ go 1.25.0
 require (
 	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0
 	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0
-	github.com/DataDog/dd-trace-go/v2 v2.9.0
+	github.com/DataDog/dd-trace-go/v2 v2.9.1
 	github.com/DataDog/orchestrion v1.10.0
 )
 
