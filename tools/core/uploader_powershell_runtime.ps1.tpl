@@ -2961,7 +2961,7 @@ function Initialize-BepEligibility {
 	  $script:FreshnessSelectedSource = "bep"
 	  $script:FreshnessEligibilityEnabled = $true
 	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count)"
-	  if ($script:FreshnessMode -eq "optional" -and $script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
+	  if ($script:FreshnessMode -eq "optional" -and $script:RemoteArtifacts -ne "required" -and $script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
 	    $first = $script:FreshnessRemoteOnlyOutputs[0]
 	    $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
 	    Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; skipping those outputs. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* to materialize payloads locally. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
@@ -3135,16 +3135,18 @@ function Assert-NoRequiredRemoteOnlyBepOutputs {
   if ($script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
     $first = $script:FreshnessRemoteOnlyOutputs[0]
     $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
-    if ($script:FreshnessMode -ne "required" -and $script:RemoteArtifacts -eq "download") {
+    if ($script:FreshnessMode -eq "required" -or $script:RemoteArtifacts -eq "required") {
+      Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $firstArtifact. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+      exit 2
+    }
+    if ($script:RemoteArtifacts -eq "download") {
       Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; unmaterialized outputs will be skipped."
       return
     }
-    if ($script:FreshnessMode -ne "required" -and $script:RemoteArtifacts -eq "disabled") {
+    if ($script:RemoteArtifacts -eq "disabled") {
       Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; remote artifact staging is disabled."
       return
     }
-    Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $firstArtifact. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-    exit 2
   }
 }
 

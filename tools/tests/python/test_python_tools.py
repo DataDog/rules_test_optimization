@@ -6337,6 +6337,89 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertEqual(1, report_doc["bep"]["remote_only_outputs"])
         self.assertNotIn("artifact", report_doc["bep"])
 
+    def test_generated_uploaders_require_configured_remote_artifacts(self) -> None:
+        """Validate required remote artifact mode fails when BEP outputs are not materialized."""
+        _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
+        bash = _require_functional_bash(self)
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell uploader execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bazel-testlogs").mkdir()
+            bep = self._write_signed_http_remote_only_bep(root)
+            runfiles_dir = root / "empty.runfiles"
+            runfiles_dir.mkdir()
+            env = os.environ.copy()
+            env.update({
+                "BUILD_WORKSPACE_DIRECTORY": str(root),
+                "DD_TEST_OPTIMIZATION_MAX_WAIT_SEC": "0",
+                "DD_TEST_OPTIMIZATION_QUIESCENT_SEC": "0",
+                "RUNFILES_DIR": str(runfiles_dir),
+                "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+            })
+
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template("tools/core/uploader_bash_runtime.sh.tpl"),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+            bash_result = subprocess.run(
+                [
+                    bash,
+                    str(generated_bash),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                    "--remote-artifacts=required",
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+            generated_ps = root / "generated_uploader.ps1"
+            generated_ps.write_text(
+                _render_uploader_runtime_template("tools/core/uploader_powershell_runtime.ps1.tpl"),
+                encoding="utf-8",
+            )
+            powershell_result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-File",
+                    str(generated_ps),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                    "--remote-artifacts=required",
+                    "--dry-run",
+                ],
+                cwd=root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+        for runtime, result in (("Bash", bash_result), ("PowerShell", powershell_result)):
+            output = result.stdout + result.stderr
+            self.assertEqual(2, result.returncode, f"{runtime} output:\n{output}")
+            self.assertIn("BEP references remote-only test outputs", output)
+            self.assertIn("local test.outputs was not found", output)
+
     def test_uploader_templates_declare_bep_artifact_helper_runfiles(self) -> None:
         """Validate generated runtimes receive explicit helper and doctor runtime labels."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")

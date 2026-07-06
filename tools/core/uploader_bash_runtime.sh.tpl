@@ -3101,7 +3101,7 @@ prepare_bep_eligibility() {
   eligible_count="$(wc -l <"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | tr -d ' ')"
   remote_count="$(wc -l <"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" | tr -d ' ')"
   log "freshness filtering enabled: source=bep files=${#BEP_JSON_FILES[@]} eligible_outputs=$eligible_count remote_only_outputs=$remote_count"
-  if [[ "$FRESHNESS_MODE" == "optional" && "$remote_count" != "0" ]]; then
+  if [[ "$FRESHNESS_MODE" == "optional" && "$REMOTE_ARTIFACTS" != "required" && "$remote_count" != "0" ]]; then
     local first_label first_artifact first_artifact_display
     first_label="$(awk -F '\t' 'NR == 1 { print $1 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
     first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
@@ -3149,7 +3149,7 @@ validate_bep_remote_only_outputs() {
     first_label="$(awk -F '\t' 'NR == 1 { print $1 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
     first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
     first_artifact_display="$(display_artifact_reference "$first_artifact")"
-    if [[ "$FRESHNESS_MODE" == "required" ]]; then
+    if [[ "$FRESHNESS_MODE" == "required" || "$REMOTE_ARTIFACTS" == "required" ]]; then
       log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact_display:-<unknown>}. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
       exit 2
     fi
