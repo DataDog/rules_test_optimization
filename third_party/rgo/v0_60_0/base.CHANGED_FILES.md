@@ -12,8 +12,8 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `52`
-- Modified files: `28`
+- Total changed paths: `53`
+- Modified files: `29`
 - Added files: `24`
 - Removed files: `0`
 
@@ -24,6 +24,7 @@ This file is generated. Do not edit by hand.
 - `docs/doc_helpers.bzl`
 - `go/extensions.bzl`
 - `go/private/BUILD.bazel`
+- `go/private/actions/BUILD.bazel`
 - `go/private/actions/archive.bzl`
 - `go/private/actions/compilepkg.bzl`
 - `go/private/actions/link.bzl`
