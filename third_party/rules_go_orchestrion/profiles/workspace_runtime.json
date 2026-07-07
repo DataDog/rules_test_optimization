@@ -7,6 +7,7 @@
     "/BUILD.bazel",
     "go/orchestrion_workspace.bzl",
     "go/private/BUILD.bazel",
+    "go/private/actions/BUILD.bazel",
     "go/private/actions/archive.bzl",
     "go/private/actions/compilepkg.bzl",
     "go/private/actions/link.bzl",

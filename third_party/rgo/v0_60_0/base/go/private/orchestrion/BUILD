@@ -1,3 +1,4 @@
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 
 filegroup(
@@ -11,6 +12,12 @@ filegroup(
     testonly = True,
     srcs = glob(["**"]),
     visibility = ["//visibility:public"],
+)
+
+bzl_library(
+    name = "pin_files",
+    srcs = ["pin_files.bzl"],
+    visibility = ["//go:__subpackages__"],
 )
 
 bool_flag(
