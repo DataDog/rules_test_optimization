@@ -55,8 +55,10 @@ dd_topt_py_test(
 )
 ```
 
-Prefer `module_identifier` in consumer-runner mode because the Datadog macro
-does not need to synthesize Python imports to infer the module.
+When the runtime module path and Bazel package path identify the test, omit
+`module_identifier` and use the derived fallback. Keep an explicit
+`module_identifier` only for a documented repository-specific exception; the
+Datadog macro does not need to synthesize Python imports for the normal path.
 
 ## Validation
 

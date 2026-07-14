@@ -15,7 +15,9 @@ load(
 load(
     "@datadog-rules-test-optimization-python//:topt_py_test.bzl",
     "build_module_labels_for_tests",
+    "build_python_fallback_identifier_for_tests",
     "normalize_user_data_for_tests",
+    "resolve_python_selector_inputs_for_tests",
     "resolve_topt_service_key_for_tests",
     "service_mapping_entries_for_tests",
 )
@@ -81,6 +83,83 @@ def _normalize_python_identifier_edge_cases_test(ctx):
     asserts.equals(env, "leading.trailing", normalize_python_identifier_for_tests("/leading/trailing/"))
     asserts.equals(env, "", normalize_python_identifier_for_tests("...."))
     asserts.equals(env, "", normalize_python_identifier_for_tests(None))
+    return unittest.end(env)
+
+def _build_python_fallback_identifier_test(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "example.project.app",
+        build_python_fallback_identifier_for_tests("app", {"module_path": "example.project"}),
+    )
+    asserts.equals(
+        env,
+        "domains.ffe.apps.apis.query_validator.internal.validator.tests",
+        build_python_fallback_identifier_for_tests(
+            "domains/ffe/apps/apis/query_validator/internal/validator/tests",
+            {"module_path": "domains.ffe.apps.apis.query_validator"},
+        ),
+    )
+    asserts.equals(
+        env,
+        "domains.ffe.apps.apis.query_validator",
+        build_python_fallback_identifier_for_tests(
+            "domains/ffe/apps/apis/query_validator",
+            {"module_path": "domains.ffe.apps.apis.query_validator"},
+        ),
+    )
+    asserts.equals(
+        env,
+        "app",
+        build_python_fallback_identifier_for_tests("app", {}),
+    )
+    asserts.equals(
+        env,
+        "example.project.app.tests",
+        build_python_fallback_identifier_for_tests("example//project\\app//tests", {"module_path": "example.project"}),
+    )
+    return unittest.end(env)
+
+def _resolve_python_selector_inputs_test(ctx):
+    env = unittest.begin(ctx)
+    derived = resolve_python_selector_inputs_for_tests(
+        module_identifier = None,
+        imports_candidates = [],
+        deps_labels = [],
+        importpath_candidate = None,
+        module_path_candidate = None,
+        fallback_identifier = "example.project.tests",
+        module_groups = ["@repo//:module_example_project_tests"],
+        module_included = False,
+    )
+    asserts.equals(env, "", derived["explicit_identifier"])
+    asserts.equals(env, "example.project.tests", derived["fallback_identifier"])
+    asserts.equals(env, True, derived["include_per_module"])
+
+    explicit = resolve_python_selector_inputs_for_tests(
+        module_identifier = "explicit.module",
+        imports_candidates = [],
+        deps_labels = [],
+        importpath_candidate = None,
+        module_path_candidate = None,
+        fallback_identifier = "fallback.module",
+        module_groups = ["@repo//:module_explicit_module"],
+        module_included = False,
+    )
+    asserts.equals(env, "explicit.module", explicit["explicit_identifier"])
+    asserts.equals(env, True, explicit["include_per_module"])
+
+    no_groups = resolve_python_selector_inputs_for_tests(
+        module_identifier = None,
+        imports_candidates = [],
+        deps_labels = [],
+        importpath_candidate = None,
+        module_path_candidate = None,
+        fallback_identifier = "example.project.tests",
+        module_groups = [],
+        module_included = False,
+    )
+    asserts.equals(env, False, no_groups["include_per_module"])
     return unittest.end(env)
 
 def _normalize_user_data_handles_none_test(ctx):
@@ -202,6 +281,8 @@ service_mapping_entries_filters_non_service_test = unittest.make(_service_mappin
 resolve_topt_service_key_prefers_exact_then_sanitized_test = unittest.make(_resolve_topt_service_key_prefers_exact_then_sanitized_test)
 select_module_group_name_test = unittest.make(_select_module_group_name_test)
 normalize_python_identifier_edge_cases_test = unittest.make(_normalize_python_identifier_edge_cases_test)
+build_python_fallback_identifier_test = unittest.make(_build_python_fallback_identifier_test)
+resolve_python_selector_inputs_test = unittest.make(_resolve_python_selector_inputs_test)
 normalize_user_data_handles_none_test = unittest.make(_normalize_user_data_handles_none_test)
 build_module_labels_valid_test = unittest.make(_build_module_labels_valid_test)
 py_stub_includes_manifest_in_files_test = unittest.make(_py_stub_includes_manifest_in_files_test)

@@ -5,6 +5,11 @@
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
 load(
+    ":test_extension.bzl",
+    "go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test",
+    "go_single_spec_propagates_non_default_enablement_and_flaky_tests_test",
+)
+load(
     ":test_macro.bzl",
     "go_macro_ci_visibility_opt_out_target",
     "go_macro_ci_visibility_opt_out_wiring_test",
@@ -114,12 +119,57 @@ load(
     "select_module_group_name_test",
     "service_mapping_entries_filters_non_service_test",
 )
+load(
+    ":test_workspace_helpers.bzl",
+    "go_workspace_multi_specs_test",
+    "go_workspace_single_specs_test",
+    "orchestrion_call_spec_test",
+)
 
 # Go-specific Starlark tests for orchestration selection and macro wiring.
 service_mapping_entries_filters_non_service_test(
     name = "service_mapping_entries_filters_non_service_test",
     size = "small",
     timeout = "short",
+)
+
+go_single_spec_propagates_non_default_enablement_and_flaky_tests_test(
+    name = "go_single_spec_propagates_non_default_enablement_and_flaky_tests_test",
+    size = "small",
+    timeout = "short",
+)
+
+go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test(
+    name = "go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test",
+    size = "small",
+    timeout = "short",
+)
+
+go_workspace_single_specs_test(
+    name = "go_workspace_single_specs_test",
+    size = "small",
+    timeout = "short",
+)
+
+go_workspace_multi_specs_test(
+    name = "go_workspace_multi_specs_test",
+    size = "small",
+    timeout = "short",
+)
+
+orchestrion_call_spec_test(
+    name = "orchestrion_call_spec_test",
+    size = "small",
+    timeout = "short",
+)
+
+test_suite(
+    name = "workspace_helpers_tests",
+    tests = [
+        ":go_workspace_multi_specs_test",
+        ":go_workspace_single_specs_test",
+        ":orchestrion_call_spec_test",
+    ],
 )
 
 resolve_topt_service_key_prefers_exact_then_sanitized_test(
@@ -673,7 +723,11 @@ test_suite(
         ":go_macro_test_optimization_linker_opt_out_wiring_test",
         ":go_macro_test_optimization_mode_wiring_test",
         ":go_macro_test_optimization_public_wrapper_mode_test",
+        ":go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test",
+        ":go_single_spec_propagates_non_default_enablement_and_flaky_tests_test",
         ":go_stub_includes_manifest_in_files_test",
+        ":go_workspace_multi_specs_test",
+        ":go_workspace_single_specs_test",
         ":has_go_mod_pin_test",
         ":has_package_local_go_mod_test",
         ":normalize_user_data_handles_none_test",
@@ -681,6 +735,7 @@ test_suite(
         ":orch_transition_forwards_mode_test",
         ":orch_wrapper_materialized_actual_non_windows_test",
         ":orch_wrapper_materialized_actual_windows_test",
+        ":orchestrion_call_spec_test",
         ":orchestrion_metadata_enabled_test",
         ":resolve_topt_service_key_missing_failure_test",
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",

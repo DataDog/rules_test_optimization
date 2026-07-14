@@ -384,12 +384,20 @@ def normalize_ref(name):
         break
     return name
 
+def resolve_service_and_environment(attr_service, environ):
+    """Resolve service/environment without probing the local checkout."""
+    return {
+        "service": attr_service or environ.get("DD_SERVICE") or "unnamed-service",
+        "environment": environ.get("DD_ENV") or "CI",
+    }
+
 def _new_env_data(attr_service, environ):
+    resolved = resolve_service_and_environment(attr_service, environ)
     return {
         "dd_site": environ.get("DD_SITE") or "",
         "dd_api_base": environ.get("DD_TEST_OPTIMIZATION_AGENTLESS_URL") or "",
-        "service": (attr_service or environ.get("DD_SERVICE") or "unnamed-service"),
-        "environment": environ.get("DD_ENV") or "CI",
+        "service": resolved["service"],
+        "environment": resolved["environment"],
         "repository_url": "",
         "branch": "",
         "tag": "",

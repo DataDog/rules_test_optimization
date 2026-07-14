@@ -887,11 +887,12 @@ def _validate_orchestrion_mode_test_impl(ctx):
     return unittest.end(env)
 
 def _orch_transition_forwards_mode_test_impl(ctx):
-    """Assert the wrapper transition enables Orchestrion and forwards the mode."""
+    """Assert the wrapper transition forwards only the Orchestrion mode."""
     env = unittest.begin(ctx)
     result = orch_transition_impl_for_tests(None, struct(orchestrion_mode = "test_optimization"))
-    asserts.equals(env, True, result["@rules_go//go/private/orchestrion:enabled"])
+    asserts.equals(env, 1, len(result))
     asserts.equals(env, "test_optimization", result["@rules_go//go/private/orchestrion:mode"])
+    asserts.false(env, "@rules_go//go/private/orchestrion:enabled" in result)
     return unittest.end(env)
 
 def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):

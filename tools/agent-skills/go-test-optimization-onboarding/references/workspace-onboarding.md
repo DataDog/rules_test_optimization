@@ -81,6 +81,16 @@ currently `v0_60_0`, which preserves the existing
 Use the repository's existing `rules_go` repo name when it is already
 established. The Go companion maps its `@rules_go` dependency to that name.
 
+Add these lines to the named config used by test, doctor, and uploader:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
+```
+
+`--config=test-optimization` is the only user-facing switch. Omitting it
+renders disabled metadata stubs and selects the local empty Orchestrion aliases.
+
 If the repository uses a non-default fetch model, set it explicitly:
 
 ```bzl
@@ -223,31 +233,33 @@ rewriting unrelated dependencies.
 ## Sync And Orchestrion Setup
 
 Declare the Orchestrion tool repository and Test Optimization sync repository
-near the repository's existing Go toolchain wiring:
+through the reusable Go companion helpers near the repository's existing Go
+toolchain wiring:
 
 ```bzl
-load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
+load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_workspace_sync_repositories")
 
-go_orchestrion_tool_repo(
+dd_topt_go_orchestrion_tool_repo(
     dd_trace_go_version = "v2.9.0",
     version = "v1.9.0",
 )
 
-test_optimization_sync(
+dd_topt_go_workspace_sync_repositories(
     name = "test_optimization_data_<service_key>",
     debug = True,
+    enabled_by_env = True,
     require_git_metadata = True,
-    runtime_module_path = "<go-module-path>",
-    runtime_name = "go",
+    module_path = "<go-module-path>",
     runtime_version = "<go-version>",
     service = "<datadog-service>",
 )
 ```
 
-Use the actual `rules_go` repository name in the `go_orchestrion_tool_repo`
-load. For example, if the repository maps rules_go to `io_bazel_rules_go`, load
-from `@io_bazel_rules_go//go:orchestrion_workspace.bzl`.
+The helper loads the public Orchestrion repository API through the Go
+companion's repository mapping, so consumers do not load it from their apparent
+`rules_go` repository directly. The apparent repository name still belongs in
+the `.bazelrc` analysis-time flag shown above.
 
 If the repository already defines a Go version constant for Bazel toolchains,
 reuse that constant for `runtime_version` instead of hardcoding another copy.

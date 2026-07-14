@@ -69,12 +69,22 @@ def _build_module_labels(sync_repo_name, labels):
 
 build_module_labels_for_tests = _build_module_labels
 
+def _normalize_python_fallback_part(value):
+    """Normalize a workspace package or runtime module path to dotted form."""
+    dotted = (value or "").replace("\\", ".").replace("/", ".")
+    return ".".join([part for part in dotted.split(".") if part])
+
 def _build_python_fallback_identifier(package_path, runtime_info):
-    pkg_dotted = (package_path or "").replace("/", ".")
-    module_path = ((runtime_info or {}).get("module_path") or "")
-    if module_path:
-        return (module_path + "." + pkg_dotted) if pkg_dotted else module_path
-    return pkg_dotted
+    """Build a generic prefix-aware Python module fallback identifier."""
+    package_dotted = _normalize_python_fallback_part(package_path)
+    module_path = _normalize_python_fallback_part((runtime_info or {}).get("module_path"))
+    if not module_path:
+        return package_dotted
+    if not package_dotted:
+        return module_path
+    if package_dotted == module_path or package_dotted.startswith(module_path + "."):
+        return package_dotted
+    return module_path + "." + package_dotted
 
 def _has_non_empty_value(value):
     """Return True when a macro input is present and materially non-empty."""
@@ -85,6 +95,40 @@ def _has_non_empty_value(value):
     if type(value) == type([]) or type(value) == type(()):
         return len(value) > 0
     return True
+
+def _resolve_python_selector_inputs(
+        module_identifier,
+        imports_candidates,
+        deps_labels,
+        importpath_candidate,
+        module_path_candidate,
+        fallback_identifier,
+        module_groups,
+        module_included):
+    """Resolve selector inputs once so production and tests share the contract."""
+    module_groups = module_groups or []
+    uses_explicit_inference = (
+        _has_non_empty_value(module_identifier) or
+        _has_non_empty_value(imports_candidates) or
+        _has_non_empty_value(deps_labels) or
+        _has_non_empty_value(importpath_candidate) or
+        _has_non_empty_value(module_path_candidate)
+    )
+    uses_derived_fallback = _has_non_empty_value(fallback_identifier) and len(module_groups) > 0
+    if uses_explicit_inference or uses_derived_fallback:
+        include_per_module = True
+    elif module_included != None:
+        include_per_module = bool(module_included)
+    else:
+        include_per_module = len(module_groups) > 0
+    return {
+        "explicit_identifier": module_identifier or "",
+        "fallback_identifier": fallback_identifier or "",
+        "include_per_module": include_per_module,
+    }
+
+build_python_fallback_identifier_for_tests = _build_python_fallback_identifier
+resolve_python_selector_inputs_for_tests = _resolve_python_selector_inputs
 
 def _is_default_py_test_rule(py_test_rule):
     """Return True when a py_test_rule value is the rules_python base py_test macro."""
@@ -195,25 +239,19 @@ def dd_topt_py_test(
     if type(module_path_candidate) == type("") and module_path_candidate:
         attribute_candidates.append(module_path_candidate)
 
-    uses_inference = (
-        _has_non_empty_value(module_identifier) or
-        _has_non_empty_value(imports_candidates) or
-        _has_non_empty_value(deps_labels) or
-        _has_non_empty_value(importpath_candidate) or
-        _has_non_empty_value(module_path_candidate)
-    )
-    if uses_inference:
-        include_per_module_files = True
-    else:
-        module_included = _python.get("module_included") if _is_dict(_python) else None
-        if module_included != None:
-            include_per_module_files = bool(module_included)
-        else:
-            include_per_module_files = bool(_svc.get("labels"))
-
     files_label = "@%s//:test_optimization_files" % sync_repo_name
     module_labels = _build_module_labels(sync_repo_name, _svc.get("labels"))
     fallback_identifier = _build_python_fallback_identifier(native.package_name(), _python)
+    selector_inputs = _resolve_python_selector_inputs(
+        module_identifier = module_identifier,
+        imports_candidates = imports_candidates,
+        deps_labels = deps_labels,
+        importpath_candidate = importpath_candidate,
+        module_path_candidate = module_path_candidate,
+        fallback_identifier = fallback_identifier,
+        module_groups = module_labels,
+        module_included = _python.get("module_included") if _is_dict(_python) else None,
+    )
 
     selector_name = name + "_topt_payloads"
     metadata_name = name + "_topt_bazel_metadata"
@@ -222,11 +260,11 @@ def dd_topt_py_test(
         deps = deps_labels,
         imports = imports_candidates,
         attribute_candidates = attribute_candidates,
-        explicit_identifier = module_identifier or "",
-        fallback_identifier = fallback_identifier,
+        explicit_identifier = selector_inputs["explicit_identifier"],
+        fallback_identifier = selector_inputs["fallback_identifier"],
         full_files = files_label,
         module_groups = module_labels,
-        include_per_module = include_per_module_files,
+        include_per_module = selector_inputs["include_per_module"],
         module_label_override = module_label_override,
         importpath = importpath_candidate if importpath_candidate != None else "",
         module_path = module_path_candidate if module_path_candidate != None else "",

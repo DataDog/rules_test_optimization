@@ -22,6 +22,12 @@ example_stub_repo = use_extension(
 )
 example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
+    labels = [
+        "example_python_modules_python_tests",
+        "example_python_pkg",
+        "example_python_stub_tests",
+        "example_python_tests",
+    ],
     service_keys = [
         "py_service",
         "ruby_service",

@@ -48,12 +48,13 @@ Shared runtime contract for every language:
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` remains a legacy explicit override, not
   the recommended mixed-runtime wiring path
 
-Shared `.bazelrc` forwarding. Prefer the generated block from
-`dd_topt_go_bootstrap --print-bazelrc-snippet` or
-`dd_topt_go_bootstrap --write-bazelrc` for Go workspaces:
+Shared `.bazelrc` forwarding for every runtime. The named config is the only
+user-facing enable switch; omitting it leaves metadata repositories on their
+disabled no-fetch stubs:
 
 ```text
 common:test-optimization --repo_env=DD_API_KEY
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
 common:test-optimization --repo_env=DD_GIT_BRANCH
@@ -64,6 +65,18 @@ test:test-optimization --remote_download_minimal
 test:test-optimization --remote_download_regex=.*test[.]outputs.*
 test:test-optimization --zip_undeclared_test_outputs
 ```
+
+Go workspaces also add the existing `rules_go` analysis-time setting. Prefer
+the generated block from `dd_topt_go_bootstrap --print-bazelrc-snippet` or
+`dd_topt_go_bootstrap --write-bazelrc`, which substitutes the consumer's actual
+apparent repository name:
+
+```text
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+# Use @io_bazel_rules_go instead of @rules_go in WORKSPACE mode.
+```
+
+Do not add that Go-only line to Python-only or other non-Go workspaces.
 
 Pass `DD_GIT_*` only through `--repo_env`. Never forward it as test
 environment data because that makes Git metadata part of the test action cache
@@ -269,24 +282,24 @@ datadog_go_test_optimization_workspace_repositories(
     rto_archive_prefix = "rules_test_optimization-<rules-test-optimization-commit>",
 )
 
-load("@<existing_rules_go_repo_name>//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
+load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
 
-go_orchestrion_tool_repo(
+dd_topt_go_orchestrion_tool_repo(
     version = "v1.9.0",
     dd_trace_go_version = "v2.9.0",
 )
 
 load(
-    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
-    "test_optimization_sync",
+    "@datadog-rules-test-optimization-go//:topt_go_workspace.bzl",
+    "dd_topt_go_workspace_sync_repositories",
 )
 
-test_optimization_sync(
+dd_topt_go_workspace_sync_repositories(
     name = "test_optimization_data",
     service = "<datadog-service-name>",
-    runtime_name = "go",
     runtime_version = "<go-sdk-version>",
-    runtime_module_path = "<go-module-path>",
+    module_path = "<go-module-path>",
+    enabled_by_env = True,
     require_git_metadata = True,
 )
 ```
@@ -520,6 +533,7 @@ topt.test_optimization_sync(
     service = "py-service",
     runtime_name = "python",
     runtime_version = "3.12",
+    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -604,8 +618,10 @@ dd_topt_py_test(
 
 `consumer_runner` intentionally rejects the base `rules_python` `py_test`
 without an explicit `main`; that shape can execute a Python file directly and
-does not prove pytest or ddtrace ran. Prefer `module_identifier` for selection
-in this mode so the integration does not depend on Python import-path mutation.
+does not prove pytest or ddtrace ran. When the runtime module path and Bazel
+package path identify the test, omit `module_identifier` and use the derived
+fallback. Keep an explicit `module_identifier` only for a documented
+repository-specific exception.
 
 ### WORKSPACE single-service
 
@@ -696,6 +712,7 @@ test_optimization_sync(
     service = "py-service",
     runtime_name = "python",
     runtime_version = "3.12",
+    enabled_by_env = True,
 )
 ```
 

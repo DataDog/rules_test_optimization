@@ -34,6 +34,17 @@ git_override(
 bazel_dep(name = "rules_go", version = "0.60.0")
 ```
 
+Add these lines to the named config used by test, doctor, and uploader:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+The config is the only user-facing switch. Removing
+`--config=test-optimization` disables metadata fetching and selects the local
+empty Orchestrion aliases; no second Test Optimization flag is required.
+
 Use a commit that is reachable from `origin/main`. Do not publish branch-only
 commits in consumer snippets because squash merges can make them disappear.
 The `rules_go` version must match the selected Datadog-managed fork support

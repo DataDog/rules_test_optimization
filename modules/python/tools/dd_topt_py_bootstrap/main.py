@@ -164,6 +164,7 @@ def render_bazelrc_snippet(args: argparse.Namespace) -> str:
     lines = [
         "# Datadog metadata is resolved during repository/module analysis.",
         "# These values are repo_env, not test_env, so tests do not receive secrets.",
+        f"common:{args.bazelrc_config} --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1",
     ]
     lines.extend(f"common:{args.bazelrc_config} --repo_env={key}" for key in SYNC_REPO_ENV_KEYS)
     lines.append(f"test:{args.bazelrc_config} --remote_download_minimal")
@@ -249,6 +250,7 @@ def render_workspace_snippet(args: argparse.Namespace) -> str:
             '    runtime_name = "python",',
             f"    runtime_version = {_quote(args.runtime_version)},",
             f"    runtime_module_path = {_quote(args.runtime_module_path)},",
+            "    enabled_by_env = True,",
             ")",
         ]
     )
@@ -310,6 +312,7 @@ def render_bzlmod_snippet(args: argparse.Namespace) -> str:
             '    runtime_name = "python",',
             f"    runtime_version = {_quote(args.runtime_version)},",
             f"    runtime_module_path = {_quote(args.runtime_module_path)},",
+            "    enabled_by_env = True,",
             ")",
             f"use_repo(test_optimization_sync, {_quote(args.sync_repo_name)})",
         ]

@@ -45,6 +45,8 @@ class BootstrapSnippetTest(unittest.TestCase):
         snippet = main.render_workspace_snippet(args)
         self.assertIn("datadog_python_test_optimization_workspace_repositories", snippet)
         self.assertIn("test_optimization_sync", snippet)
+        self.assertIn("enabled_by_env = True", snippet)
+        self.assertNotIn("rules_go", snippet)
         self.assertNotRegex(snippet, r"(?m)^        (load|# Declare|datadog_python_test_optimization_workspace_repositories|test_optimization_sync)")
 
     def test_bzlmod_snippet_contains_bazel_dep(self) -> None:
@@ -54,6 +56,8 @@ class BootstrapSnippetTest(unittest.TestCase):
         snippet = main.render_bzlmod_snippet(args)
         self.assertIn('bazel_dep(name = "datadog-rules-test-optimization"', snippet)
         self.assertIn('bazel_dep(name = "datadog-rules-test-optimization-python"', snippet)
+        self.assertIn("enabled_by_env = True", snippet)
+        self.assertNotIn("rules_go", snippet)
         self.assertNotRegex(snippet, r"(?m)^        (bazel_dep|archive_override|git_override|test_optimization_sync|use_repo)")
 
     def test_bzlmod_archive_snippet_emits_sha256_pin(self) -> None:
@@ -86,7 +90,9 @@ class BootstrapSnippetTest(unittest.TestCase):
         """Generated .bazelrc keeps secrets and git metadata out of test_env."""
         args = _args()
         snippet = main.render_bazelrc_snippet(args)
+        self.assertIn("common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1", snippet)
         self.assertIn("common:test-optimization --repo_env=DD_API_KEY", snippet)
+        self.assertNotIn("orchestrion:enabled", snippet)
         self.assertIn("test:test-optimization --remote_download_minimal", snippet)
         self.assertIn("test:test-optimization --remote_download_regex=.*test[.]outputs.*", snippet)
         self.assertIn("test:test-optimization --zip_undeclared_test_outputs", snippet)

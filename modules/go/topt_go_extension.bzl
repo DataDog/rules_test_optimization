@@ -44,16 +44,106 @@ def _record_repo_owner_or_fail(seen_repo_owners, repo_name, owner, tag_name):
         )
     seen_repo_owners[repo_name] = owner
 
+def _build_go_single_repo_spec(
+        name,
+        service,
+        module_path = "",
+        runtime_version = "",
+        runtime_arch = "",
+        out_dir = "",
+        http_connect_timeout_seconds = HTTP_POLICY_ATTR_UNSET,
+        http_max_time_seconds = HTTP_POLICY_ATTR_UNSET,
+        http_retry_attempts = HTTP_POLICY_ATTR_UNSET,
+        http_retry_delay_seconds = HTTP_POLICY_ATTR_UNSET,
+        http_execute_timeout_buffer_seconds = HTTP_POLICY_ATTR_UNSET,
+        known_tests = True,
+        test_management = True,
+        flaky_tests = True,
+        enabled = True,
+        enabled_by_env = False,
+        require_git_metadata = False,
+        debug = False):
+    """Build the complete sync spec for one Go service repository."""
+    return {
+        "name": name,
+        "repo_name": name,
+        "out_dir": out_dir,
+        "service": service,
+        "runtime_name": "go",
+        "runtime_version": runtime_version,
+        "runtime_arch": runtime_arch,
+        "runtime_module_path": module_path,
+        "http_connect_timeout_seconds": http_connect_timeout_seconds,
+        "http_max_time_seconds": http_max_time_seconds,
+        "http_retry_attempts": http_retry_attempts,
+        "http_retry_delay_seconds": http_retry_delay_seconds,
+        "http_execute_timeout_buffer_seconds": http_execute_timeout_buffer_seconds,
+        "known_tests": known_tests,
+        "test_management": test_management,
+        "flaky_tests": flaky_tests,
+        "enabled": enabled,
+        "enabled_by_env": enabled_by_env,
+        "require_git_metadata": require_git_metadata,
+        "debug": debug,
+    }
+
+def _build_go_multi_repo_specs(
+        name,
+        services,
+        module_path = "",
+        runtime_version = "",
+        runtime_arch = "",
+        out_dir = "",
+        http_connect_timeout_seconds = HTTP_POLICY_ATTR_UNSET,
+        http_max_time_seconds = HTTP_POLICY_ATTR_UNSET,
+        http_retry_attempts = HTTP_POLICY_ATTR_UNSET,
+        http_retry_delay_seconds = HTTP_POLICY_ATTR_UNSET,
+        http_execute_timeout_buffer_seconds = HTTP_POLICY_ATTR_UNSET,
+        known_tests = True,
+        test_management = True,
+        flaky_tests = True,
+        enabled = True,
+        enabled_by_env = False,
+        require_git_metadata = False,
+        debug = False):
+    """Build the per-service sync specs for a multi-service Go tag."""
+    service_keys = _compute_service_keys(services)
+    repo_names = _compute_repo_names(name, service_keys)
+    specs = []
+    for i in range(len(services)):
+        specs.append(_build_go_single_repo_spec(
+            name = repo_names[i],
+            service = services[i],
+            module_path = module_path,
+            runtime_version = runtime_version,
+            runtime_arch = runtime_arch,
+            out_dir = out_dir,
+            http_connect_timeout_seconds = http_connect_timeout_seconds,
+            http_max_time_seconds = http_max_time_seconds,
+            http_retry_attempts = http_retry_attempts,
+            http_retry_delay_seconds = http_retry_delay_seconds,
+            http_execute_timeout_buffer_seconds = http_execute_timeout_buffer_seconds,
+            known_tests = known_tests,
+            test_management = test_management,
+            flaky_tests = flaky_tests,
+            enabled = enabled,
+            enabled_by_env = enabled_by_env,
+            require_git_metadata = require_git_metadata,
+            debug = debug,
+        ))
+    return specs
+
+build_go_single_repo_spec_for_tests = _build_go_single_repo_spec
+build_go_multi_repo_specs_for_tests = _build_go_multi_repo_specs
+
 def _materialize_single_service_repo(call):
-    test_optimization_sync(
+    test_optimization_sync(**_build_go_single_repo_spec(
         name = call.name,
-        repo_name = call.name,
-        out_dir = call.out_dir,
         service = call.service,
-        runtime_name = "go",
+        module_path = call.module_path,
         runtime_version = call.runtime_version,
         runtime_arch = call.runtime_arch,
-        runtime_module_path = call.module_path,
+        out_dir = call.out_dir,
         http_connect_timeout_seconds = call.http_connect_timeout_seconds,
         http_max_time_seconds = call.http_max_time_seconds,
         http_retry_attempts = call.http_retry_attempts,
@@ -61,34 +151,38 @@ def _materialize_single_service_repo(call):
         http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
         known_tests = call.known_tests,
         test_management = call.test_management,
+        flaky_tests = call.flaky_tests,
+        enabled = call.enabled,
+        enabled_by_env = call.enabled_by_env,
         require_git_metadata = call.require_git_metadata,
         debug = call.debug,
-    )
+    ))
 
 def _materialize_multi_service_repos(call):
     service_keys = _compute_service_keys(call.services)
     repo_names = _compute_repo_names(call.name, service_keys)
 
-    for i in range(len(call.services)):
-        test_optimization_sync(
-            name = repo_names[i],
-            repo_name = repo_names[i],
-            out_dir = call.out_dir,
-            service = call.services[i],
-            runtime_name = "go",
-            runtime_version = call.runtime_version,
-            runtime_arch = call.runtime_arch,
-            runtime_module_path = call.module_path,
-            http_connect_timeout_seconds = call.http_connect_timeout_seconds,
-            http_max_time_seconds = call.http_max_time_seconds,
-            http_retry_attempts = call.http_retry_attempts,
-            http_retry_delay_seconds = call.http_retry_delay_seconds,
-            http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
-            known_tests = call.known_tests,
-            test_management = call.test_management,
-            require_git_metadata = call.require_git_metadata,
-            debug = call.debug,
-        )
+    for spec in _build_go_multi_repo_specs(
+        name = call.name,
+        services = call.services,
+        module_path = call.module_path,
+        runtime_version = call.runtime_version,
+        runtime_arch = call.runtime_arch,
+        out_dir = call.out_dir,
+        http_connect_timeout_seconds = call.http_connect_timeout_seconds,
+        http_max_time_seconds = call.http_max_time_seconds,
+        http_retry_attempts = call.http_retry_attempts,
+        http_retry_delay_seconds = call.http_retry_delay_seconds,
+        http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
+        known_tests = call.known_tests,
+        test_management = call.test_management,
+        flaky_tests = call.flaky_tests,
+        enabled = call.enabled,
+        enabled_by_env = call.enabled_by_env,
+        require_git_metadata = call.require_git_metadata,
+        debug = call.debug,
+    ):
+        test_optimization_sync(**spec)
 
     test_optimization_multi_aggregate(
         name = call.name,
@@ -137,6 +231,9 @@ test_optimization_go_extension = module_extension(
             "http_execute_timeout_buffer_seconds": attr.int(default = HTTP_POLICY_ATTR_UNSET),
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
+            "flaky_tests": attr.bool(default = True),
+            "enabled": attr.bool(default = True),
+            "enabled_by_env": attr.bool(default = False),
             "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),
