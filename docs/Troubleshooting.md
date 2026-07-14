@@ -15,6 +15,23 @@ Examples below assume the generated repository is named
 If Bazel reports that sync requires WORKSPACE support, add
 `--enable_workspace` to sync commands in this document.
 
+## Test Optimization config and disabled mode
+
+`--config=test-optimization` is the single user-facing enablement switch. Its
+`.bazelrc` entries should set both the metadata repository environment and the
+existing `rules_go` Orchestrion flag:
+
+```bazelrc
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+When the config is omitted, repositories configured with
+`enabled_by_env = True` generate the documented no-fetch stubs and the stable
+Orchestrion aliases select local empty targets. Do not add a second
+consumer-local Test Optimization bool flag. For WORKSPACE, replace
+`@rules_go` with the apparent repository name used by that workspace.
+
 ## Quick triage map
 
 | Symptom | First checks | Likely section |

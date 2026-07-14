@@ -39,6 +39,17 @@ repository, use `./bazelw` for local development convenience.
 - Provide sync credentials via environment and forward them to repository rules:
   - shell/CI secret: `DD_API_KEY`
   - `.bazelrc`: `common --repo_env=DD_API_KEY` (and optionally `common --repo_env=DD_SITE`)
+- For Go Test Optimization, make the documented config the only user-facing
+  switch:
+
+  ```bazelrc
+  common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+  build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+  ```
+
+  Removing `--config=test-optimization` disables both metadata resolution and
+  Orchestrion analysis. In WORKSPACE mode, use the apparent `rules_go` repo
+  name configured by the workspace.
 
 ## Single-service (classic)
 
@@ -214,8 +225,10 @@ runner.
 Repositories with an internal Python test wrapper should use
 `runner_mode = "consumer_runner"` and pass that wrapper through `py_test_rule`.
 In that mode the Datadog macro does not inject `run_pytest.py`, does not set
-`main`, and does not synthesize `imports`. Prefer `module_identifier` for
-payload selection so onboarding does not depend on import-path mutation.
+`main`, and does not synthesize `imports`. When the runtime module path and
+Bazel package path identify the test, omit `module_identifier` and use the
+derived fallback. Keep an explicit `module_identifier` only for a documented
+repository-specific exception.
 
 BUILD.bazel (Java companion):
 

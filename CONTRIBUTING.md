@@ -72,6 +72,15 @@ This product includes software developed at Datadog
   - Mixed-runtime uploader changes are not done until both harnesses still pass:
     they cover single-context, explicit override, multi-context repo selection,
     and no-match fallback behavior.
+- Test Optimization bootstrap config:
+  - Keep `--config=test-optimization` as the only user-facing switch. The
+    config must set both `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`
+    and the existing `rules_go` Orchestrion `enabled=true` build setting.
+  - Omitting the config is the documented opt-out: metadata repositories use
+    their disabled stubs when `enabled_by_env = True`, and the stable
+    Orchestrion aliases select local empty targets.
+  - Do not add a consumer-local Test Optimization bool flag or a second
+    Orchestrion repository chooser.
 - Go consumer integration harnesses:
   - Bzlmod default smoke:
     `tools/tests/integration/run_bzlmod_go_integration.sh`
@@ -85,6 +94,10 @@ This product includes software developed at Datadog
     `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_61_1:
     `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+  - Disabled alias gate for a fresh output root:
+    `WINDOWS_DISABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Enabled alias and payload gate with valid Orchestrion pins:
+    `WINDOWS_ENABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Each script now validates:
     - normal mode
     - hermetic mode with the inline CI sandbox/network-blocking flags

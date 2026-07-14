@@ -81,6 +81,7 @@ load(
     _first_env_from_environ = "first_env_from_environ",
     _normalize_env_data = "normalize_env_data",
     _normalize_ref = "normalize_ref",
+    _resolve_service_and_environment = "resolve_service_and_environment",
     _sanitize_repository_url = "sanitize_repository_url",
     _set_context_tag_from_env = "set_context_tag_from_env",
 )
@@ -111,6 +112,44 @@ HTTP_EXECUTE_TIMEOUT_SECONDS = (
 
 # Sentinel value used by optional integer attrs where 0 can be meaningful.
 HTTP_POLICY_ATTR_UNSET = -1
+
+_TEST_OPTIMIZATION_ENABLED_VALUES = ["1", "true", "yes", "on"]
+
+def _is_test_optimization_enabled(enabled, enabled_by_env, env_value):
+    """Resolve repository bootstrap enablement from attrs and repo environment."""
+    if not enabled:
+        return False
+    if not enabled_by_env:
+        return True
+    return (env_value or "").strip().lower() in _TEST_OPTIMIZATION_ENABLED_VALUES
+
+_TEST_OPTIMIZATION_REPOSITORY_BASE_ENVIRON = [
+    "DD_API_KEY",
+    "DD_SITE",
+    "DD_TEST_OPTIMIZATION_AGENTLESS_URL",
+    "DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS",
+    "DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS",
+    "DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS",
+    "DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS",
+    "DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS",
+    "FETCH_SALT",
+    "GIT_DIRTY",
+    "GO_MODULE_PATH",
+    "PYTHON_MODULE_PATH",
+    "JAVA_MODULE_PATH",
+    "NODEJS_MODULE_PATH",
+    "DOTNET_MODULE_PATH",
+    "RUBY_MODULE_PATH",
+    "OS",
+    "ComSpec",
+    "COMSPEC",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_ARCHITEW6432",
+]
+
+_TEST_OPTIMIZATION_REPOSITORY_ENVIRON = _TEST_OPTIMIZATION_REPOSITORY_BASE_ENVIRON + _ALL_SYNC_ENV_KEYS + [
+    "DD_TEST_OPTIMIZATION_ENABLED",
+]
 
 # ##########################################################################
 # Tools functions
@@ -1288,6 +1327,215 @@ def _render_module_runfiles_bzl(repo_name, manifest_root):
         ")\n"
     )
 
+def _render_disabled_context_json(repo_name, out_dir, env_data, runtime_name = "", runtime_version = "", runtime_arch = ""):
+    """Render the minimal context contract without local repository probing."""
+    tags = {
+        "service.name": env_data.get("service") or "unnamed-service",
+        "env": env_data.get("environment") or "CI",
+        "bazel.rule_name": TEST_BAZEL_RULE_NAME,
+        "bazel.rule_version": TEST_BAZEL_RULE_VERSION,
+        "topt.sync.enabled": False,
+        "topt.sync.repository_name": repo_name or "",
+        "topt.sync.out_dir": out_dir or TEST_OPT_DIR,
+    }
+    if runtime_name:
+        tags["runtime.name"] = runtime_name
+    if runtime_version:
+        tags["runtime.version"] = runtime_version
+    if runtime_arch:
+        tags["runtime.architecture"] = runtime_arch
+    git_tags = {
+        "repository_url": "git.repository_url",
+        "branch": "git.branch",
+        "tag": "git.tag",
+        "sha": "git.commit.sha",
+        "head_sha": "git.commit.head.sha",
+        "commit_message": "git.commit.message",
+        "head_message": "git.commit.head.message",
+        "commit_author_name": "git.commit.author.name",
+        "commit_author_email": "git.commit.author.email",
+        "commit_author_date": "git.commit.author.date",
+        "commit_committer_name": "git.commit.committer.name",
+        "commit_committer_email": "git.commit.committer.email",
+        "commit_committer_date": "git.commit.committer.date",
+        "head_author_name": "git.commit.head.author.name",
+        "head_author_email": "git.commit.head.author.email",
+        "head_author_date": "git.commit.head.author.date",
+        "head_committer_name": "git.commit.head.committer.name",
+        "head_committer_email": "git.commit.head.committer.email",
+        "head_committer_date": "git.commit.head.committer.date",
+        "pr_base_branch": "git.pull_request.base_branch",
+        "pr_base_branch_sha": "git.pull_request.base_branch_sha",
+        "pr_base_branch_head_sha": "git.pull_request.base_branch_head_sha",
+        "pr_number": "pr.number",
+    }
+    for source_key, tag_key in git_tags.items():
+        if env_data.get(source_key):
+            tags[tag_key] = env_data.get(source_key)
+    return json.encode(tags) + "\n"
+
+def _render_disabled_telemetry_facts_json(service_name, runtime_name, environment):
+    """Render the single disabled-sync telemetry fact."""
+    facts = _new_telemetry_facts(
+        service_name,
+        runtime_name = runtime_name or "",
+        env = environment or "",
+    )
+    _append_telemetry_count(facts, "sync.disabled")
+    return json.encode(facts) + "\n"
+
+def _render_disabled_export(repo_name, service, runtime_name, runtime_module_path, out_dir):
+    """Render a disabled export using the same schema as a live sync repo."""
+    sanitized_module_path = sanitize_label_fragment(runtime_module_path) if runtime_module_path else ""
+    values = {
+        "go_module_path": "",
+        "sanitized_go_module_path": "",
+        "python_module_path": "",
+        "sanitized_python_module_path": "",
+        "java_module_path": "",
+        "sanitized_java_module_path": "",
+        "nodejs_module_path": "",
+        "sanitized_nodejs_module_path": "",
+        "dotnet_module_path": "",
+        "sanitized_dotnet_module_path": "",
+        "ruby_module_path": "",
+        "sanitized_ruby_module_path": "",
+    }
+    if runtime_name == "go":
+        values["go_module_path"] = runtime_module_path or ""
+        values["sanitized_go_module_path"] = sanitized_module_path
+    elif runtime_name == "python":
+        values["python_module_path"] = runtime_module_path or ""
+        values["sanitized_python_module_path"] = sanitized_module_path
+    elif runtime_name == "java":
+        values["java_module_path"] = runtime_module_path or ""
+        values["sanitized_java_module_path"] = sanitized_module_path
+    elif runtime_name == "nodejs":
+        values["nodejs_module_path"] = runtime_module_path or ""
+        values["sanitized_nodejs_module_path"] = sanitized_module_path
+    elif runtime_name == "dotnet":
+        values["dotnet_module_path"] = runtime_module_path or ""
+        values["sanitized_dotnet_module_path"] = sanitized_module_path
+    elif runtime_name == "ruby":
+        values["ruby_module_path"] = runtime_module_path or ""
+        values["sanitized_ruby_module_path"] = sanitized_module_path
+    return _render_export_bzl(
+        repo_name = repo_name,
+        service_name = service,
+        labels = [],
+        set_literal = "{}",
+        manifest_file = "%s/manifest.txt" % out_dir,
+        go_module_path = values["go_module_path"],
+        sanitized_go_module_path = values["sanitized_go_module_path"],
+        go_module_included = False,
+        python_module_path = values["python_module_path"],
+        sanitized_python_module_path = values["sanitized_python_module_path"],
+        python_module_included = False,
+        java_module_path = values["java_module_path"],
+        sanitized_java_module_path = values["sanitized_java_module_path"],
+        java_module_included = False,
+        nodejs_module_path = values["nodejs_module_path"],
+        sanitized_nodejs_module_path = values["sanitized_nodejs_module_path"],
+        nodejs_module_included = False,
+        dotnet_module_path = values["dotnet_module_path"],
+        sanitized_dotnet_module_path = values["sanitized_dotnet_module_path"],
+        dotnet_module_included = False,
+        ruby_module_path = values["ruby_module_path"],
+        sanitized_ruby_module_path = values["sanitized_ruby_module_path"],
+        ruby_module_included = False,
+    )
+
+def _render_disabled_build(settings_file, manifest_file, known_tests_file, test_management_file, flaky_tests_file, context_file, telemetry_facts_file):
+    """Render public disabled targets with the same file labels as live repos."""
+    return (
+        'load(":module_runfiles.bzl", "topt_module_files")\n\n' +
+        "filegroup(\n" +
+        '    name = "test_optimization_files",\n' +
+        "    srcs = %s,\n" % repr([settings_file, manifest_file, known_tests_file, test_management_file, flaky_tests_file]) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n\n" +
+        "filegroup(\n" +
+        '    name = "test_optimization_context",\n' +
+        "    srcs = %s,\n" % repr([context_file, telemetry_facts_file]) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n\n" +
+        'exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest_file)
+    )
+
+def _explicit_runtime_module_path(ctx, runtime_name):
+    """Resolve only explicit module-path inputs for disabled exports."""
+    if ctx.attr.runtime_module_path:
+        return ctx.attr.runtime_module_path
+    env_key_by_runtime = {
+        "go": "GO_MODULE_PATH",
+        "python": "PYTHON_MODULE_PATH",
+        "java": "JAVA_MODULE_PATH",
+        "nodejs": "NODEJS_MODULE_PATH",
+        "dotnet": "DOTNET_MODULE_PATH",
+        "ruby": "RUBY_MODULE_PATH",
+    }
+    return ctx.os.environ.get(env_key_by_runtime.get(runtime_name, "")) or ""
+
+def _write_disabled_repository(ctx, out_dir, env_data, debug):
+    """Write a complete no-fetch repository with stable public labels."""
+    settings_file = "%s/cache/http/settings.json" % out_dir
+    known_tests_file = "%s/cache/http/known_tests.json" % out_dir
+    test_management_file = "%s/cache/http/test_management.json" % out_dir
+    flaky_tests_file = "%s/cache/http/flaky_tests.json" % out_dir
+    manifest_file = "%s/manifest.txt" % out_dir
+    context_file = "%s/context.json" % out_dir
+    telemetry_facts_file = "%s/telemetry_facts.json" % out_dir
+    for output_file in [settings_file, known_tests_file, test_management_file, flaky_tests_file, manifest_file, context_file, telemetry_facts_file]:
+        _ensure_parent_directory(ctx, output_file, debug)
+
+    repo_name = getattr(ctx.attr, "repo_name", None) or ctx.name or ""
+    runtime_name = (ctx.attr.runtime_name or "").strip()
+    runtime_module_path = _explicit_runtime_module_path(ctx, runtime_name)
+    ctx.file(manifest_file, "version=1\n")
+    ctx.file(
+        settings_file,
+        '{"data": {"attributes": {"known_tests_enabled": false, "test_management": {"enabled": false}, "flaky_test_retries_enabled": false}}}\n',
+    )
+    ctx.file(known_tests_file, '{"data": {"attributes": {"tests": {}}}}\n')
+    ctx.file(test_management_file, '{"data": {"attributes": {"modules": {}}}}\n')
+    ctx.file(flaky_tests_file, '{"data": []}\n')
+    ctx.file(
+        context_file,
+        _render_disabled_context_json(
+            repo_name,
+            out_dir,
+            env_data,
+            runtime_name = runtime_name,
+            runtime_version = ctx.attr.runtime_version or "",
+            runtime_arch = ctx.attr.runtime_arch or "",
+        ),
+    )
+    ctx.file(
+        telemetry_facts_file,
+        _render_disabled_telemetry_facts_json(
+            env_data.get("service") or "unnamed-service",
+            runtime_name,
+            env_data.get("environment") or "CI",
+        ),
+    )
+    ctx.file("module_runfiles.bzl", _render_module_runfiles_bzl(ctx.name, _dirname(manifest_file)))
+    ctx.file(
+        "export.bzl",
+        _render_disabled_export(repo_name, env_data.get("service"), runtime_name, runtime_module_path, out_dir),
+    )
+    ctx.file(
+        "BUILD",
+        _render_disabled_build(
+            settings_file,
+            manifest_file,
+            known_tests_file,
+            test_management_file,
+            flaky_tests_file,
+            context_file,
+            telemetry_facts_file,
+        ),
+    )
+
 def _partition_unix_headers(headers):
     """Split public headers from DD-API-KEY for secure Unix curl transport."""
     public_headers = {}
@@ -1565,6 +1813,13 @@ detect_runtime_module_path_for_tests = _detect_runtime_module_path
 dirname_for_tests = _dirname
 normalize_out_dir_or_fail_for_tests = _normalize_out_dir_or_fail
 render_export_bzl_for_tests = _render_export_bzl
+render_disabled_context_json_for_tests = _render_disabled_context_json
+render_disabled_telemetry_facts_json_for_tests = _render_disabled_telemetry_facts_json
+render_disabled_export_for_tests = _render_disabled_export
+render_disabled_build_for_tests = _render_disabled_build
+is_test_optimization_enabled_for_tests = _is_test_optimization_enabled
+repository_environ_for_tests = _TEST_OPTIMIZATION_REPOSITORY_ENVIRON
+resolve_service_and_environment_for_tests = _resolve_service_and_environment
 fnv1a_32_for_tests = _fnv1a_32
 clone_payload_with_detached_attributes_for_tests = _clone_payload_with_detached_attributes
 http_connect_timeout_seconds_for_tests = HTTP_CONNECT_TIMEOUT_SECONDS
@@ -2264,6 +2519,28 @@ def _impl(ctx):
     log_info("Starting repository rule implementation")
     ctx.report_progress("test_optimization_sync: starting")
 
+    sync_enabled = _is_test_optimization_enabled(
+        ctx.attr.enabled,
+        ctx.attr.enabled_by_env,
+        ctx.os.environ.get("DD_TEST_OPTIMIZATION_ENABLED", ""),
+    )
+    if not sync_enabled:
+        out_dir = _normalize_out_dir_or_fail(ctx.attr.out_dir or TEST_OPT_DIR)
+        resolved = _resolve_service_and_environment(ctx.attr.service, ctx.os.environ)
+        disabled_env_data = {
+            "service": resolved["service"],
+            "environment": resolved["environment"],
+        }
+
+        # Only explicit DD_GIT_* values are allowed in disabled mode. This
+        # path deliberately never calls `_collect_env` or local Git helpers.
+        _apply_dd_git_overrides(disabled_env_data, ctx.os.environ)
+        _normalize_env_data(disabled_env_data)
+        _write_disabled_repository(ctx, out_dir, disabled_env_data, debug)
+        log_info("Test Optimization disabled; wrote no-fetch repository stubs")
+        ctx.report_progress("test_optimization_sync: disabled")
+        return
+
     # ------------------------------------------------------------------
     # Phase 1: Resolve/validate required inputs and output paths.
     # ------------------------------------------------------------------
@@ -2819,38 +3096,12 @@ test_optimization_sync = repository_rule(
         "known_tests": attr.bool(default = True),
         "test_management": attr.bool(default = True),
         "flaky_tests": attr.bool(default = True),
+        "enabled": attr.bool(default = True),
+        "enabled_by_env": attr.bool(default = False),
         "require_git_metadata": attr.bool(default = False),
         "debug": attr.bool(default = False),  # Toggle verbose debug logging
     },
-    environ = [
-        # Keep this list intentionally broad: every env var that can influence
-        # generated outputs must be declared so Bazel cache keys stay correct.
-        # Environment variables treated as rule inputs
-        "DD_API_KEY",  # Required: Datadog API key for authentication
-        "DD_SITE",  # Optional: Datadog site; ex: app.datadoghq.com, datadoghq.eu
-        "DD_TEST_OPTIMIZATION_AGENTLESS_URL",  # Optional: override Datadog API base URL (test/dev)
-        "DD_TEST_OPTIMIZATION_HTTP_CONNECT_TIMEOUT_SECONDS",  # Optional: override connect timeout
-        "DD_TEST_OPTIMIZATION_HTTP_MAX_TIME_SECONDS",  # Optional: override request max time
-        "DD_TEST_OPTIMIZATION_HTTP_RETRY_ATTEMPTS",  # Optional: override retry attempts
-        "DD_TEST_OPTIMIZATION_HTTP_RETRY_DELAY_SECONDS",  # Optional: override retry delay
-        "DD_TEST_OPTIMIZATION_HTTP_EXECUTE_TIMEOUT_BUFFER_SECONDS",  # Optional: override outer timeout buffer
-        "FETCH_SALT",  # Optional: cache-busting salt to force re-fetch
-        "GIT_DIRTY",  # Optional: working tree state; triggers refetch on change
-        "GO_MODULE_PATH",  # Optional: explicit Go module path override for export.bzl
-        "PYTHON_MODULE_PATH",  # Optional: explicit Python module path override for export.bzl
-        "JAVA_MODULE_PATH",  # Optional: explicit Java module path override for export.bzl
-        "NODEJS_MODULE_PATH",  # Optional: explicit NodeJS module path override for export.bzl
-        "DOTNET_MODULE_PATH",  # Optional: explicit Dotnet module path override for export.bzl
-        "RUBY_MODULE_PATH",  # Optional: explicit Ruby module path override for export.bzl
-        # Host OS hints used for cross-platform behavior and request configuration
-        "OS",  # Windows OS marker (used in _is_windows and _detect_os_info)
-        "ComSpec",  # Windows command processor path
-        "COMSPEC",  # Alternate casing for Windows command processor
-        "PROCESSOR_ARCHITECTURE",  # Windows arch detection
-        "PROCESSOR_ARCHITEW6432",  # Windows WOW64 arch detection
-        # Shared CI/git metadata inputs are centralized in test_optimization_sync_env.bzl
-        # so provider extraction and repository_rule cache keys cannot drift apart.
-    ] + _ALL_SYNC_ENV_KEYS,
+    environ = _TEST_OPTIMIZATION_REPOSITORY_ENVIRON,
     # Repository rules run during workspace/module resolution; keep local=True
     # so host tooling/env detection remains predictable across environments.
     local = True,
@@ -2926,6 +3177,8 @@ def _test_optimization_sync_extension_impl(module_ctx):
                 known_tests = test_optimization_call.known_tests,
                 test_management = test_optimization_call.test_management,
                 flaky_tests = test_optimization_call.flaky_tests,
+                enabled = test_optimization_call.enabled,
+                enabled_by_env = test_optimization_call.enabled_by_env,
                 require_git_metadata = test_optimization_call.require_git_metadata,
                 debug = call_debug,
             )
@@ -2956,6 +3209,8 @@ test_optimization_sync_extension = module_extension(
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "flaky_tests": attr.bool(default = True),
+            "enabled": attr.bool(default = True),
+            "enabled_by_env": attr.bool(default = False),
             "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),

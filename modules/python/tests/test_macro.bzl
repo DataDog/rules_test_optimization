@@ -257,7 +257,11 @@ def _single_service_topt_data():
         "repo_name": "test_optimization_data",
         "service_name": "py-service",
         "manifest_path": ".testoptimization/manifest.txt",
-        "labels": [],
+        "labels": [
+            "example_python_modules_python_tests",
+            "example_python_pkg",
+            "example_python_tests",
+        ],
         "set": {},
         "runtimes": {
             "go": {
@@ -867,6 +871,31 @@ def _py_macro_public_wrapper_test_impl(ctx):
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
+def _py_macro_fallback_payloads_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    paths = [file.short_path for file in target[DefaultInfo].files.to_list()]
+
+    modular_known_tests = False
+    full_bundle_known_tests = False
+    for path in paths:
+        if "/module_example_python_" in path and path.endswith("/known_tests.json"):
+            modular_known_tests = True
+        if path.endswith("/.testoptimization/cache/http/known_tests.json"):
+            full_bundle_known_tests = True
+
+    asserts.true(
+        env,
+        modular_known_tests,
+        msg = "macro-generated selector must expose the package-derived Python module payload: %s" % paths,
+    )
+    asserts.false(
+        env,
+        full_bundle_known_tests,
+        msg = "macro-generated selector must not fall back to the full known-tests bundle: %s" % paths,
+    )
+    return analysistest.end(env)
+
 def _resolve_topt_service_key_missing_target_impl(_ctx):
     resolve_topt_service_key_for_tests(
         {
@@ -950,6 +979,9 @@ py_macro_explicit_service_wiring_test = analysistest.make(
 )
 py_macro_public_wrapper_test = analysistest.make(
     _py_macro_public_wrapper_test_impl,
+)
+py_macro_fallback_payloads_test = analysistest.make(
+    _py_macro_fallback_payloads_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

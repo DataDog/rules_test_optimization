@@ -35,6 +35,19 @@ The `test-optimization` config should contain the recommended Bazel test flags:
 `--remote_download_minimal`, `--remote_download_regex=.*test[.]outputs.*`, and
 `--zip_undeclared_test_outputs`.
 
+For Go consumers using the reusable bootstrap, keep the phase-correct enablement
+in the same config:
+
+```bazelrc
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+This is one user-facing switch. Removing `--config=test-optimization` disables
+both metadata resolution and the Orchestrion analysis aliases; it does not
+require a second bool flag. In WORKSPACE repositories, use the apparent
+`rules_go` repository name configured by that workspace.
+
 ```bash
 # Vendor the full tools/test_optimization/ helper directory, or set
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.

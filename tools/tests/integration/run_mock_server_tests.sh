@@ -225,6 +225,7 @@ test_optimization_sync = use_extension(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
+    enabled_by_env = True,
     service = "mock-service",
     runtime_name = "go",
     runtime_version = "1.2.3",
@@ -232,6 +233,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_nodejs",
+    enabled_by_env = True,
     service = "mock-service-nodejs",
     runtime_name = "nodejs",
     runtime_version = "1.2.3",
@@ -239,6 +241,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_dotnet",
+    enabled_by_env = True,
     service = "mock-service-dotnet",
     runtime_name = "dotnet",
     runtime_version = "1.2.3",
@@ -246,6 +249,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_ruby",
+    enabled_by_env = True,
     service = "mock-service-ruby",
     runtime_name = "ruby",
     runtime_version = "1.2.3",
@@ -446,7 +450,9 @@ BAZEL_FLAGS=(--output_base="$OUT_BASE")
 env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test
 
 SYNC_LAZINESS_LOG="$TMP_WS/sync_laziness_requires_api_key.log"
-if env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" build //:dd_upload_payloads_with_context >"$SYNC_LAZINESS_LOG" 2>&1; then
+if env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:dd_upload_payloads_with_context \
+  --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1 >"$SYNC_LAZINESS_LOG" 2>&1; then
   echo "error: target consuming @test_optimization_data succeeded without DD_API_KEY"
   cat "$SYNC_LAZINESS_LOG" || true
   exit 1
@@ -460,6 +466,7 @@ fi
 # Provide deterministic repo metadata for fixtures + payload enrichment.
 REPO_ENVS=(
   --repo_env=DD_API_KEY=mock
+  --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
   --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL=http://127.0.0.1:$PORT
   --repo_env=DD_ENV=ci
   --repo_env=DD_GIT_REPOSITORY_URL=https://example.com/repo.git
@@ -473,6 +480,80 @@ REPO_ENVS=(
   --repo_env=GITHUB_SHA=
   --repo_env=GITHUB_EVENT_PATH=
 )
+
+# ---------------------------------------------------------------------------
+# Scenario: disabled repositories render complete local stubs and never fetch.
+# ---------------------------------------------------------------------------
+# Keep this phase before the enabled sync so the request-log delta is isolated
+# from the baseline API traffic below.
+DISABLED_OUTPUT_BASE="$TMP_WS/.bazel_disabled_out"
+DISABLED_CQUERY_OUT="$TMP_WS/disabled-cquery.out"
+DISABLED_REPO_ENVS=(
+  --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0
+  --repo_env=DISABLE_CI_METADATA=1
+)
+if [[ -f "$LOG_FILE" ]]; then
+  DISABLED_LOG_START="$(wc -l < "$LOG_FILE" | tr -d '[:space:]')"
+else
+  DISABLED_LOG_START=0
+fi
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" cquery \
+  @test_optimization_data//:test_optimization_files --output=files \
+  "${DISABLED_REPO_ENVS[@]}" >"$DISABLED_CQUERY_OUT"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" cquery \
+  @test_optimization_data//:test_optimization_context --output=files \
+  "${DISABLED_REPO_ENVS[@]}" >>"$DISABLED_CQUERY_OUT"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" build \
+  @test_optimization_data//:test_optimization_files \
+  "${DISABLED_REPO_ENVS[@]}"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" build \
+  @test_optimization_data//:test_optimization_context \
+  "${DISABLED_REPO_ENVS[@]}"
+
+for required in settings.json known_tests.json test_management.json flaky_tests.json manifest.txt context.json; do
+  if ! grep -q "$required" "$DISABLED_CQUERY_OUT"; then
+    echo "error: disabled sync cquery is missing $required"
+    cat "$DISABLED_CQUERY_OUT"
+    exit 1
+  fi
+done
+
+DISABLED_REPO_DIR="$(find "$DISABLED_OUTPUT_BASE" -type f \
+  -path '*/external/*test_optimization_data/.testoptimization/cache/http/settings.json' \
+  -print -quit)"
+if [[ -z "$DISABLED_REPO_DIR" ]]; then
+  echo "error: disabled sync did not materialize the expected stub repository"
+  exit 1
+fi
+DISABLED_REPO_DIR="${DISABLED_REPO_DIR%/.testoptimization/cache/http/settings.json}"
+jq -e '
+  .data.attributes.known_tests_enabled == false and
+  .data.attributes.test_management.enabled == false and
+  .data.attributes.flaky_test_retries_enabled == false
+' "$DISABLED_REPO_DIR/.testoptimization/cache/http/settings.json" >/dev/null
+jq -e '.data.attributes.tests == {}' \
+  "$DISABLED_REPO_DIR/.testoptimization/cache/http/known_tests.json" >/dev/null
+jq -e '.data.attributes.modules == {}' \
+  "$DISABLED_REPO_DIR/.testoptimization/cache/http/test_management.json" >/dev/null
+jq -e '.data == []' \
+  "$DISABLED_REPO_DIR/.testoptimization/cache/http/flaky_tests.json" >/dev/null
+jq -e '."topt.sync.enabled" == false' \
+  "$DISABLED_REPO_DIR/.testoptimization/context.json" >/dev/null
+jq -e 'any(.counts[]; .name == "sync.disabled" and .value == 1)' \
+  "$DISABLED_REPO_DIR/.testoptimization/telemetry_facts.json" >/dev/null
+if [[ -f "$LOG_FILE" ]]; then
+  DISABLED_LOG_END="$(wc -l < "$LOG_FILE" | tr -d '[:space:]')"
+else
+  DISABLED_LOG_END=0
+fi
+if [[ "$DISABLED_LOG_START" != "$DISABLED_LOG_END" ]]; then
+  echo "error: disabled sync unexpectedly contacted the mock metadata server"
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Scenario: baseline sync + uploader run (agentless) with fixture assertions.
@@ -2990,6 +3071,7 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
+    github.com/DataDog/orchestrion@${ORCH_VERSION}|\
     github.com/DataDog/dd-trace-go/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
@@ -3322,6 +3404,7 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
+    github.com/DataDog/orchestrion@${ORCH_VERSION}|\
     github.com/DataDog/dd-trace-go/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)

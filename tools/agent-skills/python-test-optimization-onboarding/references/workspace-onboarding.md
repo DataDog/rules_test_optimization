@@ -139,8 +139,17 @@ test_optimization_sync(
     service = "<datadog-service>",
     runtime_name = "python",
     runtime_version = "3.12",
+    enabled_by_env = True,
 )
 ```
+
+Enable this sync only through the named Bazel config:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+```
+
+Do not add a `rules_go` Orchestrion flag to a Python-only consumer.
 
 Add one logical doctor/uploader pair. Prefer a lightweight package in monorepos:
 

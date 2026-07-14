@@ -42,6 +42,10 @@ BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_ro
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
+ORCHESTRION_DISABLED_SENTINEL="${ORCHESTRION_DISABLED_SENTINEL:-0}"
+ORCHESTRION_DISABLED_SENTINEL_VERSION="v0.0.0-rto-disabled-fetch-sentinel"
+WINDOWS_DISABLED_SMOKE_ONLY="${WINDOWS_DISABLED_SMOKE_ONLY:-0}"
+WINDOWS_ENABLED_SMOKE_ONLY="${WINDOWS_ENABLED_SMOKE_ONLY:-0}"
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0}"
 SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
@@ -80,7 +84,10 @@ BAZEL_EXTRA_ARGS+=(
   "--repo_env=DD_GIT_COMMIT_SHA=${FIXTURE_GIT_COMMIT_SHA}"
 )
 
+source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
+
 cleanup() {
+  stop_go_integration_mock_server
   USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown >/dev/null 2>&1 || true
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
@@ -368,7 +375,7 @@ PY
 run_bep_freshness_scenario() {
   local ws_dir="$1"
   local mode="$2"
-  local -a bzlmod_flags=(--enable_bzlmod)
+  local -a bzlmod_flags=(--enable_bzlmod --config=test-optimization)
   local bep_dir="$ws_dir/.topt/bep-${mode}"
   local fresh_bep="$bep_dir/fresh.bep.json"
   local cached_bep="$bep_dir/cached.bep.json"
@@ -512,14 +519,23 @@ create_fixture_archive() {
   ARCHIVE_URL="file://$ARCHIVE_PATH"
 }
 
+write_fixture_bazelrc() {
+  local ws_dir="$1"
+  local rules_go_repo="$2"
+
+  cat > "$ws_dir/.bazelrc" <<EOF
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true
+EOF
+}
+
 write_shared_fixture_sources() {
   local ws_dir="$1"
 
   mkdir -p "$ws_dir/app"
 
   cat > "$ws_dir/BUILD.bazel" <<'EOF'
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
 exports_files([
     "go.mod",
@@ -528,15 +544,10 @@ exports_files([
     "orchestrion.yml",
 ])
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
     expected_targets = ["//app:hello_test"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
 )
 EOF
 
@@ -709,8 +720,18 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read known_tests.json: %v", err)
 	}
-	if !strings.Contains(string(knownTestsContent), "module:"+wantModuleLabel) {
-		t.Fatalf("known_tests.json did not contain module marker %q: %s", "module:"+wantModuleLabel, string(knownTestsContent))
+	var knownTests struct {
+		Data struct {
+			Attributes struct {
+				Tests map[string]json.RawMessage \`json:"tests"\`
+			} \`json:"attributes"\`
+		} \`json:"data"\`
+	}
+	if err := json.Unmarshal(knownTestsContent, &knownTests); err != nil {
+		t.Fatalf("decode known_tests.json: %v", err)
+	}
+	if knownTests.Data.Attributes.Tests == nil {
+		t.Fatalf("known_tests.json did not contain the canonical tests object: %s", string(knownTestsContent))
 	}
 
 	testManagementPath := filepath.Join(manifestDir, "cache", "http", "test_management.json")
@@ -718,8 +739,18 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read test_management.json: %v", err)
 	}
-	if !strings.Contains(string(testManagementContent), "\""+wantModuleLabel+"\"") {
-		t.Fatalf("test_management.json did not contain module label %q: %s", wantModuleLabel, string(testManagementContent))
+	var testManagement struct {
+		Data struct {
+			Attributes struct {
+				Modules map[string]json.RawMessage \`json:"modules"\`
+			} \`json:"attributes"\`
+		} \`json:"data"\`
+	}
+	if err := json.Unmarshal(testManagementContent, &testManagement); err != nil {
+		t.Fatalf("decode test_management.json: %v", err)
+	}
+	if testManagement.Data.Attributes.Modules == nil {
+		t.Fatalf("test_management.json did not contain the canonical modules object: %s", string(testManagementContent))
 	}
 
 	undeclaredDir := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
@@ -744,7 +775,6 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 		"bazel.test_optimization.runtime_name": "go",
 		"bazel.go.importpath": wantModuleImportpath,
 		"bazel.go.importpath_source": "inferred",
-		"bazel.go.payload_selection": "module",
 		"bazel.go.attr.pure": "auto",
 		"bazel.go.attr.race": "auto",
 		"bazel.go.attr.msan": "auto",
@@ -755,8 +785,17 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 			t.Fatalf("%s = %v, want %q", key, metadata[key], want)
 		}
 	}
-	if got, _ := metadata["bazel.go.payload_selection"].(string); got != "module" {
-		t.Fatalf("bazel.go.payload_selection = %v, want module", metadata["bazel.go.payload_selection"])
+	selection, _ := metadata["bazel.go.payload_selection"].(string)
+	moduleCachePath := filepath.Join(manifestDir, "cache", "http", "module_"+wantModuleLabel, "known_tests.json")
+	_, moduleCacheErr := os.Stat(moduleCachePath)
+	if moduleCacheErr == nil {
+		if selection != "module" {
+			t.Fatalf("bazel.go.payload_selection = %v with a matching physical module cache, want module", selection)
+		}
+	} else if !os.IsNotExist(moduleCacheErr) {
+		t.Fatalf("stat matching physical module cache: %v", moduleCacheErr)
+	} else if selection != "full_bundle_disabled" {
+		t.Fatalf("bazel.go.payload_selection = %v without a matching physical module cache", selection)
 	}
 	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
 		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
@@ -819,6 +858,11 @@ EOF
 write_orchestrion_go_sum() {
   local ws_dir="$1"
 
+  if [[ "$ORCHESTRION_VERSION" == "$ORCHESTRION_DISABLED_SENTINEL_VERSION" ]]; then
+    : > "$ws_dir/go.sum"
+    return
+  fi
+
   if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0" && "$ORCHESTRION_VERSION" == "v1.9.0" ]]; then
     cat > "$ws_dir/go.sum" <<'EOF'
 github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0 h1:o5PABRmFQQ1uJcog3PnNF9+182EODnjHB6fjGTFkOIs=
@@ -875,21 +919,20 @@ EOF
   cat >> "$ws_dir/MODULE.bazel" <<EOF
 )
 
-example_stub_repo = use_extension(
-    "@datadog-rules-test-optimization//tools/tests:example_stub_repo.bzl",
-    "example_stub_repo_extension",
+test_optimization = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
 )
-example_stub_repo.example_stub_repo(
+test_optimization.test_optimization_go(
     name = "test_optimization_data",
+    service = "${SERVICE_NAME}",
+    module_path = "${MODULE_IMPORTPATH}",
+    runtime_version = "${GO_VERSION}",
     out_dir = "${OUT_DIR}",
-    service_name = "${SERVICE_NAME}",
-    service_keys = ["go_service"],
-    labels = ["${MODULE_LABEL}"],
-    go_module_path = "${MODULE_IMPORTPATH}",
-    go_sanitized_module_path = "${MODULE_LABEL}",
-    go_module_included = True,
+    enabled_by_env = True,
+    require_git_metadata = True,
 )
-use_repo(example_stub_repo, "test_optimization_data")
+use_repo(test_optimization, "test_optimization_data")
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
@@ -907,6 +950,7 @@ run_fixture() {
   mkdir -p "$ws_dir"
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
+  write_fixture_bazelrc "$ws_dir" "rules_go"
   if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     run_fixture_subscenario "$ws_dir" "hermetic"
     return
@@ -921,7 +965,7 @@ run_fixture() {
 run_fixture_subscenario() {
   local ws_dir="$1"
   local mode="$2"
-  local -a bzlmod_flags=(--enable_bzlmod)
+  local -a bzlmod_flags=(--enable_bzlmod --config=test-optimization)
 
   if [[ "$mode" == "standard" ]]; then
     (
@@ -1072,8 +1116,181 @@ PY
     "$no_strip_aquery_output"
 }
 
+write_disabled_fixture_test() {
+  local ws_dir="$1"
+
+  cat > "$ws_dir/app/hello_test.go" <<'EOF'
+package main
+
+import "testing"
+
+func TestDisabledBootstrap(t *testing.T) {
+	if greeting() != "Hello, Bzlmod!" {
+		t.Fatalf("unexpected greeting %q", greeting())
+	}
+}
+EOF
+}
+
+run_disabled_no_fetch_smoke() {
+  local ws_dir="$WORKSPACE_ROOT/disabled"
+  local resolved_repos="$TMP_ROOT/disabled-resolved-repositories.bzl"
+  local alias_log="$TMP_ROOT/disabled-aliases.log"
+  local test_log="$TMP_ROOT/disabled-test.log"
+  local -a disabled_flags=(
+    "${BAZEL_EXTRA_ARGS[@]}"
+    --enable_bzlmod
+  )
+  local -a disabled_env=(
+    env
+    -u DD_API_KEY
+    -u DD_SITE
+    -u DD_TEST_OPTIMIZATION_ENABLED
+  )
+  local aliases=(
+    tool_binary
+    dd_trace_go_version_file
+    dd_trace_go_module_proxy_files
+    dd_trace_go_module_proxy_root_marker
+    orchestrion_tool_version_file
+  )
+
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  write_module_file "$ws_dir"
+  write_shared_fixture_sources "$ws_dir"
+  write_disabled_fixture_test "$ws_dir"
+
+  : > "$alias_log"
+  for alias in "${aliases[@]}"; do
+    (
+      cd "$ws_dir"
+      "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+        "${disabled_flags[@]}" \
+        --experimental_repository_resolved_file="$resolved_repos" \
+        "@rules_go//go/private/orchestrion:$alias" --output=files \
+        >"$TMP_ROOT/disabled-alias-$alias.out"
+    ) 2>"$TMP_ROOT/disabled-alias-$alias.err"
+    cat "$TMP_ROOT/disabled-alias-$alias.out" >>"$alias_log"
+  done
+  if [[ -s "$alias_log" ]]; then
+    echo "error: disabled Bzlmod Orchestrion aliases exposed files" >&2
+    cat "$alias_log" >&2
+    exit 1
+  fi
+
+  (
+    cd "$ws_dir"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${disabled_flags[@]}" \
+      --experimental_repository_resolved_file="$resolved_repos" \
+      "$HELLO_TEST_TARGET"
+  ) >"$test_log" 2>&1
+
+  if [[ -f "$resolved_repos" ]] && rg -n 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$resolved_repos"; then
+    echo "error: disabled Bzlmod smoke resolved the Orchestrion sentinel repository" >&2
+    cat "$resolved_repos" >&2
+    exit 1
+  fi
+  if rg -n 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$test_log"; then
+    echo "error: disabled Bzlmod smoke attempted the Orchestrion sentinel" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+
+  local testlogs
+  testlogs="$(cd "$ws_dir" && "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${disabled_flags[@]}" bazel-testlogs)"
+  if find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -print -quit | grep -q .; then
+    echo "error: disabled Bzlmod smoke emitted Test Optimization payloads" >&2
+    exit 1
+  fi
+}
+
+run_windows_enabled_smoke() {
+  local ws_dir="$WORKSPACE_ROOT/windows-enabled"
+  local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
+  local alias_files="$TMP_ROOT/windows-enabled-aliases.log"
+  local test_log="$TMP_ROOT/windows-enabled-test.log"
+  local -a enabled_flags=(
+    "${BAZEL_EXTRA_ARGS[@]}"
+    "${GO_INTEGRATION_MOCK_REPO_ENVS[@]}"
+    --enable_bzlmod
+    --config=test-optimization
+  )
+  local aliases=(
+    tool_binary
+    dd_trace_go_version_file
+    dd_trace_go_module_proxy_files
+    dd_trace_go_module_proxy_root_marker
+    orchestrion_tool_version_file
+  )
+
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+  write_module_file "$ws_dir"
+  write_shared_fixture_sources "$ws_dir"
+  write_fixture_bazelrc "$ws_dir" "rules_go"
+
+  : > "$alias_files"
+  for alias in "${aliases[@]}"; do
+    (
+      cd "$ws_dir"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+        "${enabled_flags[@]}" \
+        --experimental_repository_resolved_file="$resolved_repos" \
+        "@rules_go//go/private/orchestrion:$alias" --output=files
+    ) >>"$alias_files"
+  done
+  if [[ ! -s "$alias_files" ]]; then
+    echo "error: enabled Bzlmod Orchestrion aliases exposed no files" >&2
+    exit 1
+  fi
+
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${enabled_flags[@]}" \
+      --experimental_repository_resolved_file="$resolved_repos" \
+      "$HELLO_TEST_TARGET"
+  ) >"$test_log" 2>&1
+
+  if ! rg -q 'rules_go_orchestrion_tool' "$alias_files"; then
+    echo "error: enabled Bzlmod aliases did not expose the real Orchestrion repository files" >&2
+    cat "$alias_files" >&2
+    exit 1
+  fi
+
+  local testlogs
+  testlogs="$(cd "$ws_dir" && USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${enabled_flags[@]}" bazel-testlogs)"
+  if ! find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -print -quit | grep -q .; then
+    echo "error: enabled Bzlmod smoke emitted no Test Optimization payloads" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+  assert_go_integration_metadata_requests
+}
+
 mkdir -p "$WORKSPACE_ROOT"
+
+if [[ "$WINDOWS_DISABLED_SMOKE_ONLY" == "1" || "$ORCHESTRION_DISABLED_SENTINEL" == "1" ]]; then
+  ORCHESTRION_VERSION="$ORCHESTRION_DISABLED_SENTINEL_VERSION"
+  ORCHESTRION_MODE="test_optimization"
+  create_fixture_archive
+  run_disabled_no_fetch_smoke
+  exit 0
+fi
+
+if [[ "$WINDOWS_ENABLED_SMOKE_ONLY" == "1" ]]; then
+  ORCHESTRION_MODE="test_optimization"
+  create_fixture_archive
+  run_windows_enabled_smoke
+  exit 0
+fi
+
 create_fixture_archive
+start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+BAZEL_EXTRA_ARGS+=("${GO_INTEGRATION_MOCK_REPO_ENVS[@]}")
 
 if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
   if [[ -z "$MEASURE_OUTPUT_PATH" ]]; then
@@ -1081,6 +1298,7 @@ if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     exit 1
   fi
   run_fixture
+  assert_go_integration_metadata_requests
   exit 0
 fi
 
@@ -1090,3 +1308,4 @@ if [[ "$INTEGRATION_SCENARIO_MODE" != "full" ]]; then
 fi
 
 run_fixture
+assert_go_integration_metadata_requests

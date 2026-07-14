@@ -263,3 +263,20 @@ they consume a complete base tree. Repositories that already own their
 `rules_go` patch stack should instead use a generated public consumer patch
 profile as a local rebase or merge input, then verify the regenerated private
 patch in their private patch order.
+
+## Test Optimization Alias Contract
+
+The public base trees keep the existing
+`//go/private/orchestrion:enabled` setting as the analysis-time control. Their
+stable Orchestrion aliases select package-local empty targets when the setting
+is false and the real `rules_go_orchestrion_tool` files when it is true.
+Consumers should expose one config that sets both effects:
+
+```bazelrc
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+The metadata environment is read only by repositories explicitly configured
+with `enabled_by_env = True`. Removing the config is the opt-out and must not
+require a consumer-owned duplicate bool flag or stub repository.

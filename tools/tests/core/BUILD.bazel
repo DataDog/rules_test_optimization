@@ -55,6 +55,8 @@ load(
 )
 load(
     "//tools/tests/core:test_multi_sync_utils.bzl",
+    "build_multi_sync_specs_deduplicates_sanitized_service_keys_test",
+    "build_multi_sync_specs_propagates_non_default_enablement_test",
     "compute_repo_names_test",
     "compute_service_keys_dedups_collisions_test",
     "compute_service_keys_edge_cases_test",
@@ -81,6 +83,16 @@ load(
     "python_missing_git_commit_target_rule",
     "python_missing_rules_python_repo_failure_test",
     "python_missing_rules_python_repo_target_rule",
+)
+load(
+    "//tools/tests/core:test_sync_disabled_utils.bzl",
+    "disabled_context_contract_test",
+    "disabled_export_and_build_shape_test",
+    "disabled_telemetry_contract_test",
+    "enabled_false_values_test",
+    "enabled_truthy_values_test",
+    "repository_environment_contains_bootstrap_inputs_test",
+    "service_environment_resolution_test",
 )
 load(
     "//tools/tests/core:test_sync_utils.bzl",
@@ -112,8 +124,8 @@ load(
     "decode_json_object_non_json_target_rule",
     "decode_json_object_valid_test",
     "dirname_test",
-    "example_stub_custom_out_dir_test",
     "example_stub_context_contains_doctor_metadata_test",
+    "example_stub_custom_out_dir_test",
     "example_stub_export_manifest_path_test",
     "example_stub_export_string_escaping_test",
     "example_stub_includes_manifest_in_files_test",
@@ -619,6 +631,48 @@ module_label_map_flaky_modules_test(
     timeout = "short",
 )
 
+enabled_truthy_values_test(
+    name = "enabled_truthy_values_test",
+    size = "small",
+    timeout = "short",
+)
+
+enabled_false_values_test(
+    name = "enabled_false_values_test",
+    size = "small",
+    timeout = "short",
+)
+
+repository_environment_contains_bootstrap_inputs_test(
+    name = "repository_environment_contains_bootstrap_inputs_test",
+    size = "small",
+    timeout = "short",
+)
+
+service_environment_resolution_test(
+    name = "service_environment_resolution_test",
+    size = "small",
+    timeout = "short",
+)
+
+disabled_context_contract_test(
+    name = "disabled_context_contract_test",
+    size = "small",
+    timeout = "short",
+)
+
+disabled_telemetry_contract_test(
+    name = "disabled_telemetry_contract_test",
+    size = "small",
+    timeout = "short",
+)
+
+disabled_export_and_build_shape_test(
+    name = "disabled_export_and_build_shape_test",
+    size = "small",
+    timeout = "short",
+)
+
 normalize_ref_test(
     name = "normalize_ref_test",
     size = "small",
@@ -1033,6 +1087,18 @@ validate_service_name_too_long_failure_test(
     target_under_test = ":validate_service_name_too_long_target",
 )
 
+build_multi_sync_specs_propagates_non_default_enablement_test(
+    name = "build_multi_sync_specs_propagates_non_default_enablement_test",
+    size = "small",
+    timeout = "short",
+)
+
+build_multi_sync_specs_deduplicates_sanitized_service_keys_test(
+    name = "build_multi_sync_specs_deduplicates_sanitized_service_keys_test",
+    size = "small",
+    timeout = "short",
+)
+
 compute_service_keys_dedups_collisions_test(
     name = "compute_service_keys_dedups_collisions_test",
     size = "small",
@@ -1443,6 +1509,8 @@ test_suite(
         ":archive_archive_specs_test",
         ":base_git_specs_test",
         ":bash_curl_retry_flags_test",
+        ":build_multi_sync_specs_deduplicates_sanitized_service_keys_test",
+        ":build_multi_sync_specs_propagates_non_default_enablement_test",
         ":clone_payload_with_detached_attributes_test",
         ":clone_payload_with_nested_structure_test",
         ":codeowners_compile_regex_edge_cases_test",
@@ -1482,10 +1550,10 @@ test_suite(
         ":doctor_kwargs_test",
         ":duplicate_names_failure_test",
         ":empty_name_failure_test",
+        ":example_stub_context_contains_doctor_metadata_test",
         ":example_stub_custom_out_dir_test",
         ":example_stub_export_manifest_path_test",
         ":example_stub_export_string_escaping_test",
-        ":example_stub_context_contains_doctor_metadata_test",
         ":example_stub_includes_manifest_in_files_test",
         ":example_stub_manifest_content_matches_sync_contract_test",
         ":example_stub_module_targets_test",

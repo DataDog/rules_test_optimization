@@ -387,6 +387,8 @@ Use `--write-bazelrc` to insert or replace the managed
 The generated config is named `test-optimization` by default:
 
 ```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 common:test-optimization --repo_env=DD_API_KEY
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
@@ -540,8 +542,10 @@ Use the default `runner_mode = "managed_pytest"` when the Datadog macro should
 own pytest execution. Use `runner_mode = "consumer_runner"` when a repository
 already has a Python test wrapper and must keep control of `main`, `imports`,
 and internal test policy. In `consumer_runner` mode, pass a custom
-`py_test_rule` or an explicit `main` that runs pytest with ddtrace enabled, and
-prefer `module_identifier` for payload selection.
+`py_test_rule` or an explicit `main` that runs pytest with ddtrace enabled. When
+the runtime module path and Bazel package path identify the test, omit
+`module_identifier` and use the derived fallback. Keep an explicit
+`module_identifier` only for a documented repository-specific exception.
 
 Python consumers can generate copy/paste onboarding snippets from the companion
 without running tests or changing lockfiles:
@@ -855,6 +859,8 @@ dd_payload_uploader(
 
 ```text
 # Repository rule (module/repo phase) — affects refetch
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 common:test-optimization --repo_env=DD_API_KEY
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional sync/uploader agentless URL override
@@ -1051,8 +1057,13 @@ test_optimization_sync(
     service = "py-service",
     runtime_name = "python",
     runtime_version = "3.12",
+    enabled_by_env = True,
 )
 ```
+
+Pair this opt-in repository rule with
+`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. Python
+does not use the Go-only `@rules_go//go/private/orchestrion:enabled` flag.
 
 Then in package BUILD files, use either managed pytest mode:
 

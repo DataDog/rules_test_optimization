@@ -90,6 +90,10 @@ def selector_payload_fixture_targets():
         marker = "module:fallback",
     )
     _payload_marker(
+        name = "module_domains_ffe_apps_apis_query_validator_internal_validator_tests",
+        marker = "module:dd-source-prefixed-fallback",
+    )
+    _payload_marker(
         name = "module_custom_override",
         marker = "module:override",
     )
@@ -184,6 +188,20 @@ def selector_no_match_fallback_target(name, tags = None):
         fallback_identifier = "example/python/no_match/pkg",
         full_files = ":full_payload",
         module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_prefixed_fallback_target(name, tags = None):
+    """Select a dd-source-style module path without falling back to full files."""
+    topt_py_payloads_selector(
+        name = name,
+        imports = [],
+        deps = [],
+        attribute_candidates = [],
+        fallback_identifier = "domains.ffe.apps.apis.query_validator.internal.validator.tests",
+        full_files = ":full_payload",
+        module_groups = [":module_domains_ffe_apps_apis_query_validator_internal_validator_tests"],
         include_per_module = True,
         tags = tags,
     )
@@ -328,6 +346,12 @@ def _selector_no_match_fallback_test_impl(ctx):
     _assert_selected(env, target, "full_payload")
     return analysistest.end(env)
 
+def _selector_prefixed_fallback_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    _assert_selected(env, target, "module_domains_ffe_apps_apis_query_validator_internal_validator_tests")
+    return analysistest.end(env)
+
 def _selector_include_disabled_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -381,6 +405,9 @@ selector_fallback_test = analysistest.make(
 )
 selector_no_match_fallback_test = analysistest.make(
     _selector_no_match_fallback_test_impl,
+)
+selector_prefixed_fallback_test = analysistest.make(
+    _selector_prefixed_fallback_test_impl,
 )
 selector_include_disabled_test = analysistest.make(
     _selector_include_disabled_test_impl,

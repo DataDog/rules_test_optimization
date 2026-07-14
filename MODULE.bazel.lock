@@ -341,8 +341,8 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "11ZYe98lW2gzeDxeH56YfpXqfu+Fz/W99x+6gbqhHpo=",
-        "usagesDigest": "ZvH9tnCNkZsHBe4vntqNT2rwFLibrjPI/w0NHRR5Lwg=",
+        "bzlTransitiveDigest": "dBh3mysStfbmE9OYr/8bdnByQgv+t2ybqpgSa1q2MpQ=",
+        "usagesDigest": "jqtG1XLwIoyhYZrl5w5guIuSZeXpuCApEcAz3bhsuio=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -353,7 +353,14 @@
               "go_module_included": false,
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
-              "labels": [],
+              "labels": [
+                "apps_ruby_example",
+                "company_product_example",
+                "example_nodejs_project",
+                "example_python_modules_python_tests",
+                "example_python_pkg",
+                "example_python_tests"
+              ],
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data",
               "service_name": "stub-service",

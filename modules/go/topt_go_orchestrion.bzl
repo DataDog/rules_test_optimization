@@ -12,7 +12,6 @@ _ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _orch_transition_impl(_settings, _attr):
     return {
-        "@rules_go//go/private/orchestrion:enabled": True,
         "@rules_go//go/private/orchestrion:mode": _attr.orchestrion_mode,
     }
 
@@ -21,10 +20,7 @@ orch_transition_impl_for_tests = _orch_transition_impl
 orch_transition = transition(
     implementation = _orch_transition_impl,
     inputs = [],
-    outputs = [
-        "@rules_go//go/private/orchestrion:enabled",
-        "@rules_go//go/private/orchestrion:mode",
-    ],
+    outputs = ["@rules_go//go/private/orchestrion:mode"],
 )
 
 def _first_target(dep):

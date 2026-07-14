@@ -364,6 +364,13 @@ invocation. They do not include
 `FETCH_SALT`, `DD_GIT_*` test env, `DD_API_KEY` test env, upload endpoint test env, or
 `DD_CIVISIBILITY_AGENTLESS_ENABLED`.
 
+For Go onboarding, the generated block also contains
+`common:<config> --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1` and the existing
+`rules_go` analysis setting
+`build:<config> --@<rules_go_repo>//go/private/orchestrion:enabled=true`.
+`--config=<config>` is the single user-facing switch: removing it disables
+both metadata resolution and the real Orchestrion aliases.
+
 ## How data is fetched
 
 The sync rule executes HTTP requests with timeouts/retries to:

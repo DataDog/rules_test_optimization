@@ -59,6 +59,54 @@ def _compute_repo_names(base_name, service_keys):
         repo_names.append("%s_%s" % (base_name, key))
     return repo_names
 
+def _build_multi_sync_repo_specs(
+        name,
+        services,
+        runtime_name = "",
+        runtime_version = "",
+        runtime_arch = "",
+        runtime_module_path = "",
+        out_dir = ".testoptimization",
+        http_connect_timeout_seconds = -1,
+        http_max_time_seconds = -1,
+        http_retry_attempts = -1,
+        http_retry_delay_seconds = -1,
+        http_execute_timeout_buffer_seconds = -1,
+        known_tests = True,
+        test_management = True,
+        flaky_tests = True,
+        enabled = True,
+        enabled_by_env = False,
+        require_git_metadata = False,
+        debug = False):
+    """Build complete per-service sync specs for a multi-service tag."""
+    service_keys = _compute_service_keys(services)
+    repo_names = _compute_repo_names(name, service_keys)
+    specs = []
+    for i in range(len(services)):
+        specs.append({
+            "repo": repo_names[i],
+            "service": services[i],
+            "out_dir": out_dir,
+            "runtime_name": runtime_name,
+            "runtime_version": runtime_version,
+            "runtime_arch": runtime_arch,
+            "runtime_module_path": runtime_module_path,
+            "http_connect_timeout_seconds": http_connect_timeout_seconds,
+            "http_max_time_seconds": http_max_time_seconds,
+            "http_retry_attempts": http_retry_attempts,
+            "http_retry_delay_seconds": http_retry_delay_seconds,
+            "http_execute_timeout_buffer_seconds": http_execute_timeout_buffer_seconds,
+            "known_tests": known_tests,
+            "test_management": test_management,
+            "flaky_tests": flaky_tests,
+            "enabled": enabled,
+            "enabled_by_env": enabled_by_env,
+            "require_git_metadata": require_git_metadata,
+            "debug": debug,
+        })
+    return specs
+
 def _record_multi_repo_owner_or_fail(seen_repo_owners, repo_name, owner):
     """Record generated repo owner and fail when names collide."""
     prev_owner = seen_repo_owners.get(repo_name)
@@ -159,6 +207,7 @@ def _render_aggregate_export_bzl():
 # Public aliases for unit tests.
 compute_multi_service_keys_for_tests = _compute_service_keys
 compute_multi_repo_names_for_tests = _compute_repo_names
+build_multi_sync_repo_specs_for_tests = _build_multi_sync_repo_specs
 render_multi_aggregate_bzl_for_tests = _render_aggregate_bzl
 render_multi_aggregate_export_bzl_for_tests = _render_aggregate_export_bzl
 record_multi_repo_owner_or_fail_for_tests = _record_multi_repo_owner_or_fail
@@ -227,12 +276,27 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
 
             # Repo names are positional with keys/services; keep list order intact.
             per_repo_names = _compute_repo_names(name, keys)
-            service_repo_entries = []
-            for i in range(len(services)):
-                service_repo_entries.append({
-                    "service": services[i],
-                    "repo": per_repo_names[i],
-                })
+            service_repo_entries = _build_multi_sync_repo_specs(
+                name = name,
+                services = services,
+                runtime_name = call.runtime_name,
+                runtime_version = call.runtime_version,
+                runtime_arch = call.runtime_arch,
+                runtime_module_path = call.runtime_module_path,
+                out_dir = call.out_dir,
+                http_connect_timeout_seconds = call.http_connect_timeout_seconds,
+                http_max_time_seconds = call.http_max_time_seconds,
+                http_retry_attempts = call.http_retry_attempts,
+                http_retry_delay_seconds = call.http_retry_delay_seconds,
+                http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
+                known_tests = call.known_tests,
+                test_management = call.test_management,
+                flaky_tests = call.flaky_tests,
+                enabled = call.enabled,
+                enabled_by_env = call.enabled_by_env,
+                require_git_metadata = call.require_git_metadata,
+                debug = call.debug,
+            )
 
             # Validate generated repository names before instantiating any repos.
             for repo_name in [name] + per_repo_names:
@@ -240,7 +304,6 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
 
             # Phase 2: materialize one sync repository per original service.
             for entry in service_repo_entries:
-                svc = entry["service"]
                 repo = entry["repo"]
 
                 # Preserve original service string for API requests; only keys
@@ -248,24 +311,26 @@ def _test_optimization_multi_sync_extension_impl(module_ctx):
                 test_optimization_sync(
                     name = repo,
                     repo_name = repo,
-                    out_dir = call.out_dir,  # optional; if set, used per-repo
-                    service = svc,  # override/DD_SERVICE for this service
-                    runtime_name = call.runtime_name,
-                    runtime_version = call.runtime_version,
-                    runtime_arch = call.runtime_arch,
-                    runtime_module_path = call.runtime_module_path,
+                    out_dir = entry["out_dir"],  # optional; if set, used per-repo
+                    service = entry["service"],  # override/DD_SERVICE for this service
+                    runtime_name = entry["runtime_name"],
+                    runtime_version = entry["runtime_version"],
+                    runtime_arch = entry["runtime_arch"],
+                    runtime_module_path = entry["runtime_module_path"],
                     # Optional HTTP timeout/retry policy overrides.
                     # Use -1 to keep default/env behavior.
-                    http_connect_timeout_seconds = call.http_connect_timeout_seconds,
-                    http_max_time_seconds = call.http_max_time_seconds,
-                    http_retry_attempts = call.http_retry_attempts,
-                    http_retry_delay_seconds = call.http_retry_delay_seconds,
-                    http_execute_timeout_buffer_seconds = call.http_execute_timeout_buffer_seconds,
-                    known_tests = call.known_tests,
-                    test_management = call.test_management,
-                    flaky_tests = call.flaky_tests,
-                    require_git_metadata = call.require_git_metadata,
-                    debug = call.debug,
+                    http_connect_timeout_seconds = entry["http_connect_timeout_seconds"],
+                    http_max_time_seconds = entry["http_max_time_seconds"],
+                    http_retry_attempts = entry["http_retry_attempts"],
+                    http_retry_delay_seconds = entry["http_retry_delay_seconds"],
+                    http_execute_timeout_buffer_seconds = entry["http_execute_timeout_buffer_seconds"],
+                    known_tests = entry["known_tests"],
+                    test_management = entry["test_management"],
+                    flaky_tests = entry["flaky_tests"],
+                    enabled = entry["enabled"],
+                    enabled_by_env = entry["enabled_by_env"],
+                    require_git_metadata = entry["require_git_metadata"],
+                    debug = entry["debug"],
                 )
 
             # Phase 3: publish one aggregate repo exposing stable aliases.
@@ -300,6 +365,8 @@ test_optimization_multi_sync_extension = module_extension(
             "known_tests": attr.bool(default = True),
             "test_management": attr.bool(default = True),
             "flaky_tests": attr.bool(default = True),
+            "enabled": attr.bool(default = True),
+            "enabled_by_env": attr.bool(default = False),
             "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),

@@ -236,11 +236,14 @@ func TestWorkspaceModeSnippetIncludesSyncAndBaseVariant(t *testing.T) {
 	for _, want := range []string{
 		`rules_go_variant = "base"`,
 		`rules_go_repo_name = "io_bazel_rules_go"`,
-		`load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")`,
+		`load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_workspace_sync_repositories")`,
+		`load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")`,
+		`dd_topt_go_workspace_sync_repositories(`,
+		`dd_topt_go_orchestrion_tool_repo(`,
 		`name = "test_optimization_data_worker"`,
 		`service = "worker"`,
-		`runtime_name = "go"`,
 		`runtime_version = "1.25.9"`,
+		`enabled_by_env = True`,
 		`require_git_metadata = True`,
 	} {
 		if !strings.Contains(got, want) {
@@ -412,6 +415,8 @@ func TestBazelrcSnippetUsesRepoEnvOnlyForSyncMetadata(t *testing.T) {
 		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL`,
 		`common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL`,
 		`common:test-optimization --repo_env=DD_PR_NUMBER`,
+		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`,
+		`build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`,
 		`test:test-optimization --remote_download_minimal`,
 		`test:test-optimization --remote_download_regex=.*test[.]outputs.*`,
 		`test:test-optimization --zip_undeclared_test_outputs`,
@@ -654,6 +659,7 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`SYNC_REPO='test_optimization_data_worker'`,
 		`DOCTOR_TARGET='//:dd_test_optimization_doctor'`,
 		`UPLOAD_TARGET='//:dd_upload_payloads'`,
+		`RULES_GO_ENABLED_LABEL='@rules_go//go/private/orchestrion:enabled'`,
 		`WORKSPACE_DIR="$(pwd -P)"`,
 		`BEP_TMP_ROOT=""`,
 		`BEP_JSON_DIR=""`,
@@ -682,6 +688,12 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`--report-json`,
 		`mktemp -d "${tmp_parent%/}/dd-go-topt.XXXXXX"`,
 		`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`,
+		`validate ordinary no-config bootstrap`,
+		`validate explicit disabled precedence`,
+		`query "@${SYNC_REPO}//:test_optimization_files"`,
+		`"${BAZEL}" cquery \
+      "${RULES_GO_ENABLED_LABEL%:enabled}:tool_binary"`,
+		`--repo_env=DD_TEST_OPTIMIZATION_ENABLED=0`,
 		`upload skipped; rerun with --upload`,
 		`${BAZEL}" shutdown`,
 	} {
@@ -799,6 +811,9 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 	}
 	logText := string(logBytes)
 	for _, want := range []string{
+		"query @test_optimization_data//:test_optimization_files",
+		"cquery @rules_go//go/private/orchestrion:tool_binary --output=files",
+		"query --config=test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0 --@rules_go//go/private/orchestrion:enabled=false @test_optimization_data//:test_optimization_files",
 		"sync --config=test-optimization --repo_env=FETCH_SALT=",
 		"test --config=test-optimization --build_event_json_file=",
 		"//pkg:go_default_test",
@@ -1608,6 +1623,31 @@ func TestBootstrapSyncCommandsTargetedModeAvoidsGoModTidy(t *testing.T) {
 	if !strings.Contains(joined, "list -mod=readonly -tags=tools github.com/DataDog/orchestrion") {
 		t.Fatalf("targeted bootstrap sync must verify readonly module completeness:\n%s", joined)
 	}
+	for _, mode := range []string{"-mod=mod", "-mod=readonly"} {
+		for _, packagePath := range orchestrionToolPackages {
+			want := "list " + mode + " -tags=tools " + packagePath
+			if !strings.Contains(joined, want) {
+				t.Fatalf("targeted bootstrap sync missing sequential package resolution %q:\n%s", want, joined)
+			}
+		}
+	}
+	expectedDownloads := []string{
+		"github.com/DataDog/orchestrion@v1.9.0",
+		"github.com/DataDog/dd-trace-go/v2@v2.9.0",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0",
+	}
+	for _, moduleVersion := range expectedDownloads {
+		want := "mod download " + moduleVersion
+		if !strings.Contains(joined, want) {
+			t.Fatalf("targeted bootstrap sync missing exact module download %q:\n%s", want, joined)
+		}
+	}
+	for _, command := range got {
+		if len(command) > 5 && command[0] == "list" {
+			t.Fatalf("targeted bootstrap sync must resolve one package root per go list command: %#v", command)
+		}
+	}
 }
 
 func TestBootstrapSyncCommandsDefaultsToTargetedMode(t *testing.T) {
@@ -2142,6 +2182,42 @@ func TestNormalizedGoEnvForcesGoWorkOff(t *testing.T) {
 	}
 	if envValue(got, "GOWORK") != "off" {
 		t.Fatalf("GOWORK=%q, want %q", envValue(got, "GOWORK"), "off")
+	}
+}
+
+func TestOrchestrionBootstrapEnvUsesPublicModuleResolution(t *testing.T) {
+	got := orchestrionBootstrapEnv()
+	cacheRoot := filepath.Join(os.TempDir(), sharedOrchestrionCacheDirName)
+	for key, want := range map[string]string{
+		"GOPATH":     cacheRoot,
+		"GOMODCACHE": filepath.Join(cacheRoot, "pkg", "mod"),
+		"GOCACHE":    filepath.Join(cacheRoot, "cache"),
+	} {
+		if value := envValue(got, key); value != want {
+			t.Fatalf("%s=%q, want %q", key, value, want)
+		}
+		prefix := key + "="
+		count := 0
+		for _, entry := range got {
+			if strings.HasPrefix(entry, prefix) {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s appears %d times in bootstrap environment, want exactly once", key, count)
+		}
+	}
+	if envValue(got, "GOPROXY") != "https://proxy.golang.org,direct" {
+		t.Fatalf("GOPROXY=%q, want public proxy", envValue(got, "GOPROXY"))
+	}
+	if envValue(got, "GOSUMDB") != "sum.golang.org" {
+		t.Fatalf("GOSUMDB=%q, want public checksum database", envValue(got, "GOSUMDB"))
+	}
+	if envValue(got, "GOPRIVATE") != "" {
+		t.Fatalf("GOPRIVATE=%q, want empty for public bootstrap modules", envValue(got, "GOPRIVATE"))
+	}
+	if envValue(got, "GONOSUMDB") != "" {
+		t.Fatalf("GONOSUMDB=%q, want empty for public bootstrap modules", envValue(got, "GONOSUMDB"))
 	}
 }
 

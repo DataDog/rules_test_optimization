@@ -8,12 +8,57 @@
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "//tools/core:test_optimization_multi_sync.bzl",
+    "build_multi_sync_repo_specs_for_tests",
     "compute_multi_repo_names_for_tests",
     "compute_multi_service_keys_for_tests",
     "record_multi_repo_owner_or_fail_for_tests",
     "render_multi_aggregate_bzl_for_tests",
     "render_multi_aggregate_export_bzl_for_tests",
 )
+
+def _build_multi_sync_specs_propagates_non_default_enablement_test(ctx):
+    env = unittest.begin(ctx)
+    specs = build_multi_sync_repo_specs_for_tests(
+        name = "test_optimization_data_go",
+        services = ["service-a", "service-b"],
+        runtime_name = "go",
+        runtime_version = "1.25.9",
+        runtime_module_path = "example.com/repo",
+        enabled = False,
+        enabled_by_env = True,
+        flaky_tests = False,
+    )
+    asserts.equals(env, 2, len(specs))
+    asserts.equals(env, False, specs[0]["enabled"])
+    asserts.equals(env, True, specs[0]["enabled_by_env"])
+    asserts.equals(env, False, specs[0]["flaky_tests"])
+    asserts.equals(env, "test_optimization_data_go_service_a", specs[0]["repo"])
+    asserts.equals(env, "service-a", specs[0]["service"])
+    asserts.equals(env, "test_optimization_data_go_service_b", specs[1]["repo"])
+    return unittest.end(env)
+
+def _build_multi_sync_specs_deduplicates_sanitized_service_keys_test(ctx):
+    env = unittest.begin(ctx)
+    specs = build_multi_sync_repo_specs_for_tests(
+        name = "test_optimization_data_go",
+        services = ["service-a", "service.a", "service_a"],
+        runtime_name = "go",
+        runtime_version = "1.25.9",
+        runtime_module_path = "example.com/repo",
+        enabled_by_env = True,
+    )
+    repo_names = [spec["repo"] for spec in specs]
+    asserts.equals(
+        env,
+        [
+            "test_optimization_data_go_service_a",
+            "test_optimization_data_go_service_a_2",
+            "test_optimization_data_go_service_a_3",
+        ],
+        repo_names,
+    )
+    asserts.equals(env, 3, len({name: True for name in repo_names}))
+    return unittest.end(env)
 
 def _compute_service_keys_dedups_collisions_test(ctx):
     """Validate sanitized-key collision deduping for multi-service inputs."""
@@ -119,6 +164,8 @@ def _record_multi_repo_owner_duplicate_failure_test_impl(ctx):
 compute_service_keys_dedups_collisions_test = unittest.make(_compute_service_keys_dedups_collisions_test)
 compute_service_keys_edge_cases_test = unittest.make(_compute_service_keys_edge_cases_test)
 compute_repo_names_test = unittest.make(_compute_repo_names_test)
+build_multi_sync_specs_propagates_non_default_enablement_test = unittest.make(_build_multi_sync_specs_propagates_non_default_enablement_test)
+build_multi_sync_specs_deduplicates_sanitized_service_keys_test = unittest.make(_build_multi_sync_specs_deduplicates_sanitized_service_keys_test)
 record_multi_repo_owner_success_test = unittest.make(_record_multi_repo_owner_success_test)
 render_multi_aggregate_bzl_contains_expected_targets_test = unittest.make(_render_multi_aggregate_bzl_contains_expected_targets_test)
 render_multi_aggregate_export_bzl_reexports_mapping_test = unittest.make(_render_multi_aggregate_export_bzl_reexports_mapping_test)
