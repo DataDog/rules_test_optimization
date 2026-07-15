@@ -1937,12 +1937,12 @@ datadog_go_test_optimization_workspace_repositories(
 	buf.WriteString(fmt.Sprintf(`load("@%s//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
 
-go_rules_dependencies()
-go_register_toolchains(version = "<go-version>")
 dd_topt_go_orchestrion_tool_repo(
     version = "%s",
 %s
 )
+go_rules_dependencies()
+go_register_toolchains(version = "<go-version>")
 `, cfg.rulesGoRepoName, cfg.orchestrionVersion, workspaceSnippetTracerConfig(cfg)))
 	if cfg.workspaceMode || strings.TrimSpace(cfg.service) != "" || strings.TrimSpace(cfg.runtimeVersion) != "" {
 		buf.WriteString("\n")
@@ -1964,8 +1964,7 @@ dd_topt_go_workspace_sync_repositories(
     name = "%s",
     service = "%s",
     runtime_version = "%s",
-%s    enabled_by_env = True,
-    require_git_metadata = True,
+%s    require_git_metadata = True,
 )
 `, cfg.syncRepoName, cfg.service, cfg.runtimeVersion, modulePathLine)
 }

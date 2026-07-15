@@ -17,6 +17,7 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("//go/private:common.bzl", "MINIMUM_BAZEL_VERSION")
 load("//go/private:nogo.bzl", "DEFAULT_NOGO", "go_register_nogo")
+load("//go/private/orchestrion:extensions.bzl", "orchestrion_empty_repository")
 load("//go/private:polyfill_bazel_features.bzl", "polyfill_bazel_features")
 load("//go/private/skylib/lib:versions.bzl", "versions")
 load("//proto:gogo.bzl", "gogo_special_proto")
@@ -38,6 +39,15 @@ def go_rules_dependencies(force = False):
     """
     if getattr(native, "bazel_version", None):
         versions.check(MINIMUM_BAZEL_VERSION, bazel_version = native.bazel_version)
+
+    # Keep the stable Orchestrion repository mapping available to ordinary
+    # WORKSPACE consumers. Test Optimization consumers declare the real tool
+    # repository before calling go_rules_dependencies(), so this fallback does
+    # not replace or fetch it.
+    _maybe(
+        orchestrion_empty_repository,
+        name = "rules_go_orchestrion_tool",
+    )
 
     if force:
         wrapper = _always

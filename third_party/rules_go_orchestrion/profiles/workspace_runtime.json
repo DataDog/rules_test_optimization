@@ -14,6 +14,7 @@
     "go/private/actions/stdlib.bzl",
     "go/private/context.bzl",
     "go/private/orchestrion/**",
+    "go/private/repositories.bzl",
     "go/private/rules/library.bzl",
     "go/private/rules/stdlib.bzl",
     "go/private/rules/test.bzl",

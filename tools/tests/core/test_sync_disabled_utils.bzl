@@ -7,12 +7,17 @@
 """Unit tests for disabled Test Optimization repository rendering."""
 
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+load("//tools/core:common_utils.bzl", "RULES_VERSION")
 load(
     "//tools/core:test_optimization_sync.bzl",
     "is_test_optimization_enabled_for_tests",
     "render_disabled_build_for_tests",
     "render_disabled_context_json_for_tests",
     "render_disabled_export_for_tests",
+    "render_disabled_flaky_tests_json_for_tests",
+    "render_disabled_known_tests_json_for_tests",
+    "render_disabled_settings_json_for_tests",
+    "render_disabled_test_management_json_for_tests",
     "render_disabled_telemetry_facts_json_for_tests",
     "repository_environ_for_tests",
     "resolve_service_and_environment_for_tests",
@@ -89,15 +94,20 @@ def _disabled_context_contract_test(ctx):
         runtime_arch = "amd64",
     )
     decoded = json.decode(content)
-    asserts.equals(env, "service-name", decoded["service.name"])
-    asserts.equals(env, "test", decoded["env"])
-    asserts.equals(env, False, decoded["topt.sync.enabled"])
-    asserts.equals(env, "test_optimization_data", decoded["topt.sync.repository_name"])
-    asserts.equals(env, "custom_topt", decoded["topt.sync.out_dir"])
-    asserts.equals(env, "go", decoded["runtime.name"])
-    asserts.equals(env, "https://github.com/example/repo", decoded["git.repository_url"])
-    asserts.equals(env, "abc123", decoded["git.commit.sha"])
-    asserts.false(env, "topt.api_key_fingerprint" in decoded)
+    asserts.equals(env, {
+        "bazel.rule_name": "datadog-rules-test-optimization",
+        "bazel.rule_version": RULES_VERSION,
+        "env": "test",
+        "git.commit.sha": "abc123",
+        "git.repository_url": "https://github.com/example/repo",
+        "runtime.architecture": "amd64",
+        "runtime.name": "go",
+        "runtime.version": "1.25.0",
+        "service.name": "service-name",
+        "topt.sync.enabled": False,
+        "topt.sync.out_dir": "custom_topt",
+        "topt.sync.repository_name": "test_optimization_data",
+    }, decoded)
 
     without_runtime = json.decode(render_disabled_context_json_for_tests(
         "test_optimization_data",
@@ -112,11 +122,38 @@ def _disabled_context_contract_test(ctx):
 def _disabled_telemetry_contract_test(ctx):
     env = unittest.begin(ctx)
     decoded = json.decode(render_disabled_telemetry_facts_json_for_tests("service-name", "go", "CI"))
-    asserts.equals(env, 1, decoded["schema_version"])
-    asserts.equals(env, "service-name", decoded["service_name"])
-    asserts.equals(env, "go", decoded["runtime_name"])
-    asserts.equals(env, [{"name": "sync.disabled", "value": 1, "tags": []}], decoded["counts"])
-    asserts.equals(env, [], decoded["distributions"])
+    asserts.equals(env, {
+        "counts": [{"name": "sync.disabled", "value": 1, "tags": []}],
+        "distributions": [],
+        "env": "CI",
+        "runtime_name": "go",
+        "schema_version": 1,
+        "service_name": "service-name",
+    }, decoded)
+    return unittest.end(env)
+
+def _disabled_cache_payloads_contract_test(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(env, {
+        "data": {
+            "attributes": {
+                "flaky_test_retries_enabled": False,
+                "known_tests_enabled": False,
+                "test_management": {"enabled": False},
+            },
+        },
+    }, json.decode(render_disabled_settings_json_for_tests()))
+    asserts.equals(
+        env,
+        {"data": {"attributes": {"tests": {}}}},
+        json.decode(render_disabled_known_tests_json_for_tests()),
+    )
+    asserts.equals(
+        env,
+        {"data": {"attributes": {"modules": {}}}},
+        json.decode(render_disabled_test_management_json_for_tests()),
+    )
+    asserts.equals(env, {"data": []}, json.decode(render_disabled_flaky_tests_json_for_tests()))
     return unittest.end(env)
 
 def _disabled_export_and_build_shape_test(ctx):
@@ -130,6 +167,7 @@ def _disabled_export_and_build_shape_test(ctx):
     )
     asserts.true(env, '"repo_name": "test_optimization_data"' in export)
     asserts.true(env, '"service_name": "go-service"' in export)
+    asserts.true(env, '"enabled": False' in export)
     asserts.true(env, '"manifest_path": "custom_topt/manifest.txt"' in export)
     asserts.true(env, '"module_path": "example.com/repo"' in export)
 
@@ -159,5 +197,6 @@ enabled_false_values_test = unittest.make(_enabled_false_values_test)
 repository_environment_contains_bootstrap_inputs_test = unittest.make(_repository_environment_contains_bootstrap_inputs_test)
 service_environment_resolution_test = unittest.make(_service_environment_resolution_test)
 disabled_context_contract_test = unittest.make(_disabled_context_contract_test)
+disabled_cache_payloads_contract_test = unittest.make(_disabled_cache_payloads_contract_test)
 disabled_telemetry_contract_test = unittest.make(_disabled_telemetry_contract_test)
 disabled_export_and_build_shape_test = unittest.make(_disabled_export_and_build_shape_test)

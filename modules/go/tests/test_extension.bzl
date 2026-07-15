@@ -21,11 +21,11 @@ def _go_single_spec_propagates_non_default_enablement_and_flaky_tests_test(ctx):
         module_path = "example.com/repo",
         runtime_version = "1.25.9",
         enabled = False,
-        enabled_by_env = True,
+        enabled_by_env = False,
         flaky_tests = False,
     )
     asserts.equals(env, False, spec["enabled"])
-    asserts.equals(env, True, spec["enabled_by_env"])
+    asserts.equals(env, False, spec["enabled_by_env"])
     asserts.equals(env, False, spec["flaky_tests"])
     asserts.equals(env, "go", spec["runtime_name"])
     return unittest.end(env)
@@ -38,14 +38,28 @@ def _go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test(ctx):
         module_path = "example.com/repo",
         runtime_version = "1.25.9",
         enabled = False,
-        enabled_by_env = True,
+        enabled_by_env = False,
         flaky_tests = False,
     )
     asserts.equals(env, 1, len(specs))
     asserts.equals(env, False, specs[0]["enabled"])
-    asserts.equals(env, True, specs[0]["enabled_by_env"])
+    asserts.equals(env, False, specs[0]["enabled_by_env"])
     asserts.equals(env, False, specs[0]["flaky_tests"])
     asserts.equals(env, "go", specs[0]["runtime_name"])
+    return unittest.end(env)
+
+def _go_specs_default_to_config_gated_test(ctx):
+    env = unittest.begin(ctx)
+    single = build_go_single_repo_spec_for_tests(
+        name = "test_optimization_data_go",
+        service = "go-service",
+    )
+    multi = build_go_multi_repo_specs_for_tests(
+        name = "test_optimization_data_go",
+        services = ["go-service"],
+    )
+    asserts.equals(env, True, single["enabled_by_env"])
+    asserts.equals(env, True, multi[0]["enabled_by_env"])
     return unittest.end(env)
 
 go_single_spec_propagates_non_default_enablement_and_flaky_tests_test = unittest.make(
@@ -54,4 +68,8 @@ go_single_spec_propagates_non_default_enablement_and_flaky_tests_test = unittest
 
 go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test = unittest.make(
     _go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test,
+)
+
+go_specs_default_to_config_gated_test = unittest.make(
+    _go_specs_default_to_config_gated_test,
 )

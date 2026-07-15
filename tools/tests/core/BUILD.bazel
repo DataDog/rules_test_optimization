@@ -86,6 +86,7 @@ load(
 )
 load(
     "//tools/tests/core:test_sync_disabled_utils.bzl",
+    "disabled_cache_payloads_contract_test",
     "disabled_context_contract_test",
     "disabled_export_and_build_shape_test",
     "disabled_telemetry_contract_test",
@@ -258,6 +259,12 @@ load(
     "missing_archive_target_rule",
     "removed_complete_variant_failure_test",
     "removed_complete_variant_target_rule",
+)
+
+disabled_cache_payloads_contract_test(
+    name = "disabled_cache_payloads_contract_test",
+    size = "small",
+    timeout = "short",
 )
 
 filegroup(
@@ -1546,10 +1553,16 @@ test_suite(
         ":dedup_keys_test",
         ":default_context_data_test",
         ":dirname_test",
+        ":disabled_cache_payloads_contract_test",
+        ":disabled_context_contract_test",
+        ":disabled_export_and_build_shape_test",
+        ":disabled_telemetry_contract_test",
         ":doctor_controlled_attr_failure_test",
         ":doctor_kwargs_test",
         ":duplicate_names_failure_test",
         ":empty_name_failure_test",
+        ":enabled_false_values_test",
+        ":enabled_truthy_values_test",
         ":example_stub_context_contains_doctor_metadata_test",
         ":example_stub_custom_out_dir_test",
         ":example_stub_export_manifest_path_test",
@@ -1565,6 +1578,8 @@ test_suite(
         ":explicit_upstream_base_specs_test",
         ":export_bzl_escaping_test",
         ":export_bzl_manifest_path_test",
+        ":repository_environment_contains_bootstrap_inputs_test",
+        ":service_environment_resolution_test",
         ":first_env_ctx_test",
         ":first_env_from_environ_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",

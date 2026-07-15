@@ -162,6 +162,25 @@ def _validate_consumer_runner_inputs(py_test_rule_was_explicit, py_test_rule_is_
             "for the built-in pytest runner.",
         )
 
+def _define_uninstrumented_py_test(name, py_test_rule, runner_mode, kwargs):
+    """Define the consumer test without Datadog wiring when sync is disabled."""
+    test_kwargs = dict(kwargs)
+    test_kwargs["env"] = _merge_user_env(
+        test_kwargs.get("env"),
+        {"DD_CIVISIBILITY_ENABLED": "false"},
+        macro_name = "dd_topt_py_test",
+    )
+    if runner_mode == _RUNNER_MODE_MANAGED_PYTEST and test_kwargs.get("main") == None:
+        pkg_path = native.package_name()
+        test_kwargs["srcs"] = _append_data_dependencies(test_kwargs.get("srcs"), [_RUN_PYTEST])
+        test_kwargs["main"] = _RUN_PYTEST
+        if "args" not in test_kwargs:
+            test_kwargs["args"] = [pkg_path] if pkg_path else []
+        if "imports" not in test_kwargs:
+            test_kwargs["imports"] = [pkg_path] if pkg_path else []
+    test_kwargs["name"] = name
+    py_test_rule(**test_kwargs)
+
 # Public aliases for unit tests.
 validate_runner_mode_for_tests = _validate_runner_mode
 validate_consumer_runner_inputs_for_tests = _validate_consumer_runner_inputs
@@ -202,6 +221,20 @@ def dd_topt_py_test(
     py_test_rule_is_default = _is_default_py_test_rule(py_test_rule)
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
+    if runner_mode == _RUNNER_MODE_CONSUMER_RUNNER:
+        _validate_consumer_runner_inputs(
+            py_test_rule_was_explicit,
+            py_test_rule_is_default,
+            kwargs.get("main"),
+        )
+
+    # A disabled sync repository exports the same schema with enabled = False.
+    # Keep the consumer's test runnable, but do not create selectors, wrappers,
+    # metadata targets, Datadog env, or payload-producing instrumentation.
+    if not _svc.get("enabled", True):
+        _define_uninstrumented_py_test(name, py_test_rule, runner_mode, kwargs)
+        return
+
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
 
     user_data = kwargs.pop("data", None)
@@ -221,9 +254,6 @@ def dd_topt_py_test(
 
     user_srcs = kwargs.pop("srcs", None)
     user_main = kwargs.pop("main", None)
-
-    if runner_mode == _RUNNER_MODE_CONSUMER_RUNNER:
-        _validate_consumer_runner_inputs(py_test_rule_was_explicit, py_test_rule_is_default, user_main)
 
     # args is a wrapper-only attr; split_test_wrapper_kwargs already moved it to wrapper_kwargs.
     user_args = wrapper_kwargs.pop("args", None)

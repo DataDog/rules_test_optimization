@@ -245,10 +245,12 @@ dd_topt_go_orchestrion_tool_repo(
     version = "v1.9.0",
 )
 
+# Call the repository's existing go_rules_dependencies() wiring after the
+# real tool repository. rules_go supplies the disabled fallback itself.
+
 dd_topt_go_workspace_sync_repositories(
     name = "test_optimization_data_<service_key>",
     debug = True,
-    enabled_by_env = True,
     require_git_metadata = True,
     module_path = "<go-module-path>",
     runtime_version = "<go-version>",
@@ -256,10 +258,15 @@ dd_topt_go_workspace_sync_repositories(
 )
 ```
 
+The public Go helper is config-gated by default. Do not add a second enable
+attribute to each repository or test target.
+
 The helper loads the public Orchestrion repository API through the Go
 companion's repository mapping, so consumers do not load it from their apparent
 `rules_go` repository directly. The apparent repository name still belongs in
-the `.bazelrc` analysis-time flag shown above.
+the `.bazelrc` analysis-time flag shown above. Do not load
+`orchestrion_empty_repository`; the fork creates that fallback internally for
+ordinary WORKSPACE use.
 
 If the repository already defines a Go version constant for Bazel toolchains,
 reuse that constant for `runtime_version` instead of hardcoding another copy.

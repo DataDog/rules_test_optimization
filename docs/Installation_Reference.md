@@ -201,6 +201,7 @@ test_optimization_sync = use_extension(
 # @test_optimization_data//:test_optimization_files
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
+    enabled_by_env = True,
 )
 
 use_repo(test_optimization_sync, "test_optimization_data")
@@ -606,7 +607,10 @@ test_optimization_sync = use_extension(
     "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
 )
-test_optimization_sync.test_optimization_sync(name = "test_optimization_data")
+test_optimization_sync.test_optimization_sync(
+    name = "test_optimization_data",
+    enabled_by_env = True,
+)
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
@@ -627,6 +631,7 @@ topt_multi.test_optimization_multi_sync(
     runtime_name = "python",
     runtime_version = "3.12",
     debug = True,
+    enabled_by_env = True,
 )
 
 use_repo(
@@ -780,6 +785,7 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 test_optimization_sync(
     name = "test_optimization_data",
     service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
+    enabled_by_env = True,
     # Optional:
     # runtime_name = "go",
     # runtime_version = "1.25.0",
@@ -1096,7 +1102,6 @@ dd_topt_py_test(
     name = "pkg_py_test",
     py_test_rule = repo_py_test,
     runner_mode = "consumer_runner",
-    module_identifier = "example.python.pkg",
     srcs = glob(["test_*.py"]),
     deps = [
         requirement("ddtrace"),
@@ -1247,18 +1252,18 @@ http_archive(
 
 load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
-load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
+load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
 
-go_rules_dependencies()
-go_register_toolchains(version = "1.25.0")
-gazelle_dependencies()
-
-go_orchestrion_tool_repo(
+dd_topt_go_orchestrion_tool_repo(
     version = "<orchestrion_version>",
     # Optional. When omitted, the helper uses the fork's current default
     # shared dd-trace-go version.
     dd_trace_go_version = "<resolved_dd_trace_go_version>",
 )
+
+go_rules_dependencies()
+go_register_toolchains(version = "1.25.0")
+gazelle_dependencies()
 ```
 
 Notes for the helper:
@@ -1267,6 +1272,9 @@ Notes for the helper:
 - `dd_trace_go_version` and `dd_trace_go_versions` are mutually exclusive.
 - Keep the default tool-repo name `rules_go_orchestrion_tool`; the current fork
   resolves that name internally.
+- Declare the real tool repository before `go_rules_dependencies()`. The fork
+  supplies its own empty fallback for ordinary WORKSPACE consumers, so do not
+  load or declare a private stub repository yourself.
 - Do not configure `patches`, `patch_tool`, or `patch_args` for this integration;
   repositories that already own their `rules_go` patch stack should generate the
   public consumer patch profile and rebase or merge it locally.

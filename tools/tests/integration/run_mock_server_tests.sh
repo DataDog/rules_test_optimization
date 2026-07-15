@@ -276,6 +276,17 @@ sh_test(
     timeout = "short",
 )
 
+sh_test(
+    name = "disabled_metadata_runfiles_test",
+    srcs = ["disabled_metadata_runfiles_test.sh"],
+    data = [
+        "@test_optimization_data//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_files",
+    ],
+    size = "small",
+    timeout = "short",
+)
+
 dd_payload_uploader(
     name = "dd_upload_payloads",
 )
@@ -437,6 +448,43 @@ JSON_EOF
 PAYLOAD_EOF
 chmod +x payload_writer.sh
 
+cat > disabled_metadata_runfiles_test.sh <<'DISABLED_RUNFILES_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+runfiles_root="${RUNFILES_DIR:-${TEST_SRCDIR:-}}"
+if [[ -z "$runfiles_root" || ! -d "$runfiles_root" ]]; then
+  echo "error: Bazel runfiles directory is unavailable" >&2
+  exit 1
+fi
+
+settings_path="$(find -L "$runfiles_root" -type f \
+  -path '*test_optimization_data/.testoptimization/cache/http/settings.json' \
+  -print -quit)"
+if [[ -z "$settings_path" ]]; then
+  echo "error: disabled settings.json was not present in test runfiles" >&2
+  exit 1
+fi
+repo_dir="${settings_path%/.testoptimization/cache/http/settings.json}"
+
+jq -e '.data.attributes == {
+  "flaky_test_retries_enabled": false,
+  "known_tests_enabled": false,
+  "test_management": {"enabled": false}
+}' "$settings_path" >/dev/null
+jq -e '.data.attributes.tests == {}' \
+  "$repo_dir/.testoptimization/cache/http/known_tests.json" >/dev/null
+jq -e '.data.attributes.modules == {}' \
+  "$repo_dir/.testoptimization/cache/http/test_management.json" >/dev/null
+jq -e '.data == []' \
+  "$repo_dir/.testoptimization/cache/http/flaky_tests.json" >/dev/null
+jq -e '."topt.sync.enabled" == false' \
+  "$repo_dir/.testoptimization/context.json" >/dev/null
+jq -e 'any(.counts[]; .name == "sync.disabled" and .value == 1)' \
+  "$repo_dir/.testoptimization/telemetry_facts.json" >/dev/null
+DISABLED_RUNFILES_EOF
+chmod +x disabled_metadata_runfiles_test.sh
+
 BAZEL="$REPO_ROOT/bazelw"
 OUT_BASE="$TMP_WS/.bazel_out"
 BAZEL_FLAGS=(--output_base="$OUT_BASE")
@@ -512,6 +560,10 @@ env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
 env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
   "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" build \
   @test_optimization_data//:test_optimization_context \
+  "${DISABLED_REPO_ENVS[@]}"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" test \
+  //:disabled_metadata_runfiles_test \
   "${DISABLED_REPO_ENVS[@]}"
 
 for required in settings.json known_tests.json test_management.json flaky_tests.json manifest.txt context.json; do

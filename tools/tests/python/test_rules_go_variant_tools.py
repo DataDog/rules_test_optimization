@@ -594,6 +594,13 @@ class RulesGoForkMaterializerTests(unittest.TestCase):
                 (materialized / "file.txt").read_text(encoding="utf-8"),
             )
 
+    def test_list_upstreams_uses_lf_on_every_platform(self) -> None:
+        """Bash consumers never receive a carriage return in an upstream id."""
+        self.assertEqual(
+            b"v0_60_0\nv0_61_1\n",
+            self.mod.render_upstream_ids(["v0_60_0", "v0_61_1"]),
+        )
+
     def test_materializer_rejects_complete_variant(self) -> None:
         """The removed complete variant fails before patch application."""
         selection = SimpleNamespace(

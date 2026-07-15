@@ -32,6 +32,10 @@ load(
     "py_macro_consumer_runner_with_main_target",
     "py_macro_default_rule_detection_target_rule",
     "py_macro_default_rule_detection_test",
+    "py_macro_disabled_consumer_runner_target",
+    "py_macro_disabled_consumer_runner_test",
+    "py_macro_disabled_managed_pytest_target",
+    "py_macro_disabled_managed_pytest_test",
     "py_macro_env_none_target",
     "py_macro_env_none_wiring_test",
     "py_macro_explicit_service_target",
@@ -399,6 +403,26 @@ py_macro_managed_pytest_kwargs_test(
     target_under_test = ":py_macro_managed_pytest_kwargs_target__raw_python_test",
 )
 
+py_macro_disabled_consumer_runner_target(
+    name = "py_macro_disabled_consumer_runner_target",
+    tags = ["consumer_tag"],
+)
+
+py_macro_disabled_consumer_runner_test(
+    name = "py_macro_disabled_consumer_runner_test",
+    target_under_test = ":py_macro_disabled_consumer_runner_target",
+)
+
+py_macro_disabled_managed_pytest_target(
+    name = "py_macro_disabled_managed_pytest_target",
+    tags = ["consumer_tag"],
+)
+
+py_macro_disabled_managed_pytest_test(
+    name = "py_macro_disabled_managed_pytest_test",
+    target_under_test = ":py_macro_disabled_managed_pytest_target",
+)
+
 py_macro_consumer_runner_no_rule_no_main_target_rule(
     name = "py_macro_consumer_runner_no_rule_no_main_target",
     tags = ["manual"],
@@ -616,6 +640,8 @@ test_suite(
         ":py_macro_consumer_runner_validation_helpers_test",
         ":py_macro_consumer_runner_wiring_test",
         ":py_macro_default_rule_detection_test",
+        ":py_macro_disabled_consumer_runner_test",
+        ":py_macro_disabled_managed_pytest_test",
         ":py_macro_env_none_wiring_test",
         ":py_macro_explicit_service_wiring_test",
         ":py_macro_fallback_payloads_test",

@@ -48,9 +48,11 @@ Shared runtime contract for every language:
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` remains a legacy explicit override, not
   the recommended mixed-runtime wiring path
 
-Shared `.bazelrc` forwarding for every runtime. The named config is the only
-user-facing enable switch; omitting it leaves metadata repositories on their
-disabled no-fetch stubs:
+Shared `.bazelrc` forwarding for every runtime. The named config is the shared
+metadata-fetch switch; omitting it leaves config-gated metadata repositories
+on their disabled no-fetch stubs. Go and Python also use it as the complete
+runtime opt-out. The Java, NodeJS, .NET, and Ruby companions do not yet promise
+a test-runtime kill switch when the config is omitted:
 
 ```text
 common:test-optimization --repo_env=DD_API_KEY
@@ -299,10 +301,17 @@ dd_topt_go_workspace_sync_repositories(
     service = "<datadog-service-name>",
     runtime_version = "<go-sdk-version>",
     module_path = "<go-module-path>",
-    enabled_by_env = True,
     require_git_metadata = True,
 )
 ```
+
+The public Go helper enables metadata gating by default. The single
+`--config=test-optimization` switch controls both metadata sync and the
+Orchestrion aliases; no per-target or per-repository enable attribute is needed.
+
+Python follows the same single-switch contract when its sync declaration uses
+`enabled_by_env = True`: without the config, the wrapper preserves the normal
+test runner but omits Test Optimization metadata, instrumentation, and payloads.
 
 If the environment can fetch Git repositories reliably, use
 `rules_go_fetch = "git"` and omit the archive attributes. If the environment
@@ -605,7 +614,6 @@ dd_topt_py_test(
     name = "pkg_py_test",
     py_test_rule = repo_py_test,
     runner_mode = "consumer_runner",
-    module_identifier = "example.python.pkg",
     srcs = glob(["test_*.py"]),
     deps = [
         ":pkg_lib",
@@ -622,6 +630,12 @@ does not prove pytest or ddtrace ran. When the runtime module path and Bazel
 package path identify the test, omit `module_identifier` and use the derived
 fallback. Keep an explicit `module_identifier` only for a documented
 repository-specific exception.
+
+The derived identifier selects a module-specific payload when that module is
+present in the synchronized metadata. If the backend has not materialized a
+matching module group yet, the selector intentionally uses the exact canonical
+payload bundle instead. Adding an explicit `module_identifier` does not create
+missing backend metadata, so it is not required for that fallback.
 
 ### WORKSPACE single-service
 
@@ -792,6 +806,7 @@ topt.test_optimization_multi_sync(
     services = ["py-service-a", "py-service-b"],
     runtime_name = "python",
     runtime_version = "3.12",
+    enabled_by_env = True,
 )
 
 use_repo(
@@ -874,6 +889,7 @@ topt.test_optimization_sync(
     service = "java-service",
     runtime_name = "java",
     runtime_version = "17",
+    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -952,6 +968,7 @@ topt.test_optimization_multi_sync(
     services = ["java-service-a", "java-service-b"],
     runtime_name = "java",
     runtime_version = "17",
+    enabled_by_env = True,
 )
 
 use_repo(
@@ -1045,6 +1062,7 @@ topt.test_optimization_sync(
     service = "nodejs-service",
     runtime_name = "nodejs",
     runtime_version = "22.22.0",
+    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -1118,6 +1136,7 @@ topt.test_optimization_multi_sync(
     services = ["nodejs-service-a", "nodejs-service-b"],
     runtime_name = "nodejs",
     runtime_version = "22.22.0",
+    enabled_by_env = True,
 )
 
 use_repo(
@@ -1227,6 +1246,7 @@ topt.test_optimization_sync(
     service = "dotnet-service",
     runtime_name = "dotnet",
     runtime_version = "8.0.100",
+    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -1302,6 +1322,7 @@ topt.test_optimization_multi_sync(
     services = ["dotnet-service-a", "dotnet-service-b"],
     runtime_name = "dotnet",
     runtime_version = "8.0.100",
+    enabled_by_env = True,
 )
 
 use_repo(
@@ -1391,6 +1412,7 @@ topt.test_optimization_sync(
     service = "ruby-service",
     runtime_name = "ruby",
     runtime_version = "3.3.9",
+    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -1466,6 +1488,7 @@ topt.test_optimization_multi_sync(
     services = ["ruby-service-a", "ruby-service-b"],
     runtime_name = "ruby",
     runtime_version = "3.3.9",
+    enabled_by_env = True,
 )
 
 use_repo(

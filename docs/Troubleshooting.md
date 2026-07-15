@@ -252,6 +252,7 @@ values automatically.
    test_optimization_sync.test_optimization_sync(
        name = "test_optimization_data",
        debug = True,  # Verbose logging
+       enabled_by_env = True,
    )
    ```
 

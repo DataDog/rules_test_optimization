@@ -60,7 +60,7 @@ def _build_go_single_repo_spec(
         test_management = True,
         flaky_tests = True,
         enabled = True,
-        enabled_by_env = False,
+        enabled_by_env = True,
         require_git_metadata = False,
         debug = False):
     """Build the complete sync spec for one Go service repository."""
@@ -103,7 +103,7 @@ def _build_go_multi_repo_specs(
         test_management = True,
         flaky_tests = True,
         enabled = True,
-        enabled_by_env = False,
+        enabled_by_env = True,
         require_git_metadata = False,
         debug = False):
     """Build the per-service sync specs for a multi-service Go tag."""
@@ -233,7 +233,7 @@ test_optimization_go_extension = module_extension(
             "test_management": attr.bool(default = True),
             "flaky_tests": attr.bool(default = True),
             "enabled": attr.bool(default = True),
-            "enabled_by_env": attr.bool(default = False),
+            "enabled_by_env": attr.bool(default = True),
             "require_git_metadata": attr.bool(default = False),
             "debug": attr.bool(default = False),
         }),

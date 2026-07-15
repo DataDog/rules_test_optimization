@@ -1247,6 +1247,7 @@ def _export_bzl_manifest_path_test(ctx):
         sanitized_ruby_module_path = "apps_ruby_service",
         ruby_module_included = False,
     )
+    asserts.true(env, '"enabled": True' in content)
     asserts.true(env, "\"service_name\": \"service-name\"" in content)
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
     asserts.true(env, "\"runtimes\": {" in content)

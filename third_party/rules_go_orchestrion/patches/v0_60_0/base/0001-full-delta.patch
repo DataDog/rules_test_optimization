@@ -3530,6 +3530,34 @@ index 0000000..a3f4e39
 +    },
 +    doc = "Groups Orchestrion pin files without treating every runtime data file as a build input.",
 +)
+diff --git a/go/private/repositories.bzl b/go/private/repositories.bzl
+index 94adead..2789520 100644
+--- a/go/private/repositories.bzl
++++ b/go/private/repositories.bzl
+@@ -17,6 +17,7 @@
+ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+ load("//go/private:common.bzl", "MINIMUM_BAZEL_VERSION")
+ load("//go/private:nogo.bzl", "DEFAULT_NOGO", "go_register_nogo")
++load("//go/private/orchestrion:extensions.bzl", "orchestrion_empty_repository")
+ load("//go/private:polyfill_bazel_features.bzl", "polyfill_bazel_features")
+ load("//go/private/skylib/lib:versions.bzl", "versions")
+ load("//proto:gogo.bzl", "gogo_special_proto")
+@@ -39,6 +40,15 @@ def go_rules_dependencies(force = False):
+     if getattr(native, "bazel_version", None):
+         versions.check(MINIMUM_BAZEL_VERSION, bazel_version = native.bazel_version)
+ 
++    # Keep the stable Orchestrion repository mapping available to ordinary
++    # WORKSPACE consumers. Test Optimization consumers declare the real tool
++    # repository before calling go_rules_dependencies(), so this fallback does
++    # not replace or fetch it.
++    _maybe(
++        orchestrion_empty_repository,
++        name = "rules_go_orchestrion_tool",
++    )
++
+     if force:
+         wrapper = _always
+     else:
 diff --git a/go/private/rules/library.bzl b/go/private/rules/library.bzl
 index ae1ce57..e195072 100644
 --- a/go/private/rules/library.bzl

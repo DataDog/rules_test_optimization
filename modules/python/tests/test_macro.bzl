@@ -282,6 +282,11 @@ def _single_service_topt_data():
         },
     }
 
+def _disabled_single_service_topt_data():
+    disabled = dict(_single_service_topt_data())
+    disabled["enabled"] = False
+    return disabled
+
 def _multi_service_topt_data():
     selected = _single_service_topt_data()
     not_selected = dict(selected)
@@ -483,6 +488,36 @@ def py_macro_managed_pytest_kwargs_target(name, tags = None):
         tags = tags,
     )
 
+def py_macro_disabled_consumer_runner_target(name, tags = None):
+    """Disabled sync preserves the consumer runner without instrumentation."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _disabled_single_service_topt_data(),
+        py_test_rule = _py_test_kwargs_capture_macro,
+        runner_mode = "consumer_runner",
+        srcs = ["consumer_runner_main.py"],
+        data = [":test_macro.bzl"],
+        dd_requirements = ["pytest"],
+        env = select({
+            "//conditions:default": {
+                "CUSTOM_ENV": "preserved",
+                "DD_CIVISIBILITY_ENABLED": "true",
+            },
+        }),
+        args = ["-k", "consumer"],
+        tags = tags,
+    )
+
+def py_macro_disabled_managed_pytest_target(name, tags = None):
+    """Disabled sync keeps the managed pytest runner but omits instrumentation."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _disabled_single_service_topt_data(),
+        py_test_rule = _py_test_kwargs_capture_macro,
+        srcs = ["consumer_runner_main.py"],
+        tags = tags,
+    )
+
 def _py_macro_consumer_runner_no_rule_no_main_target_impl(_ctx):
     dd_topt_py_test(
         name = "should_not_be_created",
@@ -673,6 +708,41 @@ def _py_macro_managed_pytest_kwargs_test_impl(ctx):
     )
     return analysistest.end(env)
 
+def _assert_no_test_optimization_wiring(env, captured):
+    asserts.equals(env, "false", captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
+    asserts.equals(env, None, captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE"))
+    asserts.equals(env, None, captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, None, captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"))
+    for label in captured.data_labels:
+        asserts.false(env, "topt_payloads" in label)
+        asserts.false(env, ".testoptimization" in label)
+
+def _py_macro_disabled_consumer_runner_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    captured = analysistest.target_under_test(env)[ToptPyKwargsCaptureInfo]
+    _assert_no_test_optimization_wiring(env, captured)
+    asserts.equals(env, "preserved", captured.env.get("CUSTOM_ENV"))
+    asserts.true(env, captured.saw_args)
+    asserts.false(env, captured.saw_imports)
+    asserts.false(env, captured.saw_main)
+    asserts.false(env, captured.saw_run_pytest)
+    asserts.equals(env, ["pytest"], captured.dd_requirements)
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.false(env, "manual" in captured.tags)
+    return analysistest.end(env)
+
+def _py_macro_disabled_managed_pytest_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    captured = analysistest.target_under_test(env)[ToptPyKwargsCaptureInfo]
+    _assert_no_test_optimization_wiring(env, captured)
+    asserts.true(env, captured.saw_args)
+    asserts.true(env, captured.saw_imports)
+    asserts.true(env, captured.saw_main)
+    asserts.true(env, captured.saw_run_pytest)
+    asserts.false(env, "manual" in captured.tags)
+    return analysistest.end(env)
+
 def _py_macro_consumer_runner_no_rule_no_main_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "requires a consumer-owned Python test runner")
@@ -727,6 +797,12 @@ py_macro_consumer_runner_select_env_test = analysistest.make(
 )
 py_macro_managed_pytest_kwargs_test = analysistest.make(
     _py_macro_managed_pytest_kwargs_test_impl,
+)
+py_macro_disabled_consumer_runner_test = analysistest.make(
+    _py_macro_disabled_consumer_runner_test_impl,
+)
+py_macro_disabled_managed_pytest_test = analysistest.make(
+    _py_macro_disabled_managed_pytest_test_impl,
 )
 py_macro_consumer_runner_no_rule_no_main_failure_test = analysistest.make(
     _py_macro_consumer_runner_no_rule_no_main_failure_test_impl,

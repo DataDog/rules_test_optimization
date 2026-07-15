@@ -941,17 +941,14 @@ load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
 load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
 load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_workspace_sync_repositories")
 
-go_rules_dependencies()
-go_register_toolchains(version = "${GO_VERSION}")
-gazelle_dependencies()
-EOF
-
-  cat >> "$ws_dir/WORKSPACE" <<EOF
-
 dd_topt_go_orchestrion_tool_repo(
     version = "${ORCHESTRION_VERSION}",
     dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
 )
+
+go_rules_dependencies()
+go_register_toolchains(version = "${GO_VERSION}")
+gazelle_dependencies()
 
 dd_topt_go_workspace_sync_repositories(
     name = "test_optimization_data",
@@ -1272,6 +1269,53 @@ run_disabled_no_fetch_smoke() {
   fi
 }
 
+run_rules_go_default_stub_smoke() {
+  local ws_dir="$WORKSPACE_ROOT/rules-go-default-stub"
+  local rules_go_fork_bzl
+  local output
+
+  rules_go_fork_bzl="$(bzl_quote "$rules_go_fork_abs")"
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  cat > "$ws_dir/WORKSPACE" <<EOF
+workspace(name = "rules_go_default_orchestrion_stub")
+
+load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+
+local_repository(
+    name = "io_bazel_rules_go",
+    path = ${rules_go_fork_bzl},
+)
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_rules_dependencies")
+
+go_rules_dependencies()
+EOF
+  cat > "$ws_dir/BUILD.bazel" <<'EOF'
+filegroup(
+    name = "probe",
+    srcs = [],
+)
+EOF
+
+  output="$(
+    (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+      "${BAZEL_EXTRA_ARGS[@]}" \
+      --noenable_bzlmod \
+      --enable_workspace \
+      @rules_go_orchestrion_tool//:orchestrion \
+      --output=files
+    )
+  )"
+  if [[ -n "$output" ]]; then
+    echo "error: rules_go default Orchestrion stub exposed files" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+}
+
 run_windows_enabled_smoke() {
   local ws_dir="$WORKSPACE_ROOT/windows-enabled"
   local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
@@ -1370,6 +1414,7 @@ run_expected_failure() {
 }
 
 mkdir -p "$WORKSPACE_ROOT"
+run_rules_go_default_stub_smoke
 
 if [[ "$WINDOWS_DISABLED_SMOKE_ONLY" == "1" || "$ORCHESTRION_DISABLED_SENTINEL" == "1" ]]; then
   ORCHESTRION_VERSION="$ORCHESTRION_DISABLED_SENTINEL_VERSION"

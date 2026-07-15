@@ -8,6 +8,7 @@ load(
     ":test_extension.bzl",
     "go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test",
     "go_single_spec_propagates_non_default_enablement_and_flaky_tests_test",
+    "go_specs_default_to_config_gated_test",
 )
 load(
     ":test_macro.bzl",
@@ -123,6 +124,7 @@ load(
     ":test_workspace_helpers.bzl",
     "go_workspace_multi_specs_test",
     "go_workspace_single_specs_test",
+    "go_workspace_specs_default_to_config_gated_test",
     "orchestrion_call_spec_test",
 )
 
@@ -145,6 +147,12 @@ go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test(
     timeout = "short",
 )
 
+go_specs_default_to_config_gated_test(
+    name = "go_specs_default_to_config_gated_test",
+    size = "small",
+    timeout = "short",
+)
+
 go_workspace_single_specs_test(
     name = "go_workspace_single_specs_test",
     size = "small",
@@ -153,6 +161,12 @@ go_workspace_single_specs_test(
 
 go_workspace_multi_specs_test(
     name = "go_workspace_multi_specs_test",
+    size = "small",
+    timeout = "short",
+)
+
+go_workspace_specs_default_to_config_gated_test(
+    name = "go_workspace_specs_default_to_config_gated_test",
     size = "small",
     timeout = "short",
 )
@@ -168,6 +182,7 @@ test_suite(
     tests = [
         ":go_workspace_multi_specs_test",
         ":go_workspace_single_specs_test",
+        ":go_workspace_specs_default_to_config_gated_test",
         ":orchestrion_call_spec_test",
     ],
 )
@@ -725,9 +740,11 @@ test_suite(
         ":go_macro_test_optimization_public_wrapper_mode_test",
         ":go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test",
         ":go_single_spec_propagates_non_default_enablement_and_flaky_tests_test",
+        ":go_specs_default_to_config_gated_test",
         ":go_stub_includes_manifest_in_files_test",
         ":go_workspace_multi_specs_test",
         ":go_workspace_single_specs_test",
+        ":workspace_helpers_tests",
         ":has_go_mod_pin_test",
         ":has_package_local_go_mod_test",
         ":normalize_user_data_handles_none_test",

@@ -117,14 +117,22 @@ or merge it locally instead of vendoring a second complete `rules_go` tree.
 
 Use this checklist before your first CI rollout:
 
-For opt-in onboarding in every language, the named `test-optimization` config
-must include
-`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`, and the
-sync declaration must set `enabled_by_env = True`. Go additionally needs
+For config-gated metadata resolution in every language, the named
+`test-optimization` config must include
+`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. The
+public Go bootstrap helpers apply metadata gating by default; direct use of the
+low-level core sync API must opt into `enabled_by_env = True`. Go additionally needs
 `build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`
 for Bzlmod, or the same flag with `@io_bazel_rules_go` for WORKSPACE.
-Removing `--config=test-optimization` disables metadata resolution and, for Go,
-the real Orchestrion aliases; no second Test Optimization bool flag is needed.
+Removing `--config=test-optimization` disables metadata resolution for every
+config-gated sync. Go and Python additionally implement the complete runtime
+opt-out described below. Other companions currently use this config as a
+metadata-fetch gate; do not infer a test-runtime kill switch from it.
+
+When a config-gated Python sync is disabled, `dd_topt_py_test` keeps the
+consumer's normal runner and test arguments, omits Test Optimization metadata
+and payload wiring, and applies the CI Visibility runtime kill switch
+automatically. No per-target disable attribute is required.
 
 1. Keep the generated repo name as `test_optimization_data` (or consistently replace it in labels/commands if you choose another name).
 2. Forward sync metadata environment variable names in `.bazelrc` under a named
@@ -253,6 +261,7 @@ test_optimization_sync = use_extension(
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
     service = "my-service",  # or set DD_SERVICE via --repo_env
+    enabled_by_env = True,
 )
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
@@ -497,7 +506,6 @@ dd_topt_py_test(
     name = "pkg_py_test",
     py_test_rule = my_repo_pytest_wrapper,
     runner_mode = "consumer_runner",
-    module_identifier = "example.python.pkg",
     srcs = glob(["test_*.py"]),
     deps = [
         ":pkg_lib",
@@ -932,6 +940,7 @@ topt_go.test_optimization_sync(
     service = "go-service",
     runtime_name = "go",
     runtime_version = "1.25.0",
+    enabled_by_env = True,
 )
 
 topt_ruby = use_extension(
@@ -943,6 +952,7 @@ topt_ruby.test_optimization_sync(
     service = "ruby-service",
     runtime_name = "ruby",
     runtime_version = "3.3.9",
+    enabled_by_env = True,
 )
 
 use_repo(topt_go, "test_optimization_data_go")
@@ -997,6 +1007,7 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 test_optimization_sync(
     name = "test_optimization_data",
     service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
+    enabled_by_env = True,
 )
 ```
 

@@ -16,7 +16,7 @@ load(
     "build_go_workspace_sync_specs_for_tests",
 )
 
-def _assert_sync_spec(env, spec, name, service):
+def _assert_sync_spec(env, spec, name, service, expected_enabled_by_env):
     asserts.equals(env, name, spec["name"])
     asserts.equals(env, name, spec["repo_name"])
     asserts.equals(env, service, spec["service"])
@@ -26,7 +26,7 @@ def _assert_sync_spec(env, spec, name, service):
     asserts.equals(env, "example.com/workspace", spec["runtime_module_path"])
     asserts.equals(env, "custom_topt", spec["out_dir"])
     asserts.equals(env, False, spec["enabled"])
-    asserts.equals(env, True, spec["enabled_by_env"])
+    asserts.equals(env, expected_enabled_by_env, spec["enabled_by_env"])
     asserts.equals(env, 11, spec["http_connect_timeout_seconds"])
     asserts.equals(env, 22, spec["http_max_time_seconds"])
     asserts.equals(env, 3, spec["http_retry_attempts"])
@@ -46,7 +46,7 @@ def _go_workspace_single_specs_test(ctx):
         runtime_version = "1.25.9",
         module_path = "example.com/workspace",
         enabled = False,
-        enabled_by_env = True,
+        enabled_by_env = False,
         runtime_arch = "arm64",
         out_dir = "custom_topt",
         http_connect_timeout_seconds = 11,
@@ -61,7 +61,7 @@ def _go_workspace_single_specs_test(ctx):
         debug = True,
     )
     asserts.equals(env, 1, len(result["sync_specs"]))
-    _assert_sync_spec(env, result["sync_specs"][0], "test_optimization_data_go", "go-service")
+    _assert_sync_spec(env, result["sync_specs"][0], "test_optimization_data_go", "go-service", False)
     asserts.equals(env, None, result["aggregate_spec"])
     return unittest.end(env)
 
@@ -73,7 +73,7 @@ def _go_workspace_multi_specs_test(ctx):
         runtime_version = "1.25.9",
         module_path = "example.com/workspace",
         enabled = False,
-        enabled_by_env = True,
+        enabled_by_env = False,
         runtime_arch = "arm64",
         out_dir = "custom_topt",
         http_connect_timeout_seconds = 11,
@@ -103,7 +103,19 @@ def _go_workspace_multi_specs_test(ctx):
             result["sync_specs"][i],
             result["aggregate_spec"]["repo_names"][i],
             ["go-service-a", "go-service-a", "go-service-b"][i],
+            False,
         )
+    return unittest.end(env)
+
+def _go_workspace_specs_default_to_config_gated_test(ctx):
+    env = unittest.begin(ctx)
+    result = build_go_workspace_sync_specs_for_tests(
+        name = "test_optimization_data_go",
+        service = "go-service",
+        runtime_version = "1.25.9",
+        module_path = "example.com/workspace",
+    )
+    asserts.equals(env, True, result["sync_specs"][0]["enabled_by_env"])
     return unittest.end(env)
 
 def _orchestrion_call_spec_test(ctx):
@@ -131,4 +143,5 @@ def _orchestrion_call_spec_test(ctx):
 
 go_workspace_single_specs_test = unittest.make(_go_workspace_single_specs_test)
 go_workspace_multi_specs_test = unittest.make(_go_workspace_multi_specs_test)
+go_workspace_specs_default_to_config_gated_test = unittest.make(_go_workspace_specs_default_to_config_gated_test)
 orchestrion_call_spec_test = unittest.make(_orchestrion_call_spec_test)

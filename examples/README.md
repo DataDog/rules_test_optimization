@@ -485,6 +485,7 @@ topt_go.test_optimization_sync(
     service = "go-service",
     runtime_name = "go",
     runtime_version = "1.25.0",
+    enabled_by_env = True,
 )
 
 topt_py = use_extension(
@@ -496,6 +497,7 @@ topt_py.test_optimization_sync(
     service = "py-service",
     runtime_name = "python",
     runtime_version = "3.12",
+    enabled_by_env = True,
 )
 
 use_repo(topt_go, "test_optimization_data_go")

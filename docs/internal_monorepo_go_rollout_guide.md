@@ -87,8 +87,8 @@ SHA256, and archive prefix generated from the same published commit.
   ```
 
   Removing `--config=test-optimization` disables both metadata repositories
-  and Orchestrion aliases. `enabled_by_env = True` controls metadata only; it
-  does not dynamically control Orchestrion repository declaration.
+  and Orchestrion aliases. The public Go helpers enable metadata gating by
+  default; it does not dynamically control Orchestrion repository declaration.
 
 ## Bootstrap Flow
 
@@ -115,6 +115,16 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --expected-target "//path/to/runtime/package:go_default_test" \
   --control-target "//path/to/plain/control:go_default_test"
 ```
+
+### Updating an existing managed config
+
+When upgrading from the current release, rerun the same bootstrap with
+`--write-bazelrc`. It replaces the content between the Datadog-managed markers
+with the current single-config contract, preserves all content outside those
+markers, and is idempotent. This adds both
+`DD_TEST_OPTIMIZATION_ENABLED=1` and the existing `rules_go` Orchestrion flag to
+the named config; consumers do not need a separate migration mode or a second
+bool flag.
 
 If the repository owns checked-in `go_repository(...)` declarations, run the
 repository-owned refresh command after targeted Go module sync and rerun

@@ -311,6 +311,11 @@ def check_selection(registry: ForkRegistry, selection: ForkSelection) -> int:
     return 0
 
 
+def render_upstream_ids(upstream_ids: list[str]) -> bytes:
+    """Render shell-consumable upstream ids with platform-independent LF endings."""
+    return "".join("%s\n" % upstream_id for upstream_id in upstream_ids).encode("utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse CLI arguments and run materializer commands."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -341,8 +346,7 @@ def main(argv: list[str] | None = None) -> int:
             print(repo_relative_path(registry.repo_root, selection.tree_path))
             return 0
         if args.command == "list-upstreams":
-            for upstream_id in registry.upstream_ids():
-                print(upstream_id)
+            sys.stdout.buffer.write(render_upstream_ids(registry.upstream_ids()))
             return 0
         if args.command == "check":
             selections = registry.selections() if args.all else [resolve_selection(registry, args)]

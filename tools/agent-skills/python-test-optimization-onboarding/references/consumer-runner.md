@@ -44,7 +44,6 @@ dd_topt_py_test(
     name = "pkg_py_test",
     py_test_rule = repo_pytest_wrapper,
     runner_mode = "consumer_runner",
-    module_identifier = "example.python.pkg",
     srcs = glob(["test_*.py"]),
     deps = [
         ":pkg_lib",

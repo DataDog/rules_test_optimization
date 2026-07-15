@@ -172,6 +172,11 @@ func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
 			t.Fatalf("workspace snippet missing %q:\n%s", want, got)
 		}
 	}
+	toolRepoCall := strings.Index(got, "\ndd_topt_go_orchestrion_tool_repo(")
+	dependenciesCall := strings.Index(got, "\ngo_rules_dependencies()\n")
+	if toolRepoCall < 0 || dependenciesCall < 0 || toolRepoCall > dependenciesCall {
+		t.Fatalf("workspace snippet must declare the real Orchestrion repository before rules_go installs its fallback:\n%s", got)
+	}
 }
 
 func TestWorkspaceSnippetFallsBackToRulesGoCommit(t *testing.T) {
@@ -243,7 +248,6 @@ func TestWorkspaceModeSnippetIncludesSyncAndBaseVariant(t *testing.T) {
 		`name = "test_optimization_data_worker"`,
 		`service = "worker"`,
 		`runtime_version = "1.25.9"`,
-		`enabled_by_env = True`,
 		`require_git_metadata = True`,
 	} {
 		if !strings.Contains(got, want) {
@@ -1190,6 +1194,14 @@ test:old --test_env=DD_GIT_BRANCH=main
 	text := string(content)
 	if strings.Contains(text, "--test_env=DD_GIT_BRANCH") || strings.Count(text, bazelrcBlockStart) != 1 {
 		t.Fatalf("expected old managed block to be replaced:\n%s", text)
+	}
+	for _, want := range []string{
+		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`,
+		`build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("migrated managed block missing %q:\n%s", want, text)
+		}
 	}
 }
 

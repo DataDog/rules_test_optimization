@@ -188,7 +188,7 @@ class BootstrapSnippetTest(unittest.TestCase):
         self.assertIn('requirement("pytest")', snippet)
 
     def test_consumer_runner_snippet_contains_module_identifier(self) -> None:
-        """Consumer runner examples preserve module selection guidance."""
+        """An explicit module-selection exception is preserved in output."""
         args = _args(
             "--runner-mode=consumer_runner",
             "--module-identifier=example.python.app",
@@ -199,6 +199,17 @@ class BootstrapSnippetTest(unittest.TestCase):
         self.assertIn('runner_mode = "consumer_runner"', snippet)
         self.assertIn('module_identifier = "example.python.app"', snippet)
         self.assertIn("py_test_rule = dd_py_test", snippet)
+
+    def test_consumer_runner_snippet_uses_derived_module_identifier_by_default(self) -> None:
+        """The normal onboarding path does not require per-target identifiers."""
+        args = _args(
+            "--runner-mode=consumer_runner",
+            "--py-test-rule-load-label=//tools:python.bzl",
+            "--py-test-rule-symbol=dd_py_test",
+        )
+        snippet = main.render_test_snippet(args)
+        self.assertNotIn("module_identifier", snippet)
+        self.assertIn('srcs = ["test_example.py"]', snippet)
 
     def test_write_modes_are_idempotent_and_preserve_user_content(self) -> None:
         """Managed block writes preserve unmanaged content and replace only generated content."""
@@ -214,6 +225,28 @@ class BootstrapSnippetTest(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertIn("# user content", second)
             self.assertEqual(1, second.count(main.BEGIN_MARKER))
+
+    def test_write_bazelrc_upgrades_an_older_managed_block(self) -> None:
+        """Re-running onboarding upgrades managed config without touching user content."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".bazelrc"
+            path.write_text(
+                "# user content\n"
+                f"{main.BEGIN_MARKER}\n"
+                "common:test-optimization --repo_env=DD_API_KEY\n"
+                f"{main.END_MARKER}\n",
+                encoding="utf-8",
+            )
+            args = _args("--write-bazelrc", f"--bazelrc-path={path}")
+            main._validate_args(args)
+            main.write_outputs(args)
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("# user content", content)
+            self.assertEqual(1, content.count(main.BEGIN_MARKER))
+            self.assertIn(
+                "common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1",
+                content,
+            )
 
     def test_write_targets_creates_parent_directories(self) -> None:
         """Target write mode creates lightweight packages on demand."""

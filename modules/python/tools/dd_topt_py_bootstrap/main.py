@@ -349,9 +349,12 @@ def render_test_snippet(args: argparse.Namespace) -> str:
     if args.runner_mode == "consumer_runner":
         load_line = "# load(\"//path/to:python_rules.bzl\", \"your_py_test_rule\")"
         rule_ref = "your_py_test_rule"
+        module_identifier_line = ""
         if args.py_test_rule_load_label and args.py_test_rule_symbol:
             load_line = f"load({_quote(args.py_test_rule_load_label)}, {_quote(args.py_test_rule_symbol)})"
             rule_ref = args.py_test_rule_symbol
+        if args.module_identifier:
+            module_identifier_line = f"    module_identifier = {_quote(args.module_identifier)},\n"
         return dedent(
             f"""
             load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
@@ -363,8 +366,7 @@ def render_test_snippet(args: argparse.Namespace) -> str:
                 topt_data = topt_data,
                 runner_mode = "consumer_runner",
                 py_test_rule = {rule_ref},
-                module_identifier = {_quote(args.module_identifier or args.runtime_module_path)},
-                srcs = ["test_example.py"],
+            {module_identifier_line}    srcs = ["test_example.py"],
                 deps = [
                     requirement("ddtrace"),
                     requirement("pytest"),
