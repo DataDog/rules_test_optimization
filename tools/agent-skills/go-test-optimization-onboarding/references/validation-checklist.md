@@ -91,7 +91,7 @@ cat "$(bazel info output_base)/external/test_optimization_data_<service_key>/exp
 ## Test, Doctor, Dry-Run, Upload
 
 For the simplest customer troubleshooting request after tests have run, use
-`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` with any
+`bazel run --config=test-optimization //:dd_test_optimization_doctor -- --support-bundle=<path>` with any
 matching BEP/artifact flags. Prefer the CI wrapper when the repository can
 vendor the helper directory and you need uploader dry-run or upload coverage:
 

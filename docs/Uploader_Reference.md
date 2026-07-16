@@ -48,6 +48,11 @@ both metadata resolution and the Orchestrion analysis aliases; it does not
 require a second bool flag. In WORKSPACE repositories, use the apparent
 `rules_go` repository name configured by that workspace.
 
+Config-gated Python consumers use only the
+`DD_TEST_OPTIMIZATION_ENABLED=1` entry and omit the Go-specific Orchestrion
+line. Java, NodeJS, .NET, and Ruby retain their existing enablement contract in
+this release.
+
 ```bash
 # Vendor the full tools/test_optimization/ helper directory, or set
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
@@ -321,7 +326,7 @@ For first-pass support, the doctor can create a doctor-only bundle without the
 wrapper:
 
 ```bash
-bazel run //:dd_test_optimization_doctor -- \
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
   --support-bundle .topt/reports/dd-test-optimization-support.zip
 ```
 

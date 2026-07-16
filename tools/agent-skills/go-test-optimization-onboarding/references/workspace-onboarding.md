@@ -386,7 +386,7 @@ test sandbox.
 
 Do not add `FETCH_SALT` to the normal config. Use it only in a separate,
 explicit force-refresh command such as
-`bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` when rollout
+`bazel sync --config=test-optimization --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` when rollout
 owners intentionally need fresh backend metadata.
 
 Never add:

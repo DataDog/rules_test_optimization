@@ -49,15 +49,16 @@ SHA256, and archive prefix generated from the same published commit.
 
 - Use a commit that is reachable from `origin/main`; never publish feature-branch
   SHAs into consumer snippets.
-- Configure `go_orchestrion_tool_repo(...)` with the current supported
+- Configure `dd_topt_go_orchestrion_tool_repo(...)` with the current supported
   Orchestrion version and the current supported `dd-trace-go` Bazel-mode
-  version.
-- Configure `test_optimization_sync(...)` with:
+  version. Do not load the underlying `rules_go` repository rule directly.
+- Configure `dd_topt_go_workspace_sync_repositories(...)` with:
   - `service`
-  - `runtime_name = "go"`
   - `runtime_version`
-  - `runtime_module_path`
+  - `module_path`
   - `require_git_metadata = True`
+  The public helper supplies `runtime_name = "go"` and config-gated metadata
+  sync by default.
 - Keep repository-specific scheduling, Docker, tags, platform constraints, and
   flaky policy in the repository-local wrapper layer.
 - Set `orchestrion_mode = "test_optimization"` in the optimized wrapper for
@@ -88,7 +89,7 @@ SHA256, and archive prefix generated from the same published commit.
 
   Removing `--config=test-optimization` disables both metadata repositories
   and Orchestrion aliases. The public Go helpers enable metadata gating by
-  default; it does not dynamically control Orchestrion repository declaration.
+  default; they do not dynamically control Orchestrion repository declaration.
 
 ## Bootstrap Flow
 

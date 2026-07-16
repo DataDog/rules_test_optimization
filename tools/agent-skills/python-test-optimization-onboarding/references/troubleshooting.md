@@ -82,7 +82,7 @@ and run those package-local labels before changing instrumentation.
 
 If metadata refetches repeatedly, check whether `.bazelrc` or scripts set
 `FETCH_SALT` by default. It should appear only in an explicit
-`bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` force-refresh
+`bazel sync --config=test-optimization --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` force-refresh
 command.
 
 ## Remote Outputs Missing
@@ -116,7 +116,7 @@ Then re-run tests before running doctor and uploader.
 ## Diagnostic Reports
 
 When logs are long or ambiguous, first ask for a doctor-only support bundle with
-`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
+`bazel run --config=test-optimization //:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
 matching BEP/artifact flags. Use the CI wrapper bundle when uploader dry-run or
 upload results matter. If a repository cannot use either bundle mode, collect
 `doctor-report.json`, `uploader-dry-run-report.json`, optional

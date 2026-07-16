@@ -26,6 +26,9 @@ This product includes software developed at Datadog
 
 - Canonical full-repo command:
   - `./bazelw test //...`
+  - On macOS with Bazel 8.5.1, append
+    `--noexperimental_split_xml_generation`. The split XML helper can terminate
+    with `SIGSEGV` independently of the test target.
 
 - Core module tests (repo root):
   - `./bazelw test //tools/...`
@@ -73,13 +76,20 @@ This product includes software developed at Datadog
     they cover single-context, explicit override, multi-context repo selection,
     and no-match fallback behavior.
 - Test Optimization bootstrap config:
-  - Keep `--config=test-optimization` as the only user-facing switch. The
-    config must set both `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`
-    and the existing `rules_go` Orchestrion `enabled=true` build setting.
-  - Omitting the config is the documented opt-out: metadata repositories use
-    their disabled stubs when `enabled_by_env = True`, and the stable
-    Orchestrion aliases select local empty targets.
-  - Do not add a consumer-local Test Optimization bool flag or a second
+  - For config-gated Go and Python onboarding, keep
+    `--config=test-optimization` as the only user-facing switch. The shared
+    config entry is
+    `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`.
+  - Go additionally sets the existing `rules_go` Orchestrion `enabled=true`
+    build setting. Python-only consumers must not declare that Go-only label.
+  - Omitting the config is the documented complete opt-out for Go and Python:
+    metadata repositories use disabled stubs when `enabled_by_env = True`, Go
+    aliases select local empty targets, and Python keeps the consumer runner
+    without Test Optimization wiring.
+  - Other companions retain their existing enablement contract. Do not add
+    `enabled_by_env = True` to their sync repositories until their runtime
+    wrapper implements and tests the disabled export contract.
+  - Do not add a consumer-local Test Optimization bool flag or a second Go
     Orchestrion repository chooser.
 - Go consumer integration harnesses:
   - Bzlmod default smoke:

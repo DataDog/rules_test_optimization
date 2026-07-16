@@ -47,7 +47,7 @@ Keep the RFC contract intact:
   `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir`, and configure
   wrapper `--support-bundle` or `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` for
   complete escalation artifacts. For first-pass customer troubleshooting after
-  tests have run, ask for `bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>`
+  tests have run, ask for `bazel run --config=test-optimization //:dd_test_optimization_doctor -- --support-bundle=<path>`
   with any matching BEP/artifact flags.
   For bundle triage, inspect `summary.md`, `diagnostics.json`,
   `reports/doctor-report.json`, optional uploader reports, and
@@ -116,7 +116,7 @@ Every successful Python onboarding should end with these pieces:
   support bundle for the simplest initial customer request. Keep individual
   reports for local inspection and manual fallback flows.
 - `FETCH_SALT` is used only for a separate, explicit
-  `bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
+  `bazel sync --config=test-optimization --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 

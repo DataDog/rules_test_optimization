@@ -121,7 +121,8 @@ For config-gated Go and Python onboarding, the named `test-optimization`
 config must include
 `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. The
 public Go bootstrap helpers apply metadata gating by default; direct use of the
-low-level core sync API must opt into `enabled_by_env = True`. Go additionally needs
+low-level core sync API in a config-gated Go or Python setup must opt into
+`enabled_by_env = True`. Go additionally needs
 `build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`
 for Bzlmod, or the same flag with `@io_bazel_rules_go` for WORKSPACE.
 Removing `--config=test-optimization` provides the complete metadata and
@@ -260,10 +261,14 @@ test_optimization_sync = use_extension(
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
     service = "my-service",  # or set DD_SERVICE via --repo_env
-    enabled_by_env = True,
 )
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
+
+The low-level core API remains always enabled by default. Set
+`enabled_by_env = True` only when this repository is part of the config-gated
+Go or Python onboarding described below. Other companions retain their current
+enablement contract.
 
 ```bzl
 # BUILD.bazel (workspace root)
@@ -1005,9 +1010,12 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 test_optimization_sync(
     name = "test_optimization_data",
     service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
-    enabled_by_env = True,
 )
 ```
+
+This low-level WORKSPACE example preserves the always-enabled core default.
+Config-gated Go and Python consumers set `enabled_by_env = True` through their
+language-specific setup; the other companions remain unchanged.
 
 For Go in WORKSPACE mode, keep the core and Go companion as separate external
 repositories and load `dd_topt_go_test` from
@@ -1428,14 +1436,14 @@ bep_json="$(mktemp "${TMPDIR:-/tmp}/dd-topt-bep.XXXXXX.json")"
 artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
 bazel test --config=test-optimization --build_event_json_file="$bep_json" //...
 
-bazel run //:dd_test_optimization_doctor -- \
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
   --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
   --artifact-source=bep \
   --artifact-staging-dir="$artifact_staging_dir"
 
-bazel run //:dd_upload_payloads -- \
+bazel run --config=test-optimization //:dd_upload_payloads -- \
   --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
@@ -1504,7 +1512,7 @@ selective remote download flags, enable remote BEP artifact staging. Plain
 HTTP/HTTPS `outputs.zip` BEP carriers do not need a downloader:
 
 ```bash
-bazel run //:dd_upload_payloads -- \
+bazel run --config=test-optimization //:dd_upload_payloads -- \
   --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
@@ -1908,9 +1916,9 @@ Fast checks before diving deep:
 - Verify sync env forwarding (`DD_API_KEY`, `DD_SITE`, and required
   `DD_GIT_*`) through `--repo_env`, not `--test_env`.
 - Force metadata refresh only when you intentionally need fresh backend state:
-  - `bazel sync --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"`
+  - `bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"`
   - If Bazel reports WORKSPACE-disabled sync errors, retry with:
-    `bazel sync --enable_workspace --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"`
+    `bazel sync --enable_workspace --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"`
   - Do not add `FETCH_SALT` to normal `bazel test`, doctor, or uploader
     commands.
 - Confirm payload files exist under `bazel-testlogs/*/test.outputs/`, or that

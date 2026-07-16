@@ -371,6 +371,11 @@ For Go onboarding, the generated block also contains
 `--config=<config>` is the single user-facing switch: removing it disables
 both metadata resolution and the real Orchestrion aliases.
 
+Config-gated Python onboarding uses the same
+`DD_TEST_OPTIMIZATION_ENABLED=1` repository environment entry but does not use
+the Go-only Orchestrion setting. The Java, NodeJS, .NET, and Ruby companions
+retain their existing enablement contract in this release.
+
 ## How data is fetched
 
 The sync rule executes HTTP requests with timeouts/retries to:

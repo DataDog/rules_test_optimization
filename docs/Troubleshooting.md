@@ -10,27 +10,36 @@ This product includes software developed at Datadog
 
 Examples below assume the generated repository is named
 `test_optimization_data`. If you used a different `name`, replace labels and
-`bazel sync --only=<repo_name>` accordingly.
+repository names accordingly. For config-gated Go and Python repositories,
+include `--config=test-optimization` in sync, test, doctor, and uploader
+commands. Other companions retain their current activation contract.
 
 If Bazel reports that sync requires WORKSPACE support, add
 `--enable_workspace` to sync commands in this document.
 
 ## Test Optimization config and disabled mode
 
-`--config=test-optimization` is the single user-facing enablement switch. Its
-`.bazelrc` entries should set both the metadata repository environment and the
-existing `rules_go` Orchestrion flag:
+For config-gated Go and Python onboarding,
+`--config=test-optimization` is the single user-facing enablement switch. Both
+languages set the metadata repository environment:
 
 ```bazelrc
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+```
+
+Go additionally sets the existing `rules_go` Orchestrion flag:
+
+```bazelrc
 build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
 When the config is omitted, repositories configured with
-`enabled_by_env = True` generate the documented no-fetch stubs and the stable
-Orchestrion aliases select local empty targets. Do not add a second
-consumer-local Test Optimization bool flag. For WORKSPACE, replace
-`@rules_go` with the apparent repository name used by that workspace.
+`enabled_by_env = True` generate the documented no-fetch stubs. Go aliases
+select local empty targets; Python keeps the normal consumer runner without
+Test Optimization metadata or payload wiring. Python-only consumers omit the
+Go line. For WORKSPACE Go, replace `@rules_go` with the apparent repository name
+used by that workspace. Java, NodeJS, .NET, and Ruby retain their existing
+enablement contract in this release.
 
 ## Quick triage map
 
@@ -58,7 +67,7 @@ from the same run. For the simplest customer ask after tests have already run,
 use the doctor directly:
 
 ```bash
-bazel run //:dd_test_optimization_doctor -- \
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
   --support-bundle .topt/reports/dd-test-optimization-support.zip
 ```
 
@@ -224,10 +233,10 @@ values automatically.
 
 2. **Force refetch only when intentional** with a cache-busting salt:
    ```bash
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"
    ```
    ```powershell
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT="$(Get-Date -UFormat %s)"
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT="$(Get-Date -UFormat %s)"
    ```
    Do not put `FETCH_SALT` in `.bazelrc`, `bazel test`, doctor, or uploader
    commands. It deliberately breaks the repository-rule cache key and should be
@@ -252,9 +261,10 @@ values automatically.
    test_optimization_sync.test_optimization_sync(
        name = "test_optimization_data",
        debug = True,  # Verbose logging
-       enabled_by_env = True,
    )
    ```
+   Preserve the repository's existing `enabled_by_env` value; enabling debug
+   logging must not change its activation contract.
 
 ## Published Go pins
 
@@ -396,10 +406,10 @@ global root `BUILD.bazel` wiring unrelated to Test Optimization.
 3. **Check DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES**: The macro should set this
    to `"true"`. Verify your test environment:
    ```bash
-   bazel test //your:test --test_output=all 2>&1 | grep DD_TEST_OPTIMIZATION
+   bazel test --config=test-optimization //your:test --test_output=all 2>&1 | grep DD_TEST_OPTIMIZATION
    ```
    ```powershell
-   bazel test //your:test --test_output=all *>&1 | Select-String "DD_TEST_OPTIMIZATION"
+   bazel test --config=test-optimization //your:test --test_output=all *>&1 | Select-String "DD_TEST_OPTIMIZATION"
    ```
    PowerShell uses `*>&1` (not Bash `2>&1`) to merge stderr/stdout.
 
@@ -887,8 +897,8 @@ client-side Bazel behavior.
   - PowerShell: set `$env:DD_API_KEY` and `$env:DD_SITE` first, then run `bazel run --config=test-optimization //:dd_upload_payloads`
 - Quote paths containing spaces and avoid `eval`-style wrappers.
 - For refetch debugging, use:
-  - `bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
-  - if required by workspace mode: `bazel sync --enable_workspace --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
+  - `bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
+  - if required by workspace mode: `bazel sync --enable_workspace --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
 
 ## Getting help
 
@@ -896,10 +906,10 @@ If issues persist:
 
 1. **Enable debug mode** and capture full output:
    ```bash
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> 2>&1 | tee debug.log
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> 2>&1 | tee debug.log
    ```
    ```powershell
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> *>&1 | Tee-Object -FilePath debug.log
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> *>&1 | Tee-Object -FilePath debug.log
    ```
 
 2. **Collect diagnostic info**:

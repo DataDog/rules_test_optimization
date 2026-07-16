@@ -201,11 +201,15 @@ test_optimization_sync = use_extension(
 # @test_optimization_data//:test_optimization_files
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
-    enabled_by_env = True,
 )
 
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
+
+The low-level core sync remains always enabled by default. Config-gated Go and
+Python onboarding sets `enabled_by_env = True` in the language-specific setup.
+Do not add that attribute to another companion until its runtime wrapper
+implements the disabled export contract.
 
 Core module note: `datadog-rules-test-optimization` is runtime-agnostic and
 does not declare language-rule dependencies. Language-specific orchestration
@@ -417,8 +421,9 @@ repeatable `--bep-json=<path>` flags. This keeps parallel CI jobs and repeated
 local runs from overwriting or reusing stale BEP files.
 
 `FETCH_SALT` is intentionally not part of the generated default config. Use it
-only in a separate force-refresh `bazel sync --only=<repo>` command when you
-deliberately want fresh backend metadata.
+only in a separate force-refresh
+`bazel sync --config=test-optimization --only=<repo>` command when you
+deliberately want fresh backend metadata from a config-gated repository.
 
 Run Go onboarding commands with this config:
 
@@ -474,7 +479,7 @@ For a first-pass support request after tests have run, the customer can run only
 the doctor:
 
 ```bash
-bazel run //:dd_test_optimization_doctor -- \
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
   --support-bundle .topt/reports/dd-test-optimization-support.zip
 ```
 
@@ -609,10 +614,13 @@ test_optimization_sync = use_extension(
 )
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
-    enabled_by_env = True,
 )
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
+
+This core-only example preserves the always-enabled contract. Add
+`enabled_by_env = True` only when deliberately composing the config-gated Go or
+Python flow.
 
 ### Multi-service usage (Bzlmod)
 
@@ -785,7 +793,6 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 test_optimization_sync(
     name = "test_optimization_data",
     service = "my-service",  # recommended; otherwise falls back to DD_SERVICE or unnamed-service
-    enabled_by_env = True,
     # Optional:
     # runtime_name = "go",
     # runtime_version = "1.25.0",
@@ -793,6 +800,10 @@ test_optimization_sync(
     # test_management = True,
 )
 ```
+
+This generic WORKSPACE example preserves the always-enabled core default. The
+Go and Python sections add `enabled_by_env = True` where their macros can safely
+consume a disabled export.
 
 ### 3) Depend on generated files in BUILD files
 
@@ -863,10 +874,20 @@ dd_payload_uploader(
 
 ### 5) Forward environment variables in `.bazelrc`
 
+The metadata forwarding entries below apply to every runtime. Config-gated Go
+and Python onboarding additionally includes:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+# Go only; use the apparent rules_go repository name:
+build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
+```
+
+Python-only consumers omit the Go line. Java, NodeJS, .NET, and Ruby retain
+their existing enablement contract and omit both lines in this release.
+
 ```text
 # Repository rule (module/repo phase) — affects refetch
-common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 common:test-optimization --repo_env=DD_API_KEY
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL  # Optional sync/uploader agentless URL override
