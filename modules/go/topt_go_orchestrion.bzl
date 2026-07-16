@@ -147,6 +147,7 @@ orch_go_test = rule(
         "metadata": attr.label(
             mandatory = True,
             allow_single_file = True,
+            cfg = orch_transition,
             doc = "Bazel-owned target metadata copied next to emitted test payloads.",
         ),
         "orchestrion_mode": attr.string(
