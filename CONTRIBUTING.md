@@ -161,25 +161,28 @@ This product includes software developed at Datadog
 
 - `bazel-tests`:
   - core tests (`//tools/...`) on Linux/macOS/Windows
-  - go companion tests (`modules/go`) on Linux/macOS/Windows
-  - integration harness on Linux/macOS (`.sh`) and Windows (`.ps1`)
+  - companion module tests on Linux
+  - mock-server integration harness on Linux (`.sh`) and Windows (`.ps1`)
   - examples build on Linux/macOS/Windows
+  - the Linux result aggregates independent main-suite and mock-server shards
 - `bazel-tests-hermetic`:
   - core tests with hermetic flags
-  - go companion tests with hermetic flags
+  - companion module tests with hermetic flags
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
 - `workspace-compat`:
-  - WORKSPACE base
-  - Bzlmod base
+  - one shard per supported `rules_go` upstream and WORKSPACE/Bzlmod pair
+  - general and Test Optimization modes run sequentially inside each shard
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
 - `rules-go-variant-smoke`:
   - vendored `rules_go` variant verification and fast fork regression coverage
+  - one independent shard per supported upstream
   - Linux-only by design so the PR gate stays fast and stable
 - `rules-go-variant-extended`:
   - nightly/manual vendored `rules_go` variant coverage for slower XML, proto, cross, and cgo regression suites
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
+  - global fork drift checks plus one consumer patch-profile shard per supported `rules_go` upstream
   - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.
