@@ -120,9 +120,10 @@ Use this checklist before your first CI rollout:
 For config-gated Go and Python onboarding, the named `test-optimization`
 config must include
 `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. The
-public Go bootstrap helpers apply metadata gating by default; direct use of the
-low-level core sync API in a config-gated Go or Python setup must opt into
-`enabled_by_env = True`. Go additionally needs
+public Go bootstrap helpers apply metadata gating by default. Manual Go
+extension wiring and direct use of the low-level core sync API in a
+config-gated Go or Python setup must opt into `enabled_by_env = True`. Go
+additionally needs
 `build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`
 for Bzlmod, or the same flag with `@io_bazel_rules_go` for WORKSPACE.
 Removing `--config=test-optimization` provides the complete metadata and
@@ -915,6 +916,7 @@ go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service-a", "go-service-b"],
     runtime_version = "1.25.0",
+    enabled_by_env = True,
 )
 
 use_repo(
@@ -1625,10 +1627,15 @@ go_topt.test_optimization_go(
     service = "go-service",
     runtime_version = "1.25.0",
     module_path = "github.com/example/service",
+    enabled_by_env = True,
 )
 
 use_repo(go_topt, "test_optimization_data")
 ```
+
+Keep `enabled_by_env = True` in new config-gated Go setups. Omitting it retains
+the previous always-enabled metadata behavior only for upgrade compatibility;
+the Go macro then requires the Orchestrion build setting to be enabled.
 
 `module_path` should match the Go module path from `go.mod`. The sync rule
 still honors `GO_MODULE_PATH` first for CI overrides, but the explicit attr is

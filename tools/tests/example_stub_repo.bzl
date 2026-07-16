@@ -95,7 +95,8 @@ def _render_stub_export(
         manifest_path,
         go_module_path,
         go_sanitized_module_path,
-        go_module_included):
+        go_module_included,
+        enabled = True):
     """Render export.bzl content for the stub repository."""
     mapping_lines = []
     for key in service_keys:
@@ -103,6 +104,7 @@ def _render_stub_export(
 
     return (
         "topt_data = {\n" +
+        "    \"enabled\": %s,\n" % ("True" if enabled else "False") +
         "    \"repo_name\": %s,\n" % _bzl_string_literal(repo_name) +
         "    \"service_name\": %s,\n" % _bzl_string_literal(service_name) +
         "    \"manifest_path\": %s,\n" % _bzl_string_literal(manifest_path) +
@@ -255,6 +257,7 @@ def _example_stub_repo_impl(ctx):
         go_module_path = ctx.attr.go_module_path,
         go_sanitized_module_path = ctx.attr.go_sanitized_module_path,
         go_module_included = ctx.attr.go_module_included,
+        enabled = ctx.attr.enabled,
     )
     ctx.file("export.bzl", export)
     ctx.file("module_runfiles.bzl", _render_stub_module_runfiles_bzl(ctx.name, out_dir))
@@ -276,6 +279,7 @@ def _example_stub_repo_impl(ctx):
 example_stub_repo = repository_rule(
     implementation = _example_stub_repo_impl,
     attrs = {
+        "enabled": attr.bool(default = True),
         "go_module_included": attr.bool(default = False),
         "go_module_path": attr.string(default = "example.com/stub"),
         "go_sanitized_module_path": attr.string(default = "example_com_stub"),
@@ -293,6 +297,7 @@ def _example_stub_repo_extension_impl(module_ctx):
         for call in mod.tags.example_stub_repo:
             example_stub_repo(
                 name = call.name,
+                enabled = call.enabled,
                 go_module_included = call.go_module_included,
                 go_module_path = call.go_module_path,
                 go_sanitized_module_path = call.go_sanitized_module_path,
@@ -307,6 +312,7 @@ example_stub_repo_extension = module_extension(
     implementation = _example_stub_repo_extension_impl,
     tag_classes = {
         "example_stub_repo": tag_class(attrs = {
+            "enabled": attr.bool(default = True),
             "go_module_included": attr.bool(default = False),
             "go_module_path": attr.string(default = "example.com/stub"),
             "go_sanitized_module_path": attr.string(default = "example_com_stub"),

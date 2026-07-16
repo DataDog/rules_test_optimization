@@ -341,8 +341,8 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "dBh3mysStfbmE9OYr/8bdnByQgv+t2ybqpgSa1q2MpQ=",
-        "usagesDigest": "jqtG1XLwIoyhYZrl5w5guIuSZeXpuCApEcAz3bhsuio=",
+        "bzlTransitiveDigest": "TrTrDHJrP0Rre84rDDioXjXxdcPRZwzJZA21GdNKrkE=",
+        "usagesDigest": "9cmeLOZZK/XcmUYXh727qZj+Cgnz6JtINwWZZD6BKfg=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -350,6 +350,7 @@
           "test_optimization_data": {
             "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
+              "enabled": false,
               "go_module_included": false,
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",

@@ -180,8 +180,9 @@ wrapper_output_name_target_rule = rule(
     },
 )
 
-def _single_service_topt_data():
+def _single_service_topt_data(enabled = True):
     return {
+        "enabled": enabled,
         "repo_name": "test_optimization_data",
         "service_name": "go-service",
         "manifest_path": ".testoptimization/manifest.txt",
@@ -211,7 +212,7 @@ def go_macro_single_service_target(name, tags = None):
     """Target-under-test: single-service wiring + default rundir path."""
     dd_topt_go_test(
         name = name,
-        topt_data = _single_service_topt_data(),
+        topt_data = _single_service_topt_data(enabled = False),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
         env = {
@@ -368,7 +369,7 @@ def go_macro_test_optimization_public_wrapper_mode_target(name, tags = None):
     """Target under test for public wrapper Orchestrion mode forwarding."""
     dd_topt_go_test(
         name = name,
-        topt_data = _single_service_topt_data(),
+        topt_data = _single_service_topt_data(enabled = False),
         go_test_rule = _go_test_transition_mode_rule,
         orchestrion_mode = "test_optimization",
         orchestrion_pin_files = [":go.mod"],
@@ -379,7 +380,7 @@ def go_macro_default_general_public_wrapper_mode_target(name, tags = None):
     """Target under test for omitted Orchestrion mode defaulting to general."""
     dd_topt_go_test(
         name = name,
-        topt_data = _single_service_topt_data(),
+        topt_data = _single_service_topt_data(enabled = False),
         go_test_rule = _go_test_transition_mode_rule,
         tags = tags,
     )
@@ -446,6 +447,15 @@ def orch_wrapper_materialized_actual_windows_target(name, tags = None):
     orch_go_test(
         name = name,
         actual = ":" + name + "_actual",
+        tags = tags,
+    )
+
+def go_macro_orchestrion_enablement_mismatch_target(name, tags = None):
+    """Target under test for an incomplete config-gated Go upgrade."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(enabled = True),
+        go_test_rule = _go_test_capture_rule,
         tags = tags,
     )
 
@@ -834,6 +844,14 @@ def _validate_test_optimization_pin_files_missing_go_mod_failure_test_impl(ctx):
     asserts.expect_failure(env, "requires a package-local go.mod or explicit orchestrion_pin_files")
     return analysistest.end(env)
 
+def _go_macro_orchestrion_enablement_mismatch_failure_test_impl(ctx):
+    """Assert a partial upgrade fails instead of silently dropping instrumentation."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "Test Optimization metadata is enabled but Orchestrion is disabled")
+    asserts.expect_failure(env, "--config=test-optimization")
+    asserts.expect_failure(env, "--write-bazelrc")
+    return analysistest.end(env)
+
 def _wrapper_output_name_non_windows_test_impl(ctx):
     """Assert non-Windows wrapper names remain extensionless."""
     env = analysistest.begin(ctx)
@@ -1017,6 +1035,10 @@ validate_orchestrion_mode_invalid_failure_test = analysistest.make(
 )
 validate_test_optimization_pin_files_missing_go_mod_failure_test = analysistest.make(
     _validate_test_optimization_pin_files_missing_go_mod_failure_test_impl,
+    expect_failure = True,
+)
+go_macro_orchestrion_enablement_mismatch_failure_test = analysistest.make(
+    _go_macro_orchestrion_enablement_mismatch_failure_test_impl,
     expect_failure = True,
 )
 wrapper_output_name_non_windows_test = analysistest.make(

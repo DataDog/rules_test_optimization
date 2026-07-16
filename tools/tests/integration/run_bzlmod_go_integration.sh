@@ -86,9 +86,30 @@ BAZEL_EXTRA_ARGS+=(
 
 source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
 
+shutdown_bazel_workspace_servers() {
+  local workspace_dir
+
+  # Bazel owns one server per generated workspace. Windows cannot remove their
+  # output bases until every server releases its files.
+  if [[ -d "$WORKSPACE_ROOT" ]]; then
+    for workspace_dir in "$WORKSPACE_ROOT"/*; do
+      [[ -d "$workspace_dir" ]] || continue
+      (
+        cd "$workspace_dir"
+        USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
+      ) >/dev/null 2>&1 || true
+    done
+  fi
+
+  (
+    cd "$REPO_ROOT"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
+  ) >/dev/null 2>&1 || true
+}
+
 cleanup() {
   stop_go_integration_mock_server
-  USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown >/dev/null 2>&1 || true
+  shutdown_bazel_workspace_servers
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
     return
@@ -1211,6 +1232,9 @@ run_windows_enabled_smoke() {
   local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
   local alias_files="$TMP_ROOT/windows-enabled-aliases.log"
   local test_log="$TMP_ROOT/windows-enabled-test.log"
+
+  start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+
   local -a enabled_flags=(
     "${BAZEL_EXTRA_ARGS[@]}"
     "${GO_INTEGRATION_MOCK_REPO_ENVS[@]}"
@@ -1227,7 +1251,6 @@ run_windows_enabled_smoke() {
 
   rm -rf "$ws_dir"
   mkdir -p "$ws_dir"
-  start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir" "rules_go"

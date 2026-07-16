@@ -15,6 +15,21 @@ versioning.
 
 ## [Unreleased]
 
+### Changed
+- Config-gated Go Bzlmod onboarding now writes `enabled_by_env = True`
+  explicitly. The Go extension keeps its previous always-enabled metadata
+  default when that attribute is omitted so existing consumers cannot silently
+  enter the new disabled mode during an upgrade.
+- Go consumers upgrading from `1.2.0` should rerun `dd_topt_go_bootstrap` with
+  `--write-bazelrc` and set `enabled_by_env = True` in manual extension wiring.
+  The managed `.bazelrc` update is idempotent and adds both metadata and
+  Orchestrion activation to the `test-optimization` config.
+
+### Fixed
+- Go test analysis now fails with migration guidance when Test Optimization
+  metadata is enabled but the global Orchestrion build setting is disabled,
+  preventing a partial upgrade from silently dropping instrumentation.
+
 ## [1.2.0] - 2026-06-03
 
 ### Added

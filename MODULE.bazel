@@ -191,6 +191,7 @@ example_stub_repo = use_extension(
 )
 example_stub_repo.example_stub_repo(
     name = "test_optimization_data",
+    enabled = False,
     labels = [
         "apps_ruby_example",
         "company_product_example",

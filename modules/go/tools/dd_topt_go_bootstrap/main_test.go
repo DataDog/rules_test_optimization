@@ -1565,6 +1565,9 @@ func TestManagedGuidedModuleBlockIncludesModulePath(t *testing.T) {
 	if !strings.Contains(got, `module_path = "github.com/DataDog/example-service"`) {
 		t.Fatalf("expected guided block to include explicit module_path:\n%s", got)
 	}
+	if !strings.Contains(got, `enabled_by_env = True`) {
+		t.Fatalf("expected guided block to opt into config-gated metadata sync:\n%s", got)
+	}
 }
 
 func TestWriteStarterOrchestrionYML(t *testing.T) {

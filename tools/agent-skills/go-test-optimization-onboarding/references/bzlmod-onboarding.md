@@ -146,6 +146,7 @@ datadog_go_topt.test_optimization_go(
     service = "<datadog-service>",
     runtime_version = "<go-version>",
     module_path = "<go-module-path>",
+    enabled_by_env = True,
     require_git_metadata = True,
 )
 
@@ -296,6 +297,7 @@ datadog_go_topt.test_optimization_go(
     services = ["go-service-a", "go-service-b"],
     runtime_version = "<go-version>",
     module_path = "<go-module-path>",
+    enabled_by_env = True,
     require_git_metadata = True,
 )
 

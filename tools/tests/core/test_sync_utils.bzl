@@ -1528,7 +1528,9 @@ def _example_stub_export_manifest_path_test(ctx):
         go_module_path = "example.com/workspace-go-integration",
         go_sanitized_module_path = "example_com_workspace_go_integration",
         go_module_included = True,
+        enabled = False,
     )
+    asserts.true(env, '"enabled": False' in content)
     asserts.true(env, '"repo_name": "test_optimization_data"' in content)
     asserts.true(env, '"manifest_path": "custom_topt/manifest.txt"' in content)
     asserts.true(env, '"service_name": "workspace-go-service"' in content)

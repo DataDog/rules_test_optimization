@@ -2025,6 +2025,7 @@ datadog_go_topt.test_optimization_go(
     name = "%s",
     service = "%s",
     runtime_version = "%s",
+    enabled_by_env = True,
 %s)
 
 use_repo(datadog_go_topt, "%s")

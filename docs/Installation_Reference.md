@@ -526,6 +526,7 @@ go_topt.test_optimization_go(
     service = "go-service",
     runtime_version = "1.25.0",
     module_path = "github.com/example/service",
+    enabled_by_env = True,
 )
 ```
 

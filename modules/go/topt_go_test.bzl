@@ -603,5 +603,6 @@ def dd_topt_go_test(
         name = name,
         actual = ":" + raw_name,
         orchestrion_mode = orchestrion_mode,
+        test_optimization_enabled = bool(_svc.get("enabled", True)),
         **wrapper_kwargs
     )

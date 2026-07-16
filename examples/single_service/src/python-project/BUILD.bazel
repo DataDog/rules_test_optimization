@@ -8,6 +8,8 @@ load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_t
 load("@example_pip//:requirements.bzl", "requirement")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
+_TEST_OPTIMIZATION_EXPECTED = "1" if topt_data.get("enabled", True) else "0"
+
 exports_files(
     [
         "requirements.in",
@@ -25,6 +27,7 @@ py_library(
 dd_topt_py_test(
     name = "hello_test",
     srcs = ["main_test.py"],
+    env = {"EXAMPLE_EXPECT_TEST_OPTIMIZATION": _TEST_OPTIMIZATION_EXPECTED},
     imports = ["example/python/project"],
     main = "main_test.py",
     py_test_rule = py_test,
@@ -38,6 +41,7 @@ dd_topt_py_test(
 dd_topt_py_test(
     name = "hello_pytest_test",
     srcs = ["pytest_test.py"],
+    env = {"EXAMPLE_EXPECT_TEST_OPTIMIZATION": _TEST_OPTIMIZATION_EXPECTED},
     target_compatible_with = select({
         "@platforms//os:windows": ["@platforms//:incompatible"],
         "//conditions:default": [],

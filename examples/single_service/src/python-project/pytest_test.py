@@ -64,13 +64,13 @@ def test_greeting():
     assert module.get_greeting() == "Hello from Python!"
 
 
-def test_manifest_env_set():
+def test_manifest_env_contract():
+    expected = os.getenv("EXAMPLE_EXPECT_TEST_OPTIMIZATION", "1") == "1"
     manifest_rloc = os.getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE", "")
-    assert manifest_rloc, "DD_TEST_OPTIMIZATION_MANIFEST_FILE should be set by dd_topt_py_test"
+    if not expected:
+        assert not manifest_rloc, "disabled tests must not receive Test Optimization metadata"
+        return
 
-
-def test_manifest_metadata_files_present():
-    manifest_rloc = os.getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE", "")
     assert manifest_rloc, "DD_TEST_OPTIMIZATION_MANIFEST_FILE should be set by dd_topt_py_test"
 
     manifest_path = _resolve_runfile(manifest_rloc)

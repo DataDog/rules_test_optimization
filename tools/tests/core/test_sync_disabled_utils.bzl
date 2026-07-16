@@ -17,8 +17,8 @@ load(
     "render_disabled_flaky_tests_json_for_tests",
     "render_disabled_known_tests_json_for_tests",
     "render_disabled_settings_json_for_tests",
-    "render_disabled_test_management_json_for_tests",
     "render_disabled_telemetry_facts_json_for_tests",
+    "render_disabled_test_management_json_for_tests",
     "repository_environ_for_tests",
     "resolve_service_and_environment_for_tests",
 )

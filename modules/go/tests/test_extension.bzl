@@ -48,7 +48,7 @@ def _go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test(ctx):
     asserts.equals(env, "go", specs[0]["runtime_name"])
     return unittest.end(env)
 
-def _go_specs_default_to_config_gated_test(ctx):
+def _go_specs_preserve_legacy_always_enabled_default_test(ctx):
     env = unittest.begin(ctx)
     single = build_go_single_repo_spec_for_tests(
         name = "test_optimization_data_go",
@@ -58,8 +58,8 @@ def _go_specs_default_to_config_gated_test(ctx):
         name = "test_optimization_data_go",
         services = ["go-service"],
     )
-    asserts.equals(env, True, single["enabled_by_env"])
-    asserts.equals(env, True, multi[0]["enabled_by_env"])
+    asserts.equals(env, False, single["enabled_by_env"])
+    asserts.equals(env, False, multi[0]["enabled_by_env"])
     return unittest.end(env)
 
 go_single_spec_propagates_non_default_enablement_and_flaky_tests_test = unittest.make(
@@ -70,6 +70,6 @@ go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test = unittest.
     _go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test,
 )
 
-go_specs_default_to_config_gated_test = unittest.make(
-    _go_specs_default_to_config_gated_test,
+go_specs_preserve_legacy_always_enabled_default_test = unittest.make(
+    _go_specs_preserve_legacy_always_enabled_default_test,
 )
