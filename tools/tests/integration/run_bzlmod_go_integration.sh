@@ -1243,12 +1243,12 @@ run_disabled_no_fetch_smoke() {
     exit 1
   fi
 
-  if [[ -f "$resolved_repos" ]] && rg -n 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$resolved_repos"; then
+  if [[ -f "$resolved_repos" ]] && grep -En 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$resolved_repos"; then
     echo "error: disabled Bzlmod smoke resolved the Orchestrion sentinel repository" >&2
     cat "$resolved_repos" >&2
     exit 1
   fi
-  if rg -n 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$test_log"; then
+  if grep -En 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$test_log"; then
     echo "error: disabled Bzlmod smoke attempted the Orchestrion sentinel" >&2
     cat "$test_log" >&2
     exit 1
@@ -1326,7 +1326,7 @@ run_windows_enabled_smoke() {
     exit 1
   fi
 
-  if ! rg -q 'rules_go_orchestrion_tool' "$alias_files"; then
+  if ! grep -Eq 'rules_go_orchestrion_tool' "$alias_files"; then
     echo "error: enabled Bzlmod aliases did not expose the real Orchestrion repository files" >&2
     cat "$alias_files" >&2
     exit 1
