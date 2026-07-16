@@ -120,7 +120,6 @@ test_optimization_sync(
     service = "<datadog-service>",
     runtime_name = "java",
     runtime_version = "<java-version>",
-    enabled_by_env = True,
 )
 ```
 

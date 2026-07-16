@@ -117,17 +117,16 @@ or merge it locally instead of vendoring a second complete `rules_go` tree.
 
 Use this checklist before your first CI rollout:
 
-For config-gated metadata resolution in every language, the named
-`test-optimization` config must include
+For config-gated Go and Python onboarding, the named `test-optimization`
+config must include
 `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. The
 public Go bootstrap helpers apply metadata gating by default; direct use of the
 low-level core sync API must opt into `enabled_by_env = True`. Go additionally needs
 `build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`
 for Bzlmod, or the same flag with `@io_bazel_rules_go` for WORKSPACE.
-Removing `--config=test-optimization` disables metadata resolution for every
-config-gated sync. Go and Python additionally implement the complete runtime
-opt-out described below. Other companions currently use this config as a
-metadata-fetch gate; do not infer a test-runtime kill switch from it.
+Removing `--config=test-optimization` provides the complete metadata and
+runtime opt-out for the Go and Python integrations described below. This
+release does not change the enablement contract of the other companions.
 
 When a config-gated Python sync is disabled, `dd_topt_py_test` keeps the
 consumer's normal runner and test arguments, omits Test Optimization metadata
@@ -952,7 +951,6 @@ topt_ruby.test_optimization_sync(
     service = "ruby-service",
     runtime_name = "ruby",
     runtime_version = "3.3.9",
-    enabled_by_env = True,
 )
 
 use_repo(topt_go, "test_optimization_data_go")

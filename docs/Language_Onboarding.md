@@ -48,15 +48,10 @@ Shared runtime contract for every language:
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` remains a legacy explicit override, not
   the recommended mixed-runtime wiring path
 
-Shared `.bazelrc` forwarding for every runtime. The named config is the shared
-metadata-fetch switch; omitting it leaves config-gated metadata repositories
-on their disabled no-fetch stubs. Go and Python also use it as the complete
-runtime opt-out. The Java, NodeJS, .NET, and Ruby companions do not yet promise
-a test-runtime kill switch when the config is omitted:
+Shared `.bazelrc` metadata forwarding for every runtime:
 
 ```text
 common:test-optimization --repo_env=DD_API_KEY
-common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
 common:test-optimization --repo_env=DD_GIT_BRANCH
@@ -66,6 +61,15 @@ common:test-optimization --repo_env=DD_PR_NUMBER
 test:test-optimization --remote_download_minimal
 test:test-optimization --remote_download_regex=.*test[.]outputs.*
 test:test-optimization --zip_undeclared_test_outputs
+```
+
+Go and Python config-gated onboarding also adds the single enable switch below.
+Omitting the named config then provides the complete metadata and runtime
+opt-out for those two integrations. This release does not change the
+enablement contract of the other companions:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 ```
 
 Go workspaces also add the existing `rules_go` analysis-time setting. Prefer
@@ -889,7 +893,6 @@ topt.test_optimization_sync(
     service = "java-service",
     runtime_name = "java",
     runtime_version = "17",
-    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -968,7 +971,6 @@ topt.test_optimization_multi_sync(
     services = ["java-service-a", "java-service-b"],
     runtime_name = "java",
     runtime_version = "17",
-    enabled_by_env = True,
 )
 
 use_repo(
@@ -1062,7 +1064,6 @@ topt.test_optimization_sync(
     service = "nodejs-service",
     runtime_name = "nodejs",
     runtime_version = "22.22.0",
-    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -1136,7 +1137,6 @@ topt.test_optimization_multi_sync(
     services = ["nodejs-service-a", "nodejs-service-b"],
     runtime_name = "nodejs",
     runtime_version = "22.22.0",
-    enabled_by_env = True,
 )
 
 use_repo(
@@ -1246,7 +1246,6 @@ topt.test_optimization_sync(
     service = "dotnet-service",
     runtime_name = "dotnet",
     runtime_version = "8.0.100",
-    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -1322,7 +1321,6 @@ topt.test_optimization_multi_sync(
     services = ["dotnet-service-a", "dotnet-service-b"],
     runtime_name = "dotnet",
     runtime_version = "8.0.100",
-    enabled_by_env = True,
 )
 
 use_repo(
@@ -1412,7 +1410,6 @@ topt.test_optimization_sync(
     service = "ruby-service",
     runtime_name = "ruby",
     runtime_version = "3.3.9",
-    enabled_by_env = True,
 )
 
 use_repo(topt, "test_optimization_data")
@@ -1488,7 +1485,6 @@ topt.test_optimization_multi_sync(
     services = ["ruby-service-a", "ruby-service-b"],
     runtime_name = "ruby",
     runtime_version = "3.3.9",
-    enabled_by_env = True,
 )
 
 use_repo(
