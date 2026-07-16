@@ -1311,14 +1311,20 @@ run_windows_enabled_smoke() {
     exit 1
   fi
 
-  (
+  if ! (
     # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
     cd "$ws_dir/$test_package"
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       "${enabled_flags[@]}" \
+      --test_output=errors \
+      --verbose_failures \
       --experimental_repository_resolved_file="$resolved_repos" \
       ":$test_name"
-  ) >"$test_log" 2>&1
+  ) >"$test_log" 2>&1; then
+    echo "error: enabled Bzlmod test failed" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
 
   if ! rg -q 'rules_go_orchestrion_tool' "$alias_files"; then
     echo "error: enabled Bzlmod aliases did not expose the real Orchestrion repository files" >&2
