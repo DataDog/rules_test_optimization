@@ -2812,6 +2812,10 @@ run_retry_sync_case \
 # - dual local_path_override (repo root + modules/go)
 MULTI_WS="$TMP_WS/ws_multi"
 mkdir -p "$MULTI_WS"
+cat > "$MULTI_WS/.bazelrc" <<'MULTI_BAZELRC_EOF'
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+MULTI_BAZELRC_EOF
 cat > "$MULTI_WS/MODULE.bazel" <<MODULE_MULTI_EOF
 module(name = "topt-multi-integration", version = "0.0.0")
 
@@ -2944,13 +2948,15 @@ BUILD_MULTI_INVALID_EOF
 MULTI_LOG_START="$(log_line_count)"
 (
   cd "$MULTI_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke //:macro_service_probe //:macro_data_none_probe \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build --config=test-optimization \
+    //:multi_sync_smoke //:macro_service_probe //:macro_data_none_probe \
     "${REPO_ENVS[@]}"
 )
 
 MULTI_MACRO_CQUERY=$(
   cd "$MULTI_WS" && \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe__raw_go_test --output=build "${REPO_ENVS[@]}"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery --config=test-optimization \
+    //:macro_service_probe__raw_go_test --output=build "${REPO_ENVS[@]}"
 )
 # The manifest/data wiring lives on the hidden raw go_test target. Querying the
 # wrapper target only verifies the public wrapper exists, not which payload set
@@ -2971,7 +2977,8 @@ if (
   # Build from the package directory to avoid //pkg:label path conversion
   # quirks under Git Bash on Windows.
   cd "$MULTI_WS/invalid" && \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build :macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build --config=test-optimization \
+    :macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
 ); then
   echo "error: dd_topt_go_test invalid-service scenario unexpectedly succeeded"
   cat "$MULTI_INVALID_LOG" || true

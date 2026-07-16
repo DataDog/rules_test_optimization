@@ -197,6 +197,20 @@ sha256_file() {
   exit 1
 }
 
+file_uri() {
+  local path="$1"
+
+  if command -v cygpath >/dev/null 2>&1; then
+    path="$(cygpath -m "$path")"
+  fi
+  "$PYTHON" - "$path" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).resolve().as_uri())
+PY
+}
+
 wall_time_ns() {
   "$PYTHON" - <<'PY'
 import time
@@ -546,7 +560,7 @@ create_fixture_archive() {
     tar -czf "$ARCHIVE_PATH" "$ARCHIVE_NAME"
   )
   ARCHIVE_SHA256="$(sha256_file "$ARCHIVE_PATH")"
-  ARCHIVE_URL="file://$ARCHIVE_PATH"
+  ARCHIVE_URL="$(file_uri "$ARCHIVE_PATH")"
 }
 
 write_fixture_bazelrc() {
