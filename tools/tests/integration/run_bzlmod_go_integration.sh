@@ -1181,6 +1181,9 @@ run_disabled_no_fetch_smoke() {
   local resolved_repos="$TMP_ROOT/disabled-resolved-repositories.bzl"
   local alias_log="$TMP_ROOT/disabled-aliases.log"
   local test_log="$TMP_ROOT/disabled-test.log"
+  local test_target_path="${HELLO_TEST_TARGET#//}"
+  local test_package="${test_target_path%%:*}"
+  local test_name="${test_target_path#*:}"
   local -a disabled_flags=(
     "${BAZEL_EXTRA_ARGS[@]}"
     --enable_bzlmod
@@ -1228,11 +1231,12 @@ run_disabled_no_fetch_smoke() {
   fi
 
   if ! (
-    cd "$ws_dir"
+    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
+    cd "$ws_dir/$test_package"
     "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       "${disabled_flags[@]}" \
       --experimental_repository_resolved_file="$resolved_repos" \
-      "$HELLO_TEST_TARGET"
+      ":$test_name"
   ) >"$test_log" 2>&1; then
     echo "error: disabled Bzlmod test failed" >&2
     cat "$test_log" >&2
@@ -1266,6 +1270,9 @@ run_windows_enabled_smoke() {
   local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
   local alias_files="$TMP_ROOT/windows-enabled-aliases.log"
   local test_log="$TMP_ROOT/windows-enabled-test.log"
+  local test_target_path="${HELLO_TEST_TARGET#//}"
+  local test_package="${test_target_path%%:*}"
+  local test_name="${test_target_path#*:}"
 
   start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
 
@@ -1305,11 +1312,12 @@ run_windows_enabled_smoke() {
   fi
 
   (
-    cd "$ws_dir"
+    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
+    cd "$ws_dir/$test_package"
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       "${enabled_flags[@]}" \
       --experimental_repository_resolved_file="$resolved_repos" \
-      "$HELLO_TEST_TARGET"
+      ":$test_name"
   ) >"$test_log" 2>&1
 
   if ! rg -q 'rules_go_orchestrion_tool' "$alias_files"; then
