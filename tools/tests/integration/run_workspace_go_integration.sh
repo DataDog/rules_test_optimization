@@ -108,14 +108,23 @@ shutdown_bazel_workspace_servers() {
 }
 
 cleanup() {
+  local status=$?
+
+  set +e
   stop_go_integration_mock_server
   shutdown_bazel_workspace_servers
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
-    return
+    return "$status"
   fi
   chmod -R u+w "$TMP_ROOT" 2>/dev/null || true
-  rm -rf "$TMP_ROOT"
+  if ! rm -rf "$TMP_ROOT" 2>/dev/null; then
+    sleep 2
+    if ! rm -rf "$TMP_ROOT" 2>/dev/null; then
+      echo "warning: unable to remove temporary workspace $TMP_ROOT" >&2
+    fi
+  fi
+  return "$status"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -1247,14 +1256,18 @@ run_disabled_no_fetch_smoke() {
 
   : > "$alias_log"
   for alias in "${aliases[@]}"; do
-    (
+    if ! (
       cd "$ws_dir"
       "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
         "${disabled_flags[@]}" \
         --experimental_repository_resolved_file="$resolved_repos" \
         "@io_bazel_rules_go//go/private/orchestrion:$alias" --output=files \
         >"$TMP_ROOT/disabled-alias-$alias.out"
-    ) 2>"$TMP_ROOT/disabled-alias-$alias.err"
+    ) 2>"$TMP_ROOT/disabled-alias-$alias.err"; then
+      echo "error: disabled WORKSPACE alias query failed for $alias" >&2
+      cat "$TMP_ROOT/disabled-alias-$alias.err" >&2
+      exit 1
+    fi
     cat "$TMP_ROOT/disabled-alias-$alias.out" >>"$alias_log"
   done
   if [[ -s "$alias_log" ]]; then
@@ -1263,13 +1276,17 @@ run_disabled_no_fetch_smoke() {
     exit 1
   fi
 
-  (
+  if ! (
     cd "$ws_dir"
     "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
       "${disabled_flags[@]}" \
       --experimental_repository_resolved_file="$resolved_repos" \
       "$HELLO_TEST_TARGET"
-  ) >"$test_log" 2>&1
+  ) >"$test_log" 2>&1; then
+    echo "error: disabled WORKSPACE test failed" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
 
   if [[ -f "$resolved_repos" ]] && rg -n 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$resolved_repos"; then
     echo "error: disabled WORKSPACE smoke resolved the Orchestrion sentinel repository" >&2
@@ -1283,7 +1300,10 @@ run_disabled_no_fetch_smoke() {
   fi
 
   local testlogs
-  testlogs="$(cd "$ws_dir" && "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${disabled_flags[@]}" bazel-testlogs)"
+  if ! testlogs="$(cd "$ws_dir" && "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${disabled_flags[@]}" bazel-testlogs)"; then
+    echo "error: unable to locate disabled WORKSPACE test logs" >&2
+    exit 1
+  fi
   if find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -print -quit | grep -q .; then
     echo "error: disabled WORKSPACE smoke emitted Test Optimization payloads" >&2
     exit 1
