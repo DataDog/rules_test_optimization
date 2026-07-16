@@ -52,6 +52,10 @@ def _wrapped_actual_output_name(label_name, executable_basename):
     """Return the wrapper-owned sibling executable name used at test runtime."""
     return label_name + "__wrapped_" + executable_basename
 
+def _wrapped_metadata_output_name(label_name, metadata_basename):
+    """Return the wrapper-owned sibling metadata name used at test runtime."""
+    return label_name + "__wrapped_" + metadata_basename
+
 def _unix_wrapper_content(actual_filename, metadata_filename):
     """Render the Unix launcher used by the Orchestrion wrapper target."""
     return """#!/usr/bin/env bash
@@ -116,19 +120,21 @@ def _orch_go_test_impl(ctx):
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
     actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
+    metadata_out = ctx.actions.declare_file(_wrapped_metadata_output_name(ctx.label.name, metadata_file.basename), sibling = out)
 
-    # Materialize the raw test binary next to the wrapper so the launcher does
-    # not have to guess which configuration-specific execroot path Bazel chose.
+    # Materialize transitioned inputs next to the wrapper so the launcher does
+    # not have to guess which configuration-specific execroot paths Bazel chose.
     ctx.actions.symlink(output = actual_out, target_file = dep_exe)
+    ctx.actions.symlink(output = metadata_out, target_file = metadata_file)
 
     ctx.actions.write(
         output = out,
-        content = _windows_wrapper_content(actual_out.basename, metadata_file.basename) if is_windows else _unix_wrapper_content(actual_out.basename, metadata_file.basename),
+        content = _windows_wrapper_content(actual_out.basename, metadata_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename, metadata_out.basename),
         is_executable = True,
     )
     providers = [DefaultInfo(
-        files = depset([out, actual_out, metadata_file]),
-        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, metadata_file])),
+        files = depset([out, actual_out, metadata_out]),
+        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, metadata_out])),
         executable = out,
     )]
     if dep_run_environment:

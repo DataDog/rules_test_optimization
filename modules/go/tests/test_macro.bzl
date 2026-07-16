@@ -726,10 +726,14 @@ def _go_macro_public_wrapper_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
+    materialized_metadata = (
+        "go_macro_single_service_target__wrapped_" +
+        "go_macro_single_service_target_topt_bazel_metadata.json"
+    )
     asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "go_macro_single_service_target"))
     asserts.true(env, _has_file_basename(files, "go_macro_single_service_target__wrapped_go_macro_single_service_target__raw_go_test.sh"))
-    asserts.true(env, _has_file_basename(files, "go_macro_single_service_target_topt_bazel_metadata.json"))
+    asserts.true(env, _has_file_basename(files, materialized_metadata))
     run_env = target[RunEnvironmentInfo].environment
     manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -935,31 +939,39 @@ def _orch_transition_forwards_mode_test_impl(ctx):
     return unittest.end(env)
 
 def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
-    """Assert the wrapper target ships the sibling raw executable."""
+    """Assert the wrapper target ships transitioned inputs as siblings."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
+    materialized_metadata = (
+        "orch_wrapper_materialized_actual_non_windows_target__wrapped_" +
+        "orch_wrapper_materialized_actual_non_windows_target_metadata.json"
+    )
     asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
-    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target_metadata.json"))
+    asserts.true(env, _has_file_basename(files, materialized_metadata))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
-    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target_metadata.json"))
+    asserts.true(env, _has_file_basename(runfiles, materialized_metadata))
     return analysistest.end(env)
 
 def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
-    """Assert the Windows wrapper target carries the sibling raw executable."""
+    """Assert the Windows wrapper target ships transitioned inputs as siblings."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
+    materialized_metadata = (
+        "orch_wrapper_materialized_actual_windows_target__wrapped_" +
+        "orch_wrapper_materialized_actual_windows_target_metadata.json"
+    )
     asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target.bat"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
-    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target_metadata.json"))
+    asserts.true(env, _has_file_basename(files, materialized_metadata))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
-    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target_metadata.json"))
+    asserts.true(env, _has_file_basename(runfiles, materialized_metadata))
     return analysistest.end(env)
 
 go_macro_single_service_wiring_test = analysistest.make(
