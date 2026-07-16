@@ -558,8 +558,9 @@ def dd_topt_go_test(
         # Signal to the library that payloads should be written to files
         # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
         "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
-        # The Orchestrion wrapper copies this file into test.outputs so the
-        # uploader can enrich payloads with target-specific Bazel metadata.
+        # Keep the target metadata basename available to the test runtime. The
+        # wrapper also receives the generated target directly and copies it
+        # into test.outputs for uploader enrichment.
         "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
     }
     if ci_visibility_enabled:
@@ -602,6 +603,7 @@ def dd_topt_go_test(
     orch_go_test(
         name = name,
         actual = ":" + raw_name,
+        metadata = ":" + metadata_name,
         orchestrion_mode = orchestrion_mode,
         test_optimization_enabled = bool(_svc.get("enabled", True)),
         **wrapper_kwargs

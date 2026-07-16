@@ -162,6 +162,13 @@ fake_executable_rule = rule(
     executable = True,
 )
 
+def _fake_metadata_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".json")
+    ctx.actions.write(out, "{}\n")
+    return [DefaultInfo(files = depset([out]))]
+
+fake_metadata_rule = rule(implementation = _fake_metadata_impl)
+
 def _wrapper_output_name_target_impl(ctx):
     return [WrapperOutputNameInfo(
         output_name = select_wrapper_output_name_for_tests(
@@ -430,9 +437,14 @@ def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
         executable_name = "hello_test__raw_go_test",
         tags = ["manual"],
     )
+    fake_metadata_rule(
+        name = name + "_metadata",
+        tags = ["manual"],
+    )
     orch_go_test(
         name = name,
         actual = ":" + name + "_actual",
+        metadata = ":" + name + "_metadata",
         tags = tags,
     )
 
@@ -444,9 +456,14 @@ def orch_wrapper_materialized_actual_windows_target(name, tags = None):
         is_windows = True,
         tags = ["manual"],
     )
+    fake_metadata_rule(
+        name = name + "_metadata",
+        tags = ["manual"],
+    )
     orch_go_test(
         name = name,
         actual = ":" + name + "_actual",
+        metadata = ":" + name + "_metadata",
         tags = tags,
     )
 
@@ -709,9 +726,10 @@ def _go_macro_public_wrapper_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
-    asserts.equals(env, 2, len(files))
+    asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "go_macro_single_service_target"))
     asserts.true(env, _has_file_basename(files, "go_macro_single_service_target__wrapped_go_macro_single_service_target__raw_go_test.sh"))
+    asserts.true(env, _has_file_basename(files, "go_macro_single_service_target_topt_bazel_metadata.json"))
     run_env = target[RunEnvironmentInfo].environment
     manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -869,9 +887,12 @@ def _wrapper_output_name_windows_test_impl(ctx):
 def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     """Assert Windows launchers preserve Bazel file mode instead of proxying uploads."""
     env = unittest.begin(ctx)
-    content = windows_wrapper_content_for_tests("raw.exe")
+    content = windows_wrapper_content_for_tests("raw.exe", "target_metadata.json")
     asserts.true(env, "bazel_target_metadata.json" in content)
+    asserts.true(env, '"%SCRIPT_DIR%target_metadata.json"' in content)
+    asserts.false(env, "META_BASENAME" in content)
     asserts.true(env, '"%ACTUAL%" %*' in content)
+    asserts.true(env, "exit /b %ERRORLEVEL%" in content)
     asserts.false(env, "DD_TRACE_AGENT_URL" in content)
     asserts.false(env, "DD_CIVISIBILITY_AGENTLESS_ENABLED" in content)
     asserts.false(env, "DD_CIVISIBILITY_AGENTLESS_URL" in content)
@@ -919,10 +940,12 @@ def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
-    asserts.equals(env, 2, len(files))
+    asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target_metadata.json"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target_metadata.json"))
     return analysistest.end(env)
 
 def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
@@ -931,10 +954,12 @@ def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
-    asserts.equals(env, 2, len(files))
+    asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target.bat"))
     asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target_metadata.json"))
     asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target_metadata.json"))
     return analysistest.end(env)
 
 go_macro_single_service_wiring_test = analysistest.make(

@@ -52,14 +52,13 @@ def _wrapped_actual_output_name(label_name, executable_basename):
     """Return the wrapper-owned sibling executable name used at test runtime."""
     return label_name + "__wrapped_" + executable_basename
 
-def _unix_wrapper_content(actual_filename):
+def _unix_wrapper_content(actual_filename, metadata_filename):
     """Render the Unix launcher used by the Orchestrion wrapper target."""
     return """#!/usr/bin/env bash
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 actual="$script_dir/%s"
-metadata_basename="${DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME:-}"
 undeclared_dir="${TEST_UNDECLARED_OUTPUTS_DIR:-}"
 
 if [[ ! -x "$actual" ]]; then
@@ -67,23 +66,22 @@ if [[ ! -x "$actual" ]]; then
   exit 1
 fi
 
-if [[ -n "$metadata_basename" && -n "$undeclared_dir" ]]; then
-  metadata_source="$script_dir/$metadata_basename"
+if [[ -n "$undeclared_dir" ]]; then
+  metadata_source="$script_dir/%s"
   if [[ -f "$metadata_source" ]]; then
     cp "$metadata_source" "$undeclared_dir/%s"
   fi
 fi
 
 "$actual" "$@"
-""" % (actual_filename, _BAZEL_TARGET_METADATA_OUTPUT)
+""" % (actual_filename, metadata_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_filename):
+def _windows_wrapper_content(actual_filename, metadata_filename):
     """Render the Windows launcher used by the Orchestrion wrapper target."""
     return """@echo off
 setlocal
 set "SCRIPT_DIR=%%~dp0"
 set "ACTUAL=%%SCRIPT_DIR%%%s"
-set "META_BASENAME=%%DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME%%"
 set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
 
 if not exist "%%ACTUAL%%" (
@@ -91,14 +89,16 @@ if not exist "%%ACTUAL%%" (
   exit /b 1
 )
 
-if not "%%META_BASENAME%%"=="" if not "%%UNDECLARED_DIR%%"=="" (
-  set "META_SOURCE=%%SCRIPT_DIR%%%%META_BASENAME%%"
-  if exist "%%META_SOURCE%%" copy /Y "%%META_SOURCE%%" "%%UNDECLARED_DIR%%\\%s" >nul
+if not "%%UNDECLARED_DIR%%"=="" (
+  if exist "%%SCRIPT_DIR%%%s" copy /Y "%%SCRIPT_DIR%%%s" "%%UNDECLARED_DIR%%\\%s" >nul
 )
 
 "%%ACTUAL%%" %%*
+exit /b %%ERRORLEVEL%%
 """ % (
         actual_filename.replace("/", "\\"),
+        metadata_filename.replace("/", "\\"),
+        metadata_filename.replace("/", "\\"),
         _BAZEL_TARGET_METADATA_OUTPUT,
     )
 
@@ -112,6 +112,7 @@ def _orch_go_test_impl(ctx):
 
     dep_exe, dep_runfiles = _dep_exec_and_runfiles(ctx.attr.actual)
     dep_run_environment = _dep_run_environment_info(ctx.attr.actual)
+    metadata_file = ctx.file.metadata
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_select_wrapper_output_name(ctx.label.name, dep_exe.basename, is_windows))
     actual_out = ctx.actions.declare_file(_wrapped_actual_output_name(ctx.label.name, dep_exe.basename), sibling = out)
@@ -122,12 +123,12 @@ def _orch_go_test_impl(ctx):
 
     ctx.actions.write(
         output = out,
-        content = _windows_wrapper_content(actual_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename),
+        content = _windows_wrapper_content(actual_out.basename, metadata_file.basename) if is_windows else _unix_wrapper_content(actual_out.basename, metadata_file.basename),
         is_executable = True,
     )
     providers = [DefaultInfo(
-        files = depset([out, actual_out]),
-        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out])),
+        files = depset([out, actual_out, metadata_file]),
+        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, metadata_file])),
         executable = out,
     )]
     if dep_run_environment:
@@ -142,6 +143,11 @@ orch_go_test = rule(
             executable = True,
             cfg = orch_transition,
             doc = "The underlying raw go_test target built with Orchestrion enabled.",
+        ),
+        "metadata": attr.label(
+            mandatory = True,
+            allow_single_file = True,
+            doc = "Bazel-owned target metadata copied next to emitted test payloads.",
         ),
         "orchestrion_mode": attr.string(
             default = _ORCHESTRION_MODE_GENERAL,
