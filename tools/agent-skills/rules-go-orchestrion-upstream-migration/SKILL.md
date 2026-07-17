@@ -140,9 +140,10 @@ build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
 `--config=test-optimization` is the only user-facing switch. Omitting it must
-leave metadata bootstrap disabled for `enabled_by_env = True` repositories and
-select local empty Orchestrion aliases. Do not add a consumer-local duplicate
-bool flag or collapse the real and empty repository rules.
+leave metadata bootstrap disabled for public Go extension repositories, and
+for low-level repositories explicitly configured with `enabled_by_env = True`,
+while selecting local empty Orchestrion aliases. Do not add a consumer-local
+duplicate bool flag or collapse the real and empty repository rules.
 
 ## Stop Conditions
 

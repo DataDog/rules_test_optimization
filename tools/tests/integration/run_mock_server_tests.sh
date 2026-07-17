@@ -488,6 +488,10 @@ chmod +x disabled_metadata_runfiles_test.sh
 BAZEL="$REPO_ROOT/bazelw"
 OUT_BASE="$TMP_WS/.bazel_out"
 BAZEL_FLAGS=(--output_base="$OUT_BASE")
+BAZEL_TEST_FLAGS=()
+if [[ "$(uname -s)" == "Darwin" && "${USE_BAZEL_VERSION:-}" == "8.5.1" ]]; then
+  BAZEL_TEST_FLAGS+=(--noexperimental_split_xml_generation)
+fi
 
 # ---------------------------------------------------------------------------
 # Scenario: declaring sync repos is lazy until a target actually consumes them.
@@ -495,7 +499,8 @@ BAZEL_FLAGS=(--output_base="$OUT_BASE")
 # Large monorepos may declare Test Optimization once near workspace setup while
 # only instrumenting a small pilot target set. Plain targets that do not load or
 # depend on @test_optimization_data must keep working without sync credentials.
-env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test
+env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test \
+  "${BAZEL_TEST_FLAGS[@]}"
 
 SYNC_LAZINESS_LOG="$TMP_WS/sync_laziness_requires_api_key.log"
 if env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
@@ -538,6 +543,7 @@ DISABLED_OUTPUT_BASE="$TMP_WS/.bazel_disabled_out"
 DISABLED_CQUERY_OUT="$TMP_WS/disabled-cquery.out"
 DISABLED_REPO_ENVS=(
   --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0
+  --repo_env=DD_ENV=ci
   --repo_env=DISABLE_CI_METADATA=1
 )
 if [[ -f "$LOG_FILE" ]]; then
@@ -564,6 +570,7 @@ env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
 env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
   "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" test \
   //:disabled_metadata_runfiles_test \
+  "${BAZEL_TEST_FLAGS[@]}" \
   "${DISABLED_REPO_ENVS[@]}"
 
 for required in settings.json known_tests.json test_management.json flaky_tests.json manifest.txt context.json; do
@@ -597,6 +604,8 @@ jq -e '."topt.sync.enabled" == false' \
   "$DISABLED_REPO_DIR/.testoptimization/context.json" >/dev/null
 jq -e 'any(.counts[]; .name == "sync.disabled" and .value == 1)' \
   "$DISABLED_REPO_DIR/.testoptimization/telemetry_facts.json" >/dev/null
+DISABLED_SERVICE="$(jq -r '."service.name"' "$DISABLED_REPO_DIR/.testoptimization/context.json")"
+DISABLED_ENVIRONMENT="$(jq -r '.env' "$DISABLED_REPO_DIR/.testoptimization/context.json")"
 if [[ -f "$LOG_FILE" ]]; then
   DISABLED_LOG_END="$(wc -l < "$LOG_FILE" | tr -d '[:space:]')"
 else
@@ -606,6 +615,68 @@ if [[ "$DISABLED_LOG_START" != "$DISABLED_LOG_END" ]]; then
   echo "error: disabled sync unexpectedly contacted the mock metadata server"
   exit 1
 fi
+
+# Re-evaluate the same canonical repository in the same output base with the
+# config gate enabled. This guards against a disabled repository remaining
+# cached after DD_TEST_OPTIMIZATION_ENABLED changes from 0 to 1.
+TOGGLE_SYNC_SALT="integration-toggle-${RANDOM}-$(date +%s)"
+"$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" fetch \
+  @test_optimization_data//:test_optimization_files \
+  --repo_env=FETCH_SALT="$TOGGLE_SYNC_SALT" \
+  "${REPO_ENVS[@]}"
+"$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" cquery \
+  @test_optimization_data//:test_optimization_context --output=files \
+  "${REPO_ENVS[@]}" >/dev/null
+
+ENABLED_REPO_SETTINGS="$(find "$DISABLED_OUTPUT_BASE" -type f \
+  -path '*/external/*test_optimization_data/.testoptimization/cache/http/settings.json' \
+  -print -quit)"
+if [[ -z "$ENABLED_REPO_SETTINGS" ]]; then
+  echo "error: enabled sync did not rematerialize the canonical repository"
+  exit 1
+fi
+ENABLED_REPO_DIR="${ENABLED_REPO_SETTINGS%/.testoptimization/cache/http/settings.json}"
+if [[ "$ENABLED_REPO_DIR" != "$DISABLED_REPO_DIR" ]]; then
+  echo "error: disabled-to-enabled sync used a different repository path"
+  printf 'disabled: %s\nenabled:  %s\n' "$DISABLED_REPO_DIR" "$ENABLED_REPO_DIR"
+  exit 1
+fi
+jq -e '
+  .data.attributes.known_tests_enabled == true and
+  .data.attributes.test_management.enabled == true
+' "$ENABLED_REPO_SETTINGS" >/dev/null
+jq -e --arg service "$DISABLED_SERVICE" --arg environment "$DISABLED_ENVIRONMENT" '
+  ."service.name" == $service and
+  .env == $environment and
+  (has("topt.sync.enabled") | not)
+' "$ENABLED_REPO_DIR/.testoptimization/context.json" >/dev/null
+
+LOG_FILE="$LOG_FILE" LOG_START="$DISABLED_LOG_END" "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+
+required = {
+    "/api/v2/libraries/tests/services/setting",
+    "/api/v2/ci/libraries/tests",
+    "/api/v2/test/libraries/test-management/tests",
+}
+with open(os.environ["LOG_FILE"], "r", encoding="utf-8") as handle:
+    records = []
+    for line in handle:
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+records = records[int(os.environ["LOG_START"]):]
+seen = {record.get("path") for record in records}
+missing = required - seen
+if missing:
+    print("error: enabled re-evaluation of the disabled repository missed metadata requests")
+    for path in sorted(missing):
+        print(f"  - {path}")
+    sys.exit(1)
+PY
 
 # ---------------------------------------------------------------------------
 # Scenario: baseline sync + uploader run (agentless) with fixture assertions.
@@ -721,6 +792,7 @@ done
 unset DD_TEST_OPTIMIZATION_AGENT_URL
 
 "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test \
+  "${BAZEL_TEST_FLAGS[@]}" \
   "${REPO_ENVS[@]}"
 
 # Use Bazel's testlogs location to find payloads for the uploader.
@@ -3900,7 +3972,9 @@ rm -f "$GUIDED_BEP_JSON"
   cd "$GUIDED_BOOT_WS"
   "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization \
     --build_event_json_file="$GUIDED_BEP_JSON" \
-    //src/go-project:hello_test__raw_go_test "${REPO_ENVS[@]}"
+    //src/go-project:hello_test__raw_go_test \
+    "${BAZEL_TEST_FLAGS[@]}" \
+    "${REPO_ENVS[@]}"
 )
 
 GUIDED_TESTLOGS_DIR="$(

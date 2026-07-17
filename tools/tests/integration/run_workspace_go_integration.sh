@@ -1378,11 +1378,15 @@ EOF
 run_windows_enabled_smoke() {
   local ws_dir="$WORKSPACE_ROOT/windows-enabled"
   local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
-  local alias_files="$TMP_ROOT/windows-enabled-aliases.log"
   local test_log="$TMP_ROOT/windows-enabled-test.log"
   local test_target_path="${HELLO_TEST_TARGET#//}"
   local test_package="${test_target_path%%:*}"
   local test_name="${test_target_path#*:}"
+  local -a bazel_test_flags=()
+
+  if [[ "$(uname -s)" == "Darwin" && "$BAZEL_VERSION" == "8.5.1" ]]; then
+    bazel_test_flags+=(--noexperimental_split_xml_generation)
+  fi
 
   start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
 
@@ -1407,20 +1411,32 @@ run_windows_enabled_smoke() {
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir" "io_bazel_rules_go"
 
-  : > "$alias_files"
   for alias in "${aliases[@]}"; do
-    (
+    local alias_files="$TMP_ROOT/windows-enabled-workspace-$alias.files"
+    local alias_log="$TMP_ROOT/windows-enabled-workspace-$alias.log"
+    if ! (
       cd "$ws_dir"
       USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
         "${enabled_flags[@]}" \
         --experimental_repository_resolved_file="$resolved_repos" \
         "@io_bazel_rules_go//go/private/orchestrion:$alias" --output=files
-    ) >>"$alias_files"
+    ) >"$alias_files" 2>"$alias_log"; then
+      echo "error: enabled WORKSPACE Orchestrion alias $alias failed analysis" >&2
+      cat "$alias_log" >&2
+      exit 1
+    fi
+    if [[ ! -s "$alias_files" ]]; then
+      echo "error: enabled WORKSPACE Orchestrion alias $alias exposed no files" >&2
+      cat "$alias_log" >&2
+      exit 1
+    fi
+    if ! grep -Eq 'rules_go_orchestrion_tool' "$alias_files"; then
+      echo "error: enabled WORKSPACE Orchestrion alias $alias did not expose real repository files" >&2
+      cat "$alias_files" >&2
+      cat "$alias_log" >&2
+      exit 1
+    fi
   done
-  if [[ ! -s "$alias_files" ]]; then
-    echo "error: enabled WORKSPACE Orchestrion aliases exposed no files" >&2
-    exit 1
-  fi
 
   if ! (
     # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
@@ -1429,17 +1445,12 @@ run_windows_enabled_smoke() {
       "${enabled_flags[@]}" \
       --test_output=errors \
       --verbose_failures \
+      "${bazel_test_flags[@]}" \
       --experimental_repository_resolved_file="$resolved_repos" \
       ":$test_name"
   ) >"$test_log" 2>&1; then
     echo "error: enabled WORKSPACE test failed" >&2
     cat "$test_log" >&2
-    exit 1
-  fi
-
-  if ! grep -Eq 'rules_go_orchestrion_tool' "$alias_files"; then
-    echo "error: enabled WORKSPACE aliases did not expose the real Orchestrion repository files" >&2
-    cat "$alias_files" >&2
     exit 1
   fi
 

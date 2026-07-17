@@ -462,7 +462,6 @@ go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service-a", "go-service-b"],
     runtime_version = "1.25.0",
-    enabled_by_env = True,
 )
 
 use_repo(

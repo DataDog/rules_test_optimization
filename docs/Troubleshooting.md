@@ -33,13 +33,14 @@ Go additionally sets the existing `rules_go` Orchestrion flag:
 build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
-When the config is omitted, repositories configured with
-`enabled_by_env = True` generate the documented no-fetch stubs. Go aliases
-select local empty targets; Python keeps the normal consumer runner without
-Test Optimization metadata or payload wiring. Python-only consumers omit the
-Go line. For WORKSPACE Go, replace `@rules_go` with the apparent repository name
-used by that workspace. Java, NodeJS, .NET, and Ruby retain their existing
-enablement contract in this release.
+When the config is omitted, the public Go extension's config-gated default and
+repositories explicitly configured with `enabled_by_env = True` generate the
+documented no-fetch stubs. Go aliases select local empty targets; Python keeps
+the normal consumer runner without Test Optimization metadata or payload
+wiring. Python-only consumers omit the Go line. For WORKSPACE Go, replace
+`@rules_go` with the apparent repository name used by that workspace. Java,
+NodeJS, .NET, and Ruby retain their existing enablement contract in this
+release.
 
 ## Quick triage map
 

@@ -109,7 +109,6 @@ go_topt = use_extension(
 go_topt.test_optimization_go(
     name = "test_optimization_data",
     debug = True,
-    enabled_by_env = True,
     runtime_version = "1.25.0",
     # Logical service identifier for Datadog metadata (not language-bound).
     # A single service can include tests from multiple runtimes.

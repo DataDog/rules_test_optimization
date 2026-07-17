@@ -121,8 +121,9 @@ For config-gated Go and Python onboarding, the named `test-optimization`
 config must include
 `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. The
 public Go bootstrap helpers apply metadata gating by default. Manual Go
-extension wiring and direct use of the low-level core sync API in a
-config-gated Go or Python setup must opt into `enabled_by_env = True`. Go
+extension wiring uses the same config-gated default. Direct use of the
+low-level core sync API in a config-gated Go or Python setup must opt into
+`enabled_by_env = True`. Go
 additionally needs
 `build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`
 for Bzlmod, or the same flag with `@io_bazel_rules_go` for WORKSPACE.
@@ -916,7 +917,6 @@ go_topt.test_optimization_go(
     name = "test_optimization_data",
     services = ["go-service-a", "go-service-b"],
     runtime_version = "1.25.0",
-    enabled_by_env = True,
 )
 
 use_repo(
@@ -1016,8 +1016,9 @@ test_optimization_sync(
 ```
 
 This low-level WORKSPACE example preserves the always-enabled core default.
-Config-gated Go and Python consumers set `enabled_by_env = True` through their
-language-specific setup; the other companions remain unchanged.
+The public Go extension is config-gated by default. Config-gated Python
+consumers set `enabled_by_env = True` through their language-specific setup;
+the other companions remain unchanged.
 
 For Go in WORKSPACE mode, keep the core and Go companion as separate external
 repositories and load `dd_topt_go_test` from
@@ -1627,15 +1628,18 @@ go_topt.test_optimization_go(
     service = "go-service",
     runtime_version = "1.25.0",
     module_path = "github.com/example/service",
-    enabled_by_env = True,
 )
 
 use_repo(go_topt, "test_optimization_data")
 ```
 
-Keep `enabled_by_env = True` in new config-gated Go setups. Omitting it retains
-the previous always-enabled metadata behavior only for upgrade compatibility;
-the Go macro then requires the Orchestrion build setting to be enabled.
+The Go extension is config-gated by default, so the normal onboarding does not
+need an enablement attribute. Consumers upgrading from `1.2.0` must add the
+named config before updating the Rule; rerun `dd_topt_go_bootstrap` with
+`--write-bazelrc` for an idempotent migration. A consumer that deliberately
+keeps manually controlled, always-enabled metadata can set
+`enabled_by_env = False`, but it must also keep the Orchestrion build setting
+enabled; analysis rejects a partial activation.
 
 `module_path` should match the Go module path from `go.mod`. The sync rule
 still honors `GO_MODULE_PATH` first for CI overrides, but the explicit attr is

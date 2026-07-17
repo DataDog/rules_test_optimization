@@ -206,10 +206,11 @@ test_optimization_sync.test_optimization_sync(
 use_repo(test_optimization_sync, "test_optimization_data")
 ```
 
-The low-level core sync remains always enabled by default. Config-gated Go and
-Python onboarding sets `enabled_by_env = True` in the language-specific setup.
-Do not add that attribute to another companion until its runtime wrapper
-implements the disabled export contract.
+The low-level core sync remains always enabled by default. The public Go
+extension is config-gated by default; config-gated Python onboarding sets
+`enabled_by_env = True` in its language-specific setup. Do not add that
+attribute to another companion until its runtime wrapper implements the
+disabled export contract.
 
 Core module note: `datadog-rules-test-optimization` is runtime-agnostic and
 does not declare language-rule dependencies. Language-specific orchestration
@@ -526,7 +527,6 @@ go_topt.test_optimization_go(
     service = "go-service",
     runtime_version = "1.25.0",
     module_path = "github.com/example/service",
-    enabled_by_env = True,
 )
 ```
 
@@ -803,8 +803,8 @@ test_optimization_sync(
 ```
 
 This generic WORKSPACE example preserves the always-enabled core default. The
-Go and Python sections add `enabled_by_env = True` where their macros can safely
-consume a disabled export.
+public Go helpers apply metadata gating by default; the Python section adds
+`enabled_by_env = True` where its macro can safely consume a disabled export.
 
 ### 3) Depend on generated files in BUILD files
 
