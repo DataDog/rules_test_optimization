@@ -421,21 +421,17 @@ providers also need `--bep-artifact-downloader=<path>`.
 Add one doctor and one uploader target at the repository root:
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data_<service_key>//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data_<service_key>",
     expected_targets = [
         "//path/to/pilot:go_default_test",
     ],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data_<service_key>//:test_optimization_context"],
-    fail_on_error = True,
+    uploader_kwargs = {
+        "fail_on_error": True,
+    },
 )
 ```
 

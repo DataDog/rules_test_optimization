@@ -824,18 +824,10 @@ filegroup(
 
 ```bzl
 # In root BUILD.bazel
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    # Provide context.json via runfiles so enrichment can occur
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
 )
 ```
 
@@ -856,17 +848,9 @@ bazel run --config=test-optimization //:dd_upload_payloads -- \
 Multi-service aggregator variant:
 
 ```bzl
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = [
-        "@test_optimization_data//:test_optimization_context_service_a",
-        "@test_optimization_data//:test_optimization_context_service_b",
-    ],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = [
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
         "@test_optimization_data//:test_optimization_context_service_a",
         "@test_optimization_data//:test_optimization_context_service_b",
     ],

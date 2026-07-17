@@ -274,17 +274,10 @@ enablement contract.
 
 ```bzl
 # BUILD.bazel (workspace root)
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
 )
 ```
 
@@ -973,20 +966,11 @@ matching context target so validation and upload enrichment use the correct
 `context.json` per payload:
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = [
-        "@test_optimization_data_go//:test_optimization_context",
-        "@test_optimization_data_ruby//:test_optimization_context",
-    ],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = [
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
         "@test_optimization_data_go//:test_optimization_context",
         "@test_optimization_data_ruby//:test_optimization_context",
     ],

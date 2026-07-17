@@ -40,6 +40,7 @@ load(
     "py_macro_env_none_wiring_test",
     "py_macro_explicit_service_target",
     "py_macro_explicit_service_wiring_test",
+    "py_macro_fallback_payloads_target",
     "py_macro_fallback_payloads_test",
     "py_macro_invalid_runner_mode_failure_test",
     "py_macro_invalid_runner_mode_target_rule",
@@ -490,9 +491,14 @@ py_macro_public_wrapper_test(
     target_under_test = ":py_macro_single_service_target",
 )
 
+py_macro_fallback_payloads_target(
+    name = "py_macro_fallback_payloads_target",
+    tags = ["manual"],
+)
+
 py_macro_fallback_payloads_test(
     name = "py_macro_fallback_payloads_test",
-    target_under_test = ":py_macro_env_none_target_topt_payloads",
+    target_under_test = ":py_macro_fallback_payloads_target_topt_payloads",
 )
 
 py_macro_multi_service_target(

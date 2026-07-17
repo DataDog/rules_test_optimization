@@ -17,6 +17,7 @@ load(
     "validate_runner_mode_for_tests",
 )
 load("@rules_python//python:py_test.bzl", _default_py_test = "py_test")
+load("@test_optimization_data//:export.bzl", _stub_topt_data = "topt_data")
 
 ToptPyMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_py_test to py_test_rule.",
@@ -328,6 +329,15 @@ def py_macro_env_none_target(name, tags = None):
         topt_data = _single_service_topt_data(),
         py_test_rule = _py_test_capture_rule,
         env = None,
+        tags = tags,
+    )
+
+def py_macro_fallback_payloads_target(name, tags = None):
+    """Exercise package-derived fallback against the shared dev stub export."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _stub_topt_data,
+        py_test_rule = _py_test_capture_rule,
         tags = tags,
     )
 
@@ -952,18 +962,18 @@ def _py_macro_fallback_payloads_test_impl(ctx):
     target = analysistest.target_under_test(env)
     paths = [file.short_path for file in target[DefaultInfo].files.to_list()]
 
-    modular_known_tests = False
+    expected_module_known_tests = False
     full_bundle_known_tests = False
     for path in paths:
-        if "/module_example_python_" in path and path.endswith("/known_tests.json"):
-            modular_known_tests = True
+        if path.endswith("/.testoptimization/module_example_python_stub_tests/known_tests.json"):
+            expected_module_known_tests = True
         if path.endswith("/.testoptimization/cache/http/known_tests.json"):
             full_bundle_known_tests = True
 
     asserts.true(
         env,
-        modular_known_tests,
-        msg = "macro-generated selector must expose the package-derived Python module payload: %s" % paths,
+        expected_module_known_tests,
+        msg = "macro-generated selector must expose module_example_python_stub_tests: %s" % paths,
     )
     asserts.false(
         env,

@@ -806,15 +806,11 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	}
 	selection, _ := metadata["bazel.go.payload_selection"].(string)
 	moduleCachePath := filepath.Join(manifestDir, "cache", "http", "module_"+wantModuleLabel, "known_tests.json")
-	_, moduleCacheErr := os.Stat(moduleCachePath)
-	if moduleCacheErr == nil {
-		if selection != "module" {
-			t.Fatalf("bazel.go.payload_selection = %v with a matching physical module cache, want module", selection)
-		}
-	} else if !os.IsNotExist(moduleCacheErr) {
-		t.Fatalf("stat matching physical module cache: %v", moduleCacheErr)
-	} else if selection != "full_bundle_disabled" {
-		t.Fatalf("bazel.go.payload_selection = %v without a matching physical module cache", selection)
+	if _, err := os.Stat(moduleCachePath); err != nil {
+		t.Fatalf("matching physical module cache %s is required: %v", moduleCachePath, err)
+	}
+	if selection != "module" {
+		t.Fatalf("bazel.go.payload_selection = %v with deterministic module metadata, want module", selection)
 	}
 	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
 		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
@@ -1000,7 +996,6 @@ dd_topt_go_workspace_sync_repositories(
     module_path = "${MODULE_IMPORTPATH}",
     runtime_version = "${GO_VERSION}",
     out_dir = "${OUT_DIR}",
-    enabled_by_env = True,
     require_git_metadata = True,
 )
 EOF

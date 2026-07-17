@@ -305,17 +305,10 @@ dd_topt_ruby_test(
 Root BUILD.bazel (one doctor and one uploader per workspace):
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
 )
 ```
 
@@ -549,28 +542,19 @@ Doctor/uploader package (multi-service). Simple examples may put these in the
 root package, but large monorepos should prefer a lightweight package:
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-  name = "dd_test_optimization_doctor",
-  data = [
-    "@test_optimization_data//:test_optimization_context_go_service_a",
-    "@test_optimization_data//:test_optimization_context_go_service_b",
-  ],
-)
-
-dd_payload_uploader(
-  name = "dd_upload_payloads",
-  data = [
-    "@test_optimization_data//:test_optimization_context_go_service_a",
-    "@test_optimization_data//:test_optimization_context_go_service_b",
-  ],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
+        "@test_optimization_data//:test_optimization_context_go_service_a",
+        "@test_optimization_data//:test_optimization_context_go_service_b",
+    ],
 )
 ```
 
 Mixed-runtime example rule:
 - keep one sync repo per runtime/service
 - keep one logical uploader for the workspace; package-local placement is fine
-- add every matching context target to uploader `data`
+- pass every matching context target through `context_data`
 - do not use `DD_TEST_OPTIMIZATION_CONTEXT_JSON` as the normal mixed-runtime path

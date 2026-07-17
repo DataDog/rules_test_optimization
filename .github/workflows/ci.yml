@@ -171,6 +171,21 @@ jobs:
         # and command construction without requiring live Datadog credentials.
         run: RUNTESTS_DRY_RUN=1 bash ./examples/multi_service/runtests.sh
 
+      - name: Exercise example PowerShell runtests scripts (dry-run)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:RUNTESTS_DRY_RUN = "1"
+          foreach ($script in @(
+            "./examples/single_service/runtests.ps1",
+            "./examples/multi_service/runtests.ps1"
+          )) {
+            & $script
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
       - name: Ensure jq is available (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

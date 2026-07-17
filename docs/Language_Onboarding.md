@@ -495,20 +495,11 @@ dd_topt_go_test(
 
 ```bzl
 # root BUILD.bazel
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = [
-        "@test_optimization_data//:test_optimization_context_go_service_a",
-        "@test_optimization_data//:test_optimization_context_go_service_b",
-    ],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = [
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
         "@test_optimization_data//:test_optimization_context_go_service_a",
         "@test_optimization_data//:test_optimization_context_go_service_b",
     ],
@@ -842,20 +833,11 @@ dd_topt_py_test(
 
 ```bzl
 # root BUILD.bazel
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = [
-        "@test_optimization_data//:test_optimization_context_py_service_a",
-        "@test_optimization_data//:test_optimization_context_py_service_b",
-    ],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = [
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
         "@test_optimization_data//:test_optimization_context_py_service_a",
         "@test_optimization_data//:test_optimization_context_py_service_b",
     ],
