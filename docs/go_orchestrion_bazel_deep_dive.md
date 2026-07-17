@@ -278,13 +278,16 @@ in one place.
 Implementation:
 - [topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 
-The wrapper rule exists for one reason: it applies a function transition that
-sets:
+The wrapper rule applies a function transition that sets only:
 
 ```bzl
-"@rules_go//go/private/orchestrion:enabled": True
 "@rules_go//go/private/orchestrion:mode": "general" or "test_optimization"
 ```
+
+The transition deliberately preserves the existing
+`@rules_go//go/private/orchestrion:enabled` setting. The user-facing
+`--config=test-optimization` config enables that setting during analysis;
+omitting the config leaves it at the `rules_go` default of `False`.
 
 The wrapper then symlinks the executable produced by the raw target and returns
 the same runfiles.
@@ -769,7 +772,7 @@ sequenceDiagram
     User->>Macro: declare Go test
     Macro->>Macro: select payload data + add pin files
     Macro->>Wrapper: public test target
-    Wrapper->>RG: build raw go_test with transition enabled
+    Wrapper->>RG: build raw go_test with mode transition; preserve enabled flag
     RG->>RG: compile customer packages
     RG->>Orch: compile woven stdlib as needed
     RG->>Orch: prepare synthetic testmain helper packagefiles

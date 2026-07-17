@@ -467,20 +467,52 @@ if [[ -z "$settings_path" ]]; then
 fi
 repo_dir="${settings_path%/.testoptimization/cache/http/settings.json}"
 
-jq -e '.data.attributes == {
-  "flaky_test_retries_enabled": false,
-  "known_tests_enabled": false,
-  "test_management": {"enabled": false}
+jq -e '. == {
+  "data": {
+    "attributes": {
+      "flaky_test_retries_enabled": false,
+      "known_tests_enabled": false,
+      "test_management": {"enabled": false}
+    }
+  }
 }' "$settings_path" >/dev/null
-jq -e '.data.attributes.tests == {}' \
+jq -e '. == {"data": {"attributes": {"tests": {}}}}' \
   "$repo_dir/.testoptimization/cache/http/known_tests.json" >/dev/null
-jq -e '.data.attributes.modules == {}' \
+jq -e '. == {"data": {"attributes": {"modules": {}}}}' \
   "$repo_dir/.testoptimization/cache/http/test_management.json" >/dev/null
-jq -e '.data == []' \
+jq -e '. == {"data": []}' \
   "$repo_dir/.testoptimization/cache/http/flaky_tests.json" >/dev/null
-jq -e '."topt.sync.enabled" == false' \
+jq -e '
+  keys == [
+    "bazel.rule_name",
+    "bazel.rule_version",
+    "env",
+    "runtime.name",
+    "runtime.version",
+    "service.name",
+    "topt.sync.enabled",
+    "topt.sync.out_dir",
+    "topt.sync.repository_name"
+  ] and
+  ."bazel.rule_name" == "datadog-rules-test-optimization" and
+  (."bazel.rule_version" | type == "string" and length > 0) and
+  .env == "ci" and
+  ."runtime.name" == "go" and
+  ."runtime.version" == "1.2.3" and
+  ."service.name" == "mock-service" and
+  ."topt.sync.enabled" == false and
+  ."topt.sync.out_dir" == ".testoptimization" and
+  ."topt.sync.repository_name" == "test_optimization_data"
+' \
   "$repo_dir/.testoptimization/context.json" >/dev/null
-jq -e 'any(.counts[]; .name == "sync.disabled" and .value == 1)' \
+jq -e '. == {
+  "counts": [{"name": "sync.disabled", "tags": [], "value": 1}],
+  "distributions": [],
+  "env": "ci",
+  "runtime_name": "go",
+  "schema_version": 1,
+  "service_name": "mock-service"
+}' \
   "$repo_dir/.testoptimization/telemetry_facts.json" >/dev/null
 DISABLED_RUNFILES_EOF
 chmod +x disabled_metadata_runfiles_test.sh
@@ -589,20 +621,52 @@ if [[ -z "$DISABLED_REPO_DIR" ]]; then
   exit 1
 fi
 DISABLED_REPO_DIR="${DISABLED_REPO_DIR%/.testoptimization/cache/http/settings.json}"
-jq -e '
-  .data.attributes.known_tests_enabled == false and
-  .data.attributes.test_management.enabled == false and
-  .data.attributes.flaky_test_retries_enabled == false
-' "$DISABLED_REPO_DIR/.testoptimization/cache/http/settings.json" >/dev/null
-jq -e '.data.attributes.tests == {}' \
+jq -e '. == {
+  "data": {
+    "attributes": {
+      "flaky_test_retries_enabled": false,
+      "known_tests_enabled": false,
+      "test_management": {"enabled": false}
+    }
+  }
+}' "$DISABLED_REPO_DIR/.testoptimization/cache/http/settings.json" >/dev/null
+jq -e '. == {"data": {"attributes": {"tests": {}}}}' \
   "$DISABLED_REPO_DIR/.testoptimization/cache/http/known_tests.json" >/dev/null
-jq -e '.data.attributes.modules == {}' \
+jq -e '. == {"data": {"attributes": {"modules": {}}}}' \
   "$DISABLED_REPO_DIR/.testoptimization/cache/http/test_management.json" >/dev/null
-jq -e '.data == []' \
+jq -e '. == {"data": []}' \
   "$DISABLED_REPO_DIR/.testoptimization/cache/http/flaky_tests.json" >/dev/null
-jq -e '."topt.sync.enabled" == false' \
+jq -e '
+  keys == [
+    "bazel.rule_name",
+    "bazel.rule_version",
+    "env",
+    "runtime.name",
+    "runtime.version",
+    "service.name",
+    "topt.sync.enabled",
+    "topt.sync.out_dir",
+    "topt.sync.repository_name"
+  ] and
+  ."bazel.rule_name" == "datadog-rules-test-optimization" and
+  (."bazel.rule_version" | type == "string" and length > 0) and
+  .env == "ci" and
+  ."runtime.name" == "go" and
+  ."runtime.version" == "1.2.3" and
+  ."service.name" == "mock-service" and
+  ."topt.sync.enabled" == false and
+  ."topt.sync.out_dir" == ".testoptimization" and
+  ."topt.sync.repository_name" == "test_optimization_data"
+' \
   "$DISABLED_REPO_DIR/.testoptimization/context.json" >/dev/null
-jq -e 'any(.counts[]; .name == "sync.disabled" and .value == 1)' \
+jq -e '. == {
+  "counts": [{"name": "sync.disabled", "tags": [], "value": 1}],
+  "distributions": [],
+  "env": "ci",
+  "runtime_name": "go",
+  "schema_version": 1,
+  "service_name": "mock-service"
+}' \
   "$DISABLED_REPO_DIR/.testoptimization/telemetry_facts.json" >/dev/null
 DISABLED_SERVICE="$(jq -r '."service.name"' "$DISABLED_REPO_DIR/.testoptimization/context.json")"
 DISABLED_ENVIRONMENT="$(jq -r '.env' "$DISABLED_REPO_DIR/.testoptimization/context.json")"
