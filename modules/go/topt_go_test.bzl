@@ -25,7 +25,8 @@ Notes:
   test_optimization_uploader.bzl) and run it via `bazel run` after tests.
 
 Macro design constraints:
-- This macro creates a hidden raw `go_test` plus a public wrapper target.
+- Enabled exports create a hidden raw `go_test` plus a public wrapper target.
+  Disabled exports create only the caller's public raw `go_test`.
 - It does not create upload targets and does not alter workspace-level upload
   behavior.
 - Runtime behavior must remain hermetic: tests write payloads to
@@ -269,8 +270,9 @@ def dd_topt_go_test(
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
-    This macro creates a hidden raw go_test target plus a public
-    Orchestrion-enabled wrapper target. Payloads are written to Bazel's
+    For an enabled export, this macro creates a hidden raw go_test target plus a
+    public Orchestrion-enabled wrapper target. For a disabled export, it creates
+    only the caller's public raw go_test. Enabled payloads are written to Bazel's
     TEST_UNDECLARED_OUTPUTS_DIR and collected in bazel-testlogs/<target>/test.outputs/.
 
     After running tests, use a single workspace-level uploader target to upload
@@ -326,13 +328,8 @@ def dd_topt_go_test(
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
     _validate_orchestrion_mode(orchestrion_mode)
-    test_binary_linker_optimization_requested = (
-        orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
-        enable_test_binary_linker_optimization
-    )
-    test_binary_linker_optimization_applied = (
-        _TEST_BINARY_LINKER_OPTIMIZATION_APPLIED if test_binary_linker_optimization_requested else False
-    )
+    if go_test_rule == None:
+        fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
     # Support both shapes:
     # 1) Single-service dict with keys: repo_name, labels, set, runtimes
@@ -352,6 +349,20 @@ def dd_topt_go_test(
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
         _svc = service_entries[selected_key]
 
+    if not bool(_svc.get("enabled", True)):
+        go_test_rule(
+            name = name,
+            **kwargs
+        )
+        return
+
+    test_binary_linker_optimization_requested = (
+        orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
+        enable_test_binary_linker_optimization
+    )
+    test_binary_linker_optimization_applied = (
+        _TEST_BINARY_LINKER_OPTIMIZATION_APPLIED if test_binary_linker_optimization_requested else False
+    )
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
 
     # ------------------------------------------------------------------
@@ -570,9 +581,6 @@ def dd_topt_go_test(
         required_env,
         macro_name = "dd_topt_go_test",
     )
-
-    if go_test_rule == None:
-        fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
     # Use the repository root when staged sources need repo-relative lookup.
     # Otherwise keep the package directory default to preserve existing tests.

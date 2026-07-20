@@ -108,7 +108,18 @@ This product includes software developed at Datadog
     `WINDOWS_DISABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Enabled alias and payload gate with valid Orchestrion pins:
     `WINDOWS_ENABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Same-output-root disabled then enabled transition for the public central
+    wrapper:
+    `WINDOWS_CONFIG_TRANSITION_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Each script now validates:
+    - the same consumer-owned central wrapper call expands to a raw `go_test`
+      without the named config and to the existing Orchestrion-backed shape
+      with it
+    - disabled then enabled resolution on one fixture workspace and output
+      root, with no intervening clean or shutdown
+    - no hidden Test Optimization targets, empty Orchestrion aliases, exact
+      disabled stubs, zero metadata HTTP requests, and no payload while
+      disabled
     - normal mode
     - hermetic mode with the inline CI sandbox/network-blocking flags
     - strict BEP fresh/cached uploader behavior

@@ -39,6 +39,8 @@ load(
 )
 load("@rules_go//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
+_ORCHESTRION_ENABLED_SETTING = str(Label("@rules_go//go/private/orchestrion:enabled"))
+
 ToptGoMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_go_test to the underlying go_test rule.",
     fields = {
@@ -219,7 +221,7 @@ def go_macro_single_service_target(name, tags = None):
     """Target-under-test: single-service wiring + default rundir path."""
     dd_topt_go_test(
         name = name,
-        topt_data = _single_service_topt_data(enabled = False),
+        topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
         env = {
@@ -227,6 +229,20 @@ def go_macro_single_service_target(name, tags = None):
             # Macro must force this to true regardless of user input.
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
         },
+        tags = tags,
+    )
+
+def go_macro_disabled_raw_target(name, tags = None):
+    """Target under test for the strict disabled raw go_test branch."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _single_service_topt_data(enabled = False),
+        go_test_rule = _go_test_capture_rule,
+        data = [":test_macro.bzl"],
+        env = {"CUSTOM_ENV": "disabled"},
+        gc_linkopts = ["-disabled-link-flag"],
+        importpath = "example.com/disabled/pkg",
+        rundir = "disabled/rundir",
         tags = tags,
     )
 
@@ -376,7 +392,7 @@ def go_macro_test_optimization_public_wrapper_mode_target(name, tags = None):
     """Target under test for public wrapper Orchestrion mode forwarding."""
     dd_topt_go_test(
         name = name,
-        topt_data = _single_service_topt_data(enabled = False),
+        topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_transition_mode_rule,
         orchestrion_mode = "test_optimization",
         orchestrion_pin_files = [":go.mod"],
@@ -387,7 +403,7 @@ def go_macro_default_general_public_wrapper_mode_target(name, tags = None):
     """Target under test for omitted Orchestrion mode defaulting to general."""
     dd_topt_go_test(
         name = name,
-        topt_data = _single_service_topt_data(enabled = False),
+        topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_transition_mode_rule,
         tags = tags,
     )
@@ -507,6 +523,20 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.true(env, captured.rundir.endswith("tests"))
+    return analysistest.end(env)
+
+def _go_macro_disabled_raw_wiring_test_impl(ctx):
+    """Assert disabled metadata forwards caller kwargs to one raw public test."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    captured = target[ToptGoMacroCaptureInfo]
+
+    asserts.equals(env, 1, len(captured.data_labels))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.equals(env, {"CUSTOM_ENV": "disabled"}, captured.env)
+    asserts.equals(env, ["-disabled-link-flag"], captured.gc_linkopts)
+    asserts.equals(env, "example.com/disabled/pkg", captured.importpath)
+    asserts.equals(env, "disabled/rundir", captured.rundir)
     return analysistest.end(env)
 
 def _go_macro_multi_service_wiring_test_impl(ctx):
@@ -977,6 +1007,9 @@ def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
 go_macro_single_service_wiring_test = analysistest.make(
     _go_macro_single_service_wiring_test_impl,
 )
+go_macro_disabled_raw_wiring_test = analysistest.make(
+    _go_macro_disabled_raw_wiring_test_impl,
+)
 go_macro_multi_service_wiring_test = analysistest.make(
     _go_macro_multi_service_wiring_test_impl,
 )
@@ -1051,12 +1084,21 @@ go_macro_explicit_service_wiring_test = analysistest.make(
 )
 go_macro_public_wrapper_test = analysistest.make(
     _go_macro_public_wrapper_test_impl,
+    config_settings = {
+        _ORCHESTRION_ENABLED_SETTING: True,
+    },
 )
 go_macro_test_optimization_public_wrapper_mode_test = analysistest.make(
     _go_macro_test_optimization_public_wrapper_mode_test_impl,
+    config_settings = {
+        _ORCHESTRION_ENABLED_SETTING: True,
+    },
 )
 go_macro_default_general_public_wrapper_mode_test = analysistest.make(
     _go_macro_default_general_public_wrapper_mode_test_impl,
+    config_settings = {
+        _ORCHESTRION_ENABLED_SETTING: True,
+    },
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

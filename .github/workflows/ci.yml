@@ -563,7 +563,7 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Validate disabled bootstrap
+      - name: Validate disabled-to-enabled bootstrap transition
         shell: bash
         env:
           BAZEL_VERSION: "8.4.1"
@@ -571,30 +571,7 @@ jobs:
           ORCHESTRION_MODE: test_optimization
           RULES_GO_UPSTREAM: ${{ matrix.upstream }}
           RULES_GO_VARIANT: base
-          WINDOWS_DISABLED_SMOKE_ONLY: "1"
-        run: |
-          case "${MODULE_SYSTEM}" in
-            workspace)
-              ./tools/tests/integration/run_workspace_go_integration.sh
-              ;;
-            bzlmod)
-              ./tools/tests/integration/run_bzlmod_go_integration.sh
-              ;;
-            *)
-              echo "Unsupported module system: ${MODULE_SYSTEM}" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Validate enabled Orchestrion aliases and payloads
-        shell: bash
-        env:
-          BAZEL_VERSION: "8.4.1"
-          MODULE_SYSTEM: ${{ matrix.module_system }}
-          ORCHESTRION_MODE: test_optimization
-          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
-          RULES_GO_VARIANT: base
-          WINDOWS_ENABLED_SMOKE_ONLY: "1"
+          WINDOWS_CONFIG_TRANSITION_ONLY: "1"
         run: |
           case "${MODULE_SYSTEM}" in
             workspace)

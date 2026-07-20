@@ -46,6 +46,7 @@ ORCHESTRION_DISABLED_SENTINEL="${ORCHESTRION_DISABLED_SENTINEL:-0}"
 ORCHESTRION_DISABLED_SENTINEL_VERSION="v0.0.0-rto-disabled-fetch-sentinel"
 WINDOWS_DISABLED_SMOKE_ONLY="${WINDOWS_DISABLED_SMOKE_ONLY:-0}"
 WINDOWS_ENABLED_SMOKE_ONLY="${WINDOWS_ENABLED_SMOKE_ONLY:-0}"
+WINDOWS_CONFIG_TRANSITION_ONLY="${WINDOWS_CONFIG_TRANSITION_ONLY:-0}"
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0}"
 SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
@@ -576,7 +577,7 @@ EOF
 write_shared_fixture_sources() {
   local ws_dir="$1"
 
-  mkdir -p "$ws_dir/app"
+  mkdir -p "$ws_dir/app" "$ws_dir/tools/build"
 
   cat > "$ws_dir/BUILD.bazel" <<'EOF'
 load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
@@ -595,11 +596,28 @@ dd_test_optimization_targets(
 )
 EOF
 
+  cat > "$ws_dir/tools/build/BUILD.bazel" <<'EOF'
+exports_files(["dd_go_test.bzl"])
+EOF
+
+  cat > "$ws_dir/tools/build/dd_go_test.bzl" <<'EOF'
+load("@rules_go//go:def.bzl", _go_test = "go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+def dd_go_test(name, **kwargs):
+    dd_topt_go_test(
+        name = name,
+        go_test_rule = _go_test,
+        topt_data = topt_data,
+        **kwargs
+    )
+EOF
+
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@rules_go//go/private/rules:transition.bzl", "go_reset_target")
-load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
 go_library(
     name = "hello_lib",
@@ -618,7 +636,7 @@ go_reset_target(
     dep = ":fixture_tool",
 )
 
-dd_topt_go_test(
+dd_go_test(
     name = "hello_test",
     srcs = [
         "hello_external_test.go",
@@ -633,7 +651,6 @@ dd_topt_go_test(
         "//:orchestrion.yml",
     ],
     orchestrion_mode = "${ORCHESTRION_MODE}",
-    topt_data = topt_data,
 )
 EOF
 
@@ -1201,6 +1218,7 @@ run_disabled_no_fetch_smoke() {
   mkdir -p "$ws_dir"
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
+  write_fixture_bazelrc "$ws_dir" "rules_go"
   write_disabled_fixture_test "$ws_dir"
 
   : > "$alias_log"
@@ -1258,9 +1276,40 @@ run_disabled_no_fetch_smoke() {
     echo "error: disabled Bzlmod smoke emitted Test Optimization payloads" >&2
     exit 1
   fi
+
+  local public_kind
+  public_kind="$(
+    cd "$ws_dir/$test_package"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
+      "${disabled_flags[@]}" \
+      ":$test_name" \
+      --output=label_kind
+  )"
+  if [[ "$public_kind" != "go_test rule "* ]]; then
+    echo "error: disabled Bzlmod public target kind is '$public_kind', want raw go_test rule" >&2
+    exit 1
+  fi
+
+  local hidden_name
+  for hidden_name in \
+    "${test_name}__raw_go_test" \
+    "${test_name}_topt_payloads" \
+    "${test_name}_topt_bazel_metadata" \
+    "${test_name}_orchestrion_pin_files"; do
+    if (
+      cd "$ws_dir/$test_package"
+      "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
+        "${disabled_flags[@]}" \
+        ":$hidden_name"
+    ) >/dev/null 2>&1; then
+      echo "error: disabled Bzlmod branch created enabled-only target :$hidden_name" >&2
+      exit 1
+    fi
+  done
 }
 
 run_windows_enabled_smoke() {
+  local reuse_disabled_workspace="${1:-0}"
   local ws_dir="$WORKSPACE_ROOT/windows-enabled"
   local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
   local test_log="$TMP_ROOT/windows-enabled-test.log"
@@ -1273,7 +1322,12 @@ run_windows_enabled_smoke() {
     bazel_test_flags+=(--noexperimental_split_xml_generation)
   fi
 
-  start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+  if [[ "$reuse_disabled_workspace" == "1" ]]; then
+    ws_dir="$WORKSPACE_ROOT/disabled"
+  fi
+  if [[ -z "$GO_INTEGRATION_MOCK_SERVER_PID" ]]; then
+    start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+  fi
 
   local -a enabled_flags=(
     "${BAZEL_EXTRA_ARGS[@]}"
@@ -1289,11 +1343,13 @@ run_windows_enabled_smoke() {
     orchestrion_tool_version_file
   )
 
-  rm -rf "$ws_dir"
-  mkdir -p "$ws_dir"
-  write_module_file "$ws_dir"
-  write_shared_fixture_sources "$ws_dir"
-  write_fixture_bazelrc "$ws_dir" "rules_go"
+  if [[ "$reuse_disabled_workspace" != "1" ]]; then
+    rm -rf "$ws_dir"
+    mkdir -p "$ws_dir"
+    write_module_file "$ws_dir"
+    write_shared_fixture_sources "$ws_dir"
+    write_fixture_bazelrc "$ws_dir" "rules_go"
+  fi
 
   for alias in "${aliases[@]}"; do
     local alias_files="$TMP_ROOT/windows-enabled-bzlmod-$alias.files"
@@ -1345,6 +1401,18 @@ run_windows_enabled_smoke() {
     cat "$test_log" >&2
     exit 1
   fi
+  local public_kind
+  public_kind="$(
+    cd "$ws_dir/$test_package"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
+      "${enabled_flags[@]}" \
+      ":$test_name" \
+      --output=label_kind
+  )"
+  if [[ "$public_kind" != "orch_go_test rule "* ]]; then
+    echo "error: enabled Bzlmod public target kind is '$public_kind', want orch_go_test rule" >&2
+    exit 1
+  fi
   assert_go_integration_metadata_requests
 }
 
@@ -1362,6 +1430,20 @@ if [[ "$WINDOWS_ENABLED_SMOKE_ONLY" == "1" ]]; then
   ORCHESTRION_MODE="test_optimization"
   create_fixture_archive
   run_windows_enabled_smoke
+  exit 0
+fi
+
+if [[ "$WINDOWS_CONFIG_TRANSITION_ONLY" == "1" ]]; then
+  ORCHESTRION_MODE="test_optimization"
+  create_fixture_archive
+  start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+  run_disabled_no_fetch_smoke
+  if [[ -s "$GO_INTEGRATION_MOCK_SERVER_LOG" ]]; then
+    echo "error: disabled Bzlmod phase contacted the metadata server" >&2
+    cat "$GO_INTEGRATION_MOCK_SERVER_LOG" >&2
+    exit 1
+  fi
+  run_windows_enabled_smoke 1
   exit 0
 fi
 

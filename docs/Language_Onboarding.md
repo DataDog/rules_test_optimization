@@ -231,9 +231,11 @@ For WORKSPACE monorepos, prefer bootstrap `--workspace-mode` to generate the
 generic local scaffolding. It can write the root doctor/uploader targets,
 `.bazelrc` block, Orchestrion pin files, and a split wrapper template while
 leaving `WORKSPACE` placement under repository control. The generated wrapper
-template keeps repo-specific policy in a local helper and exposes separate
-plain and optimized wrapper functions, so large repositories do not have to
-rediscover that split during onboarding.
+template keeps repo-specific policy in a local helper and exposes plain and
+optimized building blocks. A large repository can keep one public
+`dd_go_test`, route its enrolled package set to `dd_topt_go_test` internally,
+and rely on `--config=test-optimization` to choose the raw or instrumented
+shape without adding per-target Test Optimization attributes.
 
 ### Large WORKSPACE monorepos
 
@@ -312,6 +314,11 @@ dd_topt_go_workspace_sync_repositories(
 The public Go helper enables metadata gating by default. The single
 `--config=test-optimization` switch controls both metadata sync and the
 Orchestrion aliases; no per-target or per-repository enable attribute is needed.
+Without the config, `dd_topt_go_test` delegates directly to the consumer's
+original `go_test_rule` under the public name, preserves the caller's Go rule
+kwargs, and creates no Test Optimization-owned hidden targets. With the config,
+the same BUILD call uses the existing Orchestrion-backed Test Optimization
+shape.
 
 Python follows the same single-switch contract when its sync declaration uses
 `enabled_by_env = True`: without the config, the wrapper preserves the normal

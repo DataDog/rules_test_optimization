@@ -131,6 +131,15 @@ Removing `--config=test-optimization` provides the complete metadata and
 runtime opt-out for the Go and Python integrations described below. This
 release does not change the enablement contract of the other companions.
 
+When the selected Go sync export is disabled, `dd_topt_go_test` validates its
+macro-only inputs and selected service, then calls the supplied `go_test_rule`
+directly under the public target name with the caller's original Go rule
+arguments. It does not create the hidden raw test, payload selector, Bazel
+metadata, Orchestrion pin, or public wrapper targets. This lets a consumer keep
+one central `dd_go_test` entry point while the named config decides whether the
+same BUILD call is a raw `go_test` or the existing enabled Test Optimization
+shape.
+
 When a config-gated Python sync is disabled, `dd_topt_py_test` keeps the
 consumer's normal runner and test arguments, omits Test Optimization metadata
 and payload wiring, and applies the CI Visibility runtime kill switch
@@ -1584,8 +1593,10 @@ For complete uploader details, use [`docs/Uploader_Reference.md`](docs/Uploader_
 ## Convenience macro: dd_topt_go_test
 
 The `dd_topt_go_test` macro creates a `go_test` target with Datadog Test
-Optimization data/env wiring included, and always runs through an internal
-Orchestrion-enabled wrapper target.
+Optimization data/env wiring included when the selected sync export is enabled.
+When that export is disabled, it delegates directly to the supplied
+`go_test_rule` with the public name and original caller kwargs; no
+Test Optimization-owned hidden targets or argument mutations are created.
 
 By default, it sets `rundir` to the current Bazel package when not explicitly
 provided. If you enable `stage_sources = True`, it instead defaults `rundir`
@@ -1624,6 +1635,11 @@ named config before updating the Rule; rerun `dd_topt_go_bootstrap` with
 keeps manually controlled, always-enabled metadata can set
 `enabled_by_env = False`, but it must also keep the Orchestrion build setting
 enabled; analysis rejects a partial activation.
+
+Consumer-owned central wrappers may always delegate capable packages to
+`dd_topt_go_test`. The generated export and named config choose the raw or
+instrumented shape, so BUILD callsites do not need a Test Optimization
+attribute or a second macro name.
 
 `module_path` should match the Go module path from `go.mod`. The sync rule
 still honors `GO_MODULE_PATH` first for CI overrides, but the explicit attr is

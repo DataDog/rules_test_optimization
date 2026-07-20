@@ -371,6 +371,15 @@ For Go onboarding, the generated block also contains
 `--config=<config>` is the single user-facing switch: removing it disables
 both metadata resolution and the real Orchestrion aliases.
 
+For Go, the disabled generated export also changes the macro expansion.
+`dd_topt_go_test` performs its macro-input and service-selection validation,
+then invokes the supplied `go_test_rule(name = name, **kwargs)` directly. It
+does not run importpath inference, select metadata payloads, inject Datadog
+environment/data/linker inputs, or create hidden Test Optimization or
+Orchestrion targets. The enabled export preserves the existing instrumented
+expansion. Consumer-owned wrappers can therefore expose one public Go test
+macro in both modes.
+
 Config-gated Python onboarding uses the same
 `DD_TEST_OPTIMIZATION_ENABLED=1` repository environment entry but does not use
 the Go-only Orchestrion setting. The Java, NodeJS, .NET, and Ruby companions
