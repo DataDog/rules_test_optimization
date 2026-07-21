@@ -1315,11 +1315,12 @@ run_disabled_no_fetch_smoke() {
   fi
 
   if ! (
-    cd "$ws_dir"
+    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
+    cd "$ws_dir/$test_package"
     "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build \
       "${disabled_flags[@]}" \
       --experimental_repository_resolved_file="$resolved_repos" \
-      "//$test_package:${test_name}_deps_query"
+      ":${test_name}_deps_query"
   ) >"$genquery_log" 2>&1; then
     echo "error: disabled WORKSPACE genquery failed" >&2
     cat "$genquery_log" >&2
