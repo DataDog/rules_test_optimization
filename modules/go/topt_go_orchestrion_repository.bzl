@@ -23,6 +23,7 @@ def _build_orchestrion_repo_call(
         "name": _DEFAULT_TOOL_REPO_NAME,
         "dd_trace_go_version": dd_trace_go_version,
         "dd_trace_go_versions": dd_trace_go_versions,
+        "enabled_by_env": True,
         "version": version,
         "log_timing": log_timing,
     }

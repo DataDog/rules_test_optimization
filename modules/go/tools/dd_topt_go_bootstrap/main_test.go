@@ -101,6 +101,9 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `version = "v1.9.0"`) {
 		t.Fatalf("expected orchestrion version in managed block:\n%s", got)
 	}
+	if strings.Contains(got, `enabled_by_env`) {
+		t.Fatalf("expected managed block to rely on the config-gated extension default:\n%s", got)
+	}
 	if !strings.Contains(got, `dd_trace_go_version = "v2.5.0"`) {
 		t.Fatalf("expected dd-trace-go version in managed block:\n%s", got)
 	}

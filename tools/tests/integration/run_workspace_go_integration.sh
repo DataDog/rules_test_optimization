@@ -627,6 +627,12 @@ dd_go_test(
     ],
     orchestrion_mode = "${ORCHESTRION_MODE}",
 )
+
+genquery(
+    name = "hello_test_deps_query",
+    expression = "deps(//app:hello_test)",
+    scope = [":hello_test"],
+)
 EOF
 
   cat > "$ws_dir/app/hello.go" <<'EOF'
@@ -1254,6 +1260,8 @@ run_disabled_no_fetch_smoke() {
   local ws_dir="$WORKSPACE_ROOT/disabled"
   local resolved_repos="$TMP_ROOT/disabled-resolved-repositories.bzl"
   local alias_log="$TMP_ROOT/disabled-aliases.log"
+  local genquery_log="$TMP_ROOT/disabled-genquery.log"
+  local repository_files="$TMP_ROOT/disabled-orchestrion-repository.files"
   local test_log="$TMP_ROOT/disabled-test.log"
   local test_target_path="${HELLO_TEST_TARGET#//}"
   local test_package="${test_target_path%%:*}"
@@ -1307,6 +1315,34 @@ run_disabled_no_fetch_smoke() {
   fi
 
   if ! (
+    cd "$ws_dir"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build \
+      "${disabled_flags[@]}" \
+      --experimental_repository_resolved_file="$resolved_repos" \
+      "//$test_package:${test_name}_deps_query"
+  ) >"$genquery_log" 2>&1; then
+    echo "error: disabled WORKSPACE genquery failed" >&2
+    cat "$genquery_log" >&2
+    exit 1
+  fi
+
+  if ! (
+    cd "$ws_dir"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+      "${disabled_flags[@]}" \
+      @rules_go_orchestrion_tool//:orchestrion --output=files
+  ) >"$repository_files" 2>>"$genquery_log"; then
+    echo "error: disabled WORKSPACE Orchestrion repository query failed" >&2
+    cat "$genquery_log" >&2
+    exit 1
+  fi
+  if [[ -s "$repository_files" ]]; then
+    echo "error: disabled WORKSPACE Orchestrion repository exposed real files" >&2
+    cat "$repository_files" >&2
+    exit 1
+  fi
+
+  if ! (
     # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
     cd "$ws_dir/$test_package"
     "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
@@ -1319,14 +1355,14 @@ run_disabled_no_fetch_smoke() {
     exit 1
   fi
 
-  if [[ -f "$resolved_repos" ]] && grep -En 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$resolved_repos"; then
-    echo "error: disabled WORKSPACE smoke resolved the Orchestrion sentinel repository" >&2
-    cat "$resolved_repos" >&2
+  if grep -Ein 'building orchestrion|downloading orchestrion|Could not find .go. binary' "$test_log"; then
+    echo "error: disabled WORKSPACE smoke attempted the real Orchestrion bootstrap" >&2
+    cat "$test_log" >&2
     exit 1
   fi
-  if grep -En 'rules_go_orchestrion_tool|v0[.]0[.]0-rto-disabled-fetch-sentinel' "$test_log"; then
-    echo "error: disabled WORKSPACE smoke attempted the Orchestrion sentinel" >&2
-    cat "$test_log" >&2
+  if grep -En 'building orchestrion|downloading orchestrion|Could not find .go. binary' "$genquery_log"; then
+    echo "error: disabled WORKSPACE genquery attempted the real Orchestrion bootstrap" >&2
+    cat "$genquery_log" >&2
     exit 1
   fi
 

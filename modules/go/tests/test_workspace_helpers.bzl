@@ -132,13 +132,13 @@ def _orchestrion_call_spec_test(ctx):
             "name": "rules_go_orchestrion_tool",
             "dd_trace_go_version": "v2.9.0",
             "dd_trace_go_versions": {"example.com/service": "v2.8.0"},
+            "enabled_by_env": True,
             "version": "v1.9.0",
             "log_timing": True,
         },
         call,
     )
     asserts.false(env, "enabled" in call)
-    asserts.false(env, "enabled_by_env" in call)
     return unittest.end(env)
 
 go_workspace_single_specs_test = unittest.make(_go_workspace_single_specs_test)

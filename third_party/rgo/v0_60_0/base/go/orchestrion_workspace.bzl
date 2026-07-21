@@ -13,6 +13,7 @@ def go_orchestrion_tool_repo(
         version = "",
         dd_trace_go_version = "",
         dd_trace_go_versions = None,
+        enabled_by_env = False,
         log_timing = False):
     """Create the `rules_go_orchestrion_tool` repository in WORKSPACE mode.
 
@@ -25,6 +26,9 @@ def go_orchestrion_tool_repo(
         target module when instrumentation is enabled.
       dd_trace_go_versions: Optional per-module dd-trace-go version mapping.
         Mutually exclusive with `dd_trace_go_version`.
+      enabled_by_env: Gate repository materialization on the Test Optimization
+        repository environment. Generic Orchestrion callers should keep the
+        default.
       log_timing: Emit structured bootstrap timing probes while building the
         Orchestrion tool repository.
     """
@@ -50,5 +54,6 @@ def go_orchestrion_tool_repo(
         version = version,
         dd_trace_go_version = dd_trace_go_version,
         dd_trace_go_versions = dd_trace_go_versions,
+        enabled_by_env = enabled_by_env,
         log_timing = log_timing,
     )
