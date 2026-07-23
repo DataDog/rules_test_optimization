@@ -96,8 +96,10 @@ dd_topt_go_test(
 )
 ```
 
-But the raw `go_test` is built under a transition that enables the requested
-Orchestrion mode in the vendored toolchain.
+When Test Optimization is enabled, the raw `go_test` is built under a
+transition that enables the requested Orchestrion mode in the vendored
+toolchain. When the selected sync export is disabled, the macro instead creates
+only the caller's public raw `go_test`.
 
 ### Why This Section Exists
 
@@ -115,10 +117,14 @@ flowchart TD
     C --> E[orchestrion pin files]
     D --> F[vendored rules_go fork]
     F --> G[rules_go Orchestrion extension]
-    G --> H[patched Orchestrion binary]
+    G --> U{Test Optimization enabled?}
+    U -->|no| V[stable empty repository\n no host Go or source fetch]
+    U -->|yes| H[patched Orchestrion binary]
 
-    I[BUILD: dd_topt_go_test] --> J[hidden raw go_test]
-    I --> K[public orch_go_test wrapper]
+    I[BUILD: dd_topt_go_test] --> R{Sync export enabled?}
+    R -->|no| S[public raw go_test\n no Test Optimization targets]
+    R -->|yes| J[hidden raw go_test]
+    R -->|yes| K[public orch_go_test wrapper]
     K --> L[function transition]
     L --> J
 
@@ -231,16 +237,22 @@ target would need to carry fragile setup knowledge.
 Implementation:
 - [topt_go_test.bzl](../modules/go/topt_go_test.bzl)
 
-The macro does three distinct jobs:
+With an enabled sync export, the macro does three distinct jobs:
 
 1. Select Datadog payload data
 2. Prepare runtime env/data wiring for Test Optimization
 3. Route the public test through the Orchestrion wrapper transition
 
-The macro expands into:
+The enabled macro expands into:
 
 - a hidden raw `go_test`
 - a public `orch_go_test` wrapper
+
+With a disabled export, the macro validates its macro-only inputs and selected
+service, then creates only the caller's public raw `go_test`. It does not create
+the hidden test, payload selector, target metadata, Orchestrion pin, or wrapper
+targets. The public label is therefore stable across modes, but the rule class
+is not: it is `go_test` while disabled and `orch_go_test` while enabled.
 
 The wrapper forwards `orchestrion_mode` into the vendored `rules_go` fork. The
 default mode is `general`, which preserves broad generic Orchestrion behavior.
@@ -278,7 +290,8 @@ in one place.
 Implementation:
 - [topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 
-The wrapper rule applies a function transition that sets only:
+In the enabled path, the wrapper rule applies a function transition that sets
+only:
 
 ```bzl
 "@rules_go//go/private/orchestrion:mode": "general" or "test_optimization"
@@ -298,7 +311,9 @@ an Orchestrion-enabled configuration.
 #### Why This Exists
 
 The transition wrapper lets the raw test build under a different configuration
-without changing the public target shape that users and CI interact with.
+without changing the public target label that users and CI invoke. Callers that
+filter tests by rule language must account for the mode-dependent rule class:
+`go` for the disabled raw target and `orch_go` for the enabled wrapper.
 
 ## Why the Vendored `rules_go` Fork Exists
 
@@ -758,7 +773,10 @@ and Datadog contrib HTTP/slog helper roots.
 Some required woven dependencies are first touched inside sandboxed steps.
 Warming them reduces failures caused by lazy first access in those contexts.
 
-## End-to-End Flow for a Go Test
+## End-to-End Flow for an Enabled Go Test
+
+The disabled path stops at the macro: it creates the public raw `go_test` and
+does not enter the wrapper, vendored Orchestrion, or payload path below.
 
 ```mermaid
 sequenceDiagram

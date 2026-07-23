@@ -1592,11 +1592,18 @@ For complete uploader details, use [`docs/Uploader_Reference.md`](docs/Uploader_
 
 ## Convenience macro: dd_topt_go_test
 
-The `dd_topt_go_test` macro creates a `go_test` target with Datadog Test
-Optimization data/env wiring included when the selected sync export is enabled.
-When that export is disabled, it delegates directly to the supplied
-`go_test_rule` with the public name and original caller kwargs; no
-Test Optimization-owned hidden targets or argument mutations are created.
+The `dd_topt_go_test` macro preserves the caller's public target label in both
+modes. When the selected sync export is enabled, that label is a public
+`orch_go_test` wrapper around a hidden raw `go_test`, with Datadog Test
+Optimization data/env wiring included. When the export is disabled, the same
+label is the supplied raw `go_test_rule`; no Test Optimization-owned hidden
+targets or argument mutations are created.
+
+Because the label is stable but its rule class is mode-dependent, automation
+should prefer explicit target labels. If it uses Bazel's
+`--test_lang_filters`, enabled Test Optimization invocations need `orch_go`,
+ordinary raw Go invocations need `go`, and automation that covers both modes
+should use `--test_lang_filters=go,orch_go` or omit the language filter.
 
 By default, it sets `rundir` to the current Bazel package when not explicitly
 provided. If you enable `stage_sources = True`, it instead defaults `rundir`
@@ -1635,6 +1642,12 @@ named config before updating the Rule; rerun `dd_topt_go_bootstrap` with
 keeps manually controlled, always-enabled metadata can set
 `enabled_by_env = False`, but it must also keep the Orchestrion build setting
 enabled; analysis rejects a partial activation.
+
+Without `--config=test-optimization`, the patched `rules_go` aliases select
+package-local empty targets and the gated Orchestrion repository returns before
+looking for a host Go binary or fetching/building Orchestrion source. The
+disabled path therefore preserves the repository interface without requiring
+Go to be installed on the analysis host.
 
 Consumer-owned central wrappers may always delegate capable packages to
 `dd_topt_go_test`. The generated export and named config choose the raw or

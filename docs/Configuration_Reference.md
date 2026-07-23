@@ -175,6 +175,8 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
 | `http_execute_timeout_buffer_seconds` | int | `-1` attr / `60` effective | Optional outer execute-timeout buffer override (`-1` keeps env/default behavior) |
 | `known_tests` | bool | `True` | Local switch for Known Tests request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `known_tests_enabled=false` |
 | `test_management` | bool | `True` | Local switch for Test Management request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `test_management.enabled=false` |
+| `enabled` | bool | `True` | Hard enablement switch. When `False`, the repository emits the deterministic disabled interface and skips local Git discovery and metadata HTTP requests |
+| `enabled_by_env` | bool | `False` | When `True`, additionally gate enablement on `DD_TEST_OPTIMIZATION_ENABLED` (`1`, `true`, `yes`, or `on`, case-insensitive). Unset and false values emit the disabled interface. The public Go extension and Go WORKSPACE helper override this low-level default to `True` |
 | `require_git_metadata` | bool | `False` | Strict local/CI validation for settings-request Git metadata. When `True`, sync fails before HTTP if repository URL, branch or tag, and commit SHA cannot be resolved |
 | `debug` | bool | `False` | Enables verbose repository-rule logging |
 
@@ -208,6 +210,8 @@ Extension tag: `test_optimization_multi_sync.test_optimization_multi_sync(...)`
 | `http_execute_timeout_buffer_seconds` | int | `-1` attr / `60` effective | Optional outer execute-timeout buffer override propagated to each per-service sync repo (`-1` keeps env/default behavior) |
 | `known_tests` | bool | `True` | Known Tests kill-switch propagated to each per-service sync repo |
 | `test_management` | bool | `True` | Test Management kill-switch propagated to each per-service sync repo |
+| `enabled` | bool | `True` | Hard enablement switch propagated to every generated per-service sync repo |
+| `enabled_by_env` | bool | `False` | Environment gate propagated to every generated per-service sync repo. Config-gated consumers must set this to `True` |
 | `require_git_metadata` | bool | `False` | Strict Git metadata validation propagated to each per-service sync repo |
 | `debug` | bool | `False` | Enables verbose logging for generated per-service sync repos |
 
@@ -370,6 +374,11 @@ For Go onboarding, the generated block also contains
 `build:<config> --@<rules_go_repo>//go/private/orchestrion:enabled=true`.
 `--config=<config>` is the single user-facing switch: removing it disables
 both metadata resolution and the real Orchestrion aliases.
+
+In that disabled state, the patched `rules_go` aliases select package-local
+empty targets and the gated Orchestrion repository writes its stable empty
+interface before host-Go discovery or source fetching. Analysis can therefore
+resolve ordinary Go targets without a host Go binary while the config is absent.
 
 For Go, the disabled generated export also changes the macro expansion.
 `dd_topt_go_test` performs its macro-input and service-selection validation,
