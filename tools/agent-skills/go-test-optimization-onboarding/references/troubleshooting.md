@@ -106,7 +106,7 @@ Symptoms:
 
 Checks:
 
-- The target uses the Test Optimization wrapper.
+- The target uses the central Go wrapper that delegates to `dd_topt_go_test`.
 - The macro is not bypassed by a repo-local wrapper path.
 - The payload files came from the current test run.
 - Remote outputs were downloaded locally.
@@ -127,8 +127,9 @@ Symptoms:
 
 Meaning:
 
-- The Go macro could not match the test target to a module payload and the full
-  bundle did not provide a safe fallback.
+- The Go macro could not match an inferred/derived test target to a module
+  payload and used the canonical full bundle. The doctor rejects this by
+  default because known pilots normally require an exact module match.
 
 Checks:
 
@@ -139,14 +140,17 @@ Checks:
 - For monorepos, verify `topt_data` or `topt_data_by_service` points to the
   correct service/runtime slice.
 
-Valid alternatives are `module`, `module_override`, and
-`full_bundle_disabled`. `full_bundle_disabled` is acceptable only when the setup
-intentionally lacks backend full-bundle data.
+For known pilots, valid alternatives are `module`, `module_override`, and
+`full_bundle_disabled`. `full_bundle_disabled` is acceptable when the setup
+intentionally has no module groups. A repository that intentionally permits
+generic inferred/derived fallback may set
+`forbid_full_bundle_no_match = False` on its doctor target; do not use that
+exception to hide a missing module match for a known pilot.
 
 ## Diagnostic Reports
 
 When logs are long or ambiguous, first ask for a doctor-only support bundle with
-`bazel run --config=test-optimization //:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
+`bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
 matching BEP/artifact flags. Use the CI wrapper bundle when uploader dry-run or
 upload results matter. If a repository cannot use either bundle mode, collect
 `doctor-report.json`, `uploader-dry-run-report.json`, optional

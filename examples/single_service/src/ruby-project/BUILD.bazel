@@ -6,7 +6,7 @@
 
 load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
 load("@rules_ruby//ruby:defs.bzl", "rb_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_ruby//:export.bzl", "topt_data")
 
 dd_topt_ruby_test(
     name = "hello_test",

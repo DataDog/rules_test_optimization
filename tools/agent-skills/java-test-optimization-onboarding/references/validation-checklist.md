@@ -85,8 +85,11 @@ bazel sync --enable_workspace --config=test-optimization \
 ## Test, Doctor, Dry-Run, Upload
 
 For the simplest customer troubleshooting request after tests have run, use
-`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` with any
-matching BEP/artifact flags. Prefer the CI wrapper when the repository can
+`bazel run //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` with any
+matching BEP/artifact flags. Replace `<topt-package>` with the package that owns
+the workspace's logical doctor/uploader pair (for example,
+`tools/test_optimization`; use an empty package only when the targets
+intentionally live at the root). Prefer the CI wrapper when the repository can
 vendor the helper directory and you need uploader dry-run or upload coverage:
 
 ```bash

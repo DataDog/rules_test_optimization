@@ -5,7 +5,7 @@
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
 load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_dotnet//:export.bzl", "topt_data")
 load(":dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
 
 dd_topt_dotnet_test(

@@ -9,4 +9,12 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl
 # ONE doctor and ONE uploader target per workspace.
 dd_test_optimization_targets(
     name = "test_optimization",
+    context_data = [
+        "@test_optimization_data_go//:test_optimization_context",
+        "@test_optimization_data_python//:test_optimization_context",
+        "@test_optimization_data_java//:test_optimization_context",
+        "@test_optimization_data_nodejs//:test_optimization_context",
+        "@test_optimization_data_dotnet//:test_optimization_context",
+        "@test_optimization_data_ruby//:test_optimization_context",
+    ],
 )

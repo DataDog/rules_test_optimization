@@ -15,7 +15,7 @@ entrypoint, such as `bzl` or `./bazelw`.
 
 ## Local Structural Checks
 
-Check the repository for invalid patterns:
+Check the repository for invalid or review-required patterns:
 
 ```bash
 rg -n \
@@ -39,7 +39,10 @@ Interpretation:
 - `DD_TEST_OPTIMIZATION_AGENTLESS_URL` can be forwarded as `--repo_env` for
   sync metadata fetches; this check is only about `--test_env`.
 - Manual `rules_go` patches should not be part of new onboarding.
-- `full_bundle_no_match` in generated payloads is a stop condition.
+- `full_bundle_no_match` is valid for inferred/derived selection when no module
+  group matches. Treat it as a stop condition only when the rollout requires a
+  specific module group for that target; explicit selectors should fail
+  analysis rather than produce this state when module groups exist.
 
 Check that the root pin labels referenced by wrappers are visible:
 
@@ -53,6 +56,80 @@ labels used in `orchestrion_pin_files` instead.
 For Bzlmod manual wiring, confirm `MODULE.bazel` has an Orchestrion-enabled
 `rules_go` override and `orchestrion.from_source(...)` wiring. If guided
 bootstrap wrote the setup, this is in the Datadog-managed module block.
+
+## Disabled Then Enabled On The Same Output Root
+
+Before fetching live metadata, prove the single-switch contract on one fresh
+Bazel output root:
+
+```bash
+output_root="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-go-output.XXXXXX")"
+sync_repo="@test_optimization_data_<service_key>"
+public_target="//path/to:public_test"
+unset DD_TEST_OPTIMIZATION_ENABLED
+
+bazel --output_user_root="$output_root" test "$public_target"
+bazel --output_user_root="$output_root" cquery \
+  "${sync_repo}//:test_optimization_files" \
+  --output=files
+
+execution_root="$(
+  bazel --output_user_root="$output_root" info execution_root
+)"
+export_rel="$(
+  bazel --output_user_root="$output_root" cquery \
+    "${sync_repo}//:export.bzl" \
+    --output=files
+)"
+case "$export_rel" in
+  /*) export_file="$export_rel" ;;
+  *) export_file="$execution_root/$export_rel" ;;
+esac
+testlogs="$(
+  bazel --output_user_root="$output_root" info bazel-testlogs
+)"
+grep -F '"enabled": False' "$export_file"
+if find "$testlogs" \
+  \( -path '*/test.outputs/payloads/*' -o -name bazel_target_metadata.json \) \
+  -type f -print -quit | grep -q .; then
+  echo "disabled run emitted Test Optimization outputs" >&2
+  exit 1
+fi
+```
+
+Replace `<service_key>` and `//path/to:public_test` with the consumer's real
+repository and target. The ordinary public test must run, no Test Optimization
+payload or Bazel metadata files may appear for that target, and disabled
+repository resolution must not require a real Orchestrion tool repository or
+host Go binary. When the consumer test harness exposes a metadata-server
+request counter, require zero requests in this phase.
+
+Then reuse the exact same `output_root` for the enabled path:
+
+```bash
+bazel --output_user_root="$output_root" test \
+  --config=test-optimization \
+  "$public_target"
+
+export_rel="$(
+  bazel --output_user_root="$output_root" cquery \
+    --config=test-optimization \
+    "${sync_repo}//:export.bzl" \
+    --output=files
+)"
+case "$export_rel" in
+  /*) export_file="$export_rel" ;;
+  *) export_file="$execution_root/$export_rel" ;;
+esac
+grep -F '"enabled": True' "$export_file"
+find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -type f -print
+find "$testlogs" -name bazel_target_metadata.json -type f -print
+```
+
+Require both final `find` commands to return the expected files, then inspect
+the Bazel metadata for the expected Orchestrion mode. Every inspection command
+above is scoped to `output_root`; using the workspace's default output root at
+either stage does not prove the disabled-to-enabled repository transition.
 
 ## Sync
 
@@ -91,8 +168,11 @@ cat "$(bazel info output_base)/external/test_optimization_data_<service_key>/exp
 ## Test, Doctor, Dry-Run, Upload
 
 For the simplest customer troubleshooting request after tests have run, use
-`bazel run --config=test-optimization //:dd_test_optimization_doctor -- --support-bundle=<path>` with any
-matching BEP/artifact flags. Prefer the CI wrapper when the repository can
+`bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` with any
+matching BEP/artifact flags. Replace `<topt-package>` with the package that owns
+the workspace's logical doctor/uploader pair (for example,
+`tools/test_optimization`; use an empty package only when the targets
+intentionally live at the root). Prefer the CI wrapper when the repository can
 vendor the helper directory and you need uploader dry-run or upload coverage:
 
 ```bash
@@ -116,7 +196,7 @@ mkdir -p "$report_dir"
 bazel test --config=test-optimization --build_event_json_file="$bep_json" //path/to:pilot_test || test_status=$?
 test_status=${test_status:-0}
 
-bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
+bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- \
   --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
@@ -129,7 +209,7 @@ if [ "$doctor_status" -ne 0 ]; then
   exit "$doctor_status"
 fi
 
-bazel run --config=test-optimization //:dd_upload_payloads -- \
+bazel run --config=test-optimization //<topt-package>:dd_upload_payloads -- \
   --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
@@ -145,7 +225,7 @@ if [ "$dry_run_status" -ne 0 ]; then
 fi
 
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
-  bazel run --config=test-optimization //:dd_upload_payloads -- \
+  bazel run --config=test-optimization //<topt-package>:dd_upload_payloads -- \
     --bep-json="$bep_json" \
     --freshness-source=bep \
     --freshness-mode=required \
@@ -176,8 +256,8 @@ Expected:
 - JSON payload files exist either as loose files or inside `outputs.zip`.
 - `bazel_target_metadata.json` exists for instrumented runtime tests.
 - No `.msgpack` or `.msgpack.gz` payloads exist.
-- Go payload metadata does not contain `bazel.go.payload_selection =
-  "full_bundle_no_match"`.
+- Known pilots that require module selection do not report
+  `bazel.go.payload_selection = "full_bundle_no_match"`.
 - Go target metadata records the expected `bazel.go.orchestrion.mode`. For
   standard Go `testing` onboarding, that value should be `test_optimization`.
 
@@ -186,10 +266,19 @@ Valid payload selections:
 - `module`
 - `module_override`
 - `full_bundle_disabled`
+- `full_bundle_no_match` for intentionally generic inferred/derived fallback
 
 `full_bundle_disabled` can be valid for fixtures or repositories without
 backend data provisioned. It means the full bundle path is intentionally not
 available, not that instrumentation failed.
+
+The doctor rejects `full_bundle_no_match` by default because known pilots
+normally require a module match. A repository that intentionally permits the
+generic inferred/derived fallback must set
+`forbid_full_bundle_no_match = False` on its doctor target. Do not combine that
+with a narrower `allowed_payload_selections` list that excludes
+`full_bundle_no_match`. Explicit `importpath` and `module_label_override`
+selection still fail analysis when their requested module group is absent.
 
 When validating a known pilot, make the doctor stricter instead of relying only
 on the default allowlist:
@@ -254,10 +343,10 @@ Artifact mode choices:
 Before opening or finishing a consumer PR:
 
 - Runtime pilot targets pass.
-- Plain controls still pass on the old wrapper.
+- Ordinary controls still pass without `--config=test-optimization`.
 - Build-only controls are not listed as expected payload targets.
-- The root doctor `data` label uses the actual sync repository name.
-- The repo-local Test Optimization wrapper injects the actual `topt_data` export
+- The workspace doctor `data` label uses the actual sync repository name.
+- The repo-local central Go wrapper injects the actual `topt_data` export
   for the service being instrumented.
 - Doctor passes.
 - Dry-run enrichment passes.

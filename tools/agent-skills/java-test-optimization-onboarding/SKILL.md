@@ -48,8 +48,11 @@ Keep the RFC contract intact:
   `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir`, and configure
   wrapper `--support-bundle` or `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` for
   complete escalation artifacts. For first-pass customer troubleshooting after
-  tests have run, ask for `bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>`
-  with any matching BEP/artifact flags.
+  tests have run, ask for
+  `bazel run //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>`
+  with any matching BEP/artifact flags. Replace `<topt-package>` with the
+  package that owns the logical doctor/uploader pair; use `//:` only when a
+  small repository intentionally keeps the targets at the root.
   For bundle triage, inspect `summary.md`, `diagnostics.json`,
   `reports/doctor-report.json`, optional uploader reports, and
   `command/flags.json` in that order.

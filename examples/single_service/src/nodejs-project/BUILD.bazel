@@ -6,7 +6,7 @@
 
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_nodejs//:export.bzl", "topt_data")
 
 dd_topt_nodejs_test(
     name = "hello_test",

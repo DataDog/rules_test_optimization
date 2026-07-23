@@ -1,7 +1,7 @@
 # Required on Windows for dd_topt_java_test: -javaagent paths only resolve under symlinked runfiles.
 build --enable_runfiles
 
-# One user-facing switch for Go metadata bootstrap and Orchestrion analysis.
+# One user-facing switch for Go/Python metadata bootstrap and Go Orchestrion analysis.
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 

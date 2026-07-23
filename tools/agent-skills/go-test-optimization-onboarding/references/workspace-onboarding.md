@@ -25,7 +25,7 @@ Collect these facts from the consumer repository:
 - Sync repository name for the service. Use a stable, descriptive name when the
   repository will eventually instrument multiple services.
 - Pilot runtime test targets that should emit payloads.
-- Plain control targets that must remain uninstrumented.
+- Ordinary control targets used to prove config-disabled behavior.
 - Build-only or `.build_test` targets that should not be expected to emit
   Datadog payloads.
 
@@ -148,6 +148,8 @@ Use print modes first:
   --bazel-config test-optimization \
   --expected-target //path/to/pilot:go_default_test \
   --control-target //path/to/plain:go_default_test \
+  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+  --upload-target //tools/test_optimization:dd_upload_payloads \
   --large-monorepo \
   --default-jobs 1 \
   --shutdown-bazel-on-exit \
@@ -173,8 +175,9 @@ Then use write modes only for files the repository should actually own:
   --bazel-config test-optimization \
   --expected-target //path/to/pilot:go_default_test \
   --control-target //path/to/plain:go_default_test \
+  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
+  --upload-target //tools/test_optimization:dd_upload_payloads \
   --write-bazelrc \
-  --write-root-targets \
   --write-orchestrion-files \
   --write-wrapper-template \
   --write-validation-script \
@@ -197,8 +200,8 @@ archive flags used by the manual helper snippet:
 also be fetched from the archive.
 
 Review any generated WORKSPACE sync snippet before committing it. If the Go
-module path is known and stable, add `runtime_module_path = "<go-module-path>"`
-to `test_optimization_sync(...)` even if the generated snippet omits it. That
+module path is known and stable, pass `module_path = "<go-module-path>"` to
+`dd_topt_go_workspace_sync_repositories(...)`. That
 keeps checked-in configuration self-contained and avoids relying on
 `GO_MODULE_PATH` in normal CI.
 
@@ -270,7 +273,7 @@ ordinary WORKSPACE use.
 
 If the repository already defines a Go version constant for Bazel toolchains,
 reuse that constant for `runtime_version` instead of hardcoding another copy.
-Prefer checked-in `runtime_module_path` when the service module path is stable.
+Prefer checked-in `module_path` when the service module path is stable.
 Use `GO_MODULE_PATH` through `--repo_env` only for local experiments or
 repository layouts where the module path must stay environment-specific.
 
@@ -330,9 +333,11 @@ the dd-trace-go version coherent with `go_orchestrion_tool_repo`.
 
 For large monorepos where root-level tool imports would churn the main module,
 do not add a root `orchestrion.tool.go` only for Test Optimization. Keep the
-Orchestrion tool version in Bazel, then use package-local pin files or a
-repo-local wrapper that passes `orchestrion_pin_files = []` when that matches
-the repository's Go module policy.
+Orchestrion tool version in Bazel, then use package-local pin files. An explicit
+`orchestrion_pin_files = []` is valid only when the target package contains a
+package-local `go.mod` that the macro can auto-discover. Otherwise the central
+wrapper must pass visible labels for the owning module's `go.mod` and relevant
+pin files.
 For standard Go `testing`, that repo-local wrapper should also inject
 `orchestrion_mode = "test_optimization"`. Automatic `testify/suite`
 instrumentation is outside this mode.
@@ -342,6 +347,7 @@ instrumentation is outside this mode.
 Add a named config and use it consistently for sync, test, doctor, and upload:
 
 ```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 common:test-optimization --repo_env=DD_API_KEY
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL
@@ -370,10 +376,11 @@ common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
+build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 test:test-optimization --remote_download_minimal
 test:test-optimization --remote_download_regex=.*test[.]outputs.*
 test:test-optimization --zip_undeclared_test_outputs
-# Optional for local experiments when runtime_module_path is not checked in.
+# Optional for local experiments when module_path is not checked in.
 common:test-optimization --repo_env=GO_MODULE_PATH
 ```
 
@@ -416,11 +423,15 @@ remote-only HTTP/HTTPS `outputs.zip` carriers, add
 `--remote-artifacts=download` or `required`; bytestream/CAS/custom-auth
 providers also need `--bep-artifact-downloader=<path>`.
 
-## Root Targets
+## Doctor And Uploader Targets
 
-Add one doctor and one uploader target at the repository root:
+Add one doctor and one uploader target per workspace. Root is acceptable for a
+small repository. In a monorepo, use a lightweight package such as
+`//tools/test_optimization` so these commands do not analyze unrelated root
+wiring:
 
 ```bzl
+# tools/test_optimization/BUILD.bazel
 load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
 dd_test_optimization_targets(
@@ -442,22 +453,22 @@ targets.
 ## Local Wrapper Pattern
 
 For monorepos, avoid changing every BUILD file to load public macros directly.
-Prefer this split:
+Use one central wrapper:
 
 - A shared repo-local policy helper applies Docker defaults, tags, shards,
   flaky policy, exec constraints, and registry behavior.
-- The existing plain wrapper calls that helper with raw `go_test`.
-- A new Test Optimization wrapper calls that helper with `dd_topt_go_test`.
-- The Test Optimization wrapper sets `orchestrion_mode = "test_optimization"`,
+- The existing public wrapper calls that helper with `dd_topt_go_test`.
+- That central wrapper sets `orchestrion_mode = "test_optimization"`,
   Orchestrion pin files, and `topt_data`.
 - The wrapper rejects explicit per-target `topt_data` and
   `orchestrion_pin_files` overrides when those values must stay consistent
   across the repository.
 
-Only the Test Optimization wrapper should load
-`@test_optimization_data//:export.bzl`. Keep that load out of shared policy
-helpers and plain wrappers; otherwise non-instrumented BUILD files can force the
-sync repository to resolve even when they do not use a companion test rule.
+The central wrapper loads `@test_optimization_data//:export.bzl`. This is safe
+in config-gated onboarding because the disabled repository keeps the same
+public labels and returns before metadata requests. Omitting
+`--config=test-optimization` makes `dd_topt_go_test` emit the normal public
+`go_test` shape; BUILD callsites do not select another macro.
 
 The wrapper should always pass stable Orchestrion pin files when tests are not
 at the repo root:
@@ -479,28 +490,29 @@ the module owning the target.
 ### Large WORKSPACE Monorepo Wrapper Shape
 
 For a large WORKSPACE monorepo, use this guide's monorepo path and keep the
-Test Optimization policy in a repository-local optimized Go wrapper. That
-wrapper should call the public Go macro with the existing repository Go wrapper
-as the underlying `go_test_rule`, the aggregate service data, and the optimized
-standard Go `testing` Orchestrion mode:
+Test Optimization policy in the repository's existing central Go wrapper. That
+wrapper should call the public Go macro with the repository's internal raw rule
+as `go_test_rule`, the aggregate service data, and the standard Go `testing`
+Orchestrion mode:
 
 ```bzl
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", _rto_dd_topt_go_test = "dd_topt_go_test")
 load("@test_optimization_data_go//:aggregate.bzl", "topt_data_by_service")
-load("//path/to/repo/go:go_test.bzl", "go_test")
+load("//path/to/repo/go:raw_go_test.bzl", _repo_raw_go_test = "go_test")
 
-_rto_dd_topt_go_test(
-    name = name,
-    go_test_rule = go_test,
-    orchestrion_mode = "test_optimization",
-    orchestrion_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-    ],
-    topt_data = topt_data_by_service,
-    topt_service = topt_service,
-    **kwargs
-)
+def dd_go_test(name, topt_service, **kwargs):
+    _rto_dd_topt_go_test(
+        name = name,
+        go_test_rule = _repo_raw_go_test,
+        orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [
+            "//:go.mod",
+            "//:go.sum",
+        ],
+        topt_data = topt_data_by_service,
+        topt_service = topt_service,
+        **kwargs
+    )
 ```
 
 The repository-local wrapper should own and reject caller overrides for
@@ -508,19 +520,20 @@ The repository-local wrapper should own and reject caller overrides for
 files cannot drift away from the centrally validated Test Optimization setup.
 Declare pilot services in the repository's Test Optimization metadata file, and
 keep the expected runtime targets for doctor/uploader validation in the
-repository's root Test Optimization BUILD file. Use
+repository's lightweight Test Optimization BUILD package. Use
 `orchestrion_mode = "general"` only for explicit compatibility validation, not
 for the normal Test Optimization onboarding path.
 
-## Target Conversion
+## Pilot Selection
 
-Convert a small pilot first:
+Start with a small service or package scope without changing test callsites:
 
-- Change only runtime test targets from the plain wrapper to the Test
-  Optimization wrapper.
+- Route the existing central wrapper through `dd_topt_go_test`.
+- Select the initial capable services or packages in repository-owned central
+  policy, not with a per-target Test Optimization attribute.
 - Keep target names stable.
 - Keep ordinary test attributes unchanged.
-- Keep plain controls on the existing wrapper.
+- Keep an ordinary control target and run it without the named config.
 - Keep `.build_test` controls out of the doctor `expected_targets` list because
   they build the target but do not emit runtime payloads.
 - Add one intentionally flaky runtime control only if the repository needs to

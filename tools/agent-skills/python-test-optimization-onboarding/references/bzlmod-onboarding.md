@@ -47,10 +47,11 @@ topt = use_extension(
 
 topt.test_optimization_sync(
     name = "test_optimization_data",
-    service = "<datadog-service>",
+    enabled_by_env = True,
+    runtime_module_path = "<python-module-path>",
     runtime_name = "python",
     runtime_version = "<python-version>",
-    enabled_by_env = True,
+    service = "<datadog-service>",
 )
 
 use_repo(topt, "test_optimization_data")
@@ -63,6 +64,11 @@ common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 ```
 
 Do not add a `rules_go` Orchestrion flag to a Python-only consumer.
+Set `runtime_module_path` to the stable Python package/module prefix used by
+backend module groups. This is the checked-in default; `PYTHON_MODULE_PATH`
+remains an explicit higher-precedence override. Keep that environment variable
+unset, or standardize it in repository configuration, when selection must be
+deterministic across CI and developer machines.
 
 ## Doctor And Uploader Targets
 
@@ -104,3 +110,10 @@ dd_topt_py_test(
 
 For repositories with an existing wrapper, use `consumer_runner`; see
 [consumer-runner.md](consumer-runner.md).
+
+Omit `module_identifier` when inference or the
+`runtime_module_path` + Bazel package fallback identifies the test. Inferred
+misses use the canonical full bundle. When synchronized metadata exposes module
+groups, an explicit `module_identifier` or `module_label_override` must match
+one or analysis fails; when no groups exist, the canonical full bundle remains
+valid.

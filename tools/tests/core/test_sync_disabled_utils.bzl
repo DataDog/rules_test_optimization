@@ -10,6 +10,7 @@ load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 load("//tools/core:common_utils.bzl", "RULES_VERSION")
 load(
     "//tools/core:test_optimization_sync.bzl",
+    "explicit_runtime_module_path_for_tests",
     "is_test_optimization_enabled_for_tests",
     "render_disabled_build_for_tests",
     "render_disabled_context_json_for_tests",
@@ -76,6 +77,51 @@ def _service_environment_resolution_test(ctx):
         {"service": "unnamed-service", "environment": "CI"},
         resolve_service_and_environment_for_tests("", {}),
     )
+    return unittest.end(env)
+
+def _disabled_runtime_module_path_precedence_test(ctx):
+    env = unittest.begin(ctx)
+    for runtime_name, env_key in [
+        ("go", "GO_MODULE_PATH"),
+        ("python", "PYTHON_MODULE_PATH"),
+        ("java", "JAVA_MODULE_PATH"),
+        ("nodejs", "NODEJS_MODULE_PATH"),
+        ("dotnet", "DOTNET_MODULE_PATH"),
+        ("ruby", "RUBY_MODULE_PATH"),
+    ]:
+        asserts.equals(
+            env,
+            "env.module",
+            explicit_runtime_module_path_for_tests(
+                struct(
+                    attr = struct(runtime_module_path = " attr.module "),
+                    os = struct(environ = {env_key: " env.module "}),
+                ),
+                runtime_name,
+            ),
+        )
+        asserts.equals(
+            env,
+            "attr.module",
+            explicit_runtime_module_path_for_tests(
+                struct(
+                    attr = struct(runtime_module_path = " attr.module "),
+                    os = struct(environ = {}),
+                ),
+                runtime_name,
+            ),
+        )
+        asserts.equals(
+            env,
+            "attr.module",
+            explicit_runtime_module_path_for_tests(
+                struct(
+                    attr = struct(runtime_module_path = " attr.module "),
+                    os = struct(environ = {env_key: "   "}),
+                ),
+                runtime_name,
+            ),
+        )
     return unittest.end(env)
 
 def _disabled_context_contract_test(ctx):
@@ -200,3 +246,4 @@ disabled_context_contract_test = unittest.make(_disabled_context_contract_test)
 disabled_cache_payloads_contract_test = unittest.make(_disabled_cache_payloads_contract_test)
 disabled_telemetry_contract_test = unittest.make(_disabled_telemetry_contract_test)
 disabled_export_and_build_shape_test = unittest.make(_disabled_export_and_build_shape_test)
+disabled_runtime_module_path_precedence_test = unittest.make(_disabled_runtime_module_path_precedence_test)

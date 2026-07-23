@@ -575,16 +575,25 @@ EOF
 exports_files(["dd_go_test.bzl"])
 EOF
 
-  cat > "$ws_dir/tools/build/dd_go_test.bzl" <<'EOF'
+  cat > "$ws_dir/tools/build/dd_go_test.bzl" <<EOF
 load("@io_bazel_rules_go//go:def.bzl", _go_test = "go_test")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
+
+_ORCHESTRION_PIN_FILES = [
+    "//:go.mod",
+    "//:go.sum",
+    "//:orchestrion.tool.go",
+    "//:orchestrion.yml",
+]
 
 def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         go_test_rule = _go_test,
         topt_data = topt_data,
+        orchestrion_mode = "${ORCHESTRION_MODE}",
+        orchestrion_pin_files = _ORCHESTRION_PIN_FILES,
         **kwargs
     )
 EOF
@@ -619,13 +628,6 @@ dd_go_test(
     ],
     data = [":fixture_tool_reset"],
     embed = [":hello_lib"],
-    orchestrion_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-        "//:orchestrion.tool.go",
-        "//:orchestrion.yml",
-    ],
-    orchestrion_mode = "${ORCHESTRION_MODE}",
 )
 
 genquery(
@@ -888,6 +890,29 @@ meta:
 
 aspects: []
 EOF
+}
+
+write_bootstrap_generated_wrapper() {
+  local ws_dir="$1"
+  local bootstrap_output_user_root="$TMP_ROOT/bootstrap_wrapper_output_user_root"
+
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$bootstrap_output_user_root" run \
+      "${BAZEL_EXTRA_ARGS[@]}" \
+      --noenable_bzlmod \
+      --enable_workspace \
+      @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+      --workspace "$ws_dir" \
+      --workspace-mode \
+      --sync-repo-name test_optimization_data \
+      --wrapper-package tools/build \
+      --wrapper-file dd_go_test.bzl \
+      --plain-wrapper-name dd_go_test \
+      --optimized-wrapper-name dd_topt_go_test \
+      --write-wrapper-template \
+      --force
+  )
 }
 
 # write_orchestrion_go_sum keeps the maintained fixture on a real checked-in
@@ -1290,6 +1315,9 @@ run_disabled_no_fetch_smoke() {
   write_positive_workspace "$ws_dir" "archive"
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir" "io_bazel_rules_go"
+  if [[ "$WINDOWS_CONFIG_TRANSITION_ONLY" == "1" ]]; then
+    write_bootstrap_generated_wrapper "$ws_dir"
+  fi
   write_disabled_fixture_test "$ws_dir"
 
   : > "$alias_log"

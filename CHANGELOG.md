@@ -30,7 +30,13 @@ versioning.
   the CI Visibility runtime kill switch.
 - Python payload selection now derives the normal module identifier from runtime
   and Bazel package metadata, keeping explicit `module_identifier` values for
-  repository-specific exceptions.
+  repository-specific exceptions. When module groups are available, explicit
+  identifiers and module-label overrides must match one; inferred or derived
+  misses and metadata with no module groups retain the canonical full-bundle
+  fallback.
+- The Go WORKSPACE bootstrap template now generates one central config-gated
+  `dd_go_test` wrapper. The former optimized wrapper name is a compatibility
+  alias to that same function, not a second rollout path.
 - Go consumers upgrading from `1.2.0` should rerun `dd_topt_go_bootstrap` with
   `--write-bazelrc` before or with the Rule upgrade. The managed `.bazelrc`
   update is idempotent and adds both metadata and Orchestrion activation to the

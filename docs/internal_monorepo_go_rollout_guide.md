@@ -61,15 +61,18 @@ SHA256, and archive prefix generated from the same published commit.
   sync by default.
 - Keep repository-specific scheduling, Docker, tags, platform constraints, and
   flaky policy in the repository-local wrapper layer.
-- Set `orchestrion_mode = "test_optimization"` in the optimized wrapper for
+- Route the existing central Go wrapper through `dd_topt_go_test` and set
+  `orchestrion_mode = "test_optimization"` for
   standard Go `testing` Test Optimization pilots. The `general` mode remains
   available for explicit compatibility validation only.
-- Keep a plain wrapper path for controls and unconverted tests.
-- Convert only the agreed runtime-emitting pilot targets first.
+- Keep BUILD callsites on that same wrapper; the named config controls whether
+  its expansion is normal or instrumented.
+- Select only the agreed runtime-emitting pilot scope in central repository
+  policy.
 - Do not list `.build_test`, compile-only, or other build-only controls as
   doctor `expected_targets`.
-- Add one root `dd_test_optimization_doctor` target.
-- Add one root `dd_upload_payloads` target.
+- Add one `dd_test_optimization_doctor` target and one `dd_upload_payloads`
+  target in a lightweight package such as `//tools/test_optimization`.
 - Use `.bazelrc` to activate
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` and
   `--zip_undeclared_test_outputs` for test commands. Pass a fresh
@@ -105,7 +108,6 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --rules-go-variant base \
   --dd-trace-go-version v2.9.0 \
   --write-bazelrc \
-  --write-root-targets \
   --write-orchestrion-files \
   --write-wrapper-template \
   --write-validation-script \
@@ -114,8 +116,14 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --shutdown-bazel-on-exit \
   --default-jobs=1 \
   --expected-target "//path/to/runtime/package:go_default_test" \
+  --doctor-target "//tools/test_optimization:dd_test_optimization_doctor" \
+  --upload-target "//tools/test_optimization:dd_upload_payloads" \
   --control-target "//path/to/plain/control:go_default_test"
 ```
+
+Create the single doctor/uploader pair in
+`//tools/test_optimization:BUILD.bazel`; do not use `--write-root-targets` for
+this monorepo flow.
 
 ### Updating an existing managed config
 
@@ -142,9 +150,9 @@ bazel test --config=test-optimization <plain-control-target>
 bazel test --config=test-optimization <build-only-control-target>
 bazel test --config=test-optimization <instrumented-target-1>
 bazel test --config=test-optimization <instrumented-target-2>
-bazel run --config=test-optimization //:dd_test_optimization_doctor
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
 bazel shutdown
 ```
 

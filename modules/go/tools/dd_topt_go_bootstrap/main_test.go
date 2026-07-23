@@ -319,9 +319,8 @@ func TestRunWorkspaceModeWritesSelectedFilesWithoutModuleBazel(t *testing.T) {
 	}
 	wrapperText := string(wrapper)
 	for _, want := range []string{
-		`load("@io_bazel_rules_go//go:def.bzl", _raw_go_test = "go_test")`,
 		`def dd_go_test(name, **kwargs):`,
-		`def dd_topt_go_test(name, **kwargs):`,
+		`dd_topt_go_test = dd_go_test`,
 		`load("@test_optimization_data_worker//:export.bzl", "topt_data")`,
 		`orchestrion_mode = "test_optimization"`,
 		`orchestrion_pin_files = _ORCHESTRION_PIN_FILES`,
@@ -330,10 +329,18 @@ func TestRunWorkspaceModeWritesSelectedFilesWithoutModuleBazel(t *testing.T) {
 			t.Fatalf("workspace wrapper missing %q:\n%s", want, wrapperText)
 		}
 	}
-	for _, forbidden := range []string{"consumer-internal-name", "--test_env=DD_GIT_"} {
+	for _, forbidden := range []string{
+		"consumer-internal-name",
+		"--test_env=DD_GIT_",
+		`load("@io_bazel_rules_go//go:def.bzl", _raw_go_test = "go_test")`,
+		`def dd_topt_go_test(name, **kwargs):`,
+	} {
 		if strings.Contains(wrapperText, forbidden) {
 			t.Fatalf("workspace wrapper contains forbidden %q:\n%s", forbidden, wrapperText)
 		}
+	}
+	if got := strings.Count(wrapperText, "_raw_dd_topt_go_test,"); got != 1 {
+		t.Fatalf("workspace wrapper should have one Test Optimization call path, got %d:\n%s", got, wrapperText)
 	}
 }
 
@@ -391,6 +398,17 @@ func TestEnsureWorkspaceWrapperTemplateIsIdempotent(t *testing.T) {
 	}
 	if string(first) != string(second) {
 		t.Fatalf("expected idempotent wrapper template:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	for _, want := range []string{
+		`def plain_go_test(name, **kwargs):`,
+		`optimized_go_test = plain_go_test`,
+	} {
+		if !strings.Contains(string(first), want) {
+			t.Fatalf("workspace wrapper missing %q:\n%s", want, first)
+		}
+	}
+	if strings.Contains(string(first), `_raw_go_test`) {
+		t.Fatalf("workspace wrapper must not bypass config-gated dispatch:\n%s", first)
 	}
 }
 

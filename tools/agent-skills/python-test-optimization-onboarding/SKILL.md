@@ -47,8 +47,11 @@ Keep the RFC contract intact:
   `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir`, and configure
   wrapper `--support-bundle` or `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` for
   complete escalation artifacts. For first-pass customer troubleshooting after
-  tests have run, ask for `bazel run --config=test-optimization //:dd_test_optimization_doctor -- --support-bundle=<path>`
-  with any matching BEP/artifact flags.
+  tests have run, ask for
+  `bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>`
+  with any matching BEP/artifact flags. Replace `<topt-package>` with the
+  package that owns the logical doctor/uploader pair; use `//:` only when a
+  small repository intentionally keeps the targets at the root.
   For bundle triage, inspect `summary.md`, `diagnostics.json`,
   `reports/doctor-report.json`, optional uploader reports, and
   `command/flags.json` in that order.
@@ -102,6 +105,10 @@ Every successful Python onboarding should end with these pieces:
   labels are still fine for small repositories.
 - `.bazelrc` or CLI commands provide sync metadata with `--repo_env`.
 - Test commands use a named config such as `--config=test-optimization`.
+- Validation first runs the ordinary public Python test without that config,
+  then reruns it with the config on the same fresh Bazel output root. Disabled
+  mode must keep the consumer runner intact while omitting metadata requests,
+  selectors, Bazel metadata, and payload generation.
 - Remote-output-sensitive test configs include
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
   and `--zip_undeclared_test_outputs`.

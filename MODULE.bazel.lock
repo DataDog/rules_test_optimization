@@ -342,7 +342,7 @@
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "TrTrDHJrP0Rre84rDDioXjXxdcPRZwzJZA21GdNKrkE=",
-        "usagesDigest": "9cmeLOZZK/XcmUYXh727qZj+Cgnz6JtINwWZZD6BKfg=",
+        "usagesDigest": "EtFKqYPzQPpUPHFL/jjD4e+uC5rSFI+DlvubVmTxLT0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -375,6 +375,132 @@
                 "dotnet_service",
                 "ruby_service"
               ]
+            }
+          },
+          "test_optimization_data_go": {
+            "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": false,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [
+                "apps_ruby_example",
+                "company_product_example",
+                "example_nodejs_project",
+                "example_python_modules_python_tests",
+                "example_python_pkg",
+                "example_python_tests"
+              ],
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_go",
+              "service_name": "go-service",
+              "service_keys": []
+            }
+          },
+          "test_optimization_data_python": {
+            "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": false,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [
+                "apps_ruby_example",
+                "company_product_example",
+                "example_nodejs_project",
+                "example_python_modules_python_tests",
+                "example_python_pkg",
+                "example_python_tests"
+              ],
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_python",
+              "service_name": "go-service",
+              "service_keys": []
+            }
+          },
+          "test_optimization_data_java": {
+            "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": false,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [
+                "apps_ruby_example",
+                "company_product_example",
+                "example_nodejs_project",
+                "example_python_modules_python_tests",
+                "example_python_pkg",
+                "example_python_tests"
+              ],
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_java",
+              "service_name": "go-service",
+              "service_keys": []
+            }
+          },
+          "test_optimization_data_nodejs": {
+            "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": false,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [
+                "apps_ruby_example",
+                "company_product_example",
+                "example_nodejs_project",
+                "example_python_modules_python_tests",
+                "example_python_pkg",
+                "example_python_tests"
+              ],
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_nodejs",
+              "service_name": "go-service",
+              "service_keys": []
+            }
+          },
+          "test_optimization_data_dotnet": {
+            "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": false,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [
+                "apps_ruby_example",
+                "company_product_example",
+                "example_nodejs_project",
+                "example_python_modules_python_tests",
+                "example_python_pkg",
+                "example_python_tests"
+              ],
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_dotnet",
+              "service_name": "go-service",
+              "service_keys": []
+            }
+          },
+          "test_optimization_data_ruby": {
+            "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": false,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [
+                "apps_ruby_example",
+                "company_product_example",
+                "example_nodejs_project",
+                "example_python_modules_python_tests",
+                "example_python_pkg",
+                "example_python_tests"
+              ],
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_ruby",
+              "service_name": "go-service",
+              "service_keys": []
             }
           }
         },

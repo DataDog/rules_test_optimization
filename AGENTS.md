@@ -14,8 +14,8 @@ This repository ships Bazel integrations that fetch Datadog Test Optimization me
 The solution separates concerns into four phases:
 1. **Fetch phase (module/repo resolution)**: repository rule fetches metadata from Datadog APIs.
 2. **Execute phase (test runtime)**: tests run hermetically, consume pre-fetched metadata via runfiles, and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
-3. **Validation phase (post-test)**: a dedicated doctor target (`bazel run //:dd_test_optimization_doctor`) validates local JSON payloads, Bazel metadata, Git metadata, and invalid payload-selection states.
-4. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //:dd_upload_payloads`) enriches and uploads payloads from `bazel-testlogs/<target>/test.outputs/`.
+3. **Validation phase (post-test)**: a dedicated doctor target (`bazel run //<topt-package>:dd_test_optimization_doctor`) validates local JSON payloads, Bazel metadata, Git metadata, and invalid payload-selection states.
+4. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //<topt-package>:dd_upload_payloads`) enriches and uploads payloads from `bazel-testlogs/<target>/test.outputs/`.
 
 ## Documentation
 - User-facing onboarding and command flow: see `README.md` (use its `Reference links` section for deep references).
@@ -24,13 +24,14 @@ The solution separates concerns into four phases:
 - Problem statement & proposal: see `docs/RFC.md` for background rationale and trade-offs (historical context).
 - Usage snippets: see `examples/README.md` for copy/paste single-service and multi-service examples.
 - Agent workflow for Go consumer onboarding: see `tools/agent-skills/go-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Go instrumentation, validation, and troubleshooting.
+- Agent workflow for Python consumer onboarding: see `tools/agent-skills/python-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Python instrumentation, validation, and troubleshooting.
 - Agent workflow for Java consumer onboarding: see `tools/agent-skills/java-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Java instrumentation, validation, and troubleshooting.
 - Agent workflow for rules_go upstream migrations: see `tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md` for the neutral Codex-compatible skill that guides agents through porting the vendored Orchestrion-enabled `rules_go` fork to a new upstream tag or commit.
 - Cross-repository integration fixture: see the sibling repository `../rules_test_optimization_tests` and its `README.md` for the consumer-style validation flow that must stay green after changes here.
   - For local validation of unpublished changes from this repo, switch that fixture repo from its pinned `git_override(...)` entries to the commented `local_path_override(...)` entries in `../rules_test_optimization_tests/MODULE.bazel` so Bazel resolves this checkout instead of GitHub.
 - Go fork maintenance details: see `third_party/rgo/v0_60_0/base.METADATA.json`, `third_party/rules_go_orchestrion/registry.json`, `third_party/rules_go_orchestrion/profiles/workspace_runtime.json`, `tools/dev/diff_rules_go_fork.py`, and `tools/dev/verify_rules_go_profiles.py`.
 
-Agents: start with `README.md` for current operational behavior, then `CONTRIBUTING.md` for the maintained validation workflow. When instrumenting a Go consumer repository, load `tools/agent-skills/go-test-optimization-onboarding/SKILL.md` before editing that consumer. When instrumenting a Java consumer repository, load `tools/agent-skills/java-test-optimization-onboarding/SKILL.md` before editing that consumer. Use the overview and RFC when you need architecture details or design rationale/trade-off context.
+Agents: start with `README.md` for current operational behavior, then `CONTRIBUTING.md` for the maintained validation workflow. When instrumenting a Go, Python, or Java consumer repository, load the matching skill under `tools/agent-skills/` before editing that consumer. Use the overview and RFC when you need architecture details or design rationale/trade-off context.
 
 ## Project Structure & Module Organization
 - `tools/` — Starlark sources plus developer and agent support files:
@@ -41,6 +42,7 @@ Agents: start with `README.md` for current operational behavior, then `CONTRIBUT
   - `dev/*_bootstrap.bzl` — dev-only bootstrap extensions wiring the local Go, Python, Java, NodeJS, .NET, and Ruby companion repos from this workspace root.
   - `dev/diff_rules_go_fork.py` — maintainer utility that regenerates the delta report for the vendored `rules_go` fork.
   - `agent-skills/go-test-optimization-onboarding/` — neutral agent skill for instrumenting Go consumer repositories with Test Optimization.
+  - `agent-skills/python-test-optimization-onboarding/` — neutral agent skill for instrumenting Python consumer repositories with Test Optimization.
   - `agent-skills/java-test-optimization-onboarding/` — neutral agent skill for instrumenting Java consumer repositories with Test Optimization.
   - `agent-skills/rules-go-orchestrion-upstream-migration/` — neutral agent skill for porting the vendored Orchestrion-enabled `rules_go` fork to a new upstream version.
 - `modules/go/` — Go companion module sources:
@@ -61,11 +63,11 @@ Agents: start with `README.md` for current operational behavior, then `CONTRIBUT
 The sync rule creates `@test_optimization_data//` containing:
 - `BUILD` with public filegroups (`:test_optimization_files`, `:test_optimization_context`, `:module_<sanitized>`).
 - `export.bzl` exporting the `topt_data` dict for macros.
-- `.testoptimization/cache/http/settings.json`, `.testoptimization/cache/http/known_tests.json`, `.testoptimization/cache/http/test_management.json`, `.testoptimization/manifest.txt`, `.testoptimization/context.json`.
+- `.testoptimization/cache/http/settings.json`, `.testoptimization/cache/http/known_tests.json`, `.testoptimization/cache/http/test_management.json`, `.testoptimization/cache/http/flaky_tests.json`, `.testoptimization/manifest.txt`, `.testoptimization/context.json`, `.testoptimization/telemetry_facts.json`.
 - `.testoptimization/module_<sanitized>/` per-module splits for cache efficiency.
 
 ## Key Design Patterns
-- **Per-module splitting**: known tests and test management data are split by module to reduce cache invalidation.
+- **Per-module splitting**: known tests, test management, and flaky tests data are split by module to reduce cache invalidation.
 - **Sanitization**: module names are converted into Bazel-safe labels using `sanitize_label_fragment()` (lowercase, `[a-z0-9_]` only, deterministic suffixes).
 - **Go importpath inference**: `topt_go_payloads_selector` mirrors rules_go importpath logic (explicit `importpath` > `embed` provider > fallback `<module>/<package>`).
 - **Vendored rules_go forks for root workflows**: the repository root pins `rules_go` as a dev-only dependency and redirects it to `third_party/rgo/v0_60_0/base` with `local_path_override(...)`; consumer-facing core usage remains rules_go-free.
@@ -91,17 +93,17 @@ The sync rule creates `@test_optimization_data//` containing:
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
   ./bazelw test //... || test_status=$?; test_status=${test_status:-0}
-  ./bazelw run //:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
+  ./bazelw run //<topt-package>:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
   if [ "$doctor_status" -ne 0 ]; then
     if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
     exit "$doctor_status"
   fi
-  ./bazelw run //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
+  ./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
   if [ "$dry_run_status" -ne 0 ]; then
     if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
     exit "$dry_run_status"
   fi
-  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //:dd_upload_payloads
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads
   upload_status=$?
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$upload_status"
@@ -129,7 +131,7 @@ The sync rule creates `@test_optimization_data//` containing:
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.
 - Public labels are stable — do not rename `test_optimization_files`, `test_optimization_context`, or `module_<sanitized>`.
-- Outputs under `.testoptimization/` are fixed: `manifest.txt`, `context.json`, `cache/http/settings.json`, `cache/http/known_tests.json`, `cache/http/test_management.json`, and per‑module canonical files exposed via `:module_<sanitized>` targets (runfiles rooted under the manifest directory).
+- Outputs under `.testoptimization/` are fixed: `manifest.txt`, `context.json`, `telemetry_facts.json`, `cache/http/settings.json`, `cache/http/known_tests.json`, `cache/http/test_management.json`, `cache/http/flaky_tests.json`, and per-module canonical files exposed via `:module_<sanitized>` targets (runfiles rooted under the manifest directory).
 
 ## Testing Guidelines
 - Repository-local test matrix:
@@ -157,15 +159,19 @@ The sync rule creates `@test_optimization_data//` containing:
 - In consumer workspaces, prefer `./bazelw test //...` when package layout permits.
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
-- In consumer workspaces, run `./bazelw run //:dd_test_optimization_doctor`
-  after tests complete, then run `./bazelw run //:dd_upload_payloads -- --dry-run --validate-enrichment`, then upload with `./bazelw run //:dd_upload_payloads`.
+- In consumer workspaces, run `./bazelw run //<topt-package>:dd_test_optimization_doctor`
+  after tests complete, then run `./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment`, then upload with `./bazelw run //<topt-package>:dd_upload_payloads`.
   Do not run the real upload if doctor or dry-run enrichment validation fails.
-- For Go, use `dd_topt_go_test` to set up the test with correct environment variables.
-- Create ONE doctor target and ONE uploader target per workspace at the root BUILD.bazel.
+- For Go, route the repository's central `dd_go_test` wrapper through
+  `dd_topt_go_test`; `--config=test-optimization` is the only user-facing
+  enable switch.
+- Create ONE doctor target and ONE uploader target per workspace. Root is fine
+  for small repositories; use a lightweight package such as
+  `//tools/test_optimization` in monorepos.
 
 ## Consumer Tips (bzlmod)
-- In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)` and `bazel_dep("datadog-rules-test-optimization-go", ...)`, then `use_extension("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync_extension")`, instantiate `test_optimization_sync(name = "test_optimization_data", service = "<service>", runtime_name = "go", runtime_version = "<ver>")`, then `use_repo(..., "test_optimization_data")`.
-- In root `BUILD.bazel`: create the workspace-level doctor and uploader:
+- In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)` and `bazel_dep("datadog-rules-test-optimization-go", ...)`, then use `test_optimization_go_extension` from `@datadog-rules-test-optimization-go//:topt_go_extension.bzl`. Instantiate `test_optimization_go(name = "test_optimization_data", service = "<service>", runtime_version = "<ver>", module_path = "<go-module-path>")`, then `use_repo(..., "test_optimization_data")`. The public Go extension is config-gated by default.
+- In a small root package or a lightweight monorepo package, create the workspace-level doctor and uploader:
   ```bzl
   load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
   load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
@@ -180,8 +186,8 @@ The sync rule creates `@test_optimization_data//` containing:
       data = ["@test_optimization_data//:test_optimization_context"],
   )
   ```
-- In test `BUILD.bazel` files: `load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")` and `load("@test_optimization_data//:export.bzl", "topt_data")`; set `topt_data = topt_data` in `dd_topt_go_test(...)`.
-- Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per‑module payload group. If no match exists, it falls back to the core bundle automatically.
+- In the repository's central Go wrapper: load `dd_topt_go_test` and the generated `topt_data`, then delegate every public `dd_go_test(...)` call to the Datadog macro. Do not create separate plain and optimized onboarding paths.
+- Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in the central wrapper call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per-module payload group. Inferred misses use the core bundle. When synchronized metadata exposes module groups, an explicit `importpath` or `module_label_override` that does not match one fails analysis; when no groups exist, the canonical full bundle remains valid.
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["runtimes"]["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
 - Tests can read `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the manifest directory (via `filepath.Dir()`) and access synced payloads.
 - For Python/Java/NodeJS/.NET/Ruby companions, follow the corresponding quickstart sections in `README.md` (`Bzlmod + Python companion`, `Bzlmod + Java companion`, `Bzlmod + NodeJS companion`, `Bzlmod + .NET companion`, `Bzlmod + Ruby companion`).
@@ -237,7 +243,7 @@ Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go c
 
 ## Security & Configuration Tips
 - Never write secrets to disk. Pass `DD_API_KEY`, `DD_SITE` via environment when running the uploader.
-- `context.json` is non‑secret; include it via `@<repo>//:test_optimization_context` in the uploader's data.
+- `context.json` and `telemetry_facts.json` are non-secret; include both through `@<repo>//:test_optimization_context` in doctor/uploader data.
 - If CODEOWNERS auto-discovery is not reliable in your environment, set `DD_TEST_OPTIMIZATION_CODEOWNERS_FILE` explicitly to a checked-in CODEOWNERS path.
 - Agentless uploads require `DD_API_KEY` and `DD_SITE`; EVP proxy requires `DD_TEST_OPTIMIZATION_AGENT_URL` (EVP headers handled by the rule).
-- Uploader credentials are passed at runtime: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //:dd_upload_payloads`
+- Uploader credentials are passed at runtime: `DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads`

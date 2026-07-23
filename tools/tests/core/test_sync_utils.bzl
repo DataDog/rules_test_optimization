@@ -1100,6 +1100,15 @@ def _runtime_module_path_from_environ_test(ctx):
     )
     asserts.equals(
         env,
+        "example.com/attr",
+        detect_go_module_path_for_tests(
+            _fake_module_path_ctx({"GO_MODULE_PATH": "   "}),
+            False,
+            " example.com/attr ",
+        ),
+    )
+    asserts.equals(
+        env,
         "example.com/go-env",
         detect_go_module_path_for_tests(
             _fake_module_path_ctx({"GO_MODULE_PATH": "example.com/go-env"}),

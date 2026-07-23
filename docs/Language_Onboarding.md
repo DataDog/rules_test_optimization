@@ -44,7 +44,8 @@ Shared runtime contract for every language:
   such as `//tools/test_optimization:dd_upload_payloads`.
 - Mixed-runtime uploader wiring must bundle every relevant
   `:test_optimization_context` target and let the uploader choose the matching
-  `context.json` per payload
+  `context.json` per payload while consuming each repository's
+  `telemetry_facts.json` for rule telemetry
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` remains a legacy explicit override, not
   the recommended mixed-runtime wiring path
 
@@ -224,18 +225,18 @@ below the module root, pass the module-root pin files through
 Orchestrion path, and `test_optimization`, the standard Go `testing` Test
 Optimization path. For standard Go `testing`, set
 `orchestrion_mode = "test_optimization"` on the `dd_topt_go_test` call or
-optimized repo-local wrapper. Automatic `testify/suite` instrumentation is not
+central repo-local wrapper. Automatic `testify/suite` instrumentation is not
 part of that mode.
 
 For WORKSPACE monorepos, prefer bootstrap `--workspace-mode` to generate the
-generic local scaffolding. It can write the root doctor/uploader targets,
-`.bazelrc` block, Orchestrion pin files, and a split wrapper template while
-leaving `WORKSPACE` placement under repository control. The generated wrapper
-template keeps repo-specific policy in a local helper and exposes plain and
-optimized building blocks. A large repository can keep one public
-`dd_go_test`, route its enrolled package set to `dd_topt_go_test` internally,
-and rely on `--config=test-optimization` to choose the raw or instrumented
-shape without adding per-target Test Optimization attributes.
+generic local scaffolding. It can write the `.bazelrc` block, Orchestrion pin
+files, and a config-gated central wrapper template while leaving `WORKSPACE`
+placement under repository control. Put the single doctor/uploader pair in a
+lightweight package instead of modifying the root BUILD. A large repository
+can keep one public `dd_go_test`, route its enrolled package set to
+`dd_topt_go_test` internally, and rely on `--config=test-optimization` to
+choose the raw or instrumented shape without adding per-target Test
+Optimization attributes.
 
 ### Large WORKSPACE monorepos
 
@@ -330,7 +331,7 @@ mirrors or blocks GitHub codeload archives, publish the same commit to a mirror
 controlled by the consuming organization and point `rto_archive_url` at that
 mirror.
 
-`runtime_module_path` is preferred for checked-in configuration because it makes
+`module_path` on the public Go helper is preferred for checked-in configuration because it makes
 module selection explicit and does not depend on operator shell state. If the
 module path must stay environment-specific during local experiments, pass
 `GO_MODULE_PATH` with `--repo_env` instead of `--test_env`.
@@ -348,7 +349,6 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --rules-go-variant base \
   --dd-trace-go-version v2.9.0 \
   --write-bazelrc \
-  --write-root-targets \
   --write-orchestrion-files \
   --write-wrapper-template \
   --write-validation-script \
@@ -365,12 +365,12 @@ therefore emit JSON payloads. Do not list `.build_test`, compile-only, or other
 build-only controls as expected runtime targets; keep those under
 `--control-target` or run them separately before the doctor.
 
-The generated wrapper template should be adapted to the repository's existing
-wrapper layer. Keep scheduling, tags, flaky policy, Docker defaults,
-platform constraints, and other repository-specific behavior in the local
-helper. The optimized wrapper should call `dd_topt_go_test`, pass
-`topt_data`, set `orchestrion_mode = "test_optimization"`, and always provide
-module-root pin files:
+The generated wrapper template should replace the implementation behind the
+repository's existing central `dd_go_test` entry point. Keep scheduling, tags,
+flaky policy, Docker defaults, platform constraints, and other
+repository-specific behavior in the local helper. The same central wrapper
+should call `dd_topt_go_test`, pass `topt_data`, set
+`orchestrion_mode = "test_optimization"`, and provide module-root pin files:
 
 ```bzl
 orchestrion_mode = "test_optimization",
@@ -383,8 +383,9 @@ orchestrion_pin_files = [
 ```
 
 Export the pin files from the root package if the repository's package layout
-requires that for cross-package labels. Keep the plain wrapper path available
-for controls and for tests that are not part of the rollout yet.
+requires that for cross-package labels. Do not add a second optimized macro
+name: omitting `--config=test-optimization` makes the generated disabled export
+preserve normal `go_test` behavior under the existing entry point.
 
 If the repository has checked-in `go_repository` declarations, run bootstrap
 with `--check-go-repositories` and then use the repository-owned refresh command
@@ -408,10 +409,15 @@ Validate in this order:
    support request, the doctor itself can write a doctor-only bundle with
    `--support-bundle=<path>`.
 5. Run
-   `bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment`.
+   `bazel run --config=test-optimization //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment`.
 6. Run the real uploader with `DD_API_KEY` and `DD_SITE` in the command
    environment. Keep `DD_TEST_OPTIMIZATION_*` in the wrapper or CI
    environment, not in the test sandbox.
+
+Replace `<topt-package>` with the package that owns the workspace's doctor and
+uploader targets, such as `tools/test_optimization` in a large monorepo. Small
+repositories that keep those targets in the root package can use
+`//:dd_upload_payloads`.
 
 For remote execution or remote cache setups, keep
 `test:test-optimization --remote_download_minimal` and
@@ -430,11 +436,15 @@ effective wrapper flags, runtime metadata, and `summary.md` into one redacted
 zip for escalation. Doctor-only bundles are simpler to request from a customer,
 but they do not include uploader dry-run or upload results.
 
-If the doctor reports missing Git metadata, missing Bazel metadata,
-`full_bundle_no_match`, or msgpack payloads, fix the sync, wrapper, tracer, or
-uploader configuration. Do not work around those failures by adding `DD_GIT_*`
-or upload endpoints to `--test_env`; that would make sandbox test actions
-non-hermetic and can invalidate Bazel cache keys.
+If the doctor reports missing Git metadata, missing Bazel metadata, msgpack
+payloads, or `full_bundle_no_match` for a known pilot that requires module
+selection, fix the sync, wrapper, tracer, or uploader configuration. Generic
+inferred/derived selection may intentionally fall back to the canonical bundle;
+that path reports `full_bundle_no_match` and requires the doctor target to set
+`forbid_full_bundle_no_match = False`. Keep the default rejection for known
+pilots. Do not work around failures by adding `DD_GIT_*` or upload endpoints to
+`--test_env`; that would make sandbox test actions non-hermetic and can
+invalidate Bazel cache keys.
 
 ### Multi-service
 
@@ -541,10 +551,11 @@ topt = use_extension(
 
 topt.test_optimization_sync(
     name = "test_optimization_data",
-    service = "py-service",
+    enabled_by_env = True,
+    runtime_module_path = "example.python.pkg",
     runtime_name = "python",
     runtime_version = "3.12",
-    enabled_by_env = True,
+    service = "py-service",
 )
 
 use_repo(topt, "test_optimization_data")
@@ -636,8 +647,10 @@ repository-specific exception.
 The derived identifier selects a module-specific payload when that module is
 present in the synchronized metadata. If the backend has not materialized a
 matching module group yet, the selector intentionally uses the exact canonical
-payload bundle instead. Adding an explicit `module_identifier` does not create
-missing backend metadata, so it is not required for that fallback.
+payload bundle instead. When synchronized metadata exposes module groups, an
+explicit `module_identifier` or `module_label_override` that does not match one
+fails analysis. If no module groups exist, the canonical full bundle remains
+valid; adding an explicit value does not create missing backend metadata.
 
 ### WORKSPACE single-service
 
@@ -725,10 +738,11 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 
 test_optimization_sync(
     name = "test_optimization_data",
-    service = "py-service",
+    enabled_by_env = True,
+    runtime_module_path = "example.python.pkg",
     runtime_name = "python",
     runtime_version = "3.12",
-    enabled_by_env = True,
+    service = "py-service",
 )
 ```
 
@@ -806,6 +820,7 @@ topt = use_extension(
 topt.test_optimization_multi_sync(
     name = "test_optimization_data",
     services = ["py-service-a", "py-service-b"],
+    runtime_module_path = "example.python.pkg",
     runtime_name = "python",
     runtime_version = "3.12",
     enabled_by_env = True,

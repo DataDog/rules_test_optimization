@@ -531,7 +531,7 @@ def _detect_go_module_path(ctx, debug, runtime_module_path = ""):
     4) go.mod under git top-level directory
     """
 
-    mod_env = ctx.os.environ.get("GO_MODULE_PATH") or ""
+    mod_env = (ctx.os.environ.get("GO_MODULE_PATH") or "").strip()
     log_debug(debug, "go", "GO_MODULE_PATH env: %s" % (mod_env or "<unset>"))
     if mod_env:
         log_debug(debug, "go", "Using GO_MODULE_PATH from env")
@@ -1491,8 +1491,6 @@ def _render_disabled_build(settings_file, manifest_file, known_tests_file, test_
 
 def _explicit_runtime_module_path(ctx, runtime_name):
     """Resolve only explicit module-path inputs for disabled exports."""
-    if ctx.attr.runtime_module_path:
-        return ctx.attr.runtime_module_path
     env_key_by_runtime = {
         "go": "GO_MODULE_PATH",
         "python": "PYTHON_MODULE_PATH",
@@ -1501,7 +1499,10 @@ def _explicit_runtime_module_path(ctx, runtime_name):
         "dotnet": "DOTNET_MODULE_PATH",
         "ruby": "RUBY_MODULE_PATH",
     }
-    return ctx.os.environ.get(env_key_by_runtime.get(runtime_name, "")) or ""
+    env_value = (ctx.os.environ.get(env_key_by_runtime.get(runtime_name, "")) or "").strip()
+    if env_value:
+        return env_value
+    return (ctx.attr.runtime_module_path or "").strip()
 
 def _write_disabled_repository(ctx, out_dir, env_data, debug):
     """Write a complete no-fetch repository with stable public labels."""
@@ -1834,6 +1835,7 @@ parse_go_module_path_for_tests = _parse_go_module_path
 detect_go_module_path_for_tests = _detect_go_module_path
 runtime_module_path_from_environ_for_tests = _runtime_module_path_from_environ
 detect_runtime_module_path_for_tests = _detect_runtime_module_path
+explicit_runtime_module_path_for_tests = _explicit_runtime_module_path
 dirname_for_tests = _dirname
 normalize_out_dir_or_fail_for_tests = _normalize_out_dir_or_fail
 render_export_bzl_for_tests = _render_export_bzl
@@ -2987,7 +2989,7 @@ def _impl(ctx):
 
     # 6. Create a BUILD file with two public filegroup targets.
     # - test_optimization_files: the JSONs returned or stubbed from HTTP (existing)
-    # - test_optimization_context: the context.json (separate, so consumers can opt-in)
+    # - test_optimization_context: context.json plus telemetry_facts.json
     exp = repr(exports)
     build_content = (
         'load(":module_runfiles.bzl", "topt_module_files")\n' +

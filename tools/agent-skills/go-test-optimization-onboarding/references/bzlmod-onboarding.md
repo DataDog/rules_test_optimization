@@ -113,8 +113,8 @@ The bootstrap can create or update:
 
 - `orchestrion.tool.go`
 - `orchestrion.yml`
-- root `dd_test_optimization_doctor`
-- root `dd_upload_payloads`
+- root `dd_test_optimization_doctor` and `dd_upload_payloads` targets for a
+  small repository
 - a safe `.bazelrc` block
 - a local Go test wrapper
 
@@ -129,7 +129,7 @@ Use `--print-bazelrc-snippet` for read-only `.bazelrc` inspection. Use
 humans and agents. `--print-workspace-snippet` belongs to `--workspace-mode`,
 not the Bzlmod guided flow.
 
-## Manual Sync And Root Targets
+## Manual Sync And Workspace Targets
 
 Skip guided bootstrap only when the repository already has custom sync wiring,
 mixed-language setup, or multi-service Go setup. In that case, create the sync
@@ -152,7 +152,9 @@ datadog_go_topt.test_optimization_go(
 use_repo(datadog_go_topt, "test_optimization_data")
 ```
 
-Then add root doctor and uploader targets:
+Then add one doctor and uploader pair. Root is acceptable for a small
+repository; in a monorepo put this block in a lightweight package such as
+`//tools/test_optimization`:
 
 ```bzl
 load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
@@ -213,31 +215,34 @@ module package and use labels such as `//path/to/go-module:go.mod`.
 
 ## Wrapper Usage
 
-Use the generated local wrapper when available. If wiring manually, load
-`dd_topt_go_test` and pass `topt_data`:
+Use the generated central wrapper when available. If wiring manually, keep one
+repository-owned public wrapper that always delegates to `dd_topt_go_test`:
 
 ```bzl
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
-dd_topt_go_test(
-    name = "go_default_test",
-    srcs = ["service_test.go"],
-    embed = [":service_lib"],
-    orchestrion_mode = "test_optimization",
-    orchestrion_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-        "//:orchestrion.tool.go",
-        "//:orchestrion.yml",
-    ],
-    topt_data = topt_data,
-)
+def dd_go_test(name, **kwargs):
+    dd_topt_go_test(
+        name = name,
+        orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [
+            "//:go.mod",
+            "//:go.sum",
+            "//:orchestrion.tool.go",
+            "//:orchestrion.yml",
+        ],
+        topt_data = topt_data,
+        **kwargs
+    )
 ```
 
 Prefer `embed` so the macro can infer the same import path that `rules_go`
 uses. Use explicit `importpath` only when the repository already uses explicit
-import paths and the value is known to match the compiled package.
+import paths and the value is known to match the compiled package. When
+synchronized metadata exposes module groups, explicit `importpath` and
+`module_label_override` selections must match one or analysis fails. Inferred
+misses and metadata with no module groups use the canonical full bundle.
 
 Set `orchestrion_mode = "test_optimization"` for standard Go `testing`
 onboarding. The generated local wrapper should inject this mode; manual
@@ -317,8 +322,8 @@ dd_topt_go_test(
 )
 ```
 
-Root doctor/uploader targets must include every service context that can appear
-in emitted payloads:
+The workspace doctor/uploader targets must include every service context that
+can appear in emitted payloads:
 
 ```bzl
 load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")

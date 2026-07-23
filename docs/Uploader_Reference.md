@@ -207,6 +207,12 @@ dd_payload_uploader(
 )
 ```
 
+Each `:test_optimization_context` target bundles both `context.json` and
+`telemetry_facts.json`. The uploader selects the matching context for payload
+enrichment and consumes the bundled telemetry facts for rule-telemetry
+augmentation. Do not pass only the physical `context.json` file when using the
+normal target-based wiring.
+
 ## Upload modes
 
 - **Agentless mode (default):** Requires `DD_API_KEY` and `DD_SITE`; uploads

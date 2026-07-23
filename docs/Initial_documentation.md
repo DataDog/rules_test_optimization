@@ -28,20 +28,25 @@ The steps are:
 1. **Module/repository sync**:  
    A module extension instantiates a repository rule that resolves enablement
    before collecting local metadata. When enabled, it performs authenticated
-   HTTP requests to Datadog (settings, known tests, and test-management tests
-   when enabled). When disabled, it writes canonical settings/cache/context
-   stubs and does not inspect local Git or contact Datadog. Both paths
+   HTTP requests to Datadog (settings, known tests, test-management tests, and
+   flaky tests when enabled). When disabled, it writes canonical
+   settings/cache/context stubs and does not inspect local Git or contact
+   Datadog. Both paths
    materialize outputs under a configurable directory (default:
    `.testoptimization/`) and expose the stable top-level filegroups:
    - `@<repo>//:test_optimization_files` (core bundle, includes `cache/http/settings.json`)
-   - `@<repo>//:test_optimization_context` (the `context.json` only)
+   - `@<repo>//:test_optimization_context` (`context.json` plus
+     `telemetry_facts.json`)
    When an enabled response contains module data, the repository additionally
    exposes `@<repo>//:module_<sanitized>` bundles with
-   `cache/http/settings.json` plus that module's known/test-management files.
+   `cache/http/settings.json` plus that module's known-tests, test-management,
+   and flaky-tests files.
    The sync also emits an `export.bzl` helper describing available module labels, the resolved `manifest_path`, and detected runtime/module hints for consumers. Per‑module targets expose canonical runfile names rooted at the manifest directory (`<out_dir>/...`, default `.testoptimization/...`) regardless of where split files are stored physically.  
    Notes:
    - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; ASCII whitespace is trimmed and value is normalized to `https://api.<site>`.
-   - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
+   - Module labels are computed from the union of known-tests,
+     test-management, and flaky-tests modules to avoid cross-feature
+     collisions.
   Reference implementation: this repository
 
 2. **Test instrumentation**:
@@ -83,8 +88,14 @@ The `dd_topt_go_test` macro automatically selects the correct per‑module paylo
   2) Provider‑based inference via `embed`
   3) Fallback to `<go module path>/<bazel package>`, where the module path is exported by the sync repo in `topt_data["runtimes"]["go"]["module_path"]`
 - Per‑module selection:
-  - When using (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if the module isn’t present.
-  - When using (3), the macro consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if false, it uses the full bundle.
+  - When synchronized metadata exposes module groups, explicit `importpath` or
+    `module_label_override` values must match one or analysis fails. When no
+    module groups exist, the canonical full bundle remains valid.
+  - Provider-based inference via `embed` attempts per-module selection and may
+    fall back to the canonical full bundle on a miss.
+  - When using (3), the macro consults
+    `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if
+    false, it uses the full bundle.
 
 Note: The core module no longer declares `rules_go`. The companion module
 `datadog-rules-test-optimization-go` declares `rules_go` for provider
@@ -99,6 +110,11 @@ definitions only. Consumers still configure Go toolchains/SDK in their own
 2) inferred candidates (`imports`, dependency-propagated identifiers, explicit attrs),
 3) fallback from `<python module path>/<bazel package>` when available,
 4) full-bundle fallback.
+
+When synchronized metadata exposes module groups, explicit
+`module_identifier` and `module_label_override` values must match one or
+analysis fails. The full-bundle fallback applies to inferred or derived
+identifiers and to metadata with no module groups.
 
 ### Java macro and package identifier inference
 
@@ -231,10 +247,12 @@ flowchart TD
     G -->|yes: POST Settings| D1[Datadog Settings API]
     G -->|yes: POST Known Tests| D2[Known Tests API]
     G -->|yes: POST Test Mgmt| D3[Test Management Tests API]
+    G -->|yes: POST Flaky Tests| D4[Flaky Tests API]
     G -->|no| D0[Deterministic disabled stubs\n no local Git or HTTP]
-    D1 --> A3[.testoptimization (default)\n manifest.txt\n context.json\n cache/http/settings.json\n cache/http/known_tests.json\n (per-module targets expose canonical files)\n cache/http/test_management.json\n (per-module targets expose canonical files)]
+    D1 --> A3[.testoptimization (default)\n manifest.txt\n context.json\n telemetry_facts.json\n cache/http/settings.json\n cache/http/known_tests.json\n cache/http/test_management.json\n cache/http/flaky_tests.json\n (per-module targets expose canonical files)]
     D2 --> A3
     D3 --> A3
+    D4 --> A3
     D0 --> A3
     A2 --> A4[export.bzl + BUILD\n filegroups per module]
   end
@@ -285,13 +303,16 @@ Module/Repo Resolution
             |                |-- POST Settings --> (Settings API)
             |                |-- POST Known Tests (if enabled) --> (Known Tests API)
             |                |-- POST Test Mgmt (if enabled) --> (Test Mgmt Tests API)
+            |                |-- POST Flaky Tests (if enabled) --> (Flaky Tests API)
             |                v
             |        .testoptimization/ (default out_dir)
             |          - manifest.txt
             |          - context.json
+            |          - telemetry_facts.json
             |          - cache/http/settings.json
             |          - cache/http/known_tests.json (+ per-module)
             |          - cache/http/test_management.json (+ per-module)
+            |          - cache/http/flaky_tests.json (+ per-module)
             |        export.bzl + BUILD (filegroups)
             v
 Build Graph

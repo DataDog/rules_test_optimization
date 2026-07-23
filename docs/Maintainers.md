@@ -84,7 +84,11 @@ Use this checklist when adding `dd_topt_<language>_test` support.
        identifier -> full bundle
      - module label resolution should match `module_<sanitized>` names from sync
        outputs
-   - Keep fallback-to-full-bundle behavior non-fatal.
+   - Keep inferred/derived fallback-to-full-bundle behavior non-fatal. When
+     synchronized metadata exposes module groups, require an explicit
+     identifier or module-label override to match one so configuration mistakes
+     fail analysis instead of silently selecting unrelated metadata. Preserve
+     the canonical full bundle when no module groups exist.
 
 3. **Companion module dependency policy**
    - Keep root core module (`datadog-rules-test-optimization`) free of

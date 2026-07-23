@@ -136,10 +136,11 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 
 test_optimization_sync(
     name = "test_optimization_data",
-    service = "<datadog-service>",
+    enabled_by_env = True,
+    runtime_module_path = "<python-module-path>",
     runtime_name = "python",
     runtime_version = "3.12",
-    enabled_by_env = True,
+    service = "<datadog-service>",
 )
 ```
 
@@ -150,6 +151,11 @@ common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 ```
 
 Do not add a `rules_go` Orchestrion flag to a Python-only consumer.
+Set `runtime_module_path` to the stable Python package/module prefix used by
+backend module groups. This is the checked-in default; `PYTHON_MODULE_PATH`
+remains an explicit higher-precedence override. Keep that environment variable
+unset, or standardize it in repository configuration, when selection must be
+deterministic across CI and developer machines.
 
 Add one logical doctor/uploader pair. Prefer a lightweight package in monorepos:
 

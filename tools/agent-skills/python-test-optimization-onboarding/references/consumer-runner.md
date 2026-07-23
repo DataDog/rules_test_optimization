@@ -58,6 +58,10 @@ When the runtime module path and Bazel package path identify the test, omit
 `module_identifier` and use the derived fallback. Keep an explicit
 `module_identifier` only for a documented repository-specific exception; the
 Datadog macro does not need to synthesize Python imports for the normal path.
+Derived or inferred misses may use the canonical full bundle. An explicit
+`module_identifier` or `module_label_override` must match a module group when
+synchronized metadata exposes groups, or analysis fails. When no groups exist,
+the canonical full bundle remains valid.
 
 ## Validation
 

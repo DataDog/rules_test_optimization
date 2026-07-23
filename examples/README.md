@@ -135,12 +135,75 @@ ruby.toolchain(
 )
 use_repo(ruby, "ruby", "ruby_toolchains")
 register_toolchains("@ruby_toolchains//:all")
+
+go_topt = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
+    "test_optimization_go_extension",
+)
+go_topt.test_optimization_go(
+    name = "test_optimization_data_go",
+    module_path = "example.com/single-service-go-project",
+    runtime_version = "1.25.0",
+    service = "go-service",
+)
+use_repo(go_topt, "test_optimization_data_go")
+
+runtime_topt = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
+    "test_optimization_sync_extension",
+)
+runtime_topt.test_optimization_sync(
+    name = "test_optimization_data_python",
+    enabled_by_env = True,
+    runtime_module_path = "example.python.project",
+    runtime_name = "python",
+    runtime_version = "3.12",
+    service = "go-service",
+)
+runtime_topt.test_optimization_sync(
+    name = "test_optimization_data_java",
+    runtime_module_path = "com.example.topt",
+    runtime_name = "java",
+    runtime_version = "21",
+    service = "go-service",
+)
+runtime_topt.test_optimization_sync(
+    name = "test_optimization_data_nodejs",
+    runtime_module_path = "example/nodejs/project",
+    runtime_name = "nodejs",
+    runtime_version = "22.22.0",
+    service = "go-service",
+)
+runtime_topt.test_optimization_sync(
+    name = "test_optimization_data_dotnet",
+    runtime_module_path = "Company.Product.Example",
+    runtime_name = "dotnet",
+    runtime_version = "8.0",
+    service = "go-service",
+)
+runtime_topt.test_optimization_sync(
+    name = "test_optimization_data_ruby",
+    runtime_module_path = "apps/ruby/example",
+    runtime_name = "ruby",
+    runtime_version = "3.3.9",
+    service = "go-service",
+)
+use_repo(
+    runtime_topt,
+    "test_optimization_data_dotnet",
+    "test_optimization_data_java",
+    "test_optimization_data_nodejs",
+    "test_optimization_data_python",
+    "test_optimization_data_ruby",
+)
 ```
 
 This mirrors the buildable `examples/single_service` workspace in this
-repository: one Datadog service shared across several runtime-specific test
-macros, with Go using the bootstrap-managed extension. If your team owns only
-Python, Java, NodeJS, .NET, or Ruby, the simpler runtime-specific setup is in
+repository: one logical Datadog service shared across several runtime-specific
+sync repositories and test macros. A mixed-runtime workspace must not reuse the
+Go export for Python, Java, NodeJS, .NET, or Ruby; each runtime needs its own
+runtime metadata and context label. If your team owns only Python, Java,
+NodeJS, .NET, or Ruby, the simpler runtime-specific setup is in
 [`docs/Language_Onboarding.md`](../docs/Language_Onboarding.md).
 
 The generated Go wrapper uses `orchestrion_mode = "test_optimization"` for
@@ -155,6 +218,7 @@ Bootstrap once after adding the module prerequisites:
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
+  --sync-repo-name test_optimization_data_go \
   --runtime-version 1.25.0 \
   --dd-trace-go-version v2.9.0
 ```
@@ -203,7 +267,7 @@ BUILD.bazel (Python companion):
 ```bzl
 load("@python_deps//:requirements.bzl", "requirement")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_python//:export.bzl", "topt_data")
 
 dd_topt_py_test(
     name = "pkg_py_test",
@@ -231,13 +295,16 @@ In that mode the Datadog macro does not inject `run_pytest.py`, does not set
 `main`, and does not synthesize `imports`. When the runtime module path and
 Bazel package path identify the test, omit `module_identifier` and use the
 derived fallback. Keep an explicit `module_identifier` only for a documented
-repository-specific exception.
+repository-specific exception. Derived or inferred misses may use the
+canonical full bundle. When synchronized metadata exposes module groups, an
+explicit `module_identifier` or `module_label_override` that does not match one
+fails analysis; when no groups exist, the canonical full bundle remains valid.
 
 BUILD.bazel (Java companion):
 
 ```bzl
 load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_java//:export.bzl", "topt_data")
 
 dd_topt_java_test(
     name = "pkg_java_test",
@@ -254,7 +321,7 @@ BUILD.bazel (NodeJS companion):
 ```bzl
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@datadog-rules-test-optimization-nodejs//:topt_nodejs_test.bzl", "dd_topt_nodejs_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_nodejs//:export.bzl", "topt_data")
 
 dd_topt_nodejs_test(
     name = "pkg_nodejs_test",
@@ -270,7 +337,7 @@ BUILD.bazel (.NET companion):
 
 ```bzl
 load("@datadog-rules-test-optimization-dotnet//:topt_dotnet_test.bzl", "dd_topt_dotnet_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_dotnet//:export.bzl", "topt_data")
 load(":dotnet_test_adapter.bzl", "dotnet_csharp_test_adapter")
 
 dd_topt_dotnet_test(
@@ -290,7 +357,7 @@ BUILD.bazel (Ruby companion):
 ```bzl
 load("@rules_ruby//ruby:defs.bzl", "rb_test")
 load("@datadog-rules-test-optimization-ruby//:topt_ruby_test.bzl", "dd_topt_ruby_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("@test_optimization_data_ruby//:export.bzl", "topt_data")
 
 dd_topt_ruby_test(
     name = "pkg_ruby_test",
@@ -309,12 +376,21 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl
 
 dd_test_optimization_targets(
     name = "test_optimization",
+    context_data = [
+        "@test_optimization_data_go//:test_optimization_context",
+        "@test_optimization_data_python//:test_optimization_context",
+        "@test_optimization_data_java//:test_optimization_context",
+        "@test_optimization_data_nodejs//:test_optimization_context",
+        "@test_optimization_data_dotnet//:test_optimization_context",
+        "@test_optimization_data_ruby//:test_optimization_context",
+    ],
 )
 ```
 
-Use the single-context form above only for single-runtime workspaces. Mixed-
-runtime workspaces must add one `:test_optimization_context` label per
-runtime/service repo so uploader enrichment stays aligned with each payload.
+Use the default single-context form only for a single-runtime workspace whose
+sync repository is named `test_optimization_data`. Mixed-runtime workspaces
+must add one `:test_optimization_context` label per runtime/service repository
+so uploader enrichment stays aligned with each payload.
 
 Running tests, validating payloads, and uploading payloads:
 
@@ -490,10 +566,11 @@ topt_py = use_extension(
 )
 topt_py.test_optimization_sync(
     name = "test_optimization_data_py",
-    service = "py-service",
+    enabled_by_env = True,
+    runtime_module_path = "example.python.pkg",
     runtime_name = "python",
     runtime_version = "3.12",
-    enabled_by_env = True,
+    service = "py-service",
 )
 
 use_repo(topt_go, "test_optimization_data_go")

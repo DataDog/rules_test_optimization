@@ -483,7 +483,10 @@ fails before upload.
    importpath that `rules_go` uses, or set `module_label_override` only when the
    module label is intentionally known. `module` and `module_override` are valid
    successful selections; `full_bundle_disabled` is valid when backend module
-   data is disabled.
+   data is disabled. Generic inferred/derived selection may intentionally use
+   the canonical full bundle and report `full_bundle_no_match`; the doctor
+   rejects that state by default, so only an intentionally generic consumer
+   should set `forbid_full_bundle_no_match = False`.
 
 6. **Expected target output missing**: Run the exact target listed in
    `expected_targets` before the doctor. With remote execution or remote cache,

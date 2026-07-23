@@ -322,8 +322,8 @@ func parseFlags() config {
 	flag.IntVar(&cfg.defaultJobs, "default-jobs", 0, "Default --jobs value added to generated Bazel test commands when greater than zero")
 	flag.StringVar(&cfg.wrapperPackage, "wrapper-package", defaultWrapperPackage, "Workspace-relative Bazel package where --write-wrapper-template writes the wrapper")
 	flag.StringVar(&cfg.wrapperFile, "wrapper-file", defaultWorkspaceWrapperFile, "Wrapper .bzl filename used with --write-wrapper-template")
-	flag.StringVar(&cfg.plainWrapperName, "plain-wrapper-name", defaultPlainWrapperName, "Plain repo-local Go test wrapper name used in the generated wrapper template")
-	flag.StringVar(&cfg.optimizedWrapperName, "optimized-wrapper-name", defaultOptimizedWrapperName, "Optimized repo-local Go test wrapper name used in the generated wrapper template")
+	flag.StringVar(&cfg.plainWrapperName, "plain-wrapper-name", defaultPlainWrapperName, "Central repo-local Go test wrapper name used in the generated wrapper template")
+	flag.StringVar(&cfg.optimizedWrapperName, "optimized-wrapper-name", defaultOptimizedWrapperName, "Compatibility alias for the central repo-local Go test wrapper")
 	flag.StringVar(&cfg.orchestrionVersion, "orchestrion-version", defaultOrchestrionVersion, "Orchestrion version to configure")
 	flag.StringVar(&cfg.ddTraceGoVersion, "dd-trace-go-version", defaultDDTraceGoVersion, "dd-trace-go version to pin for Orchestrion-backed instrumentation")
 	flag.StringVar(&cfg.rulesGoRemote, "rules-go-remote", defaultRulesGoRemote, "rules_go fork remote used for Orchestrion support")
@@ -2495,9 +2495,9 @@ def dd_go_test(name, **kwargs):
 	return nil
 }
 
-// ensureWorkspaceWrapperTemplate writes a generic split wrapper template for
-// WORKSPACE monorepos. The template keeps repository policy in one local helper
-// while Datadog-specific attributes stay in the optimized wrapper path.
+// ensureWorkspaceWrapperTemplate writes a config-gated central wrapper template
+// for WORKSPACE monorepos. The template keeps repository policy in one local
+// helper while the public Test Optimization macro owns enabled/disabled dispatch.
 func ensureWorkspaceWrapperTemplate(cfg config) error {
 	if strings.TrimSpace(cfg.wrapperPackage) == "" {
 		return errors.New("--wrapper-package must be non-empty")
@@ -2554,19 +2554,27 @@ func ensureWorkspaceWrapperTemplate(cfg config) error {
 	return nil
 }
 
-// workspaceWrapperTemplate renders a repo-local plain/optimized wrapper split.
-// Consumers keep scheduling, tags, flaky handling, and platform policy inside
+// workspaceWrapperTemplate renders one repo-local public wrapper. Consumers keep
+// scheduling, tags, flaky handling, and platform policy inside
 // _apply_repo_go_test_policy instead of editing the public Datadog macro.
 func workspaceWrapperTemplate(cfg config, pinLabels []string) string {
-	return fmt.Sprintf(`"""Workspace-local Go test wrappers for Datadog Test Optimization.
+	compatibilityAlias := ""
+	if cfg.optimizedWrapperName != cfg.plainWrapperName {
+		compatibilityAlias = fmt.Sprintf(`
+# Compatibility alias for repositories that still load the former optimized name.
+%s = %s
+`, cfg.optimizedWrapperName, cfg.plainWrapperName)
+	}
+
+	return fmt.Sprintf(`"""Workspace-local Go test wrapper for Datadog Test Optimization.
 
 Keep repository-specific scheduling, tags, Docker, flaky, and platform policy
-inside _apply_repo_go_test_policy. The optimized wrapper below owns only the
-Datadog Test Optimization attributes.
+inside _apply_repo_go_test_policy. Every test uses the same public wrapper;
+--config=test-optimization selects enabled metadata and Orchestrion behavior,
+while omitting the config preserves the normal go_test behavior.
 """
 
 %s
-load("@%s//go:def.bzl", _raw_go_test = "go_test")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", _raw_dd_topt_go_test = "dd_topt_go_test")
 load("@%s//:export.bzl", "topt_data")
 
@@ -2579,11 +2587,7 @@ def _apply_repo_go_test_policy(go_test_macro, name, **kwargs):
     go_test_macro(name = name, **kwargs)
 
 def %s(name, **kwargs):
-    """Run a plain go_test with repository-local policy only."""
-    _apply_repo_go_test_policy(_raw_go_test, name = name, **kwargs)
-
-def %s(name, **kwargs):
-    """Run an Orchestrion-enabled go_test with Datadog Test Optimization."""
+    """Run a config-gated go_test with repository-local policy."""
     if "topt_data" in kwargs:
         fail("%s injects topt_data from @%s; remove the explicit topt_data attr")
     if "orchestrion_pin_files" in kwargs:
@@ -2597,7 +2601,8 @@ def %s(name, **kwargs):
         **kwargs
     )
 %s
-`, wrapperBlockStart, cfg.rulesGoRepoName, cfg.syncRepoName, strings.TrimRight(renderPinLabelLines(pinLabels), "\n"), cfg.plainWrapperName, cfg.optimizedWrapperName, cfg.optimizedWrapperName, cfg.syncRepoName, cfg.optimizedWrapperName, wrapperBlockEnd)
+%s
+`, wrapperBlockStart, cfg.syncRepoName, strings.TrimRight(renderPinLabelLines(pinLabels), "\n"), cfg.plainWrapperName, cfg.plainWrapperName, cfg.syncRepoName, cfg.plainWrapperName, strings.TrimRight(compatibilityAlias, "\n"), wrapperBlockEnd)
 }
 
 // resolveWorkspaceRelativeDir resolves a user-selected directory and rejects

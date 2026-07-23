@@ -313,17 +313,22 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --rules-go-variant base \
   --rules-go-repo-name io_bazel_rules_go \
   --write-bazelrc \
-  --write-root-targets \
   --write-orchestrion-files \
   --write-wrapper-template \
   --expected-target //pkg:go_default_test
 ```
 
-The generated wrapper template creates a plain local wrapper and an optimized
-local wrapper. Keep repository-specific scheduling, tags, flaky behavior,
-Docker defaults, and platform constraints in the local policy helper; the
-optimized wrapper owns only `topt_data`, `orchestrion_mode = "test_optimization"`,
-and `orchestrion_pin_files`.
+Create the single doctor/uploader pair in a lightweight monorepo package such
+as `//tools/test_optimization`; reserve `--write-root-targets` for small
+repositories that intentionally keep these targets in the root BUILD.
+
+The generated wrapper template creates one central local wrapper and retains
+the former optimized name only as a compatibility alias. Keep
+repository-specific scheduling, tags, flaky behavior, Docker defaults, and
+platform constraints in the local policy helper; the central wrapper owns only
+`topt_data`, `orchestrion_mode = "test_optimization"`, and
+`orchestrion_pin_files`. Omitting `--config=test-optimization` preserves normal
+`go_test` behavior through that same entry point.
 WORKSPACE mode does not run Go module commands unless `--go-mod-sync` is passed
 explicitly, so large repos can review generated files before changing
 `go.mod`/`go.sum`.
@@ -553,6 +558,10 @@ and internal test policy. In `consumer_runner` mode, pass a custom
 the runtime module path and Bazel package path identify the test, omit
 `module_identifier` and use the derived fallback. Keep an explicit
 `module_identifier` only for a documented repository-specific exception.
+When synchronized metadata exposes module groups, explicit
+`module_identifier` and `module_label_override` values must match one or
+analysis fails. Inferred or derived misses, and metadata with no module groups,
+use the canonical full bundle.
 
 Python consumers can generate copy/paste onboarding snippets from the companion
 without running tests or changing lockfiles:
@@ -637,6 +646,7 @@ topt_multi = use_extension(
 topt_multi.test_optimization_multi_sync(
     name = "test_optimization_data",
     services = ["service-a", "service-b"],
+    runtime_module_path = "example.python.pkg",
     runtime_name = "python",
     runtime_version = "3.12",
     debug = True,
@@ -697,7 +707,7 @@ filegroup(
     srcs = ["@test_optimization_data//:test_optimization_files"],
 )
 
-# Access context.json separately (for the uploader)
+# Access context.json and telemetry_facts.json through the shared context target.
 filegroup(
     name = "dd_test_opt_context",
     srcs = ["@test_optimization_data//:test_optimization_context"],
@@ -823,7 +833,8 @@ filegroup(
 ### 4) Add the doctor and uploader targets (one pair per workspace)
 
 ```bzl
-# In root BUILD.bazel
+# In root BUILD.bazel for a small repository, or in a lightweight monorepo
+# package such as //tools/test_optimization.
 load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
 dd_test_optimization_targets(
@@ -837,13 +848,17 @@ of using the CI wrapper, reuse the BEP file created by the matching
 `bazel test --build_event_json_file=...` invocation:
 
 ```bash
-bazel run --config=test-optimization //:dd_upload_payloads -- \
+bazel run --config=test-optimization //<topt-package>:dd_upload_payloads -- \
   --bep-json="$bep_json" \
   --freshness-source=bep \
   --freshness-mode=required \
   --dry-run \
   --validate-enrichment
 ```
+
+Replace `<topt-package>` with the package used above, for example
+`tools/test_optimization`. Use `//:dd_upload_payloads` only when the pair lives
+in the root package.
 
 Multi-service aggregator variant:
 
@@ -1066,10 +1081,11 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 
 test_optimization_sync(
     name = "test_optimization_data",
-    service = "py-service",
+    enabled_by_env = True,
+    runtime_module_path = "example.python.pkg",
     runtime_name = "python",
     runtime_version = "3.12",
-    enabled_by_env = True,
+    service = "py-service",
 )
 ```
 

@@ -89,6 +89,7 @@ load(
     "disabled_cache_payloads_contract_test",
     "disabled_context_contract_test",
     "disabled_export_and_build_shape_test",
+    "disabled_runtime_module_path_precedence_test",
     "disabled_telemetry_contract_test",
     "enabled_false_values_test",
     "enabled_truthy_values_test",
@@ -263,6 +264,12 @@ load(
 
 disabled_cache_payloads_contract_test(
     name = "disabled_cache_payloads_contract_test",
+    size = "small",
+    timeout = "short",
+)
+
+disabled_runtime_module_path_precedence_test(
+    name = "disabled_runtime_module_path_precedence_test",
     size = "small",
     timeout = "short",
 )
@@ -1556,6 +1563,7 @@ test_suite(
         ":disabled_cache_payloads_contract_test",
         ":disabled_context_contract_test",
         ":disabled_export_and_build_shape_test",
+        ":disabled_runtime_module_path_precedence_test",
         ":disabled_telemetry_contract_test",
         ":doctor_controlled_attr_failure_test",
         ":doctor_kwargs_test",
