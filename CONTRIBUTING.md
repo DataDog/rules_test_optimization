@@ -110,7 +110,14 @@ This product includes software developed at Datadog
     `WINDOWS_ENABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Same-output-root disabled then enabled transition for the public central
     wrapper:
-    `WINDOWS_CONFIG_TRANSITION_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+    `CONFIG_TRANSITION_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Cold bootstrap without host Go, using the Bazel-managed SDK and an isolated
+    bootstrap cache:
+    `cache_root="$(mktemp -d)"; CONFIG_TRANSITION_ONLY=1 FORBID_HOST_GO=1 EXPECTED_ORCHESTRION_CACHE_PHASE=extensions.bootstrap_cache_miss XDG_CACHE_HOME="$cache_root" RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Repeat that command with the same `XDG_CACHE_HOME` and
+    `EXPECTED_ORCHESTRION_CACHE_PHASE=extensions.bootstrap_cache_hit` to prove
+    warm restoration also avoids host Go. Run both commands for WORKSPACE and
+    Bzlmod; CI covers both supported `rules_go` upstreams.
   - Each script now validates:
     - the same consumer-owned central wrapper call expands to a raw `go_test`
       without the named config and to the existing Orchestrion-backed shape
@@ -184,6 +191,12 @@ This product includes software developed at Datadog
   - one shard per supported `rules_go` upstream and WORKSPACE/Bzlmod pair
   - general and Test Optimization modes run sequentially inside each shard
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
+- `go-bootstrap-no-host`:
+  - one shard per supported `rules_go` upstream and WORKSPACE/Bzlmod pair
+  - installs Bazelisk without Go and shadows any hosted-runner `go` binary with
+    a failing sentinel
+  - proves both a cold Bazel-managed-SDK build and warm bootstrap-cache restore
+    without invoking host Go
 - `rules-go-variant-smoke`:
   - vendored `rules_go` variant verification and fast fork regression coverage
   - one independent shard per supported upstream
