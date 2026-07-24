@@ -94,6 +94,10 @@ Every successful Go onboarding should end with these pieces:
   repository/module resolution.
 - The Orchestrion tool repository is configured with the same dd-trace-go
   version that the consumer Go module can resolve.
+- Guided bootstrap wires the repository's Bazel-managed Go SDK into
+  Orchestrion using the same version as the Go toolchain and sync runtime.
+  Enabled bootstrap must not depend on a host `go` binary, and this SDK wiring
+  remains workspace-wide rather than per service or test.
 - Orchestrion pin files exist and are exported when tests live below the
   workspace root.
 - Go tests use one central repo-local wrapper that delegates to

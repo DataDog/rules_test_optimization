@@ -49,6 +49,10 @@ ORCHESTRION_DISABLED_SENTINEL_VERSION="v0.0.0-rto-disabled-fetch-sentinel"
 WINDOWS_DISABLED_SMOKE_ONLY="${WINDOWS_DISABLED_SMOKE_ONLY:-0}"
 WINDOWS_ENABLED_SMOKE_ONLY="${WINDOWS_ENABLED_SMOKE_ONLY:-0}"
 WINDOWS_CONFIG_TRANSITION_ONLY="${WINDOWS_CONFIG_TRANSITION_ONLY:-0}"
+CONFIG_TRANSITION_ONLY="${CONFIG_TRANSITION_ONLY:-$WINDOWS_CONFIG_TRANSITION_ONLY}"
+FORBID_HOST_GO="${FORBID_HOST_GO:-0}"
+EXPECTED_ORCHESTRION_CACHE_PHASE="${EXPECTED_ORCHESTRION_CACHE_PHASE:-}"
+HOST_GO_SENTINEL_LOG=""
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0}"
@@ -114,6 +118,11 @@ cleanup() {
   set +e
   stop_go_integration_mock_server
   shutdown_bazel_workspace_servers
+  if [[ -n "$HOST_GO_SENTINEL_LOG" && -s "$HOST_GO_SENTINEL_LOG" ]]; then
+    echo "error: the consumer path invoked the host Go sentinel" >&2
+    cat "$HOST_GO_SENTINEL_LOG" >&2
+    status=1
+  fi
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
     return "$status"
@@ -138,6 +147,30 @@ require_command() {
   fi
 }
 
+enable_host_go_sentinel() {
+  [[ "$FORBID_HOST_GO" == "1" ]] || return 0
+  if [[ "${OS:-}" == "Windows_NT" ]]; then
+    echo "error: FORBID_HOST_GO is currently supported only on Unix hosts" >&2
+    exit 1
+  fi
+
+  local sentinel_root="$TMP_ROOT/host_go_sentinel"
+  mkdir -p "$sentinel_root/bin"
+  HOST_GO_SENTINEL_LOG="$sentinel_root/invocations.log"
+  : > "$HOST_GO_SENTINEL_LOG"
+  cat > "$sentinel_root/bin/go" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+sentinel_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+printf '%s\n' "$*" >> "$sentinel_root/invocations.log"
+echo "error: host Go must not be used by the Test Optimization consumer path" >&2
+exit 97
+EOF
+  chmod +x "$sentinel_root/bin/go"
+  PATH="$sentinel_root/bin:$PATH"
+  export PATH
+}
+
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
   if command -v python >/dev/null 2>&1; then
     PYTHON=python
@@ -147,8 +180,8 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   fi
 fi
 
-require_command "$GO_BIN" "go binary not found (tried '$GO_BIN')"
 require_command tar "tar is required for the WORKSPACE archive fixture"
+enable_host_go_sentinel
 
 resolve_rules_go_fork_path() {
   "$PYTHON" "$REPO_ROOT/tools/dev/materialize_rules_go_fork.py" resolve \
@@ -940,6 +973,7 @@ EOF
     return
   fi
 
+  require_command "$GO_BIN" "go binary not found for ad hoc go.sum generation (tried '$GO_BIN')"
   (
     cd "$ws_dir"
     GOWORK=off "$GO_BIN" mod download all
@@ -1032,6 +1066,9 @@ load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_
 dd_topt_go_orchestrion_tool_repo(
     version = "${ORCHESTRION_VERSION}",
     dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
+    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = "${GO_VERSION}",
+    log_timing = True,
 )
 
 go_rules_dependencies()
@@ -1315,7 +1352,7 @@ run_disabled_no_fetch_smoke() {
   write_positive_workspace "$ws_dir" "archive"
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir" "io_bazel_rules_go"
-  if [[ "$WINDOWS_CONFIG_TRANSITION_ONLY" == "1" ]]; then
+  if [[ "$CONFIG_TRANSITION_ONLY" == "1" ]]; then
     write_bootstrap_generated_wrapper "$ws_dir"
   fi
   write_disabled_fixture_test "$ws_dir"
@@ -1554,6 +1591,14 @@ run_windows_enabled_smoke() {
     fi
   done
 
+  if [[ -n "$EXPECTED_ORCHESTRION_CACHE_PHASE" ]]; then
+    if ! grep -F "phase=\"$EXPECTED_ORCHESTRION_CACHE_PHASE\"" "$TMP_ROOT"/windows-enabled-workspace-*.log >/dev/null 2>&1; then
+      echo "error: enabled WORKSPACE smoke did not emit expected Orchestrion cache phase '$EXPECTED_ORCHESTRION_CACHE_PHASE'" >&2
+      cat "$TMP_ROOT"/windows-enabled-workspace-*.log >&2
+      exit 1
+    fi
+  fi
+
   if ! (
     # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
     cd "$ws_dir/$test_package"
@@ -1641,7 +1686,7 @@ if [[ "$WINDOWS_ENABLED_SMOKE_ONLY" == "1" ]]; then
   exit 0
 fi
 
-if [[ "$WINDOWS_CONFIG_TRANSITION_ONLY" == "1" ]]; then
+if [[ "$CONFIG_TRANSITION_ONLY" == "1" ]]; then
   ORCHESTRION_MODE="test_optimization"
   create_fixture_archive
   start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"

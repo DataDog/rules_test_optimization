@@ -82,6 +82,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	cfg := config{
 		orchestrionVersion: "v1.9.0",
 		ddTraceGoVersion:   "v2.5.0",
+		runtimeVersion:     "1.25.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
 	}
@@ -94,6 +95,15 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	}
 	if !strings.Contains(got, `use_extension("@rules_go//go:extensions.bzl", "orchestrion")`) {
 		t.Fatalf("expected rules_go orchestrion extension in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")`) {
+		t.Fatalf("expected managed Go SDK extension in managed block:\n%s", got)
+	}
+	if !strings.Contains(got, `name = "test_optimization_go_sdk"`) ||
+		!strings.Contains(got, `version = "1.25.0"`) ||
+		!strings.Contains(got, `go_sdk_root = "@test_optimization_go_sdk//:ROOT"`) ||
+		!strings.Contains(got, `go_sdk_version = "1.25.0"`) {
+		t.Fatalf("expected managed Go SDK identity in managed block:\n%s", got)
 	}
 	if !strings.Contains(got, `orchestrion.from_source(`) {
 		t.Fatalf("expected orchestrion extension call in managed block:\n%s", got)
@@ -109,6 +119,21 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	}
 	if !strings.Contains(got, `use_repo(orchestrion, "rules_go_orchestrion_tool")`) {
 		t.Fatalf("expected rules_go orchestrion repo wiring in managed block:\n%s", got)
+	}
+}
+
+func TestManagedModuleBlockWithoutRuntimeVersionPreservesLegacyShape(t *testing.T) {
+	cfg := config{
+		orchestrionVersion: "v1.9.0",
+		ddTraceGoVersion:   "v2.5.0",
+		rulesGoRemote:      "https://github.com/example/repo.git",
+		rulesGoCommit:      "deadbeef",
+	}
+	got := managedModuleBlock(cfg)
+	if strings.Contains(got, `"go_sdk"`) ||
+		strings.Contains(got, `go_sdk_root`) ||
+		strings.Contains(got, `go_sdk_version`) {
+		t.Fatalf("expected a non-guided block without a runtime version to preserve legacy SDK discovery:\n%s", got)
 	}
 }
 
@@ -154,6 +179,7 @@ func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
 		rtoArchiveType:     "tar.gz",
 		orchestrionVersion: "v1.9.0",
 		ddTraceGoVersion:   "v2.9.0",
+		runtimeVersion:     "1.25.0",
 	}
 	got, err := workspaceSnippet(cfg)
 	if err != nil {
@@ -170,6 +196,9 @@ func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
 		`rules_go_variant = "base"`,
 		`go_orchestrion_tool_repo(`,
 		`dd_trace_go_version = "v2.9.0"`,
+		`go_sdk_root = "@go_sdk//:ROOT"`,
+		`go_sdk_version = "1.25.0"`,
+		`go_register_toolchains(version = "1.25.0")`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("workspace snippet missing %q:\n%s", want, got)
@@ -251,6 +280,9 @@ func TestWorkspaceModeSnippetIncludesSyncAndBaseVariant(t *testing.T) {
 		`name = "test_optimization_data_worker"`,
 		`service = "worker"`,
 		`runtime_version = "1.25.9"`,
+		`go_sdk_root = "@go_sdk//:ROOT"`,
+		`go_sdk_version = "1.25.9"`,
+		`go_register_toolchains(version = "1.25.9")`,
 		`require_git_metadata = True`,
 	} {
 		if !strings.Contains(got, want) {

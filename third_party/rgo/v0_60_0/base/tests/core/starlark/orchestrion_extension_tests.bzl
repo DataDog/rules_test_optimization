@@ -147,11 +147,43 @@ def _fallback_go_tool_identity_test(ctx):
 
 fallback_go_tool_identity_test = unittest.make(_fallback_go_tool_identity_test)
 
+def _declared_go_tool_identity_test(ctx):
+    env = unittest.begin(ctx)
+    fake_ctx = struct(
+        os = struct(
+            name = "mac os x",
+            arch = "aarch64",
+        ),
+    )
+
+    identity = orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, "1.25.0")
+    asserts.equals(env, "go version go1.25.0 darwin/arm64", identity.version)
+    asserts.equals(env, "darwin", identity.goos)
+    asserts.equals(env, "arm64", identity.goarch)
+    asserts.equals(env, identity.version, orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, "go1.25.0").version)
+    asserts.equals(env, None, orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, ""))
+
+    return unittest.end(env)
+
+declared_go_tool_identity_test = unittest.make(_declared_go_tool_identity_test)
+
+def _declared_dd_trace_go_versions_test(ctx):
+    env = unittest.begin(ctx)
+    canonical = orchestrion_extension_test_helpers.declared_dd_trace_go_versions("v2.9.0", {})
+    asserts.equals(env, "v2.9.0", canonical["github.com/DataDog/dd-trace-go/v2"])
+    asserts.equals(env, None, orchestrion_extension_test_helpers.declared_dd_trace_go_versions("main", {}))
+
+    return unittest.end(env)
+
+declared_dd_trace_go_versions_test = unittest.make(_declared_dd_trace_go_versions_test)
+
 def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
         bootstrap_cache_key_stability_test,
         bootstrap_cache_paths_contract_test,
+        declared_dd_trace_go_versions_test,
+        declared_go_tool_identity_test,
         fallback_go_tool_identity_test,
         host_platform_normalization_test,
         module_proxy_resolved_modules_json_test,

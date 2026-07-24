@@ -18,8 +18,8 @@ const (
 	// files plus selected toolchain metadata, so code-only changes would
 	// otherwise keep restoring stale synthetic go.mod state.
 	syntheticModuleCacheABIVersion = "v4"
-	helperDecisionCacheABIVersion  = "v6"
-	helperExportCacheABIVersion    = "v5"
+	helperDecisionCacheABIVersion  = "v7"
+	helperExportCacheABIVersion    = "v6"
 	helperArchiveCacheABIVersion   = "v12"
 	// Bump the helper source-set version whenever the synthetic testmain source
 	// compile closure changes. The helper decision and archive caches both key

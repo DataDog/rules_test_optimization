@@ -381,19 +381,26 @@ func TestSeedSyntheticTestmainModuleFilesFallsBack(t *testing.T) {
 // Orchestrion cache paths that break Windows subprocesses.
 func TestModulePackageCommandEnvUsesShortExportModuleCache(t *testing.T) {
 	sdkRoot := filepath.Join(t.TempDir(), "sdk")
+	wovenGoRoot := filepath.Join(t.TempDir(), "woven-goroot")
 	exportRoot := filepath.Join(t.TempDir(), "exports")
 	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
 		t.Fatalf("mkdir fake sdk bin: %v", err)
+	}
+	if err := os.MkdirAll(wovenGoRoot, 0o755); err != nil {
+		t.Fatalf("mkdir fake woven goroot: %v", err)
 	}
 	if err := os.MkdirAll(exportRoot, 0o755); err != nil {
 		t.Fatalf("mkdir export root: %v", err)
 	}
 
-	envv, err := modulePackageCommandEnv(&env{sdk: sdkRoot}, exportRoot)
+	envv, err := modulePackageCommandEnv(&env{sdk: sdkRoot, goroot: wovenGoRoot}, exportRoot)
 	if err != nil {
 		t.Fatalf("modulePackageCommandEnv error: %v", err)
 	}
 
+	if got := getEnv(envv, "GOROOT"); got != sdkRoot {
+		t.Fatalf("GOROOT = %q, want complete SDK root %q", got, sdkRoot)
+	}
 	wantGoPath := moduleExportModuleCacheRoot(exportRoot)
 	if got := getEnv(envv, "GOPATH"); got != wantGoPath {
 		t.Fatalf("GOPATH = %q, want %q", got, wantGoPath)
@@ -504,6 +511,14 @@ func TestLoadModulePackageMetadataBatchSkipsBrokenTransitiveDeps(t *testing.T) {
 	if err != nil {
 		t.Skipf("go binary not on PATH: %v", err)
 	}
+	goRootOutput, err := exec.Command(goExe, "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatalf("resolve Go SDK root: %v", err)
+	}
+	sdkRoot := strings.TrimSpace(string(goRootOutput))
+	if sdkRoot == "" {
+		t.Fatal("go env GOROOT returned an empty SDK root")
+	}
 
 	root := t.TempDir()
 	depDir := filepath.Join(root, "dep")
@@ -542,7 +557,7 @@ func TestLoadModulePackageMetadataBatchSkipsBrokenTransitiveDeps(t *testing.T) {
 		t.Fatalf("mkdir export root: %v", err)
 	}
 	metaCache, err := loadModulePackageMetadataBatch(
-		&env{sdk: filepath.Dir(filepath.Dir(goExe))},
+		&env{sdk: sdkRoot},
 		mainDir,
 		exportRoot,
 		[]string{"example.com/dep"},

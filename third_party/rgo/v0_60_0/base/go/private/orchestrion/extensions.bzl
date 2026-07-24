@@ -33,6 +33,15 @@ _DD_TRACE_GO_PREFLIGHT_PACKAGES = [
 ]
 
 def _find_go_binary(ctx):
+    go_sdk_root = ctx.attr.go_sdk_root.strip()
+    if go_sdk_root:
+        root_file = ctx.path(Label(go_sdk_root))
+        binary_name = "go.exe" if _is_windows(ctx) else "go"
+        go_path = root_file.dirname.get_child("bin").get_child(binary_name)
+        if not go_path.exists:
+            fail("Configured hermetic Go SDK does not expose %s next to %s" % (go_path, root_file))
+        return go_path
+
     go_path = ctx.which("go")
     if go_path:
         return go_path
@@ -194,6 +203,20 @@ def _fallback_go_tool_identity(ctx):
         version = "unknown-go-version",
         goos = _normalize_host_goos(ctx.os.name),
         goarch = _normalize_host_goarch(ctx.os.arch),
+    )
+
+def _declared_go_tool_identity(ctx, go_sdk_version):
+    version = go_sdk_version.strip()
+    if not version:
+        return None
+    if not version.startswith("go"):
+        version = "go" + version
+    goos = _normalize_host_goos(ctx.os.name)
+    goarch = _normalize_host_goarch(ctx.os.arch)
+    return struct(
+        version = "go version %s %s/%s" % (version, goos, goarch),
+        goos = goos,
+        goarch = goarch,
     )
 
 def _go_tool_identity(ctx, go_path):
@@ -540,6 +563,20 @@ def _validated_dd_trace_go_versions(ctx, go_path, shared_query, version_map):
         return _validated_per_module_dd_trace_go_versions(ctx, go_path, version_map)
     if shared_query:
         return _validated_shared_dd_trace_go_versions(ctx, go_path, shared_query)
+    return _dd_trace_go_versions_from_shared(DEFAULT_DD_TRACE_GO_VERSION)
+
+def _declared_dd_trace_go_versions(shared_query, version_map):
+    if shared_query and version_map:
+        fail("dd_trace_go_version and dd_trace_go_versions cannot both be set")
+    if version_map:
+        _validate_dd_trace_go_versions_keys(version_map)
+        if all([_looks_like_canonical_dd_trace_go_version(version_map[module_path]) for module_path in _DD_TRACE_GO_MODULES]):
+            return _copy_dd_trace_go_versions(version_map)
+        return None
+    if shared_query:
+        if _looks_like_canonical_dd_trace_go_version(shared_query):
+            return _dd_trace_go_versions_from_shared(shared_query)
+        return None
     return _dd_trace_go_versions_from_shared(DEFAULT_DD_TRACE_GO_VERSION)
 
 def _dd_trace_go_versions_json(version_map):
@@ -1014,6 +1051,8 @@ orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
     bootstrap_cache_paths = _bootstrap_cache_paths_with_root,
     bootstrap_cache_required_entries = _bootstrap_cache_required_entries,
+    declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
+    declared_go_tool_identity = _declared_go_tool_identity,
     fallback_go_tool_identity = _fallback_go_tool_identity,
     host_path_is_writable = _host_path_is_writable,
     module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
@@ -1075,12 +1114,40 @@ def _orchestrion_build_impl(ctx):
 
     total_start_ms = _probe_now_ms(ctx)
     version = ctx.attr.version
+    binary_name = "orchestrion.exe" if _is_windows(ctx) else "orchestrion_bin"
+    declared_go_identity = _declared_go_tool_identity(ctx, ctx.attr.go_sdk_version)
+    declared_dd_trace_go_versions = _declared_dd_trace_go_versions(ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
+    if declared_go_identity != None and declared_dd_trace_go_versions != None:
+        declared_bootstrap_cache = _bootstrap_cache_paths(ctx, version, declared_dd_trace_go_versions, declared_go_identity, binary_name)
+        if _restore_bootstrap_cache(ctx, declared_bootstrap_cache, binary_name):
+            _probe_emit(
+                ctx,
+                "extensions.bootstrap_cache_hit",
+                extra = {
+                    "cache_key": declared_bootstrap_cache.key,
+                    "cache_root": declared_bootstrap_cache.cache_root,
+                    "identity_source": "declared_sdk",
+                },
+            )
+            _probe_emit(
+                ctx,
+                "extensions.orchestrion_build_total",
+                start_ms = total_start_ms,
+                extra = {"dd_trace_go_version": declared_dd_trace_go_versions["github.com/DataDog/dd-trace-go/v2"]},
+            )
+            return
+
     go_path = _find_go_binary(ctx)
     version_start_ms = _probe_now_ms(ctx)
     dd_trace_go_versions = _validated_dd_trace_go_versions(ctx, go_path, ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
     _probe_emit(ctx, "extensions.validate_dd_trace_go_versions", start_ms = version_start_ms)
-    binary_name = "orchestrion.exe" if _is_windows(ctx) else "orchestrion_bin"
     go_identity = _go_tool_identity(ctx, go_path)
+    if declared_go_identity != None and (
+        go_identity.version != declared_go_identity.version or
+        go_identity.goos != declared_go_identity.goos or
+        go_identity.goarch != declared_go_identity.goarch
+    ):
+        fail("Configured go_sdk_version %r does not match the hermetic Go SDK identity %r" % (ctx.attr.go_sdk_version, go_identity.version))
     bootstrap_cache = _bootstrap_cache_paths(ctx, version, dd_trace_go_versions, go_identity, binary_name)
     if _restore_bootstrap_cache(ctx, bootstrap_cache, binary_name):
         _probe_emit(
@@ -1089,6 +1156,7 @@ def _orchestrion_build_impl(ctx):
             extra = {
                 "cache_key": bootstrap_cache.key,
                 "cache_root": bootstrap_cache.cache_root,
+                "identity_source": "resolved_sdk",
             },
         )
         _probe_emit(
@@ -1359,6 +1427,8 @@ _orchestrion_build = repository_rule(
         "dd_trace_go_version": attr.string(default = "", doc = "dd-trace-go version to validate against the target module for Orchestrion-backed instrumentation"),
         "dd_trace_go_versions": attr.string_dict(doc = "Per-module dd-trace-go versions to validate against the target module for Orchestrion-backed instrumentation"),
         "enabled_by_env": attr.bool(default = False, doc = "Gate repository materialization on the Test Optimization repository environment"),
+        "go_sdk_root": attr.string(default = "", doc = "Optional label string for a hermetic Go SDK ROOT marker used to build Orchestrion"),
+        "go_sdk_version": attr.string(default = "", doc = "Optional declared version for go_sdk_root; enables cache lookup before materializing the SDK and is verified on cache miss"),
         "log_timing": attr.bool(default = False, doc = "Emit structured timing probes while building Orchestrion"),
     },
     environ = [_TEST_OPTIMIZATION_ENABLED_ENV],
@@ -1384,6 +1454,8 @@ def _orchestrion_ext_impl(module_ctx):
     dd_trace_go_version = ""
     dd_trace_go_versions = {}
     enabled_by_env = True
+    go_sdk_root = ""
+    go_sdk_version = ""
     log_timing = False
     for mod in module_ctx.modules:
         for from_source in mod.tags.from_source:
@@ -1392,6 +1464,8 @@ def _orchestrion_ext_impl(module_ctx):
                     fail("dd_trace_go_version and dd_trace_go_versions cannot both be set in orchestrion.from_source()")
                 version = from_source.version
                 enabled_by_env = from_source.enabled_by_env
+                go_sdk_root = str(from_source.go_sdk_root) if from_source.go_sdk_root else ""
+                go_sdk_version = from_source.go_sdk_version
                 log_timing = from_source.log_timing
                 if from_source.dd_trace_go_version:
                     dd_trace_go_version = from_source.dd_trace_go_version
@@ -1408,6 +1482,8 @@ def _orchestrion_ext_impl(module_ctx):
             dd_trace_go_version = dd_trace_go_version,
             dd_trace_go_versions = dd_trace_go_versions,
             enabled_by_env = enabled_by_env,
+            go_sdk_root = go_sdk_root,
+            go_sdk_version = go_sdk_version,
             log_timing = log_timing,
         )
     else:
@@ -1431,6 +1507,13 @@ _from_source = tag_class(
         "enabled_by_env": attr.bool(
             default = True,
             doc = "Gate repository materialization on the Test Optimization repository environment.",
+        ),
+        "go_sdk_root": attr.label(
+            doc = "Optional hermetic Go SDK ROOT marker used to build Orchestrion.",
+        ),
+        "go_sdk_version": attr.string(
+            default = "",
+            doc = "Optional declared version for go_sdk_root; enables cache lookup before SDK materialization.",
         ),
         "log_timing": attr.bool(
             default = False,

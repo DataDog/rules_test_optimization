@@ -1281,6 +1281,8 @@ dd_topt_go_orchestrion_tool_repo(
     # Optional. When omitted, the helper uses the fork's current default
     # shared dd-trace-go version.
     dd_trace_go_version = "<resolved_dd_trace_go_version>",
+    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = "1.25.0",
 )
 
 go_rules_dependencies()
@@ -1292,6 +1294,9 @@ Notes for the helper:
 
 - `version` is required in WORKSPACE mode.
 - `dd_trace_go_version` and `dd_trace_go_versions` are mutually exclusive.
+- `go_sdk_root` must reference the SDK registered by
+  `go_register_toolchains`, and `go_sdk_version` must equal that toolchain
+  version. Enabled bootstrap uses this SDK instead of a host `go` binary.
 - Keep the default tool-repo name `rules_go_orchestrion_tool`; the current fork
   resolves that name internally.
 - Declare the real tool repository before `go_rules_dependencies()`. The fork

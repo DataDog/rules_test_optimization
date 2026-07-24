@@ -67,13 +67,27 @@ git_override(
     strip_prefix = "third_party/rgo/v0_60_0/base",
 )
 
+test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+test_optimization_go_sdk.download(
+    name = "test_optimization_go_sdk",
+    version = "<go-version>",
+)
+use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
+
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
     dd_trace_go_version = "v2.9.0",
+    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+    go_sdk_version = "<go-version>",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
+
+Guided bootstrap writes this SDK declaration from `--runtime-version`.
+Orchestrion uses the Bazel-managed SDK on cache misses, while a compatible
+bootstrap cache hit can be restored before the SDK repository is materialized.
+Do not add SDK or Orchestrion settings to individual service or test targets.
 
 For newer support lines such as `v0_61_1`, use the base strip prefix printed by
 the bootstrap or onboarding pins summary, for example

@@ -848,14 +848,39 @@ git_override(
     strip_prefix = "%s",
 )
 
+%s
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "%s",
 %s
+%s
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, stripPrefix, cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd), nil
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, stripPrefix, managedGoSDKBlock(cfg), cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedOrchestrionGoSDKAttrs(cfg), managedBlockEnd), nil
+}
+
+func managedGoSDKBlock(cfg config) string {
+	version := strings.TrimSpace(cfg.runtimeVersion)
+	if version == "" {
+		return ""
+	}
+	return fmt.Sprintf(`test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+test_optimization_go_sdk.download(
+    name = "test_optimization_go_sdk",
+    version = %q,
+)
+use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
+`, version)
+}
+
+func managedOrchestrionGoSDKAttrs(cfg config) string {
+	version := strings.TrimSpace(cfg.runtimeVersion)
+	if version == "" {
+		return ""
+	}
+	return fmt.Sprintf(`    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+    go_sdk_version = %q,`, version)
 }
 
 func validateRulesGoVariant(variant string) error {
@@ -1934,16 +1959,21 @@ datadog_go_test_optimization_workspace_repositories(
 	}
 	buf.WriteString(")\n\n")
 
+	goVersion := "<go-version>"
+	if strings.TrimSpace(cfg.runtimeVersion) != "" {
+		goVersion = strings.TrimSpace(cfg.runtimeVersion)
+	}
 	buf.WriteString(fmt.Sprintf(`load("@%s//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
 
 dd_topt_go_orchestrion_tool_repo(
     version = "%s",
 %s
+%s
 )
 go_rules_dependencies()
-go_register_toolchains(version = "<go-version>")
-`, cfg.rulesGoRepoName, cfg.orchestrionVersion, workspaceSnippetTracerConfig(cfg)))
+go_register_toolchains(version = "%s")
+`, cfg.rulesGoRepoName, cfg.orchestrionVersion, workspaceSnippetTracerConfig(cfg), workspaceSnippetOrchestrionGoSDKAttrs(cfg), goVersion))
 	if cfg.workspaceMode || strings.TrimSpace(cfg.service) != "" || strings.TrimSpace(cfg.runtimeVersion) != "" {
 		buf.WriteString("\n")
 		buf.WriteString(workspaceSyncSnippet(cfg))
@@ -1980,6 +2010,15 @@ func workspaceSnippetTracerConfig(cfg config) string {
 		return buf.String()
 	}
 	return fmt.Sprintf("    dd_trace_go_version = %q,", cfg.ddTraceGoVersion)
+}
+
+func workspaceSnippetOrchestrionGoSDKAttrs(cfg config) string {
+	version := strings.TrimSpace(cfg.runtimeVersion)
+	if version == "" {
+		return ""
+	}
+	return fmt.Sprintf(`    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = %q,`, version)
 }
 
 func rulesGoStripPrefix(cfg config) (string, error) {

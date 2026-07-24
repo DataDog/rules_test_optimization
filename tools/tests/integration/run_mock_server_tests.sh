@@ -42,6 +42,7 @@ PYTHON="${PYTHON:-python3}"
 # under test instead of relying on the old hardcoded bootstrap tag.
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 export ORCHESTRION_VERSION
+GO_VERSION="${GO_VERSION:-1.25.0}"
 RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
 RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
@@ -74,14 +75,16 @@ if [[ -z "$REAL_GO_BIN_HOST" ]]; then
   exit 1
 fi
 
-RULES_GO_OVERRIDE_REMOTE="$("$PYTHON" - <<'PY' "$REPO_ROOT"
+if [[ -z "${RULES_GO_OVERRIDE_REMOTE:-}" ]]; then
+  RULES_GO_OVERRIDE_REMOTE="$("$PYTHON" - <<'PY' "$REPO_ROOT"
 from pathlib import Path
 import sys
 
 print(Path(sys.argv[1]).resolve().as_uri())
 PY
-)"
-RULES_GO_OVERRIDE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  )"
+fi
+RULES_GO_OVERRIDE_COMMIT="${RULES_GO_OVERRIDE_COMMIT:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 
 if [[ "${KEEP_TMP:-0}" == "1" ]]; then
   echo "KEEP_TMP=1: temp workspace at $TMP_WS"
@@ -3950,7 +3953,7 @@ BUILD_GUIDED_EOF
     --rules-go-variant "$RULES_GO_VARIANT" \
     --guided \
     --service "go-service" \
-    --runtime-version "1.2.3" \
+    --runtime-version "$GO_VERSION" \
     --write-bazelrc
 )
 
@@ -3966,6 +3969,13 @@ if ! grep -q 'test_optimization_go_extension' "$GUIDED_BOOT_WS/MODULE.bazel"; th
 fi
 if ! grep -q 'module_path = "example.com/guided-bootstrap-go"' "$GUIDED_BOOT_WS/MODULE.bazel"; then
   echo "error: guided bootstrap did not persist the Go module path in sync wiring"
+  cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
+if ! grep -q 'test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")' "$GUIDED_BOOT_WS/MODULE.bazel" ||
+  ! grep -q 'go_sdk_root = "@test_optimization_go_sdk//:ROOT"' "$GUIDED_BOOT_WS/MODULE.bazel" ||
+  ! grep -q "go_sdk_version = \"$GO_VERSION\"" "$GUIDED_BOOT_WS/MODULE.bazel"; then
+  echo "error: guided bootstrap did not wire the Bazel-managed Go SDK into Orchestrion"
   cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
   exit 1
 fi

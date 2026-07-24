@@ -245,6 +245,8 @@ load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_
 
 dd_topt_go_orchestrion_tool_repo(
     dd_trace_go_version = "v2.9.0",
+    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = "<go-version>",
     version = "v1.9.0",
 )
 
@@ -263,6 +265,12 @@ dd_topt_go_workspace_sync_repositories(
 
 The public Go helper is config-gated by default. Do not add a second enable
 attribute to each repository or test target.
+
+`@go_sdk//:ROOT` is the SDK registered by the repository's existing
+`go_register_toolchains(version = "<go-version>")` call. Keep
+`go_sdk_version`, `runtime_version`, and that toolchain version equal. This
+central wiring lets enabled Orchestrion bootstrap without a host `go` binary;
+it is not repeated per service.
 
 The helper loads the public Orchestrion repository API through the Go
 companion's repository mapping, so consumers do not load it from their apparent

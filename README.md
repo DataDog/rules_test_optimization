@@ -1704,7 +1704,8 @@ the uploader enriches those JSON files with repository and Bazel metadata. Pass
 otherwise the default is `v2.9.0`.
 
 ```bash
-bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap
+bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  --runtime-version <go-version>
 ```
 
 The bootstrap's default module-sync mode is `targeted`, which avoids a broad
@@ -1712,23 +1713,39 @@ The bootstrap's default module-sync mode is `targeted`, which avoids a broad
 whole module, and use `--go-mod-sync=off` when another repository-owned command
 will update `go.mod` and `go.sum`. Use `--go-binary=/path/to/go` if the module
 must be synced with a specific Go SDK. The path must point to a `go` or
-`go.exe` executable and must not include arguments.
+`go.exe` executable and must not include arguments. This option controls the
+one-time Go module update performed by bootstrap; enabled Bazel builds use the
+SDK declared from `--runtime-version`.
 
 For WORKSPACE repos with checked-in `go_repository(...)` declarations, add
 `--check-go-repositories` after targeted sync. This catches stale
 `repositories.bzl` pins for `github.com/DataDog/orchestrion` and the three
 `dd-trace-go` modules before Bazel tries to build with mismatched versions.
 
-If you wire Orchestrion manually instead of using bootstrap, you can also set
-the tracer versions directly in `MODULE.bazel`.
+Guided bootstrap declares a Bazel-managed Go SDK from `--runtime-version` and
+passes its root and exact version to the Orchestrion repository. Enabled builds
+therefore do not depend on a host `go` binary. The declaration is workspace-wide
+and is not repeated for each service or test.
+
+If you wire Orchestrion manually instead of using bootstrap, declare the same
+SDK and pass it together with the tracer versions in `MODULE.bazel`.
 
 Shared-version form:
 
 ```bzl
+test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+test_optimization_go_sdk.download(
+    name = "test_optimization_go_sdk",
+    version = "<go-version>",
+)
+use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
+
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
     dd_trace_go_version = "v2.9.0",
+    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+    go_sdk_version = "<go-version>",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
@@ -1736,6 +1753,13 @@ use_repo(orchestrion, "rules_go_orchestrion_tool")
 Per-module form:
 
 ```bzl
+test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+test_optimization_go_sdk.download(
+    name = "test_optimization_go_sdk",
+    version = "<go-version>",
+)
+use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
+
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
@@ -1744,6 +1768,8 @@ orchestrion.from_source(
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0",
         "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0",
     },
+    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+    go_sdk_version = "<go-version>",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```

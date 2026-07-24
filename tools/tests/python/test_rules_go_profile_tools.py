@@ -388,6 +388,23 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                     upstream="v9_99_9",
                 )
 
+    def test_smoke_workspace_wires_hermetic_go_sdk_into_orchestrion(self) -> None:
+        """The generated WORKSPACE smoke must not bootstrap from host Go."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            workspace = root / "workspace"
+            self.mod.write_smoke_workspace(
+                workspace=workspace,
+                rules_go_root=root / "rules_go",
+                go_version="1.25.0",
+                orchestrion_version="v1.9.0",
+                dd_trace_go_version="v2.9.0",
+            )
+
+            workspace_text = (workspace / "WORKSPACE").read_text(encoding="utf-8")
+            self.assertIn('go_sdk_root = "@go_sdk//:ROOT"', workspace_text)
+            self.assertIn('go_sdk_version = "1.25.0"', workspace_text)
+
     def test_run_bazel_scans_captured_output_before_failure_details(self) -> None:
         """Verifier command wrappers must not leak denylisted command output."""
         with tempfile.TemporaryDirectory() as raw_tmp:

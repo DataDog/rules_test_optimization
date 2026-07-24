@@ -51,7 +51,9 @@ SHA256, and archive prefix generated from the same published commit.
   SHAs into consumer snippets.
 - Configure `dd_topt_go_orchestrion_tool_repo(...)` with the current supported
   Orchestrion version and the current supported `dd-trace-go` Bazel-mode
-  version. Do not load the underlying `rules_go` repository rule directly.
+  version, plus the repository's central `@go_sdk//:ROOT` label and exact Go
+  SDK version. Do not load the underlying `rules_go` repository rule directly
+  or repeat this wiring per service.
 - Configure `dd_topt_go_workspace_sync_repositories(...)` with:
   - `service`
   - `runtime_version`

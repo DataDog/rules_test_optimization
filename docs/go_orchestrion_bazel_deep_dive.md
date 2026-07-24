@@ -116,10 +116,12 @@ flowchart TD
     C --> D[Bzlmod MODULE.bazel patching or WORKSPACE local scaffolding]
     C --> E[orchestrion pin files]
     D --> F[vendored rules_go fork]
+    D --> W[Bazel-managed Go SDK]
     F --> G[rules_go Orchestrion extension]
     G --> U{Test Optimization enabled?}
     U -->|no| V[stable empty repository\n no host Go or source fetch]
     U -->|yes| H[patched Orchestrion binary]
+    W --> H
 
     I[BUILD: dd_topt_go_test] --> R{Sync export enabled?}
     R -->|no| S[public raw go_test\n no Test Optimization targets]
@@ -181,18 +183,20 @@ The bootstrap binary is the one-time workspace mutation step.
 Implementation:
 - [main.go](../modules/go/tools/dd_topt_go_bootstrap/main.go)
 
-In guided Bzlmod mode, bootstrap does five things that matter for the current
+In guided Bzlmod mode, bootstrap does six things that matter for the current
 architecture:
 
 1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.60.0")`
 2. Writes a managed `git_override` for `rules_go` pointing back to this repo
    with `strip_prefix = "third_party/rgo/v0_60_0/base"`
-3. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension and
+3. Declares a Bazel-managed Go SDK from `--runtime-version`
+4. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension, passes the
+   SDK root and exact version, and imports
    `use_repo(orchestrion, "rules_go_orchestrion_tool")`
-4. Sets the workspace-wide tracer selection with either
+5. Sets the workspace-wide tracer selection with either
    `orchestrion.from_source(..., dd_trace_go_version = "...")` or
    `orchestrion.from_source(..., dd_trace_go_versions = {...})`
-5. Runs `orchestrion pin` in the Go module and ensures:
+6. Runs `orchestrion pin` in the Go module and ensures:
    - `go.mod`
    - `go.sum`
    - `orchestrion.tool.go`
@@ -203,6 +207,7 @@ It aligns:
 
 - Bazel module wiring
 - the vendored `rules_go` fork
+- the Bazel-managed Go SDK used to build Orchestrion
 - the selected `dd-trace-go` version used by Bazel injection
 - the pinned Go module files that Orchestrion expects
 

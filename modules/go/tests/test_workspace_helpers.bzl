@@ -124,6 +124,8 @@ def _orchestrion_call_spec_test(ctx):
         dd_trace_go_version = "v2.9.0",
         dd_trace_go_versions = {"example.com/service": "v2.8.0"},
         version = "v1.9.0",
+        go_sdk_root = "@go_sdk//:ROOT",
+        go_sdk_version = "1.25.0",
         log_timing = True,
     )
     asserts.equals(
@@ -134,6 +136,8 @@ def _orchestrion_call_spec_test(ctx):
             "dd_trace_go_versions": {"example.com/service": "v2.8.0"},
             "enabled_by_env": True,
             "version": "v1.9.0",
+            "go_sdk_root": "@go_sdk//:ROOT",
+            "go_sdk_version": "1.25.0",
             "log_timing": True,
         },
         call,

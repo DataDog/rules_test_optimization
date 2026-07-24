@@ -17,9 +17,11 @@ def _build_orchestrion_repo_call(
         dd_trace_go_version = "",
         dd_trace_go_versions = {},
         version = "",
+        go_sdk_root = "",
+        go_sdk_version = "",
         log_timing = False):
     """Build the fixed-name public rules_go repository call."""
-    return {
+    call = {
         "name": _DEFAULT_TOOL_REPO_NAME,
         "dd_trace_go_version": dd_trace_go_version,
         "dd_trace_go_versions": dd_trace_go_versions,
@@ -27,17 +29,26 @@ def _build_orchestrion_repo_call(
         "version": version,
         "log_timing": log_timing,
     }
+    if go_sdk_root:
+        call["go_sdk_root"] = go_sdk_root
+    if go_sdk_version:
+        call["go_sdk_version"] = go_sdk_version
+    return call
 
 def dd_topt_go_orchestrion_tool_repo(
         dd_trace_go_version = "",
         dd_trace_go_versions = {},
         version = "",
+        go_sdk_root = "",
+        go_sdk_version = "",
         log_timing = False):
     """Declare the real Orchestrion repository through rules_go's public API."""
     go_orchestrion_tool_repo(**_build_orchestrion_repo_call(
         dd_trace_go_version = dd_trace_go_version,
         dd_trace_go_versions = dd_trace_go_versions,
         version = version,
+        go_sdk_root = go_sdk_root,
+        go_sdk_version = go_sdk_version,
         log_timing = log_timing,
     ))
 

@@ -785,6 +785,40 @@ set of tracer versions while the local Go module still resolves another.
 `orchestrion.tool.go` still matters, but as required import/config wiring for
 Orchestrion, not as the source of truth for tracer versions.
 
+## Enabled Orchestrion cannot find Go
+
+**Symptom**:
+
+```text
+Could not find 'go' binary. Please ensure Go is installed.
+```
+
+**Cause**: the workspace uses Orchestrion wiring generated before the
+Bazel-managed SDK contract was added, or a manual block omitted the SDK root
+and version. Disabled mode still avoids the real repository, but enabled mode
+must compile the patched Orchestrion binary on a cold cache miss.
+
+**Solution**:
+
+1. For Bzlmod, rerun guided bootstrap with the workspace's real Go toolchain
+   version:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --guided \
+     --service <datadog-service> \
+     --runtime-version <go-version> \
+     --write-bazelrc
+   ```
+2. For WORKSPACE, regenerate the reviewed snippet with
+   `--workspace-mode --print-workspace-snippet --runtime-version <go-version>`.
+3. Verify the generated SDK version equals the version passed to the
+   repository's central `go_register_toolchains(...)` call and the Test
+   Optimization sync repository.
+
+Do not install Go on the analysis host as the fix. The supported wiring uses
+the Bazel-managed SDK on a cache miss and can restore a compatible warm
+Orchestrion bootstrap before materializing that SDK.
+
 ## WORKSPACE go_repository drift
 
 **Symptom**: `go.mod` and `go.sum` look correct, but Bazel still resolves an

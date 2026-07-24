@@ -72,6 +72,29 @@ Checks:
 Fix the tracer version or macro wiring. Do not add a msgpack conversion path as
 part of onboarding unless the rule contract is intentionally redesigned.
 
+## Enabled Bootstrap Cannot Find Go
+
+Symptoms:
+
+- Bazel reports `Could not find 'go' binary. Please ensure Go is installed.`
+- Disabled validation passes, but the first enabled test fails while resolving
+  `rules_go_orchestrion_tool`.
+
+Checks:
+
+- Guided Bzlmod bootstrap was run with the workspace's real
+  `--runtime-version`.
+- The managed `MODULE.bazel` block contains one Bazel `go_sdk` declaration and
+  passes its `ROOT` label plus exact version to `orchestrion.from_source(...)`.
+- WORKSPACE wiring passes `@go_sdk//:ROOT` and the same exact version used by
+  the central `go_register_toolchains(...)` call.
+- The SDK, Test Optimization `runtime_version`, and registered Go toolchain
+  versions match.
+
+Regenerate the central bootstrap block or WORKSPACE snippet. Do not install Go
+on the analysis host, add SDK settings per service, or bypass the enabled
+Orchestrion repository.
+
 ## Missing Git Metadata
 
 Symptoms:

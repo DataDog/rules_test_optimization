@@ -236,9 +236,17 @@ gazelle_dependencies()
 go_orchestrion_tool_repo(
     version = "%s",
     dd_trace_go_version = "%s",
+    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = "%s",
 )
 """
-        % (rules_go_root.as_posix(), go_version, orchestrion_version, dd_trace_go_version),
+        % (
+            rules_go_root.as_posix(),
+            go_version,
+            orchestrion_version,
+            dd_trace_go_version,
+            go_version,
+        ),
         encoding="utf-8",
     )
     app.joinpath("BUILD.bazel").write_text(

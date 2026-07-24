@@ -130,6 +130,10 @@ Require both final `find` commands to return the expected files, then inspect
 the Bazel metadata for the expected Orchestrion mode. Every inspection command
 above is scoped to `output_root`; using the workspace's default output root at
 either stage does not prove the disabled-to-enabled repository transition.
+For the hermetic SDK proof, run this transition in an environment where a host
+`go` binary is absent from `PATH` after bootstrap has written the workspace
+files. The enabled phase must build or restore Orchestrion through the
+Bazel-managed SDK declared by the workspace.
 
 ## Sync
 

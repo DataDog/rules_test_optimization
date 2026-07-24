@@ -14,6 +14,8 @@ def go_orchestrion_tool_repo(
         dd_trace_go_version = "",
         dd_trace_go_versions = None,
         enabled_by_env = False,
+        go_sdk_root = "",
+        go_sdk_version = "",
         log_timing = False):
     """Create the `rules_go_orchestrion_tool` repository in WORKSPACE mode.
 
@@ -29,6 +31,12 @@ def go_orchestrion_tool_repo(
       enabled_by_env: Gate repository materialization on the Test Optimization
         repository environment. Generic Orchestrion callers should keep the
         default.
+      go_sdk_root: Optional label string for a hermetic Go SDK ROOT marker.
+        When set, the enabled repository builds Orchestrion with that SDK
+        instead of searching for Go on the host.
+      go_sdk_version: Optional declared version for `go_sdk_root`. When set,
+        bootstrap can restore an existing cache entry before materializing the
+        SDK and verifies the declared value on cache miss.
       log_timing: Emit structured bootstrap timing probes while building the
         Orchestrion tool repository.
     """
@@ -55,5 +63,7 @@ def go_orchestrion_tool_repo(
         dd_trace_go_version = dd_trace_go_version,
         dd_trace_go_versions = dd_trace_go_versions,
         enabled_by_env = enabled_by_env,
+        go_sdk_root = go_sdk_root,
+        go_sdk_version = go_sdk_version,
         log_timing = log_timing,
     )

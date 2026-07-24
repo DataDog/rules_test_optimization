@@ -296,6 +296,8 @@ load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl",
 dd_topt_go_orchestrion_tool_repo(
     version = "v1.9.0",
     dd_trace_go_version = "v2.9.0",
+    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = "<go-sdk-version>",
 )
 
 load(
@@ -315,6 +317,10 @@ dd_topt_go_workspace_sync_repositories(
 The public Go helper enables metadata gating by default. The single
 `--config=test-optimization` switch controls both metadata sync and the
 Orchestrion aliases; no per-target or per-repository enable attribute is needed.
+`@go_sdk//:ROOT` comes from the repository's central
+`go_register_toolchains(version = "<go-sdk-version>")` declaration. Keep that
+version, `go_sdk_version`, and `runtime_version` equal so enabled bootstrap does
+not depend on a host `go` binary.
 Without the config, `dd_topt_go_test` delegates directly to the consumer's
 original `go_test_rule` under the public name, preserves the caller's Go rule
 kwargs, and creates no Test Optimization-owned hidden targets. With the config,
