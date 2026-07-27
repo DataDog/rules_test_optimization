@@ -206,6 +206,12 @@ jobs:
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
+      - name: Validate disabled manifest sync paths (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: python tools/tests/integration/run_manifest_sync_tests.py --mode disabled
+
   bazel-tests-ubuntu-main:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
@@ -325,6 +331,10 @@ jobs:
       - name: Run mock server integration tests
         shell: bash
         run: ./tools/tests/integration/run_mock_server_tests.sh
+
+      - name: Run manifest sync and cache isolation integration
+        shell: bash
+        run: python3 tools/tests/integration/run_manifest_sync_tests.py --mode full
 
   bazel-tests-ubuntu:
     name: bazel-tests (ubuntu-latest)

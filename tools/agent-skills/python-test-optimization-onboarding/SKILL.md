@@ -84,6 +84,9 @@ Keep the RFC contract intact:
    - Bzlmod repo: follow [bzlmod-onboarding.md](references/bzlmod-onboarding.md).
    - WORKSPACE repo: follow [workspace-onboarding.md](references/workspace-onboarding.md).
    - Existing pytest wrapper: also follow [consumer-runner.md](references/consumer-runner.md).
+   - Consumer-owned managed monorepo command: use manifest sync only when the
+     command expands exact Go/Python labels and derives runtime contexts. Do
+     not add a checked-in target/service map.
    - Validation and debugging: follow
      [validation-checklist.md](references/validation-checklist.md) and
      [troubleshooting.md](references/troubleshooting.md).
@@ -127,6 +130,18 @@ Every successful Python onboarding should end with these pieces:
   as part of normal test, doctor, or uploader commands.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
+For automatic managed Go/Python monorepos:
+
+- declare one manifest aggregate repository, separate from static multi-sync;
+- load `topt_data_by_target` in the central Python wrapper;
+- preserve the consumer's comparison-base Python path when the current full
+  label is absent;
+- preserve `consumer_runner` behavior and existing pytest/JUnit policy for
+  selected targets;
+- wire doctor to aggregate contexts and generated exact targets;
+- keep the invocation manifest private to the consumer command;
+- do not describe Java or other runtimes as automatically enrolled.
+
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
 repository from `bzl` or `bazelw` to raw `bazel` just because examples use the
 generic binary name.
@@ -141,6 +156,8 @@ changes reviewable:
   repository workaround.
 - Put consumer-specific scheduling, Docker, tag, flaky, and wrapper policy in
   the consumer repository.
+- Keep automatic target expansion and service naming in the consumer's managed
+  command, not in the Rule, BUILD files, or Gazelle.
 - If an issue requires changing this rule repository, add matching fixture
   coverage in `rules_test_optimization_tests` before declaring it solved.
 

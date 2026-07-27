@@ -267,6 +267,74 @@ values automatically.
    Preserve the repository's existing `enabled_by_env` value; enabling debug
    logging must not change its activation contract.
 
+## Manifest-driven managed runs
+
+These checks apply only to the automatic Go/Python path. Static single-service
+and static multi-service consumers do not need an invocation manifest.
+
+### Enabled run reports a missing manifest
+
+The aggregate repository intentionally fails before HTTP when enabled without
+the command-owned manifest. Run the consumer repository's managed Test
+Optimization command. Do not add the internal manifest handoff to `.bazelrc`
+or ordinary CI jobs.
+
+If a direct `bazel test --config=test-optimization` bypasses the managed
+command, the failure is expected: target discovery must run first so the
+repository rule receives exact targets and runtime contexts.
+
+### Manifest is malformed or unsupported
+
+The error names the schema field rejected before metadata requests. Verify
+that the consumer resolver emitted:
+
+- schema version `1`;
+- canonical local labels such as `//pkg:test`, not patterns or external labels;
+- unique, used contexts;
+- only Go/Python runtimes;
+- deterministic context keys matching service and runtime;
+- `application` or `domain_fallback` for every target.
+
+Fix the resolver or its target input. Do not hand-edit the temporary manifest.
+
+### Unsupported target is absent from the aggregate mapping
+
+Only targets recognized by the consumer's central Go/Python macro policy are
+eligible. A target absent from `topt_data_by_target` correctly keeps its raw
+behavior. Inspect the managed command summary for unsupported labels and
+confirm that the target is a runtime test, not a build-only companion.
+
+Java, NodeJS, .NET, and Ruby are intentionally outside automatic manifest
+onboarding in this release.
+
+### Service or context collision
+
+The resolver and repository reject two logical services that sanitize to the
+same context key, conflicting module paths or runtime versions for one
+service/runtime, duplicate labels, and one label assigned to multiple
+contexts. Change the consumer's deterministic naming grammar or split the
+conflicting runtime contexts; do not append positional suffixes whose result
+depends on input order.
+
+### Doctor expected-target mismatch
+
+The aggregate `:expected_targets` file is exact. A mismatch means the execution
+set, BEP inputs, or doctor wiring does not match the manifest. The managed
+command must test the fully expanded labels from the same discovery phase and
+pass that invocation's BEP file to doctor.
+
+Cached tests do not emit fresh payloads. If strict freshness rejects a cached
+run, execute the upload-producing phase with test-result caching disabled.
+Use separate cache-isolation tests when validating action-key behavior.
+
+### Disabled mode or enabled bootstrap invokes host Go
+
+Disabled manifest sync must not read the manifest, contact Datadog, or resolve
+the real Orchestrion tool repository. Enabled Go bootstrap uses the
+Bazel-managed Go SDK and must not depend on a host `go` binary. If a host-Go
+sentinel fires, verify the patched `rules_go` profile, generated SDK wiring,
+and central wrapper before installing Go on the host.
+
 ## Published Go pins
 
 **Symptom**: A consumer cannot fetch the published Go/Orchestrion archive, or a

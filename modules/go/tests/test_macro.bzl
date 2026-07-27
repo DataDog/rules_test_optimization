@@ -217,6 +217,20 @@ def _multi_service_topt_data():
         "_meta": {"description": "non-service entry should be ignored"},
     }
 
+def _dynamic_manifest_topt_data():
+    """Model one target entry exported by the manifest aggregate repository."""
+    data = _single_service_topt_data()
+    data.update({
+        "repo_name": "virtual_dynamic_repo_that_must_not_resolve",
+        "service_name": "dynamic-go-service",
+        "files_label": ":full_payload",
+        "manifest_label": ":test_macro.bzl",
+        "module_labels": [":module_example_com_explicit_pkg"],
+        "labels": ["ignored_static_label_that_must_not_resolve"],
+        "manifest_path": "ignored/static/manifest.txt",
+    })
+    return data
+
 def go_macro_single_service_target(name, tags = None):
     """Target-under-test: single-service wiring + default rundir path."""
     dd_topt_go_test(
@@ -229,6 +243,16 @@ def go_macro_single_service_target(name, tags = None):
             # Macro must force this to true regardless of user input.
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
         },
+        tags = tags,
+    )
+
+def go_macro_dynamic_manifest_target(name, tags = None):
+    """Target under test for explicit labels from one dynamic manifest entry."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _dynamic_manifest_topt_data(),
+        go_test_rule = _go_test_capture_rule,
+        importpath = "example.com/explicit/pkg",
         tags = tags,
     )
 
@@ -557,6 +581,25 @@ def _go_macro_multi_service_wiring_test_impl(ctx):
     )
     asserts.equals(env, "example.com/override/pkg", captured.importpath)
     asserts.true(env, captured.rundir.endswith("tests"))
+    return analysistest.end(env)
+
+def _go_macro_dynamic_manifest_wiring_test_impl(ctx):
+    """Assert dynamic target entries avoid virtual-repository label fallback."""
+    env = analysistest.begin(ctx)
+    captured = analysistest.target_under_test(env)[ToptGoMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_dynamic_manifest_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.false(env, _has_fragment(captured.data_labels, "virtual_dynamic_repo_that_must_not_resolve"))
+    asserts.equals(env, "dynamic-go-service", captured.env.get("DD_SERVICE"))
+    return analysistest.end(env)
+
+def _go_macro_dynamic_manifest_payloads_test_impl(ctx):
+    """Assert only the selected explicit module files reach the selector."""
+    env = analysistest.begin(ctx)
+    files = analysistest.target_under_test(env)[DefaultInfo].files.to_list()
+    asserts.equals(env, 1, len(files))
+    asserts.true(env, _has_file_basename(files, "module_example_com_explicit_pkg.payload"))
+    asserts.false(env, _has_file_basename(files, "full_payload.payload"))
     return analysistest.end(env)
 
 def _go_macro_rundir_mismatch_wiring_test_impl(ctx):
@@ -1012,6 +1055,12 @@ go_macro_disabled_raw_wiring_test = analysistest.make(
 )
 go_macro_multi_service_wiring_test = analysistest.make(
     _go_macro_multi_service_wiring_test_impl,
+)
+go_macro_dynamic_manifest_wiring_test = analysistest.make(
+    _go_macro_dynamic_manifest_wiring_test_impl,
+)
+go_macro_dynamic_manifest_payloads_test = analysistest.make(
+    _go_macro_dynamic_manifest_payloads_test_impl,
 )
 go_macro_rundir_mismatch_wiring_test = analysistest.make(
     _go_macro_rundir_mismatch_wiring_test_impl,

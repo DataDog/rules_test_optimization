@@ -23,6 +23,8 @@ Rule of thumb:
 - Use one multi-sync aggregator per runtime for multi-service setups
 - In mixed-runtime monorepos, keep one sync repo per runtime/service slice
 - Use multi-sync aggregators only for multiple services of the same runtime
+- Use manifest sync only behind a consumer-owned managed command that expands
+  exact Go/Python targets and derives services for the current invocation
 
 Shared runtime contract for every language:
 
@@ -119,6 +121,79 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
     --upload \
     //...
 ```
+
+## Automatic managed Go/Python monorepos
+
+This path is separate from the static recipes below. It is appropriate when a
+large consumer already owns a command or pipeline adapter that can expand the
+requested Bazel targets before running tests.
+
+The consumer command:
+
+1. expands target patterns and suites to canonical local labels;
+2. identifies eligible targets created through the repository's central
+   `dd_go_test` or `dd_py_test` macro;
+3. derives a service and runtime context from each full label;
+4. writes a private invocation-scoped manifest;
+5. runs the exact labels with `--config=test-optimization`, then doctor and
+   uploader dry-run.
+
+The Rule does not discover affected tests and does not prescribe a repository's
+service grammar. A common consumer policy is to derive an application service
+when the full package path contains a stable application segment and otherwise
+fall back to the owning domain. The manifest records whether each target used
+`application` or `domain_fallback` derivation. Ambiguous names or conflicting
+runtime contexts must fail; they must not silently map to a global fallback.
+
+Central wrappers load `topt_data_by_target` from the aggregate repository and
+look up the current full label. A selected label delegates to
+`dd_topt_go_test` or `dd_topt_py_test`. An absent label follows the same raw
+test path used without Test Optimization. This keeps adding and removing
+services mechanical:
+
+- adding a new Go or Python test requires no Test Optimization BUILD edit;
+- including its label in the managed invocation enrolls it automatically;
+- removing the label from that invocation removes it from that run;
+- no checked-in service list, `examples.bzl`, Gazelle extension, or ownership
+  registry is required.
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Runner as Consumer-managed command
+  participant Bazel
+  participant Sync as Manifest aggregate repo
+  participant Post as Doctor/uploader
+
+  alt ordinary command, config omitted
+    User->>Bazel: test requested labels
+    Bazel->>Sync: resolve disabled interface
+    Sync-->>Bazel: stable empty stubs, no HTTP
+    Bazel-->>User: normal Go/Python test behavior
+  else managed Test Optimization command
+    User->>Runner: test requested labels
+    Runner->>Bazel: query and expand exact targets
+    Runner->>Runner: derive contexts and temporary manifest
+    Runner->>Bazel: sync and test exact labels with config
+    Bazel->>Sync: materialize selected Go/Python contexts
+    Sync-->>Bazel: narrow per-context/module inputs
+    Runner->>Post: doctor exact targets, then dry-run
+    Post-->>User: validation result and optional upload
+  end
+```
+
+The aggregate repository is declared once using
+`test_optimization_manifest_sync` or
+`test_optimization_manifest_sync_extension`. Doctor/uploader wiring uses
+`@test_optimization_data//:test_optimization_context` and
+`@test_optimization_data//:expected_targets`; see the
+[Installation Reference](Installation_Reference.md#manifest-driven-managed-gopython-monorepos).
+The private manifest handoff belongs to the managed command and must not be
+copied into ordinary `.bazelrc` configuration.
+
+Automatic manifest onboarding supports Go and Python in this release. Java,
+NodeJS, .NET, and Ruby continue to use the static single-service or static
+multi-service recipes in their sections below.
 
 ## Go
 

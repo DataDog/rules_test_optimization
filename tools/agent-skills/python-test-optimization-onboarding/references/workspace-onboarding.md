@@ -157,6 +157,23 @@ remains an explicit higher-precedence override. Keep that environment variable
 unset, or standardize it in repository configuration, when selection must be
 deterministic across CI and developer machines.
 
+For a consumer-managed monorepo, instantiate the separate aggregate rule:
+
+```bzl
+load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync",
+)
+
+test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+```
+
+Do not add a service list. The managed command owns exact target expansion,
+service/runtime derivation, and the private temporary manifest. Static sync
+remains correct when the repository has no such command.
+
 Add one logical doctor/uploader pair. Prefer a lightweight package in monorepos:
 
 ```bzl
@@ -170,6 +187,10 @@ dd_test_optimization_targets(
     ],
 )
 ```
+
+For manifest-managed wiring, use the aggregate context and
+`expected_targets_file = "@test_optimization_data//:expected_targets"` instead
+of a checked-in expected-target list.
 
 ## Test Targets
 

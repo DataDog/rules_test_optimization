@@ -441,22 +441,120 @@ def _resolve_testlogs_dir(workspace: Path, *, allow_missing: bool = False) -> Pa
     _fail("could not find bazel-testlogs; set TESTLOGS_DIR or run from the Bazel workspace root")
 
 
-def _expected_target_root(testlogs_dir: Path, label: str) -> Path:
-    """Return the bazel-testlogs target root for one local target label."""
+def _validate_expected_target_label(label: Any) -> str:
+    """Validate and return one canonical local expected-target label."""
+    if not isinstance(label, str):
+        _fail(f"expected target labels must be strings, got {type(label).__name__}")
+    if label != label.strip():
+        _fail(f"expected target label must not contain surrounding whitespace: {label!r}")
+    if any(ord(ch) <= 32 or ord(ch) == 127 for ch in label):
+        _fail(f"expected target label must not contain whitespace or control characters: {label!r}")
     if label.startswith("@"):
         _fail(f"expected_targets does not support external labels, got {label!r}")
     if not label.startswith("//"):
         _fail(f"expected_targets only supports local labels, got {label!r}")
     body = label[2:]
-    if ":" not in body:
-        _fail(f"expected target label must include ':', got {label!r}")
-    pkg, target = body.split(":", 1)
+    parts = body.split(":")
+    if len(parts) != 2:
+        _fail(f"expected target label must include exactly one ':', got {label!r}")
+    pkg, target = parts
     if not target:
         _fail(f"expected target label has empty target name: {label!r}")
-    if target.startswith("/") or ".." in target.split("/"):
+    if pkg and any(not component or component in {".", ".."} for component in pkg.split("/")):
+        _fail(f"expected target label has unsupported package path: {label!r}")
+    if any(not component or component in {".", ".."} for component in target.split("/")):
         _fail(f"expected target label has unsupported target path: {label!r}")
+    if "*" in label or "..." in label or "\\" in label:
+        _fail(f"expected target label must be fully expanded, got {label!r}")
+    return label
+
+
+def _expected_target_root(testlogs_dir: Path, label: str) -> Path:
+    """Return the bazel-testlogs target root for one local target label."""
+    label = _validate_expected_target_label(label)
+    body = label[2:]
+    pkg, target = body.split(":", 1)
     parts = [p for p in pkg.split("/") if p]
     return testlogs_dir.joinpath(*parts, target)
+
+
+def _resolve_configured_optional_runfile(
+    config: dict[str, Any],
+    config_path: Path,
+    path_key: str,
+    short_path_key: str,
+) -> Path | None:
+    raw_paths = [
+        config.get(path_key, ""),
+        config.get(short_path_key, ""),
+    ]
+    raw_paths = [raw for raw in raw_paths if raw]
+    if not raw_paths:
+        return None
+
+    resolved = _resolve_runfile_path(raw_paths)
+    if resolved.is_file():
+        return resolved
+    for raw in raw_paths:
+        sibling = config_path.parent / Path(raw).name
+        if sibling.is_file():
+            return sibling.resolve()
+    return resolved
+
+
+def _load_expected_targets_file(path: Path) -> list[str]:
+    if not path.is_file():
+        _fail(f"expected_targets_file does not exist or is not a file: {path}")
+    value = _load_json(path)
+    if not isinstance(value, dict):
+        _fail("expected_targets_file root must be a JSON object")
+    expected_keys = {"schema_version", "targets"}
+    if set(value) != expected_keys:
+        _fail(
+            "expected_targets_file must contain exactly schema_version and targets; "
+            f"got {sorted(value)}"
+        )
+    if value["schema_version"] != 1:
+        _fail(
+            "expected_targets_file schema_version must be 1, "
+            f"got {value['schema_version']!r}"
+        )
+    targets = value["targets"]
+    if not isinstance(targets, list):
+        _fail("expected_targets_file targets must be a JSON array")
+    normalized = [_validate_expected_target_label(label) for label in targets]
+    if len(set(normalized)) != len(normalized):
+        _fail("expected_targets_file contains duplicate target labels")
+    if normalized != sorted(normalized):
+        _fail("expected_targets_file targets must be sorted")
+    return normalized
+
+
+def _resolve_expected_targets(
+    config: dict[str, Any],
+    config_path: Path,
+) -> tuple[list[str], str]:
+    static_targets = config["expected_targets"]
+    for label in static_targets:
+        _validate_expected_target_label(label)
+
+    expected_targets_file = _resolve_configured_optional_runfile(
+        config,
+        config_path,
+        "expected_targets_file_path",
+        "expected_targets_file_short_path",
+    )
+    if expected_targets_file is None:
+        return list(static_targets), "static" if static_targets else "discovery"
+
+    dynamic_targets = _load_expected_targets_file(expected_targets_file)
+    if static_targets and set(static_targets) != set(dynamic_targets):
+        _fail(
+            "static expected_targets and expected_targets_file contain different target sets"
+        )
+    if static_targets:
+        return sorted(set(static_targets)), "static_and_file"
+    return dynamic_targets, "file"
 
 
 def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_missing: bool = False) -> list[Path]:
@@ -1989,6 +2087,7 @@ def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
             "workspace": "",
             "testlogs_dir": "",
             "expected_targets": [],
+            "expected_targets_source": "discovery",
             "freshness_source": args.freshness_source,
             "freshness_mode": args.freshness_mode,
             "artifact_source": args.artifact_source,
@@ -2165,6 +2264,7 @@ def _update_diagnostic_config(
     workspace: Path,
     testlogs_dir: Path | None,
     expected_targets: list[str],
+    expected_targets_source: str,
     bep_files: list[Path],
     staging_requested: bool,
 ) -> None:
@@ -2175,6 +2275,7 @@ def _update_diagnostic_config(
             "workspace": str(workspace),
             "testlogs_dir": str(testlogs_dir) if testlogs_dir is not None else "",
             "expected_targets": list(expected_targets),
+            "expected_targets_source": expected_targets_source,
         }
     )
     report["summary"]["expected_targets"] = len(expected_targets)
@@ -2612,13 +2713,14 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
         context_manifest = _resolve_configured_context_manifest(config, config_path)
         _validate_git_metadata(context_manifest)
 
-    expected_targets = config["expected_targets"]
+    expected_targets, expected_targets_source = _resolve_expected_targets(config, config_path)
     _update_diagnostic_config(
         report,
         config_path=config_path,
         workspace=workspace,
         testlogs_dir=testlogs_dir,
         expected_targets=expected_targets,
+        expected_targets_source=expected_targets_source,
         bep_files=bep_files,
         staging_requested=staging_requested,
     )

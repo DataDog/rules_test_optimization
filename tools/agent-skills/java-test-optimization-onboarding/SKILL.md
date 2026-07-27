@@ -18,6 +18,12 @@ Test Optimization. The skill is intentionally project-neutral: it is stored in
 this repository as a Codex-compatible skill, but any agent can read it as a
 normal implementation guide.
 
+Automatic invocation-scoped manifest onboarding currently supports Go and
+Python only. Java continues to use the static single-service or static
+multi-service contracts in this skill. Do not enroll Java targets in
+`test_optimization_manifest_sync` or describe the managed Go/Python command as
+a Java onboarding path.
+
 ## Non-Negotiable Contract
 
 Keep the RFC contract intact:

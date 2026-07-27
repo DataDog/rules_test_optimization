@@ -150,6 +150,16 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
     
   - A higher‑level “multi‑sync” extension materializes one repository per service and an aggregator repository that re‑exports per‑service filegroups and a service mapping (`topt_data_by_service`). Macros can select services by key without hardcoding repo aliases.
 
+- [Invocation-scoped managed Go/Python monorepos](../tools/core/test_optimization_manifest_sync.bzl):
+
+  - A separate manifest-sync extension materializes one aggregate repository
+    from exact targets and service/runtime contexts derived by a
+    consumer-owned command. It exports `topt_data_by_target`, narrow
+    per-context/per-module labels, bundled contexts, and an exact doctor target
+    file. This is a current implementation extension to the original proposal;
+    it does not replace the static APIs or move target discovery into a
+    repository rule.
+
 Why this solves the problem
 
 - Hermeticity: User tests run offline; only the repository rule (during resolution) and the uploader (via `bazel run` at the end) require network.  
@@ -231,6 +241,11 @@ Per‑Module Labels and Sanitization
 Multi‑Service Aggregation
 
 - For monorepos with multiple services, the multi‑service extension instantiates one repo per service plus an aggregator repo that exposes per‑service labels and a `topt_data_by_service` mapping. This allows macros to select a service by logical key without leaking the concrete repo alias.
+- For managed Go/Python invocations, the later manifest-sync API instead
+  accepts an ephemeral exact-target/context manifest and creates one aggregate
+  repository. The consumer command owns discovery and service naming; Bazel
+  repository resolution owns validation and metadata materialization. Static
+  multi-service behavior remains unchanged.
 
 Runtime Uploader
 

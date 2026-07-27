@@ -21,6 +21,13 @@ This product includes software developed at Datadog
   - `:test_optimization_files`
   - `:test_optimization_context`
   - `:module_<sanitized>`
+- Keep the three sync contracts separate:
+  - static single-service in `test_optimization_sync.bzl`;
+  - static multi-service in `test_optimization_multi_sync.bzl`;
+  - invocation-scoped Go/Python aggregation in
+    `test_optimization_manifest_sync.bzl`.
+  Manifest sync must not acquire target discovery, consumer naming policy, or a
+  checked-in target/service registry.
 
 ## Validation Commands
 
@@ -75,6 +82,13 @@ This product includes software developed at Datadog
   - Mixed-runtime uploader changes are not done until both harnesses still pass:
     they cover single-context, explicit override, multi-context repo selection,
     and no-match fallback behavior.
+  - Manifest-driven Go/Python changes:
+    `python3 tools/tests/integration/run_manifest_sync_tests.py --mode full`.
+    This proves strict manifest validation, disabled no-op behavior,
+    deterministic output, target-specific cache invalidation, exact doctor
+    targets, aggregate enrichment, and no host Go.
+  - Windows manifest-disabled parsing:
+    `python tools/tests/integration/run_manifest_sync_tests.py --mode disabled`.
 - Test Optimization bootstrap config:
   - For config-gated Go and Python onboarding, keep
     `--config=test-optimization` as the only user-facing switch. The shared
@@ -233,6 +247,14 @@ This product includes software developed at Datadog
   `...-nodejs`, `...-dotnet`, `...-ruby`).
 - Language-specific orchestration stays isolated in `modules/<language>`.
 - Dev bootstrap wiring in `tools/dev/*_bootstrap.bzl` is dev-only and cycle-safe.
+- Manifest normalization and repository rendering are deterministic: equivalent
+  input order must produce byte-identical exports, BUILD content, and
+  expected-target JSON.
+- The manifest-driven API is additive. Do not change static single-service or
+  static multi-service semantics while modifying it.
+- Validate cross-repository rollout in this order:
+  `rules_test_optimization`, then `rules_test_optimization_tests`, then the
+  consumer repository. A green Rule unit test does not replace consumer E2E.
 
 ## PR Checklist
 
@@ -241,6 +263,11 @@ This product includes software developed at Datadog
   error diagnostics remain actionable.
 - [ ] Ran split-aware validation commands relevant to changed files.
 - [ ] Updated docs/snippets for any load-path, module, or API changes.
+- [ ] Audited all first-party Markdown and agent skills affected by a public
+  onboarding change; vendored and local historical plan documents are excluded.
+- [ ] For manifest-driven changes, proved no committed target/service mapping,
+  exact target-set validation, disabled no-fetch behavior, and deterministic
+  rendering.
 - [ ] For Go Orchestrion changes, documented any `orchestrion_mode` behavior,
   unsupported `testify/suite` scope, opt-out flags, and payload metadata changes.
 - [ ] Updated `LICENSE-3rdparty.csv` for dependency or vendored-code changes.

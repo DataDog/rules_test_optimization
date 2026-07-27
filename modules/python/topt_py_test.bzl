@@ -22,6 +22,9 @@ load(
     "merge_optional_env_defaults",
     "merge_user_env",
     "normalize_user_data",
+    "resolve_files_label",
+    "resolve_manifest_label",
+    "resolve_module_labels",
     "resolve_topt_service_key",
     "select_service_entry_or_fail",
     "service_mapping_entries",
@@ -269,8 +272,8 @@ def dd_topt_py_test(
     if type(module_path_candidate) == type("") and module_path_candidate:
         attribute_candidates.append(module_path_candidate)
 
-    files_label = "@%s//:test_optimization_files" % sync_repo_name
-    module_labels = _build_module_labels(sync_repo_name, _svc.get("labels"))
+    files_label = resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
+    module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
     fallback_identifier = _build_python_fallback_identifier(native.package_name(), _python)
     selector_inputs = _resolve_python_selector_inputs(
         module_identifier = module_identifier,
@@ -337,8 +340,7 @@ def dd_topt_py_test(
 
     data = _append_data_dependencies(data, [":" + selector_name])
 
-    manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
-    manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
+    manifest_label = resolve_manifest_label(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
     data = _append_data_dependencies(data, [manifest_label])
     env = _merge_user_env(
         user_env,

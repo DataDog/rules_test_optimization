@@ -16,6 +16,17 @@ versioning.
 ## [Unreleased]
 
 ### Added
+
+- Added `test_optimization_manifest_sync` and
+  `test_optimization_manifest_sync_extension` for consumer-managed,
+  invocation-scoped Go/Python monorepo onboarding. The new aggregate
+  repository exports target-to-context data, narrow per-context/per-module
+  labels, bundled contexts, and a generated exact-target file without requiring
+  a checked-in service registry.
+- Added dynamic exact-target input support to the doctor and convenience
+  target macro, plus integration coverage for disabled behavior, deterministic
+  manifests, no-host-Go execution, multi-context enrichment, and metadata
+  cache isolation.
 - Reusable Go WORKSPACE helpers for config-gated metadata sync and fixed-name
   Orchestrion repository declaration, matching the public Go Bzlmod onboarding
   contract.

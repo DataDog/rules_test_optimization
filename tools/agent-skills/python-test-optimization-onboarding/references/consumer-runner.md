@@ -37,6 +37,13 @@ The repository-owned wrapper must:
 - If `env` is configurable with `select(...)`, ensure every relevant branch
   preserves the Datadog environment and enables the ddtrace pytest plugin.
 
+In a manifest-managed monorepo, the public central wrapper first computes its
+full label and looks it up in `topt_data_by_target`. If absent, call the
+comparison-base consumer runner exactly as before. If present, pass that entry
+to `dd_topt_py_test` with `runner_mode = "consumer_runner"` and the same
+repository-owned runner. Do not replace the existing runner merely to support
+automatic service selection.
+
 Recommended target shape:
 
 ```bzl

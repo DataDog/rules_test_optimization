@@ -72,6 +72,10 @@ The important model is:
   customer packages and external `_test` packages compile normally, while
   stdlib `testing`, synthetic `testmain`, helper packagefiles, importcfg, and
   link support stay coherent
+- the metadata input may come from static sync or from an invocation-scoped
+  manifest aggregate; this does not change Orchestrion compilation. In the
+  managed case, the consumer's central wrapper selects the exact
+  `topt_data_by_target` entry before calling `dd_topt_go_test`.
 
 ## Mode Contract
 

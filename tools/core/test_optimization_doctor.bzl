@@ -41,6 +41,7 @@ def _validate_expected_targets(expected_targets):
 def _doctor_impl(ctx):
     """Generate cross-platform doctor launchers."""
     _validate_expected_targets(ctx.attr.expected_targets)
+    expected_targets_file = ctx.file.expected_targets_file
 
     context_entries = context_manifest_entries_or_fail(ctx.attr.data, ctx.files.data, _OWNER)
     context_manifest = ctx.actions.declare_file(ctx.label.name + ".context_manifest")
@@ -57,6 +58,8 @@ def _doctor_impl(ctx):
             '  "context_manifest_path": %s,' % json.encode(context_manifest.path),
             '  "context_manifest_short_path": %s,' % json.encode(context_manifest.short_path),
             '  "expected_targets": %s,' % _json_string_list(ctx.attr.expected_targets),
+            '  "expected_targets_file_path": %s,' % json.encode(expected_targets_file.path if expected_targets_file else ""),
+            '  "expected_targets_file_short_path": %s,' % json.encode(expected_targets_file.short_path if expected_targets_file else ""),
             '  "require_git_metadata": %s,' % _json_bool(ctx.attr.require_git_metadata),
             '  "require_bazel_metadata": %s,' % _json_bool(ctx.attr.require_bazel_metadata),
             '  "require_json_payloads": %s,' % _json_bool(ctx.attr.require_json_payloads),
@@ -374,17 +377,18 @@ exit /b %%ERRORLEVEL%%
 
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     executable = bat_file if is_windows else bash_file
-    runfiles = ctx.runfiles(
-        files = [
-            ctx.file._runtime,
-            ctx.file._support_bundle_collector,
-            ctx.file._support_bundle_renderer,
-            context_manifest,
-            config_file,
-            ps_file,
-            bat_file,
-        ] + ctx.files.data,
-    )
+    runfiles_files = [
+        ctx.file._runtime,
+        ctx.file._support_bundle_collector,
+        ctx.file._support_bundle_renderer,
+        context_manifest,
+        config_file,
+        ps_file,
+        bat_file,
+    ] + ctx.files.data
+    if expected_targets_file:
+        runfiles_files.append(expected_targets_file)
+    runfiles = ctx.runfiles(files = runfiles_files)
     return [DefaultInfo(executable = executable, runfiles = runfiles)]
 
 dd_test_optimization_doctor = rule(
@@ -393,6 +397,7 @@ dd_test_optimization_doctor = rule(
     attrs = {
         "data": attr.label_list(allow_files = True, doc = "Context files, normally @test_optimization_data//:test_optimization_context."),
         "expected_targets": attr.string_list(default = [], doc = "Optional local labels whose bazel-testlogs outputs must be present."),
+        "expected_targets_file": attr.label(allow_single_file = True, doc = "Optional generated JSON file containing invocation-scoped expected targets."),
         "require_git_metadata": attr.bool(default = True, doc = "Require repository URL, commit SHA, and branch/tag in context.json."),
         "require_bazel_metadata": attr.bool(default = True, doc = "Require bazel_target_metadata.json next to payload outputs."),
         "require_json_payloads": attr.bool(default = True, doc = "Require parseable JSON payload files."),

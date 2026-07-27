@@ -167,6 +167,11 @@ materializes the metadata repo used by `dd_topt_go_test`.
 - In manual single-service or multi-service setup, the Go macro only requires a
   compatible exported `topt_data` shape. That can come from the Go extension or
   from the core sync and multi-sync extensions.
+- In a consumer-managed Go/Python monorepo, the separate manifest-sync
+  aggregate exports `topt_data_by_target`; the central Go wrapper passes the
+  matching entry to the same macro. Target discovery and service naming happen
+  before repository resolution in the consumer command, not in Orchestrion or
+  `rules_go`.
 
 The generated metadata repo then provides the per-service and per-module
 payload labels consumed by `dd_topt_go_test`.

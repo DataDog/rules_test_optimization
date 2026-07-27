@@ -54,6 +54,28 @@ load(
     "java_missing_rules_java_repo_target_rule",
 )
 load(
+    "//tools/tests/core:test_manifest_sync_utils.bzl",
+    "duplicate_manifest_target_failure_test",
+    "empty_manifest_contexts_failure_test",
+    "empty_manifest_targets_failure_test",
+    "external_manifest_label_failure_test",
+    "invalid_manifest_failure_test",
+    "invalid_manifest_target_rule",
+    "invalid_service_derivation_failure_test",
+    "manifest_aggregate_rendering_test",
+    "manifest_context_key_collision_failure_test",
+    "manifest_decode_and_summary_test",
+    "manifest_generated_contracts_test",
+    "manifest_normalization_test",
+    "manifest_validation_failure_target_rule",
+    "noncanonical_manifest_label_failure_test",
+    "unknown_manifest_key_failure_test",
+    "unknown_manifest_version_failure_test",
+    "unsupported_manifest_runtime_failure_test",
+    "unsupported_manifest_runtime_rule",
+    "unused_manifest_context_failure_test",
+)
+load(
     "//tools/tests/core:test_multi_sync_utils.bzl",
     "build_multi_sync_specs_deduplicates_sanitized_service_keys_test",
     "build_multi_sync_specs_propagates_non_default_enablement_test",
@@ -196,6 +218,7 @@ load(
     "duplicate_names_target_rule",
     "empty_name_failure_test",
     "empty_name_target_rule",
+    "expected_targets_file_test",
     "expected_targets_test",
     "explicit_context_data_test",
     "uploader_controlled_attr_failure_test",
@@ -204,6 +227,7 @@ load(
 )
 load(
     "//tools/tests/core:test_topt_macro_utils.bzl",
+    "explicit_payload_labels_precede_static_fallback_test",
     "merge_optional_env_defaults_ignores_empty_defaults_test",
     "merge_optional_env_defaults_injects_missing_key_test",
     "merge_optional_env_defaults_none_env_test",
@@ -230,6 +254,7 @@ load(
     "codeowners_section_header_powershell_parity_test",
     "context_manifest_content_test",
     "context_repo_key_parsing_test",
+    "dynamic_context_path_validation_test",
     "legacy_context_capture_rule",
     "legacy_context_direct_file_fallback_test",
     "legacy_context_filegroup_fallback_test",
@@ -368,6 +393,76 @@ java_missing_core_repo_target_rule(
 
 java_missing_rules_java_repo_target_rule(
     name = "java_missing_rules_java_repo_target",
+    tags = ["manual"],
+)
+
+invalid_manifest_target_rule(
+    name = "invalid_manifest_target",
+    tags = ["manual"],
+)
+
+unsupported_manifest_runtime_rule(
+    name = "unsupported_manifest_runtime_target",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "unknown_manifest_version_target",
+    failure_case = "unknown_version",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "duplicate_manifest_target",
+    failure_case = "duplicate_target",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "manifest_context_key_collision_target",
+    failure_case = "context_key_collision",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "empty_manifest_contexts_target",
+    failure_case = "empty_contexts",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "empty_manifest_targets_target",
+    failure_case = "empty_targets",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "unknown_manifest_key_target",
+    failure_case = "unknown_key",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "unused_manifest_context_target",
+    failure_case = "unused_context",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "external_manifest_label_target",
+    failure_case = "external_label",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "noncanonical_manifest_label_target",
+    failure_case = "noncanonical_label",
+    tags = ["manual"],
+)
+
+manifest_validation_failure_target_rule(
+    name = "invalid_service_derivation_target",
+    failure_case = "invalid_derivation",
     tags = ["manual"],
 )
 
@@ -561,6 +656,90 @@ java_missing_rules_java_repo_failure_test(
     target_under_test = ":java_missing_rules_java_repo_target",
 )
 
+manifest_normalization_test(
+    name = "manifest_normalization_test",
+    size = "small",
+    timeout = "short",
+)
+
+manifest_decode_and_summary_test(
+    name = "manifest_decode_and_summary_test",
+    size = "small",
+    timeout = "short",
+)
+
+manifest_generated_contracts_test(
+    name = "manifest_generated_contracts_test",
+    size = "small",
+    timeout = "short",
+)
+
+manifest_aggregate_rendering_test(
+    name = "manifest_aggregate_rendering_test",
+    size = "small",
+    timeout = "short",
+)
+
+invalid_manifest_failure_test(
+    name = "invalid_manifest_failure_test",
+    target_under_test = ":invalid_manifest_target",
+)
+
+unsupported_manifest_runtime_failure_test(
+    name = "unsupported_manifest_runtime_failure_test",
+    target_under_test = ":unsupported_manifest_runtime_target",
+)
+
+unknown_manifest_version_failure_test(
+    name = "unknown_manifest_version_failure_test",
+    target_under_test = ":unknown_manifest_version_target",
+)
+
+duplicate_manifest_target_failure_test(
+    name = "duplicate_manifest_target_failure_test",
+    target_under_test = ":duplicate_manifest_target",
+)
+
+manifest_context_key_collision_failure_test(
+    name = "manifest_context_key_collision_failure_test",
+    target_under_test = ":manifest_context_key_collision_target",
+)
+
+empty_manifest_contexts_failure_test(
+    name = "empty_manifest_contexts_failure_test",
+    target_under_test = ":empty_manifest_contexts_target",
+)
+
+empty_manifest_targets_failure_test(
+    name = "empty_manifest_targets_failure_test",
+    target_under_test = ":empty_manifest_targets_target",
+)
+
+unknown_manifest_key_failure_test(
+    name = "unknown_manifest_key_failure_test",
+    target_under_test = ":unknown_manifest_key_target",
+)
+
+unused_manifest_context_failure_test(
+    name = "unused_manifest_context_failure_test",
+    target_under_test = ":unused_manifest_context_target",
+)
+
+external_manifest_label_failure_test(
+    name = "external_manifest_label_failure_test",
+    target_under_test = ":external_manifest_label_target",
+)
+
+noncanonical_manifest_label_failure_test(
+    name = "noncanonical_manifest_label_failure_test",
+    target_under_test = ":noncanonical_manifest_label_target",
+)
+
+invalid_service_derivation_failure_test(
+    name = "invalid_service_derivation_failure_test",
+    target_under_test = ":invalid_service_derivation_target",
+)
+
 default_context_data_test(
     name = "default_context_data_test",
     size = "small",
@@ -573,8 +752,20 @@ explicit_context_data_test(
     timeout = "short",
 )
 
+explicit_payload_labels_precede_static_fallback_test(
+    name = "explicit_payload_labels_precede_static_fallback_test",
+    size = "small",
+    timeout = "short",
+)
+
 expected_targets_test(
     name = "expected_targets_test",
+    size = "small",
+    timeout = "short",
+)
+
+expected_targets_file_test(
+    name = "expected_targets_file_test",
     size = "small",
     timeout = "short",
 )
@@ -1489,6 +1680,12 @@ context_repo_key_parsing_test(
     timeout = "short",
 )
 
+dynamic_context_path_validation_test(
+    name = "dynamic_context_path_validation_test",
+    size = "small",
+    timeout = "short",
+)
+
 manifest_trim_and_bom_helpers_test(
     name = "manifest_trim_and_bom_helpers_test",
     size = "small",
@@ -1567,7 +1764,11 @@ test_suite(
         ":disabled_telemetry_contract_test",
         ":doctor_controlled_attr_failure_test",
         ":doctor_kwargs_test",
+        ":duplicate_manifest_target_failure_test",
         ":duplicate_names_failure_test",
+        ":dynamic_context_path_validation_test",
+        ":empty_manifest_contexts_failure_test",
+        ":empty_manifest_targets_failure_test",
         ":empty_name_failure_test",
         ":enabled_false_values_test",
         ":enabled_truthy_values_test",
@@ -1581,17 +1782,20 @@ test_suite(
         ":example_stub_service_keys_targets_test",
         ":example_stub_telemetry_facts_service_name_test",
         ":existing_repo_failure_test",
+        ":expected_targets_file_test",
         ":expected_targets_test",
         ":explicit_context_data_test",
+        ":explicit_payload_labels_precede_static_fallback_test",
         ":explicit_upstream_base_specs_test",
         ":export_bzl_escaping_test",
         ":export_bzl_manifest_path_test",
-        ":repository_environment_contains_bootstrap_inputs_test",
-        ":service_environment_resolution_test",
+        ":external_manifest_label_failure_test",
         ":first_env_ctx_test",
         ":first_env_from_environ_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",
         ":http_execute_timeout_seconds_test",
+        ":invalid_manifest_failure_test",
+        ":invalid_service_derivation_failure_test",
         ":invalid_upstream_failure_test",
         ":invalid_variant_failure_test",
         ":load_github_event_payload_ctx_test",
@@ -1599,6 +1803,11 @@ test_suite(
         ":local_git_metadata_fills_empty_fields_test",
         ":local_git_metadata_preserves_existing_fields_test",
         ":log_helpers_and_is_dict_test",
+        ":manifest_aggregate_rendering_test",
+        ":manifest_context_key_collision_failure_test",
+        ":manifest_decode_and_summary_test",
+        ":manifest_generated_contracts_test",
+        ":manifest_normalization_test",
         ":manifest_trim_and_bom_helpers_test",
         ":merge_optional_env_defaults_ignores_empty_defaults_test",
         ":merge_optional_env_defaults_injects_missing_key_test",
@@ -1610,6 +1819,7 @@ test_suite(
         ":module_label_map_collision_test",
         ":module_label_map_empty_inputs_test",
         ":module_label_map_flaky_modules_test",
+        ":noncanonical_manifest_label_failure_test",
         ":normalize_out_dir_absolute_failure_test",
         ":normalize_out_dir_control_chars_failure_test",
         ":normalize_out_dir_empty_failure_test",
@@ -1637,6 +1847,7 @@ test_suite(
         ":render_template_no_recursive_substitution_test",
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",
+        ":repository_environment_contains_bootstrap_inputs_test",
         ":required_git_metadata_missing_fields_test",
         ":resolve_dd_api_base_test",
         ":runfile_manifest_bash_resolution_test",
@@ -1646,9 +1857,14 @@ test_suite(
         ":runtime_module_path_from_environ_test",
         ":sanitize_label_fragment_test",
         ":sanitize_repository_url_test",
+        ":service_environment_resolution_test",
         ":set_context_tag_from_env_test",
         ":split_flaky_tests_by_module_test",
         ":strip_workspace_prefix_powershell_windows_test",
+        ":unknown_manifest_key_failure_test",
+        ":unknown_manifest_version_failure_test",
+        ":unsupported_manifest_runtime_failure_test",
+        ":unused_manifest_context_failure_test",
         ":uploader_controlled_attr_failure_test",
         ":uploader_kwargs_test",
         ":validate_api_key_carriage_return_failure_test",

@@ -91,6 +91,26 @@ build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=tru
 `--config=test-optimization` is the only user-facing switch. Omitting it
 renders disabled metadata stubs and selects the local empty Orchestrion aliases.
 
+For a managed monorepo, declare one aggregate repository after the Rule
+dependency:
+
+```bzl
+load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync",
+)
+
+test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+```
+
+Do not pass a service list. The repository-owned managed command expands exact
+labels, derives service/runtime contexts, and supplies the private temporary
+manifest to its child Bazel processes. The manifest handoff is not an ordinary
+WORKSPACE or `.bazelrc` setting. Existing static WORKSPACE helpers remain the
+right path when the consumer has no managed discovery command.
+
 If the repository uses a non-default fetch model, set it explicitly:
 
 ```bzl

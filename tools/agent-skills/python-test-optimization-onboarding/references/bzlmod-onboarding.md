@@ -70,6 +70,27 @@ remains an explicit higher-precedence override. Keep that environment variable
 unset, or standardize it in repository configuration, when selection must be
 deterministic across CI and developer machines.
 
+### Managed manifest variant
+
+When a consumer-owned command discovers exact Go/Python targets, use the
+separate aggregate API instead of static service declarations:
+
+```bzl
+topt_manifest = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync_extension",
+)
+topt_manifest.test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+use_repo(topt_manifest, "test_optimization_data")
+```
+
+The command supplies runtime module paths and service names through its private
+temporary manifest. Do not add that handoff to `.bazelrc` or ask users to
+maintain it. The central Python wrapper selects
+`topt_data_by_target.get(<full-label>)` and keeps its raw path when absent.
+
 ## Doctor And Uploader Targets
 
 Add one logical doctor/uploader pair. In monorepos, prefer a lightweight package
@@ -84,6 +105,18 @@ dd_test_optimization_targets(
     expected_targets = [
         "//path/to:python_test",
     ],
+)
+```
+
+For manifest-managed wiring, replace the static expected list with:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
+        "@test_optimization_data//:test_optimization_context",
+    ],
+    expected_targets_file = "@test_optimization_data//:expected_targets",
 )
 ```
 

@@ -11,7 +11,7 @@ This product includes software developed at Datadog
 This document explains the current implementation architecture in this
 repository. For installation and day-to-day usage, start with `README.md`.
 
-> Last reviewed: 2026-07-23
+> Last reviewed: 2026-07-27
 
 ## Approach Overview
 
@@ -77,6 +77,63 @@ The steps are:
    Thin wrappers (for Go/Python/Java/NodeJS/.NET/Ruby) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
    - Core module (`datadog-rules-test-optimization`) stays runtime-agnostic.
    - Language orchestration lives in companion modules (`datadog-rules-test-optimization-go`, `datadog-rules-test-optimization-python`, `datadog-rules-test-optimization-java`, `datadog-rules-test-optimization-nodejs`, `datadog-rules-test-optimization-dotnet`, `datadog-rules-test-optimization-ruby`).
+
+### Static and manifest-driven repository architectures
+
+The original static APIs remain supported:
+
+- `test_optimization_sync` materializes one configured service.
+- `test_optimization_multi_sync` materializes one repository per configured
+  service and an aggregator.
+
+`test_optimization_manifest_sync` is a separate managed API for dynamic
+Go/Python monorepo invocations. A consumer-owned command first expands exact
+test labels and derives service/runtime contexts. The repository rule then
+validates the command-owned temporary manifest before any HTTP request and
+materializes all contexts in one aggregate repository. Disabled mode ignores
+the manifest entirely and emits the same stable public stubs without metadata
+requests.
+
+```mermaid
+flowchart TB
+  subgraph Consumer["Consumer-owned managed command"]
+    I[Requested target patterns] --> Q[Bazel query and target expansion]
+    Q --> N[Service/runtime derivation]
+    N --> M[Private temporary manifest]
+  end
+
+  subgraph Repository["Bazel repository phase"]
+    M --> V[Strict schema validation]
+    V --> A[Aggregate external repository]
+    A --> C1[Context A files]
+    A --> C2[Context B files]
+    C1 --> MX[Module X label]
+    C1 --> MY[Module Y label]
+    C2 --> MZ[Module Z label]
+  end
+
+  subgraph Execution["Bazel test and post-test phases"]
+    MX --> TX[Selected target X]
+    MY --> TY[Selected target Y]
+    MZ --> TZ[Selected target Z]
+    TX --> D[Doctor exact-target validation]
+    TY --> D
+    TZ --> D
+    D --> U[Uploader dry-run and optional upload]
+  end
+```
+
+The command presents one workflow to the user, but Bazel still has two
+different phases. Target discovery must happen before repository resolution
+because repository rules cannot discover the final analyzed test set. The
+temporary manifest is therefore an internal handoff between those phases, not
+user-maintained configuration.
+
+Each selected target consumes only its context's settings and matching module
+label. A module payload change invalidates targets in that module; a context
+settings change invalidates all targets in that context; unrelated services
+remain cache hits. Doctor and uploader consume the aggregate context target,
+whose virtual context keys preserve exact per-payload enrichment.
 
 ### Go macro and import path inference
 

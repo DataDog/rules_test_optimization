@@ -2101,12 +2101,15 @@ def _populate_missing_git_metadata(ctx, env_data):
         "head_",
     )
 
-def _collect_env(ctx):
+def _collect_env(ctx, service = None):
     """Collect CI/git/service context into a normalized metadata dict."""
     environ = ctx.os.environ
+    resolved_service = service
+    if resolved_service == None:
+        resolved_service = getattr(ctx.attr, "service", None)
     env_data = _collect_env_from_environ(
         environ,
-        getattr(ctx.attr, "service", None),
+        resolved_service,
         _load_github_event_payload(ctx),
         apply_dd_git = False,
     )
@@ -2127,7 +2130,12 @@ build_unix_read_abs_file_command_for_tests = _build_unix_read_abs_file_command
 apply_github_event_payload_for_tests = _apply_github_event_payload
 all_sync_env_keys_for_tests = _ALL_SYNC_ENV_KEYS
 
-def _build_configurations_json(ctx, debug, osinfo = None):
+def _runtime_config_value(ctx, runtime, key):
+    if runtime != None:
+        return runtime.get(key) or ""
+    return getattr(ctx.attr, "runtime_%s" % key, "") or ""
+
+def _build_configurations_json(ctx, debug, osinfo = None, runtime = None):
     """Build Datadog `configurations` payload from OS/runtime attributes."""
 
     # _build_configurations_json: builds a testConfigurations structure with
@@ -2137,11 +2145,11 @@ def _build_configurations_json(ctx, debug, osinfo = None):
     # dedicated validators so future constraints can evolve independently.
     if osinfo == None:
         osinfo = _detect_os_info(ctx, debug)
-    runtime_name = validate_runtime_name(ctx.attr.runtime_name, debug) or "unknown"
-    runtime_version = validate_runtime_version(ctx.attr.runtime_version, debug) or "unknown"
+    runtime_name = validate_runtime_name(_runtime_config_value(ctx, runtime, "name"), debug) or "unknown"
+    runtime_version = validate_runtime_version(_runtime_config_value(ctx, runtime, "version"), debug) or "unknown"
 
     # Explicit runtime_arch override wins; otherwise inherit detected host arch.
-    runtime_arch = ctx.attr.runtime_arch or osinfo["arch"]
+    runtime_arch = _runtime_config_value(ctx, runtime, "arch") or osinfo["arch"]
 
     # Build configuration object using json.encode for proper escaping
     conf = {
@@ -2156,7 +2164,7 @@ def _build_configurations_json(ctx, debug, osinfo = None):
     log_debug(debug, "config", "Configurations JSON: %s" % conf_json)
     return conf_json
 
-def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
+def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None, runtime = None):
     """Build non-secret context tags stored in generated `context.json`."""
 
     # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
@@ -2173,12 +2181,15 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None):
         tags["os.architecture"] = osinfo.get("arch")
 
     # Runtime tags
-    if ctx.attr.runtime_name:
-        tags["runtime.name"] = ctx.attr.runtime_name
-    if ctx.attr.runtime_version:
-        tags["runtime.version"] = ctx.attr.runtime_version
-    if ctx.attr.runtime_arch:
-        tags["runtime.architecture"] = ctx.attr.runtime_arch
+    runtime_name = _runtime_config_value(ctx, runtime, "name")
+    runtime_version = _runtime_config_value(ctx, runtime, "version")
+    runtime_arch = _runtime_config_value(ctx, runtime, "arch")
+    if runtime_name:
+        tags["runtime.name"] = runtime_name
+    if runtime_version:
+        tags["runtime.version"] = runtime_version
+    if runtime_arch:
+        tags["runtime.architecture"] = runtime_arch
 
     # Bazel metadata tags describe the ruleset identity and Bazel host.
     tags["bazel.rule_name"] = TEST_BAZEL_RULE_NAME
@@ -2286,7 +2297,10 @@ build_context_tags_for_tests = _build_context_tags
 # Request builders
 # ##########################################################################
 
-def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, http_policy = None):
+def _request_body_path(request_dir, filename):
+    return ("%s/%s" % (request_dir, filename)) if request_dir else filename
+
+def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, http_policy = None, request_dir = ""):
     """Build and execute CI Visibility settings request."""
 
     # _perform_dd_settings_request: build and send the CI Visibility Settings request.
@@ -2347,13 +2361,13 @@ def _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, h
         url,
         headers,
         body,
-        "settings.request.json",
+        _request_body_path(request_dir, "settings.request.json"),
         settings_file,
         debug,
         http_policy = http_policy,
     )
 
-def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, debug, osinfo = None, http_policy = None):
+def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, debug, osinfo = None, http_policy = None, runtime = None, request_dir = ""):
     """Build and execute CI Visibility known-tests request."""
 
     # _perform_dd_known_tests_request: build and send the Known Tests request.
@@ -2372,7 +2386,7 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
 
     # Configurations is a JSON object, decode it to embed properly
     # Keep this decode explicit to avoid double-encoding nested JSON payloads.
-    configurations_json = _build_configurations_json(ctx, debug, osinfo = osinfo)
+    configurations_json = _build_configurations_json(ctx, debug, osinfo = osinfo, runtime = runtime)
     configurations = json.decode(configurations_json)
 
     # Build request payload using json.encode for proper escaping
@@ -2402,13 +2416,13 @@ def _perform_dd_known_tests_request(ctx, api_key, env_data, known_tests_file, de
         url,
         headers,
         body,
-        "known_tests.request.json",
+        _request_body_path(request_dir, "known_tests.request.json"),
         known_tests_file,
         debug,
         http_policy = http_policy,
     )
 
-def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug, http_policy = None):
+def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_management_file, debug, http_policy = None, request_dir = ""):
     """Build and execute CI Visibility test-management request."""
 
     # _perform_dd_test_management_tests_request: build and send the Test Management Tests request.
@@ -2454,13 +2468,13 @@ def _perform_dd_test_management_tests_request(ctx, api_key, env_data, test_manag
         url,
         headers,
         body,
-        "test_management.request.json",
+        _request_body_path(request_dir, "test_management.request.json"),
         test_management_file,
         debug,
         http_policy = http_policy,
     )
 
-def _perform_dd_flaky_tests_request(ctx, api_key, env_data, flaky_tests_file, debug, osinfo = None, http_policy = None):
+def _perform_dd_flaky_tests_request(ctx, api_key, env_data, flaky_tests_file, debug, osinfo = None, http_policy = None, runtime = None, request_dir = ""):
     """Build and execute CI Visibility flaky-tests request."""
 
     # _perform_dd_flaky_tests_request: build and send the Flaky Tests request.
@@ -2479,7 +2493,7 @@ def _perform_dd_flaky_tests_request(ctx, api_key, env_data, flaky_tests_file, de
 
     # Configurations is a JSON object, decode it to embed properly
     # Keep this decode explicit to avoid double-encoding nested JSON payloads.
-    configurations_json = _build_configurations_json(ctx, debug, osinfo = osinfo)
+    configurations_json = _build_configurations_json(ctx, debug, osinfo = osinfo, runtime = runtime)
     configurations = json.decode(configurations_json)
 
     # Build request payload using json.encode for proper escaping
@@ -2509,7 +2523,7 @@ def _perform_dd_flaky_tests_request(ctx, api_key, env_data, flaky_tests_file, de
         url,
         headers,
         body,
-        "flaky_tests.request.json",
+        _request_body_path(request_dir, "flaky_tests.request.json"),
         flaky_tests_file,
         debug,
         http_policy = http_policy,
@@ -2518,6 +2532,26 @@ def _perform_dd_flaky_tests_request(ctx, api_key, env_data, flaky_tests_file, de
 # ##########################################################################
 # Repository rule implementation
 # ##########################################################################
+
+def _sync_spec_from_attrs(ctx):
+    """Return the single-service materializer inputs from repository attrs."""
+    return {
+        "out_dir": ctx.attr.out_dir or TEST_OPT_DIR,
+        "repo_name": getattr(ctx.attr, "repo_name", None) or ctx.name or "",
+        "service": ctx.attr.service,
+        "runtime": {
+            "name": ctx.attr.runtime_name,
+            "version": ctx.attr.runtime_version,
+            "arch": ctx.attr.runtime_arch,
+            "module_path": ctx.attr.runtime_module_path,
+        },
+        "runtime_module_path_is_authoritative": False,
+        "known_tests": ctx.attr.known_tests,
+        "test_management": ctx.attr.test_management,
+        "flaky_tests": ctx.attr.flaky_tests,
+        "require_git_metadata": ctx.attr.require_git_metadata,
+        "debug": ctx.attr.debug,
+    }
 
 def _impl(ctx):
     """Repository rule orchestration entrypoint.
@@ -2571,6 +2605,19 @@ def _impl(ctx):
         ctx.report_progress("test_optimization_sync: disabled")
         return
 
+    return _materialize_enabled_context(ctx, _sync_spec_from_attrs(ctx))
+
+def _materialize_enabled_context(ctx, spec, emit_surface = True):
+    """Fetch and materialize one service/runtime context.
+
+    Static sync calls this with `emit_surface = True`. Manifest sync calls the
+    same implementation for each context and emits one aggregate surface after
+    every context has been materialized.
+    """
+    debug = spec["debug"]
+    runtime = spec["runtime"]
+    request_dir = "" if emit_surface else _normalize_out_dir_or_fail(spec["out_dir"])
+
     # ------------------------------------------------------------------
     # Phase 1: Resolve/validate required inputs and output paths.
     # ------------------------------------------------------------------
@@ -2588,7 +2635,7 @@ def _impl(ctx):
     log_info("GIT_DIRTY: %s" % (git_dirty if git_dirty else "<unset>"))
 
     # Perform the settings request (compute and ensure directories exist for outputs)
-    out_dir = _normalize_out_dir_or_fail(ctx.attr.out_dir or TEST_OPT_DIR)
+    out_dir = _normalize_out_dir_or_fail(spec["out_dir"])
     settings_file = "%s/%s" % (out_dir, "cache/http/settings.json")
     known_tests_file = "%s/%s" % (out_dir, "cache/http/known_tests.json")
     test_management_file = "%s/%s" % (out_dir, "cache/http/test_management.json")
@@ -2606,17 +2653,17 @@ def _impl(ctx):
 
     log_info("Settings file: %s" % settings_file)
     ctx.report_progress("test_optimization_sync: downloading")
-    env_data = _collect_env(ctx)
+    env_data = _collect_env(ctx, service = spec["service"])
 
     # Validate and normalize service name
     raw_service = env_data.get("service")
     validated_service = validate_service_name(raw_service, debug)
     env_data["service"] = validated_service
-    _validate_required_git_metadata_or_fail(env_data, ctx.attr.require_git_metadata)
+    _validate_required_git_metadata_or_fail(env_data, spec["require_git_metadata"])
 
     log_debug(debug, "validation", "Env data collected and validated")
 
-    runtime_name = validate_runtime_name(ctx.attr.runtime_name, debug) or ""
+    runtime_name = validate_runtime_name(runtime["name"], debug) or ""
     telemetry_facts = _new_telemetry_facts(
         validated_service,
         runtime_name = runtime_name,
@@ -2626,7 +2673,15 @@ def _impl(ctx):
     # Cache per-run expensive helpers and pass them through request/tag builders.
     http_policy = _resolve_http_policy(ctx)
     osinfo = _detect_os_info(ctx, debug)
-    settings_result = _perform_dd_settings_request(ctx, api_key, env_data, settings_file, debug, http_policy = http_policy)
+    settings_result = _perform_dd_settings_request(
+        ctx,
+        api_key,
+        env_data,
+        settings_file,
+        debug,
+        http_policy = http_policy,
+        request_dir = request_dir,
+    )
     ctx.report_progress("test_optimization_sync: download complete")
 
     # ------------------------------------------------------------------
@@ -2673,7 +2728,7 @@ def _impl(ctx):
     #
     # All three kill-switch attributes default to True, which preserves the
     # server-provided behavior when not explicitly set by the user.
-    if hasattr(ctx.attr, "known_tests") and ctx.attr.known_tests == False:
+    if spec["known_tests"] == False:
         known_tests_enabled = False
 
         # Ensure attributes dict exists and update the flag
@@ -2689,7 +2744,7 @@ def _impl(ctx):
         # settings.json (instead of rule attrs) see the same effective state.
         attrs_obj["known_tests_enabled"] = False
 
-    if hasattr(ctx.attr, "test_management") and ctx.attr.test_management == False:
+    if spec["test_management"] == False:
         test_management_enabled = False
         if not _is_dict(settings_obj.get("data")):
             settings_obj["data"] = {"attributes": {}}
@@ -2708,7 +2763,7 @@ def _impl(ctx):
         tm_mut["enabled"] = False
         attrs_obj["test_management"] = tm_mut
 
-    if hasattr(ctx.attr, "flaky_tests") and ctx.attr.flaky_tests == False:
+    if spec["flaky_tests"] == False:
         flaky_tests_enabled = False
         if not _is_dict(settings_obj.get("data")):
             settings_obj["data"] = {"attributes": {}}
@@ -2763,6 +2818,8 @@ def _impl(ctx):
             debug,
             osinfo = osinfo,
             http_policy = http_policy,
+            runtime = runtime,
+            request_dir = request_dir,
         )
         ctx.report_progress("test_optimization_sync: known tests complete")
         known_tests_obj = _decode_json_object_or_fail(ctx.read(ctx.path(known_tests_file)), known_tests_file)
@@ -2789,6 +2846,7 @@ def _impl(ctx):
             test_management_file,
             debug,
             http_policy = http_policy,
+            request_dir = request_dir,
         )
         ctx.report_progress("test_optimization_sync: test management tests complete")
         test_management_obj = _decode_json_object_or_fail(ctx.read(ctx.path(test_management_file)), test_management_file)
@@ -2821,6 +2879,8 @@ def _impl(ctx):
             debug,
             osinfo = osinfo,
             http_policy = http_policy,
+            runtime = runtime,
+            request_dir = request_dir,
         )
         ctx.report_progress("test_optimization_sync: flaky tests complete")
         flaky_tests_raw = _decode_json_object_or_fail(ctx.read(ctx.path(flaky_tests_file)), flaky_tests_file)
@@ -2854,20 +2914,24 @@ def _impl(ctx):
 
     # Build and write context.json (non-secret metadata) under `out_dir`
     # so all manifest-relative payload files share a single root.
-    context_tags = _build_context_tags(ctx, env_data, api_key, debug, osinfo = osinfo)
+    context_tags = _build_context_tags(ctx, env_data, api_key, debug, osinfo = osinfo, runtime = runtime)
     ctx.file(context_file, json.encode(context_tags) + "\n")
     ctx.file(telemetry_facts_file, json.encode(telemetry_facts) + "\n")
 
     # Emit helper runtime metadata for downstream macros.
-    runtime_module_path = (ctx.attr.runtime_module_path or "").strip()
-    runtime_name = (ctx.attr.runtime_name or "").strip()
-    go_module_path = _detect_go_module_path(
-        ctx,
-        debug,
-        runtime_module_path if runtime_name == "" or runtime_name == "go" else "",
-    )
+    runtime_module_path = (runtime["module_path"] or "").strip()
+    runtime_name = (runtime["name"] or "").strip()
+    runtime_module_path_is_authoritative = spec.get("runtime_module_path_is_authoritative", False)
+    if runtime_module_path_is_authoritative:
+        go_module_path = runtime_module_path if runtime_name == "go" else ""
+    else:
+        go_module_path = _detect_go_module_path(
+            ctx,
+            debug,
+            runtime_module_path if runtime_name == "" or runtime_name == "go" else "",
+        )
     sanitized_go_module_path = sanitize_label_fragment(go_module_path) if go_module_path else ""
-    python_module_path = _detect_runtime_module_path(
+    python_module_path = runtime_module_path if runtime_module_path_is_authoritative and runtime_name == "python" else _detect_runtime_module_path(
         ctx,
         debug,
         "python",
@@ -2875,7 +2939,7 @@ def _impl(ctx):
         runtime_module_path if runtime_name == "python" else "",
     )
     sanitized_python_module_path = sanitize_label_fragment(python_module_path) if python_module_path else ""
-    java_module_path = _detect_runtime_module_path(
+    java_module_path = runtime_module_path if runtime_module_path_is_authoritative and runtime_name == "java" else _detect_runtime_module_path(
         ctx,
         debug,
         "java",
@@ -2883,7 +2947,7 @@ def _impl(ctx):
         runtime_module_path if runtime_name == "java" else "",
     )
     sanitized_java_module_path = sanitize_label_fragment(java_module_path) if java_module_path else ""
-    nodejs_module_path = _detect_runtime_module_path(
+    nodejs_module_path = runtime_module_path if runtime_module_path_is_authoritative and runtime_name == "nodejs" else _detect_runtime_module_path(
         ctx,
         debug,
         "nodejs",
@@ -2891,7 +2955,7 @@ def _impl(ctx):
         runtime_module_path if runtime_name == "nodejs" else "",
     )
     sanitized_nodejs_module_path = sanitize_label_fragment(nodejs_module_path) if nodejs_module_path else ""
-    dotnet_module_path = _detect_runtime_module_path(
+    dotnet_module_path = runtime_module_path if runtime_module_path_is_authoritative and runtime_name == "dotnet" else _detect_runtime_module_path(
         ctx,
         debug,
         "dotnet",
@@ -2899,7 +2963,7 @@ def _impl(ctx):
         runtime_module_path if runtime_name == "dotnet" else "",
     )
     sanitized_dotnet_module_path = sanitize_label_fragment(dotnet_module_path) if dotnet_module_path else ""
-    ruby_module_path = _detect_runtime_module_path(
+    ruby_module_path = runtime_module_path if runtime_module_path_is_authoritative and runtime_name == "ruby" else _detect_runtime_module_path(
         ctx,
         debug,
         "ruby",
@@ -2949,7 +3013,7 @@ def _impl(ctx):
 
     # Unified export file for simpler loading from user repos
     # Prefer the apparent repo name passed by the extension/WORKSPACE helper; fallback to ctx.name
-    repo_name = (getattr(ctx.attr, "repo_name", None) or ctx.name or "")
+    repo_name = spec["repo_name"]
     export_bzl = _render_export_bzl(
         repo_name,
         validated_service,
@@ -2976,7 +3040,8 @@ def _impl(ctx):
         ruby_module_included = ruby_module_included,
         enabled = True,
     )
-    ctx.file("export.bzl", export_bzl)
+    if emit_surface:
+        ctx.file("export.bzl", export_bzl)
 
     # ------------------------------------------------------------------
     # Phase 5: Emit generated helper files and public BUILD targets.
@@ -2985,7 +3050,8 @@ def _impl(ctx):
     # We generate this helper rule as source text to keep repository-rule output
     # self-contained and avoid hard-coding additional checked-in helper files.
     module_runfiles_bzl = _render_module_runfiles_bzl(ctx.name, _dirname(manifest_file))
-    ctx.file("module_runfiles.bzl", module_runfiles_bzl)
+    if emit_surface:
+        ctx.file("module_runfiles.bzl", module_runfiles_bzl)
 
     # 6. Create a BUILD file with two public filegroup targets.
     # - test_optimization_files: the JSONs returned or stubbed from HTTP (existing)
@@ -3007,6 +3073,9 @@ def _impl(ctx):
     )
 
     # Append one filegroup per module so consumers can depend on individual modules
+    known_by_label = {}
+    tm_by_label = {}
+    flaky_by_label = {}
     if module_specs_known or module_specs_tm or module_specs_flaky:
         labels_for_modules = labels
         if not labels_for_modules:
@@ -3033,13 +3102,10 @@ def _impl(ctx):
             labels_for_modules = sorted(labels_for_modules)
 
         # Map module labels to their per-module files
-        known_by_label = {}
         for s in module_specs_known:
             known_by_label[s["label"]] = s["file"]
-        tm_by_label = {}
         for s in module_specs_tm:
             tm_by_label[s["label"]] = s["file"]
-        flaky_by_label = {}
         for s in module_specs_flaky:
             flaky_by_label[s["label"]] = s["file"]
 
@@ -3080,12 +3146,50 @@ def _impl(ctx):
                               (("    flaky_tests = %s,\n" % _bzl_string_literal(flaky_tests_file)) if flaky_tests_file else "") +
                               '    visibility = ["//visibility:public"],\n' +
                               ")\n")
-    log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)
-    ctx.report_progress("test_optimization_sync: writing BUILD")
-    ctx.file("BUILD", build_content)
+    if emit_surface:
+        log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)
+        ctx.report_progress("test_optimization_sync: writing BUILD")
+        ctx.file("BUILD", build_content)
 
     log_info("Repository rule completed successfully")
     ctx.report_progress("test_optimization_sync: done")
+    return {
+        "build_content": build_content,
+        "context_files": [context_file, telemetry_facts_file],
+        "export_bzl": export_bzl,
+        "exports": exports,
+        "labels": labels,
+        "manifest_file": manifest_file,
+        "module_files": {
+            label: {
+                "settings": settings_file,
+                "manifest": manifest_file,
+                "known_tests": known_by_label.get(label),
+                "test_management": tm_by_label.get(label),
+                "flaky_tests": flaky_by_label.get(label),
+            }
+            for label in labels
+        },
+        "out_dir": out_dir,
+        "repo_name": repo_name,
+        "runtime": {
+            "name": runtime_name,
+            "go_module_path": go_module_path,
+            "sanitized_go_module_path": sanitized_go_module_path,
+            "go_module_included": go_module_included,
+            "python_module_path": python_module_path,
+            "sanitized_python_module_path": sanitized_python_module_path,
+            "python_module_included": python_module_included,
+        },
+        "service": validated_service,
+    }
+
+# Shared only with the manifest repository implementation. Keeping this public
+# load symbol avoids copying HTTP, telemetry, and per-module splitting logic.
+materialize_test_optimization_context = _materialize_enabled_context
+render_test_optimization_module_runfiles = _render_module_runfiles_bzl
+test_optimization_enabled = _is_test_optimization_enabled
+test_optimization_repository_environ = _TEST_OPTIMIZATION_REPOSITORY_ENVIRON
 
 # ##########################################################################
 # Rule and extension declarations

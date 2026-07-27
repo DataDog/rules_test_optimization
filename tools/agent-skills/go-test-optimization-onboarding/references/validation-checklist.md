@@ -57,6 +57,27 @@ For Bzlmod manual wiring, confirm `MODULE.bazel` has an Orchestrion-enabled
 `rules_go` override and `orchestrion.from_source(...)` wiring. If guided
 bootstrap wrote the setup, this is in the Datadog-managed module block.
 
+## Managed Manifest Checks
+
+For the automatic managed path, additionally prove:
+
+- no committed target/service mapping, generated example registry, Gazelle
+  extension, or ownership gate was added;
+- the consumer command expands canonical exact local labels before sync;
+- unsupported or unselected central-macro targets retain the raw Go path;
+- selected labels resolve through `topt_data_by_target`;
+- disabled and enabled phases reuse one fresh output root;
+- disabled mode makes zero metadata requests and never invokes host Go;
+- enabled mode uses the Bazel-managed Go SDK;
+- doctor consumes the aggregate context and generated exact-target file;
+- uploader dry-run enriches every selected payload with its matching virtual
+  context;
+- cache tests and upload tests are separate: cache tests expect hits, while
+  strict fresh-payload validation forces test execution.
+
+Do not validate this path by setting the internal manifest environment directly.
+Invoke the consumer's managed command.
+
 ## Disabled Then Enabled On The Same Output Root
 
 Before fetching live metadata, prove the single-switch contract on one fresh

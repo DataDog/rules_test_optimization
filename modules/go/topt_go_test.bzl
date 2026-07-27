@@ -66,6 +66,9 @@ load(
     "merge_optional_env_defaults",
     "merge_user_env",
     "normalize_user_data",
+    "resolve_files_label",
+    "resolve_manifest_label",
+    "resolve_module_labels",
     "resolve_topt_service_key",
     "service_mapping_entries",
     "split_test_wrapper_kwargs",
@@ -423,7 +426,7 @@ def dd_topt_go_test(
 
     # Build labels for files/context based on (possibly derived) sync_repo_name.
     # These labels remain stable public contracts of the generated sync repo.
-    files_label = "@%s//:test_optimization_files" % sync_repo_name
+    files_label = resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
 
     # ------------------------------------------------------------------
     # Phase 4: Build environment and selector inputs for analysis-time mapping.
@@ -443,7 +446,7 @@ def dd_topt_go_test(
     # Build the list of per-module groups once (if any were exported)
     # Use exported sanitized labels directly to avoid re-deriving naming policy
     # in the macro and drifting from sync-side label generation.
-    module_labels = _build_module_labels(sync_repo_name, _svc.get("labels"))
+    module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
 
     # Fallback importpath when providers are unavailable: go_module_path + Bazel package
     pkg_path = native.package_name()
@@ -561,8 +564,7 @@ def dd_topt_go_test(
     # manifest_path is emitted by sync metadata and may include slashes.
     # These paths are rooted at the sync repo package, so target syntax remains
     # @repo//:<path> (for example @test_optimization_data//:.testoptimization/manifest.txt).
-    manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
-    manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
+    manifest_label = resolve_manifest_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
     data = _append_data_dependencies(data, [manifest_label])
     required_env = {
         "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,

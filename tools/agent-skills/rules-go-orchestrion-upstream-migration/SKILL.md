@@ -22,6 +22,12 @@ This skill is intentionally repository-local: it is stored as a
 Codex-compatible skill, but any agent can read it as a normal implementation
 guide.
 
+The manifest-driven Go/Python sync API does not change the fork migration
+boundary. A migration must preserve disabled empty-repository behavior,
+Bazel-managed Go SDK bootstrap, and the existing public Orchestrion aliases;
+it must not add target discovery, service naming, or manifest policy to
+`rules_go`.
+
 ## Non-Negotiable Contract
 
 Preserve the maintained fork contract:

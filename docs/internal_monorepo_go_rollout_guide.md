@@ -17,6 +17,13 @@ Use [`Language_Onboarding.md`](./Language_Onboarding.md#large-workspace-monorepo
 for the step-by-step onboarding guide. Use this page as the operator checklist
 when the rollout needs a reviewable local pilot before wider adoption.
 
+This page describes the static pilot path. A monorepo with a repository-owned
+managed command that expands exact targets should instead use the
+[automatic managed Go/Python contract](./Language_Onboarding.md#automatic-managed-gopython-monorepos).
+That path derives services per invocation and does not check in pilot lists,
+Gazelle policy, or ownership gates. Both paths share the same `rules_go`,
+Orchestrion, doctor, and uploader safety requirements.
+
 ## Published Contract
 
 - Consume one complete base `rules_go` Orchestrion tree. Do not copy patch

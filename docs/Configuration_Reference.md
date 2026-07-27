@@ -222,6 +222,60 @@ Extension tag: `test_optimization_multi_sync.test_optimization_multi_sync(...)`
 | `require_git_metadata` | bool | `False` | Strict Git metadata validation propagated to each per-service sync repo |
 | `debug` | bool | `False` | Enables verbose logging for generated per-service sync repos |
 
+## Manifest-sync extension attributes
+
+Extension tag:
+`test_optimization_manifest_sync.test_optimization_manifest_sync(...)`.
+The WORKSPACE repository rule has the same attributes. This API is only for a
+consumer-managed, invocation-scoped Go/Python flow; static APIs remain
+unchanged.
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | string | required | Aggregate repository name |
+| `repo_name` | string | repository name | WORKSPACE repository-rule-only apparent aggregate name used in generated labels; normally leave unset |
+| `out_dir` | string | `contexts` | Relative root containing one `<context-key>/.testoptimization` tree per context |
+| `http_connect_timeout_seconds` | int | `-1` attr / `10` effective | Optional connect-timeout override |
+| `http_max_time_seconds` | int | `-1` attr / `60` effective | Optional per-request max-time override |
+| `http_retry_attempts` | int | `-1` attr / `3` effective | Optional request retry count |
+| `http_retry_delay_seconds` | int | `-1` attr / `2` effective | Optional request retry delay |
+| `http_execute_timeout_buffer_seconds` | int | `-1` attr / `60` effective | Optional outer execute-timeout buffer |
+| `known_tests` | bool | `True` | Fetch and split Known Tests metadata |
+| `test_management` | bool | `True` | Fetch and split Test Management metadata |
+| `flaky_tests` | bool | `True` | Fetch and split Flaky Tests metadata |
+| `enabled` | bool | `True` | Hard enablement switch |
+| `enabled_by_env` | bool | `True` | Apply the named config gate; unset/false emits stable disabled stubs |
+| `require_git_metadata` | bool | `False` | Fail enabled sync before HTTP when required Git metadata is missing |
+| `debug` | bool | `False` | Enable repository-rule diagnostics |
+
+The implementation reserves
+`DD_TEST_OPTIMIZATION_SERVICES_MANIFEST` as the fixed private handoff from a
+consumer-owned managed command. It is not a public rollout switch and must not
+be added to a user's `.bazelrc` or set in ordinary jobs. Enabled resolution
+requires it to name a valid schema-v1 manifest; disabled resolution ignores it.
+
+Schema v1 contains:
+
+- non-empty `contexts`, each with deterministic `key`, `service`, and a
+  `runtime` object (`name`, `version`, optional `arch`, and `module_path`);
+- non-empty `targets`, each with a canonical local `label`, `context_key`, and
+  `service_derivation` (`application` or `domain_fallback`);
+- Go and Python runtimes only.
+
+Validation rejects unknown keys, duplicate or non-canonical labels, duplicate
+contexts, unused contexts, unsupported runtimes, key collisions, and targets
+whose context is absent. Normalized contexts and targets are sorted so
+equivalent manifests render byte-identical repository surfaces.
+
+Generated labels:
+
+- `:test_optimization_files_<context_key>`
+- `:test_optimization_context_<context_key>`
+- `:module_<context_key>_<module_label>`
+- aggregate `:test_optimization_files`
+- aggregate `:test_optimization_context`
+- `:expected_targets`
+
 ## Uploader rule attributes
 
 Rule: `dd_payload_uploader(...)`
@@ -251,6 +305,7 @@ delete, or rewrite source payloads.
 | `name` | string | required | Target name |
 | `data` | label_list | `["@test_optimization_data//:test_optimization_context"]` in examples | Context targets bundle `context.json` and `telemetry_facts.json`. Doctor selects `context.json` for Git validation; the same labels can be reused by the uploader for enrichment and rule telemetry |
 | `expected_targets` | string_list | `[]` | Optional strict list of local Bazel test labels to validate. When empty, the doctor validates discovered Test Optimization output directories and ignores plain non-instrumented test outputs |
+| `expected_targets_file` | label | unset | Optional schema-v1 JSON file containing the exact invocation-scoped target set. Static and file inputs must match when both are non-empty |
 | `require_git_metadata` | bool | `True` | Require `git.repository_url`, `git.commit.sha`, and `git.branch` or `git.tag` in synced context data |
 | `require_bazel_metadata` | bool | `True` | Require `bazel_target_metadata.json` next to selected payload outputs |
 | `require_json_payloads` | bool | `True` | Require parseable `.json` payload files |
@@ -307,6 +362,7 @@ workspace root package.
 | `doctor_name` | string | `"dd_test_optimization_doctor"` | Generated doctor target name |
 | `uploader_name` | string | `"dd_upload_payloads"` | Generated uploader target name |
 | `expected_targets` | string_list | `[]` | Strict labels passed to the doctor. List only instrumented runtime test targets that emit payloads |
+| `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to the doctor for manifest-driven invocations |
 | `context_data` | label_list or `None` | `["@<sync_repo>//:test_optimization_context"]` | Explicit context data labels when the default sync repo label is not enough |
 | `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, or `expected_targets` |
 | `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name` or `data` |

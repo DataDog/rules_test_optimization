@@ -16,7 +16,7 @@ them in the workspace root package.
 load("//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
-_DOCTOR_CONTROLLED_ATTRS = ["name", "data", "expected_targets"]
+_DOCTOR_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file"]
 _UPLOADER_CONTROLLED_ATTRS = ["name", "data"]
 
 def _copy_kwargs(kwargs, label):
@@ -42,7 +42,8 @@ def _validate_no_controlled_attrs(kwargs, controlled_attrs, field_name):
         fail(
             (
                 "dd_test_optimization_targets: %s cannot override controlled attrs %s. " +
-                "Set doctor_name, uploader_name, context_data, or expected_targets on " +
+                "Set doctor_name, uploader_name, context_data, expected_targets, or " +
+                "expected_targets_file on " +
                 "dd_test_optimization_targets(...) instead."
             ) % (field_name, forbidden),
         )
@@ -55,7 +56,8 @@ def _build_test_optimization_target_specs(
         expected_targets,
         context_data,
         doctor_kwargs,
-        uploader_kwargs):
+        uploader_kwargs,
+        expected_targets_file = None):
     """Build normalized doctor/uploader attrs without materializing rules.
 
     Args:
@@ -64,6 +66,7 @@ def _build_test_optimization_target_specs(
       doctor_name: Target name for the generated doctor rule.
       uploader_name: Target name for the generated uploader rule.
       expected_targets: Labels the doctor should require local outputs for.
+      expected_targets_file: Optional generated JSON target list for dynamic invocations.
       context_data: Optional explicit data labels for context files.
       doctor_kwargs: Extra attrs forwarded to `dd_test_optimization_doctor`.
       uploader_kwargs: Extra attrs forwarded to `dd_payload_uploader`.
@@ -98,6 +101,8 @@ def _build_test_optimization_target_specs(
         "data": normalized_context_data,
         "expected_targets": expected_targets,
     })
+    if expected_targets_file != None:
+        doctor_attrs["expected_targets_file"] = expected_targets_file
 
     uploader_attrs = dict(normalized_uploader_kwargs)
     uploader_attrs.update({
@@ -118,6 +123,7 @@ def dd_test_optimization_targets(
         doctor_name = "dd_test_optimization_doctor",
         uploader_name = "dd_upload_payloads",
         expected_targets = [],
+        expected_targets_file = None,
         context_data = None,
         doctor_kwargs = None,
         uploader_kwargs = None):
@@ -126,6 +132,10 @@ def dd_test_optimization_targets(
     The macro can be called from a small package such as
     `//tools/test_optimization`, which avoids forcing large monorepos to load
     their root package just to run validation or upload.
+
+    `expected_targets` preserves the static contract.
+    `expected_targets_file` accepts the generated schema-v1 target list emitted
+    by manifest sync.
     """
     specs = _build_test_optimization_target_specs(
         name = name,
@@ -133,6 +143,7 @@ def dd_test_optimization_targets(
         doctor_name = doctor_name,
         uploader_name = uploader_name,
         expected_targets = expected_targets,
+        expected_targets_file = expected_targets_file,
         context_data = context_data,
         doctor_kwargs = doctor_kwargs,
         uploader_kwargs = uploader_kwargs,

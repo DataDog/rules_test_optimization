@@ -299,6 +299,20 @@ def _multi_service_topt_data():
         "_meta": {"description": "non-service entry should be ignored"},
     }
 
+def _dynamic_manifest_topt_data():
+    """Model one target entry exported by the manifest aggregate repository."""
+    data = _single_service_topt_data()
+    data.update({
+        "repo_name": "virtual_dynamic_repo_that_must_not_resolve",
+        "service_name": "dynamic-python-service",
+        "files_label": ":full_payload",
+        "manifest_label": ":test_macro.bzl",
+        "module_labels": [":module_example_python_explicit_pkg"],
+        "labels": ["ignored_static_label_that_must_not_resolve"],
+        "manifest_path": "ignored/static/manifest.txt",
+    })
+    return data
+
 def py_macro_single_service_target(name, tags = None):
     dd_topt_py_test(
         name = name,
@@ -310,6 +324,16 @@ def py_macro_single_service_target(name, tags = None):
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
         },
         imports = ["example/python/pkg"],
+        tags = tags,
+    )
+
+def py_macro_dynamic_manifest_target(name, tags = None):
+    """Target under test for explicit labels from one dynamic manifest entry."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _dynamic_manifest_topt_data(),
+        py_test_rule = _py_test_capture_rule,
+        importpath = "example/python/explicit/pkg",
         tags = tags,
     )
 
@@ -881,6 +905,25 @@ def _py_macro_multi_service_wiring_test_impl(ctx):
     asserts.equals(env, ["example/python/multi"], captured.imports)
     return analysistest.end(env)
 
+def _py_macro_dynamic_manifest_wiring_test_impl(ctx):
+    """Assert dynamic target entries avoid virtual-repository label fallback."""
+    env = analysistest.begin(ctx)
+    captured = analysistest.target_under_test(env)[ToptPyMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_dynamic_manifest_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.false(env, _has_fragment(captured.data_labels, "virtual_dynamic_repo_that_must_not_resolve"))
+    asserts.equals(env, "dynamic-python-service", captured.env.get("DD_SERVICE"))
+    return analysistest.end(env)
+
+def _py_macro_dynamic_manifest_payloads_test_impl(ctx):
+    """Assert only the selected explicit module files reach the selector."""
+    env = analysistest.begin(ctx)
+    files = analysistest.target_under_test(env)[DefaultInfo].files.to_list()
+    asserts.equals(env, 1, len(files))
+    asserts.true(env, _has_file_basename(files, "module_example_python_explicit_pkg.payload"))
+    asserts.false(env, _has_file_basename(files, "full_payload.payload"))
+    return analysistest.end(env)
+
 def _py_macro_env_none_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -1053,6 +1096,12 @@ py_macro_single_service_wiring_test = analysistest.make(
 )
 py_macro_multi_service_wiring_test = analysistest.make(
     _py_macro_multi_service_wiring_test_impl,
+)
+py_macro_dynamic_manifest_wiring_test = analysistest.make(
+    _py_macro_dynamic_manifest_wiring_test_impl,
+)
+py_macro_dynamic_manifest_payloads_test = analysistest.make(
+    _py_macro_dynamic_manifest_payloads_test_impl,
 )
 py_macro_env_none_wiring_test = analysistest.make(
     _py_macro_env_none_wiring_test_impl,

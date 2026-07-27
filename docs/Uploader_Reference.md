@@ -700,6 +700,30 @@ payload discovery/quiescence before proceeding.
 - CODEOWNERS enrichment is best-effort: parse/lookup failures and misses do not
   fail uploads; debug mode logs counters and skip reasons.
 
+### Manifest-driven aggregate contexts
+
+`test_optimization_manifest_sync` places every selected Go/Python runtime
+context in one aggregate repository. Its
+`:test_optimization_context` target carries a provider mapping deterministic
+context keys to the matching `context.json`. Doctor and uploader convert those
+entries into virtual repository keys of the form
+`<aggregate_repo>_<context_key>`, which match the
+`bazel.test_optimization.repo_name` written by selected targets.
+
+The managed doctor should also consume
+`@test_optimization_data//:expected_targets` through
+`expected_targets_file`. The file contains the exact canonical labels from the
+invocation manifest. Static `expected_targets` and the generated file may be
+used together only when they describe the same set; disagreement is a hard
+error.
+
+A cached Bazel test does not produce a fresh payload for the current
+invocation. Managed upload flows that require strict BEP freshness must force a
+fresh test execution before doctor and upload. This is independent from the
+Rule integration cache tests, which intentionally keep test-result caching
+enabled to prove that metadata changes invalidate only the affected
+context/module action inputs.
+
 ### Advanced: reuse an already-fetched context file
 
 If your workflow already resolved Test Optimization data during the test

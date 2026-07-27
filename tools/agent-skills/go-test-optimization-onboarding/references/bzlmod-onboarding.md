@@ -100,6 +100,31 @@ using a second complete tree. Do not set both
 modules to different exact versions, use guided bootstrap or its onboarding
 summary to generate the exact `dd_trace_go_versions` block.
 
+## Managed Manifest Variant
+
+For a large monorepo whose repository-owned command expands exact Go/Python
+targets, declare the aggregate API instead of a checked-in service list:
+
+```bzl
+topt_manifest = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync_extension",
+)
+topt_manifest.test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+use_repo(topt_manifest, "test_optimization_data")
+```
+
+The managed command owns the temporary manifest and its private handoff to
+Bazel. Agents must not add that handoff to `.bazelrc`, generate `examples.bzl`,
+or create Gazelle/ownership machinery. The central Go wrapper looks up its full
+label in `topt_data_by_target`; only present labels delegate to
+`dd_topt_go_test`.
+
+This changes metadata selection, not Go toolchain ownership. Keep the same
+Bazel-managed SDK and Orchestrion wiring described above.
+
 ## Recommended Bootstrap
 
 For fresh or simple Bzlmod workspaces, use guided bootstrap:

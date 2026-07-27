@@ -48,6 +48,31 @@ Checks:
 Fix the target selection or wrapper first. Do not work around missing payloads
 by adding a proxy or uploading from inside the test sandbox.
 
+## Managed Target Missing From `topt_data_by_target`
+
+Symptoms:
+
+- a requested central `dd_go_test` remains raw in an enabled managed run;
+- doctor does not list the target in its generated exact-target set.
+
+Checks:
+
+- The consumer command expanded the target to a canonical local label.
+- The target carries the consumer's supported central-macro marker.
+- The full label used by the wrapper exactly matches the manifest label.
+- Service derivation succeeded and produced one Go runtime context.
+- The target was not filtered out as build-only or unsupported.
+
+Fix target discovery or service derivation in the consumer command. Do not add a
+checked-in mapping or special-case the label in the Rule.
+
+## Managed Manifest Fails Before HTTP
+
+Missing, malformed, duplicate, unsupported-runtime, or colliding manifest
+entries fail before metadata requests. Invoke the consumer's managed command
+and inspect its discovery summary. Do not hand-edit the temporary manifest or
+persist its private handoff in `.bazelrc`.
+
 ## Msgpack Payloads Instead Of JSON
 
 Symptoms:

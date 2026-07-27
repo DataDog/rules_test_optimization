@@ -684,6 +684,84 @@ Mixed-runtime note: keep runtime-specific sync repositories separate (for
 example one sync for Go services and another sync for Python services). A single
 `test_optimization_multi_sync` call currently models one runtime per invocation.
 
+### Manifest-driven managed Go/Python monorepos
+
+Use this API only when a consumer-owned managed command discovers exact test
+labels and derives service/runtime contexts for each invocation. It is not a
+replacement for static single-service or static multi-service wiring.
+
+```bzl
+# MODULE.bazel
+topt_manifest = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync_extension",
+)
+
+topt_manifest.test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+
+use_repo(topt_manifest, "test_optimization_data")
+```
+
+The same repository rule is available to WORKSPACE consumers:
+
+```bzl
+# WORKSPACE
+load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync",
+)
+
+test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+```
+
+The declaration contains no service list. The managed command owns a private
+temporary manifest with fully expanded local target labels and provides it only
+to the child Bazel invocation. Users should run that command rather than
+creating the manifest or its environment handoff manually. When
+`--config=test-optimization` is absent, the repository ignores the manifest
+and emits stable disabled stubs. When enabled, a missing or invalid manifest
+fails before any metadata HTTP request.
+
+The generated aggregate repository exports:
+
+- `topt_data_by_target`: exact local label to context-specific `topt_data`;
+- `topt_data_by_context`: deterministic context key to `topt_data`;
+- `target_context_keys`: exact local label to context key;
+- `@test_optimization_data//:test_optimization_context`: every generated
+  context for doctor/uploader enrichment;
+- `@test_optimization_data//:expected_targets`: the exact selected-target JSON
+  contract for the doctor;
+- `@test_optimization_data//:test_optimization_files_<context_key>` and
+  `@test_optimization_data//:module_<context_key>_<module_label>` for narrow
+  action inputs.
+
+The consumer's central Go/Python wrapper computes the current full label and
+looks it up in `topt_data_by_target`. A present entry delegates to
+`dd_topt_go_test` or `dd_topt_py_test`; an absent entry preserves the
+repository's raw test behavior. Java, NodeJS, .NET, and Ruby do not use this
+automatic manifest path in this release.
+
+Wire one doctor/uploader pair to the dynamic outputs:
+
+```bzl
+load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl",
+    "dd_test_optimization_targets",
+)
+
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
+        "@test_optimization_data//:test_optimization_context",
+    ],
+    expected_targets_file = "@test_optimization_data//:expected_targets",
+)
+```
+
 Additional helper file exported by the generated repository:
 
 - `export.bzl` with a single dictionary `topt_data` containing:
@@ -815,6 +893,12 @@ test_optimization_sync(
 This generic WORKSPACE example preserves the always-enabled core default. The
 public Go helpers apply metadata gating by default; the Python section adds
 `enabled_by_env = True` where its macro can safely consume a disabled export.
+
+For a managed Go/Python monorepo, instantiate
+`test_optimization_manifest_sync` instead of this static rule, as shown in
+[Manifest-driven managed Go/Python monorepos](#manifest-driven-managed-gopython-monorepos).
+The consumer-owned command supplies the private invocation manifest; do not
+check a service list or target mapping into WORKSPACE.
 
 ### 3) Depend on generated files in BUILD files
 

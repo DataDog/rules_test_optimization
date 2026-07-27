@@ -25,8 +25,62 @@ Pick the path that matches your repository:
 - **Bzlmod + .NET companion:** `dd_topt_dotnet_test` macro with analysis-time selection
 - **Bzlmod + Ruby companion:** `dd_topt_ruby_test` macro with analysis-time selection
 - **Bzlmod + multi-service monorepo:** one sync extension, per-service labels/exports
+- **Managed Go/Python monorepo:** one invocation-scoped aggregate repository,
+  with targets and services derived by a consumer-owned command instead of a
+  checked-in mapping
 - **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled, including Go, Python, and Java companion helpers
 - **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
+
+### Sync contract comparison
+
+| Contract | Service selection | Repository shape | Intended use |
+|---|---|---|---|
+| `test_optimization_sync` | One checked-in service | One repository | Small or single-service workspaces |
+| `test_optimization_multi_sync` | Checked-in service list | One repository per service plus an aggregator | Stable static multi-service wiring |
+| `test_optimization_manifest_sync` | Invocation-scoped, fully expanded Go/Python targets | One aggregate repository with per-context and per-module labels | Consumer-owned managed commands that derive services automatically |
+
+The manifest-driven API is additive. Existing single-service and static
+multi-service consumers do not need to migrate.
+
+### Ordinary and managed execution
+
+An ordinary test command omits `--config=test-optimization`. Config-gated Go
+and Python wrappers preserve the repository's normal test behavior, the
+manifest repository emits stable disabled stubs, and no Datadog metadata is
+requested.
+
+A managed command owns two Bazel phases behind one user-facing entrypoint:
+
+1. query and fully expand the requested Go/Python test labels;
+2. derive service and runtime contexts from those labels and write a private,
+   temporary manifest;
+3. run metadata sync and the exact selected tests with
+   `--config=test-optimization`;
+4. run the workspace doctor against the generated exact-target list, then run
+   uploader dry-run and optional upload.
+
+Adding or removing a target from the managed invocation changes the temporary
+manifest; it does not require a committed target-to-service registry or
+per-service repository declaration. The rules in this repository consume that
+manifest, but target discovery and service-name policy remain owned by the
+consumer command.
+
+```mermaid
+flowchart LR
+  U[Requested Bazel labels] --> Q[Consumer-owned target discovery]
+  Q --> M[Temporary Go/Python manifest]
+  M --> R[One aggregate metadata repository]
+  R --> T[Exact selected tests]
+  T --> D[Doctor with exact target set]
+  D --> V[Uploader dry-run]
+  V --> X[Optional upload]
+```
+
+See [Installation Reference](docs/Installation_Reference.md#manifest-driven-managed-gopython-monorepos),
+[Configuration Reference](docs/Configuration_Reference.md#manifest-sync-extension-attributes),
+[Language Onboarding](docs/Language_Onboarding.md#automatic-managed-gopython-monorepos),
+and [Troubleshooting](docs/Troubleshooting.md#manifest-driven-managed-runs)
+for the detailed contract.
 
 ## Documentation map
 

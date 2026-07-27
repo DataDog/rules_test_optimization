@@ -70,6 +70,27 @@ def _expected_targets_test(ctx):
 
 expected_targets_test = unittest.make(_expected_targets_test)
 
+def _expected_targets_file_test(ctx):
+    """Validate a generated expected-target file is forwarded only to doctor."""
+    env = unittest.begin(ctx)
+    expected_targets_file = "@test_optimization_data//:expected_targets"
+    specs = build_test_optimization_target_specs_for_tests(
+        name = "test_optimization",
+        sync_repo_name = "test_optimization_data",
+        doctor_name = "doctor",
+        uploader_name = "uploader",
+        expected_targets = [],
+        expected_targets_file = expected_targets_file,
+        context_data = None,
+        doctor_kwargs = None,
+        uploader_kwargs = None,
+    )
+    asserts.equals(env, expected_targets_file, specs.doctor_attrs["expected_targets_file"])
+    asserts.false(env, "expected_targets_file" in specs.uploader_attrs)
+    return unittest.end(env)
+
+expected_targets_file_test = unittest.make(_expected_targets_file_test)
+
 def _doctor_kwargs_test(ctx):
     """Validate allowed doctor kwargs are forwarded without overwriting controlled attrs."""
     env = unittest.begin(ctx)

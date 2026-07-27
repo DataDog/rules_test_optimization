@@ -38,6 +38,9 @@ Agents: start with `README.md` for current operational behavior, then `CONTRIBUT
   - `core/common_utils.bzl` — shared utilities for logging, sanitization, validation, and deduplication used across multiple rule files.
   - `core/test_optimization_sync.bzl` — module extension + repo rule producing `.testoptimization/cache/http/settings.json`, per‑module files, and `.testoptimization/context.json`.
   - `core/test_optimization_multi_sync.bzl` — multi-service module extension for monorepos with multiple services.
+  - `core/test_optimization_manifest_sync.bzl` — manifest-driven aggregate
+    repository for invocation-scoped Go/Python target sets. It is separate from
+    static multi-sync and does not own target discovery or service derivation.
   - `core/test_optimization_uploader.bzl` — workspace-level uploader rule (normal rule, not test; runs via `bazel run`).
   - `dev/*_bootstrap.bzl` — dev-only bootstrap extensions wiring the local Go, Python, Java, NodeJS, .NET, and Ruby companion repos from this workspace root.
   - `dev/diff_rules_go_fork.py` — maintainer utility that regenerates the delta report for the vendored `rules_go` fork.
@@ -229,6 +232,25 @@ Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go c
   - `@test_optimization_data//:test_optimization_files_<svc>`
   - `@test_optimization_data//:module_<svc>_<module_label>` (example: `:module_go_service_core`).
 - Macros: `load("@test_optimization_data//:export.bzl", "topt_data_by_service")` then either pass `topt_data = topt_data_by_service["<svc>"]`, or pass the mapping and set `topt_service = "<svc>"` in `dd_topt_go_test`.
+
+## Manifest-Driven Managed Usage
+- Keep `test_optimization_manifest_sync` separate from static multi-sync.
+- A consumer-owned managed command must discover and fully expand exact local
+  Go/Python test labels, derive service/runtime contexts, and pass a private
+  invocation-scoped manifest to Bazel. Do not add a committed target/service
+  mapping to this repository.
+- The aggregate repo exports `topt_data_by_target`,
+  `topt_data_by_context`, `target_context_keys`,
+  `:test_optimization_context`, and `:expected_targets`.
+- Central consumer wrappers use `topt_data_by_target.get(<full-label>)`.
+  Selected targets use the companion macro; absent targets retain the
+  consumer's raw path.
+- The doctor receives `expected_targets_file =
+  "@test_optimization_data//:expected_targets"`. The uploader and doctor share
+  the aggregate `:test_optimization_context`.
+- Automatic manifest onboarding currently supports Go and Python only. Static
+  single/multi-service APIs remain the supported path for Java, NodeJS, .NET,
+  and Ruby.
 
 ## Hermetic Config
 - Use `--config=hermetic` to enable sandboxing, stable locale, and network blocking (see `examples/single_service/.bazelrc` and `examples/multi_service/.bazelrc` for the reference pattern).

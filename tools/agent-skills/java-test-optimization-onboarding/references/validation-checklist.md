@@ -11,6 +11,10 @@ This product includes software developed at Datadog
 Replace `bazel` in examples with the consumer repository's real Bazel entrypoint
 such as `bzl` or `./bazelw`.
 
+This checklist validates the static Java contracts. The automatic
+invocation-scoped manifest API is Go/Python-only in this release; Java does not
+need a managed-manifest transition proof.
+
 ## Static Checks
 
 Check for invalid sandbox environment patterns:

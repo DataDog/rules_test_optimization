@@ -26,6 +26,21 @@ If no files appear:
 - In WORKSPACE mode, confirm the Python companion was declared with
   `datadog_python_test_optimization_workspace_repositories(...)`.
 
+For manifest-managed runs, also confirm the full target label is present in
+`topt_data_by_target`. An absent entry intentionally preserves the raw Python
+path and emits no Test Optimization payload.
+
+## Managed Manifest Fails Before HTTP
+
+Missing, malformed, duplicate, unsupported-runtime, or colliding entries are
+rejected before metadata requests. Run the consumer's managed command and
+inspect its target/service summary. Do not hand-edit the temporary manifest,
+persist its private handoff, or add a label-specific Rule exception.
+
+If a selected target stays raw, verify that the consumer resolver recognizes
+the central Python macro, emitted a canonical full label, and derived one
+unambiguous Python runtime context.
+
 ## Missing Bazel Metadata
 
 Check for metadata:

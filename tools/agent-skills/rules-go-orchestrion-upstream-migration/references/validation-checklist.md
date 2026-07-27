@@ -9,6 +9,10 @@ This product includes software developed at Datadog
 # Validation Checklist
 
 Use this checklist before calling a `rules_go` upstream migration complete.
+When the Rule also supports manifest-managed Go targets, verify the selected
+upstream still passes no-host-Go disabled/enabled bootstrap coverage. Manifest
+schema, service derivation, and target discovery remain outside this migration
+and must not be modified here.
 
 ## Metadata And Inventory
 

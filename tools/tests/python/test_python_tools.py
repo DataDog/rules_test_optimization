@@ -1526,6 +1526,8 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             "forbid_dd_git_test_env": False,
             "require_git_metadata": False,
             "expected_targets": expected_targets,
+            "expected_targets_file_path": "",
+            "expected_targets_file_short_path": "",
             "require_json_payloads": True,
             "require_bazel_metadata": True,
             "forbid_full_bundle_no_match": True,
@@ -1536,6 +1538,110 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         config_path = root / "doctor.config.json"
         config_path.write_text(json.dumps(config), encoding="utf-8")
         return config_path
+
+    def test_resolve_expected_targets_from_generated_file(self) -> None:
+        """Validate dynamic target files are strict, sorted, and selected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = self._write_doctor_config(root, [])
+            targets_path = root / "expected_targets.json"
+            targets_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:a_test", "//pkg:b_test"],
+                }),
+                encoding="utf-8",
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["expected_targets_file_path"] = str(targets_path)
+
+            targets, source = self.mod._resolve_expected_targets(config, config_path)
+
+        self.assertEqual(["//pkg:a_test", "//pkg:b_test"], targets)
+        self.assertEqual("file", source)
+
+    def test_resolve_expected_targets_rejects_static_file_mismatch(self) -> None:
+        """Validate two configured sources cannot silently disagree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = self._write_doctor_config(root, ["//pkg:a_test"])
+            targets_path = root / "expected_targets.json"
+            targets_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:b_test"],
+                }),
+                encoding="utf-8",
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["expected_targets_file_path"] = str(targets_path)
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._resolve_expected_targets(config, config_path)
+            self.assertIn("different target sets", stderr.getvalue())
+
+    def test_expected_targets_file_rejects_duplicates_and_invalid_labels(self) -> None:
+        """Validate generated target input cannot weaken local exactness."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            duplicate_path = root / "duplicates.json"
+            duplicate_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:a_test", "//pkg:a_test"],
+                }),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_expected_targets_file(duplicate_path)
+            self.assertIn("duplicate target labels", stderr.getvalue())
+
+            external_path = root / "external.json"
+            external_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["@other//pkg:a_test"],
+                }),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_expected_targets_file(external_path)
+            self.assertIn("does not support external labels", stderr.getvalue())
+
+            invalid_labels = {
+                "//pkg/../other:a_test": "unsupported package path",
+                "//pkg:bad test": "whitespace or control characters",
+                "//pkg:a_test:extra": "exactly one ':'",
+            }
+            for index, (label, message) in enumerate(invalid_labels.items()):
+                invalid_path = root / f"invalid-{index}.json"
+                invalid_path.write_text(
+                    json.dumps({
+                        "schema_version": 1,
+                        "targets": [label],
+                    }),
+                    encoding="utf-8",
+                )
+                stderr = io.StringIO()
+                with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                    self.mod._load_expected_targets_file(invalid_path)
+                self.assertIn(message, stderr.getvalue())
+
+            unsorted_path = root / "unsorted.json"
+            unsorted_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:b_test", "//pkg:a_test"],
+                }),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_expected_targets_file(unsorted_path)
+            self.assertIn("targets must be sorted", stderr.getvalue())
 
     @staticmethod
     def _write_bep(path: Path, events: list[dict[str, object]]) -> None:
@@ -7218,6 +7324,97 @@ class MockDdServerTests(unittest.TestCase):
         fake_handler = types.SimpleNamespace()
         self.assertTrue(self.mod._Handler._payload_contains_resource(fake_handler, payload, "target"))
         self.assertFalse(self.mod._Handler._payload_contains_resource(fake_handler, payload, "missing"))
+
+    def test_service_response_versions_are_reloaded_and_scoped(self) -> None:
+        """Validate mutable mock responses affect only the selected service/module."""
+        fixtures = {
+            "settings": {
+                "data": {
+                    "attributes": {"known_tests_enabled": True},
+                },
+            },
+            "known_tests": {
+                "data": {
+                    "attributes": {"tests": {}},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            versions_path = Path(temp_dir) / "versions.json"
+            versions_path.write_text(
+                json.dumps(
+                    {
+                        "services": {
+                            "service-a": {
+                                "modules": {"module.x": "v1", "module.y": "v1"},
+                                "settings": "v1",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = self.mod._ServerState(
+                fixtures,
+                str(Path(temp_dir) / "requests.jsonl"),
+                1024,
+                response_versions_path=str(versions_path),
+            )
+
+            settings = state.fixture_for_service("settings", "service-a")
+            self.assertEqual(
+                "v1",
+                settings["data"]["attributes"]["mock_response_version"],
+            )
+            known = state.fixture_for_service("known_tests", "service-a")
+            self.assertEqual(
+                ["module.x", "module.y"],
+                sorted(known["data"]["attributes"]["tests"]),
+            )
+            self.assertNotIn(
+                "mock_response_version",
+                fixtures["settings"]["data"]["attributes"],
+            )
+
+            versions_path.write_text(
+                json.dumps(
+                    {
+                        "services": {
+                            "service-a": {
+                                "modules": {"module.x": "v2", "module.y": "v1"},
+                                "settings": "v2",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            changed = state.fixture_for_service("known_tests", "service-a")
+            tests = changed["data"]["attributes"]["tests"]
+            self.assertIn("version_v2", tests["module.x"]["mock_suite"])
+            self.assertIn("version_v1", tests["module.y"]["mock_suite"])
+            self.assertEqual(
+                fixtures["known_tests"],
+                state.fixture_for_service("known_tests", "service-b"),
+            )
+
+    def test_service_response_versions_reject_malformed_state(self) -> None:
+        """Validate malformed mutable response state fails loudly."""
+        fixtures = {
+            "settings": {"data": {"attributes": {}}},
+            "known_tests": {"data": {"attributes": {"tests": {}}}},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            versions_path = Path(temp_dir) / "versions.json"
+            versions_path.write_text('{"services":[]}', encoding="utf-8")
+            state = self.mod._ServerState(
+                fixtures,
+                str(Path(temp_dir) / "requests.jsonl"),
+                1024,
+                response_versions_path=str(versions_path),
+            )
+            with self.assertRaisesRegex(ValueError, "services must be an object"):
+                state.fixture_for_service("settings", "service-a")
 
 
 if __name__ == "__main__":

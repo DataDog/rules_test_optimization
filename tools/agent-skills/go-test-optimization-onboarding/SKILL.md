@@ -78,6 +78,9 @@ Keep the RFC contract intact:
    - Large monorepo with an existing central wrapper: keep repo policy local
      and route that same wrapper through `dd_topt_go_test`; do not introduce a
      second macro name for enabled tests.
+   - Large monorepo with a consumer-owned managed test command: use manifest
+     sync only when that command can expand exact labels and derive
+     service/runtime contexts. Do not create a checked-in target/service map.
 
 ## Implementation Paths
 
@@ -133,6 +136,21 @@ Every successful Go onboarding should end with these pieces:
   reports for local inspection and manual fallback flows.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
+For automatic managed Go/Python monorepos, the universal shape has these
+additional constraints:
+
+- declare one `test_optimization_manifest_sync` aggregate repository, separate
+  from static multi-sync;
+- keep target discovery, service naming, and managed orchestration in the
+  consumer repository;
+- load `topt_data_by_target` in the central wrapper and preserve the raw Go
+  path when the current full label is absent;
+- wire doctor to aggregate context data and the generated
+  `:expected_targets` file;
+- treat the invocation manifest as a private command handoff, never as
+  user-facing `.bazelrc` configuration;
+- keep Java and other non-Python companions on their static onboarding paths.
+
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
 repository from `bzl` or `bazelw` to raw `bazel` just because examples use the
 generic binary name.
@@ -176,6 +194,8 @@ changes reviewable:
   repository workaround.
 - Put consumer-specific scheduling, Docker, tag, flaky, and wrapper policy in
   the consumer repository.
+- Put automatic target expansion and service-derivation policy in the
+  consumer's managed command. Do not move it into the Rule or Gazelle.
 - If an issue requires changing this rule repository, add matching fixture
   coverage in `rules_test_optimization_tests` before declaring it solved.
 

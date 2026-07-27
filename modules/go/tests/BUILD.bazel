@@ -18,6 +18,9 @@ load(
     "go_macro_default_general_public_wrapper_mode_test",
     "go_macro_disabled_raw_target",
     "go_macro_disabled_raw_wiring_test",
+    "go_macro_dynamic_manifest_payloads_test",
+    "go_macro_dynamic_manifest_target",
+    "go_macro_dynamic_manifest_wiring_test",
     "go_macro_env_none_target",
     "go_macro_env_none_wiring_test",
     "go_macro_explicit_service_target",
@@ -387,6 +390,21 @@ go_macro_multi_service_wiring_test(
     target_under_test = ":go_macro_multi_service_target__raw_go_test",
 )
 
+go_macro_dynamic_manifest_target(
+    name = "go_macro_dynamic_manifest_target",
+    tags = ["manual"],
+)
+
+go_macro_dynamic_manifest_wiring_test(
+    name = "go_macro_dynamic_manifest_wiring_test",
+    target_under_test = ":go_macro_dynamic_manifest_target__raw_go_test",
+)
+
+go_macro_dynamic_manifest_payloads_test(
+    name = "go_macro_dynamic_manifest_payloads_test",
+    target_under_test = ":go_macro_dynamic_manifest_target_topt_payloads",
+)
+
 go_macro_rundir_mismatch_target(
     name = "go_macro_rundir_mismatch_target",
     tags = ["manual"],
@@ -742,6 +760,8 @@ test_suite(
         ":go_macro_ci_visibility_opt_out_wiring_test",
         ":go_macro_default_general_public_wrapper_mode_test",
         ":go_macro_disabled_raw_wiring_test",
+        ":go_macro_dynamic_manifest_payloads_test",
+        ":go_macro_dynamic_manifest_wiring_test",
         ":go_macro_env_none_wiring_test",
         ":go_macro_explicit_service_wiring_test",
         ":go_macro_multi_service_wiring_test",

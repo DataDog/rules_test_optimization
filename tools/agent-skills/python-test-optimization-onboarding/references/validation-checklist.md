@@ -44,6 +44,24 @@ For WORKSPACE consumers, also confirm:
 - `rules_python_repo_name` matches the consumer repository's actual
   `rules_python` repository name.
 
+## Managed Manifest Checks
+
+For automatic managed onboarding, additionally prove:
+
+- there is no committed target/service mapping or Gazelle/ownership machinery;
+- target patterns are expanded to exact canonical labels before sync;
+- selected targets use `topt_data_by_target`;
+- unselected targets keep the same raw/consumer-runner behavior;
+- adding/removing a selected target changes only the command-owned manifest;
+- disabled mode needs no manifest and makes zero metadata requests;
+- doctor uses aggregate contexts and the generated exact-target file;
+- uploader dry-run selects the correct virtual context for each Python payload;
+- cache tests keep test-result caching enabled, while strict fresh-payload
+  validation runs selected tests freshly.
+
+Invoke the consumer's managed command. Do not set the internal manifest handoff
+manually.
+
 ## Disabled Then Enabled On The Same Output Root
 
 Prove the config is the only user-facing switch before fetching live metadata:

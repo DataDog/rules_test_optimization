@@ -8,7 +8,11 @@ This product includes software developed at Datadog
 
 # Examples
 
-This folder shows concise usage patterns for single-service and multi-service setups. These snippets are meant to be copied into your repo; in this repository we also keep them buildable (`//examples/...`) as a regression guard.
+This folder shows concise usage patterns for static single-service, static
+multi-service, and consumer-managed Go/Python setups. Static snippets are meant
+to be copied into your repo; the managed example describes the boundary a
+repository-owned command implements. In this repository we also keep the
+existing static examples buildable (`//examples/...`) as a regression guard.
 
 Tip: commands use `bazel` for portability in consumer repos. In this
 repository, use `./bazelw` for local development convenience.
@@ -452,6 +456,63 @@ Dry-run mode for CI/debugging:
 - Set `RUNTESTS_DRY_RUN=1` when invoking `examples/*/runtests.sh` to print
   the commands that would run without executing Bazel test/upload operations.
 - PowerShell wrappers honor the same `RUNTESTS_DRY_RUN=1` environment variable.
+
+## Managed manifest (automatic Go/Python monorepo)
+
+This is deliberately separate from the static examples. Declare one aggregate
+repository without a service list:
+
+```bzl
+# MODULE.bazel
+topt_manifest = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync_extension",
+)
+topt_manifest.test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+use_repo(topt_manifest, "test_optimization_data")
+```
+
+A central consumer wrapper loads `topt_data_by_target`, computes the current
+full label, and uses the optimized companion only when the label is present:
+
+```bzl
+load("@test_optimization_data//:export.bzl", "topt_data_by_target")
+
+def dd_go_test(name, **kwargs):
+    label = "//%s:%s" % (native.package_name(), name)
+    topt_data = topt_data_by_target.get(label)
+    if topt_data == None:
+        _raw_dd_go_test(name = name, **kwargs)
+        return
+    dd_topt_go_test(name = name, topt_data = topt_data, **kwargs)
+```
+
+The equivalent central Python wrapper delegates selected labels to
+`dd_topt_py_test` and preserves its existing raw path otherwise. Real consumer
+wrappers must also preserve their repository-specific policy and companion
+targets.
+
+Wire doctor/uploader to the aggregate outputs:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
+        "@test_optimization_data//:test_optimization_context",
+    ],
+    expected_targets_file = "@test_optimization_data//:expected_targets",
+)
+```
+
+The temporary manifest and its Bazel environment handoff are owned by the
+consumer's managed command. They are not user configuration and are
+intentionally omitted from this copy/paste example. That command expands exact
+Go/Python labels, derives services, performs sync, runs those labels, then runs
+doctor and uploader dry-run. Adding a service means selecting its ordinary
+central-macro target; no committed service map or repository declaration is
+added.
 
 ## Multi-service (aggregator, Go-only example)
 

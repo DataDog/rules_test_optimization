@@ -16,6 +16,73 @@ load(
     "fail_with_prefix",
 )
 
+TestOptimizationContextsInfo = provider(
+    doc = "Invocation-scoped Test Optimization contexts keyed within one aggregate repository.",
+    fields = {
+        "context_files": "Dictionary mapping deterministic context keys to context.json files.",
+    },
+)
+
+def _dynamic_context_path_matches_key(path, context_key):
+    normalized = path.replace("\\", "/")
+    return normalized.endswith("/%s/.testoptimization/context.json" % context_key)
+
+def _test_optimization_context_bundle_impl(ctx):
+    if len(ctx.attr.contexts) != len(ctx.attr.context_keys):
+        fail_with_prefix(
+            "test_optimization_context_bundle",
+            "contexts and context_keys must have equal lengths",
+        )
+
+    context_files = {}
+    all_files = []
+    for index in range(len(ctx.attr.contexts)):
+        context_key = ctx.attr.context_keys[index]
+        if not context_key:
+            fail_with_prefix(
+                "test_optimization_context_bundle",
+                "context_keys entries must be non-empty",
+            )
+        if context_key in context_files:
+            fail_with_prefix(
+                "test_optimization_context_bundle",
+                "duplicate context key %r" % context_key,
+            )
+
+        dep_files = ctx.attr.contexts[index][DefaultInfo].files.to_list()
+        all_files.extend(dep_files)
+        candidates = [f for f in dep_files if f.basename == "context.json"]
+        if len(candidates) != 1:
+            fail_with_prefix(
+                "test_optimization_context_bundle",
+                "expected exactly one context.json for %r, found %d" %
+                (context_key, len(candidates)),
+            )
+        context_file = candidates[0]
+        if not _dynamic_context_path_matches_key(context_file.short_path, context_key):
+            fail_with_prefix(
+                "test_optimization_context_bundle",
+                "context %r must use <context-key>/.testoptimization/context.json layout, got %r" %
+                (context_key, context_file.short_path),
+            )
+        context_files[context_key] = context_file
+
+    files = depset(all_files)
+    return [
+        DefaultInfo(files = files, runfiles = ctx.runfiles(transitive_files = files)),
+        TestOptimizationContextsInfo(context_files = context_files),
+    ]
+
+test_optimization_context_bundle = rule(
+    implementation = _test_optimization_context_bundle_impl,
+    attrs = {
+        "contexts": attr.label_list(mandatory = True),
+        "context_keys": attr.string_list(mandatory = True),
+    },
+)
+
+dynamic_context_path_matches_key_for_tests = _dynamic_context_path_matches_key
+
 def context_manifest_content(entries):
     """Render deterministic context-manifest content from repo/path entries."""
     lines = []
@@ -109,6 +176,15 @@ def context_manifest_entries_or_fail(data_targets, data_files, failure_owner):
     """
     entries = {}
     for dep in data_targets:
+        if TestOptimizationContextsInfo in dep:
+            aggregate_repo_key = apparent_repo_key_or_fail(dep.label, failure_owner)
+            for context_key, context_file in dep[TestOptimizationContextsInfo].context_files.items():
+                repo_key = "%s_%s" % (aggregate_repo_key, context_key)
+                if repo_key in entries:
+                    fail_with_prefix(failure_owner, "duplicate bundled context repo name '%s'" % repo_key)
+                entries[repo_key] = (context_file.short_path, context_file.path)
+            continue
+
         repo_key = context_repo_key_or_none(dep.label, failure_owner)
         if repo_key == None:
             continue
