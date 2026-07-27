@@ -300,7 +300,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "cc8H+PwBLCld2fFbU/CAnDmFXupfV/Qj6+XdbJE98/k=",
+        "bzlTransitiveDigest": "A6ikJiKlwEi5hRrfBqTTwMADTITgDCpH46mkFqp1Avc=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

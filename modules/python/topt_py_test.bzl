@@ -24,6 +24,7 @@ load(
     "normalize_user_data",
     "resolve_files_label",
     "resolve_manifest_label",
+    "resolve_module_group_names",
     "resolve_module_labels",
     "resolve_topt_service_key",
     "select_service_entry_or_fail",
@@ -274,6 +275,11 @@ def dd_topt_py_test(
 
     files_label = resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
     module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
+    module_group_names = resolve_module_group_names(
+        _svc,
+        module_labels,
+        macro_name = "dd_topt_py_test",
+    )
     fallback_identifier = _build_python_fallback_identifier(native.package_name(), _python)
     selector_inputs = _resolve_python_selector_inputs(
         module_identifier = module_identifier,
@@ -296,6 +302,7 @@ def dd_topt_py_test(
         explicit_identifier = selector_inputs["explicit_identifier"],
         fallback_identifier = selector_inputs["fallback_identifier"],
         full_files = files_label,
+        module_group_names = module_group_names,
         module_groups = module_labels,
         include_per_module = selector_inputs["include_per_module"],
         module_label_override = module_label_override,

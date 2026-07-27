@@ -230,6 +230,10 @@ def _manifest_aggregate_rendering_test(ctx):
     )
     asserts.true(
         env,
+        '"module_group_names": ["module_github_com_datadog_dd_source_domains_payments_apps_api"]' in export_content,
+    )
+    asserts.true(
+        env,
         '"//domains/payments/apps/api:api_test": topt_data_by_context["payments_api__go"]' in export_content,
     )
     asserts.true(

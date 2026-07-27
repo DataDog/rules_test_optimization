@@ -289,6 +289,10 @@ def _context_topt_data(aggregate_repo_name, context_key, materialized):
         "@%s//:module_%s_%s" % (aggregate_repo_name, context_key, label)
         for label in materialized["labels"]
     ]
+    module_group_names = [
+        "module_%s" % label
+        for label in materialized["labels"]
+    ]
     return {
         "enabled": True,
         "repo_name": "%s_%s" % (aggregate_repo_name, context_key),
@@ -300,6 +304,7 @@ def _context_topt_data(aggregate_repo_name, context_key, materialized):
         "files_label": "@%s//:test_optimization_files_%s" % (aggregate_repo_name, context_key),
         "manifest_label": "@%s//:%s" % (aggregate_repo_name, materialized["manifest_file"]),
         "module_labels": module_labels,
+        "module_group_names": module_group_names,
         "context_label": "@%s//:test_optimization_context_%s" % (aggregate_repo_name, context_key),
     }
 

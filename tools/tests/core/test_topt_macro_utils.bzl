@@ -12,6 +12,7 @@ load(
     "merge_optional_env_defaults",
     "resolve_files_label",
     "resolve_manifest_label",
+    "resolve_module_group_names",
     "resolve_module_labels",
     "split_test_wrapper_kwargs_for_tests",
 )
@@ -103,6 +104,10 @@ def _explicit_payload_labels_precede_static_fallback_test(ctx):
             "@aggregate//:module_service_go_module_a",
             "@aggregate//:module_service_go_module_b",
         ],
+        "module_group_names": [
+            "module_module_a",
+            "module_module_b",
+        ],
         "labels": ["ignored_static_label"],
         "manifest_path": "ignored/static/manifest.txt",
     }
@@ -120,6 +125,15 @@ def _explicit_payload_labels_precede_static_fallback_test(ctx):
         env,
         explicit["module_labels"],
         resolve_module_labels(explicit, "virtual_repo", macro_name = "macro_for_tests"),
+    )
+    asserts.equals(
+        env,
+        explicit["module_group_names"],
+        resolve_module_group_names(
+            explicit,
+            explicit["module_labels"],
+            macro_name = "macro_for_tests",
+        ),
     )
 
     static = {
@@ -140,6 +154,15 @@ def _explicit_payload_labels_precede_static_fallback_test(ctx):
         env,
         ["@static_repo//:module_module_a"],
         resolve_module_labels(static, "static_repo", macro_name = "macro_for_tests"),
+    )
+    asserts.equals(
+        env,
+        [],
+        resolve_module_group_names(
+            static,
+            ["@static_repo//:module_module_a"],
+            macro_name = "macro_for_tests",
+        ),
     )
     return unittest.end(env)
 

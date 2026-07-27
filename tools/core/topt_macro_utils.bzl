@@ -262,6 +262,38 @@ def resolve_module_labels(topt_data, sync_repo_name, macro_name = "dd_topt_macro
         ]
     return build_module_labels(sync_repo_name, topt_data.get("labels"), macro_name = macro_name)
 
+def resolve_module_group_names(topt_data, module_labels, macro_name = "dd_topt_macro"):
+    """Return optional logical names for explicitly namespaced module labels."""
+    explicit = topt_data.get("module_group_names")
+    if explicit == None:
+        return []
+    if not is_list(explicit):
+        fail_with_prefix(
+            "topt_macro_utils",
+            "%s: selected service topt_data['module_group_names'] must be a list or tuple" %
+            macro_name,
+        )
+    if len(explicit) != len(module_labels):
+        fail_with_prefix(
+            "topt_macro_utils",
+            (
+                "%s: selected service topt_data['module_group_names'] must contain " +
+                "one entry per module_labels entry"
+            ) % macro_name,
+        )
+    names = []
+    for name in explicit:
+        if not is_string(name) or not name.startswith("module_"):
+            fail_with_prefix(
+                "topt_macro_utils",
+                (
+                    "%s: selected service topt_data['module_group_names'] entries " +
+                    "must be non-empty strings beginning with 'module_'"
+                ) % macro_name,
+            )
+        names.append(name)
+    return names
+
 def select_service_entry_or_fail(topt_data, topt_service, macro_name = "dd_topt_macro"):
     """Select single-service payload data from single or aggregated exports.
 

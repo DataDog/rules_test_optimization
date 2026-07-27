@@ -91,6 +91,7 @@ load(
     "selector_empty_importpath_fallback_test",
     "selector_explicit_miss_failure_target",
     "selector_explicit_miss_failure_test",
+    "selector_explicit_namespaced_test",
     "selector_explicit_precedence_target",
     "selector_explicit_precedence_test",
     "selector_fallback_target",
@@ -260,6 +261,18 @@ selector_explicit_precedence_target(
 selector_explicit_precedence_test(
     name = "selector_explicit_precedence_test",
     target_under_test = ":selector_explicit_precedence_target",
+)
+
+selector_explicit_precedence_target(
+    name = "selector_explicit_namespaced_target",
+    module_group_names = ["module_example_com_explicit_pkg"],
+    module_groups = [":module_manifest_context_example_com_explicit_pkg"],
+    tags = ["manual"],
+)
+
+selector_explicit_namespaced_test(
+    name = "selector_explicit_namespaced_test",
+    target_under_test = ":selector_explicit_namespaced_target",
 )
 
 selector_embed_precedence_target(
@@ -807,6 +820,7 @@ test_suite(
         ":selector_embed_precedence_test",
         ":selector_empty_importpath_fallback_test",
         ":selector_explicit_miss_failure_test",
+        ":selector_explicit_namespaced_test",
         ":selector_explicit_precedence_test",
         ":selector_fallback_test",
         ":selector_include_disabled_test",

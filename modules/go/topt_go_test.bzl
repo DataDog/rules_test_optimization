@@ -68,6 +68,7 @@ load(
     "normalize_user_data",
     "resolve_files_label",
     "resolve_manifest_label",
+    "resolve_module_group_names",
     "resolve_module_labels",
     "resolve_topt_service_key",
     "service_mapping_entries",
@@ -447,6 +448,11 @@ def dd_topt_go_test(
     # Use exported sanitized labels directly to avoid re-deriving naming policy
     # in the macro and drifting from sync-side label generation.
     module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+    module_group_names = resolve_module_group_names(
+        _svc,
+        module_labels,
+        macro_name = "dd_topt_go_test",
+    )
 
     # Fallback importpath when providers are unavailable: go_module_path + Bazel package
     pkg_path = native.package_name()
@@ -477,6 +483,7 @@ def dd_topt_go_test(
         explicit_importpath = explicit_importpath,
         fallback_importpath = fallback_importpath,
         full_files = files_label,
+        module_group_names = module_group_names,
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override,
@@ -493,6 +500,7 @@ def dd_topt_go_test(
         embeds = embed_labels,
         explicit_importpath = explicit_importpath or "",
         fallback_importpath = fallback_importpath or "",
+        module_group_names = module_group_names,
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override or "",

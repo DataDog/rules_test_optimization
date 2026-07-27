@@ -74,7 +74,12 @@ def _resolve_payload_selection(ctx):
         ctx.attr.fallback_importpath or "",
     )
 
-    module_group_names = [m.label.name for m in ctx.attr.module_groups]
+    module_group_names = ctx.attr.module_group_names
+    if module_group_names:
+        if len(module_group_names) != len(ctx.attr.module_groups):
+            fail("module_group_names must contain one entry per module_groups entry")
+    else:
+        module_group_names = [m.label.name for m in ctx.attr.module_groups]
     strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
         bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
     )
@@ -89,9 +94,9 @@ def _resolve_payload_selection(ctx):
 
     chosen = None
     if selected_name:
-        for module_group in ctx.attr.module_groups:
-            if module_group.label.name == selected_name:
-                chosen = module_group
+        for index in range(len(module_group_names)):
+            if module_group_names[index] == selected_name:
+                chosen = ctx.attr.module_groups[index]
                 break
 
     if chosen != None:
@@ -266,6 +271,9 @@ topt_go_payloads_selector = rule(
         # All per-module filegroups (e.g., @repo//:module_<sanitized>)
         "module_groups": attr.label_list(),
 
+        # Optional logical names parallel to module_groups for namespaced repos.
+        "module_group_names": attr.string_list(),
+
         # Whether to prefer per-module files when available
         "include_per_module": attr.bool(default = True),
 
@@ -280,6 +288,7 @@ topt_go_bazel_metadata = rule(
         "embeds": attr.label_list(aspects = [_importpath_aspect]),
         "explicit_importpath": attr.string(),
         "fallback_importpath": attr.string(),
+        "module_group_names": attr.string_list(),
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),

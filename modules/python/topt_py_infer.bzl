@@ -94,7 +94,12 @@ def _select_from_candidates(candidates, module_group_names, include_per_module, 
     return ""
 
 def _topt_py_payloads_selector_impl(ctx):
-    module_group_names = [m.label.name for m in ctx.attr.module_groups]
+    module_group_names = ctx.attr.module_group_names
+    if module_group_names:
+        if len(module_group_names) != len(ctx.attr.module_groups):
+            fail("module_group_names must contain one entry per module_groups entry")
+    else:
+        module_group_names = [m.label.name for m in ctx.attr.module_groups]
 
     explicit_identifier = _normalize_python_identifier(ctx.attr.explicit_identifier)
     selected_name = ""
@@ -143,9 +148,9 @@ def _topt_py_payloads_selector_impl(ctx):
 
     chosen = None
     if selected_name:
-        for m in ctx.attr.module_groups:
-            if m.label.name == selected_name:
-                chosen = m
+        for index in range(len(module_group_names)):
+            if module_group_names[index] == selected_name:
+                chosen = ctx.attr.module_groups[index]
                 break
 
     source = chosen if chosen != None else ctx.attr.full_files
@@ -170,6 +175,7 @@ topt_py_payloads_selector = rule(
         "explicit_identifier": attr.string(),
         "fallback_identifier": attr.string(),
         "full_files": attr.label(),
+        "module_group_names": attr.string_list(),
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),
