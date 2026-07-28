@@ -1003,11 +1003,13 @@ def _py_macro_fallback_payloads_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     paths = [file.short_path for file in target[DefaultInfo].files.to_list()]
+    package_suffix = ctx.label.package.replace("/", "_")
+    expected_module_name = "module_example_python_%s" % package_suffix
 
     expected_module_known_tests = False
     full_bundle_known_tests = False
     for path in paths:
-        if path.endswith("/.testoptimization/module_example_python_modules_python_tests/known_tests.json"):
+        if path.endswith("/.testoptimization/%s/known_tests.json" % expected_module_name):
             expected_module_known_tests = True
         if path.endswith("/.testoptimization/cache/http/known_tests.json"):
             full_bundle_known_tests = True
@@ -1015,7 +1017,7 @@ def _py_macro_fallback_payloads_test_impl(ctx):
     asserts.true(
         env,
         expected_module_known_tests,
-        msg = "macro-generated selector must expose module_example_python_modules_python_tests: %s" % paths,
+        msg = "macro-generated selector must expose %s: %s" % (expected_module_name, paths),
     )
     asserts.false(
         env,

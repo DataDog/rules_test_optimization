@@ -222,6 +222,10 @@ function Render-UploaderTemplate {
     "__DDTPL_CONTEXT_MANIFEST_PATH__" = $ContextManifestPath
     "__DDTPL_CONTEXT_JSON_RLOC__" = ""
     "__DDTPL_CONTEXT_JSON_PATH__" = $ContextJsonPath
+    "__DDTPL_EXPECTED_TARGETS_RLOC__" = ""
+    "__DDTPL_EXPECTED_TARGETS_PATH__" = ""
+    "__DDTPL_EXPECTED_TARGETS_FILE_RLOC__" = ""
+    "__DDTPL_EXPECTED_TARGETS_FILE_PATH__" = ""
     "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__" = ""
     "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__" = $TelemetryFactsManifestPath
     "__DDTPL_SCHEMA_JSON_RLOC__" = ""
