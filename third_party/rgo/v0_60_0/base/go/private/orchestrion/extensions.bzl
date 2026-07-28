@@ -113,23 +113,31 @@ def _git_env(ctx):
         "GIT_TERMINAL_PROMPT": "0",
     }
 
+def _go_module_fetch_env(ctx):
+    host_env = ctx.os.environ
+    return {
+        # Allow consumers to provide an internal or authenticated module proxy,
+        # while keeping private-module resolution on that proxy instead of
+        # falling back to host Git configuration.
+        "GOPRIVATE": "",
+        "GONOPROXY": "",
+        "GONOSUMDB": (host_env.get("GONOSUMDB") or "").strip(),
+        "GOPROXY": (host_env.get("GOPROXY") or "").strip() or "https://proxy.golang.org,direct",
+        # Use the public checksum database directly. Some internal module
+        # proxies expose SumDB endpoints that are reachable only inside CI.
+        "GOSUMDB": "sum.golang.org https://sum.golang.org",
+    }
+
 def _go_env(ctx):
     go_cache_root = _bootstrap_go_cache_root(ctx)
     env = {
         "GO111MODULE": "on",
         "GOWORK": "off",
         "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
-        # Repository resolution only needs public modules. Clear host-specific
-        # private-module settings so bootstrap does not silently fall back to
-        # direct VCS fetches based on the developer environment.
-        "GOPRIVATE": "",
-        "GONOPROXY": "",
-        "GONOSUMDB": "",
-        "GOPROXY": "https://proxy.golang.org,direct",
-        "GOSUMDB": "sum.golang.org",
         "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
         "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
     }
+    env.update(_go_module_fetch_env(ctx))
     env.update(_git_env(ctx))
     return env
 
@@ -1184,6 +1192,7 @@ orchestrion_extension_test_helpers = struct(
     declared_go_tool_identity = _declared_go_tool_identity,
     fallback_go_tool_identity = _fallback_go_tool_identity,
     git_env = _git_env,
+    go_module_fetch_env = _go_module_fetch_env,
     host_path_is_writable = _host_path_is_writable,
     module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
     module_proxy_seed_go_mod = _module_proxy_seed_go_mod,
@@ -1578,7 +1587,11 @@ _orchestrion_build = repository_rule(
         "go_sdk_version": attr.string(default = "", doc = "Optional declared version for go_sdk_root; enables cache lookup before materializing the SDK and is verified on cache miss"),
         "log_timing": attr.bool(default = False, doc = "Emit structured timing probes while building Orchestrion"),
     },
-    environ = [_TEST_OPTIMIZATION_ENABLED_ENV],
+    environ = [
+        _TEST_OPTIMIZATION_ENABLED_ENV,
+        "GONOSUMDB",
+        "GOPROXY",
+    ],
 )
 
 def _orchestrion_empty_impl(ctx):

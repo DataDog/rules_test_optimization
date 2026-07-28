@@ -766,7 +766,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "TipoTsnlSwLpc+599F2OOE9hp9X+SR1jJ6c1X0wdFVY=",
+        "bzlTransitiveDigest": "k6TuFeNdo4I01jk91s4xBDhniwJJf3syb0kGpA/q7QA=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

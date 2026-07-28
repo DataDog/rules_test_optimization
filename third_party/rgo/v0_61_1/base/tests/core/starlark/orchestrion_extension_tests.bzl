@@ -149,6 +149,38 @@ def _git_env_test(ctx):
 
 git_env_test = unittest.make(_git_env_test)
 
+def _go_module_fetch_env_test(ctx):
+    env = unittest.begin(ctx)
+
+    default_env = orchestrion_extension_test_helpers.go_module_fetch_env(
+        struct(os = struct(environ = {})),
+    )
+    asserts.equals(env, "https://proxy.golang.org,direct", default_env["GOPROXY"])
+    asserts.equals(env, "", default_env["GONOSUMDB"])
+    asserts.equals(env, "", default_env["GOPRIVATE"])
+    asserts.equals(env, "", default_env["GONOPROXY"])
+    asserts.equals(env, "sum.golang.org https://sum.golang.org", default_env["GOSUMDB"])
+
+    configured_env = orchestrion_extension_test_helpers.go_module_fetch_env(
+        struct(
+            os = struct(
+                environ = {
+                    "GONOSUMDB": "github.com/DataDog",
+                    "GOPROXY": "https://proxy.example.test,direct",
+                },
+            ),
+        ),
+    )
+    asserts.equals(env, "https://proxy.example.test,direct", configured_env["GOPROXY"])
+    asserts.equals(env, "github.com/DataDog", configured_env["GONOSUMDB"])
+    asserts.equals(env, "", configured_env["GOPRIVATE"])
+    asserts.equals(env, "", configured_env["GONOPROXY"])
+    asserts.equals(env, "sum.golang.org https://sum.golang.org", configured_env["GOSUMDB"])
+
+    return unittest.end(env)
+
+go_module_fetch_env_test = unittest.make(_go_module_fetch_env_test)
+
 def _fallback_go_tool_identity_test(ctx):
     env = unittest.begin(ctx)
 
@@ -216,6 +248,7 @@ def orchestrion_extension_test_suite():
         declared_go_tool_identity_test,
         fallback_go_tool_identity_test,
         git_env_test,
+        go_module_fetch_env_test,
         host_platform_normalization_test,
         module_proxy_resolved_modules_json_test,
         module_proxy_seed_go_mod_test,
