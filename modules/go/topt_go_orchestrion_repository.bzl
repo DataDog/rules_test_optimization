@@ -13,18 +13,34 @@ load(
 
 _DEFAULT_TOOL_REPO_NAME = "rules_go_orchestrion_tool"
 
+def _configured_version_modes(dd_trace_go_version, dd_trace_go_versions, dd_trace_go_pin_files):
+    return len([
+        value
+        for value in [
+            dd_trace_go_version,
+            dd_trace_go_versions,
+            dd_trace_go_pin_files,
+        ]
+        if value
+    ])
+
 def _build_orchestrion_repo_call(
         dd_trace_go_version = "",
         dd_trace_go_versions = {},
+        dd_trace_go_pin_files = [],
         version = "",
         go_sdk_root = "",
         go_sdk_version = "",
         log_timing = False):
     """Build the fixed-name public rules_go repository call."""
+    if _configured_version_modes(dd_trace_go_version, dd_trace_go_versions, dd_trace_go_pin_files) > 1:
+        fail("dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive")
+
     call = {
         "name": _DEFAULT_TOOL_REPO_NAME,
         "dd_trace_go_version": dd_trace_go_version,
         "dd_trace_go_versions": dd_trace_go_versions,
+        "dd_trace_go_pin_files": dd_trace_go_pin_files,
         "enabled_by_env": True,
         "version": version,
         "log_timing": log_timing,
@@ -38,6 +54,7 @@ def _build_orchestrion_repo_call(
 def dd_topt_go_orchestrion_tool_repo(
         dd_trace_go_version = "",
         dd_trace_go_versions = {},
+        dd_trace_go_pin_files = [],
         version = "",
         go_sdk_root = "",
         go_sdk_version = "",
@@ -46,6 +63,7 @@ def dd_topt_go_orchestrion_tool_repo(
     go_orchestrion_tool_repo(**_build_orchestrion_repo_call(
         dd_trace_go_version = dd_trace_go_version,
         dd_trace_go_versions = dd_trace_go_versions,
+        dd_trace_go_pin_files = dd_trace_go_pin_files,
         version = version,
         go_sdk_root = go_sdk_root,
         go_sdk_version = go_sdk_version,

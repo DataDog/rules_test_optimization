@@ -134,6 +134,7 @@ load(
     "go_workspace_single_specs_test",
     "go_workspace_specs_default_to_config_gated_test",
     "orchestrion_call_spec_test",
+    "orchestrion_pin_file_call_spec_test",
 )
 
 # Go-specific Starlark tests for orchestration selection and macro wiring.
@@ -185,6 +186,12 @@ orchestrion_call_spec_test(
     timeout = "short",
 )
 
+orchestrion_pin_file_call_spec_test(
+    name = "orchestrion_pin_file_call_spec_test",
+    size = "small",
+    timeout = "short",
+)
+
 test_suite(
     name = "workspace_helpers_tests",
     tests = [
@@ -192,6 +199,7 @@ test_suite(
         ":go_workspace_single_specs_test",
         ":go_workspace_specs_default_to_config_gated_test",
         ":orchestrion_call_spec_test",
+        ":orchestrion_pin_file_call_spec_test",
     ],
 )
 

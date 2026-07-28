@@ -264,7 +264,10 @@ load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl",
 load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_workspace_sync_repositories")
 
 dd_topt_go_orchestrion_tool_repo(
-    dd_trace_go_version = "v2.9.0",
+    dd_trace_go_pin_files = [
+        "@//:go.mod",
+        "@//:go.sum",
+    ],
     go_sdk_root = "@go_sdk//:ROOT",
     go_sdk_version = "<go-version>",
     version = "v1.9.0",
@@ -285,6 +288,12 @@ dd_topt_go_workspace_sync_repositories(
 
 The public Go helper is config-gated by default. Do not add a second enable
 attribute to each repository or test target.
+
+Export the root `go.mod` and `go.sum` from its BUILD package. This normal
+pin-file mode derives all supported direct and transitive tracer versions with
+the Bazel-managed SDK and `-mod=readonly`; it does not modify the consumer
+module. Use `dd_trace_go_version` or `dd_trace_go_versions` only as a mutually
+exclusive escape hatch when the module graph cannot be resolved this way.
 
 `@go_sdk//:ROOT` is the SDK registered by the repository's existing
 `go_register_toolchains(version = "<go-version>")` call. Keep
@@ -356,8 +365,9 @@ invariant is that every label used in `orchestrion_pin_files` is visible from
 the target packages that call the wrapper.
 
 Update `go.mod` and `go.sum` using the repository's normal Go module workflow
-so the final test binary can resolve the packages injected by Orchestrion. Keep
-the dd-trace-go version coherent with `go_orchestrion_tool_repo`.
+so the final test binary can resolve the packages injected by Orchestrion. The
+tool repository derives its tracer versions from those same files; do not add a
+duplicate version declaration.
 
 For large monorepos where root-level tool imports would churn the main module,
 do not add a root `orchestrion.tool.go` only for Test Optimization. Keep the

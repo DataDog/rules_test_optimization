@@ -278,13 +278,17 @@ Symptoms:
 
 Checks:
 
-- Bootstrap should resolve one coherent tracer version set.
+- Normal manual wiring should derive one coherent tracer version set from the
+  checked-in `go.mod` and `go.sum` through `dd_trace_go_pin_files`.
 - The Go module must resolve packages injected into the final test binary.
-- Do not maintain two conflicting tracer versions between Orchestrion tooling
-  and the target's Go module.
+- Pin-file resolution requires a Bazel-managed Go SDK and runs
+  `go list -m -mod=readonly`; it does not repair `go.sum`.
+- Do not maintain a duplicate tracer version between Orchestrion tooling and
+  the target's Go module.
 
-If the repository needs a different tracer version, make that an explicit
-version decision and validate with real tests, doctor, dry-run, and upload.
+If a supported module is genuinely absent or the copied module graph cannot be
+resolved read-only, use the explicit per-module version-map escape hatch and
+validate it with real tests, doctor, dry-run, and upload.
 
 ## Local Disk Pressure
 

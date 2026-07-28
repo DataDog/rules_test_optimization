@@ -98,7 +98,8 @@ Manual Orchestrion wiring in `MODULE.bazel` accepts:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `orchestrion.from_source(..., dd_trace_go_version = "...")` | `v2.9.0` | Shared canonical tracer version that Bazel validates against the target Go module and uses for synthetic fallback paths |
+| `orchestrion.from_source(..., dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"])` | none | Preferred consumer mode. Derives exact direct and transitive supported tracer versions from one checked-in `go.mod` and `go.sum` using the Bazel-managed Go SDK and `-mod=readonly` |
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | legacy `v2.9.0` when no selection mode is set | Explicit shared-version escape hatch that Bazel validates against the target Go module |
 | `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact canonical per-module tracer versions that Bazel validates against the target Go module for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
 | `orchestrion.from_source(..., go_sdk_root = "@repo//:ROOT")` | none | Bazel-managed Go SDK root used to build Orchestrion instead of discovering a host `go` binary |
 | `orchestrion.from_source(..., go_sdk_version = "...")` | none | Exact version of `go_sdk_root`; enables bootstrap-cache lookup before SDK materialization and is verified after materialization on a miss |
@@ -106,6 +107,10 @@ Manual Orchestrion wiring in `MODULE.bazel` accepts:
 Notes:
 
 - The selected version is workspace-wide for Go. There is no per-test override.
+- Pin-file mode is the normal consumer path. It requires exactly one file named
+  `go.mod` and one named `go.sum`, requires `go_sdk_root`, never uses host Go,
+  and never edits either file. If a supported tracer module is absent or the
+  copied module cannot be resolved read-only, use the explicit per-module map.
 - Guided bootstrap declares `go_sdk_root` and `go_sdk_version` from
   `--runtime-version`. Manual wiring must set both together and keep the version
   equal to the registered Go toolchain and Test Optimization `runtime_version`.
@@ -127,8 +132,8 @@ Notes:
 - Bootstrap refuses to proceed when active tracer settings already exist in
   `orchestrion.from_source(...)` calls outside its managed block. Those manual
   settings must be removed or migrated first.
-- Do not set both `dd_trace_go_version` and `dd_trace_go_versions` in the same
-  `orchestrion.from_source(...)` call.
+- `dd_trace_go_pin_files`, `dd_trace_go_version`, and
+  `dd_trace_go_versions` are mutually exclusive.
 - If the workspace setting and the effective local Go module versions differ,
   the build fails instead of mixing versions.
 
@@ -254,6 +259,14 @@ consumer-owned managed command. It is not a public rollout switch and must not
 be added to a user's `.bazelrc` or set in ordinary jobs. Enabled resolution
 requires it to name a valid schema-v1 manifest; disabled resolution ignores it.
 
+One managed command invocation must keep that exact manifest path and
+environment value for test, doctor, uploader dry-run, and optional upload.
+Those phases therefore share one resolved repository snapshot. A later command
+invocation owns a new temporary manifest path and performs one new fetch round.
+Equivalent backend settings and module payloads remain byte-identical test
+inputs, preserving Bazel test-result cache hits. `telemetry_facts.json` is
+doctor/uploader context and must not be added to test action inputs.
+
 Schema v1 contains:
 
 - non-empty `contexts`, each with deterministic `key`, `service`, and a
@@ -291,6 +304,8 @@ Rule: `dd_payload_uploader(...)`
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
+| `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; only fresh outputs are inspected or uploaded |
+| `expected_targets_file` | label | unset | Optional schema-v1 exact-target file. Static and file inputs must match when both are non-empty |
 
 ## Doctor rule attributes
 
@@ -361,11 +376,11 @@ workspace root package.
 | `sync_repo_name` | string | `"test_optimization_data"` | Repository exposing `:test_optimization_context` |
 | `doctor_name` | string | `"dd_test_optimization_doctor"` | Generated doctor target name |
 | `uploader_name` | string | `"dd_upload_payloads"` | Generated uploader target name |
-| `expected_targets` | string_list | `[]` | Strict labels passed to the doctor. List only instrumented runtime test targets that emit payloads |
-| `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to the doctor for manifest-driven invocations |
+| `expected_targets` | string_list | `[]` | Strict labels passed to both doctor and uploader. List only instrumented runtime test targets that emit payloads |
+| `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to both doctor and uploader for manifest-driven invocations |
 | `context_data` | label_list or `None` | `["@<sync_repo>//:test_optimization_context"]` | Explicit context data labels when the default sync repo label is not enough |
-| `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, or `expected_targets` |
-| `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name` or `data` |
+| `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |
+| `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |
 
 Example:
 

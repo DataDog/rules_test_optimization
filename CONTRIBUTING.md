@@ -250,6 +250,10 @@ This product includes software developed at Datadog
 - Manifest normalization and repository rendering are deterministic: equivalent
   input order must produce byte-identical exports, BUILD content, and
   expected-target JSON.
+- One managed invocation must reuse one manifest path and metadata snapshot
+  across test, doctor, dry-run, and upload. A second invocation refetches once;
+  unchanged stable metadata must retain Bazel test-result cache hits, while
+  telemetry timing facts remain outside test action inputs.
 - The manifest-driven API is additive. Do not change static single-service or
   static multi-service semantics while modifying it.
 - Validate cross-repository rollout in this order:
@@ -269,7 +273,8 @@ This product includes software developed at Datadog
   exact target-set validation, disabled no-fetch behavior, and deterministic
   rendering.
 - [ ] For Go Orchestrion changes, documented any `orchestrion_mode` behavior,
-  unsupported `testify/suite` scope, opt-out flags, and payload metadata changes.
+  pin-file or explicit-version behavior, unsupported `testify/suite` scope,
+  opt-out flags, and payload metadata changes.
 - [ ] Updated `LICENSE-3rdparty.csv` for dependency or vendored-code changes.
 - [ ] Confirmed no stale references to removed legacy paths (for example
   `//tools/go:*`, replaced by `modules/go/...` targets).

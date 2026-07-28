@@ -59,6 +59,14 @@ A managed command owns two Bazel phases behind one user-facing entrypoint:
 4. run the workspace doctor against the generated exact-target list, then run
    uploader dry-run and optional upload.
 
+The command reuses one manifest path and one resolved metadata snapshot for
+test, doctor, dry-run, and upload. A later command invocation creates a new
+manifest path and fetches current backend state once. When the selected
+settings and module payloads are unchanged, those stable test inputs remain
+byte-identical and normal Bazel test-result cache hits are preserved.
+`telemetry_facts.json` may contain different request timings between
+invocations, but it is post-test context and is not a test action input.
+
 Adding or removing a target from the managed invocation changes the temporary
 manifest; it does not require a committed target-to-service registry or
 per-service repository declaration. The rules in this repository consume that
@@ -1477,8 +1485,12 @@ tools/test_optimization/run_test_optimization_ci.sh //...
 
 The wrapper creates a temporary BEP file for each Bazel test invocation and
 passes those files to doctor/uploader as repeatable `--bep-json` flags. The
-default freshness source/mode is `auto`: when BEP is explicitly configured the
-uploader uses it, otherwise it can use an explicitly configured legacy
+doctor accounts for configured expected targets using the union of fresh and
+cached BEP results, but validates payloads only from fresh outputs. An
+all-cached expected-target invocation is therefore a successful no-op. The
+uploader applies the same freshness filter and never uploads cached outputs.
+The default freshness source/mode is `auto`: when BEP is explicitly configured,
+the uploader uses it; otherwise it can use an explicitly configured legacy
 execution-log fallback. Artifact discovery defaults to local `bazel-testlogs`
 unless the wrapper or CLI sets `--artifact-source=bep`. In CI, uploads fail
 closed unless an explicit freshness source is available; outside CI the uploader
@@ -1782,9 +1794,8 @@ therefore do not depend on a host `go` binary. The declaration is workspace-wide
 and is not repeated for each service or test.
 
 If you wire Orchestrion manually instead of using bootstrap, declare the same
-SDK and pass it together with the tracer versions in `MODULE.bazel`.
-
-Shared-version form:
+SDK and let Bazel derive the selected tracer module versions from the
+repository's checked-in `go.mod` and `go.sum`:
 
 ```bzl
 test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
@@ -1797,14 +1808,22 @@ use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0",
+    dd_trace_go_pin_files = [
+        "@//:go.mod",
+        "@//:go.sum",
+    ],
     go_sdk_root = "@test_optimization_go_sdk//:ROOT",
     go_sdk_version = "<go-version>",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
 
-Per-module form:
+The root package must export those two files. Pin-file mode resolves direct and
+transitive supported dd-trace-go modules with the Bazel-managed SDK and
+`-mod=readonly`; it does not modify the consumer module.
+
+Use an explicit shared or per-module version only as an escape hatch for a
+module graph that pin-file mode cannot resolve:
 
 ```bzl
 test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
@@ -1832,11 +1851,11 @@ The maintained repository integration scripts validate the hermetic Go path
 with explicit Bazel flags in the script itself. There is no special repo-root
 `--config=hermetic` shortcut for this flow.
 
-If both settings are omitted, the default is still
-`v2.9.0`. Manual setups must keep the local Go
-module pins on the same effective versions, or the build will stop with a
-mismatch error. Do not set both `dd_trace_go_version` and `dd_trace_go_versions`
-in the same `orchestrion.from_source(...)` call.
+If all three selection settings are omitted, the legacy default is still
+`v2.9.0`. Manual setups must keep the local Go module pins on the same effective
+versions, or the build will stop with a mismatch error. Do not combine
+`dd_trace_go_pin_files`, `dd_trace_go_version`, or `dd_trace_go_versions` in
+the same `orchestrion.from_source(...)` call.
 Bootstrap also refuses to take over tracer settings that are already managed
 manually outside its own managed block.
 

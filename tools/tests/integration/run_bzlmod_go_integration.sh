@@ -27,6 +27,7 @@ set -euo pipefail
 #
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PIN_GRAPH_FIXTURE="$REPO_ROOT/tools/tests/integration/fixtures/orchestrion_pin_graph"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_bzlmod_go.XXXXXX")"
 WORKSPACE_ROOT="$TMP_ROOT/workspaces"
 ARCHIVE_ROOT="$TMP_ROOT/archive_root"
@@ -52,6 +53,9 @@ FORBID_HOST_GO="${FORBID_HOST_GO:-0}"
 EXPECTED_ORCHESTRION_CACHE_PHASE="${EXPECTED_ORCHESTRION_CACHE_PHASE:-}"
 HOST_GO_SENTINEL_LOG=""
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0}"
+PIN_ROOT_VERSION="v2.9.1-rc.3"
+PIN_HTTP_VERSION="v2.9.1-rc.3"
+PIN_SLOG_VERSION="v2.3.0"
 SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_bzlmod_go_integration}"
@@ -90,6 +94,47 @@ BAZEL_EXTRA_ARGS+=(
 )
 
 source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
+
+assert_pin_version_file() {
+  local ws_dir="$1"
+  local files_list="$2"
+  shift 2
+  local execution_root
+  local output_base
+  local version_file
+
+  execution_root="$(
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "$@" execution_root
+  )"
+  output_base="$(
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "$@" output_base
+  )"
+  version_file="$(head -n 1 "$files_list")"
+  if [[ "$version_file" != /* && ! "$version_file" =~ ^[A-Za-z]:[/\\] ]]; then
+    if [[ "$version_file" == external/* ]]; then
+      version_file="$output_base/$version_file"
+    else
+      version_file="$execution_root/$version_file"
+    fi
+  fi
+  "$PYTHON" - "$version_file" "$PIN_ROOT_VERSION" "$PIN_HTTP_VERSION" "$PIN_SLOG_VERSION" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+versions = json.loads(path.read_text(encoding="utf-8"))["modules"]
+expected = {
+    "github.com/DataDog/dd-trace-go/v2": sys.argv[2],
+    "github.com/DataDog/dd-trace-go/contrib/net/http/v2": sys.argv[3],
+    "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": sys.argv[4],
+}
+if versions != expected:
+    raise SystemExit(f"resolved pin versions mismatch: got {versions!r}, expected {expected!r}")
+PY
+}
 
 shutdown_bazel_workspace_servers() {
   local workspace_dir
@@ -911,19 +956,8 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 }
 EOF
 
-  cat > "$ws_dir/go.mod" <<EOF
-module ${MODULE_IMPORTPATH}
-
-go ${GO_VERSION}
-
-require (
-	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 ${DD_TRACE_GO_VERSION}
-	github.com/DataDog/dd-trace-go/contrib/net/http/v2 ${DD_TRACE_GO_VERSION}
-	github.com/DataDog/dd-trace-go/v2 ${DD_TRACE_GO_VERSION}
-	github.com/DataDog/orchestrion ${ORCHESTRION_VERSION}
-)
-EOF
-  write_orchestrion_go_sum "$ws_dir"
+  cp "$PIN_GRAPH_FIXTURE/go.mod" "$ws_dir/go.mod"
+  cp "$PIN_GRAPH_FIXTURE/go.sum" "$ws_dir/go.sum"
 
   cat > "$ws_dir/orchestrion.tool.go" <<'EOF'
 //go:build tools
@@ -932,7 +966,6 @@ package tools
 
 import (
 	_ "github.com/DataDog/orchestrion" // integration
-	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
 	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"      // integration
 )
@@ -948,43 +981,16 @@ aspects: []
 EOF
 }
 
-# write_orchestrion_go_sum keeps the maintained fixture on a real checked-in
-# style go.sum for the default tracer/tool versions. Only ad hoc version
-# overrides fall back to generating go.sum dynamically.
-write_orchestrion_go_sum() {
-  local ws_dir="$1"
-
-  if [[ "$ORCHESTRION_VERSION" == "$ORCHESTRION_DISABLED_SENTINEL_VERSION" ]]; then
-    : > "$ws_dir/go.sum"
-    return
-  fi
-
-  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0" && "$ORCHESTRION_VERSION" == "v1.9.0" ]]; then
-    cat > "$ws_dir/go.sum" <<'EOF'
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0 h1:o5PABRmFQQ1uJcog3PnNF9+182EODnjHB6fjGTFkOIs=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0/go.mod h1:+wuXa6KiqwWqg3J29gSFcRqu4hxTIJ2twz7BhjZ933Q=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0 h1:bkNoThs8Y2i1pt4eoSWq2QhQ84qAoSZRtuHyQgXbDUE=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0/go.mod h1:IublECGcvP3j2VkSyyfD3vhC/QcbwWigkQyzzQY15eY=
-github.com/DataDog/dd-trace-go/v2 v2.9.0 h1:J/EsZ7nPqkf3Pa56AAre306ylYMhtzz6oylmchqc6JA=
-github.com/DataDog/dd-trace-go/v2 v2.9.0/go.mod h1:SdMkCESSBc2knx56Xol2pO7jhMDPi7MxyNj6vRYMW48=
-github.com/DataDog/orchestrion v1.9.0 h1:TmjQfgaIMZDnGAmNXHIw5P7R+q4hOEJN5B/S24IqbKA=
-github.com/DataDog/orchestrion v1.9.0/go.mod h1:FvbdNvK2PY3YnEIw0MHqdBELhZ0P7nUpWaJB3TgUtNE=
-EOF
-    return
-  fi
-
-  require_command "$GO_BIN" "go binary not found for ad hoc go.sum generation (tried '$GO_BIN')"
-  (
-    cd "$ws_dir"
-    GOWORK=off "$GO_BIN" mod download all
-  )
-}
-
 write_module_file() {
   local ws_dir="$1"
+  local version_mode="${2:-pin_files}"
   local archive_url_bzl
+  local explicit_version_line=""
 
   archive_url_bzl="$(bzl_quote "$ARCHIVE_URL")"
+  if [[ "$version_mode" == "conflicting_pin_version" ]]; then
+    explicit_version_line="    dd_trace_go_version = \"${DD_TRACE_GO_VERSION}\","
+  fi
 
   cat > "$ws_dir/MODULE.bazel" <<EOF
 module(name = "bzlmod_go_integration")
@@ -1040,13 +1046,52 @@ use_repo(test_optimization, "test_optimization_data")
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "${ORCHESTRION_VERSION}",
-    dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
+    dd_trace_go_pin_files = [
+        "//:go.mod",
+        "//:go.sum",
+    ],
+${explicit_version_line}
     go_sdk_root = "@test_optimization_go_sdk//:ROOT",
     go_sdk_version = "${GO_VERSION}",
     log_timing = True,
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 EOF
+}
+
+run_conflicting_pin_mode_failure() {
+  local ws_dir="$WORKSPACE_ROOT/conflicting-pin-version"
+  local output_path="$ws_dir/conflicting-pin-version.log"
+
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  write_module_file "$ws_dir" "conflicting_pin_version"
+  write_shared_fixture_sources "$ws_dir"
+  write_fixture_bazelrc "$ws_dir" "rules_go"
+
+  set +e
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+      --enable_bzlmod \
+      --config=test-optimization \
+      "@rules_go//go/private/orchestrion:dd_trace_go_version_file" \
+      --output=files
+  ) >"$output_path" 2>&1
+  local rc=$?
+  set -e
+
+  if [[ $rc -eq 0 ]]; then
+    echo "error: expected conflicting Bzlmod tracer version modes to fail" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+  if ! grep -F "dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive" "$output_path" >/dev/null 2>&1; then
+    echo "error: conflicting Bzlmod tracer version modes did not fail with the expected guidance" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
 }
 
 run_fixture() {
@@ -1458,6 +1503,10 @@ run_windows_enabled_smoke() {
       exit 1
     fi
   done
+  assert_pin_version_file \
+    "$ws_dir" \
+    "$TMP_ROOT/windows-enabled-bzlmod-dd_trace_go_version_file.files" \
+    "${enabled_flags[@]}"
 
   if [[ -n "$EXPECTED_ORCHESTRION_CACHE_PHASE" ]]; then
     if ! grep -F "phase=\"$EXPECTED_ORCHESTRION_CACHE_PHASE\"" "$TMP_ROOT"/windows-enabled-bzlmod-*.log >/dev/null 2>&1; then
@@ -1556,4 +1605,5 @@ if [[ "$INTEGRATION_SCENARIO_MODE" != "full" ]]; then
 fi
 
 run_fixture
+run_conflicting_pin_mode_failure
 assert_go_integration_metadata_requests

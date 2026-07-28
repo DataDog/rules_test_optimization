@@ -52,7 +52,7 @@ def _explicit_context_data_test(ctx):
 explicit_context_data_test = unittest.make(_explicit_context_data_test)
 
 def _expected_targets_test(ctx):
-    """Validate strict expected target labels are forwarded to the doctor."""
+    """Validate strict expected target labels are forwarded to both tools."""
     env = unittest.begin(ctx)
     expected_targets = ["//app:unit_test", "//lib:integration_test"]
     specs = build_test_optimization_target_specs_for_tests(
@@ -66,12 +66,13 @@ def _expected_targets_test(ctx):
         uploader_kwargs = None,
     )
     asserts.equals(env, expected_targets, specs.doctor_attrs["expected_targets"])
+    asserts.equals(env, expected_targets, specs.uploader_attrs["expected_targets"])
     return unittest.end(env)
 
 expected_targets_test = unittest.make(_expected_targets_test)
 
 def _expected_targets_file_test(ctx):
-    """Validate a generated expected-target file is forwarded only to doctor."""
+    """Validate a generated expected-target file is forwarded to both tools."""
     env = unittest.begin(ctx)
     expected_targets_file = "@test_optimization_data//:expected_targets"
     specs = build_test_optimization_target_specs_for_tests(
@@ -86,7 +87,7 @@ def _expected_targets_file_test(ctx):
         uploader_kwargs = None,
     )
     asserts.equals(env, expected_targets_file, specs.doctor_attrs["expected_targets_file"])
-    asserts.false(env, "expected_targets_file" in specs.uploader_attrs)
+    asserts.equals(env, expected_targets_file, specs.uploader_attrs["expected_targets_file"])
     return unittest.end(env)
 
 expected_targets_file_test = unittest.make(_expected_targets_file_test)
@@ -193,7 +194,7 @@ def _uploader_controlled_attr_target_impl(_ctx):
         expected_targets = [],
         context_data = None,
         doctor_kwargs = None,
-        uploader_kwargs = {"data": [":bad"]},
+        uploader_kwargs = {"expected_targets_file": ":bad"},
     )
     return []
 

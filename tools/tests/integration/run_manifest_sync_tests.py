@@ -114,6 +114,29 @@ def _manifest(include_c: bool = False, reverse: bool = False) -> dict[str, Any]:
         "targets": targets,
     }
 
+def _windows_manifest() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "contexts": [
+            {
+                "key": "service_a__python",
+                "runtime": {
+                    "module_path": "module.y",
+                    "name": "python",
+                    "version": "3.11.0",
+                },
+                "service": "service-a",
+            },
+        ],
+        "targets": [
+            {
+                "context_key": "service_a__python",
+                "label": "//:cache_ay",
+                "service_derivation": "application",
+            },
+        ],
+    }
+
 
 def _versions(
     *,
@@ -149,6 +172,7 @@ def _workspace_module(repo_root: Path) -> str:
     return f"""module(name = "manifest-sync-integration", version = "0.0.0")
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "platforms", version = "1.0.0")
 
 local_path_override(
     module_name = "datadog-rules-test-optimization",
@@ -172,15 +196,28 @@ def _cache_rule() -> str:
     return r'''"""Test rule whose runfiles model one target's metadata action inputs."""
 
 def _cache_payload_test_impl(ctx):
-    executable = ctx.actions.declare_file(ctx.label.name + ".sh")
+    is_windows = ctx.target_platform_has_constraint(
+        ctx.attr._windows_constraint[platform_common.ConstraintValueInfo],
+    )
+    executable = ctx.actions.declare_file(ctx.label.name + (".bat" if is_windows else ".sh"))
     metadata = json.encode({
         "bazel.package": ctx.label.package,
         "bazel.target": ctx.attr.target_label,
         "bazel.test_optimization.repo_name": ctx.attr.repo_key,
     })
-    ctx.actions.write(
-        output = executable,
-        is_executable = True,
+    if is_windows:
+        content = (
+            "@echo off\r\n" +
+            "setlocal\r\n" +
+            "if \"%TEST_UNDECLARED_OUTPUTS_DIR%\"==\"\" exit /b 2\r\n" +
+            "set \"out=%TEST_UNDECLARED_OUTPUTS_DIR%\"\r\n" +
+            "if not exist \"%out%\\payloads\\tests\" mkdir \"%out%\\payloads\\tests\"\r\n" +
+            ">\"%out%\\payloads\\tests\\events.json\" echo " +
+            "{\"events\":[{\"type\":\"test\",\"version\":2,\"content\":{\"name\":\"mock.test\",\"resource\":\"mock.test\",\"service\":\"placeholder\",\"type\":\"test\",\"meta\":{\"test.module\":\"mock\",\"test.name\":\"test\",\"test.status\":\"pass\",\"test.suite\":\"mock\",\"test.type\":\"test\"},\"metrics\":{}}}]}\r\n" +
+            ">\"%out%\\bazel_target_metadata.json\" echo " + metadata + "\r\n" +
+            "exit /b 0\r\n"
+        )
+    else:
         content = """#!/usr/bin/env bash
 set -euo pipefail
 out="${TEST_UNDECLARED_OUTPUTS_DIR:?}"
@@ -191,7 +228,11 @@ JSON
 cat >"$out/bazel_target_metadata.json" <<'JSON'
 %s
 JSON
-""" % metadata,
+""" % metadata
+    ctx.actions.write(
+        output = executable,
+        is_executable = True,
+        content = content,
     )
     inputs = depset(transitive = [
         dep[DefaultInfo].files
@@ -208,6 +249,7 @@ _cache_payload_test = rule(
         "data": attr.label_list(),
         "repo_key": attr.string(mandatory = True),
         "target_label": attr.string(mandatory = True),
+        "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
     test = True,
 )
@@ -248,17 +290,17 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl"
 load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 load(":cache_test.bzl", "manifest_cache_test", "optional_manifest_cache_test")
 
-manifest_cache_test(
+optional_manifest_cache_test(
     name = "cache_ax",
     module_label = "module_x",
     target_entries = topt_data_by_target,
 )
-manifest_cache_test(
+optional_manifest_cache_test(
     name = "cache_ay",
     module_label = "module_y",
     target_entries = topt_data_by_target,
 )
-manifest_cache_test(
+optional_manifest_cache_test(
     name = "cache_bz",
     module_label = "module_z",
     target_entries = topt_data_by_target,
@@ -280,6 +322,7 @@ dd_test_optimization_doctor(
 dd_payload_uploader(
     name = "uploader",
     data = ["@test_optimization_data//:test_optimization_context"],
+    expected_targets_file = "@test_optimization_data//:expected_targets",
 )
 '''
 
@@ -297,7 +340,7 @@ class ManifestSyncHarness:
         self.request_log = self.root / "requests.jsonl"
         self.server_log = self.root / "server.log"
         self.versions_path = self.root / "response_versions.json"
-        self.manifest_path = self.workspace / "manifest.json"
+        self.manifest_dir = self.workspace / "manifests"
         self.go_marker = self.root / "host_go_was_called"
         self.server: subprocess.Popen[str] | None = None
         self.port = 0
@@ -427,14 +470,12 @@ class ManifestSyncHarness:
         self,
         *,
         enabled: bool,
-        salt: str,
         manifest: Path | None,
     ) -> list[str]:
         values = {
             "DD_ENV": "ci",
             "DD_TEST_OPTIMIZATION_ENABLED": "1" if enabled else "0",
             "DISABLE_CI_METADATA": "1",
-            "FETCH_SALT": salt,
         }
         if enabled:
             values.update(
@@ -453,6 +494,11 @@ class ManifestSyncHarness:
         else:
             values["DD_TEST_OPTIMIZATION_SERVICES_MANIFEST"] = ""
         return [f"--repo_env={key}={value}" for key, value in sorted(values.items())]
+
+    def write_manifest(self, name: str, value: dict[str, Any]) -> Path:
+        path = self.manifest_dir / f"{name}.json"
+        _write_json(path, value)
+        return path
 
     def run_bazel(
         self,
@@ -524,23 +570,23 @@ def _assert_failure_before_http(
     harness: ManifestSyncHarness,
     manifest: Path | None,
     expected_message: str,
-    salt: str,
+    case_name: str,
 ) -> None:
     start = harness.request_count()
     result = harness.run_bazel(
         "build",
         ["@test_optimization_data//:test_optimization_files"],
-        harness.repo_env(enabled=True, salt=salt, manifest=manifest),
+        harness.repo_env(enabled=True, manifest=manifest),
         check=False,
     )
     if result.returncode == 0:
-        raise AssertionError(f"expected enabled manifest failure for {salt}")
+        raise AssertionError(f"expected enabled manifest failure for {case_name}")
     if expected_message not in result.stdout:
         raise AssertionError(
-            f"missing failure diagnostic {expected_message!r} for {salt}\n{result.stdout}"
+            f"missing failure diagnostic {expected_message!r} for {case_name}\n{result.stdout}"
         )
     if harness.request_count() != start:
-        raise AssertionError(f"{salt} contacted the mock server before manifest validation")
+        raise AssertionError(f"{case_name} contacted the mock server before manifest validation")
 
 
 def _bep_cache_state(path: Path, expected_labels: list[str]) -> dict[str, bool]:
@@ -582,16 +628,15 @@ def _run_test_phase(
     harness: ManifestSyncHarness,
     *,
     name: str,
+    manifest: Path,
     labels: list[str],
     cached: list[str],
     fresh: list[str],
-    salt: str,
-    no_cache: bool = False,
 ) -> Path:
     bep = harness.root / f"{name}.bep.json"
     args = [
         "--test_output=errors",
-        f"--cache_test_results={'no' if no_cache else 'yes'}",
+        "--cache_test_results=yes",
         f"--build_event_json_file={bep}",
     ]
     if sys.platform == "darwin":
@@ -600,7 +645,7 @@ def _run_test_phase(
     harness.run_bazel(
         "test",
         args,
-        harness.repo_env(enabled=True, salt=salt, manifest=harness.manifest_path),
+        harness.repo_env(enabled=True, manifest=manifest),
     )
     state = _bep_cache_state(bep, labels)
     _assert_cache_state(state, cached=cached, fresh=fresh)
@@ -626,10 +671,103 @@ def _assert_sync_requests(requests: list[dict[str, Any]], context_count: int) ->
     if any(count != context_count for count in counts.values()):
         raise AssertionError(f"sync endpoint request counts mismatch: {counts}")
 
+def _selected_metadata_snapshot(repo: Path) -> dict[str, bytes]:
+    snapshot: dict[str, bytes] = {}
+    for path in repo.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(repo).as_posix()
+        if "/cache/http/" in f"/{relative}":
+            snapshot[relative] = path.read_bytes()
+    if not snapshot:
+        raise AssertionError("manifest repository exposed no selected metadata files")
+    return snapshot
+
+
+def _assert_telemetry_not_in_test_inputs(
+    harness: ManifestSyncHarness,
+    manifest: Path,
+    target: str,
+) -> None:
+    result = harness.run_bazel(
+        "aquery",
+        ["--include_artifacts=true", target],
+        harness.repo_env(enabled=True, manifest=manifest),
+    )
+    if "telemetry_facts.json" in result.stdout:
+        raise AssertionError(f"{target} includes telemetry_facts.json as an action input")
+
+
+def _run_rule_tools(
+    harness: ManifestSyncHarness,
+    *,
+    name: str,
+    manifest: Path,
+    bep: Path,
+    expected_labels: list[str],
+    fresh_payload_count: int,
+) -> None:
+    repo_env = harness.repo_env(enabled=True, manifest=manifest)
+    testlogs = (
+        harness.run_bazel("info", ["bazel-testlogs"], repo_env)
+        .stdout.strip()
+        .splitlines()[-1]
+    )
+    runtime_env = {"TESTLOGS_DIR": testlogs}
+    request_start = harness.request_count()
+
+    doctor_report = harness.root / f"{name}-doctor-report.json"
+    harness.run_bazel(
+        "run",
+        [
+            "//:doctor",
+            "--",
+            "--bep-json",
+            str(bep),
+            "--freshness-source=bep",
+            "--freshness-mode=required",
+            "--artifact-source=bep",
+            "--report-json",
+            str(doctor_report),
+        ],
+        repo_env,
+        extra_env=runtime_env,
+    )
+    doctor = json.loads(doctor_report.read_text(encoding="utf-8"))
+    if doctor["config"]["expected_targets"] != sorted(expected_labels):
+        raise AssertionError(f"doctor expected target set mismatch: {doctor}")
+    if doctor["config"]["expected_targets_source"] != "file":
+        raise AssertionError(f"doctor did not use the dynamic target file: {doctor}")
+
+    uploader_report = harness.root / f"{name}-uploader-report.json"
+    result = harness.run_bazel(
+        "run",
+        [
+            "//:uploader",
+            "--",
+            "--dry-run",
+            "--validate-enrichment",
+            "--expected-enriched-tag=service.name",
+            "--bep-json",
+            str(bep),
+            "--freshness-source=bep",
+            "--freshness-mode=required",
+            "--report-json",
+            str(uploader_report),
+        ],
+        repo_env,
+        extra_env=runtime_env,
+    )
+    uploader = json.loads(uploader_report.read_text(encoding="utf-8"))
+    if uploader["payloads"]["tests"]["processed"] != fresh_payload_count:
+        raise AssertionError(f"uploader report mismatch: {uploader}\n{result.stdout}")
+    if harness.request_count() != request_start:
+        raise AssertionError("doctor/uploader re-fetched manifest metadata")
+
 
 def run_disabled_contract(harness: ManifestSyncHarness) -> None:
     start = harness.request_count()
-    disabled_env = harness.repo_env(enabled=False, salt="disabled", manifest=None)
+    disabled_env = harness.repo_env(enabled=False, manifest=None)
     harness.run_bazel(
         "build",
         [
@@ -667,12 +805,11 @@ def run_disabled_contract(harness: ManifestSyncHarness) -> None:
 
 
 def run_full_contract(harness: ManifestSyncHarness) -> None:
-    _write_json(harness.manifest_path, _manifest())
     _write_json(harness.versions_path, _versions())
+    manifest_v1 = harness.write_manifest("invocation-v1", _manifest())
     enabled_env = harness.repo_env(
         enabled=True,
-        salt="enabled-v1",
-        manifest=harness.manifest_path,
+        manifest=manifest_v1,
     )
     start = harness.request_count()
     harness.run_bazel(
@@ -687,171 +824,176 @@ def run_full_contract(harness: ManifestSyncHarness) -> None:
     )
     _assert_sync_requests(harness.requests_since(start), context_count=3)
     repo = harness.generated_repo(enabled_env)
-    baseline = {
+    baseline_repository_files = {
         name: (repo / name).read_bytes()
         for name in ("BUILD", "expected_targets.json", "export.bzl")
     }
-    expected = json.loads(baseline["expected_targets.json"])
+    baseline_metadata = _selected_metadata_snapshot(repo)
+    expected = json.loads(baseline_repository_files["expected_targets.json"])
     if expected != {"schema_version": 1, "targets": sorted(INITIAL_TARGETS)}:
         raise AssertionError(f"enabled expected targets mismatch: {expected}")
 
-    _write_json(harness.manifest_path, _manifest(reverse=True))
-    harness.run_bazel(
-        "build",
-        ["@test_optimization_data//:test_optimization_context"],
-        harness.repo_env(
-            enabled=True,
-            salt="enabled-reordered",
-            manifest=harness.manifest_path,
-        ),
-    )
-    reordered_repo = harness.generated_repo(enabled_env)
-    for name, expected_bytes in baseline.items():
-        actual = (reordered_repo / name).read_bytes()
-        if actual != expected_bytes:
-            raise AssertionError(f"{name} changed after manifest reordering")
-    _write_json(harness.manifest_path, _manifest())
-
-    _run_test_phase(
+    requests_after_initial_sync = harness.request_count()
+    fresh_v1_bep = _run_test_phase(
         harness,
         name="cache_v1",
+        manifest=manifest_v1,
         labels=INITIAL_TARGETS,
         cached=[],
         fresh=INITIAL_TARGETS,
-        salt="cache-v1",
     )
-    _run_test_phase(
+    if harness.request_count() != requests_after_initial_sync:
+        raise AssertionError("test phase re-fetched the invocation manifest")
+    _assert_telemetry_not_in_test_inputs(harness, manifest_v1, "//:cache_ax")
+    _run_rule_tools(
+        harness,
+        name="fresh-v1",
+        manifest=manifest_v1,
+        bep=fresh_v1_bep,
+        expected_labels=INITIAL_TARGETS,
+        fresh_payload_count=3,
+    )
+
+    manifest_reordered = harness.write_manifest(
+        "invocation-reordered",
+        _manifest(reverse=True),
+    )
+    reordered_env = harness.repo_env(enabled=True, manifest=manifest_reordered)
+    reordered_start = harness.request_count()
+    harness.run_bazel(
+        "build",
+        ["@test_optimization_data//:test_optimization_context"],
+        reordered_env,
+    )
+    _assert_sync_requests(harness.requests_since(reordered_start), context_count=3)
+    reordered_repo = harness.generated_repo(reordered_env)
+    for name, expected_bytes in baseline_repository_files.items():
+        actual = (reordered_repo / name).read_bytes()
+        if actual != expected_bytes:
+            raise AssertionError(f"{name} changed after manifest reordering")
+    if _selected_metadata_snapshot(reordered_repo) != baseline_metadata:
+        raise AssertionError("selected metadata changed across identical backend responses")
+
+    cached_bep = _run_test_phase(
         harness,
         name="cache_unchanged",
+        manifest=manifest_reordered,
         labels=INITIAL_TARGETS,
         cached=INITIAL_TARGETS,
         fresh=[],
-        salt="cache-unchanged",
+    )
+    _run_rule_tools(
+        harness,
+        name="all-cached",
+        manifest=manifest_reordered,
+        bep=cached_bep,
+        expected_labels=INITIAL_TARGETS,
+        fresh_payload_count=0,
     )
 
     _write_json(harness.versions_path, _versions(b_z="v2"))
+    manifest_b_v2 = harness.write_manifest("invocation-b-v2", _manifest())
+    request_start = harness.request_count()
     _run_test_phase(
         harness,
         name="cache_b_changed",
+        manifest=manifest_b_v2,
         labels=INITIAL_TARGETS,
         cached=["//:cache_ax", "//:cache_ay"],
         fresh=["//:cache_bz"],
-        salt="cache-b-v2",
     )
+    _assert_sync_requests(harness.requests_since(request_start), context_count=3)
 
     _write_json(harness.versions_path, _versions(a_x="v2", b_z="v2"))
+    manifest_ax_v2 = harness.write_manifest("invocation-ax-v2", _manifest())
+    request_start = harness.request_count()
     _run_test_phase(
         harness,
         name="cache_ax_changed",
+        manifest=manifest_ax_v2,
         labels=INITIAL_TARGETS,
         cached=["//:cache_ay", "//:cache_bz"],
         fresh=["//:cache_ax"],
-        salt="cache-ax-v2",
     )
+    _assert_sync_requests(harness.requests_since(request_start), context_count=3)
 
     _write_json(
         harness.versions_path,
         _versions(a_x="v2", a_settings="v2", b_z="v2"),
     )
+    manifest_settings_v2 = harness.write_manifest(
+        "invocation-settings-v2",
+        _manifest(),
+    )
+    request_start = harness.request_count()
     _run_test_phase(
         harness,
         name="cache_a_settings_changed",
+        manifest=manifest_settings_v2,
         labels=INITIAL_TARGETS,
         cached=["//:cache_bz"],
         fresh=["//:cache_ax", "//:cache_ay"],
-        salt="cache-a-settings-v2",
     )
+    _assert_sync_requests(harness.requests_since(request_start), context_count=3)
 
-    _write_json(harness.manifest_path, _manifest(include_c=True))
     _write_json(
         harness.versions_path,
         _versions(a_x="v2", a_settings="v2", b_z="v2", include_c=True),
     )
-    _run_test_phase(
+    manifest_add_c = harness.write_manifest(
+        "invocation-add-c",
+        _manifest(include_c=True),
+    )
+    request_start = harness.request_count()
+    mixed_bep = _run_test_phase(
         harness,
         name="cache_add_c",
+        manifest=manifest_add_c,
         labels=ALL_TARGETS,
         cached=INITIAL_TARGETS,
         fresh=["//:cache_c"],
-        salt="cache-add-c",
     )
-
-    fresh_bep = _run_test_phase(
+    _assert_sync_requests(harness.requests_since(request_start), context_count=4)
+    _run_rule_tools(
         harness,
-        name="fresh_payloads",
-        labels=ALL_TARGETS,
-        cached=[],
-        fresh=ALL_TARGETS,
-        salt="fresh-payloads",
-        no_cache=True,
+        name="mixed-add-c",
+        manifest=manifest_add_c,
+        bep=mixed_bep,
+        expected_labels=ALL_TARGETS,
+        fresh_payload_count=1,
     )
-    repo_env = harness.repo_env(
-        enabled=True,
-        salt="fresh-payloads",
-        manifest=harness.manifest_path,
-    )
-    testlogs = harness.run_bazel("info", ["bazel-testlogs"], repo_env).stdout.strip().splitlines()[-1]
-    doctor_report = harness.root / "doctor-report.json"
-    runtime_env = {"TESTLOGS_DIR": testlogs}
-    harness.run_bazel(
-        "run",
-        [
-            "//:doctor",
-            "--",
-            "--bep-json",
-            str(fresh_bep),
-            "--freshness-source=bep",
-            "--freshness-mode=required",
-            "--artifact-source=bep",
-            "--report-json",
-            str(doctor_report),
-        ],
-        repo_env,
-        extra_env=runtime_env,
-    )
-    doctor = json.loads(doctor_report.read_text(encoding="utf-8"))
-    if doctor["config"]["expected_targets"] != sorted(ALL_TARGETS):
-        raise AssertionError(f"doctor expected target set mismatch: {doctor}")
-    if doctor["config"]["expected_targets_source"] != "file":
-        raise AssertionError(f"doctor did not use the dynamic target file: {doctor}")
-
-    uploader_report = harness.root / "uploader-report.json"
-    upload_start = harness.request_count()
-    result = harness.run_bazel(
-        "run",
-        [
-            "//:uploader",
-            "--",
-            "--dry-run",
-            "--validate-enrichment",
-            "--expected-enriched-tag=service.name",
-            "--bep-json",
-            str(fresh_bep),
-            "--freshness-source=bep",
-            "--freshness-mode=required",
-            "--report-json",
-            str(uploader_report),
-        ],
-        repo_env,
-        extra_env=runtime_env,
-    )
-    if "dry-run validated 4 test payloads" not in result.stdout:
-        raise AssertionError(f"uploader did not validate all dynamic payloads:\n{result.stdout}")
-    if harness.request_count() != upload_start:
-        raise AssertionError("uploader dry-run contacted the mock server")
-    uploader = json.loads(uploader_report.read_text(encoding="utf-8"))
-    if uploader["payloads"]["tests"]["processed"] != 4:
-        raise AssertionError(f"uploader report mismatch: {uploader}")
     harness.assert_host_go_unused()
+
+def run_windows_enabled_smoke(harness: ManifestSyncHarness) -> None:
+    _write_json(harness.versions_path, _versions())
+    manifest = harness.write_manifest("windows-enabled", _windows_manifest())
+    request_start = harness.request_count()
+    bep = _run_test_phase(
+        harness,
+        name="windows-enabled",
+        manifest=manifest,
+        labels=["//:cache_ay"],
+        cached=[],
+        fresh=["//:cache_ay"],
+    )
+    _assert_sync_requests(harness.requests_since(request_start), context_count=1)
+    _run_rule_tools(
+        harness,
+        name="windows-enabled",
+        manifest=manifest,
+        bep=bep,
+        expected_labels=["//:cache_ay"],
+        fresh_payload_count=1,
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=("disabled", "full"),
+        choices=("disabled", "full", "windows-enabled-smoke"),
         default="full",
-        help="Use disabled on Windows lanes that only enforce repository parsing.",
+        help="Use windows-enabled-smoke for the focused PowerShell runtime contract.",
     )
     parser.add_argument("--keep-tmp", action="store_true")
     args = parser.parse_args()
@@ -865,6 +1007,8 @@ def main() -> int:
             if os.name == "nt":
                 raise RuntimeError("full manifest cache integration requires a POSIX test runtime")
             run_full_contract(harness)
+        elif args.mode == "windows-enabled-smoke":
+            run_windows_enabled_smoke(harness)
         print(f"manifest sync integration ({args.mode}) passed")
         return 0
     finally:

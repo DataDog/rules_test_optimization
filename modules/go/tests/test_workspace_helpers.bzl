@@ -122,7 +122,6 @@ def _orchestrion_call_spec_test(ctx):
     env = unittest.begin(ctx)
     call = build_orchestrion_repo_call_for_tests(
         dd_trace_go_version = "v2.9.0",
-        dd_trace_go_versions = {"example.com/service": "v2.8.0"},
         version = "v1.9.0",
         go_sdk_root = "@go_sdk//:ROOT",
         go_sdk_version = "1.25.0",
@@ -133,7 +132,8 @@ def _orchestrion_call_spec_test(ctx):
         {
             "name": "rules_go_orchestrion_tool",
             "dd_trace_go_version": "v2.9.0",
-            "dd_trace_go_versions": {"example.com/service": "v2.8.0"},
+            "dd_trace_go_versions": {},
+            "dd_trace_go_pin_files": [],
             "enabled_by_env": True,
             "version": "v1.9.0",
             "go_sdk_root": "@go_sdk//:ROOT",
@@ -145,7 +145,31 @@ def _orchestrion_call_spec_test(ctx):
     asserts.false(env, "enabled" in call)
     return unittest.end(env)
 
+def _orchestrion_pin_file_call_spec_test(ctx):
+    env = unittest.begin(ctx)
+    call = build_orchestrion_repo_call_for_tests(
+        dd_trace_go_pin_files = [
+            "@//:go.mod",
+            "@//:go.sum",
+        ],
+        version = "v1.9.0",
+        go_sdk_root = "@go_sdk//:ROOT",
+        go_sdk_version = "1.25.0",
+    )
+    asserts.equals(
+        env,
+        [
+            "@//:go.mod",
+            "@//:go.sum",
+        ],
+        call["dd_trace_go_pin_files"],
+    )
+    asserts.equals(env, "", call["dd_trace_go_version"])
+    asserts.equals(env, {}, call["dd_trace_go_versions"])
+    return unittest.end(env)
+
 go_workspace_single_specs_test = unittest.make(_go_workspace_single_specs_test)
 go_workspace_multi_specs_test = unittest.make(_go_workspace_multi_specs_test)
 go_workspace_specs_default_to_config_gated_test = unittest.make(_go_workspace_specs_default_to_config_gated_test)
 orchestrion_call_spec_test = unittest.make(_orchestrion_call_spec_test)
+orchestrion_pin_file_call_spec_test = unittest.make(_orchestrion_pin_file_call_spec_test)

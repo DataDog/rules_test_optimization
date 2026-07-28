@@ -234,6 +234,13 @@ instead of rewriting the tool repo's own `go.mod`. The selected tracer version
 is enforced later against the target module through the emitted
 `dd_trace_go_versions.json` file and the builder-side validation path.
 
+Manual consumer wiring normally replaces bootstrap's explicit tracer selection
+with `dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"]`. The repository rule
+uses the Bazel-managed Go SDK to resolve every supported direct or transitive
+module with `-mod=readonly`, emits the same canonical
+`dd_trace_go_versions.json`, and keys the bootstrap cache by that resolved map.
+Explicit shared and per-module selections remain compatibility escape hatches.
+
 #### Why This Exists
 
 Bootstrap centralizes the one-time mutations needed to make Bazel and

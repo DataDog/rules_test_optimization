@@ -95,8 +95,10 @@ Every successful Go onboarding should end with these pieces:
 
 - Repository resolution fetches Test Optimization metadata during Bazel
   repository/module resolution.
-- The Orchestrion tool repository is configured with the same dd-trace-go
-  version that the consumer Go module can resolve.
+- The Orchestrion tool repository normally derives its complete supported
+  dd-trace-go version map from the consumer's checked-in `go.mod` and `go.sum`.
+  Explicit shared/per-module versions are escape hatches, not a second normal
+  pin-maintenance path.
 - Guided bootstrap wires the repository's Bazel-managed Go SDK into
   Orchestrion using the same version as the Go toolchain and sync runtime.
   Enabled bootstrap must not depend on a host `go` binary, and this SDK wiring
@@ -149,6 +151,11 @@ additional constraints:
   `:expected_targets` file;
 - treat the invocation manifest as a private command handoff, never as
   user-facing `.bazelrc` configuration;
+- reuse that exact manifest and resolved metadata snapshot for test, doctor,
+  dry-run, and optional upload; only a later managed invocation creates a new
+  manifest and fetches current backend state;
+- preserve Bazel test-result cache hits when selected settings/module payloads
+  are unchanged, and keep variable telemetry timing facts out of test inputs;
 - keep Java and other non-Python companions on their static onboarding paths.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a

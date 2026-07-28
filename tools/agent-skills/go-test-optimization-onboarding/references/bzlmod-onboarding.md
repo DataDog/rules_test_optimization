@@ -77,7 +77,10 @@ use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0",
+    dd_trace_go_pin_files = [
+        "@//:go.mod",
+        "@//:go.sum",
+    ],
     go_sdk_root = "@test_optimization_go_sdk//:ROOT",
     go_sdk_version = "<go-version>",
 )
@@ -88,17 +91,19 @@ Guided bootstrap writes this SDK declaration from `--runtime-version`.
 Orchestrion uses the Bazel-managed SDK on cache misses, while a compatible
 bootstrap cache hit can be restored before the SDK repository is materialized.
 Do not add SDK or Orchestrion settings to individual service or test targets.
+Export the root `go.mod` and `go.sum` labels from their BUILD package. The
+pin-file mode uses this Bazel-managed SDK with `-mod=readonly` to derive direct
+and transitive supported tracer versions without editing the module.
 
 For newer support lines such as `v0_61_1`, use the base strip prefix printed by
 the bootstrap or onboarding pins summary, for example
 `third_party/rgo/v0_61_1/base`. Repositories that
 already own a private `rules_go` patch stack should generate a public consumer
 patch profile and rebase or merge it locally inside that repository instead of
-using a second complete tree. Do not set both
-`dd_trace_go_version` and `dd_trace_go_versions` in the same
-`orchestrion.from_source(...)` call. If the repository resolves Datadog tracer
-modules to different exact versions, use guided bootstrap or its onboarding
-summary to generate the exact `dd_trace_go_versions` block.
+using a second complete tree. `dd_trace_go_pin_files`,
+`dd_trace_go_version`, and `dd_trace_go_versions` are mutually exclusive.
+Use an explicit shared or per-module version only when the checked-in module
+graph cannot be resolved by normal pin-file mode.
 
 ## Managed Manifest Variant
 
@@ -121,6 +126,11 @@ Bazel. Agents must not add that handoff to `.bazelrc`, generate `examples.bzl`,
 or create Gazelle/ownership machinery. The central Go wrapper looks up its full
 label in `topt_data_by_target`; only present labels delegate to
 `dd_topt_go_test`.
+
+One command invocation must reuse the same manifest path for test, doctor,
+dry-run, and optional upload. A later invocation creates a new path and fetches
+again. Unchanged selected metadata must retain Bazel test-result cache hits;
+telemetry timing facts are post-test context, not test action inputs.
 
 This changes metadata selection, not Go toolchain ownership. Keep the same
 Bazel-managed SDK and Orchestrion wiring described above.

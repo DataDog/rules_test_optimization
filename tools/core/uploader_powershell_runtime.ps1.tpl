@@ -538,6 +538,10 @@ $SchemaValidatorRloc = "__DDTPL_SCHEMA_VALIDATOR_RLOC__"
 $SchemaValidatorPath = "__DDTPL_SCHEMA_VALIDATOR_PATH__"
 $script:BepArtifactStageHelperRloc = "__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__"
 $script:DoctorRuntimeRloc = "__DDTPL_DOCTOR_RUNTIME_RLOC__"
+$script:ExpectedTargetsRloc = "__DDTPL_EXPECTED_TARGETS_RLOC__"
+$script:ExpectedTargetsPath = "__DDTPL_EXPECTED_TARGETS_PATH__"
+$script:ExpectedTargetsFileRloc = "__DDTPL_EXPECTED_TARGETS_FILE_RLOC__"
+$script:ExpectedTargetsFilePath = "__DDTPL_EXPECTED_TARGETS_FILE_PATH__"
 Dbg "schema validator resolution inputs: validator_path='$SchemaValidatorPath' validator_rloc='$SchemaValidatorRloc'"
 $script:SchemaValidator = Resolve-ArtifactPath $SchemaValidatorPath
 if ($script:SchemaValidator) {
@@ -705,6 +709,9 @@ $script:FreshnessSkippedOutputs = [System.Collections.Generic.HashSet[string]]::
 $script:FreshnessRemoteOnlyOutputs = New-Object System.Collections.Generic.List[object]
 $script:FreshnessMissingOutputLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkipWasWritten = $false
+$script:ExpectedTargetsConfigured = $false
+$script:ExpectedTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:HandledFreshOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:ExecutionEligibilityEnabled = $false
 $script:ExecutionEligibleLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:ExecutionEligibleOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -1115,10 +1122,14 @@ function Set-ClassifiedUploaderResult([int]$ExitCode) {
             @("Enable --remote-artifacts=download with --bep-artifact-downloader, or adjust Bazel remote download settings.")
         return
     }
-    if ($ExitCode -ne 0 -and (Get-ReportCollectionCount $script:FreshnessCachedOutputs) -gt 0) {
+    if (
+        $ExitCode -ne 0 `
+        -and (Get-ReportCollectionCount $script:FreshnessCachedOutputs) -gt 0 `
+        -and (Get-ReportCollectionCount $script:FreshnessEligibleOutputs) -eq 0
+    ) {
         Set-ReportResult "target_cached_by_bazel" `
-            "Required BEP freshness rejected cached Bazel test outputs." `
-            @("Run tests with --nocache_test_results or select targets that executed in this invocation.")
+            "Cached Bazel outputs did not satisfy the requested BEP freshness contract." `
+            @("Use the BEP from the exact matching bazel test invocation and verify each expected target is fresh or exclusively cached.")
         return
     }
     if ($ExitCode -ne 0 -and -not $script:DryRun -and $script:ReportUploadAttempted -and $script:UploadFailures -gt 0) {
@@ -1741,6 +1752,10 @@ while ($true) {
     if ($totalFiles -eq 0) {
         # No payloads yet. Branch behavior depends on max-wait configuration.
         if ($MaxWaitSec -eq 0) {
+            if ($script:FreshnessMode -ne "disabled" -and ($script:FreshnessSource -eq "bep" -or $script:BepJsonFiles.Count -gt 0)) {
+                Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
+            }
             if (Test-ExecutedTests) {
                 Log "warning: tests ran but no payload files found"
                 Log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
@@ -1750,14 +1765,14 @@ while ($true) {
                 }
             } else {
                 Log "no payload files found and no test execution detected; nothing to upload"
-            }
-            if ($script:FreshnessMode -ne "disabled" -and ($script:FreshnessSource -eq "bep" -or $script:BepJsonFiles.Count -gt 0)) {
-                Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
-                break
             }
             Exit-WithUploaderReport 0
         }
         if ($elapsed -gt $MaxWaitSec) {
+            if ($script:FreshnessMode -ne "disabled" -and ($script:FreshnessSource -eq "bep" -or $script:BepJsonFiles.Count -gt 0)) {
+                Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
+            }
             if (Test-ExecutedTests) {
                 Log "warning: tests ran but no payload files found"
                 Log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
@@ -1767,10 +1782,6 @@ while ($true) {
                 }
             } else {
                 Log "no payload files found and no test execution detected; nothing to upload"
-            }
-            if ($script:FreshnessMode -ne "disabled" -and ($script:FreshnessSource -eq "bep" -or $script:BepJsonFiles.Count -gt 0)) {
-                Log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
-                break
             }
             Exit-WithUploaderReport 0
         }
@@ -2840,6 +2851,89 @@ function Get-BepFileReferenceCandidates($FileObject) {
   return $values
 }
 
+function Initialize-ExpectedTargets {
+  $script:ExpectedTargets.Clear()
+  $script:ExpectedTargetsConfigured = $false
+  $staticTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  $staticFile = Resolve-ArtifactPath $script:ExpectedTargetsPath
+  if ([string]::IsNullOrWhiteSpace($staticFile) -and -not [string]::IsNullOrWhiteSpace($script:ExpectedTargetsRloc)) {
+    $staticFile = Resolve-Runfile $script:ExpectedTargetsRloc
+  }
+  if (-not [string]::IsNullOrWhiteSpace($staticFile) -and (Test-Path -LiteralPath $staticFile -PathType Leaf)) {
+    foreach ($line in [System.IO.File]::ReadAllLines($staticFile)) {
+      if (-not [string]::IsNullOrWhiteSpace($line)) {
+        $staticTargets.Add($line) | Out-Null
+      }
+    }
+  }
+
+  $dynamicConfigured = (
+    -not [string]::IsNullOrWhiteSpace($script:ExpectedTargetsFilePath) -or
+    -not [string]::IsNullOrWhiteSpace($script:ExpectedTargetsFileRloc)
+  )
+  if (-not $dynamicConfigured) {
+    foreach ($label in $staticTargets) { $script:ExpectedTargets.Add($label) | Out-Null }
+    $script:ExpectedTargetsConfigured = $staticTargets.Count -gt 0
+    return
+  }
+
+  $dynamicFile = Resolve-ArtifactPath $script:ExpectedTargetsFilePath
+  if ([string]::IsNullOrWhiteSpace($dynamicFile) -and -not [string]::IsNullOrWhiteSpace($script:ExpectedTargetsFileRloc)) {
+    $dynamicFile = Resolve-Runfile $script:ExpectedTargetsFileRloc
+  }
+  if ([string]::IsNullOrWhiteSpace($dynamicFile) -or -not (Test-Path -LiteralPath $dynamicFile -PathType Leaf)) {
+    Log "error: expected_targets_file does not exist or is not a file"
+    exit 2
+  }
+  try {
+    $doc = Get-Content -LiteralPath $dynamicFile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    Log "error: expected_targets_file must contain valid JSON"
+    exit 2
+  }
+  $propertyNames = @($doc.PSObject.Properties.Name | Sort-Object)
+  if (
+    ($propertyNames -join ",") -ne "schema_version,targets" -or
+    [int]$doc.schema_version -ne 1 -or
+    $doc.targets -isnot [System.Array]
+  ) {
+    Log "error: expected_targets_file must contain exactly schema_version 1 and a targets array"
+    exit 2
+  }
+  $dynamicTargets = New-Object System.Collections.Generic.List[string]
+  $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  foreach ($value in @($doc.targets)) {
+    if ($value -isnot [string] -or ([string]$value) -notmatch '^//[^:]*:[^:]+$') {
+      Log "error: expected_targets_file targets must be local //pkg:target labels"
+      exit 2
+    }
+    $label = [string]$value
+    if (-not $seen.Add($label)) {
+      Log "error: expected_targets_file contains duplicate target labels"
+      exit 2
+    }
+    $dynamicTargets.Add($label) | Out-Null
+  }
+  $sortedTargets = @($dynamicTargets.ToArray() | Sort-Object -CaseSensitive)
+  if (($dynamicTargets.ToArray() -join "`n") -cne ($sortedTargets -join "`n")) {
+    Log "error: expected_targets_file targets must be sorted"
+    exit 2
+  }
+  if ($staticTargets.Count -gt 0) {
+    $dynamicSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($label in $dynamicTargets) { $dynamicSet.Add($label) | Out-Null }
+    if (
+      $staticTargets.Count -ne $dynamicSet.Count -or
+      @($staticTargets | Where-Object { -not $dynamicSet.Contains($_) }).Count -gt 0
+    ) {
+      Log "error: static expected_targets and expected_targets_file contain different target sets"
+      exit 2
+    }
+  }
+  foreach ($label in $dynamicTargets) { $script:ExpectedTargets.Add($label) | Out-Null }
+  $script:ExpectedTargetsConfigured = $true
+}
+
 function Initialize-BepEligibility {
   $script:FreshnessEligibleLabels.Clear()
   $script:FreshnessEligibleOutputs.Clear()
@@ -2865,6 +2959,7 @@ function Initialize-BepEligibility {
         if ($null -eq $testResultId) { continue }
         $label = [string](Get-MapValue $testResultId 'label')
         if ([string]::IsNullOrWhiteSpace($label)) { continue }
+        if ($script:ExpectedTargetsConfigured -and -not $script:ExpectedTargets.Contains($label)) { continue }
         $result = Get-MapValue $event 'testResult'
         if ($null -eq $result) { $result = Get-MapValue $event 'test_result' }
         if ($null -eq $result) { continue }
@@ -3096,6 +3191,8 @@ function Merge-StagedBepFreshness {
 
   foreach ($pair in @($script:StagedOutputKeys)) {
     if ([string]::IsNullOrWhiteSpace($pair)) { continue }
+    $pairLabel = ($pair -split "`t", 2)[0]
+    if ($script:ExpectedTargetsConfigured -and -not $script:ExpectedTargets.Contains($pairLabel)) { continue }
     $script:FreshnessEligibleOutputs.Add($pair) | Out-Null
     $parts = $pair -split "`t", 2
     if ($parts.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($parts[0])) {
@@ -3120,6 +3217,23 @@ function Merge-StagedBepFreshness {
   $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
   if ($conflictingOutputs.Count -gt 0) {
     Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  }
+}
+
+function Assert-ExpectedTargetCoverage {
+  if (-not $script:ExpectedTargetsConfigured -or $script:FreshnessSelectedSource -ne "bep") { return }
+  foreach ($label in $script:ExpectedTargets) {
+    $hasFresh = @($script:FreshnessEligibleOutputs | Where-Object { $_.StartsWith("$label`t", [System.StringComparison]::Ordinal) }).Count -gt 0
+    $hasCached = @($script:FreshnessCachedOutputs | Where-Object { $_.StartsWith("$label`t", [System.StringComparison]::Ordinal) }).Count -gt 0
+    if ($hasFresh -or $hasCached) { continue }
+    $hasRemote = @($script:FreshnessRemoteOnlyOutputs | Where-Object { $_.Label -eq $label }).Count -gt 0
+    if ($hasRemote) { continue }
+    if ($script:FreshnessMissingOutputLabels.Contains($label)) {
+      Log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference)"
+    } else {
+      Log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target)"
+    }
     exit 2
   }
 }
@@ -3204,6 +3318,42 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
     Write-FreshnessSkipOnce $OutputsDir "no fresh $($script:FreshnessSelectedSource) result matched target $targetLabel output $outputKey"
   }
   return $false
+}
+
+function Mark-FreshOutputHandled([string]$OutputsDir) {
+  if ([string]::IsNullOrWhiteSpace($OutputsDir)) { return }
+  $targetLabel = Get-TestOutputTargetLabel $OutputsDir
+  $outputKey = Get-TestOutputDirKey $OutputsDir
+  if ([string]::IsNullOrWhiteSpace($targetLabel) -or [string]::IsNullOrWhiteSpace($outputKey)) { return }
+  $pair = "$targetLabel`t$outputKey"
+  if ($script:FreshnessEligibleOutputs.Contains($pair)) {
+    $script:HandledFreshOutputs.Add($pair) | Out-Null
+  }
+}
+
+function Assert-FreshOutputsHandled {
+  if (-not $FailOnError -or $script:FreshnessSelectedSource -ne "bep") { return }
+  if ($script:ExpectedTargetsConfigured) {
+    $missing = @($script:FreshnessEligibleOutputs | Where-Object { -not $script:HandledFreshOutputs.Contains($_) })
+    if ($missing.Count -gt 0) {
+      Log "error: fresh expected test output produced no uploadable payloads: $($missing[0])"
+      Exit-WithUploaderReport 1
+    }
+    return
+  }
+  $freshOutputCount = Get-ReportCollectionCount $script:FreshnessEligibleOutputs
+  $handledPayloadCount = [int](
+    $script:ReportTestsProcessed +
+    $script:ReportCoverageProcessed +
+    $script:ReportTelemetryProcessed +
+    $script:ReportTestsFailed +
+    $script:ReportCoverageFailed +
+    $script:ReportTelemetryFailed
+  )
+  if ($freshOutputCount -gt 0 -and $handledPayloadCount -eq 0) {
+    Log "error: BEP reported $freshOutputCount fresh test output(s), but none produced uploadable payloads"
+    Exit-WithUploaderReport 1
+  }
 }
 
 function Test-OutputDirExecutionEligible([string]$OutputsDir) {
@@ -4560,6 +4710,7 @@ function Upload-AllTests {
         if (-not (Test-OutputDirFreshnessEligible $outputsDir.FullName)) { continue }
         foreach ($f in @(Get-SortedRawTestMsgpackFiles $testsDir)) {
             Log "error: raw msgpack test payload is not supported in Bazel file mode: $($f.FullName)"
+            Mark-FreshOutputHandled $outputsDir.FullName
             $failed++
             $script:ReportTestsFailed++
             $script:UploadFailures++
@@ -4592,10 +4743,12 @@ function Upload-AllTests {
                 }
                 if ($validated) {
                     Log "dry-run kept test payload: $($f.FullName)"
+                    Mark-FreshOutputHandled $outputsDir.FullName
                     $total++
                     $script:ReportTestsProcessed++
                 } else {
                     Log "warning: failed to dry-run validate $($f.FullName)"
+                    Mark-FreshOutputHandled $outputsDir.FullName
                     $failed++
                     $script:ReportTestsFailed++
                     $script:UploadFailures++
@@ -4610,12 +4763,14 @@ function Upload-AllTests {
             }
             if ($uploaded) {
                 Log "uploaded test payload: $($f.FullName)"
+                Mark-FreshOutputHandled $outputsDir.FullName
                 Remove-PayloadFile $f.FullName
                 $total++
                 $script:ReportTestsProcessed++
             } else {
                 # Continue best-effort upload and report aggregate failures at end.
                 Log "warning: failed to upload $($f.FullName)"
+                Mark-FreshOutputHandled $outputsDir.FullName
                 $failed++
                 $script:ReportTestsFailed++
                 $script:UploadFailures++
@@ -4649,6 +4804,7 @@ function Upload-AllCoverage {
             }
             if ($script:DryRun) {
                 Log "dry-run kept coverage payload: $($f.FullName)"
+                Mark-FreshOutputHandled $outputsDir.FullName
                 $total++
                 $script:ReportCoverageProcessed++
                 continue
@@ -4661,12 +4817,14 @@ function Upload-AllCoverage {
             }
             if ($uploaded) {
                 Log "uploaded coverage payload: $($f.FullName)"
+                Mark-FreshOutputHandled $outputsDir.FullName
                 Remove-PayloadFile $f.FullName
                 $total++
                 $script:ReportCoverageProcessed++
             } else {
                 # Preserve symmetry with test uploads: keep going, count failures.
                 Log "warning: failed to upload $($f.FullName)"
+                Mark-FreshOutputHandled $outputsDir.FullName
                 $failed++
                 $script:ReportCoverageFailed++
                 $script:UploadFailures++
@@ -4701,6 +4859,7 @@ function Upload-AllTelemetry {
                 }
                 if ($script:DryRun) {
                     Log "dry-run kept telemetry payload: $($f.FullName)"
+                    Mark-FreshOutputHandled $outputsDir.FullName
                     $total++
                     $script:ReportTelemetryProcessed++
                     continue
@@ -4713,11 +4872,13 @@ function Upload-AllTelemetry {
                 }
                 if ($uploaded) {
                     Log "uploaded telemetry payload: $($f.FullName)"
+                    Mark-FreshOutputHandled $outputsDir.FullName
                     Remove-PayloadFile $f.FullName
                     $total++
                     $script:ReportTelemetryProcessed++
                 } else {
                     Log "warning: failed to upload $($f.FullName)"
+                    Mark-FreshOutputHandled $outputsDir.FullName
                     $failed++
                     $script:ReportTelemetryFailed++
                     $script:UploadFailures++
@@ -4768,12 +4929,15 @@ function Upload-AllTelemetry {
 try {
     # Run tests first, then coverage. This ordering mirrors historical behavior
     # and keeps log/snapshot expectations stable across platforms.
+    Initialize-ExpectedTargets
     Initialize-FreshnessEligibility
     Merge-StagedBepFreshness
     Assert-NoRequiredRemoteOnlyBepOutputs
+    Assert-ExpectedTargetCoverage
     Upload-AllTests
     Upload-AllCoverage
     Upload-AllTelemetry
+    Assert-FreshOutputsHandled
 
     # Exit with appropriate code based on upload results
     if ($script:UploadFailures -gt 0) {

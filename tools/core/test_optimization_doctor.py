@@ -1640,7 +1640,7 @@ def _validate_expected_target_bep_freshness(
     output_key_by_output_dir: dict[Path, str] | None = None,
     label_by_output_dir: dict[Path, str] | None = None,
 ) -> list[Path]:
-    """Return expected target output dirs proven fresh by matching BEP TestResult outputs."""
+    """Return fresh expected-target outputs while accepting BEP-proven cache hits."""
     if not required:
         return output_dirs
     output_key_by_output_dir = output_key_by_output_dir or {}
@@ -1653,6 +1653,9 @@ def _validate_expected_target_bep_freshness(
                 f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
             )
 
+    bep_fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
+    bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
+    cached_only_labels = bep_cached_labels.difference(bep_fresh_labels)
     fresh_output_dirs = []
     fresh_labels = set()
     for output_dir in output_dirs:
@@ -1689,17 +1692,17 @@ def _validate_expected_target_bep_freshness(
             fresh_output_dirs.append(output_dir)
             fresh_labels.add(label)
 
-    missing_labels = expected_targets - fresh_labels
+    missing_labels = expected_targets.difference(fresh_labels.union(cached_only_labels))
     if missing_labels:
         missing_label = sorted(missing_labels)[0]
         if missing_label in freshness.missing_output_mappings:
             reason = "the fresh TestResult did not contain a mappable test.outputs reference"
-        elif any(label == missing_label for label, _ in freshness.cached_outputs):
-            reason = "BEP reported only cached results for this target"
+        elif missing_label in bep_cached_labels:
+            reason = "BEP also reported a fresh result, but no fresh test.outputs could be authorized"
         else:
             reason = "no fresh BEP TestResult matched this target's local test.outputs"
         _fail(
-            f"expected target output is not fresh in BEP: {missing_label} ({reason}). "
+            f"expected target output is neither fresh nor exclusively cached in BEP: {missing_label} ({reason}). "
             f"Rerun bazel test with --build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT} "
             "then rerun the doctor with --bep-json and --freshness-source=bep "
             "--freshness-mode=required."
@@ -2563,8 +2566,10 @@ def _classify_diagnostic_failure(report: dict[str, Any], message: str) -> tuple[
     ):
         return (
             "target_cached_by_bazel",
-            "Required BEP freshness rejected cached Bazel test outputs.",
-            ["Run tests with --nocache_test_results or select targets that executed in this invocation."],
+            "Cached Bazel outputs did not satisfy the requested BEP freshness contract.",
+            [
+                "Use the BEP from the exact matching bazel test invocation and verify each expected target is fresh or exclusively cached."
+            ],
         )
     if targets.get("missing"):
         return (
@@ -2847,6 +2852,21 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 )
 
         if not output_dirs:
+            cached_only_expected_targets = False
+            if expected_targets and freshness is not None:
+                bep_fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
+                bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
+                cached_only_expected_targets = set(expected_targets).issubset(
+                    bep_cached_labels.difference(bep_fresh_labels)
+                )
+            if cached_only_expected_targets:
+                _update_diagnostic_output_summary(report, [])
+                report["summary"]["payload_selection"] = {}
+                print(
+                    "[dd-test-optimization-doctor] OK: all expected targets were served "
+                    "from Bazel's test cache; no fresh payloads require validation"
+                )
+                return 0
             if expected_targets:
                 _fail("no Test Optimization output directories found for expected targets after BEP artifact staging")
             missing_root = testlogs_dir if testlogs_dir is not None else workspace / "bazel-testlogs"

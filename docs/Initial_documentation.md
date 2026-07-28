@@ -129,6 +129,14 @@ because repository rules cannot discover the final analyzed test set. The
 temporary manifest is therefore an internal handoff between those phases, not
 user-maintained configuration.
 
+Within one managed command, test, doctor, uploader dry-run, and optional upload
+reuse the exact same manifest path and external-repository snapshot. A later
+command uses a new temporary path and fetches current backend state once.
+Stable settings and per-module payload files are the test action inputs, so
+unchanged backend responses preserve normal Bazel test-result caching.
+`telemetry_facts.json` may vary with request timings but remains post-test
+doctor/uploader context rather than a test input.
+
 Each selected target consumes only its context's settings and matching module
 label. A module payload change invalidates targets in that module; a context
 settings change invalidates all targets in that context; unrelated services

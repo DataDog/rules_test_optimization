@@ -391,6 +391,9 @@ config, expected targets, BEP files and seen targets, fresh/cached/remote-only
 BEP outputs, selected and blocked BEP artifact carriers, staged `outputs.zip`
 or `test.outputs` artifacts, local/staged payload directories, payload counts,
 Bazel metadata, payload-selection counts, and failure messages.
+When expected targets are configured, fresh and cached BEP labels jointly
+satisfy target coverage. Only fresh outputs are validated; an all-cached
+invocation succeeds with zero validated output directories.
 
 Example:
 
@@ -417,9 +420,9 @@ config, BEP files, selected freshness source, BEP freshness counts, artifact
 staging counts, discovered payload directories, per-payload-type discovered,
 processed, failed, and skipped counts, aggregate upload failures, upload
 attempt status, final status, and exit code. The `result.reason_code` explains
-common no-upload cases such as `target_cached_by_bazel`,
-`bep_output_remote_only_without_downloader`, `no_payload_json_found`,
-`payload_enrichment_failed`, and `upload_skipped_dry_run`.
+common no-upload cases such as `bep_output_remote_only_without_downloader`,
+`no_payload_json_found`, `payload_enrichment_failed`, and
+`upload_skipped_dry_run`.
 
 The CI wrapper writes a separate dry-run uploader report when `--report-dir` is
 used. If only `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` or
@@ -626,8 +629,11 @@ or set `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` for the uploader run.
 `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` controls how long the uploader waits for
 payload discovery/quiescence before proceeding.
 - `> 0`: wait up to the configured budget for payload files to appear and settle.
-- `0`: skip waiting loops immediately. If no payloads are found, uploader exits
-  cleanly with "nothing to upload" semantics.
+- `0`: skip waiting loops immediately. When BEP freshness is configured, the
+  uploader evaluates that BEP before applying no-payload failure policy, so an
+  all-cached invocation is a no-op while missing fresh payloads still fail.
+  Without BEP freshness, the configured no-payload/`fail_on_error` policy
+  applies normally.
 
 ## Endpoints and headers
 
@@ -718,11 +724,11 @@ used together only when they describe the same set; disagreement is a hard
 error.
 
 A cached Bazel test does not produce a fresh payload for the current
-invocation. Managed upload flows that require strict BEP freshness must force a
-fresh test execution before doctor and upload. This is independent from the
-Rule integration cache tests, which intentionally keep test-result caching
-enabled to prove that metadata changes invalidate only the affected
-context/module action inputs.
+invocation. With exact expected targets configured on both doctor and uploader,
+fresh and cached BEP results jointly satisfy invocation coverage. Only fresh
+outputs are validated or uploaded; an all-cached invocation is a successful
+no-op. Every fresh expected output must independently contain a handled
+payload, so one valid sibling output cannot hide an empty one.
 
 ### Advanced: reuse an already-fetched context file
 

@@ -22,8 +22,12 @@ def _bootstrap_cache_key_stability_test(ctx):
 
     ordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", ordered_versions, go_identity)
     reordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", reordered_versions, go_identity)
+    changed_versions = dict(ordered_versions)
+    changed_versions["github.com/DataDog/dd-trace-go/v2"] = "v2.8.0"
+    changed_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", changed_versions, go_identity)
 
     asserts.equals(env, ordered_key, reordered_key)
+    asserts.false(env, ordered_key == changed_key, "a selected module version change must invalidate the bootstrap cache")
 
     return unittest.end(env)
 
@@ -172,6 +176,15 @@ def _declared_dd_trace_go_versions_test(ctx):
     canonical = orchestrion_extension_test_helpers.declared_dd_trace_go_versions("v2.9.0", {})
     asserts.equals(env, "v2.9.0", canonical["github.com/DataDog/dd-trace-go/v2"])
     asserts.equals(env, None, orchestrion_extension_test_helpers.declared_dd_trace_go_versions("main", {}))
+    asserts.equals(
+        env,
+        None,
+        orchestrion_extension_test_helpers.declared_dd_trace_go_versions(
+            "",
+            {},
+            ["//:go.mod", "//:go.sum"],
+        ),
+    )
 
     return unittest.end(env)
 

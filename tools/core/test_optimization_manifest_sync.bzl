@@ -507,7 +507,6 @@ test_optimization_manifest_sync = repository_rule(
         "debug": attr.bool(default = False),
     },
     environ = test_optimization_repository_environ + [_MANIFEST_ENV],
-    local = True,
 )
 
 def _manifest_sync_extension_impl(module_ctx):

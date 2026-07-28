@@ -556,18 +556,108 @@ def _validated_per_module_dd_trace_go_versions(ctx, go_path, version_map):
     _run_dd_trace_go_package_preflight(ctx, go_path, version_map)
     return _copy_dd_trace_go_versions(version_map)
 
-def _validated_dd_trace_go_versions(ctx, go_path, shared_query, version_map):
-    if shared_query and version_map:
-        fail("dd_trace_go_version and dd_trace_go_versions cannot both be set")
+def _configured_version_modes(shared_query, version_map, pin_files):
+    return len([
+        value
+        for value in [
+            shared_query,
+            version_map,
+            pin_files,
+        ]
+        if value
+    ])
+
+def _pin_file_by_basename(ctx, pin_files, basename):
+    matches = [pin_file for pin_file in pin_files if ctx.path(pin_file).basename == basename]
+    if len(matches) != 1:
+        fail("dd_trace_go_pin_files must contain exactly one %s label" % basename)
+    return matches[0]
+
+def _validated_pin_file_dd_trace_go_versions(ctx, go_path, pin_files):
+    if not ctx.attr.go_sdk_root.strip():
+        fail("dd_trace_go_pin_files requires go_sdk_root so version resolution never depends on host Go")
+    if len(pin_files) != 2:
+        fail("dd_trace_go_pin_files must contain exactly one go.mod label and one go.sum label")
+    go_mod = _pin_file_by_basename(ctx, pin_files, "go.mod")
+    go_sum = _pin_file_by_basename(ctx, pin_files, "go.sum")
+    check_dir = ".ddtrace_pin_check"
+    ctx.file(check_dir + "/go.mod", ctx.read(ctx.path(go_mod)))
+    ctx.file(check_dir + "/go.sum", ctx.read(ctx.path(go_sum)))
+    env = _go_env(ctx)
+    pin_cache_root = str(ctx.path(".ddtrace_pin_check_go"))
+    env["GOMODCACHE"] = _path_join(ctx, pin_cache_root, "pkg", "mod")
+    env["GOCACHE"] = _path_join(ctx, pin_cache_root, "cache")
+    env["GOFLAGS"] = "-mod=readonly"
+    format_expr = "{{if .Path}}{{.Path}}={{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}{{end}}"
+    result = ctx.execute(
+        [
+            str(go_path),
+            "-C",
+            check_dir,
+            "list",
+            "-m",
+            "-mod=readonly",
+            "-f",
+            format_expr,
+        ] + _DD_TRACE_GO_MODULES,
+        timeout = 600,
+        environment = env,
+    )
+    if result.return_code != 0:
+        fail(
+            (
+                "Failed to derive dd-trace-go versions from dd_trace_go_pin_files: %s\n%s\n" +
+                "Ensure go.mod/go.sum select every supported tracer module, including transitive contrib modules. " +
+                "For unsupported module graphs, configure dd_trace_go_versions explicitly."
+            ) % (result.stdout, result.stderr),
+        )
+    resolved = _parse_key_value_lines(
+        result.stdout,
+        _DD_TRACE_GO_MODULES,
+        "Failed to derive dd-trace-go versions from dd_trace_go_pin_files",
+    )
+    for module_path in _DD_TRACE_GO_MODULES:
+        version = resolved[module_path]
+        if not _looks_like_canonical_dd_trace_go_version(version):
+            fail(
+                (
+                    "dd_trace_go_pin_files resolved %s to non-canonical version %r; " +
+                    "configure dd_trace_go_versions explicitly"
+                ) % (module_path, version),
+            )
+    _run_dd_trace_go_package_preflight(ctx, go_path, resolved)
+    return resolved
+
+def _merge_pin_file_module_proxy(ctx):
+    pin_cache_root = str(ctx.path(".ddtrace_pin_check_go"))
+    download_root = _path_join(ctx, pin_cache_root, "pkg", "mod", "cache", "download")
+    if not ctx.path(download_root).exists:
+        fail("dd_trace_go_pin_files resolution produced no module metadata to stage")
+    _host_merge_tree(
+        ctx,
+        download_root,
+        "module_proxy",
+        "Failed to stage dd_trace_go_pin_files module metadata",
+    )
+    _host_remove_path_if_exists(ctx, "module_proxy/sumdb", "Failed to prune pin-file module proxy sumdb cache")
+    _host_remove_path_if_exists(ctx, "module_proxy/golang.org/toolchain", "Failed to prune pin-file module proxy toolchain module")
+
+def _validated_dd_trace_go_versions(ctx, go_path, shared_query, version_map, pin_files):
+    if _configured_version_modes(shared_query, version_map, pin_files) > 1:
+        fail("dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive")
+    if pin_files:
+        return _validated_pin_file_dd_trace_go_versions(ctx, go_path, pin_files)
     if version_map:
         return _validated_per_module_dd_trace_go_versions(ctx, go_path, version_map)
     if shared_query:
         return _validated_shared_dd_trace_go_versions(ctx, go_path, shared_query)
     return _dd_trace_go_versions_from_shared(DEFAULT_DD_TRACE_GO_VERSION)
 
-def _declared_dd_trace_go_versions(shared_query, version_map):
-    if shared_query and version_map:
-        fail("dd_trace_go_version and dd_trace_go_versions cannot both be set")
+def _declared_dd_trace_go_versions(shared_query, version_map, pin_files = []):
+    if _configured_version_modes(shared_query, version_map, pin_files) > 1:
+        fail("dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive")
+    if pin_files:
+        return None
     if version_map:
         _validate_dd_trace_go_versions_keys(version_map)
         if all([_looks_like_canonical_dd_trace_go_version(version_map[module_path]) for module_path in _DD_TRACE_GO_MODULES]):
@@ -728,6 +818,33 @@ def _host_copy_tree(ctx, src, dst, error_prefix):
     copied, stdout, stderr = _host_copy_tree_result(ctx, src, dst)
     if not copied:
         fail("%s: %s\n%s" % (error_prefix, stdout, stderr))
+
+def _host_merge_tree(ctx, src, dst, error_prefix):
+    src_path = str(ctx.path(src))
+    dst_path = str(ctx.path(dst))
+    if _is_windows(ctx):
+        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
+        if not powershell:
+            fail("%s: could not find PowerShell" % error_prefix)
+        command = "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path %s | Out-Null; Get-ChildItem -LiteralPath %s -Force | Copy-Item -Destination %s -Recurse -Force" % (
+            _powershell_single_quoted_literal(dst_path),
+            _powershell_single_quoted_literal(src_path),
+            _powershell_single_quoted_literal(dst_path),
+        )
+        result = _ctx_execute_checked(
+            ctx,
+            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            timeout = 180,
+        )
+    else:
+        shell = ctx.which("sh") or "/bin/sh"
+        result = _ctx_execute_checked(
+            ctx,
+            [str(shell), "-c", "mkdir -p \"$2\" && cp -R \"$1/.\" \"$2\"", "bootstrap-merge-tree", src_path, dst_path],
+            timeout = 180,
+        )
+    if result.return_code != 0:
+        fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
 
 def _host_remove_path_if_exists(ctx, path, error_prefix):
     removed, stdout, stderr = _host_remove_path_if_exists_result(ctx, path)
@@ -1111,12 +1228,18 @@ def _orchestrion_build_impl(ctx):
     if not _orchestrion_repository_enabled(ctx):
         _write_empty_orchestrion_repository(ctx)
         return
+    if ctx.attr.dd_trace_go_pin_files and not ctx.attr.go_sdk_root.strip():
+        fail("dd_trace_go_pin_files requires go_sdk_root so version resolution never depends on host Go")
 
     total_start_ms = _probe_now_ms(ctx)
     version = ctx.attr.version
     binary_name = "orchestrion.exe" if _is_windows(ctx) else "orchestrion_bin"
     declared_go_identity = _declared_go_tool_identity(ctx, ctx.attr.go_sdk_version)
-    declared_dd_trace_go_versions = _declared_dd_trace_go_versions(ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
+    declared_dd_trace_go_versions = _declared_dd_trace_go_versions(
+        ctx.attr.dd_trace_go_version,
+        ctx.attr.dd_trace_go_versions,
+        ctx.attr.dd_trace_go_pin_files,
+    )
     if declared_go_identity != None and declared_dd_trace_go_versions != None:
         declared_bootstrap_cache = _bootstrap_cache_paths(ctx, version, declared_dd_trace_go_versions, declared_go_identity, binary_name)
         if _restore_bootstrap_cache(ctx, declared_bootstrap_cache, binary_name):
@@ -1139,7 +1262,13 @@ def _orchestrion_build_impl(ctx):
 
     go_path = _find_go_binary(ctx)
     version_start_ms = _probe_now_ms(ctx)
-    dd_trace_go_versions = _validated_dd_trace_go_versions(ctx, go_path, ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
+    dd_trace_go_versions = _validated_dd_trace_go_versions(
+        ctx,
+        go_path,
+        ctx.attr.dd_trace_go_version,
+        ctx.attr.dd_trace_go_versions,
+        ctx.attr.dd_trace_go_pin_files,
+    )
     _probe_emit(ctx, "extensions.validate_dd_trace_go_versions", start_ms = version_start_ms)
     go_identity = _go_tool_identity(ctx, go_path)
     if declared_go_identity != None and (
@@ -1150,6 +1279,8 @@ def _orchestrion_build_impl(ctx):
         fail("Configured go_sdk_version %r does not match the hermetic Go SDK identity %r" % (ctx.attr.go_sdk_version, go_identity.version))
     bootstrap_cache = _bootstrap_cache_paths(ctx, version, dd_trace_go_versions, go_identity, binary_name)
     if _restore_bootstrap_cache(ctx, bootstrap_cache, binary_name):
+        if ctx.attr.dd_trace_go_pin_files:
+            _merge_pin_file_module_proxy(ctx)
         _probe_emit(
             ctx,
             "extensions.bootstrap_cache_hit",
@@ -1409,6 +1540,8 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions, version)
     cache_write_start_ms = _probe_now_ms(ctx)
     _write_bootstrap_cache(ctx, bootstrap_cache, version, dd_trace_go_versions, go_identity, binary_name)
+    if ctx.attr.dd_trace_go_pin_files:
+        _merge_pin_file_module_proxy(ctx)
     _probe_emit(
         ctx,
         "extensions.bootstrap_cache_write",
@@ -1426,6 +1559,7 @@ _orchestrion_build = repository_rule(
         "version": attr.string(mandatory = True, doc = "Orchestrion version to build"),
         "dd_trace_go_version": attr.string(default = "", doc = "dd-trace-go version to validate against the target module for Orchestrion-backed instrumentation"),
         "dd_trace_go_versions": attr.string_dict(doc = "Per-module dd-trace-go versions to validate against the target module for Orchestrion-backed instrumentation"),
+        "dd_trace_go_pin_files": attr.label_list(allow_files = True, doc = "Optional go.mod and go.sum labels used to derive selected dd-trace-go module versions"),
         "enabled_by_env": attr.bool(default = False, doc = "Gate repository materialization on the Test Optimization repository environment"),
         "go_sdk_root": attr.string(default = "", doc = "Optional label string for a hermetic Go SDK ROOT marker used to build Orchestrion"),
         "go_sdk_version": attr.string(default = "", doc = "Optional declared version for go_sdk_root; enables cache lookup before materializing the SDK and is verified on cache miss"),
@@ -1453,6 +1587,7 @@ def _orchestrion_ext_impl(module_ctx):
     version = ""
     dd_trace_go_version = ""
     dd_trace_go_versions = {}
+    dd_trace_go_pin_files = []
     enabled_by_env = True
     go_sdk_root = ""
     go_sdk_version = ""
@@ -1460,8 +1595,12 @@ def _orchestrion_ext_impl(module_ctx):
     for mod in module_ctx.modules:
         for from_source in mod.tags.from_source:
             if from_source.version:
-                if from_source.dd_trace_go_version and from_source.dd_trace_go_versions:
-                    fail("dd_trace_go_version and dd_trace_go_versions cannot both be set in orchestrion.from_source()")
+                if _configured_version_modes(
+                    from_source.dd_trace_go_version,
+                    from_source.dd_trace_go_versions,
+                    from_source.dd_trace_go_pin_files,
+                ) > 1:
+                    fail("dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive in orchestrion.from_source()")
                 version = from_source.version
                 enabled_by_env = from_source.enabled_by_env
                 go_sdk_root = str(from_source.go_sdk_root) if from_source.go_sdk_root else ""
@@ -1471,6 +1610,8 @@ def _orchestrion_ext_impl(module_ctx):
                     dd_trace_go_version = from_source.dd_trace_go_version
                 if from_source.dd_trace_go_versions:
                     dd_trace_go_versions = from_source.dd_trace_go_versions
+                if from_source.dd_trace_go_pin_files:
+                    dd_trace_go_pin_files = from_source.dd_trace_go_pin_files
                 break
         if version:
             break
@@ -1481,6 +1622,7 @@ def _orchestrion_ext_impl(module_ctx):
             version = version,
             dd_trace_go_version = dd_trace_go_version,
             dd_trace_go_versions = dd_trace_go_versions,
+            dd_trace_go_pin_files = dd_trace_go_pin_files,
             enabled_by_env = enabled_by_env,
             go_sdk_root = go_sdk_root,
             go_sdk_version = go_sdk_version,
@@ -1503,6 +1645,10 @@ _from_source = tag_class(
         ),
         "dd_trace_go_versions": attr.string_dict(
             doc = "Per-module dd-trace-go versions to validate against the target module for Orchestrion-backed instrumentation.",
+        ),
+        "dd_trace_go_pin_files": attr.label_list(
+            allow_files = True,
+            doc = "Optional go.mod and go.sum labels used to derive selected dd-trace-go module versions.",
         ),
         "enabled_by_env": attr.bool(
             default = True,

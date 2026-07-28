@@ -206,11 +206,11 @@ jobs:
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
-      - name: Validate disabled manifest sync paths (Windows)
+      - name: Validate enabled manifest sync and runtime paths (Windows)
         if: runner.os == 'Windows'
         timeout-minutes: 10
         shell: pwsh
-        run: python tools/tests/integration/run_manifest_sync_tests.py --mode disabled
+        run: python tools/tests/integration/run_manifest_sync_tests.py --mode windows-enabled-smoke
 
   bazel-tests-ubuntu-main:
     needs: changes

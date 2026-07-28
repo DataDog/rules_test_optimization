@@ -54,7 +54,7 @@ release.
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | CI failure requires log archaeology | archive the support bundle from the failing run | Collect diagnostic reports |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
-| Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
+| Go build fails with a tracer version mismatch | `dd_trace_go_pin_files`, explicit version escape hatches, local `go.mod`/`go.sum` | Go tracer version drift |
 | Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
 | WORKSPACE archive pins fail after a PR was squash-merged | generated pins commit reachability and archive SHA | Published Go pins |
 | Private/internal WORKSPACE fetch returns 404 | SSH git or authenticated archive access | Private repository fetch |
@@ -283,6 +283,19 @@ If a direct `bazel test --config=test-optimization` bypasses the managed
 command, the failure is expected: target discovery must run first so the
 repository rule receives exact targets and runtime contexts.
 
+### Doctor or uploader triggers another metadata fetch
+
+One managed command invocation must pass the same temporary manifest path to
+test, doctor, uploader dry-run, and optional upload. If the request log shows
+another fetch during a post-test phase, check that the command did not create a
+new temporary directory or change
+`DD_TEST_OPTIMIZATION_SERVICES_MANIFEST` between child Bazel processes.
+
+A later managed command intentionally creates a new manifest path and fetches
+current backend state once. If its selected settings/module files are
+unchanged, tests should remain Bazel cache hits even though
+`telemetry_facts.json` contains new request timings.
+
 ### Manifest is malformed or unsupported
 
 The error names the schema field rejected before metadata requests. Verify
@@ -323,9 +336,12 @@ set, BEP inputs, or doctor wiring does not match the manifest. The managed
 command must test the fully expanded labels from the same discovery phase and
 pass that invocation's BEP file to doctor.
 
-Cached tests do not emit fresh payloads. If strict freshness rejects a cached
-run, execute the upload-producing phase with test-result caching disabled.
-Use separate cache-isolation tests when validating action-key behavior.
+Cached tests do not emit fresh payloads. With configured expected targets,
+strict BEP freshness accepts those cache hits as covered, validates no stale
+local outputs for them, and lets uploader treat an all-cached invocation as a
+no-op. If a cached target is reported as missing instead, verify that doctor
+received the BEP from the exact matching `bazel test` invocation. Use separate
+cache-isolation tests when validating action-key behavior.
 
 ### Disabled mode or enabled bootstrap invokes host Go
 
@@ -839,12 +855,27 @@ module version.
    declarations after `go.mod` or `go.sum` changes so Bazel and the Go module
    graph agree.
 
-3. **If you wire Orchestrion manually**, make sure both places match:
-   - `orchestrion.from_source(..., dd_trace_go_version = "<version>")`
-   - or `orchestrion.from_source(..., dd_trace_go_versions = {...})`
-   - the effective local module graph resolved from `go.mod` and `go.sum`
+3. **If you wire Orchestrion manually**, use the checked-in module as the
+   normal source of truth:
+   ```bzl
+   orchestrion.from_source(
+       dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"],
+       go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+       go_sdk_version = "<go-version>",
+       version = "<orchestrion-version>",
+   )
+   ```
+   Export both root files from their BUILD package. Bazel resolves all
+   supported direct and transitive tracer modules with hermetic Go and
+   `-mod=readonly`; it does not update `go.sum`.
 
-4. **If you omitted the version entirely**, remember the default is
+4. **If pin-file resolution reports an absent module, unsupported replacement,
+   or read-only failure**, fix the module with its normal dependency workflow.
+   If that graph intentionally cannot use pin-file mode, configure the exact
+   `dd_trace_go_versions` map as an escape hatch. Do not combine pin files with
+   either explicit version field.
+
+5. **If you omitted every selection mode**, remember the legacy default is
    `v2.9.0`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one

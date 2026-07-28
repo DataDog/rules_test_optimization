@@ -17,7 +17,7 @@ load("//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 _DOCTOR_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file"]
-_UPLOADER_CONTROLLED_ATTRS = ["name", "data"]
+_UPLOADER_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file"]
 
 def _copy_kwargs(kwargs, label):
     """Return a defensive copy of optional keyword arguments."""
@@ -108,7 +108,10 @@ def _build_test_optimization_target_specs(
     uploader_attrs.update({
         "name": uploader_name,
         "data": normalized_context_data,
+        "expected_targets": expected_targets,
     })
+    if expected_targets_file != None:
+        uploader_attrs["expected_targets_file"] = expected_targets_file
 
     return struct(
         doctor_attrs = doctor_attrs,

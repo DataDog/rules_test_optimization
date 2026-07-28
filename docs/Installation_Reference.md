@@ -726,6 +726,13 @@ creating the manifest or its environment handoff manually. When
 and emits stable disabled stubs. When enabled, a missing or invalid manifest
 fails before any metadata HTTP request.
 
+The command must reuse one manifest path for test, doctor, uploader dry-run,
+and optional upload so all phases resolve the same metadata snapshot. The next
+command invocation creates a new temporary manifest path and fetches current
+backend state once. Equivalent selected settings/module files remain stable
+test action inputs, preserving normal Bazel test-result cache hits; variable
+`telemetry_facts.json` timing data remains post-test context.
+
 The generated aggregate repository exports:
 
 - `topt_data_by_target`: exact local label to context-specific `topt_data`;
@@ -1362,9 +1369,10 @@ load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl",
 
 dd_topt_go_orchestrion_tool_repo(
     version = "<orchestrion_version>",
-    # Optional. When omitted, the helper uses the fork's current default
-    # shared dd-trace-go version.
-    dd_trace_go_version = "<resolved_dd_trace_go_version>",
+    dd_trace_go_pin_files = [
+        "@//:go.mod",
+        "@//:go.sum",
+    ],
     go_sdk_root = "@go_sdk//:ROOT",
     go_sdk_version = "1.25.0",
 )
@@ -1377,7 +1385,12 @@ gazelle_dependencies()
 Notes for the helper:
 
 - `version` is required in WORKSPACE mode.
-- `dd_trace_go_version` and `dd_trace_go_versions` are mutually exclusive.
+- Export the root `go.mod` and `go.sum` from its BUILD package. Pin-file mode
+  derives every supported direct or transitive tracer module with
+  `-mod=readonly` and does not modify those files.
+- `dd_trace_go_pin_files`, `dd_trace_go_version`, and
+  `dd_trace_go_versions` are mutually exclusive. The explicit forms are escape
+  hatches for module graphs that the normal pin-file mode cannot resolve.
 - `go_sdk_root` must reference the SDK registered by
   `go_register_toolchains`, and `go_sdk_version` must equal that toolchain
   version. Enabled bootstrap uses this SDK instead of a host `go` binary.
