@@ -109,7 +109,7 @@ def _go_env(ctx):
     return {
         "GO111MODULE": "on",
         "GOWORK": "off",
-        "GOTOOLCHAIN": "go1.25.0+auto",
+        "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
         # Repository resolution only needs public modules. Clear host-specific
         # private-module settings so bootstrap does not silently fall back to
         # direct VCS fetches based on the developer environment.
@@ -412,7 +412,9 @@ def _should_append_go_toolchain_hint(args):
         return True
     return "mod" in argv and "download" in argv
 
-def _go_toolchain_hint():
+def _go_toolchain_hint(ctx):
+    if ctx.attr.go_sdk_root.strip():
+        return "Bootstrap uses the configured hermetic Go SDK with GOTOOLCHAIN=local. Ensure go_sdk_root and go_sdk_version identify the same SDK."
     return "Bootstrap uses GOTOOLCHAIN=go1.25.0+auto. If Go 1.25.0 is not already installed, the Go tool may try to download it during repository resolution. In restricted environments, preinstall Go 1.25.0 or allow fetch-time egress, then rerun bazel sync."
 
 def _ctx_execute_or_fail(ctx, args, env, error_prefix):
@@ -420,7 +422,7 @@ def _ctx_execute_or_fail(ctx, args, env, error_prefix):
     if result.return_code != 0:
         details = "%s: %s\n%s" % (error_prefix, result.stdout, result.stderr)
         if _should_append_go_toolchain_hint(args):
-            details += "\n" + _go_toolchain_hint()
+            details += "\n" + _go_toolchain_hint(ctx)
         fail(details)
     return result
 
@@ -1531,7 +1533,7 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     if result.return_code == 0:
         _probe_emit(ctx, "extensions.go_build", start_ms = build_start_ms, status = "ok")
     else:
-        fail("Failed to build orchestrion from upstream module graph: %s\n%s\n%s" % (result.stdout, result.stderr, _go_toolchain_hint()))
+        fail("Failed to build orchestrion from upstream module graph: %s\n%s\n%s" % (result.stdout, result.stderr, _go_toolchain_hint(ctx)))
 
     proxy_start_ms = _probe_now_ms(ctx)
     _write_orchestrion_module_proxy(ctx, go_path, version, dd_trace_go_versions)
