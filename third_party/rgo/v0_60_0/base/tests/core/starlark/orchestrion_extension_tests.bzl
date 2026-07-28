@@ -132,6 +132,23 @@ def _host_platform_normalization_test(ctx):
 
 host_platform_normalization_test = unittest.make(_host_platform_normalization_test)
 
+def _git_env_test(ctx):
+    env = unittest.begin(ctx)
+
+    linux_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "linux")))
+    asserts.equals(env, "/dev/null", linux_env["GIT_CONFIG_GLOBAL"])
+    asserts.equals(env, "1", linux_env["GIT_CONFIG_NOSYSTEM"])
+    asserts.equals(env, "0", linux_env["GIT_TERMINAL_PROMPT"])
+
+    windows_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "windows_nt")))
+    asserts.equals(env, "NUL", windows_env["GIT_CONFIG_GLOBAL"])
+    asserts.equals(env, "1", windows_env["GIT_CONFIG_NOSYSTEM"])
+    asserts.equals(env, "0", windows_env["GIT_TERMINAL_PROMPT"])
+
+    return unittest.end(env)
+
+git_env_test = unittest.make(_git_env_test)
+
 def _fallback_go_tool_identity_test(ctx):
     env = unittest.begin(ctx)
 
@@ -198,6 +215,7 @@ def orchestrion_extension_test_suite():
         declared_dd_trace_go_versions_test,
         declared_go_tool_identity_test,
         fallback_go_tool_identity_test,
+        git_env_test,
         host_platform_normalization_test,
         module_proxy_resolved_modules_json_test,
         module_proxy_seed_go_mod_test,

@@ -2091,10 +2091,10 @@ index 0000000..31a01c3
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..a7ff531
+index 0000000..9f5b892
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1678 @@
+@@ -0,0 +1,1689 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -2201,9 +2201,18 @@ index 0000000..a7ff531
 +def _bootstrap_go_cache_root(ctx):
 +    return _path_join(ctx, _bootstrap_cache_root(ctx), "go")
 +
++def _git_env(ctx):
++    # GOPROXY=direct may invoke Git. Keep that fallback independent from host
++    # rewrites, credential helpers, and interactive prompts.
++    return {
++        "GIT_CONFIG_GLOBAL": "NUL" if _is_windows(ctx) else "/dev/null",
++        "GIT_CONFIG_NOSYSTEM": "1",
++        "GIT_TERMINAL_PROMPT": "0",
++    }
++
 +def _go_env(ctx):
 +    go_cache_root = _bootstrap_go_cache_root(ctx)
-+    return {
++    env = {
 +        "GO111MODULE": "on",
 +        "GOWORK": "off",
 +        "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
@@ -2215,10 +2224,11 @@ index 0000000..a7ff531
 +        "GONOSUMDB": "",
 +        "GOPROXY": "https://proxy.golang.org,direct",
 +        "GOSUMDB": "sum.golang.org",
-+        "GIT_TERMINAL_PROMPT": "0",
 +        "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
 +        "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
 +    }
++    env.update(_git_env(ctx))
++    return env
 +
 +def _probe_enabled(ctx):
 +    return getattr(ctx.attr, "log_timing", False)
@@ -3270,6 +3280,7 @@ index 0000000..a7ff531
 +    declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
 +    declared_go_tool_identity = _declared_go_tool_identity,
 +    fallback_go_tool_identity = _fallback_go_tool_identity,
++    git_env = _git_env,
 +    host_path_is_writable = _host_path_is_writable,
 +    module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
 +    module_proxy_seed_go_mod = _module_proxy_seed_go_mod,
@@ -16456,10 +16467,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..c8659c7
+index 0000000..f3d8151
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,224 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -16594,6 +16605,23 @@ index 0000000..c8659c7
 +
 +host_platform_normalization_test = unittest.make(_host_platform_normalization_test)
 +
++def _git_env_test(ctx):
++    env = unittest.begin(ctx)
++
++    linux_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "linux")))
++    asserts.equals(env, "/dev/null", linux_env["GIT_CONFIG_GLOBAL"])
++    asserts.equals(env, "1", linux_env["GIT_CONFIG_NOSYSTEM"])
++    asserts.equals(env, "0", linux_env["GIT_TERMINAL_PROMPT"])
++
++    windows_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "windows_nt")))
++    asserts.equals(env, "NUL", windows_env["GIT_CONFIG_GLOBAL"])
++    asserts.equals(env, "1", windows_env["GIT_CONFIG_NOSYSTEM"])
++    asserts.equals(env, "0", windows_env["GIT_TERMINAL_PROMPT"])
++
++    return unittest.end(env)
++
++git_env_test = unittest.make(_git_env_test)
++
 +def _fallback_go_tool_identity_test(ctx):
 +    env = unittest.begin(ctx)
 +
@@ -16660,6 +16688,7 @@ index 0000000..c8659c7
 +        declared_dd_trace_go_versions_test,
 +        declared_go_tool_identity_test,
 +        fallback_go_tool_identity_test,
++        git_env_test,
 +        host_platform_normalization_test,
 +        module_proxy_resolved_modules_json_test,
 +        module_proxy_seed_go_mod_test,

@@ -104,9 +104,18 @@ def _bootstrap_cache_root(ctx):
 def _bootstrap_go_cache_root(ctx):
     return _path_join(ctx, _bootstrap_cache_root(ctx), "go")
 
+def _git_env(ctx):
+    # GOPROXY=direct may invoke Git. Keep that fallback independent from host
+    # rewrites, credential helpers, and interactive prompts.
+    return {
+        "GIT_CONFIG_GLOBAL": "NUL" if _is_windows(ctx) else "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
 def _go_env(ctx):
     go_cache_root = _bootstrap_go_cache_root(ctx)
-    return {
+    env = {
         "GO111MODULE": "on",
         "GOWORK": "off",
         "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
@@ -118,10 +127,11 @@ def _go_env(ctx):
         "GONOSUMDB": "",
         "GOPROXY": "https://proxy.golang.org,direct",
         "GOSUMDB": "sum.golang.org",
-        "GIT_TERMINAL_PROMPT": "0",
         "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
         "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
     }
+    env.update(_git_env(ctx))
+    return env
 
 def _probe_enabled(ctx):
     return getattr(ctx.attr, "log_timing", False)
@@ -1173,6 +1183,7 @@ orchestrion_extension_test_helpers = struct(
     declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
     declared_go_tool_identity = _declared_go_tool_identity,
     fallback_go_tool_identity = _fallback_go_tool_identity,
+    git_env = _git_env,
     host_path_is_writable = _host_path_is_writable,
     module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
     module_proxy_seed_go_mod = _module_proxy_seed_go_mod,
