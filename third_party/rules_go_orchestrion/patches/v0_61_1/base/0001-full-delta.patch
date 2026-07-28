@@ -12722,7 +12722,7 @@ index 0000000..93f9e48
 +}
 diff --git a/go/tools/builders/orchestrion_cache.go b/go/tools/builders/orchestrion_cache.go
 new file mode 100644
-index 0000000..e3312e7
+index 0000000..bf459d7
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_cache.go
 @@ -0,0 +1,273 @@
@@ -12746,8 +12746,8 @@ index 0000000..e3312e7
 +	// files plus selected toolchain metadata, so code-only changes would
 +	// otherwise keep restoring stale synthetic go.mod state.
 +	syntheticModuleCacheABIVersion = "v4"
-+	helperDecisionCacheABIVersion  = "v7"
-+	helperExportCacheABIVersion    = "v6"
++	helperDecisionCacheABIVersion  = "v8"
++	helperExportCacheABIVersion    = "v7"
 +	helperArchiveCacheABIVersion   = "v12"
 +	// Bump the helper source-set version whenever the synthetic testmain source
 +	// compile closure changes. The helper decision and archive caches both key
