@@ -323,6 +323,22 @@ def _bootstrap_cache_required_entries(paths):
         module_proxy_root_marker = paths.module_proxy_root_marker,
     )
 
+def _bootstrap_manifest_content(paths, version, version_map, go_identity, binary_name, binary_sha256):
+    return json.encode({
+        "abi": ORCHESTRION_BOOTSTRAP_CACHE_ABI,
+        "patchset_id": ORCHESTRION_PATCHSET_ID,
+        "cache_key": paths.key,
+        "orchestrion_version": version,
+        "go_identity": {
+            "version": go_identity.version,
+            "goos": go_identity.goos,
+            "goarch": go_identity.goarch,
+        },
+        "dd_trace_go_versions": version_map,
+        "binary_name": binary_name,
+        "binary_sha256": binary_sha256,
+    }) + "\n"
+
 def _module_proxy_tree_has_payload(ctx, module_proxy_dir, root_marker):
     if not ctx.path(module_proxy_dir).exists or not ctx.path(root_marker).exists:
         return False
@@ -355,12 +371,23 @@ def _module_proxy_tree_has_payload(ctx, module_proxy_dir, root_marker):
         )
     return result.return_code == 0 and bool(result.stdout.strip())
 
-def _bootstrap_cache_entry_ready(ctx, paths):
+def _bootstrap_cache_entry_ready(ctx, paths, version, version_map, go_identity, binary_name):
     required = _bootstrap_cache_required_entries(paths)
     for required_path in required.files:
         if not ctx.path(required_path).exists:
             return False
-    return _module_proxy_tree_has_payload(ctx, required.module_proxy_dir, required.module_proxy_root_marker)
+    if not _module_proxy_tree_has_payload(ctx, required.module_proxy_dir, required.module_proxy_root_marker):
+        return False
+    binary_sha256 = _binary_sha256(ctx, paths.binary_path)
+    expected_manifest = _bootstrap_manifest_content(
+        paths,
+        version,
+        version_map,
+        go_identity,
+        binary_name,
+        binary_sha256,
+    )
+    return ctx.read(ctx.path(paths.manifest_path)) == expected_manifest
 
 def _dd_trace_go_versions_from_shared(version):
     version_map = {}
@@ -1135,22 +1162,17 @@ def _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions, versio
 def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
     manifest_repo_path = ".orchestrion_bootstrap_manifest.json"
     ready_repo_path = ".orchestrion_bootstrap_ready"
-    manifest = json.encode({
-        "abi": ORCHESTRION_BOOTSTRAP_CACHE_ABI,
-        "patchset_id": ORCHESTRION_PATCHSET_ID,
-        "cache_key": paths.key,
-        "orchestrion_version": version,
-        "go_identity": {
-            "version": go_identity.version,
-            "goos": go_identity.goos,
-            "goarch": go_identity.goarch,
-        },
-        "dd_trace_go_versions": version_map,
-        "binary_name": binary_name,
-        "binary_sha256": _binary_sha256(ctx, binary_name),
-    })
-    ctx.file(manifest_repo_path, manifest + "\n")
+    manifest = _bootstrap_manifest_content(
+        paths,
+        version,
+        version_map,
+        go_identity,
+        binary_name,
+        _binary_sha256(ctx, binary_name),
+    )
+    ctx.file(manifest_repo_path, manifest)
     ctx.file(ready_repo_path, "ready\n")
+    _host_remove_path_if_exists(ctx, paths.ready_path, "Failed to invalidate Orchestrion bootstrap cache")
     _host_copy_file(ctx, binary_name, paths.binary_path, "Failed to persist cached Orchestrion binary")
     _host_copy_file(ctx, "dd_trace_go_versions.json", paths.version_file_path, "Failed to persist cached Orchestrion version file")
     _host_copy_file(ctx, "orchestrion_version.txt", paths.tool_version_file_path, "Failed to persist cached Orchestrion tool version file")
@@ -1160,8 +1182,8 @@ def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary
     _host_copy_file(ctx, manifest_repo_path, paths.manifest_path, "Failed to persist Orchestrion bootstrap manifest")
     _host_copy_file(ctx, ready_repo_path, paths.ready_path, "Failed to persist Orchestrion bootstrap ready sentinel")
 
-def _restore_bootstrap_cache(ctx, paths, binary_name):
-    if not _bootstrap_cache_entry_ready(ctx, paths):
+def _restore_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
+    if not _bootstrap_cache_entry_ready(ctx, paths, version, version_map, go_identity, binary_name):
         return False
     binary_restored, _, _ = _host_copy_file_result(ctx, paths.binary_path, binary_name)
     if not binary_restored:
@@ -1186,6 +1208,7 @@ def _restore_bootstrap_cache(ctx, paths, binary_name):
 
 orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
+    bootstrap_manifest_content = _bootstrap_manifest_content,
     bootstrap_cache_paths = _bootstrap_cache_paths_with_root,
     bootstrap_cache_required_entries = _bootstrap_cache_required_entries,
     declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
@@ -1264,7 +1287,14 @@ def _orchestrion_build_impl(ctx):
     )
     if declared_go_identity != None and declared_dd_trace_go_versions != None:
         declared_bootstrap_cache = _bootstrap_cache_paths(ctx, version, declared_dd_trace_go_versions, declared_go_identity, binary_name)
-        if _restore_bootstrap_cache(ctx, declared_bootstrap_cache, binary_name):
+        if _restore_bootstrap_cache(
+            ctx,
+            declared_bootstrap_cache,
+            version,
+            declared_dd_trace_go_versions,
+            declared_go_identity,
+            binary_name,
+        ):
             _probe_emit(
                 ctx,
                 "extensions.bootstrap_cache_hit",
@@ -1300,7 +1330,7 @@ def _orchestrion_build_impl(ctx):
     ):
         fail("Configured go_sdk_version %r does not match the hermetic Go SDK identity %r" % (ctx.attr.go_sdk_version, go_identity.version))
     bootstrap_cache = _bootstrap_cache_paths(ctx, version, dd_trace_go_versions, go_identity, binary_name)
-    if _restore_bootstrap_cache(ctx, bootstrap_cache, binary_name):
+    if _restore_bootstrap_cache(ctx, bootstrap_cache, version, dd_trace_go_versions, go_identity, binary_name):
         if ctx.attr.dd_trace_go_pin_files:
             _merge_pin_file_module_proxy(ctx)
         _probe_emit(

@@ -2084,10 +2084,10 @@ index 0000000..177eeaf
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..01cca78
+index 0000000..db1f149
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1702 @@
+@@ -0,0 +1,1732 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -2413,6 +2413,22 @@ index 0000000..01cca78
 +        module_proxy_root_marker = paths.module_proxy_root_marker,
 +    )
 +
++def _bootstrap_manifest_content(paths, version, version_map, go_identity, binary_name, binary_sha256):
++    return json.encode({
++        "abi": ORCHESTRION_BOOTSTRAP_CACHE_ABI,
++        "patchset_id": ORCHESTRION_PATCHSET_ID,
++        "cache_key": paths.key,
++        "orchestrion_version": version,
++        "go_identity": {
++            "version": go_identity.version,
++            "goos": go_identity.goos,
++            "goarch": go_identity.goarch,
++        },
++        "dd_trace_go_versions": version_map,
++        "binary_name": binary_name,
++        "binary_sha256": binary_sha256,
++    }) + "\n"
++
 +def _module_proxy_tree_has_payload(ctx, module_proxy_dir, root_marker):
 +    if not ctx.path(module_proxy_dir).exists or not ctx.path(root_marker).exists:
 +        return False
@@ -2445,12 +2461,23 @@ index 0000000..01cca78
 +        )
 +    return result.return_code == 0 and bool(result.stdout.strip())
 +
-+def _bootstrap_cache_entry_ready(ctx, paths):
++def _bootstrap_cache_entry_ready(ctx, paths, version, version_map, go_identity, binary_name):
 +    required = _bootstrap_cache_required_entries(paths)
 +    for required_path in required.files:
 +        if not ctx.path(required_path).exists:
 +            return False
-+    return _module_proxy_tree_has_payload(ctx, required.module_proxy_dir, required.module_proxy_root_marker)
++    if not _module_proxy_tree_has_payload(ctx, required.module_proxy_dir, required.module_proxy_root_marker):
++        return False
++    binary_sha256 = _binary_sha256(ctx, paths.binary_path)
++    expected_manifest = _bootstrap_manifest_content(
++        paths,
++        version,
++        version_map,
++        go_identity,
++        binary_name,
++        binary_sha256,
++    )
++    return ctx.read(ctx.path(paths.manifest_path)) == expected_manifest
 +
 +def _dd_trace_go_versions_from_shared(version):
 +    version_map = {}
@@ -3225,22 +3252,17 @@ index 0000000..01cca78
 +def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
 +    manifest_repo_path = ".orchestrion_bootstrap_manifest.json"
 +    ready_repo_path = ".orchestrion_bootstrap_ready"
-+    manifest = json.encode({
-+        "abi": ORCHESTRION_BOOTSTRAP_CACHE_ABI,
-+        "patchset_id": ORCHESTRION_PATCHSET_ID,
-+        "cache_key": paths.key,
-+        "orchestrion_version": version,
-+        "go_identity": {
-+            "version": go_identity.version,
-+            "goos": go_identity.goos,
-+            "goarch": go_identity.goarch,
-+        },
-+        "dd_trace_go_versions": version_map,
-+        "binary_name": binary_name,
-+        "binary_sha256": _binary_sha256(ctx, binary_name),
-+    })
-+    ctx.file(manifest_repo_path, manifest + "\n")
++    manifest = _bootstrap_manifest_content(
++        paths,
++        version,
++        version_map,
++        go_identity,
++        binary_name,
++        _binary_sha256(ctx, binary_name),
++    )
++    ctx.file(manifest_repo_path, manifest)
 +    ctx.file(ready_repo_path, "ready\n")
++    _host_remove_path_if_exists(ctx, paths.ready_path, "Failed to invalidate Orchestrion bootstrap cache")
 +    _host_copy_file(ctx, binary_name, paths.binary_path, "Failed to persist cached Orchestrion binary")
 +    _host_copy_file(ctx, "dd_trace_go_versions.json", paths.version_file_path, "Failed to persist cached Orchestrion version file")
 +    _host_copy_file(ctx, "orchestrion_version.txt", paths.tool_version_file_path, "Failed to persist cached Orchestrion tool version file")
@@ -3250,8 +3272,8 @@ index 0000000..01cca78
 +    _host_copy_file(ctx, manifest_repo_path, paths.manifest_path, "Failed to persist Orchestrion bootstrap manifest")
 +    _host_copy_file(ctx, ready_repo_path, paths.ready_path, "Failed to persist Orchestrion bootstrap ready sentinel")
 +
-+def _restore_bootstrap_cache(ctx, paths, binary_name):
-+    if not _bootstrap_cache_entry_ready(ctx, paths):
++def _restore_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
++    if not _bootstrap_cache_entry_ready(ctx, paths, version, version_map, go_identity, binary_name):
 +        return False
 +    binary_restored, _, _ = _host_copy_file_result(ctx, paths.binary_path, binary_name)
 +    if not binary_restored:
@@ -3276,6 +3298,7 @@ index 0000000..01cca78
 +
 +orchestrion_extension_test_helpers = struct(
 +    bootstrap_cache_key = _bootstrap_cache_key,
++    bootstrap_manifest_content = _bootstrap_manifest_content,
 +    bootstrap_cache_paths = _bootstrap_cache_paths_with_root,
 +    bootstrap_cache_required_entries = _bootstrap_cache_required_entries,
 +    declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
@@ -3354,7 +3377,14 @@ index 0000000..01cca78
 +    )
 +    if declared_go_identity != None and declared_dd_trace_go_versions != None:
 +        declared_bootstrap_cache = _bootstrap_cache_paths(ctx, version, declared_dd_trace_go_versions, declared_go_identity, binary_name)
-+        if _restore_bootstrap_cache(ctx, declared_bootstrap_cache, binary_name):
++        if _restore_bootstrap_cache(
++            ctx,
++            declared_bootstrap_cache,
++            version,
++            declared_dd_trace_go_versions,
++            declared_go_identity,
++            binary_name,
++        ):
 +            _probe_emit(
 +                ctx,
 +                "extensions.bootstrap_cache_hit",
@@ -3390,7 +3420,7 @@ index 0000000..01cca78
 +    ):
 +        fail("Configured go_sdk_version %r does not match the hermetic Go SDK identity %r" % (ctx.attr.go_sdk_version, go_identity.version))
 +    bootstrap_cache = _bootstrap_cache_paths(ctx, version, dd_trace_go_versions, go_identity, binary_name)
-+    if _restore_bootstrap_cache(ctx, bootstrap_cache, binary_name):
++    if _restore_bootstrap_cache(ctx, bootstrap_cache, version, dd_trace_go_versions, go_identity, binary_name):
 +        if ctx.attr.dd_trace_go_pin_files:
 +            _merge_pin_file_module_proxy(ctx)
 +        _probe_emit(
@@ -16470,10 +16500,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..e0a1867
+index 0000000..48b9452
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,257 @@
+@@ -0,0 +1,290 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -16527,6 +16557,38 @@ index 0000000..e0a1867
 +    return unittest.end(env)
 +
 +bootstrap_cache_paths_contract_test = unittest.make(_bootstrap_cache_paths_contract_test)
++
++def _bootstrap_manifest_content_test(ctx):
++    env = unittest.begin(ctx)
++
++    paths = struct(key = "cache-key")
++    versions = {
++        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
++        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
++        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
++    }
++    identity = struct(
++        version = "go version go1.25.0 linux/amd64",
++        goos = "linux",
++        goarch = "amd64",
++    )
++    manifest = json.decode(orchestrion_extension_test_helpers.bootstrap_manifest_content(
++        paths,
++        "v1.6.0",
++        versions,
++        identity,
++        "orchestrion_bin",
++        "0123456789abcdef",
++    ))
++
++    asserts.equals(env, "cache-key", manifest["cache_key"])
++    asserts.equals(env, identity.version, manifest["go_identity"]["version"])
++    asserts.equals(env, versions, manifest["dd_trace_go_versions"])
++    asserts.equals(env, "0123456789abcdef", manifest["binary_sha256"])
++
++    return unittest.end(env)
++
++bootstrap_manifest_content_test = unittest.make(_bootstrap_manifest_content_test)
 +
 +def _module_proxy_seed_go_mod_test(ctx):
 +    env = unittest.begin(ctx)
@@ -16719,6 +16781,7 @@ index 0000000..e0a1867
 +    unittest.suite(
 +        "orchestrion_extension_tests",
 +        bootstrap_cache_key_stability_test,
++        bootstrap_manifest_content_test,
 +        bootstrap_cache_paths_contract_test,
 +        declared_dd_trace_go_versions_test,
 +        declared_go_tool_identity_test,

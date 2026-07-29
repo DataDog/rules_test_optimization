@@ -52,6 +52,38 @@ def _bootstrap_cache_paths_contract_test(ctx):
 
 bootstrap_cache_paths_contract_test = unittest.make(_bootstrap_cache_paths_contract_test)
 
+def _bootstrap_manifest_content_test(ctx):
+    env = unittest.begin(ctx)
+
+    paths = struct(key = "cache-key")
+    versions = {
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+    }
+    identity = struct(
+        version = "go version go1.25.0 linux/amd64",
+        goos = "linux",
+        goarch = "amd64",
+    )
+    manifest = json.decode(orchestrion_extension_test_helpers.bootstrap_manifest_content(
+        paths,
+        "v1.6.0",
+        versions,
+        identity,
+        "orchestrion_bin",
+        "0123456789abcdef",
+    ))
+
+    asserts.equals(env, "cache-key", manifest["cache_key"])
+    asserts.equals(env, identity.version, manifest["go_identity"]["version"])
+    asserts.equals(env, versions, manifest["dd_trace_go_versions"])
+    asserts.equals(env, "0123456789abcdef", manifest["binary_sha256"])
+
+    return unittest.end(env)
+
+bootstrap_manifest_content_test = unittest.make(_bootstrap_manifest_content_test)
+
 def _module_proxy_seed_go_mod_test(ctx):
     env = unittest.begin(ctx)
 
@@ -243,6 +275,7 @@ def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
         bootstrap_cache_key_stability_test,
+        bootstrap_manifest_content_test,
         bootstrap_cache_paths_contract_test,
         declared_dd_trace_go_versions_test,
         declared_go_tool_identity_test,
