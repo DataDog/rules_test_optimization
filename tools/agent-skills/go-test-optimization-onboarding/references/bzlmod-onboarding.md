@@ -95,9 +95,9 @@ Export the root `go.mod` and `go.sum` labels from their BUILD package. The
 pin-file mode uses this Bazel-managed SDK with `-mod=readonly` to derive direct
 and transitive supported tracer versions without editing the module.
 
-For newer support lines such as `v0_61_1`, use the base strip prefix printed by
+For newer support lines such as `v0_62_0`, use the base strip prefix printed by
 the bootstrap or onboarding pins summary, for example
-`third_party/rgo/v0_61_1/base`. Repositories that
+`third_party/rgo/v0_62_0/base`. Repositories that
 already own a private `rules_go` patch stack should generate a public consumer
 patch profile and rebase or merge it locally inside that repository instead of
 using a second complete tree. `dd_trace_go_pin_files`,

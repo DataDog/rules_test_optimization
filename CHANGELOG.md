@@ -30,6 +30,8 @@ versioning.
 - Reusable Go WORKSPACE helpers for config-gated metadata sync and fixed-name
   Orchestrion repository declaration, matching the public Go Bzlmod onboarding
   contract.
+- Added a non-default `rules_go` v0.62.0 support line with the maintained
+  Orchestrion integration and public consumer patch profile.
 
 ### Changed
 - The public Go Bzlmod extension now defaults `enabled_by_env` to `True`, so
