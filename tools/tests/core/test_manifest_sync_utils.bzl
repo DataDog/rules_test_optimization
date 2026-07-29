@@ -13,6 +13,7 @@ load(
     "decode_manifest_for_tests",
     "manifest_summary_for_tests",
     "normalize_manifest_for_tests",
+    "render_disabled_manifest_build_for_tests",
     "render_disabled_manifest_export_for_tests",
     "render_enabled_manifest_build_for_tests",
     "render_enabled_manifest_export_for_tests",
@@ -161,6 +162,11 @@ def _manifest_generated_contracts_test(ctx):
     asserts.true(env, "topt_data_by_target = {}" in disabled_export)
     asserts.true(env, "topt_data_by_context = {}" in disabled_export)
     asserts.true(env, "target_context_keys = {}" in disabled_export)
+
+    disabled_build = render_disabled_manifest_build_for_tests()
+    asserts.true(env, "test_optimization_context_bundle(" in disabled_build)
+    asserts.true(env, "contexts = []" in disabled_build)
+    asserts.true(env, "context_keys = []" in disabled_build)
     return unittest.end(env)
 
 def _materialized_context(service, runtime_name, module_label):

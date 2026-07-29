@@ -6440,6 +6440,11 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("idx=$((alpha_len + (i % 7)))", bash_text)
         self.assertIn("$idx = $alphabet.Length + ($i % 7)", powershell_text)
 
+    def test_bash_jq_avoids_reserved_label_variable(self) -> None:
+        """Validate jq programs remain compatible with versions reserving `label`."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        self.assertNotIn("as $label", bash_text)
+
     def test_sync_windows_mkdir_command_uses_path(self) -> None:
         """Validate sync windows mkdir command uses path behavior."""
         sync_text = _runfile("tools/core/test_optimization_sync.bzl").read_text(encoding="utf-8")

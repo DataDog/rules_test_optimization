@@ -774,6 +774,8 @@ def run_disabled_contract(harness: ManifestSyncHarness) -> None:
             "@test_optimization_data//:test_optimization_files",
             "@test_optimization_data//:test_optimization_context",
             "@test_optimization_data//:expected_targets",
+            "//:doctor",
+            "//:uploader",
         ],
         disabled_env,
     )

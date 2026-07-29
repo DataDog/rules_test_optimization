@@ -3041,8 +3041,8 @@ prepare_bep_eligibility() {
 	      select(.id.testResult? != null or .id.test_result? != null)
 	      | (.testResult // .test_result // {}) as $result
 	      | (.id.testResult // .id.test_result // {}) as $id
-      | ($id.label // empty) as $label
-	      | select($label != "")
+      | ($id.label // empty) as $target_label
+	      | select($target_label != "")
 	      | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
 	      | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
 	      | [
@@ -3060,7 +3060,7 @@ prepare_bep_eligibility() {
 	      | select(($cached_local or $cached_remote) or ($event_has_blocking_remote | not))
 	      | $output_refs[]?.keys[]? as $output_key
 	      | select($output_key != "")
-	      | "\($label)\t\($output_key)\t\(if ($cached_local or $cached_remote) then "cached" else "eligible" end)"
+	      | "\($target_label)\t\($output_key)\t\(if ($cached_local or $cached_remote) then "cached" else "eligible" end)"
 	    ' "$resolved_bep" >"$tmp_records"; then
       if optional_bep_unavailable "failed to parse BEP JSON: $resolved_bep"; then
         return 0
@@ -3093,8 +3093,8 @@ prepare_bep_eligibility() {
       select(.id.testResult? != null or .id.test_result? != null)
       | (.testResult // .test_result // {}) as $result
       | (.id.testResult // .id.test_result // {}) as $id
-      | ($id.label // empty) as $label
-      | select($label != "")
+      | ($id.label // empty) as $target_label
+      | select($target_label != "")
       | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
       | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
       | select(($cached_local or $cached_remote) | not)
@@ -3115,7 +3115,7 @@ prepare_bep_eligibility() {
       | select(.hinted or ($event_has_mappable_output | not))
 	      | . as $ref
 	      | .remote[]?
-	      | "\($label)\t\(($ref.keys[0] // ""))\t\(.)\tremote_only"
+	      | "\($target_label)\t\(($ref.keys[0] // ""))\t\(.)\tremote_only"
 		    ' "$resolved_bep" >"$tmp_remote"; then
       if optional_bep_unavailable "failed to parse BEP remote-only outputs: $resolved_bep"; then
         return 0
@@ -3147,8 +3147,8 @@ prepare_bep_eligibility() {
 	      select(.id.testResult? != null or .id.test_result? != null)
       | (.testResult // .test_result // {}) as $result
       | (.id.testResult // .id.test_result // {}) as $id
-      | ($id.label // empty) as $label
-      | select($label != "")
+      | ($id.label // empty) as $target_label
+      | select($target_label != "")
       | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
       | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
       | select(($cached_local or $cached_remote) | not)
@@ -3166,7 +3166,7 @@ prepare_bep_eligibility() {
           ([ $key_candidates[]? | test_outputs_key | select(. != "") ] | length) == 0 and
           ([ $raw_candidates[]? | select(remote_only_reference) ] | length) == 0
         )
-      | $label
+      | $target_label
 	    ' "$resolved_bep" >"$tmp_missing"; then
       if optional_bep_unavailable "failed to parse BEP missing output mappings: $resolved_bep"; then
         return 0
@@ -3341,13 +3341,13 @@ prepare_execution_log_eligibility() {
     select((.mnemonic // "") == "TestRunner")
     | select((.cacheHit // false) != true)
     | select((((.runner // "") | ascii_downcase | contains("cache hit"))) | not)
-    | (.targetLabel // empty) as $label
-    | select($label != "")
+    | (.targetLabel // empty) as $target_label
+    | select($target_label != "")
     | outputs[]?
     | select(type == "string")
     | test_output_key as $output_key
     | select($output_key != "")
-    | "\($label)\t\($output_key)"
+    | "\($target_label)\t\($output_key)"
   ' "$resolved_log" | LC_ALL=C sort -u >"$EXECUTION_ELIGIBLE_OUTPUTS_FILE"; then
     log "error: failed to parse execution log JSON: $resolved_log"
     exit 2

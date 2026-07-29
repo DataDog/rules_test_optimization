@@ -251,14 +251,16 @@ def _empty_expected_targets():
 
 def _render_disabled_build():
     return (
+        'load("@datadog-rules-test-optimization//tools/core:test_optimization_context_utils.bzl", "test_optimization_context_bundle")\n\n' +
         "filegroup(\n" +
         '    name = "test_optimization_files",\n' +
         "    srcs = [],\n" +
         '    visibility = ["//visibility:public"],\n' +
         ")\n\n" +
-        "filegroup(\n" +
+        "test_optimization_context_bundle(\n" +
         '    name = "test_optimization_context",\n' +
-        "    srcs = [],\n" +
+        "    contexts = [],\n" +
+        "    context_keys = [],\n" +
         '    visibility = ["//visibility:public"],\n' +
         ")\n\n" +
         "filegroup(\n" +
