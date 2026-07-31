@@ -322,8 +322,8 @@ func parseFlags() config {
 	flag.IntVar(&cfg.defaultJobs, "default-jobs", 0, "Default --jobs value added to generated Bazel test commands when greater than zero")
 	flag.StringVar(&cfg.wrapperPackage, "wrapper-package", defaultWrapperPackage, "Workspace-relative Bazel package where --write-wrapper-template writes the wrapper")
 	flag.StringVar(&cfg.wrapperFile, "wrapper-file", defaultWorkspaceWrapperFile, "Wrapper .bzl filename used with --write-wrapper-template")
-	flag.StringVar(&cfg.plainWrapperName, "plain-wrapper-name", defaultPlainWrapperName, "Plain repo-local Go test wrapper name used in the generated wrapper template")
-	flag.StringVar(&cfg.optimizedWrapperName, "optimized-wrapper-name", defaultOptimizedWrapperName, "Optimized repo-local Go test wrapper name used in the generated wrapper template")
+	flag.StringVar(&cfg.plainWrapperName, "plain-wrapper-name", defaultPlainWrapperName, "Central repo-local Go test wrapper name used in the generated wrapper template")
+	flag.StringVar(&cfg.optimizedWrapperName, "optimized-wrapper-name", defaultOptimizedWrapperName, "Compatibility alias for the central repo-local Go test wrapper")
 	flag.StringVar(&cfg.orchestrionVersion, "orchestrion-version", defaultOrchestrionVersion, "Orchestrion version to configure")
 	flag.StringVar(&cfg.ddTraceGoVersion, "dd-trace-go-version", defaultDDTraceGoVersion, "dd-trace-go version to pin for Orchestrion-backed instrumentation")
 	flag.StringVar(&cfg.rulesGoRemote, "rules-go-remote", defaultRulesGoRemote, "rules_go fork remote used for Orchestrion support")
@@ -848,14 +848,39 @@ git_override(
     strip_prefix = "%s",
 )
 
+%s
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "%s",
 %s
+%s
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, stripPrefix, cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedBlockEnd), nil
+`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, stripPrefix, managedGoSDKBlock(cfg), cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedOrchestrionGoSDKAttrs(cfg), managedBlockEnd), nil
+}
+
+func managedGoSDKBlock(cfg config) string {
+	version := strings.TrimSpace(cfg.runtimeVersion)
+	if version == "" {
+		return ""
+	}
+	return fmt.Sprintf(`test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+test_optimization_go_sdk.download(
+    name = "test_optimization_go_sdk",
+    version = %q,
+)
+use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
+`, version)
+}
+
+func managedOrchestrionGoSDKAttrs(cfg config) string {
+	version := strings.TrimSpace(cfg.runtimeVersion)
+	if version == "" {
+		return ""
+	}
+	return fmt.Sprintf(`    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+    go_sdk_version = %q,`, version)
 }
 
 func validateRulesGoVariant(variant string) error {
@@ -1363,12 +1388,34 @@ func bazelrcSnippet(cfg config) (string, error) {
 	for _, key := range bazelrcRepoEnvKeys {
 		fmt.Fprintf(&buf, "common:%s --repo_env=%s\n", cfg.bazelrcConfig, key)
 	}
+	fmt.Fprintf(&buf, "common:%s --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1\n", cfg.bazelrcConfig)
+	rulesGoRepoName := cfg.rulesGoRepoName
+	if !cfg.workspaceMode {
+		// Bzlmod exposes rules_go under its module name. The WORKSPACE
+		// repository name is configurable because repository rules may
+		// remap it (the default there remains io_bazel_rules_go).
+		rulesGoRepoName = "rules_go"
+	} else if rulesGoRepoName == "" {
+		rulesGoRepoName = defaultRulesGoRepoName
+	}
+	fmt.Fprintf(&buf, "build:%s --@%s//go/private/orchestrion:enabled=true\n", cfg.bazelrcConfig, rulesGoRepoName)
 	fmt.Fprintf(&buf, "test:%s --remote_download_minimal\n", cfg.bazelrcConfig)
 	fmt.Fprintf(&buf, "test:%s --remote_download_regex=.*test[.]outputs.*\n", cfg.bazelrcConfig)
 	fmt.Fprintf(&buf, "test:%s --zip_undeclared_test_outputs\n", cfg.bazelrcConfig)
 	buf.WriteString(bazelrcBlockEnd)
 	buf.WriteString("\n")
 	return buf.String(), nil
+}
+
+func apparentRulesGoRepoName(cfg config) string {
+	rulesGoRepoName := cfg.rulesGoRepoName
+	if !cfg.workspaceMode {
+		return "rules_go"
+	}
+	if rulesGoRepoName == "" {
+		return defaultRulesGoRepoName
+	}
+	return rulesGoRepoName
 }
 
 // writeBazelrcBlock inserts or replaces the managed .bazelrc block.
@@ -1420,6 +1467,7 @@ func validationScript(cfg config) (string, error) {
 	fmt.Fprintf(&buf, "SYNC_REPO=%s\n", shellQuote(cfg.syncRepoName))
 	fmt.Fprintf(&buf, "DOCTOR_TARGET=%s\n", shellQuote(cfg.validationDoctorTarget))
 	fmt.Fprintf(&buf, "UPLOAD_TARGET=%s\n", shellQuote(cfg.validationUploadTarget))
+	fmt.Fprintf(&buf, "RULES_GO_ENABLED_LABEL=%s\n", shellQuote("@"+apparentRulesGoRepoName(cfg)+"//go/private/orchestrion:enabled"))
 	buf.WriteString("WORKSPACE_DIR=\"$(pwd -P)\"\n")
 	buf.WriteString("BEP_TMP_ROOT=\"\"\n")
 	buf.WriteString("BEP_JSON_DIR=\"\"\n")
@@ -1539,6 +1587,32 @@ run_step() {
   "$@"
 }
 
+validate_disabled_bootstrap() {
+  local alias_files
+  log "validate ordinary no-config bootstrap"
+  if ! env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+    "${BAZEL}" query "@${SYNC_REPO}//:test_optimization_files"; then
+    warn "ordinary no-config metadata bootstrap failed"
+    return 1
+  fi
+  alias_files="$(
+    env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+      "${BAZEL}" cquery \
+      "${RULES_GO_ENABLED_LABEL%:enabled}:tool_binary" --output=files
+  )" || return $?
+  if [[ -n "${alias_files}" ]]; then
+    warn "ordinary no-config Orchestrion alias unexpectedly exposed files: ${alias_files}"
+    return 1
+  fi
+
+  log "validate explicit disabled precedence"
+  env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+    "${BAZEL}" query "--config=${BAZEL_CONFIG}" \
+    --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0 \
+    "--${RULES_GO_ENABLED_LABEL}=false" \
+    "@${SYNC_REPO}//:test_optimization_files"
+}
+
 upload=0
 while (($#)); do
   case "$1" in
@@ -1564,6 +1638,10 @@ done
 trap cleanup EXIT
 
 check_disk
+if ! validate_disabled_bootstrap; then
+  warn "disabled bootstrap validation failed; skipping enabled validation"
+  exit 1
+fi
 run_step "sync ${SYNC_REPO}" "${BAZEL}" sync "${SYNC_FLAGS[@]}" "--repo_env=FETCH_SALT=$(date +%s)" "--only=${SYNC_REPO}"
 sync_status=$?
 if (( sync_status != 0 )); then
@@ -1881,16 +1959,21 @@ datadog_go_test_optimization_workspace_repositories(
 	}
 	buf.WriteString(")\n\n")
 
+	goVersion := "<go-version>"
+	if strings.TrimSpace(cfg.runtimeVersion) != "" {
+		goVersion = strings.TrimSpace(cfg.runtimeVersion)
+	}
 	buf.WriteString(fmt.Sprintf(`load("@%s//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
-load("@%s//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
+load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
 
-go_rules_dependencies()
-go_register_toolchains(version = "<go-version>")
-go_orchestrion_tool_repo(
+dd_topt_go_orchestrion_tool_repo(
     version = "%s",
 %s
+%s
 )
-`, cfg.rulesGoRepoName, cfg.rulesGoRepoName, cfg.orchestrionVersion, workspaceSnippetTracerConfig(cfg)))
+go_rules_dependencies()
+go_register_toolchains(version = "%s")
+`, cfg.rulesGoRepoName, cfg.orchestrionVersion, workspaceSnippetTracerConfig(cfg), workspaceSnippetOrchestrionGoSDKAttrs(cfg), goVersion))
 	if cfg.workspaceMode || strings.TrimSpace(cfg.service) != "" || strings.TrimSpace(cfg.runtimeVersion) != "" {
 		buf.WriteString("\n")
 		buf.WriteString(workspaceSyncSnippet(cfg))
@@ -1901,16 +1984,19 @@ go_orchestrion_tool_repo(
 // workspaceSyncSnippet renders the repository-rule call that fetches Test
 // Optimization metadata during WORKSPACE repository resolution.
 func workspaceSyncSnippet(cfg config) string {
-	return fmt.Sprintf(`load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", "test_optimization_sync")
+	modulePathLine := ""
+	if cfg.goModulePath != "" {
+		modulePathLine = fmt.Sprintf("    module_path = %q,\n", cfg.goModulePath)
+	}
+	return fmt.Sprintf(`load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_workspace_sync_repositories")
 
-test_optimization_sync(
+dd_topt_go_workspace_sync_repositories(
     name = "%s",
     service = "%s",
-    runtime_name = "go",
     runtime_version = "%s",
-    require_git_metadata = True,
+%s    require_git_metadata = True,
 )
-`, cfg.syncRepoName, cfg.service, cfg.runtimeVersion)
+`, cfg.syncRepoName, cfg.service, cfg.runtimeVersion, modulePathLine)
 }
 
 func workspaceSnippetTracerConfig(cfg config) string {
@@ -1924,6 +2010,15 @@ func workspaceSnippetTracerConfig(cfg config) string {
 		return buf.String()
 	}
 	return fmt.Sprintf("    dd_trace_go_version = %q,", cfg.ddTraceGoVersion)
+}
+
+func workspaceSnippetOrchestrionGoSDKAttrs(cfg config) string {
+	version := strings.TrimSpace(cfg.runtimeVersion)
+	if version == "" {
+		return ""
+	}
+	return fmt.Sprintf(`    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = %q,`, version)
 }
 
 func rulesGoStripPrefix(cfg config) (string, error) {
@@ -2276,34 +2371,29 @@ func ensureGuidedRootBuild(cfg config) error {
 		}
 	}
 
-	text, err = ensureLoadStatement(text, `load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")`)
-	if err != nil {
-		return err
-	}
-	text, err = ensureLoadStatement(text, `load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")`)
+	text, err = ensureLoadStatement(text, `load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")`)
 	if err != nil {
 		return err
 	}
 
 	doctorBlock := fmt.Sprintf(`%s
-dd_test_optimization_doctor(
-    name = "%s",
-    data = ["@%s//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "%s",
+    doctor_name = "%s",
+    uploader_name = "%s",
 %s)
 %s
-`, doctorBlockStart, cfg.doctorTargetName, cfg.syncRepoName, renderExpectedTargetsAttr(cfg.expectedTargets), doctorBlockEnd)
+`, doctorBlockStart, cfg.syncRepoName, cfg.doctorTargetName, cfg.uploaderTargetName, renderExpectedTargetsAttr(cfg.expectedTargets), doctorBlockEnd)
 	text, err = replaceManagedSection(text, doctorBlockStart, doctorBlockEnd, doctorBlock)
 	if err != nil {
 		return err
 	}
 
 	uploaderBlock := fmt.Sprintf(`%s
-dd_payload_uploader(
-    name = "%s",
-    data = ["@%s//:test_optimization_context"],
-)
+# The doctor/uploader pair is generated by dd_test_optimization_targets above.
 %s
-`, uploaderBlockStart, cfg.uploaderTargetName, cfg.syncRepoName, uploaderBlockEnd)
+`, uploaderBlockStart, uploaderBlockEnd)
 	text, err = replaceManagedSection(text, uploaderBlockStart, uploaderBlockEnd, uploaderBlock)
 	if err != nil {
 		return err
@@ -2444,9 +2534,9 @@ def dd_go_test(name, **kwargs):
 	return nil
 }
 
-// ensureWorkspaceWrapperTemplate writes a generic split wrapper template for
-// WORKSPACE monorepos. The template keeps repository policy in one local helper
-// while Datadog-specific attributes stay in the optimized wrapper path.
+// ensureWorkspaceWrapperTemplate writes a config-gated central wrapper template
+// for WORKSPACE monorepos. The template keeps repository policy in one local
+// helper while the public Test Optimization macro owns enabled/disabled dispatch.
 func ensureWorkspaceWrapperTemplate(cfg config) error {
 	if strings.TrimSpace(cfg.wrapperPackage) == "" {
 		return errors.New("--wrapper-package must be non-empty")
@@ -2503,19 +2593,27 @@ func ensureWorkspaceWrapperTemplate(cfg config) error {
 	return nil
 }
 
-// workspaceWrapperTemplate renders a repo-local plain/optimized wrapper split.
-// Consumers keep scheduling, tags, flaky handling, and platform policy inside
+// workspaceWrapperTemplate renders one repo-local public wrapper. Consumers keep
+// scheduling, tags, flaky handling, and platform policy inside
 // _apply_repo_go_test_policy instead of editing the public Datadog macro.
 func workspaceWrapperTemplate(cfg config, pinLabels []string) string {
-	return fmt.Sprintf(`"""Workspace-local Go test wrappers for Datadog Test Optimization.
+	compatibilityAlias := ""
+	if cfg.optimizedWrapperName != cfg.plainWrapperName {
+		compatibilityAlias = fmt.Sprintf(`
+# Compatibility alias for repositories that still load the former optimized name.
+%s = %s
+`, cfg.optimizedWrapperName, cfg.plainWrapperName)
+	}
+
+	return fmt.Sprintf(`"""Workspace-local Go test wrapper for Datadog Test Optimization.
 
 Keep repository-specific scheduling, tags, Docker, flaky, and platform policy
-inside _apply_repo_go_test_policy. The optimized wrapper below owns only the
-Datadog Test Optimization attributes.
+inside _apply_repo_go_test_policy. Every test uses the same public wrapper;
+--config=test-optimization selects enabled metadata and Orchestrion behavior,
+while omitting the config preserves the normal go_test behavior.
 """
 
 %s
-load("@%s//go:def.bzl", _raw_go_test = "go_test")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", _raw_dd_topt_go_test = "dd_topt_go_test")
 load("@%s//:export.bzl", "topt_data")
 
@@ -2528,11 +2626,7 @@ def _apply_repo_go_test_policy(go_test_macro, name, **kwargs):
     go_test_macro(name = name, **kwargs)
 
 def %s(name, **kwargs):
-    """Run a plain go_test with repository-local policy only."""
-    _apply_repo_go_test_policy(_raw_go_test, name = name, **kwargs)
-
-def %s(name, **kwargs):
-    """Run an Orchestrion-enabled go_test with Datadog Test Optimization."""
+    """Run a config-gated go_test with repository-local policy."""
     if "topt_data" in kwargs:
         fail("%s injects topt_data from @%s; remove the explicit topt_data attr")
     if "orchestrion_pin_files" in kwargs:
@@ -2546,7 +2640,8 @@ def %s(name, **kwargs):
         **kwargs
     )
 %s
-`, wrapperBlockStart, cfg.rulesGoRepoName, cfg.syncRepoName, strings.TrimRight(renderPinLabelLines(pinLabels), "\n"), cfg.plainWrapperName, cfg.optimizedWrapperName, cfg.optimizedWrapperName, cfg.syncRepoName, cfg.optimizedWrapperName, wrapperBlockEnd)
+%s
+`, wrapperBlockStart, cfg.syncRepoName, strings.TrimRight(renderPinLabelLines(pinLabels), "\n"), cfg.plainWrapperName, cfg.plainWrapperName, cfg.syncRepoName, cfg.plainWrapperName, strings.TrimRight(compatibilityAlias, "\n"), wrapperBlockEnd)
 }
 
 // resolveWorkspaceRelativeDir resolves a user-selected directory and rejects
@@ -3066,10 +3161,22 @@ func bootstrapSyncCommands(cfg config) [][]string {
 
 	switch mode {
 	case "targeted":
-		commands = append(commands,
-			append([]string{"list", "-mod=mod", "-tags=tools"}, orchestrionToolPackages...),
-			append([]string{"list", "-mod=readonly", "-tags=tools"}, orchestrionToolPackages...),
-		)
+		// Seed every selected module version explicitly before loading package
+		// roots. On a cold cache, go list may otherwise query @latest even
+		// though go.mod already contains the intended requirements.
+		commands = append(commands, []string{"mod", "download", "github.com/DataDog/orchestrion@" + cfg.orchestrionVersion})
+		for _, modulePath := range ddTraceGoModules {
+			commands = append(commands, []string{"mod", "download", modulePath + "@" + versions[modulePath]})
+		}
+		// Resolve package roots one at a time. A single go list spanning several
+		// module roots can ignore freshly edited requirements on a cold module
+		// cache and fall back to @latest for some roots.
+		for _, packagePath := range orchestrionToolPackages {
+			commands = append(commands, []string{"list", "-mod=mod", "-tags=tools", packagePath})
+		}
+		for _, packagePath := range orchestrionToolPackages {
+			commands = append(commands, []string{"list", "-mod=readonly", "-tags=tools", packagePath})
+		}
 	case "tidy":
 		commands = append(commands,
 			[]string{"get", "github.com/DataDog/dd-trace-go/v2/orchestrion@" + versions["github.com/DataDog/dd-trace-go/v2"]},
@@ -3350,17 +3457,22 @@ func normalizedGoEnv(env []string) []string {
 
 func setEnvValue(env []string, key, value string) []string {
 	prefix := key + "="
+	normalized := make([]string, 0, len(env)+1)
 	replaced := false
-	for idx, entry := range env {
+	for _, entry := range env {
 		if strings.HasPrefix(entry, prefix) {
-			env[idx] = prefix + value
-			replaced = true
+			if !replaced {
+				normalized = append(normalized, prefix+value)
+				replaced = true
+			}
+			continue
 		}
+		normalized = append(normalized, entry)
 	}
 	if !replaced {
-		env = append(env, prefix+value)
+		normalized = append(normalized, prefix+value)
 	}
-	return env
+	return normalized
 }
 
 func envValue(env []string, key string) string {
@@ -3379,15 +3491,18 @@ func orchestrionBootstrapEnv() []string {
 	goModCache := filepath.Join(cacheRoot, "pkg", "mod")
 	goBuildCache := filepath.Join(cacheRoot, "cache")
 
-	env = append(env,
-		"GO111MODULE=on",
-		"GOWORK=off",
-		"GOPATH="+cacheRoot,
-		"GOMODCACHE="+goModCache,
-		"GOCACHE="+goBuildCache,
-		"GOPROXY=https://proxy.golang.org,direct",
-		"GOSUMDB=sum.golang.org",
-	)
+	env = setEnvValue(env, "GO111MODULE", "on")
+	env = setEnvValue(env, "GOWORK", "off")
+	env = setEnvValue(env, "GOPATH", cacheRoot)
+	env = setEnvValue(env, "GOMODCACHE", goModCache)
+	env = setEnvValue(env, "GOCACHE", goBuildCache)
+	env = setEnvValue(env, "GOPROXY", "https://proxy.golang.org,direct")
+	env = setEnvValue(env, "GOSUMDB", "sum.golang.org")
+	// The Orchestrion and dd-trace-go pins are public modules. Do not let a
+	// developer's broad GOPRIVATE/GONOSUMDB settings bypass the public proxy
+	// and leave the isolated module cache with incomplete package metadata.
+	env = setEnvValue(env, "GOPRIVATE", "")
+	env = setEnvValue(env, "GONOSUMDB", "")
 	return normalizedGoEnv(env)
 }
 

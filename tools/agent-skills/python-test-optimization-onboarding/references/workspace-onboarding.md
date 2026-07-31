@@ -136,11 +136,43 @@ load("@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl", 
 
 test_optimization_sync(
     name = "test_optimization_data",
-    service = "<datadog-service>",
+    enabled_by_env = True,
+    runtime_module_path = "<python-module-path>",
     runtime_name = "python",
     runtime_version = "3.12",
+    service = "<datadog-service>",
 )
 ```
+
+Enable this sync only through the named Bazel config:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+```
+
+Do not add a `rules_go` Orchestrion flag to a Python-only consumer.
+Set `runtime_module_path` to the stable Python package/module prefix used by
+backend module groups. This is the checked-in default; `PYTHON_MODULE_PATH`
+remains an explicit higher-precedence override. Keep that environment variable
+unset, or standardize it in repository configuration, when selection must be
+deterministic across CI and developer machines.
+
+For a consumer-managed monorepo, instantiate the separate aggregate rule:
+
+```bzl
+load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync",
+)
+
+test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+```
+
+Do not add a service list. The managed command owns exact target expansion,
+service/runtime derivation, and the private temporary manifest. Static sync
+remains correct when the repository has no such command.
 
 Add one logical doctor/uploader pair. Prefer a lightweight package in monorepos:
 
@@ -155,6 +187,10 @@ dd_test_optimization_targets(
     ],
 )
 ```
+
+For manifest-managed wiring, use the aggregate context and
+`expected_targets_file = "@test_optimization_data//:expected_targets"` instead
+of a checked-in expected-target list.
 
 ## Test Targets
 
@@ -189,7 +225,6 @@ dd_topt_py_test(
     name = "pkg_py_test",
     py_test_rule = repo_py_test,
     runner_mode = "consumer_runner",
-    module_identifier = "example.python.pkg",
     srcs = glob(["test_*.py"]),
     deps = [
         requirement("ddtrace"),

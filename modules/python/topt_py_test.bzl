@@ -22,6 +22,10 @@ load(
     "merge_optional_env_defaults",
     "merge_user_env",
     "normalize_user_data",
+    "resolve_files_label",
+    "resolve_manifest_label",
+    "resolve_module_group_names",
+    "resolve_module_labels",
     "resolve_topt_service_key",
     "select_service_entry_or_fail",
     "service_mapping_entries",
@@ -69,12 +73,22 @@ def _build_module_labels(sync_repo_name, labels):
 
 build_module_labels_for_tests = _build_module_labels
 
+def _normalize_python_fallback_part(value):
+    """Normalize a workspace package or runtime module path to dotted form."""
+    dotted = (value or "").replace("\\", ".").replace("/", ".")
+    return ".".join([part for part in dotted.split(".") if part])
+
 def _build_python_fallback_identifier(package_path, runtime_info):
-    pkg_dotted = (package_path or "").replace("/", ".")
-    module_path = ((runtime_info or {}).get("module_path") or "")
-    if module_path:
-        return (module_path + "." + pkg_dotted) if pkg_dotted else module_path
-    return pkg_dotted
+    """Build a generic prefix-aware Python module fallback identifier."""
+    package_dotted = _normalize_python_fallback_part(package_path)
+    module_path = _normalize_python_fallback_part((runtime_info or {}).get("module_path"))
+    if not module_path:
+        return package_dotted
+    if not package_dotted:
+        return module_path
+    if package_dotted == module_path or package_dotted.startswith(module_path + "."):
+        return package_dotted
+    return module_path + "." + package_dotted
 
 def _has_non_empty_value(value):
     """Return True when a macro input is present and materially non-empty."""
@@ -85,6 +99,40 @@ def _has_non_empty_value(value):
     if type(value) == type([]) or type(value) == type(()):
         return len(value) > 0
     return True
+
+def _resolve_python_selector_inputs(
+        module_identifier,
+        imports_candidates,
+        deps_labels,
+        importpath_candidate,
+        module_path_candidate,
+        fallback_identifier,
+        module_groups,
+        module_included):
+    """Resolve selector inputs once so production and tests share the contract."""
+    module_groups = module_groups or []
+    uses_explicit_inference = (
+        _has_non_empty_value(module_identifier) or
+        _has_non_empty_value(imports_candidates) or
+        _has_non_empty_value(deps_labels) or
+        _has_non_empty_value(importpath_candidate) or
+        _has_non_empty_value(module_path_candidate)
+    )
+    uses_derived_fallback = _has_non_empty_value(fallback_identifier) and len(module_groups) > 0
+    if uses_explicit_inference or uses_derived_fallback:
+        include_per_module = True
+    elif module_included != None:
+        include_per_module = bool(module_included)
+    else:
+        include_per_module = len(module_groups) > 0
+    return {
+        "explicit_identifier": module_identifier or "",
+        "fallback_identifier": fallback_identifier or "",
+        "include_per_module": include_per_module,
+    }
+
+build_python_fallback_identifier_for_tests = _build_python_fallback_identifier
+resolve_python_selector_inputs_for_tests = _resolve_python_selector_inputs
 
 def _is_default_py_test_rule(py_test_rule):
     """Return True when a py_test_rule value is the rules_python base py_test macro."""
@@ -117,6 +165,25 @@ def _validate_consumer_runner_inputs(py_test_rule_was_explicit, py_test_rule_is_
             "that executes pytest with ddtrace enabled, or use runner_mode = \"managed_pytest\" " +
             "for the built-in pytest runner.",
         )
+
+def _define_uninstrumented_py_test(name, py_test_rule, runner_mode, kwargs):
+    """Define the consumer test without Datadog wiring when sync is disabled."""
+    test_kwargs = dict(kwargs)
+    test_kwargs["env"] = _merge_user_env(
+        test_kwargs.get("env"),
+        {"DD_CIVISIBILITY_ENABLED": "false"},
+        macro_name = "dd_topt_py_test",
+    )
+    if runner_mode == _RUNNER_MODE_MANAGED_PYTEST and test_kwargs.get("main") == None:
+        pkg_path = native.package_name()
+        test_kwargs["srcs"] = _append_data_dependencies(test_kwargs.get("srcs"), [_RUN_PYTEST])
+        test_kwargs["main"] = _RUN_PYTEST
+        if "args" not in test_kwargs:
+            test_kwargs["args"] = [pkg_path] if pkg_path else []
+        if "imports" not in test_kwargs:
+            test_kwargs["imports"] = [pkg_path] if pkg_path else []
+    test_kwargs["name"] = name
+    py_test_rule(**test_kwargs)
 
 # Public aliases for unit tests.
 validate_runner_mode_for_tests = _validate_runner_mode
@@ -158,6 +225,20 @@ def dd_topt_py_test(
     py_test_rule_is_default = _is_default_py_test_rule(py_test_rule)
     _svc = _select_service_entry_or_fail(topt_data, topt_service)
 
+    if runner_mode == _RUNNER_MODE_CONSUMER_RUNNER:
+        _validate_consumer_runner_inputs(
+            py_test_rule_was_explicit,
+            py_test_rule_is_default,
+            kwargs.get("main"),
+        )
+
+    # A disabled sync repository exports the same schema with enabled = False.
+    # Keep the consumer's test runnable, but do not create selectors, wrappers,
+    # metadata targets, Datadog env, or payload-producing instrumentation.
+    if not _svc.get("enabled", True):
+        _define_uninstrumented_py_test(name, py_test_rule, runner_mode, kwargs)
+        return
+
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
 
     user_data = kwargs.pop("data", None)
@@ -178,9 +259,6 @@ def dd_topt_py_test(
     user_srcs = kwargs.pop("srcs", None)
     user_main = kwargs.pop("main", None)
 
-    if runner_mode == _RUNNER_MODE_CONSUMER_RUNNER:
-        _validate_consumer_runner_inputs(py_test_rule_was_explicit, py_test_rule_is_default, user_main)
-
     # args is a wrapper-only attr; split_test_wrapper_kwargs already moved it to wrapper_kwargs.
     user_args = wrapper_kwargs.pop("args", None)
 
@@ -195,25 +273,24 @@ def dd_topt_py_test(
     if type(module_path_candidate) == type("") and module_path_candidate:
         attribute_candidates.append(module_path_candidate)
 
-    uses_inference = (
-        _has_non_empty_value(module_identifier) or
-        _has_non_empty_value(imports_candidates) or
-        _has_non_empty_value(deps_labels) or
-        _has_non_empty_value(importpath_candidate) or
-        _has_non_empty_value(module_path_candidate)
+    files_label = resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
+    module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
+    module_group_names = resolve_module_group_names(
+        _svc,
+        module_labels,
+        macro_name = "dd_topt_py_test",
     )
-    if uses_inference:
-        include_per_module_files = True
-    else:
-        module_included = _python.get("module_included") if _is_dict(_python) else None
-        if module_included != None:
-            include_per_module_files = bool(module_included)
-        else:
-            include_per_module_files = bool(_svc.get("labels"))
-
-    files_label = "@%s//:test_optimization_files" % sync_repo_name
-    module_labels = _build_module_labels(sync_repo_name, _svc.get("labels"))
     fallback_identifier = _build_python_fallback_identifier(native.package_name(), _python)
+    selector_inputs = _resolve_python_selector_inputs(
+        module_identifier = module_identifier,
+        imports_candidates = imports_candidates,
+        deps_labels = deps_labels,
+        importpath_candidate = importpath_candidate,
+        module_path_candidate = module_path_candidate,
+        fallback_identifier = fallback_identifier,
+        module_groups = module_labels,
+        module_included = _python.get("module_included") if _is_dict(_python) else None,
+    )
 
     selector_name = name + "_topt_payloads"
     metadata_name = name + "_topt_bazel_metadata"
@@ -222,11 +299,12 @@ def dd_topt_py_test(
         deps = deps_labels,
         imports = imports_candidates,
         attribute_candidates = attribute_candidates,
-        explicit_identifier = module_identifier or "",
-        fallback_identifier = fallback_identifier,
+        explicit_identifier = selector_inputs["explicit_identifier"],
+        fallback_identifier = selector_inputs["fallback_identifier"],
         full_files = files_label,
+        module_group_names = module_group_names,
         module_groups = module_labels,
-        include_per_module = include_per_module_files,
+        include_per_module = selector_inputs["include_per_module"],
         module_label_override = module_label_override,
         importpath = importpath_candidate if importpath_candidate != None else "",
         module_path = module_path_candidate if module_path_candidate != None else "",
@@ -269,8 +347,7 @@ def dd_topt_py_test(
 
     data = _append_data_dependencies(data, [":" + selector_name])
 
-    manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
-    manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
+    manifest_label = resolve_manifest_label(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
     data = _append_data_dependencies(data, [manifest_label])
     env = _merge_user_env(
         user_env,

@@ -148,7 +148,7 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "pLQ+JPOKAu2+EI916bm9tEvq/JkYkgWy+BM9tmAwBUY=",
+        "bzlTransitiveDigest": "PoT1vHfLILb9IHzanYU8Hjy3Lc2nLwTn2trTYqR3g/E=",
         "usagesDigest": "yco8+ejjp1y3GIF8UGLO928CMMuVMZAHdJKNqhZnoJo=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -157,6 +157,7 @@
           "test_optimization_data": {
             "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
+              "enabled": true,
               "go_module_included": false,
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
@@ -299,7 +300,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "cc8H+PwBLCld2fFbU/CAnDmFXupfV/Qj6+XdbJE98/k=",
+        "bzlTransitiveDigest": "A6ikJiKlwEi5hRrfBqTTwMADTITgDCpH46mkFqp1Avc=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

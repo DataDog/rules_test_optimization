@@ -37,6 +37,13 @@ The repository-owned wrapper must:
 - If `env` is configurable with `select(...)`, ensure every relevant branch
   preserves the Datadog environment and enables the ddtrace pytest plugin.
 
+In a manifest-managed monorepo, the public central wrapper first computes its
+full label and looks it up in `topt_data_by_target`. If absent, call the
+comparison-base consumer runner exactly as before. If present, pass that entry
+to `dd_topt_py_test` with `runner_mode = "consumer_runner"` and the same
+repository-owned runner. Do not replace the existing runner merely to support
+automatic service selection.
+
 Recommended target shape:
 
 ```bzl
@@ -44,7 +51,6 @@ dd_topt_py_test(
     name = "pkg_py_test",
     py_test_rule = repo_pytest_wrapper,
     runner_mode = "consumer_runner",
-    module_identifier = "example.python.pkg",
     srcs = glob(["test_*.py"]),
     deps = [
         ":pkg_lib",
@@ -55,8 +61,14 @@ dd_topt_py_test(
 )
 ```
 
-Prefer `module_identifier` in consumer-runner mode because the Datadog macro
-does not need to synthesize Python imports to infer the module.
+When the runtime module path and Bazel package path identify the test, omit
+`module_identifier` and use the derived fallback. Keep an explicit
+`module_identifier` only for a documented repository-specific exception; the
+Datadog macro does not need to synthesize Python imports for the normal path.
+Derived or inferred misses may use the canonical full bundle. An explicit
+`module_identifier` or `module_label_override` must match a module group when
+synchronized metadata exposes groups, or analysis fails. When no groups exist,
+the canonical full bundle remains valid.
 
 ## Validation
 

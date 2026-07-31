@@ -115,6 +115,14 @@ def _bool_to_str(value):
     """Return Starlark bool as lowercase string for template injection."""
     return "true" if value else "false"
 
+def _validate_expected_targets(expected_targets):
+    """Validate expected target labels while still at analysis time."""
+    for label in expected_targets:
+        if label.startswith("@"):
+            fail_with_prefix("test_optimization_uploader", "expected_targets only supports local workspace labels, got %r" % label)
+        if not label.startswith("//") or ":" not in label:
+            fail_with_prefix("test_optimization_uploader", "expected_targets entries must look like //pkg:target or //:target, got %r" % label)
+
 def _base_template_substitutions(
         quiescent_sec,
         max_wait_sec,
@@ -134,7 +142,11 @@ def _base_template_substitutions(
         schema_validator_rloc,
         schema_validator_path,
         bep_artifact_stage_helper_rloc,
-        doctor_runtime_rloc):
+        doctor_runtime_rloc,
+        expected_targets_rloc,
+        expected_targets_path,
+        expected_targets_file_rloc,
+        expected_targets_file_path):
     """Build shared template substitutions for Bash/PowerShell scripts."""
     return {
         "quiescent_sec": quiescent_sec,
@@ -157,6 +169,10 @@ def _base_template_substitutions(
         "schema_validator_path": schema_validator_path,
         "bep_artifact_stage_helper_rloc": bep_artifact_stage_helper_rloc,
         "doctor_runtime_rloc": doctor_runtime_rloc,
+        "expected_targets_rloc": expected_targets_rloc,
+        "expected_targets_path": expected_targets_path,
+        "expected_targets_file_rloc": expected_targets_file_rloc,
+        "expected_targets_file_path": expected_targets_file_path,
         "rules_version": RULES_VERSION,
     }
 
@@ -654,6 +670,7 @@ def _uploader_impl(ctx):
     # ------------------------------------------------------------------
     # Phase 1: Read rule attributes and discover optional runfile artifacts.
     # ------------------------------------------------------------------
+    _validate_expected_targets(ctx.attr.expected_targets)
     quiescent_sec = ctx.attr.quiescent_sec
     max_wait_sec = ctx.attr.max_wait_sec
     fail_on_error = ctx.attr.fail_on_error
@@ -661,6 +678,12 @@ def _uploader_impl(ctx):
     keep_payloads = ctx.attr.keep_payloads
     filter_prefix_enabled = ctx.attr.filter_prefix
     gzip_payloads = ctx.attr.gzip_payloads
+    expected_targets_file = ctx.file.expected_targets_file
+    expected_targets = ctx.actions.declare_file(ctx.label.name + ".expected_targets")
+    ctx.actions.write(
+        output = expected_targets,
+        content = "\n".join(sorted(ctx.attr.expected_targets)) + ("\n" if ctx.attr.expected_targets else ""),
+    )
 
     # Find bundled context.json files keyed by their apparent external repo
     # name so runtime selection can match payload-side metadata deterministically.
@@ -763,6 +786,10 @@ def _uploader_impl(ctx):
         schema_validator_path,
         ctx.file._bep_artifact_stage_helper.short_path,
         ctx.file._doctor_runtime.short_path,
+        expected_targets.short_path,
+        expected_targets.path,
+        expected_targets_file.short_path if expected_targets_file else "",
+        expected_targets_file.path if expected_targets_file else "",
     )
     bash_substitutions["curl_retry_flags"] = " ".join(_bash_curl_retry_flags_for_tests())
     bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
@@ -802,6 +829,10 @@ def _uploader_impl(ctx):
                 schema_validator_path,
                 ctx.file._bep_artifact_stage_helper.short_path,
                 ctx.file._doctor_runtime.short_path,
+                expected_targets.short_path,
+                expected_targets.path,
+                expected_targets_file.short_path if expected_targets_file else "",
+                expected_targets_file.path if expected_targets_file else "",
             ),
         ),
         is_executable = False,
@@ -837,9 +868,10 @@ def _uploader_impl(ctx):
             bat_file,
             context_manifest,
             telemetry_facts_manifest,
+            expected_targets,
             ctx.file._bep_artifact_stage_helper,
             ctx.file._doctor_runtime,
-        ] + ctx.files.data + extra_files,
+        ] + ctx.files.data + ([expected_targets_file] if expected_targets_file else []) + extra_files,
     )
     log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
@@ -862,6 +894,8 @@ _dd_payload_uploader_rule = rule(
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
+        "expected_targets": attr.string_list(default = [], doc = "Optional local labels whose current-invocation outputs the uploader must account for."),
+        "expected_targets_file": attr.label(allow_single_file = True, doc = "Optional generated schema-v1 JSON file containing invocation-scoped expected targets."),
         # Schema + validator bundled for best-effort payload validation
         "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
         "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),

@@ -123,8 +123,11 @@ Checks:
 
 - Verify the Orchestrion extension writes the tool version file.
 - Verify builder actions receive the tool version file and tracer-version file.
-- Verify the target Go module can resolve the configured Datadog tracer module
-  versions.
+- In normal pin-file mode, verify the hermetic Go SDK resolves every supported
+  direct or transitive Datadog tracer module from the copied `go.mod`/`go.sum`
+  with `-mod=readonly`.
+- If pin-file mode cannot represent the graph, verify the explicit version-map
+  escape hatch contains exactly the supported modules.
 - Keep tool bootstrap module dependencies separate from target runtime tracer
   resolution.
 

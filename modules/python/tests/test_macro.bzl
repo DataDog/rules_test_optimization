@@ -257,7 +257,11 @@ def _single_service_topt_data():
         "repo_name": "test_optimization_data",
         "service_name": "py-service",
         "manifest_path": ".testoptimization/manifest.txt",
-        "labels": [],
+        "labels": [
+            "example_python_modules_python_tests",
+            "example_python_pkg",
+            "example_python_tests",
+        ],
         "set": {},
         "runtimes": {
             "go": {
@@ -278,6 +282,11 @@ def _single_service_topt_data():
         },
     }
 
+def _disabled_single_service_topt_data():
+    disabled = dict(_single_service_topt_data())
+    disabled["enabled"] = False
+    return disabled
+
 def _multi_service_topt_data():
     selected = _single_service_topt_data()
     not_selected = dict(selected)
@@ -288,6 +297,20 @@ def _multi_service_topt_data():
         "ruby_service": not_selected,
         "_meta": {"description": "non-service entry should be ignored"},
     }
+
+def _dynamic_manifest_topt_data():
+    """Model one target entry exported by the manifest aggregate repository."""
+    data = _single_service_topt_data()
+    data.update({
+        "repo_name": "virtual_dynamic_repo_that_must_not_resolve",
+        "service_name": "dynamic-python-service",
+        "files_label": ":full_payload",
+        "manifest_label": ":test_macro.bzl",
+        "module_labels": [":module_example_python_explicit_pkg"],
+        "labels": ["ignored_static_label_that_must_not_resolve"],
+        "manifest_path": "ignored/static/manifest.txt",
+    })
+    return data
 
 def py_macro_single_service_target(name, tags = None):
     dd_topt_py_test(
@@ -300,6 +323,16 @@ def py_macro_single_service_target(name, tags = None):
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "false",
         },
         imports = ["example/python/pkg"],
+        tags = tags,
+    )
+
+def py_macro_dynamic_manifest_target(name, tags = None):
+    """Target under test for explicit labels from one dynamic manifest entry."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _dynamic_manifest_topt_data(),
+        py_test_rule = _py_test_capture_rule,
+        importpath = "example/python/explicit/pkg",
         tags = tags,
     )
 
@@ -319,6 +352,15 @@ def py_macro_env_none_target(name, tags = None):
         topt_data = _single_service_topt_data(),
         py_test_rule = _py_test_capture_rule,
         env = None,
+        tags = tags,
+    )
+
+def py_macro_fallback_payloads_target(name, tags = None):
+    """Exercise package-derived fallback against the shared dev stub export."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _single_service_topt_data(),
+        py_test_rule = _py_test_capture_rule,
         tags = tags,
     )
 
@@ -474,6 +516,36 @@ def py_macro_managed_pytest_kwargs_target(name, tags = None):
     dd_topt_py_test(
         name = name,
         topt_data = _single_service_topt_data(),
+        py_test_rule = _py_test_kwargs_capture_macro,
+        srcs = ["consumer_runner_main.py"],
+        tags = tags,
+    )
+
+def py_macro_disabled_consumer_runner_target(name, tags = None):
+    """Disabled sync preserves the consumer runner without instrumentation."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _disabled_single_service_topt_data(),
+        py_test_rule = _py_test_kwargs_capture_macro,
+        runner_mode = "consumer_runner",
+        srcs = ["consumer_runner_main.py"],
+        data = [":test_macro.bzl"],
+        dd_requirements = ["pytest"],
+        env = select({
+            "//conditions:default": {
+                "CUSTOM_ENV": "preserved",
+                "DD_CIVISIBILITY_ENABLED": "true",
+            },
+        }),
+        args = ["-k", "consumer"],
+        tags = tags,
+    )
+
+def py_macro_disabled_managed_pytest_target(name, tags = None):
+    """Disabled sync keeps the managed pytest runner but omits instrumentation."""
+    dd_topt_py_test(
+        name = name,
+        topt_data = _disabled_single_service_topt_data(),
         py_test_rule = _py_test_kwargs_capture_macro,
         srcs = ["consumer_runner_main.py"],
         tags = tags,
@@ -669,6 +741,41 @@ def _py_macro_managed_pytest_kwargs_test_impl(ctx):
     )
     return analysistest.end(env)
 
+def _assert_no_test_optimization_wiring(env, captured):
+    asserts.equals(env, "false", captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
+    asserts.equals(env, None, captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE"))
+    asserts.equals(env, None, captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
+    asserts.equals(env, None, captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"))
+    for label in captured.data_labels:
+        asserts.false(env, "topt_payloads" in label)
+        asserts.false(env, ".testoptimization" in label)
+
+def _py_macro_disabled_consumer_runner_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    captured = analysistest.target_under_test(env)[ToptPyKwargsCaptureInfo]
+    _assert_no_test_optimization_wiring(env, captured)
+    asserts.equals(env, "preserved", captured.env.get("CUSTOM_ENV"))
+    asserts.true(env, captured.saw_args)
+    asserts.false(env, captured.saw_imports)
+    asserts.false(env, captured.saw_main)
+    asserts.false(env, captured.saw_run_pytest)
+    asserts.equals(env, ["pytest"], captured.dd_requirements)
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.false(env, "manual" in captured.tags)
+    return analysistest.end(env)
+
+def _py_macro_disabled_managed_pytest_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    captured = analysistest.target_under_test(env)[ToptPyKwargsCaptureInfo]
+    _assert_no_test_optimization_wiring(env, captured)
+    asserts.true(env, captured.saw_args)
+    asserts.true(env, captured.saw_imports)
+    asserts.true(env, captured.saw_main)
+    asserts.true(env, captured.saw_run_pytest)
+    asserts.false(env, "manual" in captured.tags)
+    return analysistest.end(env)
+
 def _py_macro_consumer_runner_no_rule_no_main_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "requires a consumer-owned Python test runner")
@@ -723,6 +830,12 @@ py_macro_consumer_runner_select_env_test = analysistest.make(
 )
 py_macro_managed_pytest_kwargs_test = analysistest.make(
     _py_macro_managed_pytest_kwargs_test_impl,
+)
+py_macro_disabled_consumer_runner_test = analysistest.make(
+    _py_macro_disabled_consumer_runner_test_impl,
+)
+py_macro_disabled_managed_pytest_test = analysistest.make(
+    _py_macro_disabled_managed_pytest_test_impl,
 )
 py_macro_consumer_runner_no_rule_no_main_failure_test = analysistest.make(
     _py_macro_consumer_runner_no_rule_no_main_failure_test_impl,
@@ -789,6 +902,25 @@ def _py_macro_multi_service_wiring_test_impl(ctx):
     )
     asserts.equals(env, "py-service", captured.env.get("DD_SERVICE"))
     asserts.equals(env, ["example/python/multi"], captured.imports)
+    return analysistest.end(env)
+
+def _py_macro_dynamic_manifest_wiring_test_impl(ctx):
+    """Assert dynamic target entries avoid virtual-repository label fallback."""
+    env = analysistest.begin(ctx)
+    captured = analysistest.target_under_test(env)[ToptPyMacroCaptureInfo]
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_dynamic_manifest_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.false(env, _has_fragment(captured.data_labels, "virtual_dynamic_repo_that_must_not_resolve"))
+    asserts.equals(env, "dynamic-python-service", captured.env.get("DD_SERVICE"))
+    return analysistest.end(env)
+
+def _py_macro_dynamic_manifest_payloads_test_impl(ctx):
+    """Assert only the selected explicit module files reach the selector."""
+    env = analysistest.begin(ctx)
+    files = analysistest.target_under_test(env)[DefaultInfo].files.to_list()
+    asserts.equals(env, 1, len(files))
+    asserts.true(env, _has_file_basename(files, "module_example_python_explicit_pkg.payload"))
+    asserts.false(env, _has_file_basename(files, "full_payload.payload"))
     return analysistest.end(env)
 
 def _py_macro_env_none_wiring_test_impl(ctx):
@@ -867,6 +999,33 @@ def _py_macro_public_wrapper_test_impl(ctx):
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
+def _py_macro_fallback_payloads_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    paths = [file.short_path for file in target[DefaultInfo].files.to_list()]
+    package_suffix = ctx.label.package.replace("/", "_")
+    expected_module_name = "module_example_python_%s" % package_suffix
+
+    expected_module_known_tests = False
+    full_bundle_known_tests = False
+    for path in paths:
+        if path.endswith("/.testoptimization/%s/known_tests.json" % expected_module_name):
+            expected_module_known_tests = True
+        if path.endswith("/.testoptimization/cache/http/known_tests.json"):
+            full_bundle_known_tests = True
+
+    asserts.true(
+        env,
+        expected_module_known_tests,
+        msg = "macro-generated selector must expose %s: %s" % (expected_module_name, paths),
+    )
+    asserts.false(
+        env,
+        full_bundle_known_tests,
+        msg = "macro-generated selector must not fall back to the full known-tests bundle: %s" % paths,
+    )
+    return analysistest.end(env)
+
 def _resolve_topt_service_key_missing_target_impl(_ctx):
     resolve_topt_service_key_for_tests(
         {
@@ -939,6 +1098,12 @@ py_macro_single_service_wiring_test = analysistest.make(
 py_macro_multi_service_wiring_test = analysistest.make(
     _py_macro_multi_service_wiring_test_impl,
 )
+py_macro_dynamic_manifest_wiring_test = analysistest.make(
+    _py_macro_dynamic_manifest_wiring_test_impl,
+)
+py_macro_dynamic_manifest_payloads_test = analysistest.make(
+    _py_macro_dynamic_manifest_payloads_test_impl,
+)
 py_macro_env_none_wiring_test = analysistest.make(
     _py_macro_env_none_wiring_test_impl,
 )
@@ -950,6 +1115,9 @@ py_macro_explicit_service_wiring_test = analysistest.make(
 )
 py_macro_public_wrapper_test = analysistest.make(
     _py_macro_public_wrapper_test_impl,
+)
+py_macro_fallback_payloads_test = analysistest.make(
+    _py_macro_fallback_payloads_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,

@@ -21,11 +21,21 @@ This product includes software developed at Datadog
   - `:test_optimization_files`
   - `:test_optimization_context`
   - `:module_<sanitized>`
+- Keep the three sync contracts separate:
+  - static single-service in `test_optimization_sync.bzl`;
+  - static multi-service in `test_optimization_multi_sync.bzl`;
+  - invocation-scoped Go/Python aggregation in
+    `test_optimization_manifest_sync.bzl`.
+  Manifest sync must not acquire target discovery, consumer naming policy, or a
+  checked-in target/service registry.
 
 ## Validation Commands
 
 - Canonical full-repo command:
   - `./bazelw test //...`
+  - On macOS with Bazel 8.5.1, append
+    `--noexperimental_split_xml_generation`. The split XML helper can terminate
+    with `SIGSEGV` independently of the test target.
 
 - Core module tests (repo root):
   - `./bazelw test //tools/...`
@@ -72,6 +82,29 @@ This product includes software developed at Datadog
   - Mixed-runtime uploader changes are not done until both harnesses still pass:
     they cover single-context, explicit override, multi-context repo selection,
     and no-match fallback behavior.
+  - Manifest-driven Go/Python changes:
+    `python3 tools/tests/integration/run_manifest_sync_tests.py --mode full`.
+    This proves strict manifest validation, disabled no-op behavior,
+    deterministic output, target-specific cache invalidation, exact doctor
+    targets, aggregate enrichment, and no host Go.
+  - Windows manifest-disabled parsing:
+    `python tools/tests/integration/run_manifest_sync_tests.py --mode disabled`.
+- Test Optimization bootstrap config:
+  - For config-gated Go and Python onboarding, keep
+    `--config=test-optimization` as the only user-facing switch. The shared
+    config entry is
+    `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`.
+  - Go additionally sets the existing `rules_go` Orchestrion `enabled=true`
+    build setting. Python-only consumers must not declare that Go-only label.
+  - Omitting the config is the documented complete opt-out for Go and Python:
+    metadata repositories use disabled stubs when `enabled_by_env = True`, Go
+    aliases select local empty targets, and Python keeps the consumer runner
+    without Test Optimization wiring.
+  - Other companions retain their existing enablement contract. Do not add
+    `enabled_by_env = True` to their sync repositories until their runtime
+    wrapper implements and tests the disabled export contract.
+  - Do not add a consumer-local Test Optimization bool flag or a second Go
+    Orchestrion repository chooser.
 - Go consumer integration harnesses:
   - Bzlmod default smoke:
     `tools/tests/integration/run_bzlmod_go_integration.sh`
@@ -85,7 +118,33 @@ This product includes software developed at Datadog
     `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_61_1:
     `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+  - WORKSPACE base, rules_go v0_62_0:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Bzlmod base, rules_go v0_62_0:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+  - Disabled alias gate for a fresh output root:
+    `WINDOWS_DISABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Enabled alias and payload gate with valid Orchestrion pins:
+    `WINDOWS_ENABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Same-output-root disabled then enabled transition for the public central
+    wrapper:
+    `CONFIG_TRANSITION_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Cold bootstrap without host Go, using the Bazel-managed SDK and an isolated
+    bootstrap cache:
+    `cache_root="$(mktemp -d)"; CONFIG_TRANSITION_ONLY=1 FORBID_HOST_GO=1 EXPECTED_ORCHESTRION_CACHE_PHASE=extensions.bootstrap_cache_miss XDG_CACHE_HOME="$cache_root" RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Repeat that command with the same `XDG_CACHE_HOME` and
+    `EXPECTED_ORCHESTRION_CACHE_PHASE=extensions.bootstrap_cache_hit` to prove
+    warm restoration also avoids host Go. Run both commands for WORKSPACE and
+    Bzlmod; CI covers both supported `rules_go` upstreams.
   - Each script now validates:
+    - the same consumer-owned central wrapper call expands to a raw `go_test`
+      without the named config and to the existing Orchestrion-backed shape
+      with it
+    - disabled then enabled resolution on one fixture workspace and output
+      root, with no intervening clean or shutdown
+    - no hidden Test Optimization targets, empty Orchestrion aliases, exact
+      disabled stubs, zero metadata HTTP requests, and no payload while
+      disabled
     - normal mode
     - hermetic mode with the inline CI sandbox/network-blocking flags
     - strict BEP fresh/cached uploader behavior
@@ -138,25 +197,34 @@ This product includes software developed at Datadog
 
 - `bazel-tests`:
   - core tests (`//tools/...`) on Linux/macOS/Windows
-  - go companion tests (`modules/go`) on Linux/macOS/Windows
-  - integration harness on Linux/macOS (`.sh`) and Windows (`.ps1`)
+  - companion module tests on Linux
+  - mock-server integration harness on Linux (`.sh`) and Windows (`.ps1`)
   - examples build on Linux/macOS/Windows
+  - the Linux result aggregates independent main-suite and mock-server shards
 - `bazel-tests-hermetic`:
   - core tests with hermetic flags
-  - go companion tests with hermetic flags
+  - companion module tests with hermetic flags
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
 - `workspace-compat`:
-  - WORKSPACE base
-  - Bzlmod base
+  - one shard per supported `rules_go` upstream and WORKSPACE/Bzlmod pair
+  - general and Test Optimization modes run sequentially inside each shard
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
+- `go-bootstrap-no-host`:
+  - one shard per supported `rules_go` upstream and WORKSPACE/Bzlmod pair
+  - installs Bazelisk without Go and shadows any hosted-runner `go` binary with
+    a failing sentinel
+  - proves both a cold Bazel-managed-SDK build and warm bootstrap-cache restore
+    without invoking host Go
 - `rules-go-variant-smoke`:
   - vendored `rules_go` variant verification and fast fork regression coverage
+  - one independent shard per supported upstream
   - Linux-only by design so the PR gate stays fast and stable
 - `rules-go-variant-extended`:
   - nightly/manual vendored `rules_go` variant coverage for slower XML, proto, cross, and cgo regression suites
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
+  - global fork drift checks plus one consumer patch-profile shard per supported `rules_go` upstream
   - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.
@@ -183,6 +251,18 @@ This product includes software developed at Datadog
   `...-nodejs`, `...-dotnet`, `...-ruby`).
 - Language-specific orchestration stays isolated in `modules/<language>`.
 - Dev bootstrap wiring in `tools/dev/*_bootstrap.bzl` is dev-only and cycle-safe.
+- Manifest normalization and repository rendering are deterministic: equivalent
+  input order must produce byte-identical exports, BUILD content, and
+  expected-target JSON.
+- One managed invocation must reuse one manifest path and metadata snapshot
+  across test, doctor, dry-run, and upload. A second invocation refetches once;
+  unchanged stable metadata must retain Bazel test-result cache hits, while
+  telemetry timing facts remain outside test action inputs.
+- The manifest-driven API is additive. Do not change static single-service or
+  static multi-service semantics while modifying it.
+- Validate cross-repository rollout in this order:
+  `rules_test_optimization`, then `rules_test_optimization_tests`, then the
+  consumer repository. A green Rule unit test does not replace consumer E2E.
 
 ## PR Checklist
 
@@ -191,8 +271,14 @@ This product includes software developed at Datadog
   error diagnostics remain actionable.
 - [ ] Ran split-aware validation commands relevant to changed files.
 - [ ] Updated docs/snippets for any load-path, module, or API changes.
+- [ ] Audited all first-party Markdown and agent skills affected by a public
+  onboarding change; vendored and local historical plan documents are excluded.
+- [ ] For manifest-driven changes, proved no committed target/service mapping,
+  exact target-set validation, disabled no-fetch behavior, and deterministic
+  rendering.
 - [ ] For Go Orchestrion changes, documented any `orchestrion_mode` behavior,
-  unsupported `testify/suite` scope, opt-out flags, and payload metadata changes.
+  pin-file or explicit-version behavior, unsupported `testify/suite` scope,
+  opt-out flags, and payload metadata changes.
 - [ ] Updated `LICENSE-3rdparty.csv` for dependency or vendored-code changes.
 - [ ] Confirmed no stale references to removed legacy paths (for example
   `//tools/go:*`, replaced by `modules/go/...` targets).

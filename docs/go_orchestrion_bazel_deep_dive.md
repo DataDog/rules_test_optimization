@@ -96,8 +96,10 @@ dd_topt_go_test(
 )
 ```
 
-But the raw `go_test` is built under a transition that enables the requested
-Orchestrion mode in the vendored toolchain.
+When Test Optimization is enabled, the raw `go_test` is built under a
+transition that enables the requested Orchestrion mode in the vendored
+toolchain. When the selected sync export is disabled, the macro instead creates
+only the caller's public raw `go_test`.
 
 ### Why This Section Exists
 
@@ -114,11 +116,17 @@ flowchart TD
     C --> D[Bzlmod MODULE.bazel patching or WORKSPACE local scaffolding]
     C --> E[orchestrion pin files]
     D --> F[vendored rules_go fork]
+    D --> W[Bazel-managed Go SDK]
     F --> G[rules_go Orchestrion extension]
-    G --> H[patched Orchestrion binary]
+    G --> U{Test Optimization enabled?}
+    U -->|no| V[stable empty repository\n no host Go or source fetch]
+    U -->|yes| H[patched Orchestrion binary]
+    W --> H
 
-    I[BUILD: dd_topt_go_test] --> J[hidden raw go_test]
-    I --> K[public orch_go_test wrapper]
+    I[BUILD: dd_topt_go_test] --> R{Sync export enabled?}
+    R -->|no| S[public raw go_test\n no Test Optimization targets]
+    R -->|yes| J[hidden raw go_test]
+    R -->|yes| K[public orch_go_test wrapper]
     K --> L[function transition]
     L --> J
 
@@ -159,6 +167,11 @@ materializes the metadata repo used by `dd_topt_go_test`.
 - In manual single-service or multi-service setup, the Go macro only requires a
   compatible exported `topt_data` shape. That can come from the Go extension or
   from the core sync and multi-sync extensions.
+- In a consumer-managed Go/Python monorepo, the separate manifest-sync
+  aggregate exports `topt_data_by_target`; the central Go wrapper passes the
+  matching entry to the same macro. Target discovery and service naming happen
+  before repository resolution in the consumer command, not in Orchestrion or
+  `rules_go`.
 
 The generated metadata repo then provides the per-service and per-module
 payload labels consumed by `dd_topt_go_test`.
@@ -175,18 +188,20 @@ The bootstrap binary is the one-time workspace mutation step.
 Implementation:
 - [main.go](../modules/go/tools/dd_topt_go_bootstrap/main.go)
 
-In guided Bzlmod mode, bootstrap does five things that matter for the current
+In guided Bzlmod mode, bootstrap does six things that matter for the current
 architecture:
 
 1. Ensures `MODULE.bazel` contains `bazel_dep(name = "rules_go", version = "0.60.0")`
 2. Writes a managed `git_override` for `rules_go` pointing back to this repo
    with `strip_prefix = "third_party/rgo/v0_60_0/base"`
-3. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension and
+3. Declares a Bazel-managed Go SDK from `--runtime-version`
+4. Enables the `@rules_go//go:extensions.bzl` Orchestrion extension, passes the
+   SDK root and exact version, and imports
    `use_repo(orchestrion, "rules_go_orchestrion_tool")`
-4. Sets the workspace-wide tracer selection with either
+5. Sets the workspace-wide tracer selection with either
    `orchestrion.from_source(..., dd_trace_go_version = "...")` or
    `orchestrion.from_source(..., dd_trace_go_versions = {...})`
-5. Runs `orchestrion pin` in the Go module and ensures:
+6. Runs `orchestrion pin` in the Go module and ensures:
    - `go.mod`
    - `go.sum`
    - `orchestrion.tool.go`
@@ -197,6 +212,7 @@ It aligns:
 
 - Bazel module wiring
 - the vendored `rules_go` fork
+- the Bazel-managed Go SDK used to build Orchestrion
 - the selected `dd-trace-go` version used by Bazel injection
 - the pinned Go module files that Orchestrion expects
 
@@ -218,6 +234,13 @@ instead of rewriting the tool repo's own `go.mod`. The selected tracer version
 is enforced later against the target module through the emitted
 `dd_trace_go_versions.json` file and the builder-side validation path.
 
+Manual consumer wiring normally replaces bootstrap's explicit tracer selection
+with `dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"]`. The repository rule
+uses the Bazel-managed Go SDK to resolve every supported direct or transitive
+module with `-mod=readonly`, emits the same canonical
+`dd_trace_go_versions.json`, and keys the bootstrap cache by that resolved map.
+Explicit shared and per-module selections remain compatibility escape hatches.
+
 #### Why This Exists
 
 Bootstrap centralizes the one-time mutations needed to make Bazel and
@@ -231,16 +254,22 @@ target would need to carry fragile setup knowledge.
 Implementation:
 - [topt_go_test.bzl](../modules/go/topt_go_test.bzl)
 
-The macro does three distinct jobs:
+With an enabled sync export, the macro does three distinct jobs:
 
 1. Select Datadog payload data
 2. Prepare runtime env/data wiring for Test Optimization
 3. Route the public test through the Orchestrion wrapper transition
 
-The macro expands into:
+The enabled macro expands into:
 
 - a hidden raw `go_test`
 - a public `orch_go_test` wrapper
+
+With a disabled export, the macro validates its macro-only inputs and selected
+service, then creates only the caller's public raw `go_test`. It does not create
+the hidden test, payload selector, target metadata, Orchestrion pin, or wrapper
+targets. The public label is therefore stable across modes, but the rule class
+is not: it is `go_test` while disabled and `orch_go_test` while enabled.
 
 The wrapper forwards `orchestrion_mode` into the vendored `rules_go` fork. The
 default mode is `general`, which preserves broad generic Orchestrion behavior.
@@ -278,13 +307,17 @@ in one place.
 Implementation:
 - [topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 
-The wrapper rule exists for one reason: it applies a function transition that
-sets:
+In the enabled path, the wrapper rule applies a function transition that sets
+only:
 
 ```bzl
-"@rules_go//go/private/orchestrion:enabled": True
 "@rules_go//go/private/orchestrion:mode": "general" or "test_optimization"
 ```
+
+The transition deliberately preserves the existing
+`@rules_go//go/private/orchestrion:enabled` setting. The user-facing
+`--config=test-optimization` config enables that setting during analysis;
+omitting the config leaves it at the `rules_go` default of `False`.
 
 The wrapper then symlinks the executable produced by the raw target and returns
 the same runfiles.
@@ -295,7 +328,9 @@ an Orchestrion-enabled configuration.
 #### Why This Exists
 
 The transition wrapper lets the raw test build under a different configuration
-without changing the public target shape that users and CI interact with.
+without changing the public target label that users and CI invoke. Callers that
+filter tests by rule language must account for the mode-dependent rule class:
+`go` for the disabled raw target and `orch_go` for the enabled wrapper.
 
 ## Why the Vendored `rules_go` Fork Exists
 
@@ -755,7 +790,10 @@ and Datadog contrib HTTP/slog helper roots.
 Some required woven dependencies are first touched inside sandboxed steps.
 Warming them reduces failures caused by lazy first access in those contexts.
 
-## End-to-End Flow for a Go Test
+## End-to-End Flow for an Enabled Go Test
+
+The disabled path stops at the macro: it creates the public raw `go_test` and
+does not enter the wrapper, vendored Orchestrion, or payload path below.
 
 ```mermaid
 sequenceDiagram
@@ -769,7 +807,7 @@ sequenceDiagram
     User->>Macro: declare Go test
     Macro->>Macro: select payload data + add pin files
     Macro->>Wrapper: public test target
-    Wrapper->>RG: build raw go_test with transition enabled
+    Wrapper->>RG: build raw go_test with mode transition; preserve enabled flag
     RG->>RG: compile customer packages
     RG->>Orch: compile woven stdlib as needed
     RG->>Orch: prepare synthetic testmain helper packagefiles

@@ -70,6 +70,9 @@ def _render_stub_module_runfiles_bzl(repo_name, manifest_root):
         "    test_management = getattr(ctx.file, \"test_management\", None)\n" +
         "    if test_management:\n" +
         "        files.append(test_management)\n" +
+        "    flaky_tests = getattr(ctx.file, \"flaky_tests\", None)\n" +
+        "    if flaky_tests:\n" +
+        "        files.append(flaky_tests)\n" +
         "    return DefaultInfo(files = depset(files), runfiles = ctx.runfiles(files = files))\n" +
         "\n" +
         "topt_module_files = rule(\n" +
@@ -79,6 +82,7 @@ def _render_stub_module_runfiles_bzl(repo_name, manifest_root):
         "        \"manifest\": attr.label(allow_single_file = True, mandatory = True),\n" +
         "        \"known_tests\": attr.label(allow_single_file = True),\n" +
         "        \"test_management\": attr.label(allow_single_file = True),\n" +
+        "        \"flaky_tests\": attr.label(allow_single_file = True),\n" +
         "    },\n" +
         ")\n"
     )
@@ -91,7 +95,8 @@ def _render_stub_export(
         manifest_path,
         go_module_path,
         go_sanitized_module_path,
-        go_module_included):
+        go_module_included,
+        enabled = True):
     """Render export.bzl content for the stub repository."""
     mapping_lines = []
     for key in service_keys:
@@ -99,6 +104,7 @@ def _render_stub_export(
 
     return (
         "topt_data = {\n" +
+        "    \"enabled\": %s,\n" % ("True" if enabled else "False") +
         "    \"repo_name\": %s,\n" % _bzl_string_literal(repo_name) +
         "    \"service_name\": %s,\n" % _bzl_string_literal(service_name) +
         "    \"manifest_path\": %s,\n" % _bzl_string_literal(manifest_path) +
@@ -151,7 +157,8 @@ def _render_stub_build(
         telemetry_facts,
         service_keys = None,
         module_labels = None,
-        manifest_root = ".testoptimization"):
+        manifest_root = ".testoptimization",
+        flaky_tests = None):
     """Render BUILD content for stub repo targets."""
 
     def _append_filegroups(name_suffix, srcs):
@@ -170,7 +177,9 @@ def _render_stub_build(
             ")\n\n",
         )
 
-    files_srcs = [settings, manifest, known_tests, test_management]
+    if flaky_tests == None:
+        flaky_tests = "%s/cache/http/flaky_tests.json" % manifest_root
+    files_srcs = [settings, manifest, known_tests, test_management, flaky_tests]
     lines = ['load(":module_runfiles.bzl", "topt_module_files")\n\n']
     _append_filegroups("", files_srcs)
     for key in list(service_keys or []):
@@ -183,6 +192,7 @@ def _render_stub_build(
             ("    manifest = %s,\n" % repr(manifest)) +
             ("    known_tests = %s,\n" % repr(_module_known_tests_path(manifest_root, label))) +
             ("    test_management = %s,\n" % repr(_module_test_management_path(manifest_root, label))) +
+            ("    flaky_tests = %s,\n" % repr(flaky_tests)) +
             '    visibility = ["//visibility:public"],\n' +
             ")\n\n",
         )
@@ -205,13 +215,18 @@ def _example_stub_repo_impl(ctx):
     settings = "%s/cache/http/settings.json" % out_dir
     known_tests = "%s/cache/http/known_tests.json" % out_dir
     test_management = "%s/cache/http/test_management.json" % out_dir
+    flaky_tests = "%s/cache/http/flaky_tests.json" % out_dir
     context = "%s/context.json" % out_dir
     telemetry_facts = "%s/telemetry_facts.json" % out_dir
 
     ctx.file(manifest, _stub_manifest_content())
-    ctx.file(settings, "{}\n")
+    ctx.file(
+        settings,
+        '{"data": {"attributes": {"known_tests_enabled": false, "test_management": {"enabled": false}, "flaky_test_retries_enabled": false}}}\n',
+    )
     ctx.file(known_tests, '{"data": {"attributes": {"tests": {}}}}\n')
     ctx.file(test_management, '{"data": {"attributes": {"modules": {}}}}\n')
+    ctx.file(flaky_tests, '{"data": []}\n')
     ctx.file(context, _render_stub_context(ctx.attr.service_name))
     ctx.file(telemetry_facts, _render_stub_telemetry_facts(ctx.attr.service_name))
 
@@ -242,6 +257,7 @@ def _example_stub_repo_impl(ctx):
         go_module_path = ctx.attr.go_module_path,
         go_sanitized_module_path = ctx.attr.go_sanitized_module_path,
         go_module_included = ctx.attr.go_module_included,
+        enabled = ctx.attr.enabled,
     )
     ctx.file("export.bzl", export)
     ctx.file("module_runfiles.bzl", _render_stub_module_runfiles_bzl(ctx.name, out_dir))
@@ -256,12 +272,14 @@ def _example_stub_repo_impl(ctx):
         service_keys = service_keys,
         module_labels = module_labels,
         manifest_root = out_dir,
+        flaky_tests = flaky_tests,
     )
     ctx.file("BUILD", build)
 
 example_stub_repo = repository_rule(
     implementation = _example_stub_repo_impl,
     attrs = {
+        "enabled": attr.bool(default = True),
         "go_module_included": attr.bool(default = False),
         "go_module_path": attr.string(default = "example.com/stub"),
         "go_sanitized_module_path": attr.string(default = "example_com_stub"),
@@ -279,6 +297,7 @@ def _example_stub_repo_extension_impl(module_ctx):
         for call in mod.tags.example_stub_repo:
             example_stub_repo(
                 name = call.name,
+                enabled = call.enabled,
                 go_module_included = call.go_module_included,
                 go_module_path = call.go_module_path,
                 go_sanitized_module_path = call.go_sanitized_module_path,
@@ -293,6 +312,7 @@ example_stub_repo_extension = module_extension(
     implementation = _example_stub_repo_extension_impl,
     tag_classes = {
         "example_stub_repo": tag_class(attrs = {
+            "enabled": attr.bool(default = True),
             "go_module_included": attr.bool(default = False),
             "go_module_path": attr.string(default = "example.com/stub"),
             "go_sanitized_module_path": attr.string(default = "example_com_stub"),

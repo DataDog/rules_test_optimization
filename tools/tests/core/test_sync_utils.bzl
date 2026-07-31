@@ -1100,6 +1100,15 @@ def _runtime_module_path_from_environ_test(ctx):
     )
     asserts.equals(
         env,
+        "example.com/attr",
+        detect_go_module_path_for_tests(
+            _fake_module_path_ctx({"GO_MODULE_PATH": "   "}),
+            False,
+            " example.com/attr ",
+        ),
+    )
+    asserts.equals(
+        env,
         "example.com/go-env",
         detect_go_module_path_for_tests(
             _fake_module_path_ctx({"GO_MODULE_PATH": "example.com/go-env"}),
@@ -1247,6 +1256,7 @@ def _export_bzl_manifest_path_test(ctx):
         sanitized_ruby_module_path = "apps_ruby_service",
         ruby_module_included = False,
     )
+    asserts.true(env, '"enabled": True' in content)
     asserts.true(env, "\"service_name\": \"service-name\"" in content)
     asserts.true(env, "\"manifest_path\": \".testoptimization/manifest.txt\"" in content)
     asserts.true(env, "\"runtimes\": {" in content)
@@ -1527,7 +1537,9 @@ def _example_stub_export_manifest_path_test(ctx):
         go_module_path = "example.com/workspace-go-integration",
         go_sanitized_module_path = "example_com_workspace_go_integration",
         go_module_included = True,
+        enabled = False,
     )
+    asserts.true(env, '"enabled": False' in content)
     asserts.true(env, '"repo_name": "test_optimization_data"' in content)
     asserts.true(env, '"manifest_path": "custom_topt/manifest.txt"' in content)
     asserts.true(env, '"service_name": "workspace-go-service"' in content)

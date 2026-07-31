@@ -23,6 +23,7 @@ Key behavior toggles:
 
 import argparse
 import base64
+import copy
 import gzip
 import json
 import os
@@ -68,11 +69,18 @@ COVERAGE_ALWAYS_FAIL_MARKER = "always_fail"
 
 class _ServerState:
     """Shared server state: fixtures and a thread-safe request log."""
-    def __init__(self, fixtures: Dict[str, Any], log_path: str, max_body_size: int) -> None:
+    def __init__(
+        self,
+        fixtures: Dict[str, Any],
+        log_path: str,
+        max_body_size: int,
+        response_versions_path: Optional[str] = None,
+    ) -> None:
         """Internal helper for init behavior."""
         self.fixtures = fixtures
         self.log_path = log_path
         self.max_body_size = max_body_size
+        self.response_versions_path = response_versions_path
         self.log_lock = threading.Lock()
         self.retry_lock = threading.Lock()
         self.retry_counters: Dict[str, int] = {}
@@ -108,6 +116,59 @@ class _ServerState:
         """Reset all retry counters to keep scenarios isolated."""
         with self.retry_lock:
             self.retry_counters = {}
+
+    def fixture_for_service(self, fixture_name: str, service: str) -> Any:
+        """Return a fixture with optional invocation-controlled service versions."""
+        fixture = copy.deepcopy(self.fixtures[fixture_name])
+        if not self.response_versions_path:
+            return fixture
+
+        versions = _read_json(self.response_versions_path)
+        if not isinstance(versions, dict) or set(versions.keys()) != {"services"}:
+            raise ValueError("response versions must contain exactly a services object")
+        services = versions["services"]
+        if not isinstance(services, dict):
+            raise ValueError("response versions services must be an object")
+        service_state = services.get(service)
+        if service_state is None:
+            return fixture
+        if not isinstance(service_state, dict):
+            raise ValueError("response versions entry for %r must be an object" % service)
+
+        if fixture_name == "settings":
+            version = service_state.get("settings")
+            if version is None:
+                return fixture
+            if not isinstance(version, str) or not version:
+                raise ValueError("settings version for %r must be a non-empty string" % service)
+            fixture["data"]["attributes"]["mock_response_version"] = version
+            return fixture
+
+        if fixture_name == "known_tests":
+            modules = service_state.get("modules")
+            if modules is None:
+                return fixture
+            if not isinstance(modules, dict) or not modules:
+                raise ValueError("modules for %r must be a non-empty object" % service)
+            tests = {}
+            for module_name in sorted(modules):
+                version = modules[module_name]
+                if not isinstance(module_name, str) or not module_name:
+                    raise ValueError("module names for %r must be non-empty strings" % service)
+                if not isinstance(version, str) or not version:
+                    raise ValueError(
+                        "module version for %r/%r must be a non-empty string" %
+                        (service, module_name),
+                    )
+                tests[module_name] = {
+                    "mock_suite": {
+                        "version_%s" % version: {},
+                    },
+                }
+            fixture["data"]["attributes"]["tests"] = tests
+            return fixture
+
+        return fixture
 
 
 def _normalize_headers(headers: Mapping[str, str]) -> Dict[str, str]:
@@ -619,7 +680,12 @@ class _Handler(BaseHTTPRequestHandler):
                     extra_headers = {"Retry-After": "1"},
                 )
                 return
-            self._send_json(200, self.server.state.fixtures["settings"])
+            try:
+                response = self.server.state.fixture_for_service("settings", service)
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                self._send_json(500, _json_error("invalid response versions: %s" % exc))
+                return
+            self._send_json(200, response)
             return
 
         # Sync known-tests endpoint.
@@ -639,7 +705,13 @@ class _Handler(BaseHTTPRequestHandler):
                     extra_headers = {"Retry-After": "1"},
                 )
                 return
-            self._send_json(200, self.server.state.fixtures["known_tests"])
+            service = self._extract_service(body)
+            try:
+                response = self.server.state.fixture_for_service("known_tests", service)
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                self._send_json(500, _json_error("invalid response versions: %s" % exc))
+                return
+            self._send_json(200, response)
             return
 
         # Sync test-management endpoint.
@@ -780,6 +852,13 @@ def main() -> int:
     parser.add_argument("--fixtures", required=True)
     parser.add_argument("--log", required=True)
     parser.add_argument(
+        "--response-versions",
+        help=(
+            "Optional JSON file re-read per sync request to version settings and "
+            "known-tests responses by service."
+        ),
+    )
+    parser.add_argument(
         "--max-body-size-bytes",
         type=int,
         default=max_body_size_default,
@@ -799,7 +878,12 @@ def main() -> int:
         "test_management": _load_fixture_or_exit(args.fixtures, "test_management.json"),
     }
 
-    state = _ServerState(fixtures, args.log, args.max_body_size_bytes)
+    state = _ServerState(
+        fixtures,
+        args.log,
+        args.max_body_size_bytes,
+        response_versions_path=args.response_versions,
+    )
 
     server = _ReusableHTTPServer((args.host, args.port), _Handler)
     server.state = state

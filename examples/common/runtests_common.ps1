@@ -17,12 +17,16 @@ function Invoke-RunCmd {
   )
 
   if ($env:RUNTESTS_DRY_RUN -eq "1") {
-    Write-Output ("[dry-run] {0} {1}" -f $Command, ($Args -join " "))
+    if ($Args -notcontains "--config=test-optimization") {
+      throw "dry-run command is missing --config=test-optimization: $Command $($Args -join ' ')"
+    }
+    Write-Host ("[dry-run] {0} {1}" -f $Command, ($Args -join " "))
     return 0
   }
 
-  & $Command @Args
-  return $LASTEXITCODE
+  & $Command @Args | Out-Host
+  $exitCode = $LASTEXITCODE
+  return $exitCode
 }
 
 # Handle Get-BazelCommand behavior.
@@ -61,22 +65,22 @@ function Invoke-ExampleRunTests {
     )
 
     Write-Output "--- non-hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$nonHermeticBep")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "--config=test-optimization", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$nonHermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- hermetic run"
-    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--config=hermetic", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$hermeticBep")
+    $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "--config=test-optimization", "--config=hermetic", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$hermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
     Write-Output "--- validating payloads"
-    $doctorStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "//:dd_test_optimization_doctor", "--") + $bepArgs)
+    $doctorStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "--config=test-optimization", "//:dd_test_optimization_doctor", "--") + $bepArgs)
     if ($doctorStatus -ne 0) {
       if ($testStatus -ne 0) { exit $testStatus }
       exit $doctorStatus
     }
 
     Write-Output "--- validating upload enrichment"
-    $dryRunStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "//:dd_upload_payloads", "--") + $bepArgs + @("--dry-run", "--validate-enrichment"))
+    $dryRunStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "--config=test-optimization", "//:dd_upload_payloads", "--") + $bepArgs + @("--dry-run", "--validate-enrichment"))
     if ($dryRunStatus -ne 0) {
       if ($testStatus -ne 0) { exit $testStatus }
       exit $dryRunStatus
@@ -84,7 +88,7 @@ function Invoke-ExampleRunTests {
 
     Write-Output "--- uploading payloads"
     if (-not $env:DD_SITE) { $env:DD_SITE = "datadoghq.com" }
-    $uploadRc = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "//:dd_upload_payloads", "--") + $bepArgs)
+    $uploadRc = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "--config=test-optimization", "//:dd_upload_payloads", "--") + $bepArgs)
 
     if ($testStatus -ne 0) { exit $testStatus }
     exit $uploadRc

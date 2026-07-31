@@ -47,8 +47,10 @@ Keep the RFC contract intact:
   `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir`, and configure
   wrapper `--support-bundle` or `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` for
   complete escalation artifacts. For first-pass customer troubleshooting after
-  tests have run, ask for `bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>`
-  with any matching BEP/artifact flags.
+  tests have run, ask for
+  `bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>`
+  with any matching BEP/artifact flags. Use `//:` for `<topt-package>` only in
+  a small repository whose targets intentionally live at the root.
   For bundle triage, inspect `summary.md`, `diagnostics.json`,
   `reports/doctor-report.json`, optional uploader reports, and
   `command/flags.json` in that order.
@@ -73,8 +75,12 @@ Keep the RFC contract intact:
 3. Pick the correct path:
    - Bzlmod fresh/simple Go repo: use the Go bootstrap guided flow.
    - WORKSPACE repo: use the generic WORKSPACE helper.
-   - Large monorepo with existing wrappers: keep repo policy local and add a
-     Test Optimization wrapper path beside the existing plain wrapper path.
+   - Large monorepo with an existing central wrapper: keep repo policy local
+     and route that same wrapper through `dd_topt_go_test`; do not introduce a
+     second macro name for enabled tests.
+   - Large monorepo with a consumer-owned managed test command: use manifest
+     sync only when that command can expand exact labels and derive
+     service/runtime contexts. Do not create a checked-in target/service map.
 
 ## Implementation Paths
 
@@ -89,13 +95,22 @@ Every successful Go onboarding should end with these pieces:
 
 - Repository resolution fetches Test Optimization metadata during Bazel
   repository/module resolution.
-- The Orchestrion tool repository is configured with the same dd-trace-go
-  version that the consumer Go module can resolve.
+- The Orchestrion tool repository normally derives its complete supported
+  dd-trace-go version map from the consumer's checked-in `go.mod` and `go.sum`.
+  Explicit shared/per-module versions are escape hatches, not a second normal
+  pin-maintenance path.
+- Guided bootstrap wires the repository's Bazel-managed Go SDK into
+  Orchestrion using the same version as the Go toolchain and sync runtime.
+  Enabled bootstrap must not depend on a host `go` binary, and this SDK wiring
+  remains workspace-wide rather than per service or test.
 - Orchestrion pin files exist and are exported when tests live below the
   workspace root.
-- Go tests use `dd_topt_go_test` directly or through a repo-local wrapper.
-- The root package has exactly one `dd_test_optimization_doctor` target.
-- The root package has exactly one `dd_upload_payloads` target.
+- Go tests use one central repo-local wrapper that delegates to
+  `dd_topt_go_test`. The named config, not a different BUILD macro, selects
+  enabled behavior.
+- The workspace has exactly one `dd_test_optimization_doctor` target and one
+  `dd_upload_payloads` target. Root is acceptable for small repositories; use a
+  lightweight package such as `//tools/test_optimization` in monorepos.
 - `.bazelrc` or CLI commands provide sync metadata with `--repo_env`,
   including the bootstrap-managed metadata key set and any runtime-specific
   module path override, such as `GO_MODULE_PATH`, only when needed.
@@ -104,6 +119,10 @@ Every successful Go onboarding should end with these pieces:
   declarations when they exist, and agents do not run broad `go mod tidy`
   unless the repository explicitly wants that behavior.
 - Test commands use a named config such as `--config=test-optimization`.
+- Validation first runs an ordinary public test without that config, then the
+  enabled test with it on the same fresh Bazel output root. Disabled mode must
+  keep the test runnable without metadata requests, payload generation, or real
+  Orchestrion repository resolution.
 - Remote-output-sensitive test configs include
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
   and `--zip_undeclared_test_outputs`.
@@ -119,16 +138,37 @@ Every successful Go onboarding should end with these pieces:
   reports for local inspection and manual fallback flows.
 - Real upload happens only after tests, doctor, and dry-run enrichment pass.
 
+For automatic managed Go/Python monorepos, the universal shape has these
+additional constraints:
+
+- declare one `test_optimization_manifest_sync` aggregate repository, separate
+  from static multi-sync;
+- keep target discovery, service naming, and managed orchestration in the
+  consumer repository;
+- load `topt_data_by_target` in the central wrapper and preserve the raw Go
+  path when the current full label is absent;
+- wire doctor to aggregate context data and the generated
+  `:expected_targets` file;
+- treat the invocation manifest as a private command handoff, never as
+  user-facing `.bazelrc` configuration;
+- reuse that exact manifest and resolved metadata snapshot for test, doctor,
+  dry-run, and optional upload; only a later managed invocation creates a new
+  manifest and fetches current backend state;
+- preserve Bazel test-result cache hits when selected settings/module payloads
+  are unchanged, and keep variable telemetry timing facts out of test inputs;
+- keep Java and other non-Python companions on their static onboarding paths.
+
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
 repository from `bzl` or `bazelw` to raw `bazel` just because examples use the
 generic binary name.
 
 For large WORKSPACE repositories, prefer the Go bootstrap's `--workspace-mode`
 scaffolding modes before writing boilerplate by hand. Use `--print-*` modes to
-review snippets first, then `--write-bazelrc`, `--write-root-targets`,
-`--write-orchestrion-files`, `--write-wrapper-template`, and
-`--write-validation-script` only when those generated files match the
-repository's local policy.
+review snippets first. Use `--write-root-targets` only for a small repository
+that intentionally owns doctor/uploader targets at the root. In a monorepo,
+create those targets in its lightweight Test Optimization package, then use
+`--write-bazelrc`, `--write-orchestrion-files`, `--write-wrapper-template`, and
+`--write-validation-script` only when those generated files match local policy.
 
 ## Large WORKSPACE Monorepo Policy
 
@@ -136,9 +176,9 @@ When applying this guide to a large WORKSPACE monorepo with a repository-local
 Go wrapper, treat it as a consumer-specific integration:
 
 - Use the WORKSPACE onboarding path, not the Bzlmod guided flow.
-- Keep Test Optimization policy in the repo-local optimized Go wrapper instead
-  of changing every BUILD file to call the public macro directly.
-- The optimized Go wrapper should pass
+- Keep Test Optimization policy in the existing repo-local central Go wrapper
+  instead of changing every BUILD file or adding an optimized-only wrapper.
+- The central Go wrapper should pass
   `orchestrion_mode = "test_optimization"` for standard Go `testing` targets.
   Do not rely on the public macro's default `general` mode for Test
   Optimization onboarding. Use `general` only for explicit compatibility
@@ -161,6 +201,8 @@ changes reviewable:
   repository workaround.
 - Put consumer-specific scheduling, Docker, tag, flaky, and wrapper policy in
   the consumer repository.
+- Put automatic target expansion and service-derivation policy in the
+  consumer's managed command. Do not move it into the Rule or Gazelle.
 - If an issue requires changing this rule repository, add matching fixture
   coverage in `rules_test_optimization_tests` before declaring it solved.
 
@@ -172,7 +214,9 @@ Stop and escalate instead of guessing when:
 - A target produces msgpack payloads instead of JSON.
 - The doctor reports missing Git metadata after sync was configured.
 - The doctor reports missing Bazel metadata.
-- `bazel.go.payload_selection` is `full_bundle_no_match`.
+- A known pilot that requires module selection reports
+  `bazel.go.payload_selection = "full_bundle_no_match"`, or a generic fallback
+  reports it without an explicitly configured doctor exception.
 - The only available fix would put `DD_GIT_*`, credentials, or upload endpoints
   into the test sandbox.
 - Validation requires secrets that are not already available in the environment.

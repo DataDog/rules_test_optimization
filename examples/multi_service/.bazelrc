@@ -1,6 +1,10 @@
 # Required on Windows for dd_topt_java_test: -javaagent paths only resolve under symlinked runfiles.
 build --enable_runfiles
 
+# One user-facing switch for Go/Python metadata bootstrap and Go Orchestrion analysis.
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+
 # Hermetic config (sandbox, stable env, network blocking)
 build:hermetic --incompatible_strict_action_env
 build:hermetic --spawn_strategy=sandboxed
@@ -14,4 +18,3 @@ test:hermetic --test_env=LC_ALL=C
 # Uncomment and provide values via shell/CI secret store:
 # common --repo_env=DD_API_KEY
 # common --repo_env=DD_SITE
-

@@ -25,7 +25,8 @@ Notes:
   test_optimization_uploader.bzl) and run it via `bazel run` after tests.
 
 Macro design constraints:
-- This macro creates a hidden raw `go_test` plus a public wrapper target.
+- Enabled exports create a hidden raw `go_test` plus a public wrapper target.
+  Disabled exports create only the caller's public raw `go_test`.
 - It does not create upload targets and does not alter workspace-level upload
   behavior.
 - Runtime behavior must remain hermetic: tests write payloads to
@@ -65,6 +66,10 @@ load(
     "merge_optional_env_defaults",
     "merge_user_env",
     "normalize_user_data",
+    "resolve_files_label",
+    "resolve_manifest_label",
+    "resolve_module_group_names",
+    "resolve_module_labels",
     "resolve_topt_service_key",
     "service_mapping_entries",
     "split_test_wrapper_kwargs",
@@ -269,8 +274,9 @@ def dd_topt_go_test(
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
-    This macro creates a hidden raw go_test target plus a public
-    Orchestrion-enabled wrapper target. Payloads are written to Bazel's
+    For an enabled export, this macro creates a hidden raw go_test target plus a
+    public Orchestrion-enabled wrapper target. For a disabled export, it creates
+    only the caller's public raw go_test. Enabled payloads are written to Bazel's
     TEST_UNDECLARED_OUTPUTS_DIR and collected in bazel-testlogs/<target>/test.outputs/.
 
     After running tests, use a single workspace-level uploader target to upload
@@ -326,13 +332,8 @@ def dd_topt_go_test(
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
     _validate_orchestrion_mode(orchestrion_mode)
-    test_binary_linker_optimization_requested = (
-        orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
-        enable_test_binary_linker_optimization
-    )
-    test_binary_linker_optimization_applied = (
-        _TEST_BINARY_LINKER_OPTIMIZATION_APPLIED if test_binary_linker_optimization_requested else False
-    )
+    if go_test_rule == None:
+        fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
     # Support both shapes:
     # 1) Single-service dict with keys: repo_name, labels, set, runtimes
@@ -352,6 +353,20 @@ def dd_topt_go_test(
         selected_key = _resolve_topt_service_key(service_entries, topt_service)
         _svc = service_entries[selected_key]
 
+    if not bool(_svc.get("enabled", True)):
+        go_test_rule(
+            name = name,
+            **kwargs
+        )
+        return
+
+    test_binary_linker_optimization_requested = (
+        orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
+        enable_test_binary_linker_optimization
+    )
+    test_binary_linker_optimization_applied = (
+        _TEST_BINARY_LINKER_OPTIMIZATION_APPLIED if test_binary_linker_optimization_requested else False
+    )
     wrapper_kwargs, raw_passthrough = split_test_wrapper_kwargs(kwargs)
 
     # ------------------------------------------------------------------
@@ -412,7 +427,7 @@ def dd_topt_go_test(
 
     # Build labels for files/context based on (possibly derived) sync_repo_name.
     # These labels remain stable public contracts of the generated sync repo.
-    files_label = "@%s//:test_optimization_files" % sync_repo_name
+    files_label = resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
 
     # ------------------------------------------------------------------
     # Phase 4: Build environment and selector inputs for analysis-time mapping.
@@ -432,7 +447,12 @@ def dd_topt_go_test(
     # Build the list of per-module groups once (if any were exported)
     # Use exported sanitized labels directly to avoid re-deriving naming policy
     # in the macro and drifting from sync-side label generation.
-    module_labels = _build_module_labels(sync_repo_name, _svc.get("labels"))
+    module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+    module_group_names = resolve_module_group_names(
+        _svc,
+        module_labels,
+        macro_name = "dd_topt_go_test",
+    )
 
     # Fallback importpath when providers are unavailable: go_module_path + Bazel package
     pkg_path = native.package_name()
@@ -463,6 +483,7 @@ def dd_topt_go_test(
         explicit_importpath = explicit_importpath,
         fallback_importpath = fallback_importpath,
         full_files = files_label,
+        module_group_names = module_group_names,
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override,
@@ -479,6 +500,7 @@ def dd_topt_go_test(
         embeds = embed_labels,
         explicit_importpath = explicit_importpath or "",
         fallback_importpath = fallback_importpath or "",
+        module_group_names = module_group_names,
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override or "",
@@ -550,16 +572,16 @@ def dd_topt_go_test(
     # manifest_path is emitted by sync metadata and may include slashes.
     # These paths are rooted at the sync repo package, so target syntax remains
     # @repo//:<path> (for example @test_optimization_data//:.testoptimization/manifest.txt).
-    manifest_path = _svc.get("manifest_path") or ".testoptimization/manifest.txt"
-    manifest_label = "@%s//:%s" % (sync_repo_name, manifest_path)
+    manifest_label = resolve_manifest_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
     data = _append_data_dependencies(data, [manifest_label])
     required_env = {
         "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
         # Signal to the library that payloads should be written to files
         # (TEST_UNDECLARED_OUTPUTS_DIR) regardless of caller input.
         "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
-        # The Orchestrion wrapper copies this file into test.outputs so the
-        # uploader can enrich payloads with target-specific Bazel metadata.
+        # Keep the target metadata basename available to the test runtime. The
+        # wrapper also receives the generated target directly and copies it
+        # into test.outputs for uploader enrichment.
         "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
     }
     if ci_visibility_enabled:
@@ -569,9 +591,6 @@ def dd_topt_go_test(
         required_env,
         macro_name = "dd_topt_go_test",
     )
-
-    if go_test_rule == None:
-        fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
     # Use the repository root when staged sources need repo-relative lookup.
     # Otherwise keep the package directory default to preserve existing tests.
@@ -602,6 +621,8 @@ def dd_topt_go_test(
     orch_go_test(
         name = name,
         actual = ":" + raw_name,
+        metadata = ":" + metadata_name,
         orchestrion_mode = orchestrion_mode,
+        test_optimization_enabled = bool(_svc.get("enabled", True)),
         **wrapper_kwargs
     )

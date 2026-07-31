@@ -135,7 +135,7 @@ Then re-run tests before running doctor and uploader.
 ## Diagnostic Reports
 
 When logs are long or ambiguous, first ask for a doctor-only support bundle with
-`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
+`bazel run //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
 matching BEP/artifact flags. Use the CI wrapper bundle when uploader dry-run or
 upload results matter. If a repository cannot use either bundle mode, collect
 `doctor-report.json`, `uploader-dry-run-report.json`, optional

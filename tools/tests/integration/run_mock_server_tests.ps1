@@ -222,6 +222,10 @@ function Render-UploaderTemplate {
     "__DDTPL_CONTEXT_MANIFEST_PATH__" = $ContextManifestPath
     "__DDTPL_CONTEXT_JSON_RLOC__" = ""
     "__DDTPL_CONTEXT_JSON_PATH__" = $ContextJsonPath
+    "__DDTPL_EXPECTED_TARGETS_RLOC__" = ""
+    "__DDTPL_EXPECTED_TARGETS_PATH__" = ""
+    "__DDTPL_EXPECTED_TARGETS_FILE_RLOC__" = ""
+    "__DDTPL_EXPECTED_TARGETS_FILE_PATH__" = ""
     "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__" = ""
     "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__" = $TelemetryFactsManifestPath
     "__DDTPL_SCHEMA_JSON_RLOC__" = ""
@@ -283,6 +287,31 @@ function Get-JsonValue {
   $property = $Object.PSObject.Properties[$Key]
   if ($property) { return $property.Value }
   return $null
+}
+
+function Get-JsonCollectionCount {
+  param($Value)
+  if ($null -eq $Value) { return 0 }
+  if ($Value -is [System.Collections.IDictionary]) { return $Value.Keys.Count }
+  if ($Value -is [System.Array]) { return $Value.Length }
+  return 1
+}
+
+function Assert-JsonKeysExact {
+  param(
+    $Object,
+    [string[]]$ExpectedKeys,
+    [string]$Label
+  )
+  if (-not ($Object -is [System.Collections.IDictionary])) {
+    throw "$Label must be a JSON object"
+  }
+  $actual = @($Object.Keys | ForEach-Object { [string]$_ } | Sort-Object)
+  $expected = @($ExpectedKeys | Sort-Object)
+  $difference = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
+  if ($difference.Count -ne 0) {
+    throw "$Label has unexpected keys (expected=$($expected -join ','), actual=$($actual -join ','))"
+  }
 }
 
 # Collect metric names from a telemetry message-batch while accepting either
@@ -456,6 +485,7 @@ test_optimization_sync = use_extension(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
+    enabled_by_env = True,
     service = "mock-service",
     runtime_name = "go",
     runtime_version = "1.2.3",
@@ -463,6 +493,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_nodejs",
+    enabled_by_env = True,
     service = "mock-service-nodejs",
     runtime_name = "nodejs",
     runtime_version = "1.2.3",
@@ -470,6 +501,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_dotnet",
+    enabled_by_env = True,
     service = "mock-service-dotnet",
     runtime_name = "dotnet",
     runtime_version = "1.2.3",
@@ -477,6 +509,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_ruby",
+    enabled_by_env = True,
     service = "mock-service-ruby",
     runtime_name = "ruby",
     runtime_version = "1.2.3",
@@ -509,6 +542,7 @@ filegroup(
   $bazelFlags = @("--output_base=$syncMetadataFetchOutBase")
   $repoEnvs = @(
     "--repo_env=DD_API_KEY=mock",
+    "--repo_env=DD_TEST_OPTIMIZATION_ENABLED=1",
     "--repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL=http://127.0.0.1:$port",
     "--repo_env=DD_ENV=ci",
     "--repo_env=DD_GIT_REPOSITORY_URL=https://example.com/repo.git",
@@ -523,6 +557,271 @@ filegroup(
     "--repo_env=GITHUB_SHA=",
     "--repo_env=GITHUB_EVENT_PATH="
   )
+
+  # -------------------------------------------------------------------------
+  # Scenario: disabled repositories render complete local stubs and never fetch.
+  # -------------------------------------------------------------------------
+  # Run this before the enabled sync so the request-log delta is isolated from
+  # the baseline API traffic below.
+  $disabledOutputBase = Join-Path $tempRoot "disabled_sync_out"
+  $disabledLogStart = @(Read-JsonLog -Path $mockLog).Count
+  $disabledRepoEnvs = @(
+    "--repo_env=DD_TEST_OPTIMIZATION_ENABLED=0",
+    "--repo_env=DD_ENV=ci",
+    "--repo_env=DD_GIT_REPOSITORY_URL=",
+    "--repo_env=DD_GIT_BRANCH=",
+    "--repo_env=DD_GIT_TAG=",
+    "--repo_env=DD_GIT_COMMIT_SHA=",
+    "--repo_env=DD_GIT_HEAD_COMMIT=",
+    "--repo_env=DD_GIT_COMMIT_MESSAGE=",
+    "--repo_env=DD_GIT_HEAD_MESSAGE=",
+    "--repo_env=DD_GIT_COMMIT_AUTHOR_NAME=",
+    "--repo_env=DD_GIT_COMMIT_AUTHOR_EMAIL=",
+    "--repo_env=DD_GIT_COMMIT_AUTHOR_DATE=",
+    "--repo_env=DD_GIT_COMMIT_COMMITTER_NAME=",
+    "--repo_env=DD_GIT_COMMIT_COMMITTER_EMAIL=",
+    "--repo_env=DD_GIT_COMMIT_COMMITTER_DATE=",
+    "--repo_env=DD_GIT_HEAD_AUTHOR_NAME=",
+    "--repo_env=DD_GIT_HEAD_AUTHOR_EMAIL=",
+    "--repo_env=DD_GIT_HEAD_AUTHOR_DATE=",
+    "--repo_env=DD_GIT_HEAD_COMMITTER_NAME=",
+    "--repo_env=DD_GIT_HEAD_COMMITTER_EMAIL=",
+    "--repo_env=DD_GIT_HEAD_COMMITTER_DATE=",
+    "--repo_env=DD_GIT_PR_BASE_BRANCH=",
+    "--repo_env=DD_GIT_PR_BASE_BRANCH_SHA=",
+    "--repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA=",
+    "--repo_env=DD_PR_NUMBER=",
+    "--repo_env=DISABLE_CI_METADATA=1"
+  )
+  $savedApiKey = $env:DD_API_KEY
+  $savedSite = $env:DD_SITE
+  $savedEnabled = $env:DD_TEST_OPTIMIZATION_ENABLED
+  $hadApiKey = Test-Path Env:DD_API_KEY
+  $hadSite = Test-Path Env:DD_SITE
+  $hadEnabled = Test-Path Env:DD_TEST_OPTIMIZATION_ENABLED
+  Push-Location $syncWorkspace
+  try {
+    Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:DD_SITE -ErrorAction SilentlyContinue
+    Remove-Item Env:DD_TEST_OPTIMIZATION_ENABLED -ErrorAction SilentlyContinue
+    $disabledCqueryOutput = @(
+      Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs @(
+        "--output_base=$disabledOutputBase",
+        "cquery",
+        "@test_optimization_data//:test_optimization_files",
+        "--output=files"
+      ) + $disabledRepoEnvs
+    )
+    $disabledCqueryExitCode = Get-NativeExitCode
+    if ($disabledCqueryExitCode -ne 0) {
+      throw "disabled sync cquery failed with exit code $disabledCqueryExitCode"
+    }
+    $disabledContextCqueryOutput = @(
+      Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs @(
+        "--output_base=$disabledOutputBase",
+        "cquery",
+        "@test_optimization_data//:test_optimization_context",
+        "--output=files"
+      ) + $disabledRepoEnvs
+    )
+    $disabledContextCqueryExitCode = Get-NativeExitCode
+    if ($disabledContextCqueryExitCode -ne 0) {
+      throw "disabled sync context cquery failed with exit code $disabledContextCqueryExitCode"
+    }
+    $disabledCqueryOutput += $disabledContextCqueryOutput
+    $disabledBuildOutput = @(
+      Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs @(
+        "--output_base=$disabledOutputBase",
+        "build",
+        "@test_optimization_data//:test_optimization_files"
+      ) + $disabledRepoEnvs
+    )
+    $disabledBuildExitCode = Get-NativeExitCode
+    if ($disabledBuildExitCode -ne 0) {
+      throw "disabled sync build failed with exit code $disabledBuildExitCode"
+    }
+    $disabledContextBuildOutput = @(
+      Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs @(
+        "--output_base=$disabledOutputBase",
+        "build",
+        "@test_optimization_data//:test_optimization_context"
+      ) + $disabledRepoEnvs
+    )
+    $disabledContextBuildExitCode = Get-NativeExitCode
+    if ($disabledContextBuildExitCode -ne 0) {
+      throw "disabled sync context build failed with exit code $disabledContextBuildExitCode"
+    }
+  } finally {
+    if ($hadApiKey) { $env:DD_API_KEY = $savedApiKey } else { Remove-Item Env:DD_API_KEY -ErrorAction SilentlyContinue }
+    if ($hadSite) { $env:DD_SITE = $savedSite } else { Remove-Item Env:DD_SITE -ErrorAction SilentlyContinue }
+    if ($hadEnabled) { $env:DD_TEST_OPTIMIZATION_ENABLED = $savedEnabled } else { Remove-Item Env:DD_TEST_OPTIMIZATION_ENABLED -ErrorAction SilentlyContinue }
+    Pop-Location
+  }
+  $disabledCqueryText = (@($disabledCqueryOutput) -join "`n")
+  foreach ($requiredFile in @("settings.json", "known_tests.json", "test_management.json", "flaky_tests.json", "manifest.txt", "context.json")) {
+    if (-not $disabledCqueryText.Contains($requiredFile)) {
+      throw "disabled sync cquery is missing $requiredFile"
+    }
+  }
+  $disabledSettings = $null
+  $disabledSettingsRelativePath = @($disabledCqueryText -split "`r?`n" | Where-Object { $_ -match 'test_optimization_data.*[\\/]\.testoptimization[\\/]cache[\\/]http[\\/]settings\.json$' } | Select-Object -First 1)
+  $disabledCqueryBases = @(
+    $disabledOutputBase,
+    (Join-Path $disabledOutputBase "execroot/_main"),
+    (Join-Path $disabledOutputBase "execroot/__main__")
+  )
+  foreach ($relativePath in $disabledSettingsRelativePath) {
+    foreach ($basePath in $disabledCqueryBases) {
+      $candidatePath = Join-Path $basePath $relativePath.Trim()
+      if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
+        $disabledSettings = Get-Item -LiteralPath $candidatePath
+        break
+      }
+    }
+    if ($disabledSettings) { break }
+  }
+  if (-not $disabledSettings) {
+    throw "disabled sync did not materialize the expected stub repository"
+  }
+  $disabledRepoDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $disabledSettings.FullName)))
+  $disabledSettingsMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $disabledSettings.FullName -Raw -Encoding UTF8)
+  Assert-JsonKeysExact -Object $disabledSettingsMap -ExpectedKeys @("data") -Label "disabled settings.json"
+  $disabledSettingsData = Get-JsonValue -Object $disabledSettingsMap -Key "data"
+  Assert-JsonKeysExact -Object $disabledSettingsData -ExpectedKeys @("attributes") -Label "disabled settings.json data"
+  $disabledSettingsAttributes = Get-JsonValue -Object $disabledSettingsData -Key "attributes"
+  Assert-JsonKeysExact -Object $disabledSettingsAttributes -ExpectedKeys @("flaky_test_retries_enabled", "known_tests_enabled", "test_management") -Label "disabled settings.json attributes"
+  $disabledTestManagementSetting = Get-JsonValue -Object $disabledSettingsAttributes -Key "test_management"
+  Assert-JsonKeysExact -Object $disabledTestManagementSetting -ExpectedKeys @("enabled") -Label "disabled settings.json test_management"
+  if ((Get-JsonValue -Object $disabledSettingsAttributes -Key "known_tests_enabled") -ne $false -or
+      (Get-JsonValue -Object $disabledTestManagementSetting -Key "enabled") -ne $false -or
+      (Get-JsonValue -Object $disabledSettingsAttributes -Key "flaky_test_retries_enabled") -ne $false) {
+    throw "disabled settings.json does not contain the canonical false flags"
+  }
+  $knownTestsValue = Read-JsonMap -JsonText (Get-Content -LiteralPath (Join-Path $disabledRepoDir ".testoptimization/cache/http/known_tests.json") -Raw -Encoding UTF8)
+  Assert-JsonKeysExact -Object $knownTestsValue -ExpectedKeys @("data") -Label "disabled known_tests.json"
+  $knownTestsAttributes = Get-JsonValue -Object $knownTestsValue -Key "data"
+  Assert-JsonKeysExact -Object $knownTestsAttributes -ExpectedKeys @("attributes") -Label "disabled known_tests.json data"
+  $knownTestsAttributes = Get-JsonValue -Object $knownTestsAttributes -Key "attributes"
+  Assert-JsonKeysExact -Object $knownTestsAttributes -ExpectedKeys @("tests") -Label "disabled known_tests.json attributes"
+  $knownTestsMap = Get-JsonValue -Object $knownTestsAttributes -Key "tests"
+  if ((Get-JsonCollectionCount $knownTestsMap) -ne 0) { throw "disabled known_tests.json is not empty" }
+  $testManagementValue = Read-JsonMap -JsonText (Get-Content -LiteralPath (Join-Path $disabledRepoDir ".testoptimization/cache/http/test_management.json") -Raw -Encoding UTF8)
+  Assert-JsonKeysExact -Object $testManagementValue -ExpectedKeys @("data") -Label "disabled test_management.json"
+  $testManagementAttributes = Get-JsonValue -Object $testManagementValue -Key "data"
+  Assert-JsonKeysExact -Object $testManagementAttributes -ExpectedKeys @("attributes") -Label "disabled test_management.json data"
+  $testManagementAttributes = Get-JsonValue -Object $testManagementAttributes -Key "attributes"
+  Assert-JsonKeysExact -Object $testManagementAttributes -ExpectedKeys @("modules") -Label "disabled test_management.json attributes"
+  $testManagementMap = Get-JsonValue -Object $testManagementAttributes -Key "modules"
+  if ((Get-JsonCollectionCount $testManagementMap) -ne 0) { throw "disabled test_management.json is not empty" }
+  $flakyValue = Read-JsonMap -JsonText (Get-Content -LiteralPath (Join-Path $disabledRepoDir ".testoptimization/cache/http/flaky_tests.json") -Raw -Encoding UTF8)
+  Assert-JsonKeysExact -Object $flakyValue -ExpectedKeys @("data") -Label "disabled flaky_tests.json"
+  $flakyData = Get-JsonValue -Object $flakyValue -Key "data"
+  if ((Get-JsonCollectionCount $flakyData) -ne 0) { throw "disabled flaky_tests.json is not empty" }
+  $disabledContextPath = Join-Path $disabledRepoDir ".testoptimization/context.json"
+  $disabledContext = Read-JsonMap -JsonText (Get-Content -LiteralPath $disabledContextPath -Raw -Encoding UTF8)
+  Assert-JsonKeysExact -Object $disabledContext -ExpectedKeys @(
+    "bazel.rule_name",
+    "bazel.rule_version",
+    "env",
+    "runtime.name",
+    "runtime.version",
+    "service.name",
+    "topt.sync.enabled",
+    "topt.sync.out_dir",
+    "topt.sync.repository_name"
+  ) -Label "disabled context.json"
+  if ((Get-JsonValue -Object $disabledContext -Key "bazel.rule_name") -ne "datadog-rules-test-optimization" -or
+      [string]::IsNullOrWhiteSpace([string](Get-JsonValue -Object $disabledContext -Key "bazel.rule_version")) -or
+      (Get-JsonValue -Object $disabledContext -Key "env") -ne "ci" -or
+      (Get-JsonValue -Object $disabledContext -Key "runtime.name") -ne "go" -or
+      (Get-JsonValue -Object $disabledContext -Key "runtime.version") -ne "1.2.3" -or
+      (Get-JsonValue -Object $disabledContext -Key "service.name") -ne "mock-service" -or
+      (Get-JsonValue -Object $disabledContext -Key "topt.sync.enabled") -ne $false -or
+      (Get-JsonValue -Object $disabledContext -Key "topt.sync.out_dir") -ne ".testoptimization" -or
+      (Get-JsonValue -Object $disabledContext -Key "topt.sync.repository_name") -ne "test_optimization_data") {
+    throw "disabled context.json does not match the canonical repository context"
+  }
+  $disabledTelemetryPath = Join-Path $disabledRepoDir ".testoptimization/telemetry_facts.json"
+  $disabledTelemetry = Read-JsonMap -JsonText (Get-Content -LiteralPath $disabledTelemetryPath -Raw -Encoding UTF8)
+  Assert-JsonKeysExact -Object $disabledTelemetry -ExpectedKeys @("counts", "distributions", "env", "runtime_name", "schema_version", "service_name") -Label "disabled telemetry_facts.json"
+  $disabledCounts = @(Get-JsonValue -Object $disabledTelemetry -Key "counts")
+  $disabledDistributions = Get-JsonValue -Object $disabledTelemetry -Key "distributions"
+  if ($disabledCounts.Count -ne 1 -or (Get-JsonCollectionCount $disabledDistributions) -ne 0) {
+    throw "disabled telemetry_facts.json must contain exactly one count and no distributions"
+  }
+  $disabledCount = $disabledCounts[0]
+  Assert-JsonKeysExact -Object $disabledCount -ExpectedKeys @("name", "tags", "value") -Label "disabled telemetry count"
+  if ((Get-JsonValue -Object $disabledTelemetry -Key "schema_version") -ne 1 -or
+      (Get-JsonValue -Object $disabledTelemetry -Key "service_name") -ne "mock-service" -or
+      (Get-JsonValue -Object $disabledTelemetry -Key "runtime_name") -ne "go" -or
+      (Get-JsonValue -Object $disabledTelemetry -Key "env") -ne "ci" -or
+      (Get-JsonValue -Object $disabledCount -Key "name") -ne "sync.disabled" -or
+      (Get-JsonValue -Object $disabledCount -Key "value") -ne 1 -or
+      (Get-JsonCollectionCount (Get-JsonValue -Object $disabledCount -Key "tags")) -ne 0) {
+    throw "disabled telemetry_facts.json does not match the canonical disabled fact"
+  }
+  $disabledService = [string](Get-JsonValue -Object $disabledContext -Key "service.name")
+  $disabledEnvironment = [string](Get-JsonValue -Object $disabledContext -Key "env")
+  $disabledLogEnd = @(Read-JsonLog -Path $mockLog).Count
+  if ($disabledLogStart -ne $disabledLogEnd) {
+    throw "disabled sync unexpectedly contacted the mock metadata server"
+  }
+
+  # Re-evaluate the same canonical repository in the same output base with the
+  # config gate enabled. A cached disabled repository must not survive the
+  # DD_TEST_OPTIMIZATION_ENABLED transition from 0 to 1.
+  $toggleSalt = "integration-toggle-$([Guid]::NewGuid().ToString('N'))"
+  Push-Location $syncWorkspace
+  try {
+    Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@(
+      "--output_base=$disabledOutputBase",
+      "fetch",
+      "@test_optimization_data//:test_optimization_files",
+      "--repo_env=FETCH_SALT=$toggleSalt"
+    ) + $repoEnvs)
+    $toggleFetchExitCode = Get-NativeExitCode
+    if ($toggleFetchExitCode -ne 0) {
+      throw "enabled re-evaluation of the disabled repository failed with exit code $toggleFetchExitCode"
+    }
+    Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@(
+      "--output_base=$disabledOutputBase",
+      "cquery",
+      "@test_optimization_data//:test_optimization_context",
+      "--output=files"
+    ) + $repoEnvs) | Out-Null
+    $toggleCqueryExitCode = Get-NativeExitCode
+    if ($toggleCqueryExitCode -ne 0) {
+      throw "enabled context cquery after disabled sync failed with exit code $toggleCqueryExitCode"
+    }
+  } finally {
+    Pop-Location
+  }
+  if (-not (Test-Path -LiteralPath $disabledSettings.FullName -PathType Leaf)) {
+    throw "enabled sync did not rematerialize the same canonical repository path"
+  }
+  $enabledSettingsMap = Read-JsonMap -JsonText (Get-Content -LiteralPath $disabledSettings.FullName -Raw -Encoding UTF8)
+  $enabledSettingsAttributes = Get-JsonValue -Object (Get-JsonValue -Object $enabledSettingsMap -Key "data") -Key "attributes"
+  if ((Get-JsonValue -Object $enabledSettingsAttributes -Key "known_tests_enabled") -ne $true -or
+      (Get-JsonValue -Object (Get-JsonValue -Object $enabledSettingsAttributes -Key "test_management") -Key "enabled") -ne $true) {
+    throw "enabled re-evaluation retained the disabled settings stub"
+  }
+  $enabledContext = Read-JsonMap -JsonText (Get-Content -LiteralPath $disabledContextPath -Raw -Encoding UTF8)
+  if ((Get-JsonValue -Object $enabledContext -Key "service.name") -ne $disabledService -or
+      (Get-JsonValue -Object $enabledContext -Key "env") -ne $disabledEnvironment -or
+      $enabledContext.Contains("topt.sync.enabled")) {
+    throw "enabled re-evaluation changed service/environment or retained disabled context state"
+  }
+  $enabledToggleEntries = @(Read-NewLogEntries -StartIndex $disabledLogEnd -Path $mockLog)
+  foreach ($expectedPath in @(
+    "/api/v2/libraries/tests/services/setting",
+    "/api/v2/ci/libraries/tests",
+    "/api/v2/test/libraries/test-management/tests"
+  )) {
+    if (@($enabledToggleEntries | Where-Object { $_.path -eq $expectedPath }).Count -eq 0) {
+      throw "enabled re-evaluation missed expected metadata request $expectedPath"
+    }
+  }
+
   Push-Location $syncWorkspace
   try {
     Invoke-BazelCommand -BazelInvoker $bazelInvoker -BazelArgs (@($bazelFlags + @("fetch", "//:all_sync_payloads") + $repoEnvs))

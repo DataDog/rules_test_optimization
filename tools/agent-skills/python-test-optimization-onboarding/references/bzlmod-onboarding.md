@@ -47,13 +47,49 @@ topt = use_extension(
 
 topt.test_optimization_sync(
     name = "test_optimization_data",
-    service = "<datadog-service>",
+    enabled_by_env = True,
+    runtime_module_path = "<python-module-path>",
     runtime_name = "python",
     runtime_version = "<python-version>",
+    service = "<datadog-service>",
 )
 
 use_repo(topt, "test_optimization_data")
 ```
+
+Enable this sync only through the named Bazel config:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+```
+
+Do not add a `rules_go` Orchestrion flag to a Python-only consumer.
+Set `runtime_module_path` to the stable Python package/module prefix used by
+backend module groups. This is the checked-in default; `PYTHON_MODULE_PATH`
+remains an explicit higher-precedence override. Keep that environment variable
+unset, or standardize it in repository configuration, when selection must be
+deterministic across CI and developer machines.
+
+### Managed manifest variant
+
+When a consumer-owned command discovers exact Go/Python targets, use the
+separate aggregate API instead of static service declarations:
+
+```bzl
+topt_manifest = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync_extension",
+)
+topt_manifest.test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+use_repo(topt_manifest, "test_optimization_data")
+```
+
+The command supplies runtime module paths and service names through its private
+temporary manifest. Do not add that handoff to `.bazelrc` or ask users to
+maintain it. The central Python wrapper selects
+`topt_data_by_target.get(<full-label>)` and keeps its raw path when absent.
 
 ## Doctor And Uploader Targets
 
@@ -69,6 +105,18 @@ dd_test_optimization_targets(
     expected_targets = [
         "//path/to:python_test",
     ],
+)
+```
+
+For manifest-managed wiring, replace the static expected list with:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
+        "@test_optimization_data//:test_optimization_context",
+    ],
+    expected_targets_file = "@test_optimization_data//:expected_targets",
 )
 ```
 
@@ -95,3 +143,10 @@ dd_topt_py_test(
 
 For repositories with an existing wrapper, use `consumer_runner`; see
 [consumer-runner.md](consumer-runner.md).
+
+Omit `module_identifier` when inference or the
+`runtime_module_path` + Bazel package fallback identifies the test. Inferred
+misses use the canonical full bundle. When synchronized metadata exposes module
+groups, an explicit `module_identifier` or `module_label_override` must match
+one or analysis fails; when no groups exist, the canonical full bundle remains
+valid.

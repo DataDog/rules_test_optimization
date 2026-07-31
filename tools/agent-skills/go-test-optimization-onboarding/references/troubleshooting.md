@@ -48,6 +48,31 @@ Checks:
 Fix the target selection or wrapper first. Do not work around missing payloads
 by adding a proxy or uploading from inside the test sandbox.
 
+## Managed Target Missing From `topt_data_by_target`
+
+Symptoms:
+
+- a requested central `dd_go_test` remains raw in an enabled managed run;
+- doctor does not list the target in its generated exact-target set.
+
+Checks:
+
+- The consumer command expanded the target to a canonical local label.
+- The target carries the consumer's supported central-macro marker.
+- The full label used by the wrapper exactly matches the manifest label.
+- Service derivation succeeded and produced one Go runtime context.
+- The target was not filtered out as build-only or unsupported.
+
+Fix target discovery or service derivation in the consumer command. Do not add a
+checked-in mapping or special-case the label in the Rule.
+
+## Managed Manifest Fails Before HTTP
+
+Missing, malformed, duplicate, unsupported-runtime, or colliding manifest
+entries fail before metadata requests. Invoke the consumer's managed command
+and inspect its discovery summary. Do not hand-edit the temporary manifest or
+persist its private handoff in `.bazelrc`.
+
 ## Msgpack Payloads Instead Of JSON
 
 Symptoms:
@@ -71,6 +96,29 @@ Checks:
 
 Fix the tracer version or macro wiring. Do not add a msgpack conversion path as
 part of onboarding unless the rule contract is intentionally redesigned.
+
+## Enabled Bootstrap Cannot Find Go
+
+Symptoms:
+
+- Bazel reports `Could not find 'go' binary. Please ensure Go is installed.`
+- Disabled validation passes, but the first enabled test fails while resolving
+  `rules_go_orchestrion_tool`.
+
+Checks:
+
+- Guided Bzlmod bootstrap was run with the workspace's real
+  `--runtime-version`.
+- The managed `MODULE.bazel` block contains one Bazel `go_sdk` declaration and
+  passes its `ROOT` label plus exact version to `orchestrion.from_source(...)`.
+- WORKSPACE wiring passes `@go_sdk//:ROOT` and the same exact version used by
+  the central `go_register_toolchains(...)` call.
+- The SDK, Test Optimization `runtime_version`, and registered Go toolchain
+  versions match.
+
+Regenerate the central bootstrap block or WORKSPACE snippet. Do not install Go
+on the analysis host, add SDK settings per service, or bypass the enabled
+Orchestrion repository.
 
 ## Missing Git Metadata
 
@@ -106,7 +154,7 @@ Symptoms:
 
 Checks:
 
-- The target uses the Test Optimization wrapper.
+- The target uses the central Go wrapper that delegates to `dd_topt_go_test`.
 - The macro is not bypassed by a repo-local wrapper path.
 - The payload files came from the current test run.
 - Remote outputs were downloaded locally.
@@ -127,8 +175,9 @@ Symptoms:
 
 Meaning:
 
-- The Go macro could not match the test target to a module payload and the full
-  bundle did not provide a safe fallback.
+- The Go macro could not match an inferred/derived test target to a module
+  payload and used the canonical full bundle. The doctor rejects this by
+  default because known pilots normally require an exact module match.
 
 Checks:
 
@@ -139,14 +188,17 @@ Checks:
 - For monorepos, verify `topt_data` or `topt_data_by_service` points to the
   correct service/runtime slice.
 
-Valid alternatives are `module`, `module_override`, and
-`full_bundle_disabled`. `full_bundle_disabled` is acceptable only when the setup
-intentionally lacks backend full-bundle data.
+For known pilots, valid alternatives are `module`, `module_override`, and
+`full_bundle_disabled`. `full_bundle_disabled` is acceptable when the setup
+intentionally has no module groups. A repository that intentionally permits
+generic inferred/derived fallback may set
+`forbid_full_bundle_no_match = False` on its doctor target; do not use that
+exception to hide a missing module match for a known pilot.
 
 ## Diagnostic Reports
 
 When logs are long or ambiguous, first ask for a doctor-only support bundle with
-`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
+`bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
 matching BEP/artifact flags. Use the CI wrapper bundle when uploader dry-run or
 upload results matter. If a repository cannot use either bundle mode, collect
 `doctor-report.json`, `uploader-dry-run-report.json`, optional
@@ -226,13 +278,17 @@ Symptoms:
 
 Checks:
 
-- Bootstrap should resolve one coherent tracer version set.
+- Normal manual wiring should derive one coherent tracer version set from the
+  checked-in `go.mod` and `go.sum` through `dd_trace_go_pin_files`.
 - The Go module must resolve packages injected into the final test binary.
-- Do not maintain two conflicting tracer versions between Orchestrion tooling
-  and the target's Go module.
+- Pin-file resolution requires a Bazel-managed Go SDK and runs
+  `go list -m -mod=readonly`; it does not repair `go.sum`.
+- Do not maintain a duplicate tracer version between Orchestrion tooling and
+  the target's Go module.
 
-If the repository needs a different tracer version, make that an explicit
-version decision and validate with real tests, doctor, dry-run, and upload.
+If a supported module is genuinely absent or the copied module graph cannot be
+resolved read-only, use the explicit per-module version-map escape hatch and
+validate it with real tests, doctor, dry-run, and upload.
 
 ## Local Disk Pressure
 

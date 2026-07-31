@@ -44,6 +44,95 @@ For WORKSPACE consumers, also confirm:
 - `rules_python_repo_name` matches the consumer repository's actual
   `rules_python` repository name.
 
+## Managed Manifest Checks
+
+For automatic managed onboarding, additionally prove:
+
+- there is no committed target/service mapping or Gazelle/ownership machinery;
+- target patterns are expanded to exact canonical labels before sync;
+- selected targets use `topt_data_by_target`;
+- unselected targets keep the same raw/consumer-runner behavior;
+- adding/removing a selected target changes only the command-owned manifest;
+- disabled mode needs no manifest and makes zero metadata requests;
+- doctor uses aggregate contexts and the generated exact-target file;
+- uploader dry-run selects the correct virtual context for each Python payload;
+- cache tests keep test-result caching enabled, while strict fresh-payload
+  validation runs selected tests freshly.
+
+Invoke the consumer's managed command. Do not set the internal manifest handoff
+manually.
+
+## Disabled Then Enabled On The Same Output Root
+
+Prove the config is the only user-facing switch before fetching live metadata:
+
+```bash
+output_root="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-python-output.XXXXXX")"
+sync_repo="@test_optimization_data"
+public_target="//path/to:python_test"
+unset DD_TEST_OPTIMIZATION_ENABLED
+
+bazel --output_user_root="$output_root" test "$public_target"
+bazel --output_user_root="$output_root" cquery \
+  "${sync_repo}//:test_optimization_files" \
+  --output=files
+
+execution_root="$(
+  bazel --output_user_root="$output_root" info execution_root
+)"
+export_rel="$(
+  bazel --output_user_root="$output_root" cquery \
+    "${sync_repo}//:export.bzl" \
+    --output=files
+)"
+case "$export_rel" in
+  /*) export_file="$export_rel" ;;
+  *) export_file="$execution_root/$export_rel" ;;
+esac
+testlogs="$(
+  bazel --output_user_root="$output_root" info bazel-testlogs
+)"
+grep -F '"enabled": False' "$export_file"
+if find "$testlogs" \
+  \( -path '*/test.outputs/payloads/*' -o -name bazel_target_metadata.json \) \
+  -type f -print -quit | grep -q .; then
+  echo "disabled run emitted Test Optimization outputs" >&2
+  exit 1
+fi
+```
+
+Replace `sync_repo` and `public_target` when the consumer uses different
+labels. The ordinary Python runner must still execute, while Test Optimization
+selectors, Bazel metadata, and payload files remain absent. When a mock metadata
+server or request counter is available, require zero requests in this phase.
+
+Then reuse the exact same `output_root`:
+
+```bash
+bazel --output_user_root="$output_root" test \
+  --config=test-optimization \
+  "$public_target"
+
+export_rel="$(
+  bazel --output_user_root="$output_root" cquery \
+    --config=test-optimization \
+    "${sync_repo}//:export.bzl" \
+    --output=files
+)"
+case "$export_rel" in
+  /*) export_file="$export_rel" ;;
+  *) export_file="$execution_root/$export_rel" ;;
+esac
+grep -F '"enabled": True' "$export_file"
+find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -type f -print
+find "$testlogs" -name bazel_target_metadata.json -type f -print
+```
+
+Require both final `find` commands to return the expected files. Every
+inspection command above is scoped to `output_root`; using the workspace's
+default output root at either stage does not prove the disabled-to-enabled
+repository transition.
+
 ## Sync
 
 Normal sync should not use `FETCH_SALT`:
@@ -72,8 +161,11 @@ bazel sync --enable_workspace --config=test-optimization \
 ## Test, Doctor, Dry-Run, Upload
 
 For the simplest customer troubleshooting request after tests have run, use
-`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` with any
-matching BEP/artifact flags. Prefer the CI wrapper when the repository can
+`bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` with any
+matching BEP/artifact flags. Replace `<topt-package>` with the package that owns
+the workspace's logical doctor/uploader pair (for example,
+`tools/test_optimization`; use an empty package only when the targets
+intentionally live at the root). Prefer the CI wrapper when the repository can
 vendor the helper directory and you need uploader dry-run or upload coverage:
 
 ```bash

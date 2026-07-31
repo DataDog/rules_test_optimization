@@ -21,6 +21,8 @@ env:
   # the current default tracer pin exercised by that fixture.
   GO_VERSION: "1.25.0"
   PYTHON_VERSION: "3.11"
+  BAZELISK_VERSION: "1.28.1"
+  BAZELISK_SHA256_LINUX_AMD64: "22e7d3a188699982f661cf4687137ee52d1f24fec1ec893d91a6c4d791a75de8"
   BUILDIFIER_VERSION: "8.2.1"
   BUILDIFIER_SHA256_LINUX_AMD64: "6ceb7b0ab7cf66fceccc56a027d21d9cc557a7f34af37d2101edb56b92fcfa1a"
 
@@ -39,12 +41,19 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      rules_go_integration_matrix: ${{ steps.rules_go_matrix.outputs.integration_matrix }}
+      rules_go_upstreams: ${{ steps.rules_go_matrix.outputs.upstreams }}
       run_full_ci: ${{ steps.classify.outputs.run_full_ci }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Classify changed files
         id: classify
@@ -77,6 +86,14 @@ jobs:
             echo "${line}" >> "${GITHUB_OUTPUT}"
           done < <(./tools/dev/classify_ci_changes.sh "${base_sha}" "${head_sha}")
 
+      - name: Generate rules_go CI matrices
+        id: rules_go_matrix
+        shell: bash
+        run: |
+          python3 tools/dev/materialize_rules_go_fork.py list-upstreams |
+            python3 -c 'import json, sys; upstreams = [line.strip() for line in sys.stdin if line.strip()]; assert upstreams, "no rules_go upstreams found"; print("upstreams=" + json.dumps(upstreams, separators=(",", ":"))); print("integration_matrix=" + json.dumps({"upstream": upstreams, "module_system": ["workspace", "bzlmod"]}, separators=(",", ":")))' \
+              >> "${GITHUB_OUTPUT}"
+
   bazel-tests:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
@@ -84,7 +101,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -109,78 +126,12 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/... --test_output=errors
 
-      - name: Run Bazel tests (go companion module)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          (
-            cd modules/go &&
-            ../../bazelw test //... \
-              --override_module=datadog-rules-test-optimization=../..
-          )
-
-      - name: Run Bazel tests (python companion module)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          (
-            cd modules/python &&
-            ../../bazelw test //... \
-              --override_module=datadog-rules-test-optimization=../..
-          )
-
-      - name: Run Bazel tests (java companion module)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          (
-            cd modules/java &&
-            ../../bazelw test //... \
-              --override_module=datadog-rules-test-optimization=../..
-          )
-
-      - name: Run Bazel tests (nodejs companion module)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          (
-            cd modules/nodejs &&
-            ../../bazelw test //... \
-              --override_module=datadog-rules-test-optimization=../..
-          )
-
-      - name: Run Bazel tests (dotnet companion module)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          (
-            cd modules/dotnet &&
-            ../../bazelw test //... \
-              --override_module=datadog-rules-test-optimization=../..
-          )
-
-      - name: Run Bazel tests (ruby companion module)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          (
-            cd modules/ruby &&
-            ../../bazelw test //... \
-              --override_module=datadog-rules-test-optimization=../..
-          )
-
       - name: Build examples
         timeout-minutes: 20
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # Linux/macOS already build the full example matrix, including Go.
+            # Ubuntu and macOS build the full example matrix, including Go.
             # Keep Windows coverage on the non-Go examples until the vendored
             # rules_go Orchestrion stdlib action is stable there.
             ./bazelw --output_user_root=C:/b build \
@@ -222,16 +173,20 @@ jobs:
         # and command construction without requiring live Datadog credentials.
         run: RUNTESTS_DRY_RUN=1 bash ./examples/multi_service/runtests.sh
 
-      # Exercises the uploader end-to-end against a local mock server.
-      - name: Run mock server integration tests (Linux)
-        if: runner.os == 'Linux'
-        # The guided Orchestrion bootstrap coverage in this harness now performs
-        # a full cold-start bootstrap before the mocked runtime assertions. Keep
-        # this lane bounded, but give it enough headroom to finish on slower
-        # GitHub-hosted Linux runners.
-        timeout-minutes: 30
-        shell: bash
-        run: ./tools/tests/integration/run_mock_server_tests.sh
+      - name: Exercise example PowerShell runtests scripts (dry-run)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:RUNTESTS_DRY_RUN = "1"
+          foreach ($script in @(
+            "./examples/single_service/runtests.ps1",
+            "./examples/multi_service/runtests.ps1"
+          )) {
+            & $script
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
 
       - name: Ensure jq is available (Windows)
         if: runner.os == 'Windows'
@@ -251,12 +206,182 @@ jobs:
         shell: pwsh
         run: ./tools/tests/integration/run_mock_server_tests.ps1
 
-  rules-go-variant-smoke:
+      - name: Validate enabled manifest sync and runtime paths (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: python tools/tests/integration/run_manifest_sync_tests.py --mode windows-enabled-smoke
+
+  bazel-tests-ubuntu-main:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
-    # This job runs the smoke harness serially for every supported upstream.
-    # Keep enough headroom as the registry grows.
-    timeout-minutes: 75
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Fresh-run policy: keep this lane intentionally cacheless so every CI run
+      # re-evaluates repository rules from scratch.
+      # Guardrail: do not add Bazel cache steps (actions/cache, disk cache,
+      # remote cache) here without explicit maintainer approval.
+      - name: Run Bazel tests
+        shell: bash
+        run: ./bazelw test //tools/... --test_output=errors
+
+      - name: Run Bazel tests (go companion module)
+        shell: bash
+        run: |
+          (
+            cd modules/go &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (python companion module)
+        shell: bash
+        run: |
+          (
+            cd modules/python &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (java companion module)
+        shell: bash
+        run: |
+          (
+            cd modules/java &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (nodejs companion module)
+        shell: bash
+        run: |
+          (
+            cd modules/nodejs &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (dotnet companion module)
+        shell: bash
+        run: |
+          (
+            cd modules/dotnet &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Run Bazel tests (ruby companion module)
+        shell: bash
+        run: |
+          (
+            cd modules/ruby &&
+            ../../bazelw test //... \
+              --override_module=datadog-rules-test-optimization=../..
+          )
+
+      - name: Build examples
+        shell: bash
+        run: ./bazelw build //examples/...
+
+      - name: Test examples
+        shell: bash
+        run: ./bazelw test //examples/... --test_output=errors
+
+      - name: Exercise single-service runtests script (dry-run)
+        shell: bash
+        run: RUNTESTS_DRY_RUN=1 bash ./examples/single_service/runtests.sh
+
+      - name: Exercise multi-service runtests script (dry-run)
+        shell: bash
+        run: RUNTESTS_DRY_RUN=1 bash ./examples/multi_service/runtests.sh
+
+  bazel-tests-ubuntu-mock-server:
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # The harness owns isolated output bases, so it does not benefit from the
+      # Bazel state created by the main Ubuntu lane.
+      - name: Run mock server integration tests
+        shell: bash
+        run: ./tools/tests/integration/run_mock_server_tests.sh
+
+      - name: Run manifest sync and cache isolation integration
+        shell: bash
+        run: python3 tools/tests/integration/run_manifest_sync_tests.py --mode full
+
+  bazel-tests-ubuntu:
+    name: bazel-tests (ubuntu-latest)
+    needs:
+      - changes
+      - bazel-tests-ubuntu-main
+      - bazel-tests-ubuntu-mock-server
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful Ubuntu Bazel test shards
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          MAIN_RESULT: ${{ needs.bazel-tests-ubuntu-main.result }}
+          MOCK_SERVER_RESULT: ${{ needs.bazel-tests-ubuntu-mock-server.result }}
+          RUN_FULL_CI: ${{ needs.changes.outputs.run_full_ci }}
+        run: |
+          if [[ "${CHANGES_RESULT}" != "success" ]]; then
+            echo "Change classification did not succeed: ${CHANGES_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${RUN_FULL_CI}" != "true" ]]; then
+            echo "Ubuntu Bazel tests are not required for this change."
+            exit 0
+          fi
+
+          if [[ "${MAIN_RESULT}" != "success" ]]; then
+            echo "The main Ubuntu Bazel test shard did not succeed: ${MAIN_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${MOCK_SERVER_RESULT}" != "success" ]]; then
+            echo "The Ubuntu mock-server shard did not succeed: ${MOCK_SERVER_RESULT}" >&2
+            exit 1
+          fi
+
+  rules-go-variant-smoke-shard:
+    name: rules-go-variant-smoke-shard (${{ matrix.upstream }})
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        upstream: ${{ fromJSON(needs.changes.outputs.rules_go_upstreams) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -285,17 +410,48 @@ jobs:
 
       - name: Run vendored rules_go smoke coverage
         shell: bash
-        run: |
-          while IFS= read -r upstream; do
-            RULES_GO_UPSTREAM="${upstream}" \
-            RULES_GO_VARIANT="base" \
-              ./tools/dev/run_rules_go_variant_smoke.sh
-          done < <(python3 tools/dev/materialize_rules_go_fork.py list-upstreams)
+        env:
+          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
+          RULES_GO_VARIANT: base
+        run: ./tools/dev/run_rules_go_variant_smoke.sh
 
-  workspace-compat:
+  rules-go-variant-smoke:
+    needs:
+      - changes
+      - rules-go-variant-smoke-shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful rules_go variant smoke shards
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_FULL_CI: ${{ needs.changes.outputs.run_full_ci }}
+          SHARD_RESULT: ${{ needs.rules-go-variant-smoke-shard.result }}
+        run: |
+          if [[ "${CHANGES_RESULT}" != "success" ]]; then
+            echo "Change classification did not succeed: ${CHANGES_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${RUN_FULL_CI}" != "true" ]]; then
+            echo "rules_go variant smoke coverage is not required for this change."
+            exit 0
+          fi
+
+          if [[ "${SHARD_RESULT}" != "success" ]]; then
+            echo "One or more rules_go variant smoke shards did not succeed: ${SHARD_RESULT}" >&2
+            exit 1
+          fi
+
+  workspace-compat-shard:
+    name: workspace-compat-shard (${{ matrix.upstream }}, ${{ matrix.module_system }})
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
-    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.changes.outputs.rules_go_integration_matrix) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -317,24 +473,285 @@ jobs:
           GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Validate Go companion consumer paths
+      - name: Validate general Go companion consumer path
+        shell: bash
+        env:
+          MODULE_SYSTEM: ${{ matrix.module_system }}
+          ORCHESTRION_MODE: general
+          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
+          RULES_GO_VARIANT: base
+          USE_BAZEL_VERSION: "8.4.1"
+        run: |
+          case "${MODULE_SYSTEM}" in
+            workspace)
+              ./tools/tests/integration/run_workspace_go_integration.sh
+              ;;
+            bzlmod)
+              ./tools/tests/integration/run_bzlmod_go_integration.sh
+              ;;
+            *)
+              echo "Unsupported module system: ${MODULE_SYSTEM}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Validate Test Optimization Go companion consumer path
+        shell: bash
+        env:
+          MODULE_SYSTEM: ${{ matrix.module_system }}
+          ORCHESTRION_MODE: test_optimization
+          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
+          RULES_GO_VARIANT: base
+          USE_BAZEL_VERSION: "8.4.1"
+        run: |
+          case "${MODULE_SYSTEM}" in
+            workspace)
+              ./tools/tests/integration/run_workspace_go_integration.sh
+              ;;
+            bzlmod)
+              ./tools/tests/integration/run_bzlmod_go_integration.sh
+              ;;
+            *)
+              echo "Unsupported module system: ${MODULE_SYSTEM}" >&2
+              exit 1
+              ;;
+          esac
+
+  workspace-compat:
+    needs:
+      - changes
+      - workspace-compat-shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful workspace compatibility shards
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_FULL_CI: ${{ needs.changes.outputs.run_full_ci }}
+          SHARD_RESULT: ${{ needs.workspace-compat-shard.result }}
+        run: |
+          if [[ "${CHANGES_RESULT}" != "success" ]]; then
+            echo "Change classification did not succeed: ${CHANGES_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${RUN_FULL_CI}" != "true" ]]; then
+            echo "Workspace compatibility coverage is not required for this change."
+            exit 0
+          fi
+
+          if [[ "${SHARD_RESULT}" != "success" ]]; then
+            echo "One or more workspace compatibility shards did not succeed: ${SHARD_RESULT}" >&2
+            exit 1
+          fi
+
+  go-bootstrap-no-host-shard:
+    name: go-bootstrap-no-host-shard (${{ matrix.upstream }}, ${{ matrix.module_system }})
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.changes.outputs.rules_go_integration_matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Do not use setup-go or `go install` in this lane. The consumer path must
+      # obtain its Go SDK from Bazel, while a sentinel shadows any Go binary
+      # already present in the hosted-runner image.
+      - name: Install Bazelisk without Go
         shell: bash
         run: |
-          while IFS= read -r upstream; do
-            for mode in general test_optimization; do
-              USE_BAZEL_VERSION=8.4.1 \
-              RULES_GO_UPSTREAM="${upstream}" \
-              RULES_GO_VARIANT="base" \
-              ORCHESTRION_MODE="${mode}" \
-                ./tools/tests/integration/run_workspace_go_integration.sh
+          set -euo pipefail
+          bin_dir="${RUNNER_TEMP}/bazelisk-bin"
+          bazelisk_path="${bin_dir}/bazelisk"
+          mkdir -p "${bin_dir}"
+          curl --fail --location --silent --show-error \
+            --retry 3 \
+            --output "${bazelisk_path}" \
+            "https://github.com/bazelbuild/bazelisk/releases/download/v${BAZELISK_VERSION}/bazelisk-linux-amd64"
+          printf '%s  %s\n' "${BAZELISK_SHA256_LINUX_AMD64}" "${bazelisk_path}" |
+            sha256sum --check
+          chmod +x "${bazelisk_path}"
+          echo "${bin_dir}" >> "${GITHUB_PATH}"
 
-              USE_BAZEL_VERSION=8.4.1 \
-              RULES_GO_UPSTREAM="${upstream}" \
-              RULES_GO_VARIANT="base" \
-              ORCHESTRION_MODE="${mode}" \
-                ./tools/tests/integration/run_bzlmod_go_integration.sh
-            done
-          done < <(python3 tools/dev/materialize_rules_go_fork.py list-upstreams)
+      - name: Validate cold config transition without host Go
+        shell: bash
+        env:
+          CONFIG_TRANSITION_ONLY: "1"
+          EXPECTED_ORCHESTRION_CACHE_PHASE: extensions.bootstrap_cache_miss
+          FORBID_HOST_GO: "1"
+          MODULE_SYSTEM: ${{ matrix.module_system }}
+          ORCHESTRION_MODE: test_optimization
+          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
+          RULES_GO_VARIANT: base
+          USE_BAZEL_VERSION: "8.4.1"
+          XDG_CACHE_HOME: ${{ runner.temp }}/rto-no-host-go-cache/${{ matrix.upstream }}/${{ matrix.module_system }}
+        run: |
+          set -euo pipefail
+          if [[ -e "${XDG_CACHE_HOME}" ]]; then
+            echo "Cold bootstrap cache path already exists: ${XDG_CACHE_HOME}" >&2
+            exit 1
+          fi
+          mkdir -p "${XDG_CACHE_HOME}"
+          case "${MODULE_SYSTEM}" in
+            workspace)
+              ./tools/tests/integration/run_workspace_go_integration.sh
+              ;;
+            bzlmod)
+              ./tools/tests/integration/run_bzlmod_go_integration.sh
+              ;;
+            *)
+              echo "Unsupported module system: ${MODULE_SYSTEM}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Validate warm cache restoration without host Go
+        shell: bash
+        env:
+          CONFIG_TRANSITION_ONLY: "1"
+          EXPECTED_ORCHESTRION_CACHE_PHASE: extensions.bootstrap_cache_hit
+          FORBID_HOST_GO: "1"
+          MODULE_SYSTEM: ${{ matrix.module_system }}
+          ORCHESTRION_MODE: test_optimization
+          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
+          RULES_GO_VARIANT: base
+          USE_BAZEL_VERSION: "8.4.1"
+          XDG_CACHE_HOME: ${{ runner.temp }}/rto-no-host-go-cache/${{ matrix.upstream }}/${{ matrix.module_system }}
+        run: |
+          set -euo pipefail
+          case "${MODULE_SYSTEM}" in
+            workspace)
+              ./tools/tests/integration/run_workspace_go_integration.sh
+              ;;
+            bzlmod)
+              ./tools/tests/integration/run_bzlmod_go_integration.sh
+              ;;
+            *)
+              echo "Unsupported module system: ${MODULE_SYSTEM}" >&2
+              exit 1
+              ;;
+          esac
+
+  go-bootstrap-no-host:
+    needs:
+      - changes
+      - go-bootstrap-no-host-shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful no-host-Go bootstrap shards
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_FULL_CI: ${{ needs.changes.outputs.run_full_ci }}
+          SHARD_RESULT: ${{ needs.go-bootstrap-no-host-shard.result }}
+        run: |
+          if [[ "${CHANGES_RESULT}" != "success" ]]; then
+            echo "Change classification did not succeed: ${CHANGES_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${RUN_FULL_CI}" != "true" ]]; then
+            echo "No-host-Go bootstrap coverage is not required for this change."
+            exit 0
+          fi
+
+          if [[ "${SHARD_RESULT}" != "success" ]]; then
+            echo "One or more no-host-Go bootstrap shards did not succeed: ${SHARD_RESULT}" >&2
+            exit 1
+          fi
+
+  windows-go-bootstrap-shard:
+    name: windows-go-bootstrap-shard (${{ matrix.upstream }}, ${{ matrix.module_system }})
+    needs: changes
+    if: ${{ needs.changes.outputs.run_full_ci == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.changes.outputs.rules_go_integration_matrix) }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Bazelisk
+        shell: bash
+        run: |
+          GO111MODULE=on go install github.com/bazelbuild/bazelisk@v1.28.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Validate disabled-to-enabled bootstrap transition
+        shell: bash
+        env:
+          BAZEL_VERSION: "8.4.1"
+          MODULE_SYSTEM: ${{ matrix.module_system }}
+          ORCHESTRION_MODE: test_optimization
+          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
+          RULES_GO_VARIANT: base
+          WINDOWS_CONFIG_TRANSITION_ONLY: "1"
+        run: |
+          case "${MODULE_SYSTEM}" in
+            workspace)
+              ./tools/tests/integration/run_workspace_go_integration.sh
+              ;;
+            bzlmod)
+              ./tools/tests/integration/run_bzlmod_go_integration.sh
+              ;;
+            *)
+              echo "Unsupported module system: ${MODULE_SYSTEM}" >&2
+              exit 1
+              ;;
+          esac
+
+  # Keep one consolidated result while the expensive work runs in parallel.
+  windows-go-bootstrap-smoke:
+    needs:
+      - changes
+      - windows-go-bootstrap-shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful Windows bootstrap shards
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_FULL_CI: ${{ needs.changes.outputs.run_full_ci }}
+          SHARD_RESULT: ${{ needs.windows-go-bootstrap-shard.result }}
+        run: |
+          if [[ "${CHANGES_RESULT}" != "success" ]]; then
+            echo "Change classification did not succeed: ${CHANGES_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${RUN_FULL_CI}" != "true" ]]; then
+            echo "Windows Go bootstrap smoke is not required for this change."
+            exit 0
+          fi
+
+          if [[ "${SHARD_RESULT}" != "success" ]]; then
+            echo "One or more Windows Go bootstrap shards did not succeed: ${SHARD_RESULT}" >&2
+            exit 1
+          fi
 
   coverage-tools:
     needs: changes

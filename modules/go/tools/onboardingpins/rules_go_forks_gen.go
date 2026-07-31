@@ -11,4 +11,7 @@ var rulesGoForkStripPrefixes = map[string]map[string]string{
 	"v0_61_1": {
 		"base": "third_party/rgo/v0_61_1/base",
 	},
+	"v0_62_0": {
+		"base": "third_party/rgo/v0_62_0/base",
+	},
 }

@@ -29,6 +29,8 @@ set -euo pipefail
 #
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PIN_GRAPH_FIXTURE="$REPO_ROOT/tools/tests/integration/fixtures/orchestrion_pin_graph"
+MISSING_PIN_MODULE_FIXTURE="$PIN_GRAPH_FIXTURE/missing_module"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_workspace_go.XXXXXX")"
 WORKSPACE_ROOT="$TMP_ROOT/workspaces"
 ARCHIVE_ROOT="$TMP_ROOT/archive_root"
@@ -44,9 +46,21 @@ BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_ro
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
+ORCHESTRION_DISABLED_SENTINEL="${ORCHESTRION_DISABLED_SENTINEL:-0}"
+ORCHESTRION_DISABLED_SENTINEL_VERSION="v0.0.0-rto-disabled-fetch-sentinel"
+WINDOWS_DISABLED_SMOKE_ONLY="${WINDOWS_DISABLED_SMOKE_ONLY:-0}"
+WINDOWS_ENABLED_SMOKE_ONLY="${WINDOWS_ENABLED_SMOKE_ONLY:-0}"
+WINDOWS_CONFIG_TRANSITION_ONLY="${WINDOWS_CONFIG_TRANSITION_ONLY:-0}"
+CONFIG_TRANSITION_ONLY="${CONFIG_TRANSITION_ONLY:-$WINDOWS_CONFIG_TRANSITION_ONLY}"
+FORBID_HOST_GO="${FORBID_HOST_GO:-0}"
+EXPECTED_ORCHESTRION_CACHE_PHASE="${EXPECTED_ORCHESTRION_CACHE_PHASE:-}"
+HOST_GO_SENTINEL_LOG=""
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0}"
+PIN_ROOT_VERSION="v2.9.1-rc.3"
+PIN_HTTP_VERSION="v2.9.1-rc.3"
+PIN_SLOG_VERSION="v2.3.0"
 SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/workspace-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_workspace_go_integration}"
@@ -80,14 +94,93 @@ HERMETIC_TEST_FLAGS=(
   --test_env=LC_ALL=C
 )
 
+source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
+
+assert_pin_version_file() {
+  local ws_dir="$1"
+  local files_list="$2"
+  shift 2
+  local execution_root
+  local output_base
+  local version_file
+
+  execution_root="$(
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "$@" execution_root
+  )"
+  output_base="$(
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "$@" output_base
+  )"
+  version_file="$(head -n 1 "$files_list")"
+  if [[ "$version_file" != /* && ! "$version_file" =~ ^[A-Za-z]:[/\\] ]]; then
+    if [[ "$version_file" == external/* ]]; then
+      version_file="$output_base/$version_file"
+    else
+      version_file="$execution_root/$version_file"
+    fi
+  fi
+  "$PYTHON" - "$version_file" "$PIN_ROOT_VERSION" "$PIN_HTTP_VERSION" "$PIN_SLOG_VERSION" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+versions = json.loads(path.read_text(encoding="utf-8"))["modules"]
+expected = {
+    "github.com/DataDog/dd-trace-go/v2": sys.argv[2],
+    "github.com/DataDog/dd-trace-go/contrib/net/http/v2": sys.argv[3],
+    "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": sys.argv[4],
+}
+if versions != expected:
+    raise SystemExit(f"resolved pin versions mismatch: got {versions!r}, expected {expected!r}")
+PY
+}
+
+shutdown_bazel_workspace_servers() {
+  local workspace_dir
+
+  # Bazel owns one server per generated workspace. Windows cannot remove their
+  # output bases until every server releases its files.
+  if [[ -d "$WORKSPACE_ROOT" ]]; then
+    for workspace_dir in "$WORKSPACE_ROOT"/*; do
+      [[ -d "$workspace_dir" ]] || continue
+      (
+        cd "$workspace_dir"
+        USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
+      ) >/dev/null 2>&1 || true
+    done
+  fi
+
+  (
+    cd "$REPO_ROOT"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
+  ) >/dev/null 2>&1 || true
+}
+
 cleanup() {
-  USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown >/dev/null 2>&1 || true
+  local status=$?
+
+  set +e
+  stop_go_integration_mock_server
+  shutdown_bazel_workspace_servers
+  if [[ -n "$HOST_GO_SENTINEL_LOG" && -s "$HOST_GO_SENTINEL_LOG" ]]; then
+    echo "error: the consumer path invoked the host Go sentinel" >&2
+    cat "$HOST_GO_SENTINEL_LOG" >&2
+    status=1
+  fi
   if [[ "${KEEP_TMP:-0}" == "1" ]]; then
     echo "KEEP_TMP=1: workspace fixtures left at $TMP_ROOT"
-    return
+    return "$status"
   fi
   chmod -R u+w "$TMP_ROOT" 2>/dev/null || true
-  rm -rf "$TMP_ROOT"
+  if ! rm -rf "$TMP_ROOT" 2>/dev/null; then
+    sleep 2
+    if ! rm -rf "$TMP_ROOT" 2>/dev/null; then
+      echo "warning: unable to remove temporary workspace $TMP_ROOT" >&2
+    fi
+  fi
+  return "$status"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -100,6 +193,30 @@ require_command() {
   fi
 }
 
+enable_host_go_sentinel() {
+  [[ "$FORBID_HOST_GO" == "1" ]] || return 0
+  if [[ "${OS:-}" == "Windows_NT" ]]; then
+    echo "error: FORBID_HOST_GO is currently supported only on Unix hosts" >&2
+    exit 1
+  fi
+
+  local sentinel_root="$TMP_ROOT/host_go_sentinel"
+  mkdir -p "$sentinel_root/bin"
+  HOST_GO_SENTINEL_LOG="$sentinel_root/invocations.log"
+  : > "$HOST_GO_SENTINEL_LOG"
+  cat > "$sentinel_root/bin/go" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+sentinel_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+printf '%s\n' "$*" >> "$sentinel_root/invocations.log"
+echo "error: host Go must not be used by the Test Optimization consumer path" >&2
+exit 97
+EOF
+  chmod +x "$sentinel_root/bin/go"
+  PATH="$sentinel_root/bin:$PATH"
+  export PATH
+}
+
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
   if command -v python >/dev/null 2>&1; then
     PYTHON=python
@@ -109,8 +226,8 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   fi
 fi
 
-require_command "$GO_BIN" "go binary not found (tried '$GO_BIN')"
 require_command tar "tar is required for the WORKSPACE archive fixture"
+enable_host_go_sentinel
 
 resolve_rules_go_fork_path() {
   "$PYTHON" "$REPO_ROOT/tools/dev/materialize_rules_go_fork.py" resolve \
@@ -142,6 +259,20 @@ sha256_file() {
   fi
   echo "error: neither sha256sum nor shasum is available" >&2
   exit 1
+}
+
+file_uri() {
+  local path="$1"
+
+  if command -v cygpath >/dev/null 2>&1; then
+    path="$(cygpath -m "$path")"
+  fi
+  "$PYTHON" - "$path" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).resolve().as_uri())
+PY
 }
 
 wall_time_ns() {
@@ -352,7 +483,7 @@ PY
 run_bep_freshness_scenario() {
   local ws_dir="$1"
   local mode="$2"
-  local -a workspace_flags=("${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace)
+  local -a workspace_flags=("${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace --config=test-optimization)
   local bep_dir="$ws_dir/.topt/bep-${mode}"
   local fresh_bep="$bep_dir/fresh.bep.json"
   local cached_bep="$bep_dir/cached.bep.json"
@@ -484,17 +615,26 @@ create_fixture_archive() {
     tar -czf "$ARCHIVE_PATH" "$ARCHIVE_NAME"
   )
   ARCHIVE_SHA256="$(sha256_file "$ARCHIVE_PATH")"
-  ARCHIVE_URL="file://$ARCHIVE_PATH"
+  ARCHIVE_URL="$(file_uri "$ARCHIVE_PATH")"
+}
+
+write_fixture_bazelrc() {
+  local ws_dir="$1"
+  local rules_go_repo="$2"
+
+  cat > "$ws_dir/.bazelrc" <<EOF
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true
+EOF
 }
 
 write_shared_fixture_sources() {
   local ws_dir="$1"
 
-  mkdir -p "$ws_dir/app"
+  mkdir -p "$ws_dir/app" "$ws_dir/tools/build"
 
   cat > "$ws_dir/BUILD.bazel" <<'EOF'
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
 exports_files([
     "go.mod",
@@ -503,23 +643,44 @@ exports_files([
     "orchestrion.yml",
 ])
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
     expected_targets = ["//app:hello_test"],
 )
+EOF
 
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
+  cat > "$ws_dir/tools/build/BUILD.bazel" <<'EOF'
+exports_files(["dd_go_test.bzl"])
+EOF
+
+  cat > "$ws_dir/tools/build/dd_go_test.bzl" <<EOF
+load("@io_bazel_rules_go//go:def.bzl", _go_test = "go_test")
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data//:export.bzl", "topt_data")
+
+_ORCHESTRION_PIN_FILES = [
+    "//:go.mod",
+    "//:go.sum",
+    "//:orchestrion.tool.go",
+    "//:orchestrion.yml",
+]
+
+def dd_go_test(name, **kwargs):
+    dd_topt_go_test(
+        name = name,
+        go_test_rule = _go_test,
+        topt_data = topt_data,
+        orchestrion_mode = "${ORCHESTRION_MODE}",
+        orchestrion_pin_files = _ORCHESTRION_PIN_FILES,
+        **kwargs
+    )
 EOF
 
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
 load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("@io_bazel_rules_go//go/private/rules:transition.bzl", "go_reset_target")
-load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
-load("@test_optimization_data//:export.bzl", "topt_data")
+load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
 go_library(
     name = "hello_lib",
@@ -538,7 +699,7 @@ go_reset_target(
     dep = ":fixture_tool",
 )
 
-dd_topt_go_test(
+dd_go_test(
     name = "hello_test",
     srcs = [
         "hello_external_test.go",
@@ -546,14 +707,12 @@ dd_topt_go_test(
     ],
     data = [":fixture_tool_reset"],
     embed = [":hello_lib"],
-    orchestrion_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-        "//:orchestrion.tool.go",
-        "//:orchestrion.yml",
-    ],
-    orchestrion_mode = "${ORCHESTRION_MODE}",
-    topt_data = topt_data,
+)
+
+genquery(
+    name = "hello_test_deps_query",
+    expression = "deps(//app:hello_test)",
+    scope = [":hello_test"],
 )
 EOF
 
@@ -684,8 +843,18 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read known_tests.json: %v", err)
 	}
-	if !strings.Contains(string(knownTestsContent), "module:"+wantModuleLabel) {
-		t.Fatalf("known_tests.json did not contain module marker %q: %s", "module:"+wantModuleLabel, string(knownTestsContent))
+	var knownTests struct {
+		Data struct {
+			Attributes struct {
+				Tests map[string]json.RawMessage \`json:"tests"\`
+			} \`json:"attributes"\`
+		} \`json:"data"\`
+	}
+	if err := json.Unmarshal(knownTestsContent, &knownTests); err != nil {
+		t.Fatalf("decode known_tests.json: %v", err)
+	}
+	if knownTests.Data.Attributes.Tests == nil {
+		t.Fatalf("known_tests.json did not contain the canonical tests object: %s", string(knownTestsContent))
 	}
 
 	testManagementPath := filepath.Join(manifestDir, "cache", "http", "test_management.json")
@@ -693,8 +862,18 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read test_management.json: %v", err)
 	}
-	if !strings.Contains(string(testManagementContent), "\""+wantModuleLabel+"\"") {
-		t.Fatalf("test_management.json did not contain module label %q: %s", wantModuleLabel, string(testManagementContent))
+	var testManagement struct {
+		Data struct {
+			Attributes struct {
+				Modules map[string]json.RawMessage \`json:"modules"\`
+			} \`json:"attributes"\`
+		} \`json:"data"\`
+	}
+	if err := json.Unmarshal(testManagementContent, &testManagement); err != nil {
+		t.Fatalf("decode test_management.json: %v", err)
+	}
+	if testManagement.Data.Attributes.Modules == nil {
+		t.Fatalf("test_management.json did not contain the canonical modules object: %s", string(testManagementContent))
 	}
 
 	undeclaredDir := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
@@ -719,7 +898,6 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 		"bazel.test_optimization.runtime_name": "go",
 		"bazel.go.importpath": wantModuleImportpath,
 		"bazel.go.importpath_source": "inferred",
-		"bazel.go.payload_selection": "module",
 		"bazel.go.attr.pure": "auto",
 		"bazel.go.attr.race": "auto",
 		"bazel.go.attr.msan": "auto",
@@ -730,8 +908,13 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 			t.Fatalf("%s = %v, want %q", key, metadata[key], want)
 		}
 	}
-	if got, _ := metadata["bazel.go.payload_selection"].(string); got != "module" {
-		t.Fatalf("bazel.go.payload_selection = %v, want module", metadata["bazel.go.payload_selection"])
+	selection, _ := metadata["bazel.go.payload_selection"].(string)
+	moduleCachePath := filepath.Join(manifestDir, "cache", "http", "module_"+wantModuleLabel, "known_tests.json")
+	if _, err := os.Stat(moduleCachePath); err != nil {
+		t.Fatalf("matching physical module cache %s is required: %v", moduleCachePath, err)
+	}
+	if selection != "module" {
+		t.Fatalf("bazel.go.payload_selection = %v with deterministic module metadata, want module", selection)
 	}
 	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
 		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
@@ -751,19 +934,8 @@ func TestWorkspaceGoEnvWiring(t *testing.T) {
 }
 EOF
 
-  cat > "$ws_dir/go.mod" <<EOF
-module ${MODULE_IMPORTPATH}
-
-go ${GO_VERSION}
-
-require (
-	github.com/DataDog/dd-trace-go/contrib/log/slog/v2 ${DD_TRACE_GO_VERSION}
-	github.com/DataDog/dd-trace-go/contrib/net/http/v2 ${DD_TRACE_GO_VERSION}
-	github.com/DataDog/dd-trace-go/v2 ${DD_TRACE_GO_VERSION}
-	github.com/DataDog/orchestrion ${ORCHESTRION_VERSION}
-)
-EOF
-  write_orchestrion_go_sum "$ws_dir"
+  cp "$PIN_GRAPH_FIXTURE/go.mod" "$ws_dir/go.mod"
+  cp "$PIN_GRAPH_FIXTURE/go.sum" "$ws_dir/go.sum"
 
   cat > "$ws_dir/orchestrion.tool.go" <<'EOF'
 //go:build tools
@@ -772,7 +944,6 @@ package tools
 
 import (
 	_ "github.com/DataDog/orchestrion" // integration
-	_ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
 	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
 	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"      // integration
 )
@@ -788,29 +959,26 @@ aspects: []
 EOF
 }
 
-# write_orchestrion_go_sum keeps the maintained fixture on a real checked-in
-# style go.sum for the default tracer/tool versions. Only ad hoc version
-# overrides fall back to generating go.sum dynamically.
-write_orchestrion_go_sum() {
+write_bootstrap_generated_wrapper() {
   local ws_dir="$1"
-
-  if [[ "$DD_TRACE_GO_VERSION" == "v2.9.0" && "$ORCHESTRION_VERSION" == "v1.9.0" ]]; then
-    cat > "$ws_dir/go.sum" <<'EOF'
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0 h1:o5PABRmFQQ1uJcog3PnNF9+182EODnjHB6fjGTFkOIs=
-github.com/DataDog/dd-trace-go/contrib/log/slog/v2 v2.9.0/go.mod h1:+wuXa6KiqwWqg3J29gSFcRqu4hxTIJ2twz7BhjZ933Q=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0 h1:bkNoThs8Y2i1pt4eoSWq2QhQ84qAoSZRtuHyQgXbDUE=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.0/go.mod h1:IublECGcvP3j2VkSyyfD3vhC/QcbwWigkQyzzQY15eY=
-github.com/DataDog/dd-trace-go/v2 v2.9.0 h1:J/EsZ7nPqkf3Pa56AAre306ylYMhtzz6oylmchqc6JA=
-github.com/DataDog/dd-trace-go/v2 v2.9.0/go.mod h1:SdMkCESSBc2knx56Xol2pO7jhMDPi7MxyNj6vRYMW48=
-github.com/DataDog/orchestrion v1.9.0 h1:TmjQfgaIMZDnGAmNXHIw5P7R+q4hOEJN5B/S24IqbKA=
-github.com/DataDog/orchestrion v1.9.0/go.mod h1:FvbdNvK2PY3YnEIw0MHqdBELhZ0P7nUpWaJB3TgUtNE=
-EOF
-    return
-  fi
+  local bootstrap_output_user_root="$TMP_ROOT/bootstrap_wrapper_output_user_root"
 
   (
     cd "$ws_dir"
-    GOWORK=off "$GO_BIN" mod download all
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$bootstrap_output_user_root" run \
+      "${BAZEL_EXTRA_ARGS[@]}" \
+      --noenable_bzlmod \
+      --enable_workspace \
+      @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+      --workspace "$ws_dir" \
+      --workspace-mode \
+      --sync-repo-name test_optimization_data \
+      --wrapper-package tools/build \
+      --wrapper-file dd_go_test.bzl \
+      --plain-wrapper-name dd_go_test \
+      --optimized-wrapper-name dd_topt_go_test \
+      --write-wrapper-template \
+      --force
   )
 }
 
@@ -894,30 +1062,31 @@ http_archive(
 
 load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
-load("@io_bazel_rules_go//go:orchestrion_workspace.bzl", "go_orchestrion_tool_repo")
-load("@datadog-rules-test-optimization//tools/tests:example_stub_repo.bzl", "example_stub_repo")
+load("@datadog-rules-test-optimization-go//:topt_go_orchestrion_repository.bzl", "dd_topt_go_orchestrion_tool_repo")
+load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_workspace_sync_repositories")
+
+dd_topt_go_orchestrion_tool_repo(
+    version = "${ORCHESTRION_VERSION}",
+    dd_trace_go_pin_files = [
+        "@//:go.mod",
+        "@//:go.sum",
+    ],
+    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = "${GO_VERSION}",
+    log_timing = True,
+)
 
 go_rules_dependencies()
 go_register_toolchains(version = "${GO_VERSION}")
 gazelle_dependencies()
-EOF
 
-  cat >> "$ws_dir/WORKSPACE" <<EOF
-
-go_orchestrion_tool_repo(
-    version = "${ORCHESTRION_VERSION}",
-    dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
-)
-
-example_stub_repo(
+dd_topt_go_workspace_sync_repositories(
     name = "test_optimization_data",
+    service = "${SERVICE_NAME}",
+    module_path = "${MODULE_IMPORTPATH}",
+    runtime_version = "${GO_VERSION}",
     out_dir = "${OUT_DIR}",
-    service_name = "${SERVICE_NAME}",
-    service_keys = ["go_service"],
-    labels = ["${MODULE_LABEL}"],
-    go_module_path = "${MODULE_IMPORTPATH}",
-    go_sanitized_module_path = "${MODULE_LABEL}",
-    go_module_included = True,
+    require_git_metadata = True,
 )
 EOF
 }
@@ -959,6 +1128,17 @@ go_orchestrion_tool_repo(
     },
 )
 EOF
+  elif [[ "$scenario" == "conflicting_pin_version" ]]; then
+    cat >> "$ws_dir/WORKSPACE" <<EOF
+go_orchestrion_tool_repo(
+    version = "${ORCHESTRION_VERSION}",
+    dd_trace_go_version = "${DD_TRACE_GO_VERSION}",
+    dd_trace_go_pin_files = [
+        "@//:go.mod",
+        "@//:go.sum",
+    ],
+)
+EOF
   else
     cat >> "$ws_dir/WORKSPACE" <<'EOF'
 go_orchestrion_tool_repo()
@@ -973,6 +1153,47 @@ filegroup(
 EOF
 }
 
+run_missing_pin_module_failure() {
+  local ws_dir="$WORKSPACE_ROOT/missing_pin_module"
+  local output_path="$ws_dir/missing_pin_module.log"
+  local -a enabled_flags=("${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace --config=test-optimization)
+
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  write_positive_workspace "$ws_dir" "archive"
+  cp "$MISSING_PIN_MODULE_FIXTURE/go.mod" "$ws_dir/go.mod"
+  cp "$MISSING_PIN_MODULE_FIXTURE/go.sum" "$ws_dir/go.sum"
+  cat > "$ws_dir/BUILD.bazel" <<'EOF'
+exports_files([
+    "go.mod",
+    "go.sum",
+])
+EOF
+  write_fixture_bazelrc "$ws_dir" "io_bazel_rules_go"
+
+  set +e
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+      "${enabled_flags[@]}" \
+      "@io_bazel_rules_go//go/private/orchestrion:dd_trace_go_version_file" \
+      --output=files
+  ) >"$output_path" 2>&1
+  local rc=$?
+  set -e
+
+  if [[ $rc -eq 0 ]]; then
+    echo "error: expected absent tracer module resolution to fail" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+  if ! grep -F "configure dd_trace_go_versions explicitly" "$output_path" >/dev/null 2>&1; then
+    echo "error: absent tracer module failure did not explain the explicit version-map escape hatch" >&2
+    cat "$output_path" >&2
+    exit 1
+  fi
+}
+
 run_positive_fixture() {
   local repo_mode="$1"
   local ws_dir="$WORKSPACE_ROOT/${repo_mode}"
@@ -981,6 +1202,7 @@ run_positive_fixture() {
   mkdir -p "$ws_dir"
   write_positive_workspace "$ws_dir" "$repo_mode"
   write_shared_fixture_sources "$ws_dir"
+  write_fixture_bazelrc "$ws_dir" "io_bazel_rules_go"
   if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     run_positive_subscenario "$ws_dir" "hermetic"
     return
@@ -995,7 +1217,7 @@ run_positive_fixture() {
 run_positive_subscenario() {
   local ws_dir="$1"
   local mode="$2"
-  local -a workspace_flags=("${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace)
+  local -a workspace_flags=("${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace --config=test-optimization)
 
   if [[ "$mode" == "standard" ]]; then
     (
@@ -1137,6 +1359,345 @@ PY
     "$no_strip_aquery_output"
 }
 
+write_disabled_fixture_test() {
+  local ws_dir="$1"
+
+  cat > "$ws_dir/app/hello_test.go" <<'EOF'
+package main
+
+import "testing"
+
+func TestDisabledBootstrap(t *testing.T) {
+	if greeting() != "Hello, Workspace!" {
+		t.Fatalf("unexpected greeting %q", greeting())
+	}
+}
+EOF
+}
+
+run_disabled_no_fetch_smoke() {
+  local ws_dir="$WORKSPACE_ROOT/disabled"
+  local resolved_repos="$TMP_ROOT/disabled-resolved-repositories.bzl"
+  local alias_log="$TMP_ROOT/disabled-aliases.log"
+  local genquery_log="$TMP_ROOT/disabled-genquery.log"
+  local repository_files="$TMP_ROOT/disabled-orchestrion-repository.files"
+  local test_log="$TMP_ROOT/disabled-test.log"
+  local test_target_path="${HELLO_TEST_TARGET#//}"
+  local test_package="${test_target_path%%:*}"
+  local test_name="${test_target_path#*:}"
+  local -a disabled_flags=(
+    "${BAZEL_EXTRA_ARGS[@]}"
+    --noenable_bzlmod
+    --enable_workspace
+  )
+  local -a disabled_env=(
+    env
+    -u DD_API_KEY
+    -u DD_SITE
+    -u DD_TEST_OPTIMIZATION_ENABLED
+  )
+  local aliases=(
+    tool_binary
+    dd_trace_go_version_file
+    dd_trace_go_module_proxy_files
+    dd_trace_go_module_proxy_root_marker
+    orchestrion_tool_version_file
+  )
+
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  write_positive_workspace "$ws_dir" "archive"
+  write_shared_fixture_sources "$ws_dir"
+  write_fixture_bazelrc "$ws_dir" "io_bazel_rules_go"
+  if [[ "$CONFIG_TRANSITION_ONLY" == "1" ]]; then
+    write_bootstrap_generated_wrapper "$ws_dir"
+  fi
+  write_disabled_fixture_test "$ws_dir"
+
+  : > "$alias_log"
+  for alias in "${aliases[@]}"; do
+    if ! (
+      cd "$ws_dir"
+      "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+        "${disabled_flags[@]}" \
+        --experimental_repository_resolved_file="$resolved_repos" \
+        "@io_bazel_rules_go//go/private/orchestrion:$alias" --output=files \
+        >"$TMP_ROOT/disabled-alias-$alias.out"
+    ) 2>"$TMP_ROOT/disabled-alias-$alias.err"; then
+      echo "error: disabled WORKSPACE alias query failed for $alias" >&2
+      cat "$TMP_ROOT/disabled-alias-$alias.err" >&2
+      exit 1
+    fi
+    cat "$TMP_ROOT/disabled-alias-$alias.out" >>"$alias_log"
+  done
+  if [[ -s "$alias_log" ]]; then
+    echo "error: disabled WORKSPACE Orchestrion aliases exposed files" >&2
+    cat "$alias_log" >&2
+    exit 1
+  fi
+
+  if ! (
+    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
+    cd "$ws_dir/$test_package"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build \
+      "${disabled_flags[@]}" \
+      --experimental_repository_resolved_file="$resolved_repos" \
+      ":${test_name}_deps_query"
+  ) >"$genquery_log" 2>&1; then
+    echo "error: disabled WORKSPACE genquery failed" >&2
+    cat "$genquery_log" >&2
+    exit 1
+  fi
+
+  if ! (
+    cd "$ws_dir"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+      "${disabled_flags[@]}" \
+      @rules_go_orchestrion_tool//:orchestrion --output=files
+  ) >"$repository_files" 2>>"$genquery_log"; then
+    echo "error: disabled WORKSPACE Orchestrion repository query failed" >&2
+    cat "$genquery_log" >&2
+    exit 1
+  fi
+  if [[ -s "$repository_files" ]]; then
+    echo "error: disabled WORKSPACE Orchestrion repository exposed real files" >&2
+    cat "$repository_files" >&2
+    exit 1
+  fi
+
+  if ! (
+    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
+    cd "$ws_dir/$test_package"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${disabled_flags[@]}" \
+      --experimental_repository_resolved_file="$resolved_repos" \
+      ":$test_name"
+  ) >"$test_log" 2>&1; then
+    echo "error: disabled WORKSPACE test failed" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+
+  if grep -Ein 'building orchestrion|downloading orchestrion|Could not find .go. binary' "$test_log"; then
+    echo "error: disabled WORKSPACE smoke attempted the real Orchestrion bootstrap" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+  if grep -En 'building orchestrion|downloading orchestrion|Could not find .go. binary' "$genquery_log"; then
+    echo "error: disabled WORKSPACE genquery attempted the real Orchestrion bootstrap" >&2
+    cat "$genquery_log" >&2
+    exit 1
+  fi
+
+  local testlogs
+  if ! testlogs="$(cd "$ws_dir" && "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${disabled_flags[@]}" bazel-testlogs)"; then
+    echo "error: unable to locate disabled WORKSPACE test logs" >&2
+    exit 1
+  fi
+  if find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -print -quit | grep -q .; then
+    echo "error: disabled WORKSPACE smoke emitted Test Optimization payloads" >&2
+    exit 1
+  fi
+
+  local public_kind
+  public_kind="$(
+    cd "$ws_dir/$test_package"
+    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
+      "${disabled_flags[@]}" \
+      ":$test_name" \
+      --output=label_kind
+  )"
+  if [[ "$public_kind" != "go_test rule "* ]]; then
+    echo "error: disabled WORKSPACE public target kind is '$public_kind', want raw go_test rule" >&2
+    exit 1
+  fi
+
+  local hidden_name
+  for hidden_name in \
+    "${test_name}__raw_go_test" \
+    "${test_name}_topt_payloads" \
+    "${test_name}_topt_bazel_metadata" \
+    "${test_name}_orchestrion_pin_files"; do
+    if (
+      cd "$ws_dir/$test_package"
+      "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
+        "${disabled_flags[@]}" \
+        ":$hidden_name"
+    ) >/dev/null 2>&1; then
+      echo "error: disabled WORKSPACE branch created enabled-only target :$hidden_name" >&2
+      exit 1
+    fi
+  done
+}
+
+run_rules_go_default_stub_smoke() {
+  local ws_dir="$WORKSPACE_ROOT/rules-go-default-stub"
+  local rules_go_fork_bzl
+  local output
+
+  rules_go_fork_bzl="$(bzl_quote "$rules_go_fork_abs")"
+  rm -rf "$ws_dir"
+  mkdir -p "$ws_dir"
+  cat > "$ws_dir/WORKSPACE" <<EOF
+workspace(name = "rules_go_default_orchestrion_stub")
+
+load("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+
+local_repository(
+    name = "io_bazel_rules_go",
+    path = ${rules_go_fork_bzl},
+)
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_rules_dependencies")
+
+go_rules_dependencies()
+EOF
+  cat > "$ws_dir/BUILD.bazel" <<'EOF'
+filegroup(
+    name = "probe",
+    srcs = [],
+)
+EOF
+
+  output="$(
+    (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+      "${BAZEL_EXTRA_ARGS[@]}" \
+      --noenable_bzlmod \
+      --enable_workspace \
+      @rules_go_orchestrion_tool//:orchestrion \
+      --output=files
+    )
+  )"
+  if [[ -n "$output" ]]; then
+    echo "error: rules_go default Orchestrion stub exposed files" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+}
+
+run_windows_enabled_smoke() {
+  local reuse_disabled_workspace="${1:-0}"
+  local ws_dir="$WORKSPACE_ROOT/windows-enabled"
+  local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
+  local test_log="$TMP_ROOT/windows-enabled-test.log"
+  local test_target_path="${HELLO_TEST_TARGET#//}"
+  local test_package="${test_target_path%%:*}"
+  local test_name="${test_target_path#*:}"
+  local -a bazel_test_flags=()
+
+  if [[ "$(uname -s)" == "Darwin" && "$BAZEL_VERSION" == "8.5.1" ]]; then
+    bazel_test_flags+=(--noexperimental_split_xml_generation)
+  fi
+
+  if [[ "$reuse_disabled_workspace" == "1" ]]; then
+    ws_dir="$WORKSPACE_ROOT/disabled"
+  fi
+  if [[ -z "$GO_INTEGRATION_MOCK_SERVER_PID" ]]; then
+    start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+  fi
+
+  local -a enabled_flags=(
+    "${BAZEL_EXTRA_ARGS[@]}"
+    "${GO_INTEGRATION_MOCK_REPO_ENVS[@]}"
+    --noenable_bzlmod
+    --enable_workspace
+    --config=test-optimization
+  )
+  local aliases=(
+    tool_binary
+    dd_trace_go_version_file
+    dd_trace_go_module_proxy_files
+    dd_trace_go_module_proxy_root_marker
+    orchestrion_tool_version_file
+  )
+
+  if [[ "$reuse_disabled_workspace" != "1" ]]; then
+    rm -rf "$ws_dir"
+    mkdir -p "$ws_dir"
+    write_positive_workspace "$ws_dir" "archive"
+    write_shared_fixture_sources "$ws_dir"
+    write_fixture_bazelrc "$ws_dir" "io_bazel_rules_go"
+  fi
+
+  for alias in "${aliases[@]}"; do
+    local alias_files="$TMP_ROOT/windows-enabled-workspace-$alias.files"
+    local alias_log="$TMP_ROOT/windows-enabled-workspace-$alias.log"
+    if ! (
+      cd "$ws_dir"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
+        "${enabled_flags[@]}" \
+        --experimental_repository_resolved_file="$resolved_repos" \
+        "@io_bazel_rules_go//go/private/orchestrion:$alias" --output=files
+    ) >"$alias_files" 2>"$alias_log"; then
+      echo "error: enabled WORKSPACE Orchestrion alias $alias failed analysis" >&2
+      cat "$alias_log" >&2
+      exit 1
+    fi
+    if [[ ! -s "$alias_files" ]]; then
+      echo "error: enabled WORKSPACE Orchestrion alias $alias exposed no files" >&2
+      cat "$alias_log" >&2
+      exit 1
+    fi
+    if ! grep -Eq 'rules_go_orchestrion_tool' "$alias_files"; then
+      echo "error: enabled WORKSPACE Orchestrion alias $alias did not expose real repository files" >&2
+      cat "$alias_files" >&2
+      cat "$alias_log" >&2
+      exit 1
+    fi
+  done
+  assert_pin_version_file \
+    "$ws_dir" \
+    "$TMP_ROOT/windows-enabled-workspace-dd_trace_go_version_file.files" \
+    "${enabled_flags[@]}"
+
+  if [[ -n "$EXPECTED_ORCHESTRION_CACHE_PHASE" ]]; then
+    if ! grep -F "phase=\"$EXPECTED_ORCHESTRION_CACHE_PHASE\"" "$TMP_ROOT"/windows-enabled-workspace-*.log >/dev/null 2>&1; then
+      echo "error: enabled WORKSPACE smoke did not emit expected Orchestrion cache phase '$EXPECTED_ORCHESTRION_CACHE_PHASE'" >&2
+      cat "$TMP_ROOT"/windows-enabled-workspace-*.log >&2
+      exit 1
+    fi
+  fi
+
+  if ! (
+    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
+    cd "$ws_dir/$test_package"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
+      "${enabled_flags[@]}" \
+      --test_output=errors \
+      --verbose_failures \
+      "${bazel_test_flags[@]}" \
+      --experimental_repository_resolved_file="$resolved_repos" \
+      ":$test_name"
+  ) >"$test_log" 2>&1; then
+    echo "error: enabled WORKSPACE test failed" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+
+  local testlogs
+  testlogs="$(cd "$ws_dir" && USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${enabled_flags[@]}" bazel-testlogs)"
+  if ! find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -print -quit | grep -q .; then
+    echo "error: enabled WORKSPACE smoke emitted no Test Optimization payloads" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+  local public_kind
+  public_kind="$(
+    cd "$ws_dir/$test_package"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
+      "${enabled_flags[@]}" \
+      ":$test_name" \
+      --output=label_kind
+  )"
+  if [[ "$public_kind" != "orch_go_test rule "* ]]; then
+    echo "error: enabled WORKSPACE public target kind is '$public_kind', want orch_go_test rule" >&2
+    exit 1
+  fi
+  assert_go_integration_metadata_requests
+}
+
 run_expected_failure() {
   local scenario="$1"
   local expected_fragment="$2"
@@ -1169,7 +1730,40 @@ run_expected_failure() {
 }
 
 mkdir -p "$WORKSPACE_ROOT"
+run_rules_go_default_stub_smoke
+
+if [[ "$WINDOWS_DISABLED_SMOKE_ONLY" == "1" || "$ORCHESTRION_DISABLED_SENTINEL" == "1" ]]; then
+  ORCHESTRION_VERSION="$ORCHESTRION_DISABLED_SENTINEL_VERSION"
+  ORCHESTRION_MODE="test_optimization"
+  create_fixture_archive
+  run_disabled_no_fetch_smoke
+  exit 0
+fi
+
+if [[ "$WINDOWS_ENABLED_SMOKE_ONLY" == "1" ]]; then
+  ORCHESTRION_MODE="test_optimization"
+  create_fixture_archive
+  run_windows_enabled_smoke
+  exit 0
+fi
+
+if [[ "$CONFIG_TRANSITION_ONLY" == "1" ]]; then
+  ORCHESTRION_MODE="test_optimization"
+  create_fixture_archive
+  start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+  run_disabled_no_fetch_smoke
+  if [[ -s "$GO_INTEGRATION_MOCK_SERVER_LOG" ]]; then
+    echo "error: disabled WORKSPACE phase contacted the metadata server" >&2
+    cat "$GO_INTEGRATION_MOCK_SERVER_LOG" >&2
+    exit 1
+  fi
+  run_windows_enabled_smoke 1
+  exit 0
+fi
+
 create_fixture_archive
+start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
+BAZEL_EXTRA_ARGS+=("${GO_INTEGRATION_MOCK_REPO_ENVS[@]}")
 
 if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
   if [[ -z "$MEASURE_OUTPUT_PATH" ]]; then
@@ -1177,6 +1771,7 @@ if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     exit 1
   fi
   run_positive_fixture "archive"
+  assert_go_integration_metadata_requests
   exit 0
 fi
 
@@ -1187,6 +1782,9 @@ fi
 
 run_positive_fixture "local"
 run_positive_fixture "archive"
+run_missing_pin_module_failure
 run_expected_failure "custom_name" "name must be rules_go_orchestrion_tool"
 run_expected_failure "missing_version" "version is required in WORKSPACE mode"
-run_expected_failure "conflicting_versions" "dd_trace_go_version and dd_trace_go_versions cannot both be set"
+run_expected_failure "conflicting_versions" "dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive"
+run_expected_failure "conflicting_pin_version" "dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive"
+assert_go_integration_metadata_requests

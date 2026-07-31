@@ -182,6 +182,9 @@ def _render_uploader_runtime_template(
     *,
     bep_artifact_stage_helper_rloc: str = _BEP_ARTIFACT_STAGE_HELPER_RLOC,
     doctor_runtime_rloc: str = _DOCTOR_RUNTIME_RLOC,
+    expected_targets_path: str = "",
+    expected_targets_file_path: str = "",
+    fail_on_error: bool = False,
 ) -> str:
     """Render uploader runtime template placeholders for direct unit tests."""
     text = _runfile(rel_path).read_text(encoding="utf-8")
@@ -194,7 +197,11 @@ def _render_uploader_runtime_template(
         "curl_retry_flags": "--retry 3 --retry-delay 2 --retry-connrefused",
         "debug": "false",
         "doctor_runtime_rloc": doctor_runtime_rloc,
-        "fail_on_error": "false",
+        "expected_targets_file_path": expected_targets_file_path,
+        "expected_targets_file_rloc": "",
+        "expected_targets_path": expected_targets_path,
+        "expected_targets_rloc": "",
+        "fail_on_error": "true" if fail_on_error else "false",
         "filter_prefix": "false",
         "gzip_payloads": "false",
         "keep_payloads": "false",
@@ -1526,6 +1533,8 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             "forbid_dd_git_test_env": False,
             "require_git_metadata": False,
             "expected_targets": expected_targets,
+            "expected_targets_file_path": "",
+            "expected_targets_file_short_path": "",
             "require_json_payloads": True,
             "require_bazel_metadata": True,
             "forbid_full_bundle_no_match": True,
@@ -1536,6 +1545,110 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         config_path = root / "doctor.config.json"
         config_path.write_text(json.dumps(config), encoding="utf-8")
         return config_path
+
+    def test_resolve_expected_targets_from_generated_file(self) -> None:
+        """Validate dynamic target files are strict, sorted, and selected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = self._write_doctor_config(root, [])
+            targets_path = root / "expected_targets.json"
+            targets_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:a_test", "//pkg:b_test"],
+                }),
+                encoding="utf-8",
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["expected_targets_file_path"] = str(targets_path)
+
+            targets, source = self.mod._resolve_expected_targets(config, config_path)
+
+        self.assertEqual(["//pkg:a_test", "//pkg:b_test"], targets)
+        self.assertEqual("file", source)
+
+    def test_resolve_expected_targets_rejects_static_file_mismatch(self) -> None:
+        """Validate two configured sources cannot silently disagree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = self._write_doctor_config(root, ["//pkg:a_test"])
+            targets_path = root / "expected_targets.json"
+            targets_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:b_test"],
+                }),
+                encoding="utf-8",
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["expected_targets_file_path"] = str(targets_path)
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._resolve_expected_targets(config, config_path)
+            self.assertIn("different target sets", stderr.getvalue())
+
+    def test_expected_targets_file_rejects_duplicates_and_invalid_labels(self) -> None:
+        """Validate generated target input cannot weaken local exactness."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            duplicate_path = root / "duplicates.json"
+            duplicate_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:a_test", "//pkg:a_test"],
+                }),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_expected_targets_file(duplicate_path)
+            self.assertIn("duplicate target labels", stderr.getvalue())
+
+            external_path = root / "external.json"
+            external_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["@other//pkg:a_test"],
+                }),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_expected_targets_file(external_path)
+            self.assertIn("does not support external labels", stderr.getvalue())
+
+            invalid_labels = {
+                "//pkg/../other:a_test": "unsupported package path",
+                "//pkg:bad test": "whitespace or control characters",
+                "//pkg:a_test:extra": "exactly one ':'",
+            }
+            for index, (label, message) in enumerate(invalid_labels.items()):
+                invalid_path = root / f"invalid-{index}.json"
+                invalid_path.write_text(
+                    json.dumps({
+                        "schema_version": 1,
+                        "targets": [label],
+                    }),
+                    encoding="utf-8",
+                )
+                stderr = io.StringIO()
+                with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                    self.mod._load_expected_targets_file(invalid_path)
+                self.assertIn(message, stderr.getvalue())
+
+            unsorted_path = root / "unsorted.json"
+            unsorted_path.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": ["//pkg:b_test", "//pkg:a_test"],
+                }),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_expected_targets_file(unsorted_path)
+            self.assertIn("targets must be sorted", stderr.getvalue())
 
     @staticmethod
     def _write_bep(path: Path, events: list[dict[str, object]]) -> None:
@@ -2047,8 +2160,8 @@ $rows | ConvertTo-Json -Compress
         self.assertEqual("fail", doctor_report["result"]["status"])
         self.assertEqual("no_payload_json_found", doctor_report["result"]["reason_code"])
 
-    def test_doctor_report_json_classifies_cached_bep_outputs(self) -> None:
-        """Validate doctor reports cached BEP outputs as the primary no-upload reason."""
+    def test_doctor_report_json_accepts_cached_bep_outputs_as_no_op(self) -> None:
+        """Validate doctor reports an all-cached invocation as a successful no-op."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             testlogs = root / "bazel-testlogs"
@@ -2076,22 +2189,24 @@ $rows | ConvertTo-Json -Compress
                 os.environ,
                 {"TESTLOGS_DIR": str(testlogs), "BUILD_WORKSPACE_DIRECTORY": str(root)},
             ):
-                with self.assertRaises(SystemExit):
-                    self.mod.main([
-                        "--config",
-                        str(config),
-                        "--bep-json",
-                        str(bep),
-                        "--freshness-source=bep",
-                        "--freshness-mode=required",
-                        "--report-json",
-                        str(report_path),
-                    ])
+                rc = self.mod.main([
+                    "--config",
+                    str(config),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--report-json",
+                    str(report_path),
+                ])
 
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            self.assertEqual("fail", report["result"]["status"])
-            self.assertEqual("target_cached_by_bazel", report["result"]["reason_code"])
+            self.assertEqual(0, rc)
+            self.assertEqual("ok", report["result"]["status"])
+            self.assertEqual("ok", report["result"]["reason_code"])
             self.assertEqual(["//pkg:target"], report["targets"]["cached"])
+            self.assertEqual(0, report["summary"]["validated_output_dirs"])
+            self.assertEqual(0, report["summary"]["payloads"]["json"])
 
     def test_doctor_report_json_classifies_remote_only_without_downloader(self) -> None:
         """Validate strict BEP artifact mode reports remote-only artifacts without a downloader."""
@@ -4813,8 +4928,8 @@ Path(out).mkdir(parents=True)
                     required=True,
                 )
 
-    def test_expected_target_rejects_cached_bep_match(self) -> None:
-        """Validate strict doctor freshness rejects expected targets served from cache."""
+    def test_expected_target_accepts_cached_bep_match_without_payload_validation(self) -> None:
+        """Validate strict doctor freshness accepts cache hits without selecting stale outputs."""
         with tempfile.TemporaryDirectory() as tmp:
             output = self._write_doctor_output(Path(tmp), "module", "//pkg:target")
             bep = Path(tmp) / "freshness.bep.json"
@@ -4825,6 +4940,36 @@ Path(out).mkdir(parents=True)
                         "//pkg:target",
                         "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
                         cached_locally=True,
+                    ),
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            selected_outputs = self.mod._validate_expected_target_bep_freshness(
+                [output],
+                {"//pkg:target"},
+                freshness,
+                required=True,
+            )
+
+            self.assertEqual([], selected_outputs)
+
+    def test_cached_result_does_not_mask_unmatched_fresh_output(self) -> None:
+        """Validate a cached shard cannot authorize an unmatched fresh shard."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module", "//pkg:target")
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                        cached_locally=True,
+                    ),
+                    self._bep_test_result(
+                        "//pkg:target",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/other/test.outputs",
                     ),
                 ],
             )
@@ -4860,6 +5005,36 @@ Path(out).mkdir(parents=True)
                 freshness,
                 required=True,
             )
+
+    def test_expected_targets_accept_mixed_fresh_and_cached_bep_results(self) -> None:
+        """Validate only fresh outputs are selected from a mixed current invocation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self._write_doctor_output(Path(tmp), "module", "//pkg:fresh")
+            bep = Path(tmp) / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_test_result(
+                        "//pkg:fresh",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/target/test.outputs",
+                    ),
+                    self._bep_test_result(
+                        "//pkg:cached",
+                        "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/cached/test.outputs",
+                        cached_locally=True,
+                    ),
+                ],
+            )
+            freshness = self.mod._parse_bep_freshness([bep])
+
+            selected_outputs = self.mod._validate_expected_target_bep_freshness(
+                [output],
+                {"//pkg:fresh", "//pkg:cached"},
+                freshness,
+                required=True,
+            )
+
+            self.assertEqual([output], selected_outputs)
 
     def test_expected_target_rejects_missing_metadata_in_bep_required_mode(self) -> None:
         """Validate BEP required mode does not authorize outputs without metadata."""
@@ -5916,6 +6091,56 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         return bep
 
     @staticmethod
+    def _write_mixed_fresh_output_fixture(root: Path) -> tuple[Path, Path]:
+        """Create one payload-producing and one empty fresh expected output."""
+        valid_output = root / "bazel-testlogs" / "pkg" / "valid" / "test.outputs"
+        empty_output = root / "bazel-testlogs" / "pkg" / "empty" / "test.outputs"
+        valid_output.mkdir(parents=True)
+        empty_output.mkdir(parents=True)
+        for output_dir, label in (
+            (valid_output, "//pkg:valid"),
+            (empty_output, "//pkg:empty"),
+        ):
+            (output_dir / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.target": label}),
+                encoding="utf-8",
+            )
+        payload_dir = valid_output / "payloads" / "tests"
+        payload_dir.mkdir(parents=True)
+        (payload_dir / "span_events_valid.json").write_text(
+            json.dumps({
+                "events": [{
+                    "type": "test",
+                    "content": {"resource": "pkg.valid", "meta": {}, "metrics": {}},
+                }],
+            }),
+            encoding="utf-8",
+        )
+        bep = root / "freshness.bep.json"
+        TestOptimizationDoctorTests._write_bep(
+            bep,
+            [
+                TestOptimizationDoctorTests._bep_test_result(
+                    "//pkg:empty",
+                    empty_output.as_uri(),
+                ),
+                TestOptimizationDoctorTests._bep_test_result(
+                    "//pkg:valid",
+                    valid_output.as_uri(),
+                ),
+            ],
+        )
+        expected_targets = root / "expected_targets.json"
+        expected_targets.write_text(
+            json.dumps({
+                "schema_version": 1,
+                "targets": ["//pkg:empty", "//pkg:valid"],
+            }),
+            encoding="utf-8",
+        )
+        return bep, expected_targets
+
+    @staticmethod
     def _write_signed_http_remote_only_bep(root: Path) -> Path:
         """Create a BEP fixture whose remote-only artifact URL contains secrets."""
         bep = root / "signed-http-remote-only.bep.json"
@@ -6002,6 +6227,179 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertEqual(0, report["payloads"]["telemetry"]["processed"])
         self.assertEqual(0, report["upload_failures"])
 
+    def test_generated_uploaders_reject_any_fresh_expected_output_without_payloads(self) -> None:
+        """Validate one valid output cannot hide another empty expected output."""
+        _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
+        bash = _require_functional_bash(self)
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep, expected_targets = self._write_mixed_fresh_output_fixture(root)
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+
+            generated_powershell = root / "generated_uploader.ps1"
+            generated_powershell.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+
+            invocations = [
+                (
+                    "Bash",
+                    [
+                        bash,
+                        str(generated_bash),
+                    ],
+                ),
+                (
+                    "PowerShell",
+                    [
+                        pwsh,
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-File",
+                        str(generated_powershell),
+                    ],
+                ),
+            ]
+            for name, command in invocations:
+                with self.subTest(runtime=name):
+                    report = root / f"{name.lower()}-report.json"
+                    result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--report-json",
+                            str(report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertNotEqual(0, result.returncode, output)
+                    self.assertIn("fresh expected test output produced no uploadable payloads", output)
+                    self.assertIn("//pkg:empty", output)
+                    report_doc = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual("fail", report_doc["status"])
+                    self.assertEqual("upload_failed_unknown", report_doc["result"]["reason_code"])
+
+    def test_generated_uploaders_accept_empty_expected_target_set(self) -> None:
+        """Validate an invocation without optimized targets ignores unrelated BEP rows."""
+        _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
+        bash = _require_functional_bash(self)
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "bazel-testlogs").mkdir()
+            bep = self._write_bep_staging_smoke_fixture(root)
+            expected_targets = root / "expected_targets.json"
+            expected_targets.write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "targets": [],
+                }),
+                encoding="utf-8",
+            )
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+
+            generated_powershell = root / "generated_uploader.ps1"
+            generated_powershell.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+
+            for name, command in [
+                ("Bash", [bash, str(generated_bash)]),
+                (
+                    "PowerShell",
+                    [
+                        pwsh,
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-File",
+                        str(generated_powershell),
+                    ],
+                ),
+            ]:
+                with self.subTest(runtime=name):
+                    report = root / f"{name.lower()}-empty-report.json"
+                    result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--report-json",
+                            str(report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(0, result.returncode, output)
+                    report_doc = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual("ok", report_doc["status"])
+                    self.assertEqual(0, report_doc["bep"]["eligible_outputs"])
+                    self.assertEqual(0, report_doc["payloads"]["tests"]["processed"])
+
     def _assert_uploader_report_failure(self, report_path: Path, bep_path: Path) -> None:
         """Validate a failed generated uploader machine-readable report."""
         report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -6041,6 +6439,11 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         )
         self.assertIn("idx=$((alpha_len + (i % 7)))", bash_text)
         self.assertIn("$idx = $alphabet.Length + ($i % 7)", powershell_text)
+
+    def test_bash_jq_avoids_reserved_label_variable(self) -> None:
+        """Validate jq programs remain compatible with versions reserving `label`."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+        self.assertNotIn("as $label", bash_text)
 
     def test_sync_windows_mkdir_command_uses_path(self) -> None:
         """Validate sync windows mkdir command uses path behavior."""
@@ -6174,6 +6577,16 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         expected_log = "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
         self.assertIn(expected_log, bash_text)
         self.assertIn(expected_log, powershell_text)
+        bash_no_payload = bash_text.index("if (( total_files == 0 )); then")
+        powershell_no_payload = powershell_text.index("if ($totalFiles -eq 0) {")
+        self.assertLess(
+            bash_text.index(expected_log, bash_no_payload),
+            bash_text.index("if tests_executed; then", bash_no_payload),
+        )
+        self.assertLess(
+            powershell_text.index(expected_log, powershell_no_payload),
+            powershell_text.index("if (Test-ExecutedTests) {", powershell_no_payload),
+        )
         self.assertLess(
             bash_text.index(expected_log),
             bash_text.index("prepare_freshness_eligibility"),
@@ -7218,6 +7631,97 @@ class MockDdServerTests(unittest.TestCase):
         fake_handler = types.SimpleNamespace()
         self.assertTrue(self.mod._Handler._payload_contains_resource(fake_handler, payload, "target"))
         self.assertFalse(self.mod._Handler._payload_contains_resource(fake_handler, payload, "missing"))
+
+    def test_service_response_versions_are_reloaded_and_scoped(self) -> None:
+        """Validate mutable mock responses affect only the selected service/module."""
+        fixtures = {
+            "settings": {
+                "data": {
+                    "attributes": {"known_tests_enabled": True},
+                },
+            },
+            "known_tests": {
+                "data": {
+                    "attributes": {"tests": {}},
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            versions_path = Path(temp_dir) / "versions.json"
+            versions_path.write_text(
+                json.dumps(
+                    {
+                        "services": {
+                            "service-a": {
+                                "modules": {"module.x": "v1", "module.y": "v1"},
+                                "settings": "v1",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = self.mod._ServerState(
+                fixtures,
+                str(Path(temp_dir) / "requests.jsonl"),
+                1024,
+                response_versions_path=str(versions_path),
+            )
+
+            settings = state.fixture_for_service("settings", "service-a")
+            self.assertEqual(
+                "v1",
+                settings["data"]["attributes"]["mock_response_version"],
+            )
+            known = state.fixture_for_service("known_tests", "service-a")
+            self.assertEqual(
+                ["module.x", "module.y"],
+                sorted(known["data"]["attributes"]["tests"]),
+            )
+            self.assertNotIn(
+                "mock_response_version",
+                fixtures["settings"]["data"]["attributes"],
+            )
+
+            versions_path.write_text(
+                json.dumps(
+                    {
+                        "services": {
+                            "service-a": {
+                                "modules": {"module.x": "v2", "module.y": "v1"},
+                                "settings": "v2",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            changed = state.fixture_for_service("known_tests", "service-a")
+            tests = changed["data"]["attributes"]["tests"]
+            self.assertIn("version_v2", tests["module.x"]["mock_suite"])
+            self.assertIn("version_v1", tests["module.y"]["mock_suite"])
+            self.assertEqual(
+                fixtures["known_tests"],
+                state.fixture_for_service("known_tests", "service-b"),
+            )
+
+    def test_service_response_versions_reject_malformed_state(self) -> None:
+        """Validate malformed mutable response state fails loudly."""
+        fixtures = {
+            "settings": {"data": {"attributes": {}}},
+            "known_tests": {"data": {"attributes": {"tests": {}}}},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            versions_path = Path(temp_dir) / "versions.json"
+            versions_path.write_text('{"services":[]}', encoding="utf-8")
+            state = self.mod._ServerState(
+                fixtures,
+                str(Path(temp_dir) / "requests.jsonl"),
+                1024,
+                response_versions_path=str(versions_path),
+            )
+            with self.assertRaisesRegex(ValueError, "services must be an object"):
+                state.fixture_for_service("settings", "service-a")
 
 
 if __name__ == "__main__":

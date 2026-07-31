@@ -12,8 +12,8 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `53`
-- Modified files: `29`
+- Total changed paths: `54`
+- Modified files: `30`
 - Added files: `24`
 - Removed files: `0`
 
@@ -30,6 +30,7 @@ This file is generated. Do not edit by hand.
 - `go/private/actions/link.bzl`
 - `go/private/actions/stdlib.bzl`
 - `go/private/context.bzl`
+- `go/private/repositories.bzl`
 - `go/private/rules/library.bzl`
 - `go/private/rules/stdlib.bzl`
 - `go/private/rules/test.bzl`

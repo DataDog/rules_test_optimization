@@ -42,6 +42,7 @@ PYTHON="${PYTHON:-python3}"
 # under test instead of relying on the old hardcoded bootstrap tag.
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
 export ORCHESTRION_VERSION
+GO_VERSION="${GO_VERSION:-1.25.0}"
 RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
 RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
@@ -74,14 +75,16 @@ if [[ -z "$REAL_GO_BIN_HOST" ]]; then
   exit 1
 fi
 
-RULES_GO_OVERRIDE_REMOTE="$("$PYTHON" - <<'PY' "$REPO_ROOT"
+if [[ -z "${RULES_GO_OVERRIDE_REMOTE:-}" ]]; then
+  RULES_GO_OVERRIDE_REMOTE="$("$PYTHON" - <<'PY' "$REPO_ROOT"
 from pathlib import Path
 import sys
 
 print(Path(sys.argv[1]).resolve().as_uri())
 PY
-)"
-RULES_GO_OVERRIDE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  )"
+fi
+RULES_GO_OVERRIDE_COMMIT="${RULES_GO_OVERRIDE_COMMIT:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 
 if [[ "${KEEP_TMP:-0}" == "1" ]]; then
   echo "KEEP_TMP=1: temp workspace at $TMP_WS"
@@ -225,6 +228,7 @@ test_optimization_sync = use_extension(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data",
+    enabled_by_env = True,
     service = "mock-service",
     runtime_name = "go",
     runtime_version = "1.2.3",
@@ -232,6 +236,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_nodejs",
+    enabled_by_env = True,
     service = "mock-service-nodejs",
     runtime_name = "nodejs",
     runtime_version = "1.2.3",
@@ -239,6 +244,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_dotnet",
+    enabled_by_env = True,
     service = "mock-service-dotnet",
     runtime_name = "dotnet",
     runtime_version = "1.2.3",
@@ -246,6 +252,7 @@ test_optimization_sync.test_optimization_sync(
 
 test_optimization_sync.test_optimization_sync(
     name = "test_optimization_data_ruby",
+    enabled_by_env = True,
     service = "mock-service-ruby",
     runtime_name = "ruby",
     runtime_version = "1.2.3",
@@ -268,6 +275,17 @@ sh_test(
     name = "write_payloads_test",
     srcs = ["payload_writer.sh"],
     data = ["citestcycle_payload.json"],
+    size = "small",
+    timeout = "short",
+)
+
+sh_test(
+    name = "disabled_metadata_runfiles_test",
+    srcs = ["disabled_metadata_runfiles_test.sh"],
+    data = [
+        "@test_optimization_data//:test_optimization_context",
+        "@test_optimization_data//:test_optimization_files",
+    ],
     size = "small",
     timeout = "short",
 )
@@ -433,9 +451,82 @@ JSON_EOF
 PAYLOAD_EOF
 chmod +x payload_writer.sh
 
+cat > disabled_metadata_runfiles_test.sh <<'DISABLED_RUNFILES_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+runfiles_root="${RUNFILES_DIR:-${TEST_SRCDIR:-}}"
+if [[ -z "$runfiles_root" || ! -d "$runfiles_root" ]]; then
+  echo "error: Bazel runfiles directory is unavailable" >&2
+  exit 1
+fi
+
+settings_path="$(find -L "$runfiles_root" -type f \
+  -path '*test_optimization_data/.testoptimization/cache/http/settings.json' \
+  -print -quit)"
+if [[ -z "$settings_path" ]]; then
+  echo "error: disabled settings.json was not present in test runfiles" >&2
+  exit 1
+fi
+repo_dir="${settings_path%/.testoptimization/cache/http/settings.json}"
+
+jq -e '. == {
+  "data": {
+    "attributes": {
+      "flaky_test_retries_enabled": false,
+      "known_tests_enabled": false,
+      "test_management": {"enabled": false}
+    }
+  }
+}' "$settings_path" >/dev/null
+jq -e '. == {"data": {"attributes": {"tests": {}}}}' \
+  "$repo_dir/.testoptimization/cache/http/known_tests.json" >/dev/null
+jq -e '. == {"data": {"attributes": {"modules": {}}}}' \
+  "$repo_dir/.testoptimization/cache/http/test_management.json" >/dev/null
+jq -e '. == {"data": []}' \
+  "$repo_dir/.testoptimization/cache/http/flaky_tests.json" >/dev/null
+jq -e '
+  keys == [
+    "bazel.rule_name",
+    "bazel.rule_version",
+    "env",
+    "runtime.name",
+    "runtime.version",
+    "service.name",
+    "topt.sync.enabled",
+    "topt.sync.out_dir",
+    "topt.sync.repository_name"
+  ] and
+  ."bazel.rule_name" == "datadog-rules-test-optimization" and
+  (."bazel.rule_version" | type == "string" and length > 0) and
+  .env == "ci" and
+  ."runtime.name" == "go" and
+  ."runtime.version" == "1.2.3" and
+  ."service.name" == "mock-service" and
+  ."topt.sync.enabled" == false and
+  ."topt.sync.out_dir" == ".testoptimization" and
+  ."topt.sync.repository_name" == "test_optimization_data"
+' \
+  "$repo_dir/.testoptimization/context.json" >/dev/null
+jq -e '. == {
+  "counts": [{"name": "sync.disabled", "tags": [], "value": 1}],
+  "distributions": [],
+  "env": "ci",
+  "runtime_name": "go",
+  "schema_version": 1,
+  "service_name": "mock-service"
+}' \
+  "$repo_dir/.testoptimization/telemetry_facts.json" >/dev/null
+DISABLED_RUNFILES_EOF
+chmod +x disabled_metadata_runfiles_test.sh
+
 BAZEL="$REPO_ROOT/bazelw"
 OUT_BASE="$TMP_WS/.bazel_out"
 BAZEL_FLAGS=(--output_base="$OUT_BASE")
+BAZEL_TEST_FLAGS=()
+if [[ "$(uname -s)" == "Darwin" && "${USE_BAZEL_VERSION:-}" == "8.5.1" ]]; then
+  BAZEL_TEST_FLAGS+=(--noexperimental_split_xml_generation)
+fi
 
 # ---------------------------------------------------------------------------
 # Scenario: declaring sync repos is lazy until a target actually consumes them.
@@ -443,10 +534,13 @@ BAZEL_FLAGS=(--output_base="$OUT_BASE")
 # Large monorepos may declare Test Optimization once near workspace setup while
 # only instrumenting a small pilot target set. Plain targets that do not load or
 # depend on @test_optimization_data must keep working without sync credentials.
-env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test
+env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test \
+  "${BAZEL_TEST_FLAGS[@]}"
 
 SYNC_LAZINESS_LOG="$TMP_WS/sync_laziness_requires_api_key.log"
-if env -u DD_API_KEY -u DD_SITE "$BAZEL" "${BAZEL_FLAGS[@]}" build //:dd_upload_payloads_with_context >"$SYNC_LAZINESS_LOG" 2>&1; then
+if env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:dd_upload_payloads_with_context \
+  --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1 >"$SYNC_LAZINESS_LOG" 2>&1; then
   echo "error: target consuming @test_optimization_data succeeded without DD_API_KEY"
   cat "$SYNC_LAZINESS_LOG" || true
   exit 1
@@ -460,6 +554,7 @@ fi
 # Provide deterministic repo metadata for fixtures + payload enrichment.
 REPO_ENVS=(
   --repo_env=DD_API_KEY=mock
+  --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
   --repo_env=DD_TEST_OPTIMIZATION_AGENTLESS_URL=http://127.0.0.1:$PORT
   --repo_env=DD_ENV=ci
   --repo_env=DD_GIT_REPOSITORY_URL=https://example.com/repo.git
@@ -473,6 +568,182 @@ REPO_ENVS=(
   --repo_env=GITHUB_SHA=
   --repo_env=GITHUB_EVENT_PATH=
 )
+
+# ---------------------------------------------------------------------------
+# Scenario: disabled repositories render complete local stubs and never fetch.
+# ---------------------------------------------------------------------------
+# Keep this phase before the enabled sync so the request-log delta is isolated
+# from the baseline API traffic below.
+DISABLED_OUTPUT_BASE="$TMP_WS/.bazel_disabled_out"
+DISABLED_CQUERY_OUT="$TMP_WS/disabled-cquery.out"
+DISABLED_REPO_ENVS=(
+  --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0
+  --repo_env=DD_ENV=ci
+  --repo_env=DISABLE_CI_METADATA=1
+)
+if [[ -f "$LOG_FILE" ]]; then
+  DISABLED_LOG_START="$(wc -l < "$LOG_FILE" | tr -d '[:space:]')"
+else
+  DISABLED_LOG_START=0
+fi
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" cquery \
+  @test_optimization_data//:test_optimization_files --output=files \
+  "${DISABLED_REPO_ENVS[@]}" >"$DISABLED_CQUERY_OUT"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" cquery \
+  @test_optimization_data//:test_optimization_context --output=files \
+  "${DISABLED_REPO_ENVS[@]}" >>"$DISABLED_CQUERY_OUT"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" build \
+  @test_optimization_data//:test_optimization_files \
+  "${DISABLED_REPO_ENVS[@]}"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" build \
+  @test_optimization_data//:test_optimization_context \
+  "${DISABLED_REPO_ENVS[@]}"
+env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
+  "$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" test \
+  //:disabled_metadata_runfiles_test \
+  "${BAZEL_TEST_FLAGS[@]}" \
+  "${DISABLED_REPO_ENVS[@]}"
+
+for required in settings.json known_tests.json test_management.json flaky_tests.json manifest.txt context.json; do
+  if ! grep -q "$required" "$DISABLED_CQUERY_OUT"; then
+    echo "error: disabled sync cquery is missing $required"
+    cat "$DISABLED_CQUERY_OUT"
+    exit 1
+  fi
+done
+
+DISABLED_REPO_DIR="$(find "$DISABLED_OUTPUT_BASE" -type f \
+  -path '*/external/*test_optimization_data/.testoptimization/cache/http/settings.json' \
+  -print -quit)"
+if [[ -z "$DISABLED_REPO_DIR" ]]; then
+  echo "error: disabled sync did not materialize the expected stub repository"
+  exit 1
+fi
+DISABLED_REPO_DIR="${DISABLED_REPO_DIR%/.testoptimization/cache/http/settings.json}"
+jq -e '. == {
+  "data": {
+    "attributes": {
+      "flaky_test_retries_enabled": false,
+      "known_tests_enabled": false,
+      "test_management": {"enabled": false}
+    }
+  }
+}' "$DISABLED_REPO_DIR/.testoptimization/cache/http/settings.json" >/dev/null
+jq -e '. == {"data": {"attributes": {"tests": {}}}}' \
+  "$DISABLED_REPO_DIR/.testoptimization/cache/http/known_tests.json" >/dev/null
+jq -e '. == {"data": {"attributes": {"modules": {}}}}' \
+  "$DISABLED_REPO_DIR/.testoptimization/cache/http/test_management.json" >/dev/null
+jq -e '. == {"data": []}' \
+  "$DISABLED_REPO_DIR/.testoptimization/cache/http/flaky_tests.json" >/dev/null
+jq -e '
+  keys == [
+    "bazel.rule_name",
+    "bazel.rule_version",
+    "env",
+    "runtime.name",
+    "runtime.version",
+    "service.name",
+    "topt.sync.enabled",
+    "topt.sync.out_dir",
+    "topt.sync.repository_name"
+  ] and
+  ."bazel.rule_name" == "datadog-rules-test-optimization" and
+  (."bazel.rule_version" | type == "string" and length > 0) and
+  .env == "ci" and
+  ."runtime.name" == "go" and
+  ."runtime.version" == "1.2.3" and
+  ."service.name" == "mock-service" and
+  ."topt.sync.enabled" == false and
+  ."topt.sync.out_dir" == ".testoptimization" and
+  ."topt.sync.repository_name" == "test_optimization_data"
+' \
+  "$DISABLED_REPO_DIR/.testoptimization/context.json" >/dev/null
+jq -e '. == {
+  "counts": [{"name": "sync.disabled", "tags": [], "value": 1}],
+  "distributions": [],
+  "env": "ci",
+  "runtime_name": "go",
+  "schema_version": 1,
+  "service_name": "mock-service"
+}' \
+  "$DISABLED_REPO_DIR/.testoptimization/telemetry_facts.json" >/dev/null
+DISABLED_SERVICE="$(jq -r '."service.name"' "$DISABLED_REPO_DIR/.testoptimization/context.json")"
+DISABLED_ENVIRONMENT="$(jq -r '.env' "$DISABLED_REPO_DIR/.testoptimization/context.json")"
+if [[ -f "$LOG_FILE" ]]; then
+  DISABLED_LOG_END="$(wc -l < "$LOG_FILE" | tr -d '[:space:]')"
+else
+  DISABLED_LOG_END=0
+fi
+if [[ "$DISABLED_LOG_START" != "$DISABLED_LOG_END" ]]; then
+  echo "error: disabled sync unexpectedly contacted the mock metadata server"
+  exit 1
+fi
+
+# Re-evaluate the same canonical repository in the same output base with the
+# config gate enabled. This guards against a disabled repository remaining
+# cached after DD_TEST_OPTIMIZATION_ENABLED changes from 0 to 1.
+TOGGLE_SYNC_SALT="integration-toggle-${RANDOM}-$(date +%s)"
+"$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" fetch \
+  @test_optimization_data//:test_optimization_files \
+  --repo_env=FETCH_SALT="$TOGGLE_SYNC_SALT" \
+  "${REPO_ENVS[@]}"
+"$BAZEL" --output_base="$DISABLED_OUTPUT_BASE" cquery \
+  @test_optimization_data//:test_optimization_context --output=files \
+  "${REPO_ENVS[@]}" >/dev/null
+
+ENABLED_REPO_SETTINGS="$(find "$DISABLED_OUTPUT_BASE" -type f \
+  -path '*/external/*test_optimization_data/.testoptimization/cache/http/settings.json' \
+  -print -quit)"
+if [[ -z "$ENABLED_REPO_SETTINGS" ]]; then
+  echo "error: enabled sync did not rematerialize the canonical repository"
+  exit 1
+fi
+ENABLED_REPO_DIR="${ENABLED_REPO_SETTINGS%/.testoptimization/cache/http/settings.json}"
+if [[ "$ENABLED_REPO_DIR" != "$DISABLED_REPO_DIR" ]]; then
+  echo "error: disabled-to-enabled sync used a different repository path"
+  printf 'disabled: %s\nenabled:  %s\n' "$DISABLED_REPO_DIR" "$ENABLED_REPO_DIR"
+  exit 1
+fi
+jq -e '
+  .data.attributes.known_tests_enabled == true and
+  .data.attributes.test_management.enabled == true
+' "$ENABLED_REPO_SETTINGS" >/dev/null
+jq -e --arg service "$DISABLED_SERVICE" --arg environment "$DISABLED_ENVIRONMENT" '
+  ."service.name" == $service and
+  .env == $environment and
+  (has("topt.sync.enabled") | not)
+' "$ENABLED_REPO_DIR/.testoptimization/context.json" >/dev/null
+
+LOG_FILE="$LOG_FILE" LOG_START="$DISABLED_LOG_END" "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+
+required = {
+    "/api/v2/libraries/tests/services/setting",
+    "/api/v2/ci/libraries/tests",
+    "/api/v2/test/libraries/test-management/tests",
+}
+with open(os.environ["LOG_FILE"], "r", encoding="utf-8") as handle:
+    records = []
+    for line in handle:
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+records = records[int(os.environ["LOG_START"]):]
+seen = {record.get("path") for record in records}
+missing = required - seen
+if missing:
+    print("error: enabled re-evaluation of the disabled repository missed metadata requests")
+    for path in sorted(missing):
+        print(f"  - {path}")
+    sys.exit(1)
+PY
 
 # ---------------------------------------------------------------------------
 # Scenario: baseline sync + uploader run (agentless) with fixture assertions.
@@ -588,6 +859,7 @@ done
 unset DD_TEST_OPTIMIZATION_AGENT_URL
 
 "$BAZEL" "${BAZEL_FLAGS[@]}" test //:write_payloads_test \
+  "${BAZEL_TEST_FLAGS[@]}" \
   "${REPO_ENVS[@]}"
 
 # Use Bazel's testlogs location to find payloads for the uploader.
@@ -2679,6 +2951,10 @@ run_retry_sync_case \
 # - dual local_path_override (repo root + modules/go)
 MULTI_WS="$TMP_WS/ws_multi"
 mkdir -p "$MULTI_WS"
+cat > "$MULTI_WS/.bazelrc" <<'MULTI_BAZELRC_EOF'
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+MULTI_BAZELRC_EOF
 cat > "$MULTI_WS/MODULE.bazel" <<MODULE_MULTI_EOF
 module(name = "topt-multi-integration", version = "0.0.0")
 
@@ -2713,6 +2989,7 @@ go_topt.test_optimization_go(
     services = ["go-service", "go_service"],
     out_dir = "custom_topt",
     runtime_version = "1.2.3",
+    enabled_by_env = True,
 )
 
 use_repo(
@@ -2810,13 +3087,15 @@ BUILD_MULTI_INVALID_EOF
 MULTI_LOG_START="$(log_line_count)"
 (
   cd "$MULTI_WS"
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build //:multi_sync_smoke //:macro_service_probe //:macro_data_none_probe \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build --config=test-optimization \
+    //:multi_sync_smoke //:macro_service_probe //:macro_data_none_probe \
     "${REPO_ENVS[@]}"
 )
 
 MULTI_MACRO_CQUERY=$(
   cd "$MULTI_WS" && \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery //:macro_service_probe__raw_go_test --output=build "${REPO_ENVS[@]}"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" cquery --config=test-optimization \
+    //:macro_service_probe__raw_go_test --output=build "${REPO_ENVS[@]}"
 )
 # The manifest/data wiring lives on the hidden raw go_test target. Querying the
 # wrapper target only verifies the public wrapper exists, not which payload set
@@ -2837,7 +3116,8 @@ if (
   # Build from the package directory to avoid //pkg:label path conversion
   # quirks under Git Bash on Windows.
   cd "$MULTI_WS/invalid" && \
-  "$BAZEL" "${BAZEL_FLAGS[@]}" build :macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build --config=test-optimization \
+    :macro_service_probe_invalid "${REPO_ENVS[@]}" >"$MULTI_INVALID_LOG" 2>&1
 ); then
   echo "error: dd_topt_go_test invalid-service scenario unexpectedly succeeded"
   cat "$MULTI_INVALID_LOG" || true
@@ -2892,6 +3172,7 @@ go_topt.test_optimization_go(
     name = "test_optimization_data",
     service = "go-service",
     runtime_version = "1.2.3",
+    enabled_by_env = True,
 )
 
 use_repo(go_topt, "test_optimization_data")
@@ -2990,6 +3271,7 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
+    github.com/DataDog/orchestrion@${ORCH_VERSION}|\
     github.com/DataDog/dd-trace-go/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
@@ -3322,6 +3604,7 @@ fi
 
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
+    github.com/DataDog/orchestrion@${ORCH_VERSION}|\
     github.com/DataDog/dd-trace-go/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
@@ -3670,7 +3953,7 @@ BUILD_GUIDED_EOF
     --rules-go-variant "$RULES_GO_VARIANT" \
     --guided \
     --service "go-service" \
-    --runtime-version "1.2.3" \
+    --runtime-version "$GO_VERSION" \
     --write-bazelrc
 )
 
@@ -3686,6 +3969,13 @@ if ! grep -q 'test_optimization_go_extension' "$GUIDED_BOOT_WS/MODULE.bazel"; th
 fi
 if ! grep -q 'module_path = "example.com/guided-bootstrap-go"' "$GUIDED_BOOT_WS/MODULE.bazel"; then
   echo "error: guided bootstrap did not persist the Go module path in sync wiring"
+  cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
+if ! grep -q 'test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")' "$GUIDED_BOOT_WS/MODULE.bazel" ||
+  ! grep -q 'go_sdk_root = "@test_optimization_go_sdk//:ROOT"' "$GUIDED_BOOT_WS/MODULE.bazel" ||
+  ! grep -q "go_sdk_version = \"$GO_VERSION\"" "$GUIDED_BOOT_WS/MODULE.bazel"; then
+  echo "error: guided bootstrap did not wire the Bazel-managed Go SDK into Orchestrion"
   cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
@@ -3756,7 +4046,9 @@ rm -f "$GUIDED_BEP_JSON"
   cd "$GUIDED_BOOT_WS"
   "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization \
     --build_event_json_file="$GUIDED_BEP_JSON" \
-    //src/go-project:hello_test__raw_go_test "${REPO_ENVS[@]}"
+    //src/go-project:hello_test__raw_go_test \
+    "${BAZEL_TEST_FLAGS[@]}" \
+    "${REPO_ENVS[@]}"
 )
 
 GUIDED_TESTLOGS_DIR="$(

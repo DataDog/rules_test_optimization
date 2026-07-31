@@ -4,21 +4,12 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
 # ONE doctor and ONE uploader target per workspace.
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = [
-        "@test_optimization_data//:test_optimization_context_go_service_a",
-        "@test_optimization_data//:test_optimization_context_go_service_b",
-    ],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = [
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
         "@test_optimization_data//:test_optimization_context_go_service_a",
         "@test_optimization_data//:test_optimization_context_go_service_b",
     ],

@@ -70,7 +70,7 @@ Modern CI/CD pipelines benefit from Bazel's hermetic, reproducible builds and te
 We need an integration that:
 
 - Works with Bazel’s hermetic sandbox model (preferably with network blocked during test actions).  
-- Fetches Test Optimization metadata (settings, known tests, test management tests) at a time compatible with Bazel’s caching and repository resolution phases.  
+- Fetches Test Optimization metadata (settings, known tests, test management tests, and flaky tests) at a time compatible with Bazel’s caching and repository resolution phases.
 - Scales across languages and services, including multi‑service monorepos.  
 - Minimizes cache invalidation scope to avoid unnecessary test re‑execution.  
 - Uploads test and coverage payloads reliably from the same `bazel test` invocation without compromising hermeticity or leaking secrets to disk.  
@@ -84,7 +84,7 @@ This section describes what exists today prior to this proposal and the work in 
 
 - Language tracers initialize within each test process (depending on the implementation this may be done from a parent process) and perform live network calls to Datadog to retrieve:  
   - Service settings and feature flags.  
-  - Known Tests and Test Management tests if the feature is enabled.  
+  - Known Tests, Test Management tests, and Flaky Tests if each feature is enabled.
 - Also fetches CI/Git metadata inferred from environment variables or by running git commands directly if data is missing.  
 - Tests execute and the tracer records results. At test process completion, the tracer uploads test and coverage payloads directly to Datadog using either agentless (API key \+ site) or an EVP proxy URL.
 
@@ -121,12 +121,12 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 
 - Phase 1 — [Sync at module/repo resolution](../tools/core/test_optimization_sync.bzl):  
     
-  - A module extension instantiates a repository rule that performs the Datadog API calls for Settings (always), Known Tests (when enabled), and Test Management tests (when enabled).  
-- The rule writes deterministic JSON outputs under a configurable directory (default: `.testoptimization/`) and produces a non‑secret `context.json` with CI/Git/OS/runtime tags. It also writes a `manifest.txt` with a version marker (currently `version=1`) to track payload format changes.  
+  - A module extension instantiates a repository rule that, when the repository is enabled, performs the Datadog API calls for Settings, Known Tests, Test Management tests, and Flaky Tests. Config-disabled repositories emit deterministic stubs without HTTP requests.
+- The rule writes deterministic JSON outputs under a configurable directory (default: `.testoptimization/`) and produces non-secret `context.json` and `telemetry_facts.json` files with enrichment and rule-telemetry data. It also writes a `manifest.txt` with a version marker (currently `version=1`) to track payload format changes.
   - It generates a BUILD file exposing stable public filegroups:  
     - `@<repo>//:test_optimization_files` (core bundle with `settings.json`),  
-    - `@<repo>//:test_optimization_context` (`context.json` only),  
-    - `@<repo>//:module_<sanitized>` (per‑module bundles with `settings.json` \+ that module’s known/test‑management files).  
+    - `@<repo>//:test_optimization_context` (`context.json` plus `telemetry_facts.json`),
+    - `@<repo>//:module_<sanitized>` (per-module bundles with `settings.json` plus that module's known-tests, test-management, and flaky-tests files).
   - It emits `export.bzl` with a structured `topt_data` object describing the available per‑module labels, the resolved `manifest_path`, and language hints (e.g., Go module path inclusion).
 
 
@@ -149,6 +149,16 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 - [Multi‑service monorepos](../tools/core/test_optimization_multi_sync.bzl):  
     
   - A higher‑level “multi‑sync” extension materializes one repository per service and an aggregator repository that re‑exports per‑service filegroups and a service mapping (`topt_data_by_service`). Macros can select services by key without hardcoding repo aliases.
+
+- [Invocation-scoped managed Go/Python monorepos](../tools/core/test_optimization_manifest_sync.bzl):
+
+  - A separate manifest-sync extension materializes one aggregate repository
+    from exact targets and service/runtime contexts derived by a
+    consumer-owned command. It exports `topt_data_by_target`, narrow
+    per-context/per-module labels, bundled contexts, and an exact doctor target
+    file. This is a current implementation extension to the original proposal;
+    it does not replace the static APIs or move target discovery into a
+    repository rule.
 
 Why this solves the problem
 
@@ -207,19 +217,20 @@ Repository Rule and Module Extension
 - The `test_optimization_sync_extension` tag is declared in `MODULE.bazel`. It instantiates `test_optimization_sync` with optional attributes:  
   - `service`: explicit override for service name (else derived from `DD_SERVICE`).  
   - `runtime_name`, `runtime_version`, `runtime_arch`: enrich `configurations` and `context.json`.  
-  - `known_tests`, `test_management`: local kill‑switches to skip specific feature requests and emit minimal stubs while adjusting `settings.json` accordingly.  
+  - `known_tests`, `test_management`, `flaky_tests`: local kill-switches to skip specific feature requests and emit minimal stubs while adjusting `settings.json` accordingly.
   - `debug`: increases logging verbosity and writes additional artifacts (e.g., request JSONs) for troubleshooting.  
 - The repository rule performs:  
-  1. Settings request: always issued; response persisted to `cache/http/settings.json`.  
+  1. Settings request: always issued in enabled mode; response persisted to `cache/http/settings.json`. Config-disabled mode writes the canonical stub without a request.
   2. Known Tests request: gated by settings and `known_tests` attribute; persisted to `cache/http/known_tests.json` and split by module (canonical per‑module files exposed by targets).  
   3. Test Management Tests request: gated by settings and `test_management` attribute; persisted to `cache/http/test_management.json` and split by module (canonical per‑module files exposed by targets).  
-  4. `context.json`: built locally from CI/git/OS/runtime information — non‑secret and safe to ship as runfiles.  
-  5. A generated `BUILD` file that exposes:  
+  4. Flaky Tests request: gated by settings and `flaky_tests` attribute; persisted to `cache/http/flaky_tests.json` and split by module (canonical per-module files exposed by targets).
+  5. `context.json` and `telemetry_facts.json`: built locally from CI/git/OS/runtime and rule-telemetry information — non-secret and safe to ship as runfiles.
+  6. A generated `BUILD` file that exposes:
      - `:test_optimization_files` → includes `cache/http/settings.json` and `manifest.txt` (stable bundle for most uses).  
-     - `:test_optimization_context` → `context.json` (opt‑in for enrichment).  
-     - `:module_<sanitized>` → per‑module bundle of settings \+ module‑specific JSONs.  
+     - `:test_optimization_context` → `context.json` plus `telemetry_facts.json` (opt-in for enrichment and rule telemetry).
+     - `:module_<sanitized>` → per-module bundle of settings plus module-specific known-tests, test-management, and flaky-tests JSONs.
      - Per‑module targets expose canonical runfile names rooted at the manifest directory (`<out_dir>/...`, default `.testoptimization/...`) regardless of the physical split-file locations.  
-  6. An `export.bzl` with `topt_data` describing labels, the resolved `manifest_path`, and language‑specific hints (e.g., Go module path inclusion).  
+  7. An `export.bzl` with `topt_data` describing labels, the resolved `manifest_path`, and language-specific hints (e.g., Go module path inclusion).
 - HTTP behavior uses `curl` with fail‑fast and retries; `DD_SITE` is normalized; Windows and non‑Windows paths are handled. The rule declares all relevant env vars in `environ` so changes lead to re‑execution and fresh outputs.
 
 Per‑Module Labels and Sanitization
@@ -230,6 +241,11 @@ Per‑Module Labels and Sanitization
 Multi‑Service Aggregation
 
 - For monorepos with multiple services, the multi‑service extension instantiates one repo per service plus an aggregator repo that exposes per‑service labels and a `topt_data_by_service` mapping. This allows macros to select a service by logical key without leaking the concrete repo alias.
+- For managed Go/Python invocations, the later manifest-sync API instead
+  accepts an ephemeral exact-target/context manifest and creates one aggregate
+  repository. The consumer command owns discovery and service naming; Bazel
+  repository resolution owns validation and metadata materialization. Static
+  multi-service behavior remains unchanged.
 
 Runtime Uploader
 
@@ -271,7 +287,7 @@ Language Macros
   - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
   - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_path>)` using `topt_data["manifest_path"]`, so custom `out_dir` values are supported.  
   - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
-  - The exported `topt_data["runtimes"]["go"]["module_included"]` flag is consulted only in fallback mode; when inferring via (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if no match exists.  
+  - When synchronized metadata exposes module groups, explicit `importpath` and `module_label_override` values must match one or analysis fails. Provider-based or derived inference, and metadata with no module groups, may use the canonical full bundle. The exported `topt_data["runtimes"]["go"]["module_included"]` flag is consulted only in fallback mode.
 - Module dependency: the Go companion module (`datadog-rules-test-optimization-go`) declares `bazel_dep("rules_go", <version>)` to make provider loads visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.
 
 - [The existing `dd_topt_go_test` demonstrates this pattern and should be mirrored for other languages incrementally.](../modules/go/topt_go_test.bzl)

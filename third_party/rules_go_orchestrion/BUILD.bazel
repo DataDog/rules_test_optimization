@@ -10,6 +10,8 @@ exports_files([
     "patches/v0_60_0/base/0001-full-delta.patch",
     "patches/v0_61_1/base.series",
     "patches/v0_61_1/base/0001-full-delta.patch",
+    "patches/v0_62_0/base.series",
+    "patches/v0_62_0/base/0001-full-delta.patch",
 ], visibility = ["//visibility:public"])
 
 filegroup(
@@ -19,6 +21,8 @@ filegroup(
         "patches/v0_60_0/base/0001-full-delta.patch",
         "patches/v0_61_1/base.series",
         "patches/v0_61_1/base/0001-full-delta.patch",
+        "patches/v0_62_0/base.series",
+        "patches/v0_62_0/base/0001-full-delta.patch",
     ],
     visibility = ["//visibility:public"],
 )

@@ -61,8 +61,13 @@ class HelloTest(unittest.TestCase):
         module = _load_main_module()
         self.assertEqual("Hello from Python!", module.get_greeting())
 
-    def test_manifest_metadata_files_present(self):
+    def test_manifest_metadata_contract(self):
+        expected = os.getenv("EXAMPLE_EXPECT_TEST_OPTIMIZATION", "1") == "1"
         manifest_rloc = os.getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE", "")
+        if not expected:
+            self.assertFalse(manifest_rloc, "disabled tests must not receive Test Optimization metadata")
+            return
+
         self.assertTrue(manifest_rloc, "DD_TEST_OPTIMIZATION_MANIFEST_FILE should be set by dd_topt_py_test")
 
         manifest_path = _resolve_runfile(manifest_rloc)

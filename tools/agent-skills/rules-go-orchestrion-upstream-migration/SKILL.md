@@ -22,6 +22,12 @@ This skill is intentionally repository-local: it is stored as a
 Codex-compatible skill, but any agent can read it as a normal implementation
 guide.
 
+The manifest-driven Go/Python sync API does not change the fork migration
+boundary. A migration must preserve disabled empty-repository behavior,
+Bazel-managed Go SDK bootstrap, and the existing public Orchestrion aliases;
+it must not add target discovery, service naming, or manifest policy to
+`rules_go`.
+
 ## Non-Negotiable Contract
 
 Preserve the maintained fork contract:
@@ -128,6 +134,22 @@ A migration is done only when all of these are true:
   has passed.
 - The final report names the target upstream, changed-path counts, validation
   results, and any remaining external blockers.
+
+## Test Optimization Alias Contract
+
+When validating a consumer that uses Test Optimization, preserve the stable
+alias contract from the vendored base tree:
+
+```bazelrc
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+`--config=test-optimization` is the only user-facing switch. Omitting it must
+leave metadata bootstrap disabled for public Go extension repositories, and
+for low-level repositories explicitly configured with `enabled_by_env = True`,
+while selecting local empty Orchestrion aliases. Do not add a consumer-local
+duplicate bool flag or collapse the real and empty repository rules.
 
 ## Stop Conditions
 

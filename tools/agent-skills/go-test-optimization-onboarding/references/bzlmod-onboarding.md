@@ -34,6 +34,17 @@ git_override(
 bazel_dep(name = "rules_go", version = "0.60.0")
 ```
 
+Add these lines to the named config used by test, doctor, and uploader:
+
+```text
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+The config is the only user-facing switch. Removing
+`--config=test-optimization` disables metadata fetching and selects the local
+empty Orchestrion aliases; no second Test Optimization flag is required.
+
 Use a commit that is reachable from `origin/main`. Do not publish branch-only
 commits in consumer snippets because squash merges can make them disappear.
 The `rules_go` version must match the selected Datadog-managed fork support
@@ -56,24 +67,73 @@ git_override(
     strip_prefix = "third_party/rgo/v0_60_0/base",
 )
 
+test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+test_optimization_go_sdk.download(
+    name = "test_optimization_go_sdk",
+    version = "<go-version>",
+)
+use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
+
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
     version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0",
+    dd_trace_go_pin_files = [
+        "@//:go.mod",
+        "@//:go.sum",
+    ],
+    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+    go_sdk_version = "<go-version>",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 ```
 
-For newer support lines such as `v0_61_1`, use the base strip prefix printed by
+Guided bootstrap writes this SDK declaration from `--runtime-version`.
+Orchestrion uses the Bazel-managed SDK on cache misses, while a compatible
+bootstrap cache hit can be restored before the SDK repository is materialized.
+Do not add SDK or Orchestrion settings to individual service or test targets.
+Export the root `go.mod` and `go.sum` labels from their BUILD package. The
+pin-file mode uses this Bazel-managed SDK with `-mod=readonly` to derive direct
+and transitive supported tracer versions without editing the module.
+
+For newer support lines such as `v0_62_0`, use the base strip prefix printed by
 the bootstrap or onboarding pins summary, for example
-`third_party/rgo/v0_61_1/base`. Repositories that
+`third_party/rgo/v0_62_0/base`. Repositories that
 already own a private `rules_go` patch stack should generate a public consumer
 patch profile and rebase or merge it locally inside that repository instead of
-using a second complete tree. Do not set both
-`dd_trace_go_version` and `dd_trace_go_versions` in the same
-`orchestrion.from_source(...)` call. If the repository resolves Datadog tracer
-modules to different exact versions, use guided bootstrap or its onboarding
-summary to generate the exact `dd_trace_go_versions` block.
+using a second complete tree. `dd_trace_go_pin_files`,
+`dd_trace_go_version`, and `dd_trace_go_versions` are mutually exclusive.
+Use an explicit shared or per-module version only when the checked-in module
+graph cannot be resolved by normal pin-file mode.
+
+## Managed Manifest Variant
+
+For a large monorepo whose repository-owned command expands exact Go/Python
+targets, declare the aggregate API instead of a checked-in service list:
+
+```bzl
+topt_manifest = use_extension(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_manifest_sync.bzl",
+    "test_optimization_manifest_sync_extension",
+)
+topt_manifest.test_optimization_manifest_sync(
+    name = "test_optimization_data",
+)
+use_repo(topt_manifest, "test_optimization_data")
+```
+
+The managed command owns the temporary manifest and its private handoff to
+Bazel. Agents must not add that handoff to `.bazelrc`, generate `examples.bzl`,
+or create Gazelle/ownership machinery. The central Go wrapper looks up its full
+label in `topt_data_by_target`; only present labels delegate to
+`dd_topt_go_test`.
+
+One command invocation must reuse the same manifest path for test, doctor,
+dry-run, and optional upload. A later invocation creates a new path and fetches
+again. Unchanged selected metadata must retain Bazel test-result cache hits;
+telemetry timing facts are post-test context, not test action inputs.
+
+This changes metadata selection, not Go toolchain ownership. Keep the same
+Bazel-managed SDK and Orchestrion wiring described above.
 
 ## Recommended Bootstrap
 
@@ -102,8 +162,8 @@ The bootstrap can create or update:
 
 - `orchestrion.tool.go`
 - `orchestrion.yml`
-- root `dd_test_optimization_doctor`
-- root `dd_upload_payloads`
+- root `dd_test_optimization_doctor` and `dd_upload_payloads` targets for a
+  small repository
 - a safe `.bazelrc` block
 - a local Go test wrapper
 
@@ -118,7 +178,7 @@ Use `--print-bazelrc-snippet` for read-only `.bazelrc` inspection. Use
 humans and agents. `--print-workspace-snippet` belongs to `--workspace-mode`,
 not the Bzlmod guided flow.
 
-## Manual Sync And Root Targets
+## Manual Sync And Workspace Targets
 
 Skip guided bootstrap only when the repository already has custom sync wiring,
 mixed-language setup, or multi-service Go setup. In that case, create the sync
@@ -141,20 +201,15 @@ datadog_go_topt.test_optimization_go(
 use_repo(datadog_go_topt, "test_optimization_data")
 ```
 
-Then add root doctor and uploader targets:
+Then add one doctor and uploader pair. Root is acceptable for a small
+repository; in a monorepo put this block in a lightweight package such as
+`//tools/test_optimization`:
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = ["@test_optimization_data//:test_optimization_context"],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = ["@test_optimization_data//:test_optimization_context"],
+dd_test_optimization_targets(
+    name = "test_optimization",
 )
 ```
 
@@ -209,31 +264,34 @@ module package and use labels such as `//path/to/go-module:go.mod`.
 
 ## Wrapper Usage
 
-Use the generated local wrapper when available. If wiring manually, load
-`dd_topt_go_test` and pass `topt_data`:
+Use the generated central wrapper when available. If wiring manually, keep one
+repository-owned public wrapper that always delegates to `dd_topt_go_test`:
 
 ```bzl
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
 
-dd_topt_go_test(
-    name = "go_default_test",
-    srcs = ["service_test.go"],
-    embed = [":service_lib"],
-    orchestrion_mode = "test_optimization",
-    orchestrion_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-        "//:orchestrion.tool.go",
-        "//:orchestrion.yml",
-    ],
-    topt_data = topt_data,
-)
+def dd_go_test(name, **kwargs):
+    dd_topt_go_test(
+        name = name,
+        orchestrion_mode = "test_optimization",
+        orchestrion_pin_files = [
+            "//:go.mod",
+            "//:go.sum",
+            "//:orchestrion.tool.go",
+            "//:orchestrion.yml",
+        ],
+        topt_data = topt_data,
+        **kwargs
+    )
 ```
 
 Prefer `embed` so the macro can infer the same import path that `rules_go`
 uses. Use explicit `importpath` only when the repository already uses explicit
-import paths and the value is known to match the compiled package.
+import paths and the value is known to match the compiled package. When
+synchronized metadata exposes module groups, explicit `importpath` and
+`module_label_override` selections must match one or analysis fails. Inferred
+misses and metadata with no module groups use the canonical full bundle.
 
 Set `orchestrion_mode = "test_optimization"` for standard Go `testing`
 onboarding. The generated local wrapper should inject this mode; manual
@@ -313,24 +371,15 @@ dd_topt_go_test(
 )
 ```
 
-Root doctor/uploader targets must include every service context that can appear
-in emitted payloads:
+The workspace doctor/uploader targets must include every service context that
+can appear in emitted payloads:
 
 ```bzl
-load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
-load("@datadog-rules-test-optimization//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
+load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
 
-dd_test_optimization_doctor(
-    name = "dd_test_optimization_doctor",
-    data = [
-        "@test_optimization_data//:test_optimization_context_go_service_a",
-        "@test_optimization_data//:test_optimization_context_go_service_b",
-    ],
-)
-
-dd_payload_uploader(
-    name = "dd_upload_payloads",
-    data = [
+dd_test_optimization_targets(
+    name = "test_optimization",
+    context_data = [
         "@test_optimization_data//:test_optimization_context_go_service_a",
         "@test_optimization_data//:test_optimization_context_go_service_b",
     ],

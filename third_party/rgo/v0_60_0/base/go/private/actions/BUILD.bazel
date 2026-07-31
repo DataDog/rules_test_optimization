@@ -43,6 +43,7 @@ bzl_library(
     deps = [
         ":utils",
         "//go/private:mode",
+        "//go/private/orchestrion:pin_files",
         "@bazel_skylib//lib:shell",
     ],
 )
@@ -54,6 +55,7 @@ bzl_library(
     deps = [
         "//go/private:common",
         "//go/private:mode",
+        "//go/private/orchestrion:pin_files",
         "//go/private:rpath",
         "@bazel_skylib//lib:collections",
     ],
@@ -66,6 +68,7 @@ bzl_library(
     deps = [
         ":utils",
         "//go/private:mode",
+        "//go/private/orchestrion:pin_files",
         "//go/private:providers",
         "//go/private:sdk",
     ],

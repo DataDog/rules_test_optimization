@@ -11,31 +11,52 @@ This product includes software developed at Datadog
 This document explains the current implementation architecture in this
 repository. For installation and day-to-day usage, start with `README.md`.
 
-> Last reviewed: 2026-05-07
+> Last reviewed: 2026-07-27
 
 ## Approach Overview
 
-The integration uses a Bazel module extension and repository rule to fetch
-Datadog Test Optimization metadata during module/repo resolution, a
+The integration uses a Bazel module extension and repository rule to
+materialize the Test Optimization repository during module/repo resolution, a
 workspace-level doctor (via `bazel run`) to validate local outputs after tests,
 and a workspace-level uploader (via `bazel run`) to ship payloads from hermetic
-test runs.
+test runs. Enabled repositories fetch Datadog metadata. Config-gated disabled
+repositories expose the same public Bazel interface using deterministic stubs
+without local Git discovery or HTTP requests.
 
 The steps are:
 
 1. **Module/repository sync**:  
-   A module extension instantiates a repository rule that performs authenticated HTTP requests to Datadog (settings, known tests, and test‑management tests when enabled). It materializes JSON outputs under a configurable directory (default: `.testoptimization/`), writes a non‑secret `context.json`, and exposes public filegroups:
+   A module extension instantiates a repository rule that resolves enablement
+   before collecting local metadata. When enabled, it performs authenticated
+   HTTP requests to Datadog (settings, known tests, test-management tests, and
+   flaky tests when enabled). When disabled, it writes canonical
+   settings/cache/context stubs and does not inspect local Git or contact
+   Datadog. Both paths
+   materialize outputs under a configurable directory (default:
+   `.testoptimization/`) and expose the stable top-level filegroups:
    - `@<repo>//:test_optimization_files` (core bundle, includes `cache/http/settings.json`)
-   - `@<repo>//:test_optimization_context` (the `context.json` only)
-   - `@<repo>//:module_<sanitized>` (per‑module bundle: `cache/http/settings.json` + that module’s known/test‑management files)
+   - `@<repo>//:test_optimization_context` (`context.json` plus
+     `telemetry_facts.json`)
+   When an enabled response contains module data, the repository additionally
+   exposes `@<repo>//:module_<sanitized>` bundles with
+   `cache/http/settings.json` plus that module's known-tests, test-management,
+   and flaky-tests files.
    The sync also emits an `export.bzl` helper describing available module labels, the resolved `manifest_path`, and detected runtime/module hints for consumers. Per‑module targets expose canonical runfile names rooted at the manifest directory (`<out_dir>/...`, default `.testoptimization/...`) regardless of where split files are stored physically.  
    Notes:
    - `DD_SITE` accepts bare host, app/api-prefixed host, or full URL; ASCII whitespace is trimmed and value is normalized to `https://api.<site>`.
-   - Module labels are computed from the union of known-tests and test-management modules to avoid cross-feature collisions.
+   - Module labels are computed from the union of known-tests,
+     test-management, and flaky-tests modules to avoid cross-feature
+     collisions.
   Reference implementation: this repository
 
 2. **Test instrumentation**:
-   Tests are instrumented by the tracer library as usual. Under Bazel, they discover synced metadata via runfiles (for example through `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
+   Enabled tests are instrumented by the tracer library as usual. Under Bazel,
+   they discover synced metadata via runfiles (for example through
+   `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to
+   `TEST_UNDECLARED_OUTPUTS_DIR`. The config-gated Go and Python companions
+   consume the disabled export as a real no-op: they preserve the consumer's
+   ordinary test behavior without Test Optimization selectors, metadata
+   targets, or payload instrumentation.
 
 3. **Payload validation and reporting**:
    A single workspace-level doctor runs via `bazel run` after tests complete and validates local JSON payloads, Bazel target metadata, Git metadata, and invalid Go payload-selection states. A single workspace-level uploader then discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`).
@@ -57,6 +78,71 @@ The steps are:
    - Core module (`datadog-rules-test-optimization`) stays runtime-agnostic.
    - Language orchestration lives in companion modules (`datadog-rules-test-optimization-go`, `datadog-rules-test-optimization-python`, `datadog-rules-test-optimization-java`, `datadog-rules-test-optimization-nodejs`, `datadog-rules-test-optimization-dotnet`, `datadog-rules-test-optimization-ruby`).
 
+### Static and manifest-driven repository architectures
+
+The original static APIs remain supported:
+
+- `test_optimization_sync` materializes one configured service.
+- `test_optimization_multi_sync` materializes one repository per configured
+  service and an aggregator.
+
+`test_optimization_manifest_sync` is a separate managed API for dynamic
+Go/Python monorepo invocations. A consumer-owned command first expands exact
+test labels and derives service/runtime contexts. The repository rule then
+validates the command-owned temporary manifest before any HTTP request and
+materializes all contexts in one aggregate repository. Disabled mode ignores
+the manifest entirely and emits the same stable public stubs without metadata
+requests.
+
+```mermaid
+flowchart TB
+  subgraph Consumer["Consumer-owned managed command"]
+    I[Requested target patterns] --> Q[Bazel query and target expansion]
+    Q --> N[Service/runtime derivation]
+    N --> M[Private temporary manifest]
+  end
+
+  subgraph Repository["Bazel repository phase"]
+    M --> V[Strict schema validation]
+    V --> A[Aggregate external repository]
+    A --> C1[Context A files]
+    A --> C2[Context B files]
+    C1 --> MX[Module X label]
+    C1 --> MY[Module Y label]
+    C2 --> MZ[Module Z label]
+  end
+
+  subgraph Execution["Bazel test and post-test phases"]
+    MX --> TX[Selected target X]
+    MY --> TY[Selected target Y]
+    MZ --> TZ[Selected target Z]
+    TX --> D[Doctor exact-target validation]
+    TY --> D
+    TZ --> D
+    D --> U[Uploader dry-run and optional upload]
+  end
+```
+
+The command presents one workflow to the user, but Bazel still has two
+different phases. Target discovery must happen before repository resolution
+because repository rules cannot discover the final analyzed test set. The
+temporary manifest is therefore an internal handoff between those phases, not
+user-maintained configuration.
+
+Within one managed command, test, doctor, uploader dry-run, and optional upload
+reuse the exact same manifest path and external-repository snapshot. A later
+command uses a new temporary path and fetches current backend state once.
+Stable settings and per-module payload files are the test action inputs, so
+unchanged backend responses preserve normal Bazel test-result caching.
+`telemetry_facts.json` may vary with request timings but remains post-test
+doctor/uploader context rather than a test input.
+
+Each selected target consumes only its context's settings and matching module
+label. A module payload change invalidates targets in that module; a context
+settings change invalidates all targets in that context; unrelated services
+remain cache hits. Doctor and uploader consume the aggregate context target,
+whose virtual context keys preserve exact per-payload enrichment.
+
 ### Go macro and import path inference
 
 The `dd_topt_go_test` macro automatically selects the correct per‑module payloads by inferring the Go package `importpath` using `rules_go` providers, mirroring how `go_test` computes it.
@@ -67,8 +153,14 @@ The `dd_topt_go_test` macro automatically selects the correct per‑module paylo
   2) Provider‑based inference via `embed`
   3) Fallback to `<go module path>/<bazel package>`, where the module path is exported by the sync repo in `topt_data["runtimes"]["go"]["module_path"]`
 - Per‑module selection:
-  - When using (1) or (2), the macro always attempts per‑module selection and falls back to the full bundle if the module isn’t present.
-  - When using (3), the macro consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if false, it uses the full bundle.
+  - When synchronized metadata exposes module groups, explicit `importpath` or
+    `module_label_override` values must match one or analysis fails. When no
+    module groups exist, the canonical full bundle remains valid.
+  - Provider-based inference via `embed` attempts per-module selection and may
+    fall back to the canonical full bundle on a miss.
+  - When using (3), the macro consults
+    `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if
+    false, it uses the full bundle.
 
 Note: The core module no longer declares `rules_go`. The companion module
 `datadog-rules-test-optimization-go` declares `rules_go` for provider
@@ -83,6 +175,11 @@ definitions only. Consumers still configure Go toolchains/SDK in their own
 2) inferred candidates (`imports`, dependency-propagated identifiers, explicit attrs),
 3) fallback from `<python module path>/<bazel package>` when available,
 4) full-bundle fallback.
+
+When synchronized metadata exposes module groups, explicit
+`module_identifier` and `module_label_override` values must match one or
+analysis fails. The full-bundle fallback applies to inferred or derived
+identifiers and to metadata with no module groups.
 
 ### Java macro and package identifier inference
 
@@ -211,10 +308,17 @@ flowchart TD
     A1[Bazel module extension\n test_optimization_sync_extension]
     A2[Repository rule\n test_optimization_sync]
     A1 --> A2
-    A2 -->|POST Settings| D1[Datadog Settings API]
-    A2 -->|POST Known Tests (if enabled)| D2[Known Tests API]
-    A2 -->|POST Test Mgmt (if enabled)| D3[Test Management Tests API]
-    A2 --> A3[.testoptimization (default)\n manifest.txt\n context.json\n cache/http/settings.json\n cache/http/known_tests.json\n (per-module targets expose canonical files)\n cache/http/test_management.json\n (per-module targets expose canonical files)]
+    A2 --> G{Enabled?}
+    G -->|yes: POST Settings| D1[Datadog Settings API]
+    G -->|yes: POST Known Tests| D2[Known Tests API]
+    G -->|yes: POST Test Mgmt| D3[Test Management Tests API]
+    G -->|yes: POST Flaky Tests| D4[Flaky Tests API]
+    G -->|no| D0[Deterministic disabled stubs\n no local Git or HTTP]
+    D1 --> A3[.testoptimization (default)\n manifest.txt\n context.json\n telemetry_facts.json\n cache/http/settings.json\n cache/http/known_tests.json\n cache/http/test_management.json\n cache/http/flaky_tests.json\n (per-module targets expose canonical files)]
+    D2 --> A3
+    D3 --> A3
+    D4 --> A3
+    D0 --> A3
     A2 --> A4[export.bzl + BUILD\n filegroups per module]
   end
 
@@ -264,13 +368,16 @@ Module/Repo Resolution
             |                |-- POST Settings --> (Settings API)
             |                |-- POST Known Tests (if enabled) --> (Known Tests API)
             |                |-- POST Test Mgmt (if enabled) --> (Test Mgmt Tests API)
+            |                |-- POST Flaky Tests (if enabled) --> (Flaky Tests API)
             |                v
             |        .testoptimization/ (default out_dir)
             |          - manifest.txt
             |          - context.json
+            |          - telemetry_facts.json
             |          - cache/http/settings.json
             |          - cache/http/known_tests.json (+ per-module)
             |          - cache/http/test_management.json (+ per-module)
+            |          - cache/http/flaky_tests.json (+ per-module)
             |        export.bzl + BUILD (filegroups)
             v
 Build Graph
@@ -297,11 +404,12 @@ Optional: Multi-service aggregator
 
 ## Summary
 
-The repository extension approach enables Bazel support for Test Optimization in
-a hermetic, cache-friendly way. Metadata is fetched once during module/repo
-resolution, exposed as filegroups, and consumed by tests via runfiles.
-Per-module outputs limit cache impact to relevant targets. Post-test validation
-and runtime uploads happen through workspace-level `bazel run` targets,
-preserving hermetic execution for tests. Settings and Test Management remain
-valuable even with occasional invalidations; Known Tests and any future TIA
-integration should be opt-in to avoid disrupting established Bazel workflows.
+The repository extension approach enables Bazel support for Test Optimization
+in a hermetic, cache-friendly way. When enabled, metadata is fetched once during
+module/repo resolution; when config-gated and disabled, the same labels expose
+deterministic stubs without Git or network work. Per-module outputs limit cache
+impact to relevant targets. Post-test validation and runtime uploads happen
+through workspace-level `bazel run` targets, preserving hermetic execution for
+tests. Settings and Test Management remain valuable even with occasional
+invalidations; Known Tests and any future TIA integration should be opt-in to
+avoid disrupting established Bazel workflows.

@@ -164,6 +164,7 @@ def render_bazelrc_snippet(args: argparse.Namespace) -> str:
     lines = [
         "# Datadog metadata is resolved during repository/module analysis.",
         "# These values are repo_env, not test_env, so tests do not receive secrets.",
+        f"common:{args.bazelrc_config} --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1",
     ]
     lines.extend(f"common:{args.bazelrc_config} --repo_env={key}" for key in SYNC_REPO_ENV_KEYS)
     lines.append(f"test:{args.bazelrc_config} --remote_download_minimal")
@@ -249,6 +250,7 @@ def render_workspace_snippet(args: argparse.Namespace) -> str:
             '    runtime_name = "python",',
             f"    runtime_version = {_quote(args.runtime_version)},",
             f"    runtime_module_path = {_quote(args.runtime_module_path)},",
+            "    enabled_by_env = True,",
             ")",
         ]
     )
@@ -310,6 +312,7 @@ def render_bzlmod_snippet(args: argparse.Namespace) -> str:
             '    runtime_name = "python",',
             f"    runtime_version = {_quote(args.runtime_version)},",
             f"    runtime_module_path = {_quote(args.runtime_module_path)},",
+            "    enabled_by_env = True,",
             ")",
             f"use_repo(test_optimization_sync, {_quote(args.sync_repo_name)})",
         ]
@@ -346,9 +349,12 @@ def render_test_snippet(args: argparse.Namespace) -> str:
     if args.runner_mode == "consumer_runner":
         load_line = "# load(\"//path/to:python_rules.bzl\", \"your_py_test_rule\")"
         rule_ref = "your_py_test_rule"
+        module_identifier_line = ""
         if args.py_test_rule_load_label and args.py_test_rule_symbol:
             load_line = f"load({_quote(args.py_test_rule_load_label)}, {_quote(args.py_test_rule_symbol)})"
             rule_ref = args.py_test_rule_symbol
+        if args.module_identifier:
+            module_identifier_line = f"    module_identifier = {_quote(args.module_identifier)},\n"
         return dedent(
             f"""
             load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
@@ -360,8 +366,7 @@ def render_test_snippet(args: argparse.Namespace) -> str:
                 topt_data = topt_data,
                 runner_mode = "consumer_runner",
                 py_test_rule = {rule_ref},
-                module_identifier = {_quote(args.module_identifier or args.runtime_module_path)},
-                srcs = ["test_example.py"],
+            {module_identifier_line}    srcs = ["test_example.py"],
                 deps = [
                     requirement("ddtrace"),
                     requirement("pytest"),

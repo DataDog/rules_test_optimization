@@ -1042,10 +1042,10 @@ index a02bda6..3d2f91a 100644
 +orchestrion = _orchestrion_ext
 diff --git a/go/orchestrion_workspace.bzl b/go/orchestrion_workspace.bzl
 new file mode 100644
-index 0000000..8d85b87
+index 0000000..ce44389
 --- /dev/null
 +++ b/go/orchestrion_workspace.bzl
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,87 @@
 +"""Public WORKSPACE macro for configuring the Orchestrion tool repository."""
 +
 +load(
@@ -1056,11 +1056,26 @@ index 0000000..8d85b87
 +
 +_DEFAULT_TOOL_REPO_NAME = "rules_go_orchestrion_tool"
 +
++def _configured_version_modes(dd_trace_go_version, dd_trace_go_versions, dd_trace_go_pin_files):
++    return len([
++        value
++        for value in [
++            dd_trace_go_version,
++            dd_trace_go_versions,
++            dd_trace_go_pin_files,
++        ]
++        if value
++    ])
++
 +def go_orchestrion_tool_repo(
 +        name = _DEFAULT_TOOL_REPO_NAME,
 +        version = "",
 +        dd_trace_go_version = "",
 +        dd_trace_go_versions = None,
++        dd_trace_go_pin_files = None,
++        enabled_by_env = False,
++        go_sdk_root = "",
++        go_sdk_version = "",
 +        log_timing = False):
 +    """Create the `rules_go_orchestrion_tool` repository in WORKSPACE mode.
 +
@@ -1073,6 +1088,18 @@ index 0000000..8d85b87
 +        target module when instrumentation is enabled.
 +      dd_trace_go_versions: Optional per-module dd-trace-go version mapping.
 +        Mutually exclusive with `dd_trace_go_version`.
++      dd_trace_go_pin_files: Optional `[go.mod, go.sum]` labels used to derive
++        the selected direct and transitive dd-trace-go module versions.
++        Mutually exclusive with explicit version fields.
++      enabled_by_env: Gate repository materialization on the Test Optimization
++        repository environment. Generic Orchestrion callers should keep the
++        default.
++      go_sdk_root: Optional label string for a hermetic Go SDK ROOT marker.
++        When set, the enabled repository builds Orchestrion with that SDK
++        instead of searching for Go on the host.
++      go_sdk_version: Optional declared version for `go_sdk_root`. When set,
++        bootstrap can restore an existing cache entry before materializing the
++        SDK and verifies the declared value on cache miss.
 +      log_timing: Emit structured bootstrap timing probes while building the
 +        Orchestrion tool repository.
 +    """
@@ -1083,14 +1110,16 @@ index 0000000..8d85b87
 +
 +    if dd_trace_go_versions == None:
 +        dd_trace_go_versions = {}
++    if dd_trace_go_pin_files == None:
++        dd_trace_go_pin_files = []
 +
-+    if dd_trace_go_version and dd_trace_go_versions:
-+        fail("go_orchestrion_tool_repo: dd_trace_go_version and dd_trace_go_versions cannot both be set")
++    if _configured_version_modes(dd_trace_go_version, dd_trace_go_versions, dd_trace_go_pin_files) > 1:
++        fail("go_orchestrion_tool_repo: dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive")
 +
 +    if not version:
 +        fail("go_orchestrion_tool_repo: version is required in WORKSPACE mode")
 +
-+    if not dd_trace_go_version and not dd_trace_go_versions:
++    if not dd_trace_go_version and not dd_trace_go_versions and not dd_trace_go_pin_files:
 +        dd_trace_go_version = DEFAULT_DD_TRACE_GO_VERSION
 +
 +    orchestrion_build_repository(
@@ -1098,6 +1127,10 @@ index 0000000..8d85b87
 +        version = version,
 +        dd_trace_go_version = dd_trace_go_version,
 +        dd_trace_go_versions = dd_trace_go_versions,
++        dd_trace_go_pin_files = dd_trace_go_pin_files,
++        enabled_by_env = enabled_by_env,
++        go_sdk_root = go_sdk_root,
++        go_sdk_version = go_sdk_version,
 +        log_timing = log_timing,
 +    )
 diff --git a/go/private/BUILD.bazel b/go/private/BUILD.bazel
@@ -1937,10 +1970,10 @@ index 049b8ec..97b5629 100644
      It is a common dependency of all Go targets.""",
 diff --git a/go/private/orchestrion/BUILD b/go/private/orchestrion/BUILD
 new file mode 100644
-index 0000000..488d4ad
+index 0000000..177eeaf
 --- /dev/null
 +++ b/go/private/orchestrion/BUILD
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,108 @@
 +load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 +
 +filegroup(
@@ -1972,46 +2005,89 @@ index 0000000..488d4ad
 +    visibility = ["//visibility:public"],
 +)
 +
-+# Proxy target for the orchestrion tool binary.
-+# This always points to the rules_go_orchestrion_tool repo.
-+# The repo provides an empty filegroup by default, or the actual orchestrion
-+# binary when configured via module extension.
-+# go_context_data checks the :enabled flag to determine whether to use this.
++config_setting(
++    name = "enabled_config",
++    flag_values = {":enabled": "true"},
++)
++
++filegroup(
++    name = "disabled_tool_binary",
++    srcs = [],
++)
++
++filegroup(
++    name = "disabled_dd_trace_go_version_file",
++    srcs = [],
++)
++
++filegroup(
++    name = "disabled_dd_trace_go_module_proxy_files",
++    srcs = [],
++)
++
++filegroup(
++    name = "disabled_dd_trace_go_module_proxy_root_marker",
++    srcs = [],
++)
++
++filegroup(
++    name = "disabled_orchestrion_tool_version_file",
++    srcs = [],
++)
++
++# Stable Orchestrion aliases select package-local empty targets by default and
++# only reference the real tool repository when the public :enabled flag is set.
++# go_context_data also checks :enabled before consuming these files.
 +alias(
 +    name = "tool_binary",
-+    actual = "@rules_go_orchestrion_tool//:orchestrion",
++    actual = select({
++        ":enabled_config": "@rules_go_orchestrion_tool//:orchestrion",
++        "//conditions:default": ":disabled_tool_binary",
++    }),
 +    visibility = ["//visibility:public"],
 +)
 +
 +alias(
 +    name = "dd_trace_go_version_file",
-+    actual = "@rules_go_orchestrion_tool//:dd_trace_go_version_file",
++    actual = select({
++        ":enabled_config": "@rules_go_orchestrion_tool//:dd_trace_go_version_file",
++        "//conditions:default": ":disabled_dd_trace_go_version_file",
++    }),
 +    visibility = ["//visibility:public"],
 +)
 +
 +alias(
 +    name = "dd_trace_go_module_proxy_files",
-+    actual = "@rules_go_orchestrion_tool//:dd_trace_go_module_proxy_files",
++    actual = select({
++        ":enabled_config": "@rules_go_orchestrion_tool//:dd_trace_go_module_proxy_files",
++        "//conditions:default": ":disabled_dd_trace_go_module_proxy_files",
++    }),
 +    visibility = ["//visibility:public"],
 +)
 +
 +alias(
 +    name = "dd_trace_go_module_proxy_root_marker",
-+    actual = "@rules_go_orchestrion_tool//:dd_trace_go_module_proxy_root_marker",
++    actual = select({
++        ":enabled_config": "@rules_go_orchestrion_tool//:dd_trace_go_module_proxy_root_marker",
++        "//conditions:default": ":disabled_dd_trace_go_module_proxy_root_marker",
++    }),
 +    visibility = ["//visibility:public"],
 +)
 +
 +alias(
 +    name = "orchestrion_tool_version_file",
-+    actual = "@rules_go_orchestrion_tool//:orchestrion_tool_version_file",
++    actual = select({
++        ":enabled_config": "@rules_go_orchestrion_tool//:orchestrion_tool_version_file",
++        "//conditions:default": ":disabled_orchestrion_tool_version_file",
++    }),
 +    visibility = ["//visibility:public"],
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..0565233
+index 0000000..db1f149
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1422 @@
+@@ -0,0 +1,1732 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -2047,6 +2123,15 @@ index 0000000..0565233
 +]
 +
 +def _find_go_binary(ctx):
++    go_sdk_root = ctx.attr.go_sdk_root.strip()
++    if go_sdk_root:
++        root_file = ctx.path(Label(go_sdk_root))
++        binary_name = "go.exe" if _is_windows(ctx) else "go"
++        go_path = root_file.dirname.get_child("bin").get_child(binary_name)
++        if not go_path.exists:
++            fail("Configured hermetic Go SDK does not expose %s next to %s" % (go_path, root_file))
++        return go_path
++
 +    go_path = ctx.which("go")
 +    if go_path:
 +        return go_path
@@ -2109,24 +2194,42 @@ index 0000000..0565233
 +def _bootstrap_go_cache_root(ctx):
 +    return _path_join(ctx, _bootstrap_cache_root(ctx), "go")
 +
-+def _go_env(ctx):
-+    go_cache_root = _bootstrap_go_cache_root(ctx)
++def _git_env(ctx):
++    # GOPROXY=direct may invoke Git. Keep that fallback independent from host
++    # rewrites, credential helpers, and interactive prompts.
 +    return {
-+        "GO111MODULE": "on",
-+        "GOWORK": "off",
-+        "GOTOOLCHAIN": "go1.25.0+auto",
-+        # Repository resolution only needs public modules. Clear host-specific
-+        # private-module settings so bootstrap does not silently fall back to
-+        # direct VCS fetches based on the developer environment.
++        "GIT_CONFIG_GLOBAL": "NUL" if _is_windows(ctx) else "/dev/null",
++        "GIT_CONFIG_NOSYSTEM": "1",
++        "GIT_TERMINAL_PROMPT": "0",
++    }
++
++def _go_module_fetch_env(ctx):
++    host_env = ctx.os.environ
++    return {
++        # Allow consumers to provide an internal or authenticated module proxy,
++        # while keeping private-module resolution on that proxy instead of
++        # falling back to host Git configuration.
 +        "GOPRIVATE": "",
 +        "GONOPROXY": "",
-+        "GONOSUMDB": "",
-+        "GOPROXY": "https://proxy.golang.org,direct",
-+        "GOSUMDB": "sum.golang.org",
-+        "GIT_TERMINAL_PROMPT": "0",
++        "GONOSUMDB": (host_env.get("GONOSUMDB") or "").strip(),
++        "GOPROXY": (host_env.get("GOPROXY") or "").strip() or "https://proxy.golang.org,direct",
++        # Use the public checksum database directly. Some internal module
++        # proxies expose SumDB endpoints that are reachable only inside CI.
++        "GOSUMDB": "sum.golang.org https://sum.golang.org",
++    }
++
++def _go_env(ctx):
++    go_cache_root = _bootstrap_go_cache_root(ctx)
++    env = {
++        "GO111MODULE": "on",
++        "GOWORK": "off",
++        "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
 +        "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
 +        "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
 +    }
++    env.update(_go_module_fetch_env(ctx))
++    env.update(_git_env(ctx))
++    return env
 +
 +def _probe_enabled(ctx):
 +    return getattr(ctx.attr, "log_timing", False)
@@ -2208,6 +2311,20 @@ index 0000000..0565233
 +        version = "unknown-go-version",
 +        goos = _normalize_host_goos(ctx.os.name),
 +        goarch = _normalize_host_goarch(ctx.os.arch),
++    )
++
++def _declared_go_tool_identity(ctx, go_sdk_version):
++    version = go_sdk_version.strip()
++    if not version:
++        return None
++    if not version.startswith("go"):
++        version = "go" + version
++    goos = _normalize_host_goos(ctx.os.name)
++    goarch = _normalize_host_goarch(ctx.os.arch)
++    return struct(
++        version = "go version %s %s/%s" % (version, goos, goarch),
++        goos = goos,
++        goarch = goarch,
 +    )
 +
 +def _go_tool_identity(ctx, go_path):
@@ -2296,6 +2413,22 @@ index 0000000..0565233
 +        module_proxy_root_marker = paths.module_proxy_root_marker,
 +    )
 +
++def _bootstrap_manifest_content(paths, version, version_map, go_identity, binary_name, binary_sha256):
++    return json.encode({
++        "abi": ORCHESTRION_BOOTSTRAP_CACHE_ABI,
++        "patchset_id": ORCHESTRION_PATCHSET_ID,
++        "cache_key": paths.key,
++        "orchestrion_version": version,
++        "go_identity": {
++            "version": go_identity.version,
++            "goos": go_identity.goos,
++            "goarch": go_identity.goarch,
++        },
++        "dd_trace_go_versions": version_map,
++        "binary_name": binary_name,
++        "binary_sha256": binary_sha256,
++    }) + "\n"
++
 +def _module_proxy_tree_has_payload(ctx, module_proxy_dir, root_marker):
 +    if not ctx.path(module_proxy_dir).exists or not ctx.path(root_marker).exists:
 +        return False
@@ -2328,12 +2461,23 @@ index 0000000..0565233
 +        )
 +    return result.return_code == 0 and bool(result.stdout.strip())
 +
-+def _bootstrap_cache_entry_ready(ctx, paths):
++def _bootstrap_cache_entry_ready(ctx, paths, version, version_map, go_identity, binary_name):
 +    required = _bootstrap_cache_required_entries(paths)
 +    for required_path in required.files:
 +        if not ctx.path(required_path).exists:
 +            return False
-+    return _module_proxy_tree_has_payload(ctx, required.module_proxy_dir, required.module_proxy_root_marker)
++    if not _module_proxy_tree_has_payload(ctx, required.module_proxy_dir, required.module_proxy_root_marker):
++        return False
++    binary_sha256 = _binary_sha256(ctx, paths.binary_path)
++    expected_manifest = _bootstrap_manifest_content(
++        paths,
++        version,
++        version_map,
++        go_identity,
++        binary_name,
++        binary_sha256,
++    )
++    return ctx.read(ctx.path(paths.manifest_path)) == expected_manifest
 +
 +def _dd_trace_go_versions_from_shared(version):
 +    version_map = {}
@@ -2403,7 +2547,9 @@ index 0000000..0565233
 +        return True
 +    return "mod" in argv and "download" in argv
 +
-+def _go_toolchain_hint():
++def _go_toolchain_hint(ctx):
++    if ctx.attr.go_sdk_root.strip():
++        return "Bootstrap uses the configured hermetic Go SDK with GOTOOLCHAIN=local. Ensure go_sdk_root and go_sdk_version identify the same SDK."
 +    return "Bootstrap uses GOTOOLCHAIN=go1.25.0+auto. If Go 1.25.0 is not already installed, the Go tool may try to download it during repository resolution. In restricted environments, preinstall Go 1.25.0 or allow fetch-time egress, then rerun bazel sync."
 +
 +def _ctx_execute_or_fail(ctx, args, env, error_prefix):
@@ -2411,7 +2557,7 @@ index 0000000..0565233
 +    if result.return_code != 0:
 +        details = "%s: %s\n%s" % (error_prefix, result.stdout, result.stderr)
 +        if _should_append_go_toolchain_hint(args):
-+            details += "\n" + _go_toolchain_hint()
++            details += "\n" + _go_toolchain_hint(ctx)
 +        fail(details)
 +    return result
 +
@@ -2547,13 +2693,117 @@ index 0000000..0565233
 +    _run_dd_trace_go_package_preflight(ctx, go_path, version_map)
 +    return _copy_dd_trace_go_versions(version_map)
 +
-+def _validated_dd_trace_go_versions(ctx, go_path, shared_query, version_map):
-+    if shared_query and version_map:
-+        fail("dd_trace_go_version and dd_trace_go_versions cannot both be set")
++def _configured_version_modes(shared_query, version_map, pin_files):
++    return len([
++        value
++        for value in [
++            shared_query,
++            version_map,
++            pin_files,
++        ]
++        if value
++    ])
++
++def _pin_file_by_basename(ctx, pin_files, basename):
++    matches = [pin_file for pin_file in pin_files if ctx.path(pin_file).basename == basename]
++    if len(matches) != 1:
++        fail("dd_trace_go_pin_files must contain exactly one %s label" % basename)
++    return matches[0]
++
++def _validated_pin_file_dd_trace_go_versions(ctx, go_path, pin_files):
++    if not ctx.attr.go_sdk_root.strip():
++        fail("dd_trace_go_pin_files requires go_sdk_root so version resolution never depends on host Go")
++    if len(pin_files) != 2:
++        fail("dd_trace_go_pin_files must contain exactly one go.mod label and one go.sum label")
++    go_mod = _pin_file_by_basename(ctx, pin_files, "go.mod")
++    go_sum = _pin_file_by_basename(ctx, pin_files, "go.sum")
++    check_dir = ".ddtrace_pin_check"
++    ctx.file(check_dir + "/go.mod", ctx.read(ctx.path(go_mod)))
++    ctx.file(check_dir + "/go.sum", ctx.read(ctx.path(go_sum)))
++    env = _go_env(ctx)
++    pin_cache_root = str(ctx.path(".ddtrace_pin_check_go"))
++    env["GOMODCACHE"] = _path_join(ctx, pin_cache_root, "pkg", "mod")
++    env["GOCACHE"] = _path_join(ctx, pin_cache_root, "cache")
++    env["GOFLAGS"] = "-mod=readonly"
++    format_expr = "{{if .Path}}{{.Path}}={{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}{{end}}"
++    result = ctx.execute(
++        [
++            str(go_path),
++            "-C",
++            check_dir,
++            "list",
++            "-m",
++            "-mod=readonly",
++            "-f",
++            format_expr,
++        ] + _DD_TRACE_GO_MODULES,
++        timeout = 600,
++        environment = env,
++    )
++    if result.return_code != 0:
++        fail(
++            (
++                "Failed to derive dd-trace-go versions from dd_trace_go_pin_files: %s\n%s\n" +
++                "Ensure go.mod/go.sum select every supported tracer module, including transitive contrib modules. " +
++                "For unsupported module graphs, configure dd_trace_go_versions explicitly."
++            ) % (result.stdout, result.stderr),
++        )
++    resolved = _parse_key_value_lines(
++        result.stdout,
++        _DD_TRACE_GO_MODULES,
++        "Failed to derive dd-trace-go versions from dd_trace_go_pin_files",
++    )
++    for module_path in _DD_TRACE_GO_MODULES:
++        version = resolved[module_path]
++        if not _looks_like_canonical_dd_trace_go_version(version):
++            fail(
++                (
++                    "dd_trace_go_pin_files resolved %s to non-canonical version %r; " +
++                    "configure dd_trace_go_versions explicitly"
++                ) % (module_path, version),
++            )
++    _run_dd_trace_go_package_preflight(ctx, go_path, resolved)
++    return resolved
++
++def _merge_pin_file_module_proxy(ctx):
++    pin_cache_root = str(ctx.path(".ddtrace_pin_check_go"))
++    download_root = _path_join(ctx, pin_cache_root, "pkg", "mod", "cache", "download")
++    if not ctx.path(download_root).exists:
++        fail("dd_trace_go_pin_files resolution produced no module metadata to stage")
++    _host_merge_tree(
++        ctx,
++        download_root,
++        "module_proxy",
++        "Failed to stage dd_trace_go_pin_files module metadata",
++    )
++    _host_remove_path_if_exists(ctx, "module_proxy/sumdb", "Failed to prune pin-file module proxy sumdb cache")
++    _host_remove_path_if_exists(ctx, "module_proxy/golang.org/toolchain", "Failed to prune pin-file module proxy toolchain module")
++
++def _validated_dd_trace_go_versions(ctx, go_path, shared_query, version_map, pin_files):
++    if _configured_version_modes(shared_query, version_map, pin_files) > 1:
++        fail("dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive")
++    if pin_files:
++        return _validated_pin_file_dd_trace_go_versions(ctx, go_path, pin_files)
 +    if version_map:
 +        return _validated_per_module_dd_trace_go_versions(ctx, go_path, version_map)
 +    if shared_query:
 +        return _validated_shared_dd_trace_go_versions(ctx, go_path, shared_query)
++    return _dd_trace_go_versions_from_shared(DEFAULT_DD_TRACE_GO_VERSION)
++
++def _declared_dd_trace_go_versions(shared_query, version_map, pin_files = []):
++    if _configured_version_modes(shared_query, version_map, pin_files) > 1:
++        fail("dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive")
++    if pin_files:
++        return None
++    if version_map:
++        _validate_dd_trace_go_versions_keys(version_map)
++        if all([_looks_like_canonical_dd_trace_go_version(version_map[module_path]) for module_path in _DD_TRACE_GO_MODULES]):
++            return _copy_dd_trace_go_versions(version_map)
++        return None
++    if shared_query:
++        if _looks_like_canonical_dd_trace_go_version(shared_query):
++            return _dd_trace_go_versions_from_shared(shared_query)
++        return None
 +    return _dd_trace_go_versions_from_shared(DEFAULT_DD_TRACE_GO_VERSION)
 +
 +def _dd_trace_go_versions_json(version_map):
@@ -2705,6 +2955,33 @@ index 0000000..0565233
 +    copied, stdout, stderr = _host_copy_tree_result(ctx, src, dst)
 +    if not copied:
 +        fail("%s: %s\n%s" % (error_prefix, stdout, stderr))
++
++def _host_merge_tree(ctx, src, dst, error_prefix):
++    src_path = str(ctx.path(src))
++    dst_path = str(ctx.path(dst))
++    if _is_windows(ctx):
++        powershell = ctx.which("powershell.exe") or ctx.which("pwsh") or ctx.which("powershell")
++        if not powershell:
++            fail("%s: could not find PowerShell" % error_prefix)
++        command = "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path %s | Out-Null; Get-ChildItem -LiteralPath %s -Force | Copy-Item -Destination %s -Recurse -Force" % (
++            _powershell_single_quoted_literal(dst_path),
++            _powershell_single_quoted_literal(src_path),
++            _powershell_single_quoted_literal(dst_path),
++        )
++        result = _ctx_execute_checked(
++            ctx,
++            [str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
++            timeout = 180,
++        )
++    else:
++        shell = ctx.which("sh") or "/bin/sh"
++        result = _ctx_execute_checked(
++            ctx,
++            [str(shell), "-c", "mkdir -p \"$2\" && cp -R \"$1/.\" \"$2\"", "bootstrap-merge-tree", src_path, dst_path],
++            timeout = 180,
++        )
++    if result.return_code != 0:
++        fail("%s: %s\n%s" % (error_prefix, result.stdout, result.stderr))
 +
 +def _host_remove_path_if_exists(ctx, path, error_prefix):
 +    removed, stdout, stderr = _host_remove_path_if_exists_result(ctx, path)
@@ -2975,22 +3252,17 @@ index 0000000..0565233
 +def _write_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
 +    manifest_repo_path = ".orchestrion_bootstrap_manifest.json"
 +    ready_repo_path = ".orchestrion_bootstrap_ready"
-+    manifest = json.encode({
-+        "abi": ORCHESTRION_BOOTSTRAP_CACHE_ABI,
-+        "patchset_id": ORCHESTRION_PATCHSET_ID,
-+        "cache_key": paths.key,
-+        "orchestrion_version": version,
-+        "go_identity": {
-+            "version": go_identity.version,
-+            "goos": go_identity.goos,
-+            "goarch": go_identity.goarch,
-+        },
-+        "dd_trace_go_versions": version_map,
-+        "binary_name": binary_name,
-+        "binary_sha256": _binary_sha256(ctx, binary_name),
-+    })
-+    ctx.file(manifest_repo_path, manifest + "\n")
++    manifest = _bootstrap_manifest_content(
++        paths,
++        version,
++        version_map,
++        go_identity,
++        binary_name,
++        _binary_sha256(ctx, binary_name),
++    )
++    ctx.file(manifest_repo_path, manifest)
 +    ctx.file(ready_repo_path, "ready\n")
++    _host_remove_path_if_exists(ctx, paths.ready_path, "Failed to invalidate Orchestrion bootstrap cache")
 +    _host_copy_file(ctx, binary_name, paths.binary_path, "Failed to persist cached Orchestrion binary")
 +    _host_copy_file(ctx, "dd_trace_go_versions.json", paths.version_file_path, "Failed to persist cached Orchestrion version file")
 +    _host_copy_file(ctx, "orchestrion_version.txt", paths.tool_version_file_path, "Failed to persist cached Orchestrion tool version file")
@@ -3000,8 +3272,8 @@ index 0000000..0565233
 +    _host_copy_file(ctx, manifest_repo_path, paths.manifest_path, "Failed to persist Orchestrion bootstrap manifest")
 +    _host_copy_file(ctx, ready_repo_path, paths.ready_path, "Failed to persist Orchestrion bootstrap ready sentinel")
 +
-+def _restore_bootstrap_cache(ctx, paths, binary_name):
-+    if not _bootstrap_cache_entry_ready(ctx, paths):
++def _restore_bootstrap_cache(ctx, paths, version, version_map, go_identity, binary_name):
++    if not _bootstrap_cache_entry_ready(ctx, paths, version, version_map, go_identity, binary_name):
 +        return False
 +    binary_restored, _, _ = _host_copy_file_result(ctx, paths.binary_path, binary_name)
 +    if not binary_restored:
@@ -3026,9 +3298,14 @@ index 0000000..0565233
 +
 +orchestrion_extension_test_helpers = struct(
 +    bootstrap_cache_key = _bootstrap_cache_key,
++    bootstrap_manifest_content = _bootstrap_manifest_content,
 +    bootstrap_cache_paths = _bootstrap_cache_paths_with_root,
 +    bootstrap_cache_required_entries = _bootstrap_cache_required_entries,
++    declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
++    declared_go_tool_identity = _declared_go_tool_identity,
 +    fallback_go_tool_identity = _fallback_go_tool_identity,
++    git_env = _git_env,
++    go_module_fetch_env = _go_module_fetch_env,
 +    host_path_is_writable = _host_path_is_writable,
 +    module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
 +    module_proxy_seed_go_mod = _module_proxy_seed_go_mod,
@@ -3038,24 +3315,121 @@ index 0000000..0565233
 +    powershell_single_quoted_literal = _powershell_single_quoted_literal,
 +)
 +
++_TEST_OPTIMIZATION_ENABLED_ENV = "DD_TEST_OPTIMIZATION_ENABLED"
++_TEST_OPTIMIZATION_ENABLED_VALUES = ["1", "true", "yes", "on"]
++
++def _orchestrion_repository_enabled(ctx):
++    if not ctx.attr.enabled_by_env:
++        return True
++    value = ctx.os.environ.get(_TEST_OPTIMIZATION_ENABLED_ENV, "")
++    return value.strip().lower() in _TEST_OPTIMIZATION_ENABLED_VALUES
++
++def _write_empty_orchestrion_repository(ctx):
++    ctx.file("BUILD.bazel", """# Generated by rules_go orchestrion extension
++# Orchestrion is disabled
++filegroup(
++    name = "orchestrion",
++    srcs = [],
++    visibility = ["//visibility:public"],
++)
++
++filegroup(
++    name = "dd_trace_go_version_file",
++    srcs = [],
++    visibility = ["//visibility:public"],
++)
++
++filegroup(
++    name = "dd_trace_go_module_proxy_files",
++    srcs = [],
++    visibility = ["//visibility:public"],
++)
++
++filegroup(
++    name = "dd_trace_go_module_proxy_root_marker",
++    srcs = [],
++    visibility = ["//visibility:public"],
++)
++
++filegroup(
++    name = "orchestrion_tool_version_file",
++    srcs = [],
++    visibility = ["//visibility:public"],
++)
++""")
++
 +def _orchestrion_build_impl(ctx):
 +    """Build orchestrion from source."""
++    if not _orchestrion_repository_enabled(ctx):
++        _write_empty_orchestrion_repository(ctx)
++        return
++    if ctx.attr.dd_trace_go_pin_files and not ctx.attr.go_sdk_root.strip():
++        fail("dd_trace_go_pin_files requires go_sdk_root so version resolution never depends on host Go")
++
 +    total_start_ms = _probe_now_ms(ctx)
 +    version = ctx.attr.version
++    binary_name = "orchestrion.exe" if _is_windows(ctx) else "orchestrion_bin"
++    declared_go_identity = _declared_go_tool_identity(ctx, ctx.attr.go_sdk_version)
++    declared_dd_trace_go_versions = _declared_dd_trace_go_versions(
++        ctx.attr.dd_trace_go_version,
++        ctx.attr.dd_trace_go_versions,
++        ctx.attr.dd_trace_go_pin_files,
++    )
++    if declared_go_identity != None and declared_dd_trace_go_versions != None:
++        declared_bootstrap_cache = _bootstrap_cache_paths(ctx, version, declared_dd_trace_go_versions, declared_go_identity, binary_name)
++        if _restore_bootstrap_cache(
++            ctx,
++            declared_bootstrap_cache,
++            version,
++            declared_dd_trace_go_versions,
++            declared_go_identity,
++            binary_name,
++        ):
++            _probe_emit(
++                ctx,
++                "extensions.bootstrap_cache_hit",
++                extra = {
++                    "cache_key": declared_bootstrap_cache.key,
++                    "cache_root": declared_bootstrap_cache.cache_root,
++                    "identity_source": "declared_sdk",
++                },
++            )
++            _probe_emit(
++                ctx,
++                "extensions.orchestrion_build_total",
++                start_ms = total_start_ms,
++                extra = {"dd_trace_go_version": declared_dd_trace_go_versions["github.com/DataDog/dd-trace-go/v2"]},
++            )
++            return
++
 +    go_path = _find_go_binary(ctx)
 +    version_start_ms = _probe_now_ms(ctx)
-+    dd_trace_go_versions = _validated_dd_trace_go_versions(ctx, go_path, ctx.attr.dd_trace_go_version, ctx.attr.dd_trace_go_versions)
++    dd_trace_go_versions = _validated_dd_trace_go_versions(
++        ctx,
++        go_path,
++        ctx.attr.dd_trace_go_version,
++        ctx.attr.dd_trace_go_versions,
++        ctx.attr.dd_trace_go_pin_files,
++    )
 +    _probe_emit(ctx, "extensions.validate_dd_trace_go_versions", start_ms = version_start_ms)
-+    binary_name = "orchestrion.exe" if _is_windows(ctx) else "orchestrion_bin"
 +    go_identity = _go_tool_identity(ctx, go_path)
++    if declared_go_identity != None and (
++        go_identity.version != declared_go_identity.version or
++        go_identity.goos != declared_go_identity.goos or
++        go_identity.goarch != declared_go_identity.goarch
++    ):
++        fail("Configured go_sdk_version %r does not match the hermetic Go SDK identity %r" % (ctx.attr.go_sdk_version, go_identity.version))
 +    bootstrap_cache = _bootstrap_cache_paths(ctx, version, dd_trace_go_versions, go_identity, binary_name)
-+    if _restore_bootstrap_cache(ctx, bootstrap_cache, binary_name):
++    if _restore_bootstrap_cache(ctx, bootstrap_cache, version, dd_trace_go_versions, go_identity, binary_name):
++        if ctx.attr.dd_trace_go_pin_files:
++            _merge_pin_file_module_proxy(ctx)
 +        _probe_emit(
 +            ctx,
 +            "extensions.bootstrap_cache_hit",
 +            extra = {
 +                "cache_key": bootstrap_cache.key,
 +                "cache_root": bootstrap_cache.cache_root,
++                "identity_source": "resolved_sdk",
 +            },
 +        )
 +        _probe_emit(
@@ -3299,7 +3673,7 @@ index 0000000..0565233
 +    if result.return_code == 0:
 +        _probe_emit(ctx, "extensions.go_build", start_ms = build_start_ms, status = "ok")
 +    else:
-+        fail("Failed to build orchestrion from upstream module graph: %s\n%s\n%s" % (result.stdout, result.stderr, _go_toolchain_hint()))
++        fail("Failed to build orchestrion from upstream module graph: %s\n%s\n%s" % (result.stdout, result.stderr, _go_toolchain_hint(ctx)))
 +
 +    proxy_start_ms = _probe_now_ms(ctx)
 +    _write_orchestrion_module_proxy(ctx, go_path, version, dd_trace_go_versions)
@@ -3308,6 +3682,8 @@ index 0000000..0565233
 +    _write_orchestrion_repo_files(ctx, binary_name, dd_trace_go_versions, version)
 +    cache_write_start_ms = _probe_now_ms(ctx)
 +    _write_bootstrap_cache(ctx, bootstrap_cache, version, dd_trace_go_versions, go_identity, binary_name)
++    if ctx.attr.dd_trace_go_pin_files:
++        _merge_pin_file_module_proxy(ctx)
 +    _probe_emit(
 +        ctx,
 +        "extensions.bootstrap_cache_write",
@@ -3325,44 +3701,22 @@ index 0000000..0565233
 +        "version": attr.string(mandatory = True, doc = "Orchestrion version to build"),
 +        "dd_trace_go_version": attr.string(default = "", doc = "dd-trace-go version to validate against the target module for Orchestrion-backed instrumentation"),
 +        "dd_trace_go_versions": attr.string_dict(doc = "Per-module dd-trace-go versions to validate against the target module for Orchestrion-backed instrumentation"),
++        "dd_trace_go_pin_files": attr.label_list(allow_files = True, doc = "Optional go.mod and go.sum labels used to derive selected dd-trace-go module versions"),
++        "enabled_by_env": attr.bool(default = False, doc = "Gate repository materialization on the Test Optimization repository environment"),
++        "go_sdk_root": attr.string(default = "", doc = "Optional label string for a hermetic Go SDK ROOT marker used to build Orchestrion"),
++        "go_sdk_version": attr.string(default = "", doc = "Optional declared version for go_sdk_root; enables cache lookup before materializing the SDK and is verified on cache miss"),
 +        "log_timing": attr.bool(default = False, doc = "Emit structured timing probes while building Orchestrion"),
 +    },
++    environ = [
++        _TEST_OPTIMIZATION_ENABLED_ENV,
++        "GONOSUMDB",
++        "GOPROXY",
++    ],
 +)
 +
 +def _orchestrion_empty_impl(ctx):
 +    """Create an empty placeholder repo."""
-+    ctx.file("BUILD.bazel", """# Generated by rules_go orchestrion extension
-+# No orchestrion configured
-+filegroup(
-+    name = "orchestrion",
-+    srcs = [],
-+    visibility = ["//visibility:public"],
-+)
-+
-+filegroup(
-+    name = "dd_trace_go_version_file",
-+    srcs = [],
-+    visibility = ["//visibility:public"],
-+)
-+
-+filegroup(
-+    name = "dd_trace_go_module_proxy_files",
-+    srcs = [],
-+    visibility = ["//visibility:public"],
-+)
-+
-+filegroup(
-+    name = "dd_trace_go_module_proxy_root_marker",
-+    srcs = [],
-+    visibility = ["//visibility:public"],
-+)
-+
-+filegroup(
-+    name = "orchestrion_tool_version_file",
-+    srcs = [],
-+    visibility = ["//visibility:public"],
-+)
-+""")
++    _write_empty_orchestrion_repository(ctx)
 +
 +_orchestrion_empty = repository_rule(
 +    implementation = _orchestrion_empty_impl,
@@ -3379,18 +3733,31 @@ index 0000000..0565233
 +    version = ""
 +    dd_trace_go_version = ""
 +    dd_trace_go_versions = {}
++    dd_trace_go_pin_files = []
++    enabled_by_env = True
++    go_sdk_root = ""
++    go_sdk_version = ""
 +    log_timing = False
 +    for mod in module_ctx.modules:
 +        for from_source in mod.tags.from_source:
 +            if from_source.version:
-+                if from_source.dd_trace_go_version and from_source.dd_trace_go_versions:
-+                    fail("dd_trace_go_version and dd_trace_go_versions cannot both be set in orchestrion.from_source()")
++                if _configured_version_modes(
++                    from_source.dd_trace_go_version,
++                    from_source.dd_trace_go_versions,
++                    from_source.dd_trace_go_pin_files,
++                ) > 1:
++                    fail("dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive in orchestrion.from_source()")
 +                version = from_source.version
++                enabled_by_env = from_source.enabled_by_env
++                go_sdk_root = str(from_source.go_sdk_root) if from_source.go_sdk_root else ""
++                go_sdk_version = from_source.go_sdk_version
 +                log_timing = from_source.log_timing
 +                if from_source.dd_trace_go_version:
 +                    dd_trace_go_version = from_source.dd_trace_go_version
 +                if from_source.dd_trace_go_versions:
 +                    dd_trace_go_versions = from_source.dd_trace_go_versions
++                if from_source.dd_trace_go_pin_files:
++                    dd_trace_go_pin_files = from_source.dd_trace_go_pin_files
 +                break
 +        if version:
 +            break
@@ -3401,6 +3768,10 @@ index 0000000..0565233
 +            version = version,
 +            dd_trace_go_version = dd_trace_go_version,
 +            dd_trace_go_versions = dd_trace_go_versions,
++            dd_trace_go_pin_files = dd_trace_go_pin_files,
++            enabled_by_env = enabled_by_env,
++            go_sdk_root = go_sdk_root,
++            go_sdk_version = go_sdk_version,
 +            log_timing = log_timing,
 +        )
 +    else:
@@ -3420,6 +3791,21 @@ index 0000000..0565233
 +        ),
 +        "dd_trace_go_versions": attr.string_dict(
 +            doc = "Per-module dd-trace-go versions to validate against the target module for Orchestrion-backed instrumentation.",
++        ),
++        "dd_trace_go_pin_files": attr.label_list(
++            allow_files = True,
++            doc = "Optional go.mod and go.sum labels used to derive selected dd-trace-go module versions.",
++        ),
++        "enabled_by_env": attr.bool(
++            default = True,
++            doc = "Gate repository materialization on the Test Optimization repository environment.",
++        ),
++        "go_sdk_root": attr.label(
++            doc = "Optional hermetic Go SDK ROOT marker used to build Orchestrion.",
++        ),
++        "go_sdk_version": attr.string(
++            default = "",
++            doc = "Optional declared version for go_sdk_root; enables cache lookup before SDK materialization.",
 +        ),
 +        "log_timing": attr.bool(
 +            default = False,
@@ -3480,6 +3866,34 @@ index 0000000..a3f4e39
 +    },
 +    doc = "Groups Orchestrion pin files without treating every runtime data file as a build input.",
 +)
+diff --git a/go/private/repositories.bzl b/go/private/repositories.bzl
+index 865c41f..c57f719 100644
+--- a/go/private/repositories.bzl
++++ b/go/private/repositories.bzl
+@@ -17,6 +17,7 @@
+ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+ load("//go/private:common.bzl", "MINIMUM_BAZEL_VERSION")
+ load("//go/private:nogo.bzl", "DEFAULT_NOGO", "go_register_nogo")
++load("//go/private/orchestrion:extensions.bzl", "orchestrion_empty_repository")
+ load("//go/private:polyfill_bazel_features.bzl", "polyfill_bazel_features")
+ load("//go/private/skylib/lib:versions.bzl", "versions")
+ load("//proto:gogo.bzl", "gogo_special_proto")
+@@ -39,6 +40,15 @@ def go_rules_dependencies(force = False):
+     if getattr(native, "bazel_version", None):
+         versions.check(MINIMUM_BAZEL_VERSION, bazel_version = native.bazel_version)
+ 
++    # Keep the stable Orchestrion repository mapping available to ordinary
++    # WORKSPACE consumers. Test Optimization consumers declare the real tool
++    # repository before calling go_rules_dependencies(), so this fallback does
++    # not replace or fetch it.
++    _maybe(
++        orchestrion_empty_repository,
++        name = "rules_go_orchestrion_tool",
++    )
++
+     if force:
+         wrapper = _always
+     else:
 diff --git a/go/private/rules/library.bzl b/go/private/rules/library.bzl
 index 1b9bfeb..79c0b41 100644
 --- a/go/private/rules/library.bzl
@@ -4102,7 +4516,7 @@ index fdeda2d..e8a3e32 100644
  	}
  }
 diff --git a/go/tools/builders/compilepkg.go b/go/tools/builders/compilepkg.go
-index e2b0be5..dab85cb 100644
+index e2b0be5..02e5b2e 100644
 --- a/go/tools/builders/compilepkg.go
 +++ b/go/tools/builders/compilepkg.go
 @@ -17,17 +17,131 @@
@@ -4429,7 +4843,7 @@ index e2b0be5..dab85cb 100644
  
  	// Compile the .s files with Go's assembler, if this is not a cgo package.
  	// Cgo is assembled by cc above.
-@@ -489,100 +668,1761 @@ func compileArchive(
+@@ -489,100 +668,1763 @@ func compileArchive(
  	return nil
  }
  
@@ -5033,8 +5447,10 @@ index e2b0be5..dab85cb 100644
 +	env = setEnv(env, "GOWORK", "off")
 +	env = setEnv(env, orchestrionJobserverURLEnvVar, "")
 +	env = setEnv(env, orchestrionSkipPinEnvVar, "")
-+	if goenv.goroot != "" {
-+		env = setEnv(env, "GOROOT", abs(goenv.goroot))
++	if goenv.sdk != "" {
++		// Module `go list` commands need the complete SDK root so Go can find
++		// its tools. The woven stdlib remains available through GOCACHE.
++		env = setEnv(env, "GOROOT", abs(goenv.sdk))
 +	}
 +
 +	goBin := filepath.Join(abs(goenv.sdk), "bin")
@@ -6260,10 +6676,10 @@ index e2b0be5..dab85cb 100644
  }
 diff --git a/go/tools/builders/compilepkg_test.go b/go/tools/builders/compilepkg_test.go
 new file mode 100644
-index 0000000..9f7a1b0
+index 0000000..3de12ac
 --- /dev/null
 +++ b/go/tools/builders/compilepkg_test.go
-@@ -0,0 +1,727 @@
+@@ -0,0 +1,742 @@
 +package main
 +
 +import (
@@ -6647,19 +7063,26 @@ index 0000000..9f7a1b0
 +// Orchestrion cache paths that break Windows subprocesses.
 +func TestModulePackageCommandEnvUsesShortExportModuleCache(t *testing.T) {
 +	sdkRoot := filepath.Join(t.TempDir(), "sdk")
++	wovenGoRoot := filepath.Join(t.TempDir(), "woven-goroot")
 +	exportRoot := filepath.Join(t.TempDir(), "exports")
 +	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
 +		t.Fatalf("mkdir fake sdk bin: %v", err)
++	}
++	if err := os.MkdirAll(wovenGoRoot, 0o755); err != nil {
++		t.Fatalf("mkdir fake woven goroot: %v", err)
 +	}
 +	if err := os.MkdirAll(exportRoot, 0o755); err != nil {
 +		t.Fatalf("mkdir export root: %v", err)
 +	}
 +
-+	envv, err := modulePackageCommandEnv(&env{sdk: sdkRoot}, exportRoot)
++	envv, err := modulePackageCommandEnv(&env{sdk: sdkRoot, goroot: wovenGoRoot}, exportRoot)
 +	if err != nil {
 +		t.Fatalf("modulePackageCommandEnv error: %v", err)
 +	}
 +
++	if got := getEnv(envv, "GOROOT"); got != sdkRoot {
++		t.Fatalf("GOROOT = %q, want complete SDK root %q", got, sdkRoot)
++	}
 +	wantGoPath := moduleExportModuleCacheRoot(exportRoot)
 +	if got := getEnv(envv, "GOPATH"); got != wantGoPath {
 +		t.Fatalf("GOPATH = %q, want %q", got, wantGoPath)
@@ -6770,6 +7193,14 @@ index 0000000..9f7a1b0
 +	if err != nil {
 +		t.Skipf("go binary not on PATH: %v", err)
 +	}
++	goRootOutput, err := exec.Command(goExe, "env", "GOROOT").Output()
++	if err != nil {
++		t.Fatalf("resolve Go SDK root: %v", err)
++	}
++	sdkRoot := strings.TrimSpace(string(goRootOutput))
++	if sdkRoot == "" {
++		t.Fatal("go env GOROOT returned an empty SDK root")
++	}
 +
 +	root := t.TempDir()
 +	depDir := filepath.Join(root, "dep")
@@ -6808,7 +7239,7 @@ index 0000000..9f7a1b0
 +		t.Fatalf("mkdir export root: %v", err)
 +	}
 +	metaCache, err := loadModulePackageMetadataBatch(
-+		&env{sdk: filepath.Dir(filepath.Dir(goExe))},
++		&env{sdk: sdkRoot},
 +		mainDir,
 +		exportRoot,
 +		[]string{"example.com/dep"},
@@ -12347,7 +12778,7 @@ index 0000000..93f9e48
 +}
 diff --git a/go/tools/builders/orchestrion_cache.go b/go/tools/builders/orchestrion_cache.go
 new file mode 100644
-index 0000000..fa74327
+index 0000000..e4768cf
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_cache.go
 @@ -0,0 +1,273 @@
@@ -12370,9 +12801,9 @@ index 0000000..fa74327
 +	// logic changes. The prepared cache snapshot only keys off the copied module
 +	// files plus selected toolchain metadata, so code-only changes would
 +	// otherwise keep restoring stale synthetic go.mod state.
-+	syntheticModuleCacheABIVersion = "v4"
-+	helperDecisionCacheABIVersion  = "v6"
-+	helperExportCacheABIVersion    = "v5"
++	syntheticModuleCacheABIVersion = "v5"
++	helperDecisionCacheABIVersion  = "v8"
++	helperExportCacheABIVersion    = "v7"
 +	helperArchiveCacheABIVersion   = "v12"
 +	// Bump the helper source-set version whenever the synthetic testmain source
 +	// compile closure changes. The helper decision and archive caches both key
@@ -16069,10 +16500,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..42c5d5a
+index 0000000..48b9452
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,290 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -16097,8 +16528,12 @@ index 0000000..42c5d5a
 +
 +    ordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", ordered_versions, go_identity)
 +    reordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", reordered_versions, go_identity)
++    changed_versions = dict(ordered_versions)
++    changed_versions["github.com/DataDog/dd-trace-go/v2"] = "v2.8.0"
++    changed_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", changed_versions, go_identity)
 +
 +    asserts.equals(env, ordered_key, reordered_key)
++    asserts.false(env, ordered_key == changed_key, "a selected module version change must invalidate the bootstrap cache")
 +
 +    return unittest.end(env)
 +
@@ -16122,6 +16557,38 @@ index 0000000..42c5d5a
 +    return unittest.end(env)
 +
 +bootstrap_cache_paths_contract_test = unittest.make(_bootstrap_cache_paths_contract_test)
++
++def _bootstrap_manifest_content_test(ctx):
++    env = unittest.begin(ctx)
++
++    paths = struct(key = "cache-key")
++    versions = {
++        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
++        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
++        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
++    }
++    identity = struct(
++        version = "go version go1.25.0 linux/amd64",
++        goos = "linux",
++        goarch = "amd64",
++    )
++    manifest = json.decode(orchestrion_extension_test_helpers.bootstrap_manifest_content(
++        paths,
++        "v1.6.0",
++        versions,
++        identity,
++        "orchestrion_bin",
++        "0123456789abcdef",
++    ))
++
++    asserts.equals(env, "cache-key", manifest["cache_key"])
++    asserts.equals(env, identity.version, manifest["go_identity"]["version"])
++    asserts.equals(env, versions, manifest["dd_trace_go_versions"])
++    asserts.equals(env, "0123456789abcdef", manifest["binary_sha256"])
++
++    return unittest.end(env)
++
++bootstrap_manifest_content_test = unittest.make(_bootstrap_manifest_content_test)
 +
 +def _module_proxy_seed_go_mod_test(ctx):
 +    env = unittest.begin(ctx)
@@ -16203,6 +16670,55 @@ index 0000000..42c5d5a
 +
 +host_platform_normalization_test = unittest.make(_host_platform_normalization_test)
 +
++def _git_env_test(ctx):
++    env = unittest.begin(ctx)
++
++    linux_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "linux")))
++    asserts.equals(env, "/dev/null", linux_env["GIT_CONFIG_GLOBAL"])
++    asserts.equals(env, "1", linux_env["GIT_CONFIG_NOSYSTEM"])
++    asserts.equals(env, "0", linux_env["GIT_TERMINAL_PROMPT"])
++
++    windows_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "windows_nt")))
++    asserts.equals(env, "NUL", windows_env["GIT_CONFIG_GLOBAL"])
++    asserts.equals(env, "1", windows_env["GIT_CONFIG_NOSYSTEM"])
++    asserts.equals(env, "0", windows_env["GIT_TERMINAL_PROMPT"])
++
++    return unittest.end(env)
++
++git_env_test = unittest.make(_git_env_test)
++
++def _go_module_fetch_env_test(ctx):
++    env = unittest.begin(ctx)
++
++    default_env = orchestrion_extension_test_helpers.go_module_fetch_env(
++        struct(os = struct(environ = {})),
++    )
++    asserts.equals(env, "https://proxy.golang.org,direct", default_env["GOPROXY"])
++    asserts.equals(env, "", default_env["GONOSUMDB"])
++    asserts.equals(env, "", default_env["GOPRIVATE"])
++    asserts.equals(env, "", default_env["GONOPROXY"])
++    asserts.equals(env, "sum.golang.org https://sum.golang.org", default_env["GOSUMDB"])
++
++    configured_env = orchestrion_extension_test_helpers.go_module_fetch_env(
++        struct(
++            os = struct(
++                environ = {
++                    "GONOSUMDB": "github.com/DataDog",
++                    "GOPROXY": "https://proxy.example.test,direct",
++                },
++            ),
++        ),
++    )
++    asserts.equals(env, "https://proxy.example.test,direct", configured_env["GOPROXY"])
++    asserts.equals(env, "github.com/DataDog", configured_env["GONOSUMDB"])
++    asserts.equals(env, "", configured_env["GOPRIVATE"])
++    asserts.equals(env, "", configured_env["GONOPROXY"])
++    asserts.equals(env, "sum.golang.org https://sum.golang.org", configured_env["GOSUMDB"])
++
++    return unittest.end(env)
++
++go_module_fetch_env_test = unittest.make(_go_module_fetch_env_test)
++
 +def _fallback_go_tool_identity_test(ctx):
 +    env = unittest.begin(ctx)
 +
@@ -16222,12 +16738,56 @@ index 0000000..42c5d5a
 +
 +fallback_go_tool_identity_test = unittest.make(_fallback_go_tool_identity_test)
 +
++def _declared_go_tool_identity_test(ctx):
++    env = unittest.begin(ctx)
++    fake_ctx = struct(
++        os = struct(
++            name = "mac os x",
++            arch = "aarch64",
++        ),
++    )
++
++    identity = orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, "1.25.0")
++    asserts.equals(env, "go version go1.25.0 darwin/arm64", identity.version)
++    asserts.equals(env, "darwin", identity.goos)
++    asserts.equals(env, "arm64", identity.goarch)
++    asserts.equals(env, identity.version, orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, "go1.25.0").version)
++    asserts.equals(env, None, orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, ""))
++
++    return unittest.end(env)
++
++declared_go_tool_identity_test = unittest.make(_declared_go_tool_identity_test)
++
++def _declared_dd_trace_go_versions_test(ctx):
++    env = unittest.begin(ctx)
++    canonical = orchestrion_extension_test_helpers.declared_dd_trace_go_versions("v2.9.0", {})
++    asserts.equals(env, "v2.9.0", canonical["github.com/DataDog/dd-trace-go/v2"])
++    asserts.equals(env, None, orchestrion_extension_test_helpers.declared_dd_trace_go_versions("main", {}))
++    asserts.equals(
++        env,
++        None,
++        orchestrion_extension_test_helpers.declared_dd_trace_go_versions(
++            "",
++            {},
++            ["//:go.mod", "//:go.sum"],
++        ),
++    )
++
++    return unittest.end(env)
++
++declared_dd_trace_go_versions_test = unittest.make(_declared_dd_trace_go_versions_test)
++
 +def orchestrion_extension_test_suite():
 +    unittest.suite(
 +        "orchestrion_extension_tests",
 +        bootstrap_cache_key_stability_test,
++        bootstrap_manifest_content_test,
 +        bootstrap_cache_paths_contract_test,
++        declared_dd_trace_go_versions_test,
++        declared_go_tool_identity_test,
 +        fallback_go_tool_identity_test,
++        git_env_test,
++        go_module_fetch_env_test,
 +        host_platform_normalization_test,
 +        module_proxy_resolved_modules_json_test,
 +        module_proxy_seed_go_mod_test,

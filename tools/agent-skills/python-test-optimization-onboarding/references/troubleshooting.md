@@ -26,6 +26,21 @@ If no files appear:
 - In WORKSPACE mode, confirm the Python companion was declared with
   `datadog_python_test_optimization_workspace_repositories(...)`.
 
+For manifest-managed runs, also confirm the full target label is present in
+`topt_data_by_target`. An absent entry intentionally preserves the raw Python
+path and emits no Test Optimization payload.
+
+## Managed Manifest Fails Before HTTP
+
+Missing, malformed, duplicate, unsupported-runtime, or colliding entries are
+rejected before metadata requests. Run the consumer's managed command and
+inspect its target/service summary. Do not hand-edit the temporary manifest,
+persist its private handoff, or add a label-specific Rule exception.
+
+If a selected target stays raw, verify that the consumer resolver recognizes
+the central Python macro, emitted a canonical full label, and derived one
+unambiguous Python runtime context.
+
 ## Missing Bazel Metadata
 
 Check for metadata:
@@ -82,7 +97,7 @@ and run those package-local labels before changing instrumentation.
 
 If metadata refetches repeatedly, check whether `.bazelrc` or scripts set
 `FETCH_SALT` by default. It should appear only in an explicit
-`bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` force-refresh
+`bazel sync --config=test-optimization --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` force-refresh
 command.
 
 ## Remote Outputs Missing
@@ -116,7 +131,7 @@ Then re-run tests before running doctor and uploader.
 ## Diagnostic Reports
 
 When logs are long or ambiguous, first ask for a doctor-only support bundle with
-`bazel run //:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
+`bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` plus any
 matching BEP/artifact flags. Use the CI wrapper bundle when uploader dry-run or
 upload results matter. If a repository cannot use either bundle mode, collect
 `doctor-report.json`, `uploader-dry-run-report.json`, optional

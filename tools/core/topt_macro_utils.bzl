@@ -222,6 +222,78 @@ def build_module_labels(sync_repo_name, labels, macro_name = "dd_topt_macro"):
         module_labels.append("@%s//:module_%s" % (sync_repo_name, lab))
     return module_labels
 
+def _validate_explicit_label(value, field_name, macro_name):
+    if not is_string(value) or not value:
+        fail_with_prefix(
+            "topt_macro_utils",
+            "%s: selected service topt_data['%s'] must be a non-empty label string" %
+            (macro_name, field_name),
+        )
+    return value
+
+def resolve_files_label(topt_data, sync_repo_name, macro_name = "dd_topt_macro"):
+    """Prefer a generated explicit files label, preserving static fallback."""
+    explicit = topt_data.get("files_label")
+    if explicit != None:
+        return _validate_explicit_label(explicit, "files_label", macro_name)
+    return "@%s//:test_optimization_files" % sync_repo_name
+
+def resolve_manifest_label(topt_data, sync_repo_name, macro_name = "dd_topt_macro"):
+    """Prefer a generated explicit manifest label, preserving static fallback."""
+    explicit = topt_data.get("manifest_label")
+    if explicit != None:
+        return _validate_explicit_label(explicit, "manifest_label", macro_name)
+    manifest_path = topt_data.get("manifest_path") or ".testoptimization/manifest.txt"
+    return "@%s//:%s" % (sync_repo_name, manifest_path)
+
+def resolve_module_labels(topt_data, sync_repo_name, macro_name = "dd_topt_macro"):
+    """Prefer generated explicit module labels, preserving static fallback."""
+    explicit = topt_data.get("module_labels")
+    if explicit != None:
+        if not is_list(explicit):
+            fail_with_prefix(
+                "topt_macro_utils",
+                "%s: selected service topt_data['module_labels'] must be a list or tuple" %
+                macro_name,
+            )
+        return [
+            _validate_explicit_label(label, "module_labels", macro_name)
+            for label in explicit
+        ]
+    return build_module_labels(sync_repo_name, topt_data.get("labels"), macro_name = macro_name)
+
+def resolve_module_group_names(topt_data, module_labels, macro_name = "dd_topt_macro"):
+    """Return optional logical names for explicitly namespaced module labels."""
+    explicit = topt_data.get("module_group_names")
+    if explicit == None:
+        return []
+    if not is_list(explicit):
+        fail_with_prefix(
+            "topt_macro_utils",
+            "%s: selected service topt_data['module_group_names'] must be a list or tuple" %
+            macro_name,
+        )
+    if len(explicit) != len(module_labels):
+        fail_with_prefix(
+            "topt_macro_utils",
+            (
+                "%s: selected service topt_data['module_group_names'] must contain " +
+                "one entry per module_labels entry"
+            ) % macro_name,
+        )
+    names = []
+    for name in explicit:
+        if not is_string(name) or not name.startswith("module_"):
+            fail_with_prefix(
+                "topt_macro_utils",
+                (
+                    "%s: selected service topt_data['module_group_names'] entries " +
+                    "must be non-empty strings beginning with 'module_'"
+                ) % macro_name,
+            )
+        names.append(name)
+    return names
+
 def select_service_entry_or_fail(topt_data, topt_service, macro_name = "dd_topt_macro"):
     """Select single-service payload data from single or aggregated exports.
 

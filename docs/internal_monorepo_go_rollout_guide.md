@@ -17,6 +17,13 @@ Use [`Language_Onboarding.md`](./Language_Onboarding.md#large-workspace-monorepo
 for the step-by-step onboarding guide. Use this page as the operator checklist
 when the rollout needs a reviewable local pilot before wider adoption.
 
+This page describes the static pilot path. A monorepo with a repository-owned
+managed command that expands exact targets should instead use the
+[automatic managed Go/Python contract](./Language_Onboarding.md#automatic-managed-gopython-monorepos).
+That path derives services per invocation and does not check in pilot lists,
+Gazelle policy, or ownership gates. Both paths share the same `rules_go`,
+Orchestrion, doctor, and uploader safety requirements.
+
 ## Published Contract
 
 - Consume one complete base `rules_go` Orchestrion tree. Do not copy patch
@@ -49,26 +56,32 @@ SHA256, and archive prefix generated from the same published commit.
 
 - Use a commit that is reachable from `origin/main`; never publish feature-branch
   SHAs into consumer snippets.
-- Configure `go_orchestrion_tool_repo(...)` with the current supported
+- Configure `dd_topt_go_orchestrion_tool_repo(...)` with the current supported
   Orchestrion version and the current supported `dd-trace-go` Bazel-mode
-  version.
-- Configure `test_optimization_sync(...)` with:
+  version, plus the repository's central `@go_sdk//:ROOT` label and exact Go
+  SDK version. Do not load the underlying `rules_go` repository rule directly
+  or repeat this wiring per service.
+- Configure `dd_topt_go_workspace_sync_repositories(...)` with:
   - `service`
-  - `runtime_name = "go"`
   - `runtime_version`
-  - `runtime_module_path`
+  - `module_path`
   - `require_git_metadata = True`
+  The public helper supplies `runtime_name = "go"` and config-gated metadata
+  sync by default.
 - Keep repository-specific scheduling, Docker, tags, platform constraints, and
   flaky policy in the repository-local wrapper layer.
-- Set `orchestrion_mode = "test_optimization"` in the optimized wrapper for
+- Route the existing central Go wrapper through `dd_topt_go_test` and set
+  `orchestrion_mode = "test_optimization"` for
   standard Go `testing` Test Optimization pilots. The `general` mode remains
   available for explicit compatibility validation only.
-- Keep a plain wrapper path for controls and unconverted tests.
-- Convert only the agreed runtime-emitting pilot targets first.
+- Keep BUILD callsites on that same wrapper; the named config controls whether
+  its expansion is normal or instrumented.
+- Select only the agreed runtime-emitting pilot scope in central repository
+  policy.
 - Do not list `.build_test`, compile-only, or other build-only controls as
   doctor `expected_targets`.
-- Add one root `dd_test_optimization_doctor` target.
-- Add one root `dd_upload_payloads` target.
+- Add one `dd_test_optimization_doctor` target and one `dd_upload_payloads`
+  target in a lightweight package such as `//tools/test_optimization`.
 - Use `.bazelrc` to activate
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*` and
   `--zip_undeclared_test_outputs` for test commands. Pass a fresh
@@ -78,6 +91,17 @@ SHA256, and archive prefix generated from the same published commit.
   `--artifact-staging-dir=<temp-dir>`.
 - Pass `DD_GIT_*` only through `--repo_env`, never through `--test_env`.
 - Pass uploader credentials at `bazel run` time, not into test actions.
+- Keep one user-facing `test-optimization` config with both phase-correct
+  switches:
+
+  ```bazelrc
+  common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+  build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
+  ```
+
+  Removing `--config=test-optimization` disables both metadata repositories
+  and Orchestrion aliases. The public Go helpers enable metadata gating by
+  default; they do not dynamically control Orchestrion repository declaration.
 
 ## Bootstrap Flow
 
@@ -93,7 +117,6 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --rules-go-variant base \
   --dd-trace-go-version v2.9.0 \
   --write-bazelrc \
-  --write-root-targets \
   --write-orchestrion-files \
   --write-wrapper-template \
   --write-validation-script \
@@ -102,8 +125,24 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --shutdown-bazel-on-exit \
   --default-jobs=1 \
   --expected-target "//path/to/runtime/package:go_default_test" \
+  --doctor-target "//tools/test_optimization:dd_test_optimization_doctor" \
+  --upload-target "//tools/test_optimization:dd_upload_payloads" \
   --control-target "//path/to/plain/control:go_default_test"
 ```
+
+Create the single doctor/uploader pair in
+`//tools/test_optimization:BUILD.bazel`; do not use `--write-root-targets` for
+this monorepo flow.
+
+### Updating an existing managed config
+
+When upgrading from the current release, rerun the same bootstrap with
+`--write-bazelrc`. It replaces the content between the Datadog-managed markers
+with the current single-config contract, preserves all content outside those
+markers, and is idempotent. This adds both
+`DD_TEST_OPTIMIZATION_ENABLED=1` and the existing `rules_go` Orchestrion flag to
+the named config; consumers do not need a separate migration mode or a second
+bool flag.
 
 If the repository owns checked-in `go_repository(...)` declarations, run the
 repository-owned refresh command after targeted Go module sync and rerun
@@ -120,9 +159,9 @@ bazel test --config=test-optimization <plain-control-target>
 bazel test --config=test-optimization <build-only-control-target>
 bazel test --config=test-optimization <instrumented-target-1>
 bazel test --config=test-optimization <instrumented-target-2>
-bazel run --config=test-optimization //:dd_test_optimization_doctor
-bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
+bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
 bazel shutdown
 ```
 

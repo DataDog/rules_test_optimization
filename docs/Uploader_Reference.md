@@ -35,6 +35,24 @@ The `test-optimization` config should contain the recommended Bazel test flags:
 `--remote_download_minimal`, `--remote_download_regex=.*test[.]outputs.*`, and
 `--zip_undeclared_test_outputs`.
 
+For Go consumers using the reusable bootstrap, keep the phase-correct enablement
+in the same config:
+
+```bazelrc
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+This is one user-facing switch. Removing `--config=test-optimization` disables
+both metadata resolution and the Orchestrion analysis aliases; it does not
+require a second bool flag. In WORKSPACE repositories, use the apparent
+`rules_go` repository name configured by that workspace.
+
+Config-gated Python consumers use only the
+`DD_TEST_OPTIMIZATION_ENABLED=1` entry and omit the Go-specific Orchestrion
+line. Java, NodeJS, .NET, and Ruby retain their existing enablement contract in
+this release.
+
 ```bash
 # Vendor the full tools/test_optimization/ helper directory, or set
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
@@ -189,6 +207,12 @@ dd_payload_uploader(
 )
 ```
 
+Each `:test_optimization_context` target bundles both `context.json` and
+`telemetry_facts.json`. The uploader selects the matching context for payload
+enrichment and consumes the bundled telemetry facts for rule-telemetry
+augmentation. Do not pass only the physical `context.json` file when using the
+normal target-based wiring.
+
 ## Upload modes
 
 - **Agentless mode (default):** Requires `DD_API_KEY` and `DD_SITE`; uploads
@@ -308,7 +332,7 @@ For first-pass support, the doctor can create a doctor-only bundle without the
 wrapper:
 
 ```bash
-bazel run //:dd_test_optimization_doctor -- \
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
   --support-bundle .topt/reports/dd-test-optimization-support.zip
 ```
 
@@ -367,6 +391,9 @@ config, expected targets, BEP files and seen targets, fresh/cached/remote-only
 BEP outputs, selected and blocked BEP artifact carriers, staged `outputs.zip`
 or `test.outputs` artifacts, local/staged payload directories, payload counts,
 Bazel metadata, payload-selection counts, and failure messages.
+When expected targets are configured, fresh and cached BEP labels jointly
+satisfy target coverage. Only fresh outputs are validated; an all-cached
+invocation succeeds with zero validated output directories.
 
 Example:
 
@@ -393,9 +420,9 @@ config, BEP files, selected freshness source, BEP freshness counts, artifact
 staging counts, discovered payload directories, per-payload-type discovered,
 processed, failed, and skipped counts, aggregate upload failures, upload
 attempt status, final status, and exit code. The `result.reason_code` explains
-common no-upload cases such as `target_cached_by_bazel`,
-`bep_output_remote_only_without_downloader`, `no_payload_json_found`,
-`payload_enrichment_failed`, and `upload_skipped_dry_run`.
+common no-upload cases such as `bep_output_remote_only_without_downloader`,
+`no_payload_json_found`, `payload_enrichment_failed`, and
+`upload_skipped_dry_run`.
 
 The CI wrapper writes a separate dry-run uploader report when `--report-dir` is
 used. If only `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` or
@@ -602,8 +629,11 @@ or set `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` for the uploader run.
 `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` controls how long the uploader waits for
 payload discovery/quiescence before proceeding.
 - `> 0`: wait up to the configured budget for payload files to appear and settle.
-- `0`: skip waiting loops immediately. If no payloads are found, uploader exits
-  cleanly with "nothing to upload" semantics.
+- `0`: skip waiting loops immediately. When BEP freshness is configured, the
+  uploader evaluates that BEP before applying no-payload failure policy, so an
+  all-cached invocation is a no-op while missing fresh payloads still fail.
+  Without BEP freshness, the configured no-payload/`fail_on_error` policy
+  applies normally.
 
 ## Endpoints and headers
 
@@ -675,6 +705,30 @@ payload discovery/quiescence before proceeding.
 - Matching uses GitHub-style glob semantics with "last matching rule wins".
 - CODEOWNERS enrichment is best-effort: parse/lookup failures and misses do not
   fail uploads; debug mode logs counters and skip reasons.
+
+### Manifest-driven aggregate contexts
+
+`test_optimization_manifest_sync` places every selected Go/Python runtime
+context in one aggregate repository. Its
+`:test_optimization_context` target carries a provider mapping deterministic
+context keys to the matching `context.json`. Doctor and uploader convert those
+entries into virtual repository keys of the form
+`<aggregate_repo>_<context_key>`, which match the
+`bazel.test_optimization.repo_name` written by selected targets.
+
+The managed doctor should also consume
+`@test_optimization_data//:expected_targets` through
+`expected_targets_file`. The file contains the exact canonical labels from the
+invocation manifest. Static `expected_targets` and the generated file may be
+used together only when they describe the same set; disagreement is a hard
+error.
+
+A cached Bazel test does not produce a fresh payload for the current
+invocation. With exact expected targets configured on both doctor and uploader,
+fresh and cached BEP results jointly satisfy invocation coverage. Only fresh
+outputs are validated or uploaded; an all-cached invocation is a successful
+no-op. Every fresh expected output must independently contain a handled
+payload, so one valid sibling output cannot hide an empty one.
 
 ### Advanced: reuse an already-fetched context file
 

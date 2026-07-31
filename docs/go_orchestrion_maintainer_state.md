@@ -38,8 +38,10 @@ together.
 
 ```mermaid
 flowchart TD
-    A["Consumer BUILD: dd_topt_go_test"] --> B["Hidden raw go_test"]
-    A --> C["Test Optimization data repo"]
+    A["Consumer BUILD: dd_topt_go_test"] --> Z{"Selected sync export enabled?"}
+    Z -->|"no"| R["Public raw go_test; no TO-owned targets"]
+    Z -->|"yes"| B["Hidden raw go_test"]
+    Z -->|"yes"| C["Test Optimization data repo"]
     B --> D["Vendored rules_go fork"]
     D --> E["compilepkg / stdlib / link builders"]
     E --> F["orchestrion toolexec"]
@@ -49,8 +51,10 @@ flowchart TD
     I --> J["CI Visibility runtime and payload files"]
 
     K["Bootstrap or manual MODULE wiring"] --> L["rules_go Orchestrion extension"]
-    L --> G
-    L --> M["dd_trace_go_versions.json"]
+    L --> N{"DD_TEST_OPTIMIZATION_ENABLED?"}
+    N -->|"no"| O["Stable empty repository and local aliases"]
+    N -->|"yes"| G
+    N -->|"yes"| M["dd_trace_go_versions.json"]
     M --> E
 ```
 
@@ -61,10 +65,17 @@ The important model is:
 - Orchestrion is not a post-processing step
 - the vendored fork makes Orchestrion part of the normal compile, stdlib, and
   link path
+- without `--config=test-optimization`, the public test is the raw `go_test`,
+  the stable Orchestrion aliases select package-local empty targets, and the
+  gated repository returns before host-Go discovery or source fetching
 - `test_optimization` mode is the narrower standard Go `testing` path:
   customer packages and external `_test` packages compile normally, while
   stdlib `testing`, synthetic `testmain`, helper packagefiles, importcfg, and
   link support stay coherent
+- the metadata input may come from static sync or from an invocation-scoped
+  manifest aggregate; this does not change Orchestrion compilation. In the
+  managed case, the consumer's central wrapper selects the exact
+  `topt_data_by_target` entry before calling `dd_topt_go_test`.
 
 ## Mode Contract
 
@@ -102,14 +113,26 @@ Orchestrion and upstream `rules_go` do not provide together out of the box:
 In short: the fork is not ornamental. It is the compatibility layer that keeps
 Orchestrion coherent inside Bazel.
 
-## Why The Orchestrion Tool Is Still Built
+## Why The Orchestrion Tool Is Still Built When Enabled
 
-On a true cold start, Bazel still builds the Orchestrion binary because:
+On an enabled true cold start, Bazel still builds the Orchestrion binary
+because:
 
 - the extension downloads Orchestrion source, not a prebuilt binary
 - we patch that source for Bazel compatibility before building it
 - the resulting binary is platform-specific
 - the bootstrap cache is host-local, so a fresh CI runner starts empty
+
+The build uses the Bazel-managed Go SDK declared by guided bootstrap, not a
+host `go` binary. The SDK version is also part of the bootstrap cache identity.
+On a compatible cache hit, the extension restores the tool before materializing
+the SDK repository; on a miss, it materializes the SDK and verifies that its
+reported version matches the declaration.
+
+This cost does not apply to the config-disabled path. The patched repository
+rule writes the stable empty interface before SDK or host-Go discovery, and the
+vendored `rules_go` aliases avoid referencing the real tool repository while
+the Orchestrion build setting is false.
 
 The recent work changed one important part of this story:
 
@@ -340,17 +363,20 @@ Measured with:
 - a new `--output_base`
 - the same shared cache root
 
-Current warm numbers:
+Current isolated warm-bootstrap observation:
 
-- total build elapsed: `86.281s`
-- critical path: `68.91s`
-- Orchestrion bootstrap total: `3.955s`
+- fresh Bazel output root with the same bootstrap cache: about `12.9s` total
+  command elapsed
+- Orchestrion repository bootstrap within that command: about `1.8s` to `2.5s`
+- cache identity source: the declared Bazel SDK, allowing restore before SDK
+  materialization
 
 The main conclusion is:
 
 - once the bootstrap artifact cache hits, the tool bootstrap is no longer the
-  main problem
-- stdlib becomes the most visible remaining build step
+  main cost
+- Bazel startup, repository mapping, and analysis account for most of the
+  remaining fresh-output-root command time
 
 ### Runtime correctness validation
 
@@ -374,7 +400,8 @@ This validation is part of the baseline, not optional extra checking.
 
 ### 1. Cold Orchestrion tool build
 
-This is still the largest single cost on a true cold start.
+This is still the largest single cost on an enabled true cold start. The
+config-disabled path does not build the tool.
 
 At this point, the likely remaining wins here are more architectural than
 incremental:

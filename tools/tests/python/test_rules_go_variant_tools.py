@@ -428,6 +428,11 @@ class RulesGoForkRegistryTests(unittest.TestCase):
             '"base": "third_party/rgo/v0_61_1/base"',
             content,
         )
+        self.assertIn('"v0_62_0"', content)
+        self.assertIn(
+            '"base": "third_party/rgo/v0_62_0/base"',
+            content,
+        )
         self.assertNotIn('        "complete":', content)
         self.assertIn('rules_go_variant \\"complete\\" is no longer supported', content)
         self.assertNotIn("rules_go_orchestrion_complete", content)
@@ -442,6 +447,11 @@ class RulesGoForkRegistryTests(unittest.TestCase):
         self.assertIn('"v0_61_1"', content)
         self.assertIn(
             '"base": "third_party/rgo/v0_61_1/base"',
+            content,
+        )
+        self.assertIn('"v0_62_0"', content)
+        self.assertIn(
+            '"base": "third_party/rgo/v0_62_0/base"',
             content,
         )
         self.assertNotIn('"complete":', content)
@@ -486,6 +496,10 @@ class RulesGoReleaseArchiveContentsTests(unittest.TestCase):
             required,
         )
         self.assertIn(
+            "third_party/rules_go_orchestrion/patches/v0_62_0/base/0001-full-delta.patch",
+            required,
+        )
+        self.assertIn(
             "third_party/rgo/v0_60_0/base/MODULE.bazel",
             required,
         )
@@ -503,6 +517,14 @@ class RulesGoReleaseArchiveContentsTests(unittest.TestCase):
         )
         self.assertIn(
             "third_party/rgo/v0_61_1/base.METADATA.json",
+            required,
+        )
+        self.assertIn(
+            "third_party/rgo/v0_62_0/base/MODULE.bazel",
+            required,
+        )
+        self.assertIn(
+            "third_party/rgo/v0_62_0/base.METADATA.json",
             required,
         )
         self.assertIn("tools/go/rules_go_forks.bzl", required)
@@ -593,6 +615,13 @@ class RulesGoForkMaterializerTests(unittest.TestCase):
                 "patched\n",
                 (materialized / "file.txt").read_text(encoding="utf-8"),
             )
+
+    def test_list_upstreams_uses_lf_on_every_platform(self) -> None:
+        """Bash consumers never receive a carriage return in an upstream id."""
+        self.assertEqual(
+            b"v0_60_0\nv0_61_1\n",
+            self.mod.render_upstream_ids(["v0_60_0", "v0_61_1"]),
+        )
 
     def test_materializer_rejects_complete_variant(self) -> None:
         """The removed complete variant fails before patch application."""

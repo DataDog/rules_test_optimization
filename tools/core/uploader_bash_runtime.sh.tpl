@@ -442,6 +442,10 @@ SCHEMA_VALIDATOR_RLOC="__DDTPL_SCHEMA_VALIDATOR_RLOC__"
 SCHEMA_VALIDATOR_PATH="__DDTPL_SCHEMA_VALIDATOR_PATH__"
 BEP_ARTIFACT_STAGE_HELPER_RLOC="__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__"
 DOCTOR_RUNTIME_RLOC="__DDTPL_DOCTOR_RUNTIME_RLOC__"
+EXPECTED_TARGETS_RLOC="__DDTPL_EXPECTED_TARGETS_RLOC__"
+EXPECTED_TARGETS_PATH="__DDTPL_EXPECTED_TARGETS_PATH__"
+EXPECTED_TARGETS_FILE_RLOC="__DDTPL_EXPECTED_TARGETS_FILE_RLOC__"
+EXPECTED_TARGETS_FILE_PATH="__DDTPL_EXPECTED_TARGETS_FILE_PATH__"
 dbg "schema resolution inputs: schema_path='$SCHEMA_JSON_PATH' schema_rloc='$SCHEMA_JSON_RLOC' validator_path='$SCHEMA_VALIDATOR_PATH' validator_rloc='$SCHEMA_VALIDATOR_RLOC'"
 SCHEMA_JSON=$(resolve_artifact_path "$SCHEMA_JSON_PATH")
 if [[ -n "$SCHEMA_JSON" ]]; then
@@ -657,6 +661,9 @@ FRESHNESS_SKIPPED_OUTPUTS_FILE=""
 FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE=""
 FRESHNESS_MISSING_OUTPUT_LABELS_FILE=""
 FRESHNESS_SKIP_WAS_EMITTED=0
+EXPECTED_TARGETS_CONFIGURED=0
+EXPECTED_TARGETS_RESOLVED_FILE=""
+HANDLED_FRESH_OUTPUTS_FILE=""
 EXECUTION_ELIGIBILITY_ENABLED=0
 EXECUTION_ELIGIBLE_LABELS_FILE=""
 EXECUTION_ELIGIBLE_OUTPUTS_FILE=""
@@ -1198,10 +1205,12 @@ classify_uploader_result() {
             "Enable --remote-artifacts=download with --bep-artifact-downloader, or adjust Bazel remote download settings."
         return
     fi
-    if (( exit_code != 0 && $(report_count_lines_file "${FRESHNESS_CACHED_OUTPUTS_FILE:-}") > 0 )); then
+    if (( exit_code != 0 &&
+          $(report_count_lines_file "${FRESHNESS_CACHED_OUTPUTS_FILE:-}") > 0 &&
+          $(report_count_lines_file "${FRESHNESS_ELIGIBLE_OUTPUTS_FILE:-}") == 0 )); then
         set_report_result "target_cached_by_bazel" \
-            "Required BEP freshness rejected cached Bazel test outputs." \
-            "Run tests with --nocache_test_results or select targets that executed in this invocation."
+            "Cached Bazel outputs did not satisfy the requested BEP freshness contract." \
+            "Use the BEP from the exact matching bazel test invocation and verify each expected target is fresh or exclusively cached."
         return
     fi
     if (( exit_code != 0 && DRY_RUN == 0 && REPORT_UPLOAD_ATTEMPTED > 0 && ${UPLOAD_FAILURES:-0} > 0 )); then
@@ -1811,6 +1820,10 @@ while true; do
         # - MAX_WAIT_SEC=0: immediate decision (upload no-op or fail-on-error)
         # - MAX_WAIT_SEC>0: keep polling until timeout
         if (( MAX_WAIT_SEC == 0 )); then
+            if [[ "$FRESHNESS_MODE" != "disabled" && ( "$FRESHNESS_SOURCE" == "bep" || ${#BEP_JSON_FILES[@]} -gt 0 ) ]]; then
+                log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
+            fi
             if tests_executed; then
                 log "warning: tests ran but no payload files found"
                 log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
@@ -1820,14 +1833,14 @@ while true; do
                 fi
             else
                 log "no payload files found and no test execution detected; nothing to upload"
-            fi
-            if [[ "$FRESHNESS_MODE" != "disabled" && ( "$FRESHNESS_SOURCE" == "bep" || ${#BEP_JSON_FILES[@]} -gt 0 ) ]]; then
-                log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
-                break
             fi
             exit 0
         fi
         if (( elapsed > MAX_WAIT_SEC )); then
+            if [[ "$FRESHNESS_MODE" != "disabled" && ( "$FRESHNESS_SOURCE" == "bep" || ${#BEP_JSON_FILES[@]} -gt 0 ) ]]; then
+                log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
+                break
+            fi
             if tests_executed; then
                 log "warning: tests ran but no payload files found"
                 log "hint: check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set"
@@ -1837,10 +1850,6 @@ while true; do
                 fi
             else
                 log "no payload files found and no test execution detected; nothing to upload"
-            fi
-            if [[ "$FRESHNESS_MODE" != "disabled" && ( "$FRESHNESS_SOURCE" == "bep" || ${#BEP_JSON_FILES[@]} -gt 0 ) ]]; then
-                log "BEP freshness is configured; checking BEP before treating missing local payloads as no-op"
-                break
             fi
             exit 0
         fi
@@ -2886,6 +2895,91 @@ is_remote_only_bep_reference_jq='
     | (. == "test.outputs" or . == "outputs.zip" or contains("/test.outputs/") or endswith("/test.outputs") or endswith("/outputs.zip"));
 '
 
+prepare_expected_targets() {
+  local static_file dynamic_file dynamic_targets
+  EXPECTED_TARGETS_RESOLVED_FILE="$TMP_PAYLOAD_DIR/expected_targets.txt"
+  HANDLED_FRESH_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/handled_fresh_outputs.txt"
+  : >"$EXPECTED_TARGETS_RESOLVED_FILE"
+  : >"$HANDLED_FRESH_OUTPUTS_FILE"
+
+  static_file="$(resolve_artifact_path "$EXPECTED_TARGETS_PATH")"
+  if [[ -z "$static_file" && -n "$EXPECTED_TARGETS_RLOC" ]]; then
+    static_file="$(resolve_runfile "$EXPECTED_TARGETS_RLOC")"
+  fi
+  if [[ -n "$static_file" && -f "$static_file" ]]; then
+    sed '/^$/d' "$static_file" | LC_ALL=C sort -u >"$EXPECTED_TARGETS_RESOLVED_FILE"
+  fi
+
+  if [[ -z "$EXPECTED_TARGETS_FILE_PATH" && -z "$EXPECTED_TARGETS_FILE_RLOC" ]]; then
+    if [[ -s "$EXPECTED_TARGETS_RESOLVED_FILE" ]]; then
+      EXPECTED_TARGETS_CONFIGURED=1
+    fi
+    return 0
+  fi
+
+  if (( JQ_AVAILABLE == 0 )); then
+    log "error: expected_targets_file requires jq"
+    exit 2
+  fi
+  dynamic_file="$(resolve_artifact_path "$EXPECTED_TARGETS_FILE_PATH")"
+  if [[ -z "$dynamic_file" && -n "$EXPECTED_TARGETS_FILE_RLOC" ]]; then
+    dynamic_file="$(resolve_runfile "$EXPECTED_TARGETS_FILE_RLOC")"
+  fi
+  if [[ -z "$dynamic_file" || ! -f "$dynamic_file" ]]; then
+    log "error: expected_targets_file does not exist or is not a file"
+    exit 2
+  fi
+  if ! jq -e '
+    type == "object" and
+    (keys == ["schema_version", "targets"]) and
+    .schema_version == 1 and
+    (.targets | type == "array") and
+    all(.targets[]; type == "string") and
+    (.targets == (.targets | sort)) and
+    ((.targets | length) == (.targets | unique | length)) and
+    all(.targets[]; test("^//[^:]*:[^:]+$"))
+  ' "$dynamic_file" >/dev/null; then
+    log "error: expected_targets_file must use schema_version 1 with sorted, unique local //pkg:target labels"
+    exit 2
+  fi
+  dynamic_targets="$TMP_PAYLOAD_DIR/expected_targets_dynamic.txt"
+  jq -r '.targets[]' "$dynamic_file" >"$dynamic_targets"
+  if [[ -s "$EXPECTED_TARGETS_RESOLVED_FILE" ]] &&
+      ! cmp -s "$EXPECTED_TARGETS_RESOLVED_FILE" "$dynamic_targets"; then
+    log "error: static expected_targets and expected_targets_file contain different target sets"
+    exit 2
+  fi
+  cp "$dynamic_targets" "$EXPECTED_TARGETS_RESOLVED_FILE"
+  EXPECTED_TARGETS_CONFIGURED=1
+}
+
+filter_bep_rows_to_expected_targets() {
+  local source_file="$1"
+  local filtered_file
+  [[ -n "$source_file" && -f "$source_file" ]] || return 0
+  if [[ ! -s "$EXPECTED_TARGETS_RESOLVED_FILE" ]]; then
+    : >"$source_file"
+    return 0
+  fi
+  filtered_file="$(mktemp "$TMP_PAYLOAD_DIR/expected_filter.XXXXXX" 2>/dev/null || true)"
+  if [[ -z "$filtered_file" ]]; then
+    log "error: failed to create expected-target filter temp file"
+    exit 2
+  fi
+  awk -F '\t' 'NR == FNR { expected[$1] = 1; next } ($1 in expected)' \
+    "$EXPECTED_TARGETS_RESOLVED_FILE" "$source_file" >"$filtered_file"
+  mv "$filtered_file" "$source_file"
+}
+
+filter_bep_freshness_to_expected_targets() {
+  (( EXPECTED_TARGETS_CONFIGURED == 1 )) || return 0
+  filter_bep_rows_to_expected_targets "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+  filter_bep_rows_to_expected_targets "$FRESHNESS_CACHED_OUTPUTS_FILE"
+  filter_bep_rows_to_expected_targets "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
+  filter_bep_rows_to_expected_targets "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
+  cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
+}
+
 prepare_bep_eligibility() {
   if (( JQ_AVAILABLE == 0 )); then
     if optional_bep_unavailable "BEP JSON parsing requires jq"; then
@@ -2947,8 +3041,8 @@ prepare_bep_eligibility() {
 	      select(.id.testResult? != null or .id.test_result? != null)
 	      | (.testResult // .test_result // {}) as $result
 	      | (.id.testResult // .id.test_result // {}) as $id
-      | ($id.label // empty) as $label
-	      | select($label != "")
+      | ($id.label // empty) as $target_label
+	      | select($target_label != "")
 	      | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
 	      | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
 	      | [
@@ -2966,7 +3060,7 @@ prepare_bep_eligibility() {
 	      | select(($cached_local or $cached_remote) or ($event_has_blocking_remote | not))
 	      | $output_refs[]?.keys[]? as $output_key
 	      | select($output_key != "")
-	      | "\($label)\t\($output_key)\t\(if ($cached_local or $cached_remote) then "cached" else "eligible" end)"
+	      | "\($target_label)\t\($output_key)\t\(if ($cached_local or $cached_remote) then "cached" else "eligible" end)"
 	    ' "$resolved_bep" >"$tmp_records"; then
       if optional_bep_unavailable "failed to parse BEP JSON: $resolved_bep"; then
         return 0
@@ -2999,8 +3093,8 @@ prepare_bep_eligibility() {
       select(.id.testResult? != null or .id.test_result? != null)
       | (.testResult // .test_result // {}) as $result
       | (.id.testResult // .id.test_result // {}) as $id
-      | ($id.label // empty) as $label
-      | select($label != "")
+      | ($id.label // empty) as $target_label
+      | select($target_label != "")
       | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
       | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
       | select(($cached_local or $cached_remote) | not)
@@ -3021,7 +3115,7 @@ prepare_bep_eligibility() {
       | select(.hinted or ($event_has_mappable_output | not))
 	      | . as $ref
 	      | .remote[]?
-	      | "\($label)\t\(($ref.keys[0] // ""))\t\(.)\tremote_only"
+	      | "\($target_label)\t\(($ref.keys[0] // ""))\t\(.)\tremote_only"
 		    ' "$resolved_bep" >"$tmp_remote"; then
       if optional_bep_unavailable "failed to parse BEP remote-only outputs: $resolved_bep"; then
         return 0
@@ -3053,8 +3147,8 @@ prepare_bep_eligibility() {
 	      select(.id.testResult? != null or .id.test_result? != null)
       | (.testResult // .test_result // {}) as $result
       | (.id.testResult // .id.test_result // {}) as $id
-      | ($id.label // empty) as $label
-      | select($label != "")
+      | ($id.label // empty) as $target_label
+      | select($target_label != "")
       | ((field($result; "cachedLocally"; "cached_locally") // false) == true) as $cached_local
       | ((field((field($result; "executionInfo"; "execution_info") // {}); "cachedRemotely"; "cached_remotely") // false) == true) as $cached_remote
       | select(($cached_local or $cached_remote) | not)
@@ -3072,7 +3166,7 @@ prepare_bep_eligibility() {
           ([ $key_candidates[]? | test_outputs_key | select(. != "") ] | length) == 0 and
           ([ $raw_candidates[]? | select(remote_only_reference) ] | length) == 0
         )
-      | $label
+      | $target_label
 	    ' "$resolved_bep" >"$tmp_missing"; then
       if optional_bep_unavailable "failed to parse BEP missing output mappings: $resolved_bep"; then
         return 0
@@ -3094,6 +3188,7 @@ prepare_bep_eligibility() {
 	    exit 2
 	  fi
 	  cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
+  filter_bep_freshness_to_expected_targets
 
   FRESHNESS_SELECTED_SOURCE="bep"
   FRESHNESS_ELIGIBILITY_ENABLED=1
@@ -3119,6 +3214,7 @@ merge_staged_bep_freshness() {
     LC_ALL=C sort -u -o "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
     cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
   fi
+  filter_bep_freshness_to_expected_targets
   if [[ -n "$STAGED_REMOTE_CLEARANCES_FILE" && -s "$STAGED_REMOTE_CLEARANCES_FILE" && -s "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" ]]; then
     local filtered_remote
     filtered_remote="$(mktemp "$TMP_PAYLOAD_DIR/freshness_remote_filtered.XXXXXX" 2>/dev/null || true)"
@@ -3138,6 +3234,29 @@ merge_staged_bep_freshness() {
       exit 2
     fi
   fi
+}
+
+validate_expected_target_coverage() {
+  (( EXPECTED_TARGETS_CONFIGURED == 1 )) || return 0
+  [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" ]] || return 0
+
+  local label
+  while IFS= read -r label; do
+    [[ -n "$label" ]] || continue
+    if grep -Fq "$label"$'\t' "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" 2>/dev/null ||
+        grep -Fq "$label"$'\t' "$FRESHNESS_CACHED_OUTPUTS_FILE" 2>/dev/null; then
+      continue
+    fi
+    if grep -Fq "$label"$'\t' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" 2>/dev/null; then
+      continue
+    fi
+    if grep -Fxq "$label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
+      log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference)"
+    else
+      log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target)"
+    fi
+    exit 2
+  done <"$EXPECTED_TARGETS_RESOLVED_FILE"
 }
 
 validate_bep_remote_only_outputs() {
@@ -3222,13 +3341,13 @@ prepare_execution_log_eligibility() {
     select((.mnemonic // "") == "TestRunner")
     | select((.cacheHit // false) != true)
     | select((((.runner // "") | ascii_downcase | contains("cache hit"))) | not)
-    | (.targetLabel // empty) as $label
-    | select($label != "")
+    | (.targetLabel // empty) as $target_label
+    | select($target_label != "")
     | outputs[]?
     | select(type == "string")
     | test_output_key as $output_key
     | select($output_key != "")
-    | "\($label)\t\($output_key)"
+    | "\($target_label)\t\($output_key)"
   ' "$resolved_log" | LC_ALL=C sort -u >"$EXECUTION_ELIGIBLE_OUTPUTS_FILE"; then
     log "error: failed to parse execution log JSON: $resolved_log"
     exit 2
@@ -3404,6 +3523,47 @@ test_output_dir_is_freshness_eligible() {
 	    log_freshness_skip_once "$outputs_dir" "no fresh $FRESHNESS_SELECTED_SOURCE result matched target $target_label output $output_key"
 	  fi
   return 1
+}
+
+mark_fresh_output_handled() {
+  local outputs_dir="$1"
+  local target_label output_key pair
+  [[ -n "$HANDLED_FRESH_OUTPUTS_FILE" ]] || return 0
+  target_label="$(test_output_target_label "$outputs_dir")"
+  output_key="$(test_output_dir_key "$outputs_dir")"
+  [[ -n "$target_label" && -n "$output_key" ]] || return 0
+  pair="$target_label"$'\t'"$output_key"
+  if [[ -n "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" ]] &&
+      grep -Fxq "$pair" "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" 2>/dev/null; then
+    printf '%s\n' "$pair" >>"$HANDLED_FRESH_OUTPUTS_FILE"
+  fi
+}
+
+validate_fresh_outputs_handled() {
+  [[ "$FAIL_ON_ERROR" == "1" && "$FRESHNESS_SELECTED_SOURCE" == "bep" ]] || return 0
+  local fresh_output_count handled_payload_count missing_output
+  fresh_output_count="$(report_count_lines_file "${FRESHNESS_ELIGIBLE_OUTPUTS_FILE:-}")"
+  if (( EXPECTED_TARGETS_CONFIGURED == 1 )); then
+    LC_ALL=C sort -u -o "$HANDLED_FRESH_OUTPUTS_FILE" "$HANDLED_FRESH_OUTPUTS_FILE"
+    missing_output="$(comm -23 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$HANDLED_FRESH_OUTPUTS_FILE" | head -n 1 || true)"
+    if [[ -n "$missing_output" ]]; then
+      log "error: fresh expected test output produced no uploadable payloads: $missing_output"
+      exit 1
+    fi
+    return 0
+  fi
+  handled_payload_count=$((
+      REPORT_TESTS_PROCESSED +
+      REPORT_COVERAGE_PROCESSED +
+      REPORT_TELEMETRY_PROCESSED +
+      REPORT_TESTS_FAILED +
+      REPORT_COVERAGE_FAILED +
+      REPORT_TELEMETRY_FAILED
+  ))
+  if (( fresh_output_count > 0 && handled_payload_count == 0 )); then
+    log "error: BEP reported $fresh_output_count fresh test output(s), but none produced uploadable payloads"
+    exit 1
+  fi
 }
 
 test_output_dir_is_execution_eligible() {
@@ -4788,6 +4948,7 @@ upload_all_tests() {
         while IFS= read -r f; do
             [[ -f "$f" ]] || continue
             log "error: raw msgpack test payload is not supported in Bazel file mode: $f"
+            mark_fresh_output_handled "$outputs_dir"
             ((++failed))
             ((++REPORT_TESTS_FAILED))
             ((++UPLOAD_FAILURES))
@@ -4811,10 +4972,12 @@ upload_all_tests() {
             if (( DRY_RUN == 1 )); then
                 if dry_run_single_test "$f"; then
                     log "dry-run kept test payload: $f"
+                    mark_fresh_output_handled "$outputs_dir"
                     ((++total))
                     ((++REPORT_TESTS_PROCESSED))
                 else
                     log "warning: failed to dry-run validate $f"
+                    mark_fresh_output_handled "$outputs_dir"
                     ((++failed))
                     ((++REPORT_TESTS_FAILED))
                     ((++UPLOAD_FAILURES))
@@ -4824,6 +4987,7 @@ upload_all_tests() {
             REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_test "$f"; then
                 log "uploaded test payload: $f"
+                mark_fresh_output_handled "$outputs_dir"
                 cleanup_file "$f"
                 ((++total))
                 ((++REPORT_TESTS_PROCESSED))
@@ -4831,6 +4995,7 @@ upload_all_tests() {
                 # Keep uploading subsequent files to maximize successful delivery
                 # even when one payload is malformed or temporarily rejected.
                 log "warning: failed to upload $f"
+                mark_fresh_output_handled "$outputs_dir"
                 ((++failed))
                 ((++REPORT_TESTS_FAILED))
                 ((++UPLOAD_FAILURES))
@@ -4873,6 +5038,7 @@ upload_all_coverage() {
             fi
             if (( DRY_RUN == 1 )); then
                 log "dry-run kept coverage payload: $f"
+                mark_fresh_output_handled "$outputs_dir"
                 ((++total))
                 ((++REPORT_COVERAGE_PROCESSED))
                 continue
@@ -4880,6 +5046,7 @@ upload_all_coverage() {
             REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_coverage "$f"; then
                 log "uploaded coverage payload: $f"
+                mark_fresh_output_handled "$outputs_dir"
                 cleanup_file "$f"
                 ((++total))
                 ((++REPORT_COVERAGE_PROCESSED))
@@ -4887,6 +5054,7 @@ upload_all_coverage() {
                 # Coverage failures are tracked but non-fatal per-file; final
                 # exit code reflects aggregate failure count after both passes.
                 log "warning: failed to upload $f"
+                mark_fresh_output_handled "$outputs_dir"
                 ((++failed))
                 ((++REPORT_COVERAGE_FAILED))
                 ((++UPLOAD_FAILURES))
@@ -4931,6 +5099,7 @@ upload_all_telemetry() {
             fi
             if (( DRY_RUN == 1 )); then
                 log "dry-run kept telemetry payload: $f"
+                mark_fresh_output_handled "$outputs_dir"
                 ((++total))
                 ((++REPORT_TELEMETRY_PROCESSED))
                 continue
@@ -4938,11 +5107,13 @@ upload_all_telemetry() {
             REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
+                mark_fresh_output_handled "$outputs_dir"
                 cleanup_file "$f"
                 ((++total))
                 ((++REPORT_TELEMETRY_PROCESSED))
             else
                 log "warning: failed to upload $f"
+                mark_fresh_output_handled "$outputs_dir"
                 ((++failed))
                 ((++REPORT_TELEMETRY_FAILED))
                 ((++UPLOAD_FAILURES))
@@ -4985,12 +5156,15 @@ upload_all_telemetry() {
     fi
 }
 
+prepare_expected_targets
 prepare_freshness_eligibility
 merge_staged_bep_freshness
 validate_bep_remote_only_outputs
+validate_expected_target_coverage
 upload_all_tests
 upload_all_coverage
 upload_all_telemetry
+validate_fresh_outputs_handled
 
 # Exit with appropriate code based on upload results
 if (( UPLOAD_FAILURES > 0 )); then

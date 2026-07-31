@@ -10,10 +10,37 @@ This product includes software developed at Datadog
 
 Examples below assume the generated repository is named
 `test_optimization_data`. If you used a different `name`, replace labels and
-`bazel sync --only=<repo_name>` accordingly.
+repository names accordingly. For config-gated Go and Python repositories,
+include `--config=test-optimization` in sync, test, doctor, and uploader
+commands. Other companions retain their current activation contract.
 
 If Bazel reports that sync requires WORKSPACE support, add
 `--enable_workspace` to sync commands in this document.
+
+## Test Optimization config and disabled mode
+
+For config-gated Go and Python onboarding,
+`--config=test-optimization` is the single user-facing enablement switch. Both
+languages set the metadata repository environment:
+
+```bazelrc
+common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+```
+
+Go additionally sets the existing `rules_go` Orchestrion flag:
+
+```bazelrc
+build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+```
+
+When the config is omitted, the public Go extension's config-gated default and
+repositories explicitly configured with `enabled_by_env = True` generate the
+documented no-fetch stubs. Go aliases select local empty targets; Python keeps
+the normal consumer runner without Test Optimization metadata or payload
+wiring. Python-only consumers omit the Go line. For WORKSPACE Go, replace
+`@rules_go` with the apparent repository name used by that workspace. Java,
+NodeJS, .NET, and Ruby retain their existing enablement contract in this
+release.
 
 ## Quick triage map
 
@@ -27,7 +54,7 @@ If Bazel reports that sync requires WORKSPACE support, add
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | CI failure requires log archaeology | archive the support bundle from the failing run | Collect diagnostic reports |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
-| Go build fails with a tracer version mismatch | `dd_trace_go_version`, `dd_trace_go_versions`, `--dd-trace-go-version`, local `go.mod` pins | Go tracer version drift |
+| Go build fails with a tracer version mismatch | `dd_trace_go_pin_files`, explicit version escape hatches, local `go.mod`/`go.sum` | Go tracer version drift |
 | Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
 | WORKSPACE archive pins fail after a PR was squash-merged | generated pins commit reachability and archive SHA | Published Go pins |
 | Private/internal WORKSPACE fetch returns 404 | SSH git or authenticated archive access | Private repository fetch |
@@ -41,7 +68,7 @@ from the same run. For the simplest customer ask after tests have already run,
 use the doctor directly:
 
 ```bash
-bazel run //:dd_test_optimization_doctor -- \
+bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
   --support-bundle .topt/reports/dd-test-optimization-support.zip
 ```
 
@@ -207,10 +234,10 @@ values automatically.
 
 2. **Force refetch only when intentional** with a cache-busting salt:
    ```bash
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT="$(date +%s)"
    ```
    ```powershell
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT="$(Get-Date -UFormat %s)"
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT="$(Get-Date -UFormat %s)"
    ```
    Do not put `FETCH_SALT` in `.bazelrc`, `bazel test`, doctor, or uploader
    commands. It deliberately breaks the repository-rule cache key and should be
@@ -237,6 +264,92 @@ values automatically.
        debug = True,  # Verbose logging
    )
    ```
+   Preserve the repository's existing `enabled_by_env` value; enabling debug
+   logging must not change its activation contract.
+
+## Manifest-driven managed runs
+
+These checks apply only to the automatic Go/Python path. Static single-service
+and static multi-service consumers do not need an invocation manifest.
+
+### Enabled run reports a missing manifest
+
+The aggregate repository intentionally fails before HTTP when enabled without
+the command-owned manifest. Run the consumer repository's managed Test
+Optimization command. Do not add the internal manifest handoff to `.bazelrc`
+or ordinary CI jobs.
+
+If a direct `bazel test --config=test-optimization` bypasses the managed
+command, the failure is expected: target discovery must run first so the
+repository rule receives exact targets and runtime contexts.
+
+### Doctor or uploader triggers another metadata fetch
+
+One managed command invocation must pass the same temporary manifest path to
+test, doctor, uploader dry-run, and optional upload. If the request log shows
+another fetch during a post-test phase, check that the command did not create a
+new temporary directory or change
+`DD_TEST_OPTIMIZATION_SERVICES_MANIFEST` between child Bazel processes.
+
+A later managed command intentionally creates a new manifest path and fetches
+current backend state once. If its selected settings/module files are
+unchanged, tests should remain Bazel cache hits even though
+`telemetry_facts.json` contains new request timings.
+
+### Manifest is malformed or unsupported
+
+The error names the schema field rejected before metadata requests. Verify
+that the consumer resolver emitted:
+
+- schema version `1`;
+- canonical local labels such as `//pkg:test`, not patterns or external labels;
+- unique, used contexts;
+- only Go/Python runtimes;
+- deterministic context keys matching service and runtime;
+- `application` or `domain_fallback` for every target.
+
+Fix the resolver or its target input. Do not hand-edit the temporary manifest.
+
+### Unsupported target is absent from the aggregate mapping
+
+Only targets recognized by the consumer's central Go/Python macro policy are
+eligible. A target absent from `topt_data_by_target` correctly keeps its raw
+behavior. Inspect the managed command summary for unsupported labels and
+confirm that the target is a runtime test, not a build-only companion.
+
+Java, NodeJS, .NET, and Ruby are intentionally outside automatic manifest
+onboarding in this release.
+
+### Service or context collision
+
+The resolver and repository reject two logical services that sanitize to the
+same context key, conflicting module paths or runtime versions for one
+service/runtime, duplicate labels, and one label assigned to multiple
+contexts. Change the consumer's deterministic naming grammar or split the
+conflicting runtime contexts; do not append positional suffixes whose result
+depends on input order.
+
+### Doctor expected-target mismatch
+
+The aggregate `:expected_targets` file is exact. A mismatch means the execution
+set, BEP inputs, or doctor wiring does not match the manifest. The managed
+command must test the fully expanded labels from the same discovery phase and
+pass that invocation's BEP file to doctor.
+
+Cached tests do not emit fresh payloads. With configured expected targets,
+strict BEP freshness accepts those cache hits as covered, validates no stale
+local outputs for them, and lets uploader treat an all-cached invocation as a
+no-op. If a cached target is reported as missing instead, verify that doctor
+received the BEP from the exact matching `bazel test` invocation. Use separate
+cache-isolation tests when validating action-key behavior.
+
+### Disabled mode or enabled bootstrap invokes host Go
+
+Disabled manifest sync must not read the manifest, contact Datadog, or resolve
+the real Orchestrion tool repository. Enabled Go bootstrap uses the
+Bazel-managed Go SDK and must not depend on a host `go` binary. If a host-Go
+sentinel fires, verify the patched `rules_go` profile, generated SDK wiring,
+and central wrapper before installing Go on the host.
 
 ## Published Go pins
 
@@ -378,10 +491,10 @@ global root `BUILD.bazel` wiring unrelated to Test Optimization.
 3. **Check DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES**: The macro should set this
    to `"true"`. Verify your test environment:
    ```bash
-   bazel test //your:test --test_output=all 2>&1 | grep DD_TEST_OPTIMIZATION
+   bazel test --config=test-optimization //your:test --test_output=all 2>&1 | grep DD_TEST_OPTIMIZATION
    ```
    ```powershell
-   bazel test //your:test --test_output=all *>&1 | Select-String "DD_TEST_OPTIMIZATION"
+   bazel test --config=test-optimization //your:test --test_output=all *>&1 | Select-String "DD_TEST_OPTIMIZATION"
    ```
    PowerShell uses `*>&1` (not Bash `2>&1`) to merge stderr/stdout.
 
@@ -454,7 +567,10 @@ fails before upload.
    importpath that `rules_go` uses, or set `module_label_override` only when the
    module label is intentionally known. `module` and `module_override` are valid
    successful selections; `full_bundle_disabled` is valid when backend module
-   data is disabled.
+   data is disabled. Generic inferred/derived selection may intentionally use
+   the canonical full bundle and report `full_bundle_no_match`; the doctor
+   rejects that state by default, so only an intentionally generic consumer
+   should set `forbid_full_bundle_no_match = False`.
 
 6. **Expected target output missing**: Run the exact target listed in
    `expected_targets` before the doctor. With remote execution or remote cache,
@@ -739,12 +855,27 @@ module version.
    declarations after `go.mod` or `go.sum` changes so Bazel and the Go module
    graph agree.
 
-3. **If you wire Orchestrion manually**, make sure both places match:
-   - `orchestrion.from_source(..., dd_trace_go_version = "<version>")`
-   - or `orchestrion.from_source(..., dd_trace_go_versions = {...})`
-   - the effective local module graph resolved from `go.mod` and `go.sum`
+3. **If you wire Orchestrion manually**, use the checked-in module as the
+   normal source of truth:
+   ```bzl
+   orchestrion.from_source(
+       dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"],
+       go_sdk_root = "@test_optimization_go_sdk//:ROOT",
+       go_sdk_version = "<go-version>",
+       version = "<orchestrion-version>",
+   )
+   ```
+   Export both root files from their BUILD package. Bazel resolves all
+   supported direct and transitive tracer modules with hermetic Go and
+   `-mod=readonly`; it does not update `go.sum`.
 
-4. **If you omitted the version entirely**, remember the default is
+4. **If pin-file resolution reports an absent module, unsupported replacement,
+   or read-only failure**, fix the module with its normal dependency workflow.
+   If that graph intentionally cannot use pin-file mode, configure the exact
+   `dd_trace_go_versions` map as an escape hatch. Do not combine pin files with
+   either explicit version field.
+
+5. **If you omitted every selection mode**, remember the legacy default is
    `v2.9.0`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one
@@ -752,6 +883,40 @@ set of tracer versions while the local Go module still resolves another.
 
 `orchestrion.tool.go` still matters, but as required import/config wiring for
 Orchestrion, not as the source of truth for tracer versions.
+
+## Enabled Orchestrion cannot find Go
+
+**Symptom**:
+
+```text
+Could not find 'go' binary. Please ensure Go is installed.
+```
+
+**Cause**: the workspace uses Orchestrion wiring generated before the
+Bazel-managed SDK contract was added, or a manual block omitted the SDK root
+and version. Disabled mode still avoids the real repository, but enabled mode
+must compile the patched Orchestrion binary on a cold cache miss.
+
+**Solution**:
+
+1. For Bzlmod, rerun guided bootstrap with the workspace's real Go toolchain
+   version:
+   ```bash
+   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+     --guided \
+     --service <datadog-service> \
+     --runtime-version <go-version> \
+     --write-bazelrc
+   ```
+2. For WORKSPACE, regenerate the reviewed snippet with
+   `--workspace-mode --print-workspace-snippet --runtime-version <go-version>`.
+3. Verify the generated SDK version equals the version passed to the
+   repository's central `go_register_toolchains(...)` call and the Test
+   Optimization sync repository.
+
+Do not install Go on the analysis host as the fix. The supported wiring uses
+the Bazel-managed SDK on a cache miss and can restore a compatible warm
+Orchestrion bootstrap before materializing that SDK.
 
 ## WORKSPACE go_repository drift
 
@@ -869,8 +1034,8 @@ client-side Bazel behavior.
   - PowerShell: set `$env:DD_API_KEY` and `$env:DD_SITE` first, then run `bazel run --config=test-optimization //:dd_upload_payloads`
 - Quote paths containing spaces and avoid `eval`-style wrappers.
 - For refetch debugging, use:
-  - `bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
-  - if required by workspace mode: `bazel sync --enable_workspace --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
+  - `bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
+  - if required by workspace mode: `bazel sync --enable_workspace --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp>`
 
 ## Getting help
 
@@ -878,10 +1043,10 @@ If issues persist:
 
 1. **Enable debug mode** and capture full output:
    ```bash
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> 2>&1 | tee debug.log
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> 2>&1 | tee debug.log
    ```
    ```powershell
-   bazel sync --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> *>&1 | Tee-Object -FilePath debug.log
+   bazel sync --config=test-optimization --only=<repo_name> --repo_env=FETCH_SALT=<timestamp> *>&1 | Tee-Object -FilePath debug.log
    ```
 
 2. **Collect diagnostic info**:

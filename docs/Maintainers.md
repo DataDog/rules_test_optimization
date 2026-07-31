@@ -30,6 +30,11 @@ This document is for contributors and maintainers of
 - Integration harness:
   - Linux/macOS: `tools/tests/integration/run_mock_server_tests.sh`
   - Windows: `tools/tests/integration/run_mock_server_tests.ps1`
+- Manifest-driven integration:
+  - Full Go/Python/cache/doctor/uploader:
+    `python3 tools/tests/integration/run_manifest_sync_tests.py --mode full`
+  - Windows disabled-path parsing:
+    `python tools/tests/integration/run_manifest_sync_tests.py --mode disabled`
 - Hermetic lane parity (local smoke):
   - Run the same commands with sandbox/network-blocking flags used in CI.
 - Version alignment guard:
@@ -59,6 +64,38 @@ This document is for contributors and maintainers of
   do not add placeholder language packages under `tools/<language>`.
   Language-specific orchestration belongs in `modules/<language>/`.
 
+## Manifest-driven API ownership
+
+- `tools/core/test_optimization_manifest_sync.bzl` owns strict schema
+  validation, deterministic normalization, aggregate repository rendering, and
+  per-context materialization for Go/Python.
+- `tools/core/test_optimization_sync.bzl` owns shared single-context fetch and
+  materialization. Static sync must continue to call the same implementation
+  without behavior drift.
+- Companion modules own explicit-label consumption and language analysis.
+- Consumer repositories own target discovery, affected-target expansion,
+  service-name grammar, managed-command orchestration, and rollout policy.
+- Do not add a committed target/service mapping, Gazelle integration,
+  CODEOWNERS gate, or pipeline model to the Rule.
+
+Compatibility requirements:
+
+- static single-service and static multi-service APIs remain supported;
+- disabled manifest resolution ignores the manifest and performs no HTTP or
+  local Git discovery;
+- enabled resolution validates the complete manifest before HTTP;
+- equivalent manifests render byte-identical public surfaces;
+- target action inputs stay narrowed to one context/module where selection
+  succeeds;
+- aggregate doctor/uploader contexts retain stable virtual keys;
+- automatic manifest onboarding remains Go/Python-only until another companion
+  implements and proves the same contract.
+
+Changes spanning this contract are validated in order: Rule unit/integration
+tests, consumer-style `_tests` WORKSPACE/Bzlmod fixtures, then the concrete
+consumer repository. Public behavior changes also require a complete
+first-party documentation and agent-skill audit.
+
 ## Adding a language companion module
 
 Use this checklist when adding `dd_topt_<language>_test` support.
@@ -84,7 +121,11 @@ Use this checklist when adding `dd_topt_<language>_test` support.
        identifier -> full bundle
      - module label resolution should match `module_<sanitized>` names from sync
        outputs
-   - Keep fallback-to-full-bundle behavior non-fatal.
+   - Keep inferred/derived fallback-to-full-bundle behavior non-fatal. When
+     synchronized metadata exposes module groups, require an explicit
+     identifier or module-label override to match one so configuration mistakes
+     fail analysis instead of silently selecting unrelated metadata. Preserve
+     the canonical full bundle when no module groups exist.
 
 3. **Companion module dependency policy**
    - Keep root core module (`datadog-rules-test-optimization`) free of
@@ -222,6 +263,9 @@ Notes:
   `runtests.sh` scripts.
 - CI runs example `runtests.sh` scripts in `RUNTESTS_DRY_RUN=1` mode to verify
   wiring without requiring Datadog credentials in PR checks.
+- CI runs the full manifest integration on Linux and the disabled manifest path
+  on Windows. Keep the Linux cache sequence evidence-based through BEP rather
+  than test output text.
 - Repository tracks both `.bazelversion` and `MODULE.bazel.lock` in git to
   reduce local/CI drift.
 - `.bazelversion` is intentionally duplicated at repository root and companion

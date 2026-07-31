@@ -9,6 +9,10 @@ This product includes software developed at Datadog
 # Validation Checklist
 
 Use this checklist before calling a `rules_go` upstream migration complete.
+When the Rule also supports manifest-managed Go targets, verify the selected
+upstream still passes no-host-Go disabled/enabled bootstrap coverage. Manifest
+schema, service derivation, and target discovery remain outside this migration
+and must not be modified here.
 
 ## Metadata And Inventory
 
@@ -66,6 +70,11 @@ Expected:
 
 - normal mode passes
 - hermetic mode passes
+- pin-file mode resolves direct and transitive supported dd-trace-go modules
+  from `go.mod`/`go.sum` with host Go blocked
+- missing supported modules and pin-file/explicit-version conflicts fail with
+  actionable diagnostics
+- unchanged pin-file content reuses the stable bootstrap cache
 - structural `aquery` assertions for offline module proxy wiring pass
 - payload files are written under `bazel-testlogs`
 - payload metadata does not show unexpected fallback states

@@ -77,6 +77,10 @@ def selector_payload_fixture_targets():
         marker = "module:explicit",
     )
     _payload_marker(
+        name = "module_manifest_context_example_com_explicit_pkg",
+        marker = "module:explicit-namespaced",
+    )
+    _payload_marker(
         name = "module_example_com_embed_pkg",
         marker = "module:embed",
     )
@@ -112,7 +116,11 @@ def selector_payload_fixture_targets():
         deps = [":deps_leaf"],
     )
 
-def selector_explicit_precedence_target(name, tags = None):
+def selector_explicit_precedence_target(
+        name,
+        tags = None,
+        module_groups = None,
+        module_group_names = None):
     """explicit_importpath wins over embed-derived and fallback importpaths."""
     topt_go_payloads_selector(
         name = name,
@@ -120,7 +128,8 @@ def selector_explicit_precedence_target(name, tags = None):
         embeds = [":embed_wrapper"],
         fallback_importpath = "example.com/fallback/pkg",
         full_files = ":full_payload",
-        module_groups = _COMMON_MODULE_GROUPS,
+        module_group_names = module_group_names or [],
+        module_groups = module_groups or _COMMON_MODULE_GROUPS,
         include_per_module = True,
         tags = tags,
     )
@@ -296,6 +305,13 @@ def _selector_explicit_precedence_test_impl(ctx):
     _assert_selected(env, target, "module_example_com_explicit_pkg")
     return analysistest.end(env)
 
+def _selector_explicit_namespaced_test_impl(ctx):
+    """Logical module names select physical context-namespaced labels."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    _assert_selected(env, target, "module_manifest_context_example_com_explicit_pkg")
+    return analysistest.end(env)
+
 def _selector_embed_precedence_test_impl(ctx):
     """Implement selector embed precedence test impl behavior."""
     env = analysistest.begin(ctx)
@@ -374,6 +390,9 @@ def _selector_omits_flaky_tests_test_impl(ctx):
 
 selector_explicit_precedence_test = analysistest.make(
     _selector_explicit_precedence_test_impl,
+)
+selector_explicit_namespaced_test = analysistest.make(
+    _selector_explicit_namespaced_test_impl,
 )
 selector_embed_precedence_test = analysistest.make(
     _selector_embed_precedence_test_impl,

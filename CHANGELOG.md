@@ -15,6 +15,56 @@ versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Added `test_optimization_manifest_sync` and
+  `test_optimization_manifest_sync_extension` for consumer-managed,
+  invocation-scoped Go/Python monorepo onboarding. The new aggregate
+  repository exports target-to-context data, narrow per-context/per-module
+  labels, bundled contexts, and a generated exact-target file without requiring
+  a checked-in service registry.
+- Added dynamic exact-target input support to the doctor and convenience
+  target macro, plus integration coverage for disabled behavior, deterministic
+  manifests, no-host-Go execution, multi-context enrichment, and metadata
+  cache isolation.
+- Reusable Go WORKSPACE helpers for config-gated metadata sync and fixed-name
+  Orchestrion repository declaration, matching the public Go Bzlmod onboarding
+  contract.
+- Added a non-default `rules_go` v0.62.0 support line with the maintained
+  Orchestrion integration and public consumer patch profile.
+
+### Changed
+- The public Go Bzlmod extension now defaults `enabled_by_env` to `True`, so
+  omitting `--config=test-optimization` disables metadata sync and Orchestrion
+  together while the named config enables both.
+- Config-gated Go and Python macros now consume disabled sync exports as real
+  runtime no-ops while preserving the consumer's ordinary public test target.
+  Go emits the public raw `go_test`; Python keeps the selected runner and applies
+  the CI Visibility runtime kill switch.
+- Python payload selection now derives the normal module identifier from runtime
+  and Bazel package metadata, keeping explicit `module_identifier` values for
+  repository-specific exceptions. When module groups are available, explicit
+  identifiers and module-label overrides must match one; inferred or derived
+  misses and metadata with no module groups retain the canonical full-bundle
+  fallback.
+- The Go WORKSPACE bootstrap template now generates one central config-gated
+  `dd_go_test` wrapper. The former optimized wrapper name is a compatibility
+  alias to that same function, not a second rollout path.
+- Go consumers upgrading from `1.2.0` should rerun `dd_topt_go_bootstrap` with
+  `--write-bazelrc` before or with the Rule upgrade. The managed `.bazelrc`
+  update is idempotent and adds both metadata and Orchestrion activation to the
+  `test-optimization` config. Consumers that deliberately retain manual
+  always-enabled metadata may set `enabled_by_env = False`, but must also keep
+  the Orchestrion build setting enabled.
+
+### Fixed
+- Go test analysis now fails with migration guidance when Test Optimization
+  metadata is enabled but the global Orchestrion build setting is disabled,
+  preventing a partial upgrade from silently dropping instrumentation.
+- Config-disabled Go analysis now resolves stable empty Orchestrion repository
+  targets before host-Go discovery or source fetching, so ordinary targets do
+  not require Go to be installed merely because the integration is declared.
+
 ## [1.2.0] - 2026-06-03
 
 ### Added

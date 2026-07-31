@@ -7,6 +7,10 @@
 # Unit tests for uploader template rendering (placeholder and brace handling).
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
+    "//tools/core:test_optimization_context_utils.bzl",
+    "dynamic_context_path_matches_key_for_tests",
+)
+load(
     "//tools/core:test_optimization_uploader.bzl",
     "apparent_repo_key_from_label_text_or_fail_for_tests",
     "bash_curl_retry_flags_for_tests",
@@ -103,6 +107,33 @@ def _context_repo_key_parsing_test(ctx):
     return unittest.end(env)
 
 context_repo_key_parsing_test = unittest.make(_context_repo_key_parsing_test)
+
+def _dynamic_context_path_validation_test(ctx):
+    env = unittest.begin(ctx)
+    asserts.true(
+        env,
+        dynamic_context_path_matches_key_for_tests(
+            "../test_optimization_data/contexts/payments_api__go/.testoptimization/context.json",
+            "payments_api__go",
+        ),
+    )
+    asserts.true(
+        env,
+        dynamic_context_path_matches_key_for_tests(
+            "external\\test_optimization_data\\custom\\payments_worker__python\\.testoptimization\\context.json",
+            "payments_worker__python",
+        ),
+    )
+    asserts.false(
+        env,
+        dynamic_context_path_matches_key_for_tests(
+            "../test_optimization_data/contexts/wrong__go/.testoptimization/context.json",
+            "payments_api__go",
+        ),
+    )
+    return unittest.end(env)
+
+dynamic_context_path_validation_test = unittest.make(_dynamic_context_path_validation_test)
 
 def _legacy_context_direct_file_fallback_test_impl(ctx):
     """Validate a direct context.json file still enables single-context upload."""

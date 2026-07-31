@@ -41,6 +41,18 @@ run_example_runtests() {
   # Handle run cmd behavior.
   run_cmd() {
     if [[ "${RUNTESTS_DRY_RUN:-0}" == "1" ]]; then
+      local arg
+      local has_test_optimization_config=0
+      for arg in "$@"; do
+        if [[ "$arg" == "--config=test-optimization" ]]; then
+          has_test_optimization_config=1
+          break
+        fi
+      done
+      if [[ "$has_test_optimization_config" -ne 1 ]]; then
+        echo "error: dry-run command is missing --config=test-optimization: $*" >&2
+        return 1
+      fi
       echo "[dry-run] $*"
       return 0
     fi
@@ -48,13 +60,13 @@ run_example_runtests() {
   }
 
   echo "--- non-hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs --build_event_json_file="$non_hermetic_bep" || test_status=$?
+  run_cmd "${bazelw}" test --config=test-optimization //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs --build_event_json_file="$non_hermetic_bep" || test_status=$?
 
   echo "--- hermetic run"
-  run_cmd "${bazelw}" test //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --config=hermetic --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs --build_event_json_file="$hermetic_bep" || test_status=$?
+  run_cmd "${bazelw}" test --config=test-optimization --config=hermetic //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs --build_event_json_file="$hermetic_bep" || test_status=$?
 
   echo "--- validating payloads"
-  run_cmd "${bazelw}" run //:dd_test_optimization_doctor -- "${bep_args[@]}" || doctor_status=$?
+  run_cmd "${bazelw}" run --config=test-optimization //:dd_test_optimization_doctor -- "${bep_args[@]}" || doctor_status=$?
   if [[ "$doctor_status" -ne 0 ]]; then
     if [[ "$test_status" -ne 0 ]]; then
       return "$test_status"
@@ -63,7 +75,7 @@ run_example_runtests() {
   fi
 
   echo "--- validating upload enrichment"
-  run_cmd "${bazelw}" run //:dd_upload_payloads -- "${bep_args[@]}" --dry-run --validate-enrichment || dry_run_status=$?
+  run_cmd "${bazelw}" run --config=test-optimization //:dd_upload_payloads -- "${bep_args[@]}" --dry-run --validate-enrichment || dry_run_status=$?
   if [[ "$dry_run_status" -ne 0 ]]; then
     if [[ "$test_status" -ne 0 ]]; then
       return "$test_status"
@@ -73,7 +85,7 @@ run_example_runtests() {
 
   echo "--- uploading payloads"
   # Requires DD_API_KEY and DD_SITE environment variables.
-  DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run //:dd_upload_payloads -- "${bep_args[@]}" || upload_status=$?
+  DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run --config=test-optimization //:dd_upload_payloads -- "${bep_args[@]}" || upload_status=$?
 
   if [[ "$test_status" -ne 0 ]]; then
     return "$test_status"

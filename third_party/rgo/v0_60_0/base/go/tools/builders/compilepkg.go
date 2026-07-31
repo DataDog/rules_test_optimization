@@ -1201,8 +1201,10 @@ func modulePackageCommandEnv(goenv *env, exportRoot string) ([]string, error) {
 	env = setEnv(env, "GOWORK", "off")
 	env = setEnv(env, orchestrionJobserverURLEnvVar, "")
 	env = setEnv(env, orchestrionSkipPinEnvVar, "")
-	if goenv.goroot != "" {
-		env = setEnv(env, "GOROOT", abs(goenv.goroot))
+	if goenv.sdk != "" {
+		// Module `go list` commands need the complete SDK root so Go can find
+		// its tools. The woven stdlib remains available through GOCACHE.
+		env = setEnv(env, "GOROOT", abs(goenv.sdk))
 	}
 
 	goBin := filepath.Join(abs(goenv.sdk), "bin")

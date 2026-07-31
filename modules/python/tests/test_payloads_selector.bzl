@@ -74,6 +74,10 @@ def selector_payload_fixture_targets():
         marker = "module:explicit",
     )
     _payload_marker(
+        name = "module_manifest_context_example_python_explicit_pkg",
+        marker = "module:explicit-namespaced",
+    )
+    _payload_marker(
         name = "module_example_python_imports_pkg",
         marker = "module:imports",
     )
@@ -88,6 +92,10 @@ def selector_payload_fixture_targets():
     _payload_marker(
         name = "module_example_python_fallback_pkg",
         marker = "module:fallback",
+    )
+    _payload_marker(
+        name = "module_domains_ffe_apps_apis_query_validator_internal_validator_tests",
+        marker = "module:dd-source-prefixed-fallback",
     )
     _payload_marker(
         name = "module_custom_override",
@@ -109,7 +117,11 @@ def selector_payload_fixture_targets():
         deps = [":deps_leaf"],
     )
 
-def selector_explicit_precedence_target(name, tags = None):
+def selector_explicit_precedence_target(
+        name,
+        tags = None,
+        module_groups = None,
+        module_group_names = None):
     topt_py_payloads_selector(
         name = name,
         explicit_identifier = "example/python/explicit/pkg",
@@ -118,7 +130,8 @@ def selector_explicit_precedence_target(name, tags = None):
         attribute_candidates = ["example/python/attr/pkg"],
         fallback_identifier = "example/python/fallback/pkg",
         full_files = ":full_payload",
-        module_groups = _COMMON_MODULE_GROUPS,
+        module_group_names = module_group_names or [],
+        module_groups = module_groups or _COMMON_MODULE_GROUPS,
         include_per_module = True,
         tags = tags,
     )
@@ -184,6 +197,20 @@ def selector_no_match_fallback_target(name, tags = None):
         fallback_identifier = "example/python/no_match/pkg",
         full_files = ":full_payload",
         module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_prefixed_fallback_target(name, tags = None):
+    """Select a dd-source-style module path without falling back to full files."""
+    topt_py_payloads_selector(
+        name = name,
+        imports = [],
+        deps = [],
+        attribute_candidates = [],
+        fallback_identifier = "domains.ffe.apps.apis.query_validator.internal.validator.tests",
+        full_files = ":full_payload",
+        module_groups = [":module_domains_ffe_apps_apis_query_validator_internal_validator_tests"],
         include_per_module = True,
         tags = tags,
     )
@@ -298,6 +325,12 @@ def _selector_explicit_precedence_test_impl(ctx):
     _assert_selected(env, target, "module_example_python_explicit_pkg")
     return analysistest.end(env)
 
+def _selector_explicit_namespaced_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    _assert_selected(env, target, "module_manifest_context_example_python_explicit_pkg")
+    return analysistest.end(env)
+
 def _selector_imports_precedence_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
@@ -326,6 +359,12 @@ def _selector_no_match_fallback_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     _assert_selected(env, target, "full_payload")
+    return analysistest.end(env)
+
+def _selector_prefixed_fallback_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    _assert_selected(env, target, "module_domains_ffe_apps_apis_query_validator_internal_validator_tests")
     return analysistest.end(env)
 
 def _selector_include_disabled_test_impl(ctx):
@@ -367,6 +406,9 @@ def _selector_omits_flaky_tests_test_impl(ctx):
 selector_explicit_precedence_test = analysistest.make(
     _selector_explicit_precedence_test_impl,
 )
+selector_explicit_namespaced_test = analysistest.make(
+    _selector_explicit_namespaced_test_impl,
+)
 selector_imports_precedence_test = analysistest.make(
     _selector_imports_precedence_test_impl,
 )
@@ -381,6 +423,9 @@ selector_fallback_test = analysistest.make(
 )
 selector_no_match_fallback_test = analysistest.make(
     _selector_no_match_fallback_test_impl,
+)
+selector_prefixed_fallback_test = analysistest.make(
+    _selector_prefixed_fallback_test_impl,
 )
 selector_include_disabled_test = analysistest.make(
     _selector_include_disabled_test_impl,
