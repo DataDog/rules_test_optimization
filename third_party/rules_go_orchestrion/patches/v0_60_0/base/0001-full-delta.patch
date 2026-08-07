@@ -12795,10 +12795,10 @@ index 0000000..93f9e48
 +}
 diff --git a/go/tools/builders/orchestrion_cache.go b/go/tools/builders/orchestrion_cache.go
 new file mode 100644
-index 0000000..e4768cf
+index 0000000..746ac80
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_cache.go
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,276 @@
 +package main
 +
 +import (
@@ -12901,6 +12901,9 @@ index 0000000..e4768cf
 +			if err := os.RemoveAll(lockDir); err != nil && !os.IsNotExist(err) {
 +				return nil, fmt.Errorf("remove stale cache lock %s: %w", lockDir, err)
 +			}
++			continue
++		}
++		if !stale {
 +			continue
 +		}
 +		return nil, fmt.Errorf("timeout acquiring cache lock %s", lockDir)
@@ -13074,10 +13077,10 @@ index 0000000..e4768cf
 +}
 diff --git a/go/tools/builders/orchestrion_cache_test.go b/go/tools/builders/orchestrion_cache_test.go
 new file mode 100644
-index 0000000..4d2d016
+index 0000000..5bc0af2
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_cache_test.go
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,117 @@
 +package main
 +
 +import (
@@ -13162,6 +13165,24 @@ index 0000000..4d2d016
 +	if _, err := os.Stat(lockDir); !os.IsNotExist(err) {
 +		t.Fatalf("expected release to remove lock dir, stat err=%v", err)
 +	}
++}
++
++func TestAcquireCacheLockWaitsForActiveOwnerPastTimeout(t *testing.T) {
++	lockDir := filepath.Join(t.TempDir(), "cache.lock")
++	releaseOwner, err := tryAcquireCacheLock(lockDir)
++	if err != nil {
++		t.Fatalf("acquire owner lock: %v", err)
++	}
++	go func() {
++		time.Sleep(50 * time.Millisecond)
++		releaseOwner()
++	}()
++
++	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 20*time.Millisecond, time.Minute, 5*time.Millisecond)
++	if err != nil {
++		t.Fatalf("wait for active owner: %v", err)
++	}
++	releaseWaiter()
 +}
 +
 +func TestWriteFileAtomically(t *testing.T) {

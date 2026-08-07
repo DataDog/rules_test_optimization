@@ -102,6 +102,9 @@ func acquireCacheLockWithTimings(lockDir string, timeout, staleAfter, pollInterv
 			}
 			continue
 		}
+		if !stale {
+			continue
+		}
 		return nil, fmt.Errorf("timeout acquiring cache lock %s", lockDir)
 	}
 }

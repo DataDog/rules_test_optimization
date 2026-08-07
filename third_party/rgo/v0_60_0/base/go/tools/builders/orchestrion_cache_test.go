@@ -84,6 +84,24 @@ func TestAcquireCacheLockReplacesStaleLock(t *testing.T) {
 	}
 }
 
+func TestAcquireCacheLockWaitsForActiveOwnerPastTimeout(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "cache.lock")
+	releaseOwner, err := tryAcquireCacheLock(lockDir)
+	if err != nil {
+		t.Fatalf("acquire owner lock: %v", err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		releaseOwner()
+	}()
+
+	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 20*time.Millisecond, time.Minute, 5*time.Millisecond)
+	if err != nil {
+		t.Fatalf("wait for active owner: %v", err)
+	}
+	releaseWaiter()
+}
+
 func TestWriteFileAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "manifest.json")
 	if err := writeFileAtomically(path, []byte("payload\n"), 0o644); err != nil {
