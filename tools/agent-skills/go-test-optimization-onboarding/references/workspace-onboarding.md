@@ -270,7 +270,7 @@ dd_topt_go_orchestrion_tool_repo(
     ],
     go_sdk_root = "@go_sdk//:ROOT",
     go_sdk_version = "<go-version>",
-    version = "v1.9.0",
+    version = "v1.12.0",
 )
 
 # Call the repository's existing go_rules_dependencies() wiring after the
@@ -285,6 +285,9 @@ dd_topt_go_workspace_sync_repositories(
     service = "<datadog-service>",
 )
 ```
+
+For Orchestrion `v1.12.0`, `go_sdk_version` and the registered Go toolchain
+must be Go `1.25.0` or newer.
 
 The public Go helper is config-gated by default. Do not add a second enable
 attribute to each repository or test target.

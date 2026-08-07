@@ -76,7 +76,7 @@ use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
+    version = "v1.12.0",
     dd_trace_go_pin_files = [
         "@//:go.mod",
         "@//:go.sum",
@@ -90,6 +90,7 @@ use_repo(orchestrion, "rules_go_orchestrion_tool")
 Guided bootstrap writes this SDK declaration from `--runtime-version`.
 Orchestrion uses the Bazel-managed SDK on cache misses, while a compatible
 bootstrap cache hit can be restored before the SDK repository is materialized.
+For Orchestrion `v1.12.0`, use Go `1.25.0` or newer.
 Do not add SDK or Orchestrion settings to individual service or test targets.
 Export the root `go.mod` and `go.sum` labels from their BUILD package. The
 pin-file mode uses this Bazel-managed SDK with `-mod=readonly` to derive direct

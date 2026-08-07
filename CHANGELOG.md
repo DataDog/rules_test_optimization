@@ -34,6 +34,10 @@ versioning.
   Orchestrion integration and public consumer patch profile.
 
 ### Changed
+- Updated the maintained `rules_go` Orchestrion integration to Orchestrion
+  `v1.12.0` and `dd-trace-go/v2` `v2.9.1`, preserving upstream test-variant
+  resolution while retaining the Bazel-specific resolver compatibility layer.
+  Orchestrion `v1.12.0` requires Go `1.25.0` or newer.
 - The public Go Bzlmod extension now defaults `enabled_by_env` to `True`, so
   omitting `--config=test-optimization` disables metadata sync and Orchestrion
   together while the named config enables both.

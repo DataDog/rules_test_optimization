@@ -62,8 +62,8 @@ def verify_profiles(
     run_functional_smoke: bool = True,
     bazel: Path = REPO_ROOT / "bazelw",
     go_version: str = "1.25.0",
-    orchestrion_version: str = "v1.9.0",
-    dd_trace_go_version: str = "v2.9.0",
+    orchestrion_version: str = "v1.12.0",
+    dd_trace_go_version: str = "v2.9.1",
 ) -> None:
     """Generate and validate one profile patch for selected upstreams."""
     registry = load_registry(registry_path)
@@ -483,8 +483,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--bazel", type=Path, default=REPO_ROOT / "bazelw")
     parser.add_argument("--go-version", default="1.25.0")
-    parser.add_argument("--orchestrion-version", default="v1.9.0")
-    parser.add_argument("--dd-trace-go-version", default="v2.9.0")
+    parser.add_argument("--orchestrion-version", default="v1.12.0")
+    parser.add_argument("--dd-trace-go-version", default="v2.9.1")
     args = parser.parse_args(argv)
     try:
         if args.output_dir:

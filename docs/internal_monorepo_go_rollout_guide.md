@@ -115,7 +115,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --rules-go-repo-name "<existing_rules_go_repo_name>" \
   --rules-go-upstream v0_60_0 \
   --rules-go-variant base \
-  --dd-trace-go-version v2.9.0 \
+  --dd-trace-go-version v2.9.1 \
   --write-bazelrc \
   --write-orchestrion-files \
   --write-wrapper-template \

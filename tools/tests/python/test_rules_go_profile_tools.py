@@ -397,8 +397,8 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                 workspace=workspace,
                 rules_go_root=root / "rules_go",
                 go_version="1.25.0",
-                orchestrion_version="v1.9.0",
-                dd_trace_go_version="v2.9.0",
+                orchestrion_version="v1.12.0",
+                dd_trace_go_version="v2.9.1",
             )
 
             workspace_text = (workspace / "WORKSPACE").read_text(encoding="utf-8")

@@ -126,8 +126,8 @@ RTO_ARCHIVE_TYPE="tar.gz"
 RULES_GO_UPSTREAM="v0_60_0"
 RULES_GO_VARIANT="base"
 RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
-DD_TRACE_GO_VERSION="v2.9.0"
-ORCHESTRION_VERSION="v1.9.0"
+DD_TRACE_GO_VERSION="v2.9.1"
+ORCHESTRION_VERSION="v1.12.0"
 ```
 
 The archive URL, SHA256, and prefix are tied to the repository commit.
@@ -237,7 +237,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0 \
+  --dd-trace-go-version v2.9.1 \
   --write-bazelrc
 ```
 
@@ -248,13 +248,13 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0 \
+  --dd-trace-go-version v2.9.1 \
   --go-module-dir path/to/go-module \
   --write-bazelrc
 ```
 
 `--dd-trace-go-version` is optional. If omitted, the workspace uses the default
-`v2.9.0`. It accepts a tag, pseudo-version,
+`v2.9.1`. It accepts a tag, pseudo-version,
 branch, or commit SHA. Bootstrap resolves that input to exact tracer versions,
 keeps the local Go module pins on those same versions, and prevents Bazel and
 the Go module from silently drifting apart.

@@ -224,11 +224,11 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service go-service \
   --sync-repo-name test_optimization_data_go \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0
+  --dd-trace-go-version v2.9.1
 ```
 
 `--dd-trace-go-version` is optional. If omitted, bootstrap uses the default
-`v2.9.0`. It accepts a tag,
+`v2.9.1`. It accepts a tag,
 pseudo-version, branch, or commit SHA. Bootstrap resolves that input to exact
 versions and repins the local Go module to match what Bazel will use.
 
@@ -559,11 +559,11 @@ Bootstrap once after adding the Go module files:
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --go-module-dir src/go-project \
-  --dd-trace-go-version v2.9.0
+  --dd-trace-go-version v2.9.1
 ```
 
 As in the single-service flow, `--dd-trace-go-version` is optional and defaults
-to `v2.9.0`. It may resolve to one shared tracer version or to separate exact
+to `v2.9.1`. It may resolve to one shared tracer version or to separate exact
 versions for the traced Go modules when you pass a branch or commit SHA.
 
 This multi-service path stays on the lower-level/manual API. Guided bootstrap is

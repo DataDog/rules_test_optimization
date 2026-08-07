@@ -40,7 +40,7 @@ SNAPSHOT_DIR="$REPO_ROOT/tools/tests/integration/snapshots"
 PYTHON="${PYTHON:-python3}"
 # Keep the mock-server harness aligned with the supported Orchestrion version
 # under test instead of relying on the old hardcoded bootstrap tag.
-ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
+ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 export ORCHESTRION_VERSION
 GO_VERSION="${GO_VERSION:-1.25.0}"
 RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
@@ -3188,7 +3188,7 @@ cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
 #!/bin/sh
 set -eu
 
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 
 # The plain bootstrap scenario still validates file edits, but deterministic
 # proxy generation now resolves real modules during repository bootstrap. Keep
@@ -3272,9 +3272,9 @@ fi
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
     github.com/DataDog/orchestrion@${ORCH_VERSION}|\
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       run_real_go "$@"
       exit 0
       ;;
@@ -3295,9 +3295,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -3307,8 +3307,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.1" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.1"
   exit 0
 fi
 
@@ -3322,7 +3322,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0\n'
+      printf 'v2.9.1\n'
       exit 0
       ;;
   esac
@@ -3330,10 +3330,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
-      printf '{"Version":"v2.9.0"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -3348,7 +3348,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0"}\n'
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -3522,7 +3522,7 @@ cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
 #!/bin/sh
 set -eu
 
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 
 # The guided bootstrap scenario later builds a real Go test, so the fake Go
 # tool delegates the download-heavy paths to the host Go binary using temporary
@@ -3605,9 +3605,9 @@ fi
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
     github.com/DataDog/orchestrion@${ORCH_VERSION}|\
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       run_real_go "$@"
       exit 0
       ;;
@@ -3620,9 +3620,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -3632,8 +3632,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.1" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.1"
   exit 0
 fi
 
@@ -3647,7 +3647,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0\n'
+      printf 'v2.9.1\n'
       exit 0
       ;;
   esac
@@ -3655,10 +3655,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
-      printf '{"Version":"v2.9.0"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -3673,7 +3673,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0"}\n'
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -4032,7 +4032,7 @@ if ! grep -q 'orchestrion_mode = "test_optimization"' "$GUIDED_BOOT_WS/tools/bui
   exit 1
 fi
 
-# The release tracer pinned by default in this fixture is v2.9.0. The generated
+# The release tracer pinned by default in this fixture is v2.9.1. The generated
 # wrapper above must still default to test_optimization mode, but that release
 # does not include the unreleased Go testing Orchestrion package needed to build
 # a real instrumented test binary. Run the raw target for this temporary runtime

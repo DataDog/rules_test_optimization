@@ -414,6 +414,6 @@ func ExampleFormatShell() {
 	// RULES_GO_UPSTREAM="v0_60_0"
 	// RULES_GO_VARIANT="base"
 	// RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
-	// DD_TRACE_GO_VERSION="v2.9.0"
-	// ORCHESTRION_VERSION="v1.9.0"
+	// DD_TRACE_GO_VERSION="v2.9.1"
+	// ORCHESTRION_VERSION="v1.12.0"
 }

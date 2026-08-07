@@ -876,7 +876,7 @@ module version.
    either explicit version field.
 
 5. **If you omitted every selection mode**, remember the legacy default is
-   `v2.9.0`.
+   `v2.9.1`.
 
 The build fails on purpose here. It is preventing Bazel from injecting one
 set of tracer versions while the local Go module still resolves another.

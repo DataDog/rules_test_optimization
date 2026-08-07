@@ -16,7 +16,7 @@ Guided Go bootstrap accepts:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dd-trace-go-version` | `v2.9.0` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
+| `--dd-trace-go-version` | `v2.9.1` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
 | `--go-binary` | `go` | Go binary used for bootstrap module graph synchronization. Set this to a pinned SDK path named `go` or `go.exe` when the repository must match Bazel's Go SDK; do not include shell syntax or arguments |
 | `--go-mod-sync` | `targeted` | Local Go module synchronization strategy: `targeted` updates and verifies only Orchestrion tool packages, `tidy` also runs `go mod tidy`, and `off` skips Go module commands |
 
@@ -99,7 +99,7 @@ Manual Orchestrion wiring in `MODULE.bazel` accepts:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `orchestrion.from_source(..., dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"])` | none | Preferred consumer mode. Derives exact direct and transitive supported tracer versions from one checked-in `go.mod` and `go.sum` using the Bazel-managed Go SDK and `-mod=readonly` |
-| `orchestrion.from_source(..., dd_trace_go_version = "...")` | legacy `v2.9.0` when no selection mode is set | Explicit shared-version escape hatch that Bazel validates against the target Go module |
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | legacy `v2.9.1` when no selection mode is set | Explicit shared-version escape hatch that Bazel validates against the target Go module |
 | `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact canonical per-module tracer versions that Bazel validates against the target Go module for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
 | `orchestrion.from_source(..., go_sdk_root = "@repo//:ROOT")` | none | Bazel-managed Go SDK root used to build Orchestrion instead of discovering a host `go` binary |
 | `orchestrion.from_source(..., go_sdk_version = "...")` | none | Exact version of `go_sdk_root`; enables bootstrap-cache lookup before SDK materialization and is verified after materialization on a miss |
@@ -114,6 +114,7 @@ Notes:
 - Guided bootstrap declares `go_sdk_root` and `go_sdk_version` from
   `--runtime-version`. Manual wiring must set both together and keep the version
   equal to the registered Go toolchain and Test Optimization `runtime_version`.
+- Orchestrion `v1.12.0` requires Go `1.25.0` or newer.
 - Bootstrap repins the local Go module to the same effective versions.
 - Bootstrap uses targeted module sync by default and does not run
   `go mod tidy` unless `--go-mod-sync=tidy` is selected.
