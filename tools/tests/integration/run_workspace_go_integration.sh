@@ -58,7 +58,7 @@ HOST_GO_SENTINEL_LOG=""
 # Keep this aligned with the bootstrap helper's published default tracer pin so
 # the WORKSPACE harness validates the same public Go path the docs describe.
 DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.1}"
-PIN_ROOT_VERSION="v2.9.1"
+PIN_ROOT_VERSION="v2.9.1-rc.3"
 PIN_HTTP_VERSION="v2.9.1-rc.3"
 PIN_SLOG_VERSION="v2.3.0"
 SERVICE_NAME="${SERVICE_NAME:-workspace-go-service}"

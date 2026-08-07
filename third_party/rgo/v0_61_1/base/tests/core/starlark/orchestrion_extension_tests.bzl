@@ -122,6 +122,25 @@ def _module_proxy_resolved_modules_json_test(ctx):
 
 module_proxy_resolved_modules_json_test = unittest.make(_module_proxy_resolved_modules_json_test)
 
+def _module_proxy_exact_dd_trace_go_queries_test(ctx):
+    env = unittest.begin(ctx)
+
+    queries = orchestrion_extension_test_helpers.module_proxy_exact_dd_trace_go_queries({
+        "github.com/DataDog/dd-trace-go/v2": "v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.3.0",
+    })
+
+    asserts.equals(env, [
+        "github.com/DataDog/dd-trace-go/v2@v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.3.0",
+    ], queries)
+
+    return unittest.end(env)
+
+module_proxy_exact_dd_trace_go_queries_test = unittest.make(_module_proxy_exact_dd_trace_go_queries_test)
+
 def _parse_certutil_sha256_test(ctx):
     env = unittest.begin(ctx)
 
@@ -283,6 +302,7 @@ def orchestrion_extension_test_suite():
         git_env_test,
         go_module_fetch_env_test,
         host_platform_normalization_test,
+        module_proxy_exact_dd_trace_go_queries_test,
         module_proxy_resolved_modules_json_test,
         module_proxy_seed_go_mod_test,
         parse_certutil_sha256_test,

@@ -764,6 +764,12 @@ def _module_proxy_resolved_modules_json(resolved_versions):
         entries.append('  "%s": "%s"' % (module_path, resolved_versions[module_path]))
     return "{\n%s\n}\n" % ",\n".join(entries)
 
+def _module_proxy_exact_dd_trace_go_queries(version_map):
+    return [
+        "%s@%s" % (module_path, version_map[module_path])
+        for module_path in _DD_TRACE_GO_MODULES
+    ]
+
 def _split_go_list_json_objects(output, error_prefix):
     objects = []
     current = []
@@ -1038,6 +1044,19 @@ def _write_orchestrion_module_proxy(ctx, go_path, version, version_map):
         "Failed to download Orchestrion module proxy graph",
     )
 
+    _ctx_execute_or_fail(
+        ctx,
+        [
+            str(go_path),
+            "-C",
+            seed_dir,
+            "mod",
+            "download",
+        ] + _module_proxy_exact_dd_trace_go_queries(version_map),
+        seed_env,
+        "Failed to download configured dd-trace-go module versions",
+    )
+
     seed_go_sum_path = seed_dir + "/go.sum"
     if not ctx.path(seed_go_sum_path).exists:
         fail("Failed to generate Orchestrion module proxy seed go.sum in %s" % seed_dir)
@@ -1218,6 +1237,7 @@ orchestrion_extension_test_helpers = struct(
     go_module_fetch_env = _go_module_fetch_env,
     host_path_is_writable = _host_path_is_writable,
     module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
+    module_proxy_exact_dd_trace_go_queries = _module_proxy_exact_dd_trace_go_queries,
     module_proxy_seed_go_mod = _module_proxy_seed_go_mod,
     normalize_host_goarch = _normalize_host_goarch,
     normalize_host_goos = _normalize_host_goos,

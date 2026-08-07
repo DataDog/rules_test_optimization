@@ -2084,10 +2084,10 @@ index 0000000..177eeaf
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..a56e568
+index 0000000..5b757a9
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1719 @@
+@@ -0,0 +1,1739 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -2854,6 +2854,12 @@ index 0000000..a56e568
 +        entries.append('  "%s": "%s"' % (module_path, resolved_versions[module_path]))
 +    return "{\n%s\n}\n" % ",\n".join(entries)
 +
++def _module_proxy_exact_dd_trace_go_queries(version_map):
++    return [
++        "%s@%s" % (module_path, version_map[module_path])
++        for module_path in _DD_TRACE_GO_MODULES
++    ]
++
 +def _split_go_list_json_objects(output, error_prefix):
 +    objects = []
 +    current = []
@@ -3128,6 +3134,19 @@ index 0000000..a56e568
 +        "Failed to download Orchestrion module proxy graph",
 +    )
 +
++    _ctx_execute_or_fail(
++        ctx,
++        [
++            str(go_path),
++            "-C",
++            seed_dir,
++            "mod",
++            "download",
++        ] + _module_proxy_exact_dd_trace_go_queries(version_map),
++        seed_env,
++        "Failed to download configured dd-trace-go module versions",
++    )
++
 +    seed_go_sum_path = seed_dir + "/go.sum"
 +    if not ctx.path(seed_go_sum_path).exists:
 +        fail("Failed to generate Orchestrion module proxy seed go.sum in %s" % seed_dir)
@@ -3308,6 +3327,7 @@ index 0000000..a56e568
 +    go_module_fetch_env = _go_module_fetch_env,
 +    host_path_is_writable = _host_path_is_writable,
 +    module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
++    module_proxy_exact_dd_trace_go_queries = _module_proxy_exact_dd_trace_go_queries,
 +    module_proxy_seed_go_mod = _module_proxy_seed_go_mod,
 +    normalize_host_goarch = _normalize_host_goarch,
 +    normalize_host_goos = _normalize_host_goos,
@@ -16487,10 +16507,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..48b9452
+index 0000000..ec4826f
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,290 @@
+@@ -0,0 +1,310 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -16614,6 +16634,25 @@ index 0000000..48b9452
 +    return unittest.end(env)
 +
 +module_proxy_resolved_modules_json_test = unittest.make(_module_proxy_resolved_modules_json_test)
++
++def _module_proxy_exact_dd_trace_go_queries_test(ctx):
++    env = unittest.begin(ctx)
++
++    queries = orchestrion_extension_test_helpers.module_proxy_exact_dd_trace_go_queries({
++        "github.com/DataDog/dd-trace-go/v2": "v2.9.1-rc.3",
++        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1-rc.3",
++        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.3.0",
++    })
++
++    asserts.equals(env, [
++        "github.com/DataDog/dd-trace-go/v2@v2.9.1-rc.3",
++        "github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1-rc.3",
++        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.3.0",
++    ], queries)
++
++    return unittest.end(env)
++
++module_proxy_exact_dd_trace_go_queries_test = unittest.make(_module_proxy_exact_dd_trace_go_queries_test)
 +
 +def _parse_certutil_sha256_test(ctx):
 +    env = unittest.begin(ctx)
@@ -16776,6 +16815,7 @@ index 0000000..48b9452
 +        git_env_test,
 +        go_module_fetch_env_test,
 +        host_platform_normalization_test,
++        module_proxy_exact_dd_trace_go_queries_test,
 +        module_proxy_resolved_modules_json_test,
 +        module_proxy_seed_go_mod_test,
 +        parse_certutil_sha256_test,
