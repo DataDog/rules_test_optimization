@@ -136,7 +136,7 @@ Every successful Go onboarding should end with these pieces:
   Prefer the wrapper support bundle for full CI escalation; use the doctor-only
   support bundle for the simplest initial customer request. Keep individual
   reports for local inspection and manual fallback flows.
-- Real upload happens only after tests, doctor, and dry-run enrichment pass.
+- Real upload processes available fresh valid payloads after doctor and dry-run attempts, while preserving any earlier failure.
 
 For automatic managed Go/Python monorepos, the universal shape has these
 additional constraints:
@@ -189,7 +189,7 @@ Go wrapper, treat it as a consumer-specific integration:
 - Validate with fresh `bazel-testlogs/<target>/test.outputs/`, inspect
   `bazel_target_metadata.json` for
   `bazel.go.orchestrion.mode = "test_optimization"` on Go targets, then run
-  the doctor and uploader dry-run before any real upload.
+  the doctor and uploader dry-run before the real upload attempt.
 
 ## Branch And PR Hygiene
 

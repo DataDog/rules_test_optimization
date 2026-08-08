@@ -68,7 +68,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
 # With --upload it also writes uploader-upload-report.json. --support-bundle
 # adds dd-test-optimization-support.zip for escalation.
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
@@ -94,7 +94,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
 # With -Upload it also writes uploader-upload-report.json. -SupportBundle
 # adds dd-test-optimization-support.zip for escalation.
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -106,9 +106,9 @@ $env:DD_SITE = "datadoghq.com"
   //...
 ```
 
-Always preserve all statuses. Test failures should win, doctor failures should
-stop the real upload while still preserving an earlier test failure, and
-uploader failures must still fail the job when tests and validations passed.
+Always preserve all statuses. Test failures win, followed by doctor, dry-run,
+and uploader failures. When upload is enabled, validation failures do not block
+the uploader from processing other fresh valid payloads.
 
 Dry-run enrichment validation:
 
@@ -727,8 +727,9 @@ A cached Bazel test does not produce a fresh payload for the current
 invocation. With exact expected targets configured on both doctor and uploader,
 fresh and cached BEP results jointly satisfy invocation coverage. Only fresh
 outputs are validated or uploaded; an all-cached invocation is a successful
-no-op. Every fresh expected output must independently contain a handled
-payload, so one valid sibling output cannot hide an empty one.
+no-op. A missing expected result is reported without blocking other fresh
+payloads. Every fresh expected output that exists must independently contain a
+handled payload, so one valid sibling output cannot hide an empty one.
 
 ### Advanced: reuse an already-fetched context file
 

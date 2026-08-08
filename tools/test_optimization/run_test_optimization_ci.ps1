@@ -236,19 +236,16 @@ try {
     $finalStatus = $doctorStatus
   }
 
-  $dryRunStatus = 0
-  if ($doctorStatus -eq 0) {
-    $dryRunRuntimeArgs = $runtimeArgs
-    if (-not [string]::IsNullOrWhiteSpace($UploaderReportJson)) {
-      $dryRunRuntimeArgs += "--report-json=$UploaderReportJson"
-    }
-    $dryRunStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $dryRunRuntimeArgs + @("--dry-run", "--validate-enrichment"))
-    if ($dryRunStatus -ne 0 -and $finalStatus -eq 0) {
-      $finalStatus = $dryRunStatus
-    }
+  $dryRunRuntimeArgs = $runtimeArgs
+  if (-not [string]::IsNullOrWhiteSpace($UploaderReportJson)) {
+    $dryRunRuntimeArgs += "--report-json=$UploaderReportJson"
+  }
+  $dryRunStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $dryRunRuntimeArgs + @("--dry-run", "--validate-enrichment"))
+  if ($dryRunStatus -ne 0 -and $finalStatus -eq 0) {
+    $finalStatus = $dryRunStatus
   }
 
-  if ($doctorStatus -eq 0 -and $dryRunStatus -eq 0 -and $Upload.IsPresent) {
+  if ($Upload.IsPresent) {
     $uploadRuntimeArgs = $runtimeArgs
     if (-not [string]::IsNullOrWhiteSpace($UploadReportJson)) {
       $uploadRuntimeArgs += "--report-json=$UploadReportJson"

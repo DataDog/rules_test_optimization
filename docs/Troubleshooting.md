@@ -995,7 +995,10 @@ long command sequence, local controls, disk checks, and an explicit upload step.
    ./tools/test_optimization/validate_go_pilot.sh --no-upload
    ```
 
-3. Upload only after tests and doctor pass:
+3. When credentials and upload authorization are available, run the upload even
+   if the validation-only attempt reported a test, doctor, or dry-run failure.
+   The script uploads every available fresh valid payload and still returns the
+   earliest failure:
    ```bash
    DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
      ./tools/test_optimization/validate_go_pilot.sh --upload

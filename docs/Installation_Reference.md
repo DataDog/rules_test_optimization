@@ -441,7 +441,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --report-dir .topt/reports \
@@ -458,7 +458,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -521,7 +521,9 @@ python3 tools/test_optimization/render_report_summary.py \
   --output .topt/reports/upload-diagnostics.md
 ```
 
-Do not run the real uploader if the doctor or dry-run enrichment step fails.
+When upload is enabled, run the real uploader after the doctor and dry-run
+attempts even if either validation failed. It processes every available fresh
+valid payload while the wrapper preserves the earlier failure as the job result.
 
 For manual Go extension wiring, set `module_path` to the Go module path from
 `go.mod`:

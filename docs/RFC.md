@@ -142,8 +142,8 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
   - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`), and deletes successfully uploaded files.
   - Usage: run `bazel test`, then `//:dd_test_optimization_doctor`, then
     `//:dd_upload_payloads -- --dry-run --validate-enrichment`, then the real
-    `//:dd_upload_payloads` target. Preserve the test exit code, but do not run
-    the real upload if doctor or dry-run enrichment validation fails.
+    `//:dd_upload_payloads` target. Preserve the earliest failure while still
+    uploading every available fresh valid payload.
 
 
 - [Multi‑service monorepos](../tools/core/test_optimization_multi_sync.bzl):  

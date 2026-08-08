@@ -70,8 +70,8 @@ The steps are:
    as `//tools/test_optimization`.
    Usage: run `bazel test`, then the doctor target, then the uploader with
    `--dry-run --validate-enrichment`, then the real uploader target. Preserve
-   the test exit code, but do not run the real upload if doctor or dry-run
-   enrichment validation fails.
+   the earliest failure, but still let the real uploader process every available
+   fresh valid payload when upload is enabled.
 
 4. **Language macros (optional)**:
    Thin wrappers (for Go/Python/Java/NodeJS/.NET/Ruby) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.

@@ -43,7 +43,7 @@ Options:
   --support-bundle-collector PATH
                            Collector script path. Defaults to create_support_bundle.py beside this wrapper.
   --test-flag FLAG         Extra flag passed to every bazel test invocation.
-  --upload                 Run the real upload after dry-run enrichment validation.
+  --upload                 Upload every available fresh valid payload after validation attempts.
   --no-upload              Skip the real upload. This is the default.
   --keep-tmp               Keep generated BEP and artifact-staging files.
   -h, --help               Show this help.
@@ -394,24 +394,20 @@ else
   fi
 fi
 
-if [[ "$doctor_status" -eq 0 ]]; then
-  dry_run_runtime_args=("${runtime_args[@]}")
-  if [[ -n "$UPLOADER_REPORT_JSON" ]]; then
-    dry_run_runtime_args+=("--report-json=$UPLOADER_REPORT_JSON")
-  fi
-  if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${dry_run_runtime_args[@]}" --dry-run --validate-enrichment; then
-    dry_run_status=0
-  else
-    dry_run_status=$?
-    if [[ "$final_status" -eq 0 ]]; then
-      final_status="$dry_run_status"
-    fi
-  fi
-else
+dry_run_runtime_args=("${runtime_args[@]}")
+if [[ -n "$UPLOADER_REPORT_JSON" ]]; then
+  dry_run_runtime_args+=("--report-json=$UPLOADER_REPORT_JSON")
+fi
+if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${dry_run_runtime_args[@]}" --dry-run --validate-enrichment; then
   dry_run_status=0
+else
+  dry_run_status=$?
+  if [[ "$final_status" -eq 0 ]]; then
+    final_status="$dry_run_status"
+  fi
 fi
 
-if [[ "$doctor_status" -eq 0 && "$dry_run_status" -eq 0 && "$DO_UPLOAD" -eq 1 ]]; then
+if [[ "$DO_UPLOAD" -eq 1 ]]; then
   upload_runtime_args=("${runtime_args[@]}")
   if [[ -n "$UPLOAD_REPORT_JSON" ]]; then
     upload_runtime_args+=("--report-json=$UPLOAD_REPORT_JSON")

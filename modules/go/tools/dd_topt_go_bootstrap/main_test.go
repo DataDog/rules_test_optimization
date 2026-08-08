@@ -1009,6 +1009,63 @@ set -euo pipefail
 	}
 }
 
+func TestValidationScriptUploadsAfterPartialFailures(t *testing.T) {
+	dir := t.TempDir()
+	fakeBazel := filepath.Join(dir, "bazel")
+	logPath := filepath.Join(dir, "bazel.log")
+	fakeBazelScript := `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$BAZEL_LOG"
+if [[ "${1:-}" == "test" ]]; then exit 7; fi
+if [[ "${1:-}" == "run" && "$*" == *"//:dd_test_optimization_doctor"* ]]; then exit 8; fi
+if [[ "${1:-}" == "run" && "$*" == *"//:dd_upload_payloads"*"--dry-run"* ]]; then exit 9; fi
+if [[ "${1:-}" == "run" && "$*" == *"//:dd_upload_payloads"* ]]; then exit 10; fi
+exit 0
+`
+	if err := os.WriteFile(fakeBazel, []byte(fakeBazelScript), 0o755); err != nil {
+		t.Fatalf("write fake bazel: %v", err)
+	}
+
+	script, err := validationScript(config{
+		printValidationScript:  true,
+		bazelCommand:           fakeBazel,
+		bazelConfig:            "test-optimization",
+		syncRepoName:           defaultSyncRepoName,
+		validationDoctorTarget: "//:dd_test_optimization_doctor",
+		validationUploadTarget: "//:dd_upload_payloads",
+		expectedTargets:        []string{"//pkg:go_default_test"},
+		minFreeDiskGB:          defaultMinFreeDiskGB,
+	})
+	if err != nil {
+		t.Fatalf("validationScript error: %v", err)
+	}
+	scriptPath := filepath.Join(dir, "validate.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write validation script: %v", err)
+	}
+
+	cmd := exec.Command("bash", scriptPath, "--upload")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath)
+	output, err := cmd.CombinedOutput()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 7 {
+		t.Fatalf("validation script error=%v, want test exit 7\n%s", err, output)
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake bazel log: %v", err)
+	}
+	logText := string(logBytes)
+	if got := strings.Count(logText, "run --config=test-optimization //:dd_upload_payloads"); got != 2 {
+		t.Fatalf("uploader command count=%d, want dry-run and real upload:\n%s", got, logText)
+	}
+	if !strings.Contains(logText, "--dry-run --validate-enrichment") ||
+		!strings.Contains(logText, "uploader-upload-report.json") {
+		t.Fatalf("validation script did not run both uploader phases:\n%s", logText)
+	}
+}
+
 func TestValidationScriptUsesBepArtifactSourceForZippedOutputs(t *testing.T) {
 	dir := t.TempDir()
 	fakeBazel := filepath.Join(dir, "bazel")

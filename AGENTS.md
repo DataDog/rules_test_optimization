@@ -95,21 +95,14 @@ The sync rule creates `@test_optimization_data//` containing:
   ```bash
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
-  ./bazelw test //... || test_status=$?; test_status=${test_status:-0}
-  ./bazelw run //<topt-package>:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-  if [ "$doctor_status" -ne 0 ]; then
-    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-    exit "$doctor_status"
-  fi
-  ./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-  if [ "$dry_run_status" -ne 0 ]; then
-    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-    exit "$dry_run_status"
-  fi
-  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads
-  upload_status=$?
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$upload_status"
+  test_status=0; doctor_status=0; dry_run_status=0; upload_status=0
+  ./bazelw test //... || test_status=$?
+  ./bazelw run //<topt-package>:dd_test_optimization_doctor || doctor_status=$?
+  ./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads || upload_status=$?
+  for status in "$test_status" "$doctor_status" "$dry_run_status" "$upload_status"; do
+    if [ "$status" -ne 0 ]; then exit "$status"; fi
+  done
   ```
 - Force refetch of test optimization data:
   ```bash
@@ -164,7 +157,8 @@ The sync rule creates `@test_optimization_data//` containing:
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
 - In consumer workspaces, run `./bazelw run //<topt-package>:dd_test_optimization_doctor`
   after tests complete, then run `./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment`, then upload with `./bazelw run //<topt-package>:dd_upload_payloads`.
-  Do not run the real upload if doctor or dry-run enrichment validation fails.
+  When upload is authorized, process every available fresh valid payload even if
+  tests, doctor, or dry-run fail, and preserve the earliest failure as the job result.
 - For Go, route the repository's central `dd_go_test` wrapper through
   `dd_topt_go_test`; `--config=test-optimization` is the only user-facing
   enable switch.

@@ -377,7 +377,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --report-dir .topt/reports \
@@ -395,7 +395,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -1426,7 +1426,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --report-dir .topt/reports \
@@ -1442,7 +1442,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -1452,10 +1452,10 @@ $env:DD_SITE = "datadoghq.com"
   //...
 ```
 
-**IMPORTANT**: Always preserve the test exit code. Upload failed-test payloads
-when doctor and dry-run enrichment pass, but do not run the real upload after a
-doctor or dry-run failure. Using plain `;` causes CI to report success even when
-tests fail.
+**IMPORTANT**: Always preserve the test exit code. When upload is enabled, the
+wrapper runs doctor and dry-run for diagnostics, then uploads every available
+fresh valid payload even if tests or either validation step failed. The earliest
+test, doctor, dry-run, or upload failure remains the job result.
 
 ### Important runtime requirements
 

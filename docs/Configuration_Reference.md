@@ -305,8 +305,8 @@ Rule: `dd_payload_uploader(...)`
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
-| `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; only fresh outputs are inspected or uploaded |
-| `expected_targets_file` | label | unset | Optional schema-v1 exact-target file. Static and file inputs must match when both are non-empty |
+| `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |
+| `expected_targets_file` | label | unset | Optional schema-v1 exact-target file. Static and file inputs must match when both are non-empty; missing results do not block other fresh uploads |
 
 ## Doctor rule attributes
 
@@ -377,8 +377,8 @@ workspace root package.
 | `sync_repo_name` | string | `"test_optimization_data"` | Repository exposing `:test_optimization_context` |
 | `doctor_name` | string | `"dd_test_optimization_doctor"` | Generated doctor target name |
 | `uploader_name` | string | `"dd_upload_payloads"` | Generated uploader target name |
-| `expected_targets` | string_list | `[]` | Strict labels passed to both doctor and uploader. List only instrumented runtime test targets that emit payloads |
-| `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to both doctor and uploader for manifest-driven invocations |
+| `expected_targets` | string_list | `[]` | Exact labels passed to both tools. Doctor validates them strictly; uploader reports missing results while continuing with other fresh payloads |
+| `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to both tools with the same doctor/uploader semantics for manifest-driven invocations |
 | `context_data` | label_list or `None` | `["@<sync_repo>//:test_optimization_context"]` | Explicit context data labels when the default sync repo label is not enough |
 | `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |
 | `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |

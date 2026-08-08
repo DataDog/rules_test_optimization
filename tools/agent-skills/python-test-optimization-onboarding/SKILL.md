@@ -128,7 +128,7 @@ Every successful Python onboarding should end with these pieces:
 - `FETCH_SALT` is used only for a separate, explicit
   `bazel sync --config=test-optimization --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.
-- Real upload happens only after tests, doctor, and dry-run enrichment pass.
+- Real upload processes available fresh valid payloads after doctor and dry-run attempts, while preserving any earlier failure.
 
 For automatic managed Go/Python monorepos:
 

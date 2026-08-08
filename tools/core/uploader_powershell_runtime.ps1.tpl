@@ -3223,6 +3223,7 @@ function Merge-StagedBepFreshness {
 
 function Assert-ExpectedTargetCoverage {
   if (-not $script:ExpectedTargetsConfigured -or $script:FreshnessSelectedSource -ne "bep") { return }
+  $missingCount = 0
   foreach ($label in $script:ExpectedTargets) {
     $hasFresh = @($script:FreshnessEligibleOutputs | Where-Object { $_.StartsWith("$label`t", [System.StringComparison]::Ordinal) }).Count -gt 0
     $hasCached = @($script:FreshnessCachedOutputs | Where-Object { $_.StartsWith("$label`t", [System.StringComparison]::Ordinal) }).Count -gt 0
@@ -3230,11 +3231,14 @@ function Assert-ExpectedTargetCoverage {
     $hasRemote = @($script:FreshnessRemoteOnlyOutputs | Where-Object { $_.Label -eq $label }).Count -gt 0
     if ($hasRemote) { continue }
     if ($script:FreshnessMissingOutputLabels.Contains($label)) {
-      Log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference)"
+      Log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference); continuing with other fresh outputs"
     } else {
-      Log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target)"
+      Log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target); continuing with other fresh outputs"
     }
-    exit 2
+    $missingCount++
+  }
+  if ($missingCount -gt 0) {
+    Log "warning: $missingCount expected target(s) produced no current uploadable output; available fresh payloads will still be processed"
   }
 }
 

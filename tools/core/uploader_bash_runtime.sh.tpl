@@ -3240,7 +3240,7 @@ validate_expected_target_coverage() {
   (( EXPECTED_TARGETS_CONFIGURED == 1 )) || return 0
   [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" ]] || return 0
 
-  local label
+  local label missing_count=0
   while IFS= read -r label; do
     [[ -n "$label" ]] || continue
     if grep -Fq "$label"$'\t' "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" 2>/dev/null ||
@@ -3251,12 +3251,15 @@ validate_expected_target_coverage() {
       continue
     fi
     if grep -Fxq "$label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
-      log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference)"
+      log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference); continuing with other fresh outputs"
     else
-      log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target)"
+      log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target); continuing with other fresh outputs"
     fi
-    exit 2
+    ((++missing_count))
   done <"$EXPECTED_TARGETS_RESOLVED_FILE"
+  if (( missing_count > 0 )); then
+    log "warning: $missing_count expected target(s) produced no current uploadable output; available fresh payloads will still be processed"
+  fi
 }
 
 validate_bep_remote_only_outputs() {

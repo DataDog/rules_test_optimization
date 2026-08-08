@@ -546,6 +546,51 @@ esac
                 normalized_log_text,
             )
 
+    def test_bash_wrapper_uploads_after_partial_validation_failures(self) -> None:
+        """Validate upload still processes fresh payloads after validation failures."""
+        bash = _require_functional_bash(self)
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {str(log_path)!r}
+if [[ "$1" == "test" ]]; then exit 0; fi
+if [[ "$1" == "run" && "$3" == "//:dd_test_optimization_doctor" ]]; then exit 11; fi
+if [[ "$1" == "run" && "$*" == *"--dry-run"* ]]; then exit 12; fi
+if [[ "$1" == "run" && "$3" == "//:dd_upload_payloads" ]]; then exit 0; fi
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["BAZEL"] = str(fake_bazel)
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+
+            result = subprocess.run(
+                [bash, str(wrapper), "--upload", "//pkg:target"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(11, result.returncode, result.stderr)
+            upload_commands = [
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if "//:dd_upload_payloads" in line
+            ]
+            self.assertEqual(2, len(upload_commands), upload_commands)
+            self.assertIn("--dry-run --validate-enrichment", upload_commands[0])
+            self.assertNotIn("--dry-run", upload_commands[1])
+
     def test_bash_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate Bash support bundle path preserves the original test status."""
         if os.name == "nt":
@@ -843,6 +888,64 @@ exit 99
 
         self.assertIn("//:dd_upload_payloads", log_text)
         self.assertIn("--dry-run --validate-enrichment", log_text)
+
+    def test_powershell_wrapper_uploads_after_partial_validation_failures(self) -> None:
+        """Validate PowerShell uploads fresh payloads after validation failures."""
+        pwsh = _require_command(self, "pwsh", "pwsh is required for PowerShell wrapper smoke")
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.ps1")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel.ps1"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$BazelArgs)
+$Command = $BazelArgs -join ' '
+Add-Content -LiteralPath {str(log_path)!r} -Value $Command
+if ($BazelArgs[0] -eq 'test') {{ exit 0 }}
+if ($Command -like '*//:dd_test_optimization_doctor*') {{ exit 11 }}
+if ($Command -like '*//:dd_upload_payloads*--dry-run*') {{ exit 12 }}
+if ($Command -like '*//:dd_upload_payloads*') {{ exit 0 }}
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+
+            result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                    "-Bazel",
+                    str(fake_bazel),
+                    "-Upload",
+                    "//pkg:target",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(11, result.returncode, result.stderr + result.stdout)
+            upload_commands = [
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if "//:dd_upload_payloads" in line
+            ]
+            self.assertEqual(2, len(upload_commands), upload_commands)
+            self.assertIn("--dry-run --validate-enrichment", upload_commands[0])
+            self.assertNotIn("--dry-run", upload_commands[1])
 
     def test_powershell_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate PowerShell support bundle path preserves the original test status."""
@@ -6134,7 +6237,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         expected_targets.write_text(
             json.dumps({
                 "schema_version": 1,
-                "targets": ["//pkg:empty", "//pkg:valid"],
+                "targets": ["//pkg:empty", "//pkg:missing", "//pkg:valid"],
             }),
             encoding="utf-8",
         )
@@ -6227,8 +6330,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertEqual(0, report["payloads"]["telemetry"]["processed"])
         self.assertEqual(0, report["upload_failures"])
 
-    def test_generated_uploaders_reject_any_fresh_expected_output_without_payloads(self) -> None:
-        """Validate one valid output cannot hide another empty expected output."""
+    def test_generated_uploaders_process_valid_payloads_before_reporting_partial_outputs(self) -> None:
+        """Validate missing or empty outputs do not hide another valid expected output."""
         _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
         bash = _require_functional_bash(self)
         if os.name == "nt":
@@ -6285,6 +6388,13 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             ]
             for name, command in invocations:
                 with self.subTest(runtime=name):
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": ["//pkg:empty", "//pkg:missing", "//pkg:valid"],
+                        }),
+                        encoding="utf-8",
+                    )
                     report = root / f"{name.lower()}-report.json"
                     result = subprocess.run(
                         [
@@ -6307,11 +6417,50 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     )
                     output = result.stdout + result.stderr
                     self.assertNotEqual(0, result.returncode, output)
+                    self.assertIn(
+                        "no TestResult matched this target); continuing with other fresh outputs",
+                        output,
+                    )
                     self.assertIn("fresh expected test output produced no uploadable payloads", output)
                     self.assertIn("//pkg:empty", output)
                     report_doc = json.loads(report.read_text(encoding="utf-8"))
                     self.assertEqual("fail", report_doc["status"])
                     self.assertEqual("upload_failed_unknown", report_doc["result"]["reason_code"])
+                    self.assertEqual(1, report_doc["payloads"]["tests"]["processed"])
+
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": ["//pkg:missing", "//pkg:valid"],
+                        }),
+                        encoding="utf-8",
+                    )
+                    partial_report = root / f"{name.lower()}-missing-report.json"
+                    partial_result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--report-json",
+                            str(partial_report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    partial_output = partial_result.stdout + partial_result.stderr
+                    self.assertEqual(0, partial_result.returncode, partial_output)
+                    self.assertIn("continuing with other fresh outputs", partial_output)
+                    partial_report_doc = json.loads(partial_report.read_text(encoding="utf-8"))
+                    self.assertEqual("ok", partial_report_doc["status"])
+                    self.assertEqual(1, partial_report_doc["payloads"]["tests"]["processed"])
 
     def test_generated_uploaders_accept_empty_expected_target_set(self) -> None:
         """Validate an invocation without optimized targets ignores unrelated BEP rows."""

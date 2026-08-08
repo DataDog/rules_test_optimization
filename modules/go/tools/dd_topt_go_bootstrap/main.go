@@ -1505,7 +1505,9 @@ Runs the Datadog Go Test Optimization validation flow:
   sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload
 
 Upload is disabled by default. Pass --upload only when local Datadog
-credentials are already available in the environment.
+credentials are already available in the environment. When enabled, every
+available fresh valid payload is uploaded even if an earlier phase failed; the
+earliest failure remains the script result.
 
 Set DD_TEST_OPTIMIZATION_REPORT_DIR to persist doctor/uploader reports in CI.
 EOF
@@ -1677,40 +1679,36 @@ if ((${#INSTRUMENTED_TARGETS[@]} > 0)); then
   done
 fi
 
-if (( test_status != 0 )); then
-  warn "one or more tests failed; skipping doctor and upload"
-  exit "${test_status}"
-fi
+final_status=${test_status}
 
 check_disk
 run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${DOCTOR_REPORT_JSON}"
 doctor_status=$?
-if (( doctor_status != 0 )); then
-  warn "doctor failed; skipping upload"
-  log_report_dir
-  exit "${doctor_status}"
+if (( doctor_status != 0 && final_status == 0 )); then
+  final_status=${doctor_status}
 fi
 
 check_disk
 run_step "dry-run upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_DRY_RUN_REPORT_JSON}" --dry-run --validate-enrichment
 dry_run_status=$?
-if (( dry_run_status != 0 )); then
-  warn "dry-run uploader failed; skipping upload"
-  log_report_dir
-  exit "${dry_run_status}"
+if (( dry_run_status != 0 && final_status == 0 )); then
+  final_status=${dry_run_status}
 fi
 
 if (( upload == 0 )); then
   log "upload skipped; rerun with --upload to run ${UPLOAD_TARGET}"
   log_report_dir
-  exit 0
+  exit "${final_status}"
 fi
 
 check_disk
 run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_UPLOAD_REPORT_JSON}"
 upload_status=$?
+if (( upload_status != 0 && final_status == 0 )); then
+  final_status=${upload_status}
+fi
 log_report_dir
-exit "${upload_status}"
+exit "${final_status}"
 `)
 	return buf.String(), nil
 }

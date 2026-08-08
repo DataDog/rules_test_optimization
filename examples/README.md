@@ -408,7 +408,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --config test-optimization \
@@ -428,7 +428,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -440,9 +440,9 @@ $env:DD_SITE = "datadoghq.com"
 ```
 
 Notes:
-- The wrapper preserves test failures, blocks upload success when doctor
-  or dry-run enrichment fails, and still fails on uploader errors when the
-  earlier steps passed.
+- The wrapper preserves test and validation failures while still uploading every
+  available fresh valid payload when upload is enabled. Uploader errors fail the
+  job when no earlier phase already failed.
 - For first-pass support after tests have run, the doctor
   `--support-bundle=.topt/reports/dd-test-optimization-support.zip` option
   creates a doctor-only bundle without vendoring the wrapper helper directory.

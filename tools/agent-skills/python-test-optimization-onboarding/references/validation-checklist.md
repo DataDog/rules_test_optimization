@@ -188,8 +188,8 @@ artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
 report_dir="${REPORT_DIR:-.topt/reports}"
 mkdir -p "$report_dir"
 
+test_status=0; doctor_status=0; dry_run_status=0; upload_status=0
 bazel test --config=test-optimization --build_event_json_file="$bep_json" //path/to:python_test || test_status=$?
-test_status=${test_status:-0}
 
 bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor -- \
   --bep-json="$bep_json" \
@@ -198,11 +198,6 @@ bazel run --config=test-optimization //tools/test_optimization:dd_test_optimizat
   --artifact-source=bep \
   --artifact-staging-dir="$artifact_staging_dir" \
   --report-json="$report_dir/doctor-report.json" || doctor_status=$?
-doctor_status=${doctor_status:-0}
-if [ "$doctor_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$doctor_status"
-fi
 
 bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
   --bep-json="$bep_json" \
@@ -213,11 +208,6 @@ bazel run --config=test-optimization //tools/test_optimization:dd_upload_payload
   --dry-run \
   --validate-enrichment \
   --report-json="$report_dir/uploader-dry-run-report.json" || dry_run_status=$?
-dry_run_status=${dry_run_status:-0}
-if [ "$dry_run_status" -ne 0 ]; then
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$dry_run_status"
-fi
 
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- \
@@ -226,11 +216,11 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
     --freshness-mode=required \
     --artifact-source=bep \
     --artifact-staging-dir="$artifact_staging_dir" \
-    --report-json="$report_dir/uploader-upload-report.json"
-upload_status=$?
+    --report-json="$report_dir/uploader-upload-report.json" || upload_status=$?
 
-if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-exit "$upload_status"
+for status in "$test_status" "$doctor_status" "$dry_run_status" "$upload_status"; do
+  if [ "$status" -ne 0 ]; then exit "$status"; fi
+done
 ```
 
 Do not run the real upload unless credentials are intentionally available and
@@ -244,7 +234,8 @@ After tests:
 - `bazel_target_metadata.json` exists for instrumented runtime tests.
 - The doctor passes.
 - Dry-run enrichment passes.
-- Real upload sends data only after local validation succeeds.
+- Real upload processes every available fresh valid payload after validation
+  attempts; any earlier validation failure still fails the workflow.
 - Datadog shows Git metadata, Bazel metadata, and the expected test service.
 
 Do not list build-only or analysis-only targets in doctor `expected_targets`;

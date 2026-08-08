@@ -132,7 +132,7 @@ Every successful Java onboarding should end with these pieces:
 - `FETCH_SALT` is used only for a separate, explicit
   `bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.
-- Real upload happens only after tests, doctor, and dry-run enrichment pass.
+- Real upload processes available fresh valid payloads after doctor and dry-run attempts, while preserving any earlier failure.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
 repository from `bzl` or `bazelw` to raw `bazel` just because examples use the

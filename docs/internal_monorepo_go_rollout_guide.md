@@ -165,8 +165,9 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization
 bazel shutdown
 ```
 
-Do not run the real uploader if the doctor or dry-run enrichment step fails.
-Upload failed-test payloads only when those validation steps pass.
+Run the real uploader after doctor and dry-run attempts even when an earlier
+phase fails. It uploads available fresh valid failed-test payloads while the
+wrapper preserves the earlier failure as the job result.
 
 The doctor must see JSON payloads, Bazel target metadata, Git metadata, and only
 valid Go payload-selection states. `module`, `module_override`, and

@@ -111,7 +111,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
