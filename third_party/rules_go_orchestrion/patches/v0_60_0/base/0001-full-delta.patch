@@ -1419,7 +1419,7 @@ index a339eef..7525a1e 100644
          inputs = depset(inputs_direct, transitive = inputs_transitive),
          outputs = outputs,
 diff --git a/go/private/actions/link.bzl b/go/private/actions/link.bzl
-index 7d8ff5f..2cc2212 100644
+index 7d8ff5f..0d59e08 100644
 --- a/go/private/actions/link.bzl
 +++ b/go/private/actions/link.bzl
 @@ -33,10 +33,88 @@ load(
@@ -1539,7 +1539,7 @@ index 7d8ff5f..2cc2212 100644
      inputs_transitive = [
          archive.libs,
          archive.cgo_deps,
-@@ -186,6 +276,46 @@ def emit_link(
+@@ -186,6 +276,48 @@ def emit_link(
          go.sdk.tools,
          go.stdlib.libs,
      ]
@@ -1562,8 +1562,10 @@ index 7d8ff5f..2cc2212 100644
 +        # Orchestrion needs the go binary to run `go env GOMOD`
 +        inputs_direct.append(go.sdk.go)
 +
-+        # The toolexec path may resolve woven dependencies during linking too,
-+        # so keep the SDK source tree available in sandboxed executions.
++        # The toolexec path may resolve and compile woven dependencies during
++        # linking, so keep the SDK source tree and assembly headers available
++        # in sandboxed executions.
++        inputs_transitive.append(go.sdk.headers)
 +        inputs_transitive.append(go.sdk.srcs)
 +        if getattr(go, "orchestrion_module_proxy_files", None):
 +            inputs_transitive.append(go.orchestrion_module_proxy_files)
@@ -1586,7 +1588,7 @@ index 7d8ff5f..2cc2212 100644
      inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
  
      go.actions.run(
-@@ -194,7 +324,13 @@ def emit_link(
+@@ -194,7 +326,13 @@ def emit_link(
          mnemonic = "GoLink",
          executable = go.toolchain._builder,
          arguments = [builder_args, "--", tool_args],
