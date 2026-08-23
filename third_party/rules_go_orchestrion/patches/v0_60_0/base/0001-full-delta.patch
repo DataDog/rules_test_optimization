@@ -2093,10 +2093,10 @@ index 0000000..31a01c3
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..9ec04e6
+index 0000000..4487054
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1760 @@
+@@ -0,0 +1,1765 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -3325,19 +3325,24 @@ index 0000000..9ec04e6
 +    return True
 +
 +def _patch_resolver_cycle_guard(source):
-+    header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
-+	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
-+    guarded_header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
-+	return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))
-+}
-+
-+func (r ResolveResponse) mergeFromVisited(pkg *packages.Package, visited map[*packages.Package]struct{}) error {
-+	// packages.Load can return cycles whose nodes do not have ExportFile yet.
-+	if _, ok := visited[pkg]; ok {
-+		return nil
-+	}
-+	visited[pkg] = struct{}{}
-+	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
++    line_ending = "\r\n" if "\r\n" in source else "\n"
++    header = line_ending.join([
++        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
++        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
++    ])
++    guarded_header = line_ending.join([
++        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
++        "\treturn r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))",
++        "}",
++        "",
++        "func (r ResolveResponse) mergeFromVisited(pkg *packages.Package, visited map[*packages.Package]struct{}) error {",
++        "\t// packages.Load can return cycles whose nodes do not have ExportFile yet.",
++        "\tif _, ok := visited[pkg]; ok {",
++        "\t\treturn nil",
++        "\t}",
++        "\tvisited[pkg] = struct{}{}",
++        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
++    ])
 +    recursive_call = "r.mergeFrom(dep)"
 +    if header not in source or recursive_call not in source:
 +        fail("Could not patch Orchestrion resolver cycle guard")
@@ -16561,10 +16566,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..9d605a8
+index 0000000..884076a
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,332 @@
+@@ -0,0 +1,334 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -16859,20 +16864,22 @@ index 0000000..9d605a8
 +
 +def _resolver_cycle_guard_patch_test(ctx):
 +    env = unittest.begin(ctx)
-+    source = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
-+	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {
-+	}
-+	for _, dep := range pkg.Imports {
-+		errs = errors.Join(errs, r.mergeFrom(dep))
-+	}
-+}
-+"""
++    source_lines = [
++        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
++        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
++        "\t}",
++        "\tfor _, dep := range pkg.Imports {",
++        "\t\terrs = errors.Join(errs, r.mergeFrom(dep))",
++        "\t}",
++        "}",
++    ]
 +
-+    patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(source)
-+    asserts.true(env, "make(map[*packages.Package]struct{})" in patched)
-+    asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
-+    asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
-+    asserts.false(env, "r.mergeFrom(dep)" in patched)
++    for line_ending in ["\n", "\r\n"]:
++        patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(line_ending.join(source_lines) + line_ending)
++        asserts.true(env, ("return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))" + line_ending + "}") in patched)
++        asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
++        asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
++        asserts.false(env, "r.mergeFrom(dep)" in patched)
 +
 +    return unittest.end(env)
 +

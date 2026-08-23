@@ -292,20 +292,22 @@ declared_dd_trace_go_versions_test = unittest.make(_declared_dd_trace_go_version
 
 def _resolver_cycle_guard_patch_test(ctx):
     env = unittest.begin(ctx)
-    source = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
-	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {
-	}
-	for _, dep := range pkg.Imports {
-		errs = errors.Join(errs, r.mergeFrom(dep))
-	}
-}
-"""
+    source_lines = [
+        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
+        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
+        "\t}",
+        "\tfor _, dep := range pkg.Imports {",
+        "\t\terrs = errors.Join(errs, r.mergeFrom(dep))",
+        "\t}",
+        "}",
+    ]
 
-    patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(source)
-    asserts.true(env, "make(map[*packages.Package]struct{})" in patched)
-    asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
-    asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
-    asserts.false(env, "r.mergeFrom(dep)" in patched)
+    for line_ending in ["\n", "\r\n"]:
+        patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(line_ending.join(source_lines) + line_ending)
+        asserts.true(env, ("return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))" + line_ending + "}") in patched)
+        asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
+        asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
+        asserts.false(env, "r.mergeFrom(dep)" in patched)
 
     return unittest.end(env)
 

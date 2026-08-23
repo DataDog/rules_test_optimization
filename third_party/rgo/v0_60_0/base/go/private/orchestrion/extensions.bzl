@@ -1226,19 +1226,24 @@ def _restore_bootstrap_cache(ctx, paths, version, version_map, go_identity, bina
     return True
 
 def _patch_resolver_cycle_guard(source):
-    header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
-	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
-    guarded_header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
-	return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))
-}
-
-func (r ResolveResponse) mergeFromVisited(pkg *packages.Package, visited map[*packages.Package]struct{}) error {
-	// packages.Load can return cycles whose nodes do not have ExportFile yet.
-	if _, ok := visited[pkg]; ok {
-		return nil
-	}
-	visited[pkg] = struct{}{}
-	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
+    line_ending = "\r\n" if "\r\n" in source else "\n"
+    header = line_ending.join([
+        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
+        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
+    ])
+    guarded_header = line_ending.join([
+        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
+        "\treturn r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))",
+        "}",
+        "",
+        "func (r ResolveResponse) mergeFromVisited(pkg *packages.Package, visited map[*packages.Package]struct{}) error {",
+        "\t// packages.Load can return cycles whose nodes do not have ExportFile yet.",
+        "\tif _, ok := visited[pkg]; ok {",
+        "\t\treturn nil",
+        "\t}",
+        "\tvisited[pkg] = struct{}{}",
+        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
+    ])
     recursive_call = "r.mergeFrom(dep)"
     if header not in source or recursive_call not in source:
         fail("Could not patch Orchestrion resolver cycle guard")
