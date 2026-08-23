@@ -20,7 +20,7 @@ ORCHESTRION_SEED_GO_MOD_VERSION = "1.21"
 
 # Bump this identifier whenever the in-repo Orchestrion patch block changes in
 # a way that should invalidate previously cached bootstrap binaries.
-ORCHESTRION_PATCHSET_ID = "20260427-go-tool-transition"
+ORCHESTRION_PATCHSET_ID = "20260823-resolver-cycle-guard"
 _DD_TRACE_GO_MODULES = [
     "github.com/DataDog/dd-trace-go/v2",
     "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
@@ -1225,6 +1225,25 @@ def _restore_bootstrap_cache(ctx, paths, version, version_map, go_identity, bina
     ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
     return True
 
+def _patch_resolver_cycle_guard(source):
+    header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
+	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
+    guarded_header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
+	return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))
+}
+
+func (r ResolveResponse) mergeFromVisited(pkg *packages.Package, visited map[*packages.Package]struct{}) error {
+	// packages.Load can return cycles whose nodes do not have ExportFile yet.
+	if _, ok := visited[pkg]; ok {
+		return nil
+	}
+	visited[pkg] = struct{}{}
+	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
+    recursive_call = "r.mergeFrom(dep)"
+    if header not in source or recursive_call not in source:
+        fail("Could not patch Orchestrion resolver cycle guard")
+    return source.replace(header, guarded_header, 1).replace(recursive_call, "r.mergeFromVisited(dep, visited)", 1)
+
 orchestrion_extension_test_helpers = struct(
     bootstrap_cache_key = _bootstrap_cache_key,
     bootstrap_manifest_content = _bootstrap_manifest_content,
@@ -1243,6 +1262,7 @@ orchestrion_extension_test_helpers = struct(
     normalize_host_goos = _normalize_host_goos,
     parse_certutil_sha256 = _parse_certutil_sha256,
     powershell_single_quoted_literal = _powershell_single_quoted_literal,
+    patch_resolver_cycle_guard = _patch_resolver_cycle_guard,
 )
 
 _TEST_OPTIMIZATION_ENABLED_ENV = "DD_TEST_OPTIMIZATION_ENABLED"
@@ -1407,6 +1427,7 @@ def _orchestrion_build_impl(ctx):
     if resolve_tempdir_old not in resolve_src:
         fail("Could not patch Orchestrion resolver tempdir block in %s" % resolve_path)
     resolve_src = resolve_src.replace(resolve_tempdir_old, resolve_tempdir_new, 1)
+    resolve_src = _patch_resolver_cycle_guard(resolve_src)
     ctx.file(resolve_path, resolve_src)
 
     # Compile-proxy / archive metadata patches for the synthetic testmain flow.

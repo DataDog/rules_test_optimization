@@ -2088,10 +2088,10 @@ index 0000000..177eeaf
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..dc4e483
+index 0000000..9ec04e6
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1739 @@
+@@ -0,0 +1,1760 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -2114,7 +2114,7 @@ index 0000000..dc4e483
 +
 +# Bump this identifier whenever the in-repo Orchestrion patch block changes in
 +# a way that should invalidate previously cached bootstrap binaries.
-+ORCHESTRION_PATCHSET_ID = "20260427-go-tool-transition"
++ORCHESTRION_PATCHSET_ID = "20260823-resolver-cycle-guard"
 +_DD_TRACE_GO_MODULES = [
 +    "github.com/DataDog/dd-trace-go/v2",
 +    "github.com/DataDog/dd-trace-go/contrib/net/http/v2",
@@ -3319,6 +3319,25 @@ index 0000000..dc4e483
 +    ctx.file("BUILD.bazel", _orchestrion_build_file(binary_name))
 +    return True
 +
++def _patch_resolver_cycle_guard(source):
++    header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
++	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
++    guarded_header = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
++	return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))
++}
++
++func (r ResolveResponse) mergeFromVisited(pkg *packages.Package, visited map[*packages.Package]struct{}) error {
++	// packages.Load can return cycles whose nodes do not have ExportFile yet.
++	if _, ok := visited[pkg]; ok {
++		return nil
++	}
++	visited[pkg] = struct{}{}
++	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {"""
++    recursive_call = "r.mergeFrom(dep)"
++    if header not in source or recursive_call not in source:
++        fail("Could not patch Orchestrion resolver cycle guard")
++    return source.replace(header, guarded_header, 1).replace(recursive_call, "r.mergeFromVisited(dep, visited)", 1)
++
 +orchestrion_extension_test_helpers = struct(
 +    bootstrap_cache_key = _bootstrap_cache_key,
 +    bootstrap_manifest_content = _bootstrap_manifest_content,
@@ -3337,6 +3356,7 @@ index 0000000..dc4e483
 +    normalize_host_goos = _normalize_host_goos,
 +    parse_certutil_sha256 = _parse_certutil_sha256,
 +    powershell_single_quoted_literal = _powershell_single_quoted_literal,
++    patch_resolver_cycle_guard = _patch_resolver_cycle_guard,
 +)
 +
 +_TEST_OPTIMIZATION_ENABLED_ENV = "DD_TEST_OPTIMIZATION_ENABLED"
@@ -3501,6 +3521,7 @@ index 0000000..dc4e483
 +    if resolve_tempdir_old not in resolve_src:
 +        fail("Could not patch Orchestrion resolver tempdir block in %s" % resolve_path)
 +    resolve_src = resolve_src.replace(resolve_tempdir_old, resolve_tempdir_new, 1)
++    resolve_src = _patch_resolver_cycle_guard(resolve_src)
 +    ctx.file(resolve_path, resolve_src)
 +
 +    # Compile-proxy / archive metadata patches for the synthetic testmain flow.
@@ -16532,10 +16553,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..ec4826f
+index 0000000..9d605a8
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,332 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -16828,6 +16849,27 @@ index 0000000..ec4826f
 +
 +declared_dd_trace_go_versions_test = unittest.make(_declared_dd_trace_go_versions_test)
 +
++def _resolver_cycle_guard_patch_test(ctx):
++    env = unittest.begin(ctx)
++    source = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
++	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {
++	}
++	for _, dep := range pkg.Imports {
++		errs = errors.Join(errs, r.mergeFrom(dep))
++	}
++}
++"""
++
++    patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(source)
++    asserts.true(env, "make(map[*packages.Package]struct{})" in patched)
++    asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
++    asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
++    asserts.false(env, "r.mergeFrom(dep)" in patched)
++
++    return unittest.end(env)
++
++resolver_cycle_guard_patch_test = unittest.make(_resolver_cycle_guard_patch_test)
++
 +def orchestrion_extension_test_suite():
 +    unittest.suite(
 +        "orchestrion_extension_tests",
@@ -16845,4 +16887,5 @@ index 0000000..ec4826f
 +        module_proxy_seed_go_mod_test,
 +        parse_certutil_sha256_test,
 +        powershell_single_quoted_literal_test,
++        resolver_cycle_guard_patch_test,
 +    )

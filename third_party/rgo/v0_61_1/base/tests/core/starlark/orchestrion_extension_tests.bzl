@@ -290,6 +290,27 @@ def _declared_dd_trace_go_versions_test(ctx):
 
 declared_dd_trace_go_versions_test = unittest.make(_declared_dd_trace_go_versions_test)
 
+def _resolver_cycle_guard_patch_test(ctx):
+    env = unittest.begin(ctx)
+    source = """func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {
+	if pkg.PkgPath == "" || pkg.PkgPath == "unsafe" || r[pkg.PkgPath].ExportFile != "" {
+	}
+	for _, dep := range pkg.Imports {
+		errs = errors.Join(errs, r.mergeFrom(dep))
+	}
+}
+"""
+
+    patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(source)
+    asserts.true(env, "make(map[*packages.Package]struct{})" in patched)
+    asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
+    asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
+    asserts.false(env, "r.mergeFrom(dep)" in patched)
+
+    return unittest.end(env)
+
+resolver_cycle_guard_patch_test = unittest.make(_resolver_cycle_guard_patch_test)
+
 def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
@@ -307,4 +328,5 @@ def orchestrion_extension_test_suite():
         module_proxy_seed_go_mod_test,
         parse_certutil_sha256_test,
         powershell_single_quoted_literal_test,
+        resolver_cycle_guard_patch_test,
     )
