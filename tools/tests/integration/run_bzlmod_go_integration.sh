@@ -709,6 +709,12 @@ go_binary(
     importpath = "${MODULE_IMPORTPATH}/fixture_tool",
 )
 
+go_binary(
+    name = "fixture_testing_tool",
+    srcs = ["fixture_testing_tool.go"],
+    importpath = "${MODULE_IMPORTPATH}/fixture_testing_tool",
+)
+
 go_reset_target(
     name = "fixture_tool_reset",
     dep = ":fixture_tool",
@@ -720,7 +726,10 @@ dd_go_test(
         "hello_external_test.go",
         "hello_test.go",
     ],
-    data = [":fixture_tool_reset"],
+    data = [
+        ":fixture_testing_tool",
+        ":fixture_tool_reset",
+    ],
     embed = [":hello_lib"],
     orchestrion_pin_files = [
         "//:go.mod",
@@ -748,6 +757,16 @@ EOF
 
   cat > "$ws_dir/app/fixture_tool.go" <<'EOF'
 package main
+
+func main() {}
+EOF
+
+  cat > "$ws_dir/app/fixture_testing_tool.go" <<'EOF'
+package main
+
+import "testing"
+
+var _ = testing.Short
 
 func main() {}
 EOF

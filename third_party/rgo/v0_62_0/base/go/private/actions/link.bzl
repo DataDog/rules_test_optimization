@@ -98,6 +98,8 @@ def _orchestrion_pin_file_inputs(go, allowed_pin_files):
 def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
     if not go.orchestrion:
         return False
+    if getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return False
 
     # Synthetic testmain compile already produced the Datadog helper packagefile
     # manifest that final link needs. Keep that final test-binary link on the

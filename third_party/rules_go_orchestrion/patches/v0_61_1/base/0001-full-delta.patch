@@ -1403,10 +1403,10 @@ index 9c067b2..1b2ab71 100644
      if ldflags:
          arguments.append(ldflags)
 diff --git a/go/private/actions/link.bzl b/go/private/actions/link.bzl
-index 61f076f..57dab7b 100644
+index 61f076f..3e2b178 100644
 --- a/go/private/actions/link.bzl
 +++ b/go/private/actions/link.bzl
-@@ -33,10 +33,88 @@ load(
+@@ -33,10 +33,90 @@ load(
      "//go/private:rpath.bzl",
      "rpath",
  )
@@ -1475,6 +1475,8 @@ index 61f076f..57dab7b 100644
 +def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
 +    if not go.orchestrion:
 +        return False
++    if getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION:
++        return False
 +
 +    # Synthetic testmain compile already produced the Datadog helper packagefile
 +    # manifest that final link needs. Keep that final test-binary link on the
@@ -1495,7 +1497,7 @@ index 61f076f..57dab7b 100644
  def emit_link(
          go,
          archive = None,
-@@ -167,6 +245,12 @@ def emit_link(
+@@ -167,6 +247,12 @@ def emit_link(
      builder_args.add("-o", executable)
      builder_args.add("-main", archive.data.file)
      builder_args.add("-p", archive.data.importmap)
@@ -1508,7 +1510,7 @@ index 61f076f..57dab7b 100644
      tool_args.add_all(gc_linkopts)
      tool_args.add_all(go.toolchain.flags.link)
  
-@@ -177,8 +261,14 @@ def emit_link(
+@@ -177,8 +263,14 @@ def emit_link(
      tool_args.add_joined("-extldflags", extldflags, join_with = " ")
  
      inputs_direct = stamp_inputs + [go.sdk.package_list]
@@ -1523,7 +1525,7 @@ index 61f076f..57dab7b 100644
      inputs_transitive = [
          archive.libs,
          archive.cgo_deps,
-@@ -187,6 +277,48 @@ def emit_link(
+@@ -187,6 +279,48 @@ def emit_link(
          go.sdk.tools,
          go.stdlib.libs,
      ]
@@ -1572,7 +1574,7 @@ index 61f076f..57dab7b 100644
      inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
  
      go.actions.run(
-@@ -195,7 +327,13 @@ def emit_link(
+@@ -195,7 +329,13 @@ def emit_link(
          mnemonic = "GoLink",
          executable = go.toolchain._builder,
          arguments = [builder_args, "--", tool_args],
@@ -4090,7 +4092,7 @@ index d65b5ca..4bdf9de 100644
          test_deps.append(go.coverdata)
      test_go_info = new_go_info(
 diff --git a/go/private/rules/transition.bzl b/go/private/rules/transition.bzl
-index 809ede6..4cb0953 100644
+index 809ede6..6751455 100644
 --- a/go/private/rules/transition.bzl
 +++ b/go/private/rules/transition.bzl
 @@ -161,18 +161,48 @@ go_transition = transition(
@@ -4179,6 +4181,32 @@ index 809ede6..4cb0953 100644
      """
      return dict(settings, **_reset_transition_dict)
  
+@@ -388,12 +424,23 @@ def _non_go_transition_impl(settings, _attr):
+         #    and cause incorrect Go setting values.
+         new_settings[original_key] = ""
+ 
++    # Runtime tools and files reached through non-Go attributes such as data
++    # are separate executables, not part of the selected instrumented target.
++    new_settings[_ORCHESTRION_ENABLED_SETTING] = False
++    new_settings[_ORCHESTRION_MODE_SETTING] = _ORCHESTRION_MODE_GENERAL
++
+     return new_settings
+ 
+ non_go_transition = transition(
+     implementation = _non_go_transition_impl,
+-    inputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
+-    outputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
++    inputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values() + [
++        _ORCHESTRION_ENABLED_SETTING,
++        _ORCHESTRION_MODE_SETTING,
++    ],
++    outputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values() + [
++        _ORCHESTRION_ENABLED_SETTING,
++        _ORCHESTRION_MODE_SETTING,
++    ],
+ )
+ 
+ def _check_ternary(name, value):
 diff --git a/go/tools/builders/BUILD.bazel b/go/tools/builders/BUILD.bazel
 index ae68ab5..9cb7118 100644
 --- a/go/tools/builders/BUILD.bazel
