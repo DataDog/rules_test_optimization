@@ -7621,6 +7621,14 @@ echo blocked
         self.assertIn("events still receive context and Bazel tags before this CODEOWNERS pass", powershell_text)
         self.assertNotIn('[string]$eventType -eq "span"', powershell_text)
 
+    def test_bash_uploader_batches_codeowners_payload_updates(self) -> None:
+        """Validate CODEOWNERS enrichment rewrites each payload only once."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+
+        self.assertIn('jq --rawfile assignments "$assignments"', bash_text)
+        self.assertIn("One atomic replacement avoids rewriting the full payload per event", bash_text)
+        self.assertNotIn('jq --arg owners "$owners_json" --argjson idx "$idx"', bash_text)
+
     def test_uploader_skips_empty_test_payload_placeholders(self) -> None:
         """Validate empty JSON placeholders are not uploaded as test payloads."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")

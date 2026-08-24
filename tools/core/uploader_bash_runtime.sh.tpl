@@ -2671,61 +2671,132 @@ inject_codeowners_tags() {
   init_codeowners
   (( CODEOWNERS_ENABLED == 1 )) || return 0
 
-  local events_len idx event_type has_existing source_path owners_json tmp_payload
-  # Skip gracefully on malformed payload shapes; uploader remains best-effort.
-  events_len=$(jq '.events | if type=="array" then length else 0 end' "$payload_file" 2>/dev/null || echo 0)
-  if ! [[ "$events_len" =~ ^[0-9]+$ ]]; then
+  local event_rows unique_sources owners_by_source assignments stats tmp_payload
+  event_rows=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_events.XXXXXX" 2>/dev/null || true)
+  unique_sources=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_sources.XXXXXX" 2>/dev/null || true)
+  owners_by_source=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_owners.XXXXXX" 2>/dev/null || true)
+  assignments=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_assignments.XXXXXX" 2>/dev/null || true)
+  stats=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_stats.XXXXXX" 2>/dev/null || true)
+  if [[ -z "$event_rows" || -z "$unique_sources" || -z "$owners_by_source" || -z "$assignments" || -z "$stats" ]]; then
+    [[ -n "$event_rows" ]] && rm -f "$event_rows" 2>/dev/null || true
+    [[ -n "$unique_sources" ]] && rm -f "$unique_sources" 2>/dev/null || true
+    [[ -n "$owners_by_source" ]] && rm -f "$owners_by_source" 2>/dev/null || true
+    [[ -n "$assignments" ]] && rm -f "$assignments" 2>/dev/null || true
+    [[ -n "$stats" ]] && rm -f "$stats" 2>/dev/null || true
+    ((++CO_EVENTS_SKIPPED_ERRORS))
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip internal error creating batch files"
     return 0
   fi
 
-  for ((idx = 0; idx < events_len; idx++)); do
-    event_type=$(jq -r --argjson idx "$idx" '.events[$idx].type // ""' "$payload_file" 2>/dev/null || true)
+  # Extract the relevant event state once. URI encoding keeps tabs and newlines
+  # in source paths from interfering with the tab-separated batch format.
+  if ! jq -r '
+    def source_path:
+      (.content.meta["test.source.file"]
+        // .content.meta["test.source.path"]
+        // .content.meta["source.file"]
+        // .content.meta["source.path"]
+        // .content.source.file
+        // .content.source.path
+        // "")
+      | tostring;
+    .events
+    | if type == "array" then to_entries[] else empty end
+    | .key as $idx
+    | .value as $event
     # CODEOWNERS remains scoped to non-span lifecycle/test events. Span-form Go
     # events still receive context and Bazel tags before this CODEOWNERS pass.
-    [[ "$event_type" == "span" ]] && continue
-    ((++CO_EVENTS_SCANNED))
+    | select(($event.type // "") != "span")
+    | if (($event.content.meta | type) == "object" and ($event.content.meta | has("test.codeowners"))) then
+        [$idx, "existing"]
+      else
+        ($event | source_path) as $source
+        | if $source == "" then
+            [$idx, "missing"]
+          else
+            [$idx, "source", ($source | @uri)]
+          end
+      end
+    | @tsv
+  ' "$payload_file" > "$event_rows" 2>/dev/null; then
+    rm -f "$event_rows" "$unique_sources" "$owners_by_source" "$assignments" "$stats" 2>/dev/null || true
+    return 0
+  fi
 
-    has_existing=$(jq -r --argjson idx "$idx" 'if (.events[$idx].content.meta | type) == "object" and (.events[$idx].content.meta | has("test.codeowners")) then "1" else "0" end' "$payload_file" 2>/dev/null || echo "0")
-    if [[ "$has_existing" == "1" ]]; then
-      ((++CO_EVENTS_SKIPPED_EXISTING))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip existing tag at event[$idx]"
-      continue
-    fi
-
-    source_path=$(jq -r --argjson idx "$idx" '.events[$idx].content.meta["test.source.file"] // .events[$idx].content.meta["test.source.path"] // .events[$idx].content.meta["source.file"] // .events[$idx].content.meta["source.path"] // .events[$idx].content.source.file // .events[$idx].content.source.path // ""' "$payload_file" 2>/dev/null || true)
-    if [[ -z "$source_path" ]]; then
-      ((++CO_EVENTS_SKIPPED_MISSING_SOURCE))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip missing source at event[$idx]"
-      continue
-    fi
-
+  awk -F '\t' '$2 == "source" { print $3 }' "$event_rows" | LC_ALL=C sort -u > "$unique_sources"
+  local encoded_source source_path owners_json
+  while IFS= read -r encoded_source; do
+    [[ -n "$encoded_source" ]] || continue
+    source_path=$(decode_percent_path "$encoded_source")
     owners_json=$(resolve_codeowners_json_for_source "$source_path")
-    if [[ -z "$owners_json" ]]; then
-      ((++CO_EVENTS_SKIPPED_UNMATCHED))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip unmatched source '$source_path' at event[$idx]"
-      continue
-    fi
+    printf '%s\t%s\n' "$encoded_source" "$owners_json" >> "$owners_by_source"
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: resolved source '$source_path' owners='${owners_json:-<none>}'"
+  done < "$unique_sources"
 
+  # Join all events to the per-source ownership cache in one process. This
+  # avoids both a jq invocation and a linear Bash cache scan per event.
+  if ! awk -F '\t' \
+    -v owners_file="$owners_by_source" \
+    -v assignments_file="$assignments" \
+    -v stats_file="$stats" '
+      FILENAME == owners_file {
+        owners[$1] = $2
+        next
+      }
+      {
+        scanned++
+        if ($2 == "existing") {
+          existing++
+        } else if ($2 == "missing") {
+          missing++
+        } else if ($2 == "source" && owners[$3] != "") {
+          print $1 "\t" owners[$3] > assignments_file
+          enriched++
+        } else {
+          unmatched++
+        }
+      }
+      END {
+        print scanned + 0 "\t" enriched + 0 "\t" existing + 0 "\t" missing + 0 "\t" unmatched + 0 > stats_file
+      }
+    ' "$owners_by_source" "$event_rows"; then
+    rm -f "$event_rows" "$unique_sources" "$owners_by_source" "$assignments" "$stats" 2>/dev/null || true
+    ((++CO_EVENTS_SKIPPED_ERRORS))
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip internal error joining batch assignments"
+    return 0
+  fi
+
+  local batch_scanned pending_enriched batch_existing batch_missing batch_unmatched
+  IFS=$'\t' read -r batch_scanned pending_enriched batch_existing batch_missing batch_unmatched < "$stats"
+  CO_EVENTS_SCANNED=$((CO_EVENTS_SCANNED + batch_scanned))
+  CO_EVENTS_SKIPPED_EXISTING=$((CO_EVENTS_SKIPPED_EXISTING + batch_existing))
+  CO_EVENTS_SKIPPED_MISSING_SOURCE=$((CO_EVENTS_SKIPPED_MISSING_SOURCE + batch_missing))
+  CO_EVENTS_SKIPPED_UNMATCHED=$((CO_EVENTS_SKIPPED_UNMATCHED + batch_unmatched))
+
+  if (( pending_enriched > 0 )); then
     tmp_payload=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_payload.XXXXXX" 2>/dev/null || true)
-    if [[ -z "$tmp_payload" ]]; then
-      ((++CO_EVENTS_SKIPPED_ERRORS))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip internal error creating temp payload at event[$idx]"
-      continue
-    fi
-    if jq --arg owners "$owners_json" --argjson idx "$idx" '
-      .events[$idx].content = (.events[$idx].content // {})
-      | .events[$idx].content.meta = ((.events[$idx].content.meta // {}) | .["test.codeowners"] = $owners)
+    if [[ -n "$tmp_payload" ]] && jq --rawfile assignments "$assignments" '
+      ($assignments
+        | split("\n")
+        | map(select(length > 0) | split("\t") | {(.[0]): .[1]})
+        | add // {}) as $owners_by_index
+      | reduce ($owners_by_index | to_entries[]) as $entry (.;
+          ($entry.key | tonumber) as $idx
+          | .events[$idx].content = (.events[$idx].content // {})
+          | .events[$idx].content.meta = ((.events[$idx].content.meta // {}) | .["test.codeowners"] = $entry.value)
+        )
     ' "$payload_file" > "$tmp_payload"; then
-      # Atomic replacement prevents partially-written payload files.
+      # One atomic replacement avoids rewriting the full payload per event.
       mv "$tmp_payload" "$payload_file"
-      ((++CO_EVENTS_ENRICHED))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: assigned owners '$owners_json' at event[$idx]"
+      CO_EVENTS_ENRICHED=$((CO_EVENTS_ENRICHED + pending_enriched))
     else
-      rm -f "$tmp_payload" 2>/dev/null || true
-      ((++CO_EVENTS_SKIPPED_ERRORS))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip jq update failure at event[$idx]"
+      [[ -n "$tmp_payload" ]] && rm -f "$tmp_payload" 2>/dev/null || true
+      CO_EVENTS_SKIPPED_ERRORS=$((CO_EVENTS_SKIPPED_ERRORS + pending_enriched))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip batch jq update failure for $pending_enriched event(s)"
     fi
-  done
+  fi
+
+  rm -f "$event_rows" "$unique_sources" "$owners_by_source" "$assignments" "$stats" 2>/dev/null || true
 
   if [[ "$DEBUG" == "1" ]]; then
     dbg "codeowners: scanned=$CO_EVENTS_SCANNED enriched=$CO_EVENTS_ENRICHED skipped_existing=$CO_EVENTS_SKIPPED_EXISTING skipped_missing_source=$CO_EVENTS_SKIPPED_MISSING_SOURCE skipped_unmatched=$CO_EVENTS_SKIPPED_UNMATCHED skipped_errors=$CO_EVENTS_SKIPPED_ERRORS"
