@@ -196,7 +196,11 @@ def _topt_go_payloads_selector_impl(ctx):
     )
     return [DefaultInfo(
         files = depset(payload.files),
-        runfiles = ctx.runfiles(files = payload.files, symlinks = payload.symlinks),
+        runfiles = ctx.runfiles(
+            files = payload.files,
+            root_symlinks = payload.root_symlinks,
+            symlinks = payload.symlinks,
+        ),
     )]
 
 def _topt_go_bazel_metadata_impl(ctx):

@@ -76,6 +76,8 @@ load(
     "selector_explicit_namespaced_test",
     "selector_explicit_precedence_target",
     "selector_explicit_precedence_test",
+    "selector_external_module_runfiles_target",
+    "selector_external_module_runfiles_test",
     "selector_fallback_target",
     "selector_fallback_test",
     "selector_imports_precedence_target",
@@ -191,6 +193,16 @@ selector_omits_flaky_tests_target(
 selector_omits_flaky_tests_test(
     name = "selector_omits_flaky_tests_test",
     target_under_test = ":selector_omits_flaky_tests_target",
+)
+
+selector_external_module_runfiles_target(
+    name = "selector_external_module_runfiles_target",
+    tags = ["manual"],
+)
+
+selector_external_module_runfiles_test(
+    name = "selector_external_module_runfiles_test",
+    target_under_test = ":selector_external_module_runfiles_target",
 )
 
 selector_explicit_precedence_target(
@@ -702,6 +714,7 @@ test_suite(
         ":selector_explicit_miss_failure_test",
         ":selector_explicit_namespaced_test",
         ":selector_explicit_precedence_test",
+        ":selector_external_module_runfiles_test",
         ":selector_fallback_test",
         ":selector_imports_precedence_test",
         ":selector_include_disabled_test",

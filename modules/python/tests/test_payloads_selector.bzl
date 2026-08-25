@@ -286,6 +286,21 @@ def selector_omits_flaky_tests_target(name, tags = None):
         tags = tags,
     )
 
+def selector_external_module_runfiles_target(name, tags = None):
+    topt_py_payloads_selector(
+        name = name,
+        explicit_identifier = "example/python/pkg",
+        imports = [],
+        deps = [],
+        attribute_candidates = [],
+        fallback_identifier = "example/python/pkg",
+        full_files = "@test_optimization_data_python//:test_optimization_files",
+        module_group_names = ["module_example_python_pkg"],
+        module_groups = ["@test_optimization_data_python//:module_example_python_pkg"],
+        include_per_module = True,
+        tags = tags,
+    )
+
 def _has_fragment(items, fragment):
     for item in items:
         if fragment in item:
@@ -403,6 +418,20 @@ def _selector_omits_flaky_tests_test_impl(ctx):
     asserts.false(env, _has_suffix(symlink_paths, "/flaky_tests.json"), "unexpected flaky_tests.json symlink: %s" % symlink_paths)
     return analysistest.end(env)
 
+def _selector_external_module_runfiles_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    symlink_paths = [s.path for s in target[DefaultInfo].default_runfiles.symlinks.to_list()]
+    root_symlink_paths = [s.path for s in target[DefaultInfo].default_runfiles.root_symlinks.to_list()]
+    _assert_core_cache_symlinks(env, root_symlink_paths)
+    asserts.equals(env, [], symlink_paths)
+    asserts.false(
+        env,
+        _has_suffix(root_symlink_paths, "/flaky_tests.json"),
+        "unexpected flaky_tests.json root symlink: %s" % root_symlink_paths,
+    )
+    return analysistest.end(env)
+
 selector_explicit_precedence_test = analysistest.make(
     _selector_explicit_precedence_test_impl,
 )
@@ -443,4 +472,7 @@ selector_override_miss_failure_test = analysistest.make(
 )
 selector_omits_flaky_tests_test = analysistest.make(
     _selector_omits_flaky_tests_test_impl,
+)
+selector_external_module_runfiles_test = analysistest.make(
+    _selector_external_module_runfiles_test_impl,
 )
