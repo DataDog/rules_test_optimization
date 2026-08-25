@@ -147,18 +147,18 @@ whose virtual context keys preserve exact per-payload enrichment.
 
 The `dd_topt_go_test` macro automatically selects the correct per‑module payloads by inferring the Go package `importpath` using `rules_go` providers, mirroring how `go_test` computes it.
 
-- Preferred: add a `go_library` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoInfo` from `@rules_go//go:def.bzl` via a Starlark aspect walking `embed`.
+- Preferred: add a `go_library` with an explicit `importpath` and set `embed = [":<that_library>"]` in your `dd_topt_go_test` call. The macro reads `GoArchive`/`GoInfo` from `@rules_go//go:def.bzl` via a Starlark aspect.
 - Precedence for determining importpath:
   1) `importpath` explicitly set on the `go_test` invocation (if provided via kwargs)
-  2) Provider‑based inference via `embed`
-  3) Fallback to `<go module path>/<bazel package>`, where the module path is exported by the sync repo in `topt_data["runtimes"]["go"]["module_path"]`
+  2) Provider-based inference via `embed` when the library importpath is explicit
+  3) Fallback to the label-derived importpath that `rules_go` assigns to the hidden raw `go_test` target
 - Per‑module selection:
   - When synchronized metadata exposes module groups, explicit `importpath` or
     `module_label_override` values must match one or analysis fails. When no
     module groups exist, the canonical full bundle remains valid.
   - Provider-based inference via `embed` attempts per-module selection and may
     fall back to the canonical full bundle on a miss.
-  - When using (3), the macro consults
+  - When neither `importpath` nor `embed` is supplied, the macro consults
     `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if
     false, it uses the full bundle.
 

@@ -283,10 +283,10 @@ Language Macros
   - Configure payloads to write to `TEST_UNDECLARED_OUTPUTS_DIR` automatically.
   - Surface reasonable defaults and allow overrides.
 - Note: Macros no longer create per-test uploaders. Users create ONE uploader target per workspace.  
-- Go importpath inference:  
-  - A Starlark aspect walks `embed` on the `go_test` target and reads `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.  
-  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_path>)` using `topt_data["manifest_path"]`, so custom `out_dir` values are supported.  
-  - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) provider‑based inference via `embed`; (3) fallback to `<go module path>/<bazel package>`.  
+- Go importpath inference:
+  - A Starlark aspect reads an embedded library's explicit `GoArchive.importpath` from rules_go providers, mirroring how `go_test` computes it.
+  - A small rule uses the inferred importpath to pick the matching `:module_<sanitized>` filegroup from the synced repo and exposes it in runfiles; the macro sets `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to `$(rlocationpath <manifest_path>)` using `topt_data["manifest_path"]`, so custom `out_dir` values are supported.
+  - Precedence: (1) explicit `importpath` kwarg on the `go_test`; (2) an explicit provider importpath via `embed`; (3) the label-derived importpath that `rules_go` assigns to the hidden raw `go_test` target.
   - When synchronized metadata exposes module groups, explicit `importpath` and `module_label_override` values must match one or analysis fails. Provider-based or derived inference, and metadata with no module groups, may use the canonical full bundle. The exported `topt_data["runtimes"]["go"]["module_included"]` flag is consulted only in fallback mode.
 - Module dependency: the Go companion module (`datadog-rules-test-optimization-go`) declares `bazel_dep("rules_go", <version>)` to make provider loads visible under Bzlmod; it does not configure toolchains. Consumers must still configure `rules_go` and the Go SDK in their own `MODULE.bazel`.
 

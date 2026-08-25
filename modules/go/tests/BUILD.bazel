@@ -27,6 +27,7 @@ load(
     "go_macro_explicit_service_wiring_test",
     "go_macro_general_mode_linker_flags_target",
     "go_macro_general_mode_linker_flags_wiring_test",
+    "go_macro_inferred_importpath_metadata_test",
     "go_macro_multi_service_target",
     "go_macro_multi_service_wiring_test",
     "go_macro_orchestrion_enablement_mismatch_failure_test",
@@ -83,8 +84,6 @@ load(
 )
 load(
     ":test_payloads_selector.bzl",
-    "selector_deps_precedence_target",
-    "selector_deps_precedence_test",
     "selector_embed_precedence_target",
     "selector_embed_precedence_test",
     "selector_empty_importpath_fallback_target",
@@ -98,6 +97,8 @@ load(
     "selector_fallback_test",
     "selector_include_disabled_target",
     "selector_include_disabled_test",
+    "selector_inferred_embed_uses_fallback_target",
+    "selector_inferred_embed_uses_fallback_test",
     "selector_no_match_fallback_target",
     "selector_no_match_fallback_test",
     "selector_omits_flaky_tests_target",
@@ -293,14 +294,14 @@ selector_embed_precedence_test(
     target_under_test = ":selector_embed_precedence_target",
 )
 
-selector_deps_precedence_target(
-    name = "selector_deps_precedence_target",
+selector_inferred_embed_uses_fallback_target(
+    name = "selector_inferred_embed_uses_fallback_target",
     tags = ["manual"],
 )
 
-selector_deps_precedence_test(
-    name = "selector_deps_precedence_test",
-    target_under_test = ":selector_deps_precedence_target",
+selector_inferred_embed_uses_fallback_test(
+    name = "selector_inferred_embed_uses_fallback_test",
+    target_under_test = ":selector_inferred_embed_uses_fallback_target",
 )
 
 selector_fallback_target(
@@ -394,6 +395,11 @@ go_macro_disabled_raw_wiring_test(
 go_macro_single_service_wiring_test(
     name = "go_macro_single_service_wiring_test",
     target_under_test = ":go_macro_single_service_target__raw_go_test",
+)
+
+go_macro_inferred_importpath_metadata_test(
+    name = "go_macro_inferred_importpath_metadata_test",
+    target_under_test = ":go_macro_single_service_target_topt_bazel_metadata",
 )
 
 go_macro_public_wrapper_test(
@@ -785,6 +791,7 @@ test_suite(
         ":go_macro_dynamic_manifest_wiring_test",
         ":go_macro_env_none_wiring_test",
         ":go_macro_explicit_service_wiring_test",
+        ":go_macro_inferred_importpath_metadata_test",
         ":go_macro_multi_service_wiring_test",
         ":go_macro_orchestrion_enablement_mismatch_failure_test",
         ":go_macro_orchestrion_pin_files_provider_test",
@@ -824,7 +831,6 @@ test_suite(
         ":resolve_topt_service_key_prefers_exact_then_sanitized_test",
         ":resolve_topt_service_key_unknown_failure_test",
         ":select_module_group_name_test",
-        ":selector_deps_precedence_test",
         ":selector_embed_precedence_test",
         ":selector_empty_importpath_fallback_test",
         ":selector_explicit_miss_failure_test",
@@ -832,6 +838,7 @@ test_suite(
         ":selector_explicit_precedence_test",
         ":selector_fallback_test",
         ":selector_include_disabled_test",
+        ":selector_inferred_embed_uses_fallback_test",
         ":selector_no_match_fallback_test",
         ":selector_omits_flaky_tests_test",
         ":selector_override_miss_failure_test",

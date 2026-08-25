@@ -18,9 +18,9 @@ Notes:
   --remote_download_regex=.*test[.]outputs.*, and
   --zip_undeclared_test_outputs are set, and run doctor/uploader with BEP
   freshness plus artifact staging.
-- Import path inference mirrors rules_go behavior by walking `embed` via
-  an aspect and reading the GoArchive provider; when unavailable, falls
-  back to go_module_path + Bazel package path.
+- Import path inference mirrors rules_go behavior by reading an explicit
+  `embed` importpath via an aspect; when unavailable, it falls back to the
+  hidden raw go_test label's inferred importpath.
 - Create ONE uploader target per workspace (see dd_payload_uploader in
   test_optimization_uploader.bzl) and run it via `bazel run` after tests.
 
@@ -245,6 +245,19 @@ def _label_dedupe_key(value):
 
     return label
 
+def _rules_go_inferred_importpath(package_name, target_name):
+    """Mirror rules_go's label-based fallback importpath calculation."""
+    importpath = package_name
+    if not importpath.endswith(target_name):
+        importpath += "/" + target_name
+
+    vendor_prefix = "/vendor/"
+    if importpath.rfind(vendor_prefix) != -1:
+        importpath = importpath[len(vendor_prefix) + importpath.rfind(vendor_prefix):]
+    if importpath.startswith("/"):
+        importpath = importpath[1:]
+    return importpath
+
 def dd_topt_go_test(
         name,
         # Required: pass the exported `modules` dict from @<repo>//:export.bzl
@@ -287,7 +300,7 @@ def dd_topt_go_test(
       name: Test target name.
       topt_data: Either the single-service dict exported by @<repo>//:export.bzl, or the
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
-        Used to derive the repo alias, go_module_path, and whether to include per-module files.
+        Used to derive the repo alias and whether to include per-module files.
       go_test_rule: Optional override for the underlying rules_go go_test rule.
         Defaults to `go_test` from `@rules_go//go:def.bzl`. This hook is for
         tests and low-level experiments; repository policy wrappers should stay
@@ -454,23 +467,12 @@ def dd_topt_go_test(
         macro_name = "dd_topt_go_test",
     )
 
-    # Fallback importpath when providers are unavailable: go_module_path + Bazel package
+    # Mirror rules_go's fallback for the actual hidden go_test label. rules_go
+    # only inherits an embed importpath when that path is explicit; otherwise
+    # it derives the importpath from the go_test package and target name.
     pkg_path = native.package_name()
-    fallback_importpath = None
-    if explicit_importpath:
-        # Explicit importpath is authoritative and mirrors rules_go semantics.
-        fallback_importpath = explicit_importpath
-    else:
-        _mp = (_go.get("module_path") if _is_dict(_go) else None) or None
-        if _mp:
-            # Build module-relative fallback importpath: "<go_module>/<pkg>".
-            # Trim trailing slash to avoid accidental double separators.
-            base = _mp[:-1] if _mp.endswith("/") else _mp
-            fallback_importpath = (base + "/" + pkg_path) if pkg_path else base
-        else:
-            # Last resort: package path only, still sufficient for best-effort
-            # module label matching when repo metadata is incomplete.
-            fallback_importpath = pkg_path
+    raw_name = name + "__raw_go_test"
+    fallback_importpath = explicit_importpath or _rules_go_inferred_importpath(pkg_path, raw_name)
 
     selector_name = name + "_topt_payloads"
     metadata_name = name + "_topt_bazel_metadata"
@@ -602,7 +604,6 @@ def dd_topt_go_test(
             _TEST_BINARY_LINKER_OPTIMIZATION_GC_LINKOPTS,
         )
 
-    raw_name = name + "__raw_go_test"
     user_tags = wrapper_kwargs.get("tags")
     kwargs["tags"] = (user_tags or []) + ["manual"]
     kwargs["visibility"] = ["//visibility:private"]

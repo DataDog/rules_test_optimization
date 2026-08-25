@@ -7,8 +7,8 @@
 """Starlark helpers to infer Go importpath via rules_go providers.
 
 This file provides:
-- An aspect that walks the `embed` attribute to find a go_library's
-  computed importpath (matching rules_go's logic).
+- An aspect that reads an embedded go_library's explicit importpath
+  (matching rules_go's logic).
 - A rule that uses that aspect result to choose the correct per-module
   filegroup from the synced repository and expose those files as runfiles.
 
@@ -132,14 +132,17 @@ def _importpath_aspect_impl(target, ctx):
     - If this target provides GoInfo (formerly GoLibrary), read its importpath.
     - Else, if this target provides GoArchive, read its importpath.
     - Else, if rule has an explicit importpath attribute, use it.
-    - Else, traverse children via `embed` and propagate first discovered value.
+    - Else, report no explicit embed importpath so the caller can use the
+      label-derived go_test fallback.
     """
 
-    # Prefer GoInfo provider (rules_go v0.51+, replaces GoLibrary)
+    # rules_go only inherits an embedded library's importpath when that path
+    # was explicit. Inferred embed paths are ignored and the go_test label is
+    # used instead.
     if GoInfo in target:
         info = target[GoInfo]
         ip = getattr(info, "importpath", None)
-        if type(ip) == type("") and ip:
+        if getattr(info, "pathtype", None) == "explicit" and type(ip) == type("") and ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
     # Fallback: GoArchive may carry importpath
@@ -152,7 +155,7 @@ def _importpath_aspect_impl(target, ctx):
             ip = getattr(arch.source, "importpath", None)
         if (not ip) and hasattr(arch, "library"):
             ip = getattr(arch.library, "importpath", None)
-        if type(ip) == type("") and ip:
+        if getattr(arch, "pathtype", None) == "explicit" and type(ip) == type("") and ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
     # Explicit attribute on some go_* rules
@@ -161,21 +164,11 @@ def _importpath_aspect_impl(target, ctx):
         if type(ip) == type("") and ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
-    # Propagate from transitive deps.
-    # Returning the first non-empty importpath preserves deterministic behavior.
-    for attr_name in ["embed", "deps"]:
-        for dep in getattr(ctx.rule.attr, attr_name, []):
-            if ToptGoImportpathInfo in dep:
-                ip = dep[ToptGoImportpathInfo].importpath
-                if type(ip) == type("") and ip:
-                    return [ToptGoImportpathInfo(importpath = ip)]
-
     # No information found at this node
     return []
 
 _importpath_aspect = aspect(
     implementation = _importpath_aspect_impl,
-    attr_aspects = ["embed", "deps"],
 )
 
 def _topt_go_payloads_selector_impl(ctx):

@@ -1981,8 +1981,8 @@ The macro auto-selects the correct per-module payloads by inferring the Go packa
 
 - Precedence:
   1) `importpath` explicitly set on your `go_test` invocation (if provided in kwargs)
-  2) Inference via `embed = [":<go_library>"]` by reading `GoArchive.importpath` from rules_go (recommended)
-  3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo's exported `topt_data["runtimes"]["go"]["module_path"]`
+  2) Inference via `embed = [":<go_library>"]` when that library has an explicit rules_go importpath (recommended)
+  3) Fallback: the label-derived importpath that `rules_go` assigns to the hidden raw `go_test` target
 
 When automatic per-module selection is close but not exact (for example, custom
 import path layouts), use `module_label_override` to pin the expected sanitized

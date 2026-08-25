@@ -549,6 +549,19 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
 
+def _go_macro_inferred_importpath_metadata_test_impl(ctx):
+    """Assert fallback metadata mirrors the hidden rules_go test label."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    metadata = target[ToptGoBazelMetadataInfo].metadata
+    asserts.equals(
+        env,
+        "modules/go/tests/go_macro_single_service_target__raw_go_test",
+        metadata["bazel.go.importpath"],
+    )
+    asserts.equals(env, "fallback", metadata["bazel.go.importpath_source"])
+    return analysistest.end(env)
+
 def _go_macro_disabled_raw_wiring_test_impl(ctx):
     """Assert disabled metadata forwards caller kwargs to one raw public test."""
     env = analysistest.begin(ctx)
@@ -1049,6 +1062,9 @@ def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
 
 go_macro_single_service_wiring_test = analysistest.make(
     _go_macro_single_service_wiring_test_impl,
+)
+go_macro_inferred_importpath_metadata_test = analysistest.make(
+    _go_macro_inferred_importpath_metadata_test_impl,
 )
 go_macro_disabled_raw_wiring_test = analysistest.make(
     _go_macro_disabled_raw_wiring_test_impl,
