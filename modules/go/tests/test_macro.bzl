@@ -556,7 +556,7 @@ def _go_macro_inferred_importpath_metadata_test_impl(ctx):
     metadata = target[ToptGoBazelMetadataInfo].metadata
     asserts.equals(
         env,
-        "modules/go/tests/go_macro_single_service_target__raw_go_test",
+        target.label.package + "/go_macro_single_service_target__raw_go_test",
         metadata["bazel.go.importpath"],
     )
     asserts.equals(env, "fallback", metadata["bazel.go.importpath_source"])
