@@ -294,9 +294,9 @@ def selector_external_module_runfiles_target(name, tags = None):
         deps = [],
         attribute_candidates = [],
         fallback_identifier = "example/python/pkg",
-        full_files = "@test_optimization_data_python//:test_optimization_files",
+        full_files = "@test_optimization_data//:test_optimization_files",
         module_group_names = ["module_example_python_pkg"],
-        module_groups = ["@test_optimization_data_python//:module_example_python_pkg"],
+        module_groups = ["@test_optimization_data//:module_example_python_pkg"],
         include_per_module = True,
         tags = tags,
     )
