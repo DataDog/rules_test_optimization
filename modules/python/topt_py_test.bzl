@@ -23,7 +23,6 @@ load(
     "merge_user_env",
     "normalize_user_data",
     "resolve_files_label",
-    "resolve_manifest_label",
     "resolve_module_group_names",
     "resolve_module_labels",
     "resolve_topt_service_key",
@@ -293,6 +292,7 @@ def dd_topt_py_test(
     )
 
     selector_name = name + "_topt_payloads"
+    selector_manifest_name = selector_name + "_manifest"
     metadata_name = name + "_topt_bazel_metadata"
     topt_py_payloads_selector(
         name = selector_name,
@@ -308,6 +308,11 @@ def dd_topt_py_test(
         module_label_override = module_label_override,
         importpath = importpath_candidate if importpath_candidate != None else "",
         module_path = module_path_candidate if module_path_candidate != None else "",
+    )
+    native.filegroup(
+        name = selector_manifest_name,
+        srcs = [":" + selector_name],
+        output_group = "selected_manifest",
     )
 
     pkg_path = native.package_name()
@@ -345,14 +350,12 @@ def dd_topt_py_test(
         user_env = dict(user_env)
         user_env["PYTEST_ADDOPTS"] = _existing_pytest_addopts + " --ddtrace"
 
-    data = _append_data_dependencies(data, [":" + selector_name])
-
-    manifest_label = resolve_manifest_label(_svc, sync_repo_name, macro_name = "dd_topt_py_test")
-    data = _append_data_dependencies(data, [manifest_label])
+    selector_manifest_label = ":" + selector_manifest_name
+    data = _append_data_dependencies(data, [":" + selector_name, selector_manifest_label])
     env = _merge_user_env(
         user_env,
         {
-            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
+            "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % selector_manifest_label,
             "DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES": "true",
             "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
         },

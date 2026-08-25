@@ -93,6 +93,39 @@ def _select_from_candidates(candidates, module_group_names, include_per_module, 
             return selected_name
     return ""
 
+def _materialize_selected_payloads(ctx, files):
+    """Materialize the selected metadata under one physical manifest root."""
+    sources_by_basename = {file.basename: file for file in files}
+    manifest_source = sources_by_basename.get("manifest.txt")
+    if manifest_source == None:
+        return struct(files = files, manifest = None)
+
+    output_paths = {
+        "manifest.txt": ".testoptimization/manifest.txt",
+        "settings.json": ".testoptimization/cache/http/settings.json",
+        "known_tests.json": ".testoptimization/cache/http/known_tests.json",
+        "test_management.json": ".testoptimization/cache/http/test_management.json",
+        "flaky_tests.json": ".testoptimization/cache/http/flaky_tests.json",
+    }
+    outputs = []
+    replaced_paths = {}
+    manifest = None
+    for basename, relative_path in output_paths.items():
+        source = sources_by_basename.get(basename)
+        if source == None:
+            continue
+        output = ctx.actions.declare_file(ctx.label.name + "/" + relative_path)
+        ctx.actions.symlink(output = output, target_file = source)
+        outputs.append(output)
+        replaced_paths[source.path] = True
+        if basename == "manifest.txt":
+            manifest = output
+
+    return struct(
+        files = outputs + [file for file in files if not replaced_paths.get(file.path)],
+        manifest = manifest,
+    )
+
 def _topt_py_payloads_selector_impl(ctx):
     module_group_names = ctx.attr.module_group_names
     if module_group_names:
@@ -159,14 +192,18 @@ def _topt_py_payloads_selector_impl(ctx):
         src_default.files.to_list(),
         include_flaky_tests = False,
     )
-    return [DefaultInfo(
-        files = depset(payload.files),
+    materialized = _materialize_selected_payloads(ctx, payload.files)
+    providers = [DefaultInfo(
+        files = depset(materialized.files),
         runfiles = ctx.runfiles(
-            files = payload.files,
-            root_symlinks = payload.root_symlinks,
-            symlinks = payload.symlinks,
+            files = materialized.files,
         ),
     )]
+    if materialized.manifest != None:
+        providers.append(OutputGroupInfo(
+            selected_manifest = depset([materialized.manifest]),
+        ))
+    return providers
 
 topt_py_payloads_selector = rule(
     implementation = _topt_py_payloads_selector_impl,

@@ -616,7 +616,7 @@ def _py_macro_consumer_runner_wiring_test_impl(ctx):
 
     # Test Optimization wiring is present.
     asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_target_topt_payloads"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_target_topt_payloads_manifest"))
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
@@ -653,7 +653,7 @@ def _py_macro_consumer_runner_capture_test_impl(ctx):
 
     # Data has selector and manifest.
     asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_with_capture_target_topt_payloads"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_with_capture_target_topt_payloads_manifest"))
 
     # imports is empty — not synthesized from package path.
     asserts.equals(env, [], captured.imports)
@@ -696,7 +696,7 @@ def _py_macro_consumer_runner_kwargs_test_impl(ctx):
     asserts.equals(env, ["pytest", "ddtrace"], captured.dd_requirements)
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_kwargs_target_topt_payloads"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_consumer_runner_kwargs_target_topt_payloads_manifest"))
     asserts.equals(env, "--ddtrace", captured.env.get("PYTEST_ADDOPTS"))
     asserts.true(env, "manual" in captured.tags)
     asserts.true(env, "consumer_tag" in captured.tags)
@@ -867,15 +867,13 @@ def _py_macro_single_service_wiring_test_impl(ctx):
     captured = target[ToptPyMacroCaptureInfo]
 
     asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_single_service_target_topt_payloads"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_single_service_target_topt_payloads_manifest"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
-    asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
 
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
     asserts.true(env, "rlocationpath" in manifest_env)
-    asserts.true(env, "test_optimization_data" in manifest_env)
-    asserts.true(env, ".testoptimization/manifest.txt" in manifest_env)
+    asserts.true(env, "py_macro_single_service_target_topt_payloads_manifest" in manifest_env)
     asserts.equals(
         env,
         "py_macro_single_service_target_topt_bazel_metadata.json",
@@ -893,8 +891,7 @@ def _py_macro_multi_service_wiring_test_impl(ctx):
     captured = target[ToptPyMacroCaptureInfo]
 
     asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_multi_service_target_topt_payloads"))
-    asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_multi_service_target_topt_payloads_manifest"))
     asserts.equals(
         env,
         "py_macro_multi_service_target_topt_bazel_metadata.json",
@@ -909,7 +906,7 @@ def _py_macro_dynamic_manifest_wiring_test_impl(ctx):
     env = analysistest.begin(ctx)
     captured = analysistest.target_under_test(env)[ToptPyMacroCaptureInfo]
     asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_dynamic_manifest_target_topt_payloads"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
+    asserts.true(env, _has_label_suffix(captured.data_labels, ":py_macro_dynamic_manifest_target_topt_payloads_manifest"))
     asserts.false(env, _has_fragment(captured.data_labels, "virtual_dynamic_repo_that_must_not_resolve"))
     asserts.equals(env, "dynamic-python-service", captured.env.get("DD_SERVICE"))
     return analysistest.end(env)
@@ -1001,14 +998,15 @@ def _py_macro_public_wrapper_test_impl(ctx):
 
 def _py_macro_fallback_payloads_test_impl(ctx):
     env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    paths = [file.short_path for file in target[DefaultInfo].files.to_list()]
+    input_paths = []
+    for action in analysistest.target_actions(env):
+        input_paths.extend([file.short_path for file in action.inputs.to_list()])
     package_suffix = ctx.label.package.replace("/", "_")
     expected_module_name = "module_example_python_%s" % package_suffix
 
     expected_module_known_tests = False
     full_bundle_known_tests = False
-    for path in paths:
+    for path in input_paths:
         if path.endswith("/.testoptimization/%s/known_tests.json" % expected_module_name):
             expected_module_known_tests = True
         if path.endswith("/.testoptimization/cache/http/known_tests.json"):
@@ -1017,12 +1015,12 @@ def _py_macro_fallback_payloads_test_impl(ctx):
     asserts.true(
         env,
         expected_module_known_tests,
-        msg = "macro-generated selector must expose %s: %s" % (expected_module_name, paths),
+        msg = "macro-generated selector must select %s: %s" % (expected_module_name, input_paths),
     )
     asserts.false(
         env,
         full_bundle_known_tests,
-        msg = "macro-generated selector must not fall back to the full known-tests bundle: %s" % paths,
+        msg = "macro-generated selector must not read the full known-tests bundle: %s" % input_paths,
     )
     return analysistest.end(env)
 

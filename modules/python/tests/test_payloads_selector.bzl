@@ -313,16 +313,16 @@ def _has_suffix(items, suffix):
             return True
     return False
 
-def _assert_core_cache_symlinks(env, symlink_paths):
+def _assert_core_cache_paths(env, paths):
     asserts.true(
         env,
-        _has_fragment(symlink_paths, "/.testoptimization/cache/http/known_tests.json"),
-        "expected canonical known_tests.json symlink in paths: %s" % symlink_paths,
+        _has_fragment(paths, "/.testoptimization/cache/http/known_tests.json"),
+        "expected canonical known_tests.json in paths: %s" % paths,
     )
     asserts.true(
         env,
-        _has_fragment(symlink_paths, "/.testoptimization/cache/http/test_management.json"),
-        "expected canonical test_management.json symlink in paths: %s" % symlink_paths,
+        _has_fragment(paths, "/.testoptimization/cache/http/test_management.json"),
+        "expected canonical test_management.json in paths: %s" % paths,
     )
 
 def _assert_selected(env, target, expected_fragment):
@@ -409,26 +409,26 @@ def _selector_override_miss_failure_test_impl(ctx):
 def _selector_omits_flaky_tests_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
-    files = [f.basename for f in target[DefaultInfo].files.to_list()]
-    runfiles = [f.basename for f in target[DefaultInfo].default_runfiles.files.to_list()]
-    symlink_paths = [s.path for s in target[DefaultInfo].default_runfiles.symlinks.to_list()]
-    _assert_core_cache_symlinks(env, symlink_paths)
-    asserts.false(env, _has_fragment(files, "flaky_tests.json"), "unexpected flaky_tests.json in files: %s" % files)
-    asserts.false(env, _has_fragment(runfiles, "flaky_tests.json"), "unexpected flaky_tests.json in runfiles: %s" % runfiles)
-    asserts.false(env, _has_suffix(symlink_paths, "/flaky_tests.json"), "unexpected flaky_tests.json symlink: %s" % symlink_paths)
+    file_paths = [f.short_path for f in target[DefaultInfo].files.to_list()]
+    runfile_paths = [f.short_path for f in target[DefaultInfo].default_runfiles.files.to_list()]
+    _assert_core_cache_paths(env, file_paths)
+    asserts.false(env, _has_fragment(file_paths, "flaky_tests.json"), "unexpected flaky_tests.json in files: %s" % file_paths)
+    asserts.false(env, _has_fragment(runfile_paths, "flaky_tests.json"), "unexpected flaky_tests.json in runfiles: %s" % runfile_paths)
     return analysistest.end(env)
 
 def _selector_external_module_runfiles_test_impl(ctx):
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
+    file_paths = [f.short_path for f in target[DefaultInfo].files.to_list()]
     symlink_paths = [s.path for s in target[DefaultInfo].default_runfiles.symlinks.to_list()]
     root_symlink_paths = [s.path for s in target[DefaultInfo].default_runfiles.root_symlinks.to_list()]
-    _assert_core_cache_symlinks(env, root_symlink_paths)
+    _assert_core_cache_paths(env, file_paths)
     asserts.equals(env, [], symlink_paths)
+    asserts.equals(env, [], root_symlink_paths)
     asserts.false(
         env,
-        _has_suffix(root_symlink_paths, "/flaky_tests.json"),
-        "unexpected flaky_tests.json root symlink: %s" % root_symlink_paths,
+        _has_suffix(file_paths, "/flaky_tests.json"),
+        "unexpected flaky_tests.json in files: %s" % file_paths,
     )
     return analysistest.end(env)
 
