@@ -7036,8 +7036,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertEqual("fail", report["result"]["status"])
         self.assertEqual("payload_enrichment_failed", report["result"]["reason_code"])
         self.assertFalse(report["upload"]["attempted"])
-        self.assertTrue(report["upload"]["dry_run"])
-        self.assertTrue(report["config"]["dry_run"])
+        self.assertFalse(report["upload"]["dry_run"])
+        self.assertFalse(report["config"]["dry_run"])
         self.assertTrue(report["config"]["validate_enrichment"])
         self.assertEqual([str(bep_path)], report["bep"]["files"])
         self.assertEqual(1, report["payloads"]["test_outputs_dirs"])
@@ -7706,7 +7706,7 @@ echo blocked
 
     def test_generated_bash_uploader_writes_failure_report(self) -> None:
         """Validate generated Bash uploader writes a report for controlled upload failures."""
-        _require_command(self, "jq", "jq is required for Bash dry-run enrichment validation")
+        _require_command(self, "jq", "jq is required for Bash enrichment validation")
         bash = _require_functional_bash(self)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -7726,6 +7726,8 @@ echo blocked
             generated_bash.chmod(0o755)
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
             env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            env["DD_API_KEY"] = "test-api-key"
+            env["DD_TEST_OPTIMIZATION_AGENTLESS_URL"] = "http://127.0.0.1:9"
             report = root / "uploader-report.json"
             env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(report)
             result = subprocess.run(
@@ -7740,7 +7742,6 @@ echo blocked
                     "--remote-artifacts=download",
                     "--artifact-staging-dir",
                     str(root / ".topt" / "bep-artifacts"),
-                    "--dry-run",
                     "--validate-enrichment",
                     "--expected-enriched-tag=missing.required.tag",
                 ],
@@ -7886,6 +7887,8 @@ echo blocked
             )
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
             env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            env["DD_API_KEY"] = "test-api-key"
+            env["DD_TEST_OPTIMIZATION_AGENTLESS_URL"] = "http://127.0.0.1:9"
             report = root / "uploader-report.json"
             env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(report)
             result = subprocess.run(
@@ -7903,7 +7906,6 @@ echo blocked
                     "--remote-artifacts=download",
                     "--artifact-staging-dir",
                     str(root / ".topt" / "bep-artifacts"),
-                    "--dry-run",
                     "--validate-enrichment",
                     "--expected-enriched-tag=missing.required.tag",
                 ],

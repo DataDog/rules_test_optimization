@@ -30,6 +30,7 @@ load(
 )
 load(
     "@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl",
+    "stdlib_warmup_tags_for_tests",
     "stdlib_warmup_transition_impl_for_tests",
 )
 load(
@@ -1037,6 +1038,14 @@ def _stdlib_warmup_transition_selects_test_optimization_test_impl(ctx):
     asserts.false(env, "@rules_go//go/private/orchestrion:enabled" in result)
     return unittest.end(env)
 
+def _stdlib_warmup_tags_test_impl(ctx):
+    """Assert warmup targets remain excluded from wildcard builds."""
+    env = unittest.begin(ctx)
+    asserts.equals(env, ["manual"], stdlib_warmup_tags_for_tests(None))
+    asserts.equals(env, ["custom", "manual"], stdlib_warmup_tags_for_tests(["custom"]))
+    asserts.equals(env, ["custom", "manual"], stdlib_warmup_tags_for_tests(["custom", "manual"]))
+    return unittest.end(env)
+
 def _stdlib_warmup_disabled_noop_test_impl(ctx):
     """Assert broad builds can analyze the warmup target without enablement."""
     env = analysistest.begin(ctx)
@@ -1228,6 +1237,9 @@ orch_transition_forwards_mode_test = unittest.make(
 )
 stdlib_warmup_transition_selects_test_optimization_test = unittest.make(
     _stdlib_warmup_transition_selects_test_optimization_test_impl,
+)
+stdlib_warmup_tags_test = unittest.make(
+    _stdlib_warmup_tags_test_impl,
 )
 stdlib_warmup_disabled_noop_test = analysistest.make(
     _stdlib_warmup_disabled_noop_test_impl,

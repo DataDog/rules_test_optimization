@@ -616,6 +616,7 @@ REPORT_REASON_CODE="running"
 REPORT_REASON="Uploader is still running."
 REPORT_NEXT_STEPS=()
 REPORT_UPLOAD_ATTEMPTED=0
+REPORT_UPLOAD_FAILED=0
 REPORT_PAYLOADS_DISCOVERED_TESTS=0
 REPORT_PAYLOADS_DISCOVERED_COVERAGE=0
 REPORT_PAYLOADS_DISCOVERED_TELEMETRY=0
@@ -1216,7 +1217,7 @@ classify_uploader_result() {
             "Use the BEP from the exact matching bazel test invocation and verify each expected target is fresh or exclusively cached."
         return
     fi
-    if (( exit_code != 0 && DRY_RUN == 0 && REPORT_UPLOAD_ATTEMPTED > 0 && ${UPLOAD_FAILURES:-0} > 0 )); then
+    if (( exit_code != 0 && DRY_RUN == 0 && REPORT_UPLOAD_FAILED > 0 )); then
         set_report_result "upload_failed_http" \
             "One or more payload uploads failed." \
             "Check HTTP status diagnostics and Datadog credentials/site configuration."
@@ -4972,6 +4973,7 @@ send_test_payload_part() {
             dbg "header[content-encoding]: Content-Encoding: gzip"
         fi
     fi
+    REPORT_UPLOAD_ATTEMPTED=1
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless "${CURL_FAIL_FLAG[@]}" -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}"); then
@@ -4992,6 +4994,7 @@ send_test_payload_part() {
         dbg "upload_single_test: HTTP $http (rc=$rc; part=$part_index/$part_count; uncompressed_bytes=$uncompressed_bytes; transmitted_bytes=$transmitted_bytes; encoding=$encoding)"
     fi
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        REPORT_UPLOAD_FAILED=1
         response_bytes="$(test_payload_size_bytes "$resp")"
         response_text="<empty>"
         truncated="false"
@@ -5078,6 +5081,7 @@ upload_single_coverage() {
         fi
         dbg "headers: multipart/form-data (event + coveragex=${coverage_content_type})"
     fi
+    REPORT_UPLOAD_ATTEMPTED=1
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" \
@@ -5106,6 +5110,7 @@ upload_single_coverage() {
     fi
     rm -f "$resp" "$eventjson" 2>/dev/null || true
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        REPORT_UPLOAD_FAILED=1
         return 1
     fi
     return 0
@@ -5152,6 +5157,7 @@ upload_single_telemetry() {
         rm -f "$meta_file" 2>/dev/null || true
         return 1
     fi
+    REPORT_UPLOAD_ATTEMPTED=1
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${upload_body}" -o "$resp" -w "%{http_code}"); then
@@ -5176,6 +5182,7 @@ upload_single_telemetry() {
     fi
     rm -f "$resp" "$meta_file" "$provider_body" 2>/dev/null || true
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        REPORT_UPLOAD_FAILED=1
         return 1
     fi
     return 0
@@ -5232,7 +5239,6 @@ upload_all_tests() {
                 fi
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_test "$f"; then
                 log "uploaded test payload: $f"
                 mark_fresh_output_handled "$outputs_dir"
@@ -5291,7 +5297,6 @@ upload_all_coverage() {
                 ((++REPORT_COVERAGE_PROCESSED))
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_coverage "$f"; then
                 log "uploaded coverage payload: $f"
                 mark_fresh_output_handled "$outputs_dir"
@@ -5352,7 +5357,6 @@ upload_all_telemetry() {
                 ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
                 mark_fresh_output_handled "$outputs_dir"
@@ -5379,7 +5383,6 @@ upload_all_telemetry() {
                 ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$anchor_path" "$synthetic_body"; then
                 log "uploaded telemetry payload: $anchor_path"
                 ((++total))

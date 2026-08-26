@@ -661,6 +661,7 @@ $script:ReportReasonCode = "running"
 $script:ReportReason = "Uploader is still running."
 $script:ReportNextSteps = [System.Collections.Generic.List[string]]::new()
 $script:ReportUploadAttempted = $false
+$script:ReportUploadFailed = $false
 $script:ReportPayloadsDiscoveredTests = 0
 $script:ReportPayloadsDiscoveredCoverage = 0
 $script:ReportPayloadsDiscoveredTelemetry = 0
@@ -1132,7 +1133,7 @@ function Set-ClassifiedUploaderResult([int]$ExitCode) {
             @("Use the BEP from the exact matching bazel test invocation and verify each expected target is fresh or exclusively cached.")
         return
     }
-    if ($ExitCode -ne 0 -and -not $script:DryRun -and $script:ReportUploadAttempted -and $script:UploadFailures -gt 0) {
+    if ($ExitCode -ne 0 -and -not $script:DryRun -and $script:ReportUploadFailed) {
         Set-ReportResult "upload_failed_http" `
             "One or more payload uploads failed." `
             @("Check HTTP status diagnostics and Datadog credentials/site configuration.")
@@ -3862,6 +3863,7 @@ function Send-PostJson(
         $encoding = 'identity'
         Dbg "Send-PostJson: Content-Type=application/json"
       }
+      $script:ReportUploadAttempted = $true
       $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
       if ($resp.IsSuccessStatusCode) {
         if ($script:DebugMode) {
@@ -3873,6 +3875,7 @@ function Send-PostJson(
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Dbg "Send-PostJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
         if ($attempt -eq $maxRetries) {
+          $script:ReportUploadFailed = $true
           $bounded = Format-BoundedUploadResponse $body
           Log "upload failed: source='$SourcePath' part=$PartIndex/$PartCount http=$([int]$resp.StatusCode) encoding=$encoding uncompressed_bytes=$uncompressedBytes compressed_bytes=$compressedBytes transmitted_bytes=$transmittedBytes response_bytes=$($bounded.Bytes) response_truncated=$($bounded.Truncated.ToString().ToLowerInvariant()) response_body='$($bounded.Text)'"
           return [bool]$false
@@ -3881,6 +3884,7 @@ function Send-PostJson(
     } catch {
       Dbg "Send-PostJson: Exception on attempt $attempt - $_"
       if ($attempt -eq $maxRetries) {
+        $script:ReportUploadFailed = $true
         $encoding = if ($script:GzipPayloads) { 'gzip' } else { 'identity' }
         $compressedBytes = if ($script:GzipPayloads -and $null -ne $compressed) { $compressed.Length } else { 'none' }
         $transmittedBytes = if ($script:GzipPayloads -and $null -ne $compressed) { $compressed.Length } else { $uncompressedBytes }
@@ -4566,6 +4570,7 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
       $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $bytes)
       $content.Headers.ContentType = 'application/json'
       Dbg "Send-PostRawJson: Content-Type=application/json"
+      $script:ReportUploadAttempted = $true
       $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
       if ($resp.IsSuccessStatusCode) {
         if ($script:DebugMode) {
@@ -4577,6 +4582,7 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Dbg "Send-PostRawJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
         if ($attempt -eq $maxRetries) {
+          $script:ReportUploadFailed = $true
           Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
           return [bool]$false
         }
@@ -4584,6 +4590,7 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
     } catch {
       Dbg "Send-PostRawJson: Exception on attempt $attempt - $_"
       if ($attempt -eq $maxRetries) {
+        $script:ReportUploadFailed = $true
         Log "upload failed: $_"
         return [bool]$false
       }
@@ -4766,6 +4773,7 @@ function Upload-SingleCoverage([string]$FilePath) {
                 $covContent.Headers.ContentType = $coverageContentType
                 $content.Add($covContent, 'coveragex', $coverageFileName)
                 Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries; Content-Type=multipart/form-data; coveragex=$coverageContentType)"
+                $script:ReportUploadAttempted = $true
                 $resp = $client.PostAsync($CovUrl, $content).GetAwaiter().GetResult()
                 if ($resp.IsSuccessStatusCode) {
                     $uploaded = $true
@@ -4777,6 +4785,7 @@ function Upload-SingleCoverage([string]$FilePath) {
                     $respBody = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
                     Dbg "Upload-SingleCoverage: HTTP $([int]$resp.StatusCode) on attempt $attempt"
                     if ($attempt -eq $maxRetries) {
+                        $script:ReportUploadFailed = $true
                         # Only emit user-facing error after final retry to avoid
                         # noisy logs for transient first-attempt failures.
                         Log "coverage upload failed: HTTP $([int]$resp.StatusCode) $respBody"
@@ -4785,6 +4794,7 @@ function Upload-SingleCoverage([string]$FilePath) {
             } catch {
                 Dbg "Upload-SingleCoverage: Exception on attempt $attempt - $_"
                 if ($attempt -eq $maxRetries) {
+                    $script:ReportUploadFailed = $true
                     Log "coverage upload failed: $_"
                 }
             } finally {
@@ -4915,7 +4925,6 @@ function Upload-AllTests {
                 }
                 continue
             }
-            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleTest $f.FullName)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -4969,7 +4978,6 @@ function Upload-AllCoverage {
                 $script:ReportCoverageProcessed++
                 continue
             }
-            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleCoverage $f.FullName)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -5024,7 +5032,6 @@ function Upload-AllTelemetry {
                     $script:ReportTelemetryProcessed++
                     continue
                 }
-                $script:ReportUploadAttempted = $true
                 $uploadedResult = @(Upload-SingleTelemetry $f.FullName $bodyPath)
                 $uploaded = $false
                 if ($uploadedResult.Count -gt 0) {
@@ -5057,7 +5064,6 @@ function Upload-AllTelemetry {
                 $script:ReportTelemetryProcessed++
                 continue
             }
-            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleTelemetry $entry.AnchorPath $entry.BodyPath)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {

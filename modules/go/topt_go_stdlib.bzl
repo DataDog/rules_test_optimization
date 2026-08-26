@@ -20,6 +20,14 @@ def _stdlib_warmup_transition_impl(_settings, _attr):
 
 stdlib_warmup_transition_impl_for_tests = _stdlib_warmup_transition_impl
 
+def _with_manual_tag(tags):
+    tags = list(tags or [])
+    if "manual" not in tags:
+        tags.append("manual")
+    return tags
+
+stdlib_warmup_tags_for_tests = _with_manual_tag
+
 _stdlib_warmup_transition = transition(
     implementation = _stdlib_warmup_transition_impl,
     inputs = [],
@@ -84,6 +92,7 @@ def dd_topt_go_stdlib_warmup(name, **kwargs):
         tags = ["manual"],
         visibility = ["//visibility:private"],
     )
+    kwargs["tags"] = _with_manual_tag(kwargs.get("tags"))
     _dd_topt_go_stdlib_warmup(
         name = name,
         actual = ":" + transitioned_name,
