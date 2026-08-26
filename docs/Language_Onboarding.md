@@ -136,7 +136,7 @@ The consumer command:
 3. derives a service and runtime context from each full label;
 4. writes a private invocation-scoped manifest;
 5. runs the exact labels with `--config=test-optimization`, then doctor and
-   uploader dry-run.
+   one validated uploader pass.
 
 The Rule does not discover affected tests and does not prescribe a repository's
 service grammar. A common consumer policy is to derive an application service
@@ -177,8 +177,8 @@ sequenceDiagram
     Runner->>Bazel: sync and test exact labels with config
     Bazel->>Sync: materialize selected Go/Python contexts
     Sync-->>Bazel: narrow per-context/module inputs
-    Runner->>Post: doctor exact targets, then dry-run
-    Post-->>User: validation result and optional upload
+    Runner->>Post: doctor exact targets, then validated uploader
+    Post-->>User: validation or upload result
   end
 ```
 
@@ -876,7 +876,7 @@ bazel run @datadog-rules-test-optimization-python//tools/dd_topt_py_bootstrap:dd
 The default output excludes `FETCH_SALT`. If you intentionally need fresh
 metadata, print the separate force-refresh command with
 `--print-refresh-snippet`, run that sync command once, then return to the normal
-test, doctor, dry-run, and upload flow without `FETCH_SALT`.
+test, doctor, and validated uploader flow without `FETCH_SALT`.
 
 ### Multi-service
 

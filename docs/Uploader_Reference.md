@@ -283,7 +283,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. |
 | `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | unset | Optional path for the doctor machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the doctor target's `--` separator. |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | unset | Optional path for the uploader machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the uploader target's `--` separator. |
-| `DD_TEST_OPTIMIZATION_REPORT_DIR` | unset | Optional wrapper report directory. CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`, and optional `uploader-upload-report.json` under this directory. |
+| `DD_TEST_OPTIMIZATION_REPORT_DIR` | unset | Optional wrapper report directory. CI wrappers write `doctor-report.json` plus `uploader-dry-run-report.json` without upload or `uploader-upload-report.json` with upload. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | `auto` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | unset | Optional explicit legacy execution-log fallback path. Prefer BEP for new CI integrations. The uploader does not auto-discover `.topt/bazel-execution-log.json` because stale execution-log files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | `local` | Artifact source for `test.outputs` materialization: `local`, `bep`, or `auto`. `local` preserves existing discovery. `bep` requires an explicit BEP JSON file and stages BEP-referenced artifacts. |
@@ -427,10 +427,10 @@ common no-upload cases such as `bep_output_remote_only_without_downloader`,
 `no_payload_json_found`, `payload_enrichment_failed`, and
 `upload_skipped_dry_run`.
 
-The CI wrapper writes a separate dry-run uploader report when `--report-dir` is
-used. If only `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` or
-`--uploader-report-json` is configured and `--report-dir` is not set, that
-single path is used by the dry-run invocation only.
+The CI wrapper writes exactly one uploader report when `--report-dir` is used:
+`uploader-dry-run-report.json` without upload, or `uploader-upload-report.json`
+with upload. `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` and
+`--uploader-report-json` override that selected report path.
 
 Example:
 

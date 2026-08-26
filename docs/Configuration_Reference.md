@@ -261,7 +261,7 @@ be added to a user's `.bazelrc` or set in ordinary jobs. Enabled resolution
 requires it to name a valid schema-v1 manifest; disabled resolution ignores it.
 
 One managed command invocation must keep that exact manifest path and
-environment value for test, doctor, uploader dry-run, and optional upload.
+environment value for test, doctor, and the validated uploader.
 Those phases therefore share one resolved repository snapshot. A later command
 invocation owns a new temporary manifest path and performs one new fetch round.
 Equivalent backend settings and module payloads remain byte-identical test
@@ -624,7 +624,7 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
 | `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Optional path for the doctor machine-readable diagnostic report |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Optional path for the uploader machine-readable diagnostic report |
-| `DD_TEST_OPTIMIZATION_REPORT_DIR` | Optional wrapper/report-script directory. CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`, and, when upload is enabled, `uploader-upload-report.json` under this directory unless explicit report paths override the doctor or dry-run uploader path |
+| `DD_TEST_OPTIMIZATION_REPORT_DIR` | Optional wrapper/report-script directory. CI wrappers write `doctor-report.json` plus `uploader-dry-run-report.json` without upload or `uploader-upload-report.json` with upload unless explicit report paths override them |
 | `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` | Optional doctor or wrapper path for the redacted support diagnostics zip |
 | `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` | Optional override for the support bundle collector script. Doctor targets provide this through runfiles; wrappers default to `create_support_bundle.py` beside the wrapper |
 | `DD_TEST_OPTIMIZATION_PYTHON` | Optional Python interpreter used by wrapper support-bundle generation and helper scripts before falling back to `PYTHON`, `python3`, and `python` |
@@ -676,9 +676,9 @@ Wrapper report options:
 
 | Option / variable | Purpose |
 |-------------------|---------|
-| `--report-dir=<path>` / `-ReportDir <path>` / `DD_TEST_OPTIMIZATION_REPORT_DIR` | Recommended CI artifact directory. Bash and PowerShell wrappers write separate doctor, dry-run uploader, and upload reports under this directory |
+| `--report-dir=<path>` / `-ReportDir <path>` / `DD_TEST_OPTIMIZATION_REPORT_DIR` | Recommended CI artifact directory. Bash and PowerShell wrappers write a doctor report plus exactly one uploader report under this directory |
 | `--doctor-report-json=<path>` / `-DoctorReportJson <path>` / `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Override only the wrapper doctor report path |
-| `--uploader-report-json=<path>` / `-UploaderReportJson <path>` / `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Override only the wrapper dry-run uploader report path. Real upload still uses `<report-dir>/uploader-upload-report.json` when `--report-dir` is set |
+| `--uploader-report-json=<path>` / `-UploaderReportJson <path>` / `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Override the selected wrapper uploader report path, for either dry-run or real upload |
 | `--support-bundle=<path>` / `-SupportBundle <path>` / `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` | Write a redacted support diagnostics zip containing reports, selected BEP summaries, command metadata, runtime metadata, and a Markdown summary |
 | `--support-bundle-collector=<path>` / `-SupportBundleCollector <path>` / `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` | Override the support bundle collector path. Defaults to `create_support_bundle.py` beside the wrapper |
 
@@ -687,7 +687,7 @@ so customers do not need to copy helper scripts just to create a first-pass
 diagnostics package. The wrapper support bundle still requires the full
 `tools/test_optimization/` helper directory or an explicit
 `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` path. Both modes are opt-in and
-do not change the doctor, test, dry-run, upload, or final CI exit status.
+do not change the doctor, test, uploader, or final CI exit status.
 Bundle generation failures are reported as warnings.
 
 | Bundle file | Purpose |

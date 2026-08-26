@@ -119,7 +119,7 @@ flowchart TB
     TX --> D[Doctor exact-target validation]
     TY --> D
     TZ --> D
-    D --> U[Uploader dry-run and optional upload]
+    D --> U[Validated uploader]
   end
 ```
 
@@ -129,8 +129,8 @@ because repository rules cannot discover the final analyzed test set. The
 temporary manifest is therefore an internal handoff between those phases, not
 user-maintained configuration.
 
-Within one managed command, test, doctor, uploader dry-run, and optional upload
-reuse the exact same manifest path and external-repository snapshot. A later
+Within one managed command, test, doctor, and the validated uploader reuse the
+exact same manifest path and external-repository snapshot. A later
 command uses a new temporary path and fetches current backend state once.
 Stable settings and per-module payload files are the test action inputs, so
 unchanged backend responses preserve normal Bazel test-result caching.

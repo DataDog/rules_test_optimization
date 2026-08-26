@@ -95,12 +95,11 @@ The sync rule creates `@test_optimization_data//` containing:
   ```bash
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
-  test_status=0; doctor_status=0; dry_run_status=0; upload_status=0
+  test_status=0; doctor_status=0; uploader_status=0
   ./bazelw test //... || test_status=$?
   ./bazelw run //<topt-package>:dd_test_optimization_doctor || doctor_status=$?
-  ./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?
-  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads || upload_status=$?
-  for status in "$test_status" "$doctor_status" "$dry_run_status" "$upload_status"; do
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads -- --validate-enrichment || uploader_status=$?
+  for status in "$test_status" "$doctor_status" "$uploader_status"; do
     if [ "$status" -ne 0 ]; then exit "$status"; fi
   done
   ```
@@ -156,9 +155,11 @@ The sync rule creates `@test_optimization_data//` containing:
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
 - In consumer workspaces, run `./bazelw run //<topt-package>:dd_test_optimization_doctor`
-  after tests complete, then run `./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment`, then upload with `./bazelw run //<topt-package>:dd_upload_payloads`.
+  after tests complete, then run the uploader once with `--validate-enrichment`.
+  Add `--dry-run` to that invocation only when upload is disabled.
   When upload is authorized, process every available fresh valid payload even if
-  tests, doctor, or dry-run fail, and preserve the earliest failure as the job result.
+  tests or doctor fail, and preserve the earliest test, doctor, or uploader
+  failure as the job result.
 - For Go, route the repository's central `dd_go_test` wrapper through
   `dd_topt_go_test`; `--config=test-optimization` is the only user-facing
   enable switch.

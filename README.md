@@ -57,10 +57,10 @@ A managed command owns two Bazel phases behind one user-facing entrypoint:
 3. run metadata sync and the exact selected tests with
    `--config=test-optimization`;
 4. run the workspace doctor against the generated exact-target list, then run
-   uploader dry-run and optional upload.
+   one validated uploader pass: dry-run without upload, or real upload.
 
 The command reuses one manifest path and one resolved metadata snapshot for
-test, doctor, dry-run, and upload. A later command invocation creates a new
+test, doctor, and uploader. A later command invocation creates a new
 manifest path and fetches current backend state once. When the selected
 settings and module payloads are unchanged, those stable test inputs remain
 byte-identical and normal Bazel test-result cache hits are preserved.
@@ -80,8 +80,7 @@ flowchart LR
   M --> R[One aggregate metadata repository]
   R --> T[Exact selected tests]
   T --> D[Doctor with exact target set]
-  D --> V[Uploader dry-run]
-  V --> X[Optional upload]
+  D --> V[Validated uploader]
 ```
 
 See [Installation Reference](docs/Installation_Reference.md#manifest-driven-managed-gopython-monorepos),
@@ -237,7 +236,7 @@ automatically. No per-target disable attribute is required.
    `--build_event_json_file` in `.bazelrc`; CI wrappers should create a fresh
    BEP file path for each Bazel test invocation so parallel jobs cannot
    overwrite each other.
-5. Configure doctor, enrichment dry-run, and uploader with the matching BEP
+5. Configure doctor and the validated uploader with the matching BEP
    files and BEP artifact staging through wrapper arguments:
    - `--bep-json=<path>` once per Bazel test invocation
    - `--freshness-source=bep`
@@ -1489,9 +1488,9 @@ $env:DD_SITE = "datadoghq.com"
 ```
 
 **IMPORTANT**: Always preserve the test exit code. When upload is enabled, the
-wrapper runs doctor and dry-run for diagnostics, then uploads every available
-fresh valid payload even if tests or either validation step failed. The earliest
-test, doctor, dry-run, or upload failure remains the job result.
+wrapper runs the doctor, then validates enrichment and uploads every available
+fresh valid payload in one uploader pass even if tests or doctor failed. The
+earliest test, doctor, or uploader failure remains the job result.
 
 ### Important runtime requirements
 
@@ -1999,7 +1998,7 @@ dd_topt_go_test(
 `embedsrcs`. When enabled, it changes the default `rundir` to `.` only if you
 did not already set `rundir`. An explicit `rundir` still wins unchanged.
 
-Then run tests, doctor, enrichment dry-run, and upload with the same BEP-required
+Then run tests, doctor, and one validated uploader pass with the same BEP-required
 flow shown in [Basic usage](#basic-usage): let the wrapper generate a fresh BEP
 file path for each `bazel test` invocation, pass those paths to doctor/uploader
 via repeatable `--bep-json`, and keep

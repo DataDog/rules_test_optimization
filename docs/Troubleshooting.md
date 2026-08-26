@@ -95,7 +95,7 @@ Use this escalation ladder:
 | Situation | Ask for | Why |
 | --- | --- | --- |
 | First customer response after tests already ran | Doctor `--support-bundle=<path>` | Smallest command; built into the doctor target; no helper scripts required |
-| CI failure where upload, enrichment, or dry-run behavior matters | Wrapper `--report-dir=<path> --support-bundle=<path>` | Includes doctor, uploader dry-run, optional upload report, BEP summaries, and effective wrapper flags |
+| CI failure where upload, enrichment, or dry-run behavior matters | Wrapper `--report-dir=<path> --support-bundle=<path>` | Includes doctor, the selected uploader report, BEP summaries, and effective wrapper flags |
 | Repository cannot run the wrapper or doctor bundle | Raw `--report-json` files plus manual `create_support_bundle.py` output | Fallback only; raw reports may include internal paths until the redacted zip is created |
 
 Ask the customer to attach the zip, not screenshots of terminal output. If the
@@ -286,7 +286,7 @@ repository rule receives exact targets and runtime contexts.
 ### Doctor or uploader triggers another metadata fetch
 
 One managed command invocation must pass the same temporary manifest path to
-test, doctor, uploader dry-run, and optional upload. If the request log shows
+test, doctor, and the validated uploader. If the request log shows
 another fetch during a post-test phase, check that the command did not create a
 new temporary directory or change
 `DD_TEST_OPTIMIZATION_SERVICES_MANIFEST` between child Bazel processes.

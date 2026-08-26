@@ -126,8 +126,8 @@ RTO_ARCHIVE_TYPE="tar.gz"
 RULES_GO_UPSTREAM="v0_60_0"
 RULES_GO_VARIANT="base"
 RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
-DD_TRACE_GO_VERSION="v2.9.1"
-ORCHESTRION_VERSION="v1.12.0"
+DD_TRACE_GO_VERSION="v2.9.0"
+ORCHESTRION_VERSION="v1.9.0"
 ```
 
 The archive URL, SHA256, and prefix are tied to the repository commit.
@@ -471,9 +471,9 @@ $env:DD_SITE = "datadoghq.com"
 During rollout debugging, prefer `--report-dir <path>` plus
 `--support-bundle <path>` on the CI wrapper, or set
 `DD_TEST_OPTIMIZATION_REPORT_DIR` and `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE`.
-The wrapper writes separate
-`doctor-report.json`, `uploader-dry-run-report.json`, and, when `--upload` is
-enabled, `uploader-upload-report.json` files. When support bundle output is
+The wrapper writes `doctor-report.json` plus exactly one uploader report:
+`uploader-dry-run-report.json` without `--upload`, or
+`uploader-upload-report.json` with it. When support bundle output is
 configured, it also writes `dd-test-optimization-support.zip` with redacted
 reports, selected BEP summaries, effective wrapper flags, runtime metadata, and
 `summary.md`. Use `--doctor-report-json` or
@@ -521,9 +521,10 @@ python3 tools/test_optimization/render_report_summary.py \
   --output .topt/reports/upload-diagnostics.md
 ```
 
-When upload is enabled, run the real uploader after the doctor and dry-run
-attempts even if either validation failed. It processes every available fresh
-valid payload while the wrapper preserves the earlier failure as the job result.
+When upload is enabled, the wrapper runs the real uploader once after the doctor
+and validates enrichment in that same pass. It processes every available fresh
+valid payload even if tests or doctor failed while preserving the earliest
+failure as the job result.
 
 For manual Go extension wiring, set `module_path` to the Go module path from
 `go.mod`:
@@ -728,8 +729,8 @@ creating the manifest or its environment handoff manually. When
 and emits stable disabled stubs. When enabled, a missing or invalid manifest
 fails before any metadata HTTP request.
 
-The command must reuse one manifest path for test, doctor, uploader dry-run,
-and optional upload so all phases resolve the same metadata snapshot. The next
+The command must reuse one manifest path for test, doctor, and the validated
+uploader so all phases resolve the same metadata snapshot. The next
 command invocation creates a new temporary manifest path and fetches current
 backend state once. Equivalent selected settings/module files remain stable
 test action inputs, preserving normal Bazel test-result cache hits; variable

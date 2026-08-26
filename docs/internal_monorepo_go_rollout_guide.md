@@ -160,21 +160,20 @@ bazel test --config=test-optimization <build-only-control-target>
 bazel test --config=test-optimization <instrumented-target-1>
 bazel test --config=test-optimization <instrumented-target-2>
 bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --validate-enrichment
 bazel shutdown
 ```
 
-Run the real uploader after doctor and dry-run attempts even when an earlier
-phase fails. It uploads available fresh valid failed-test payloads while the
-wrapper preserves the earlier failure as the job result.
+Run the real uploader after the doctor even when an earlier phase fails. It
+validates enrichment and uploads available fresh valid failed-test payloads in
+one pass while the wrapper preserves the earlier failure as the job result.
 
 The doctor must see JSON payloads, Bazel target metadata, Git metadata, and only
 valid Go payload-selection states. `module`, `module_override`, and
 `full_bundle_disabled` are valid. `full_bundle_no_match` is a rollout blocker
 unless the target was explicitly configured to allow it.
 
-The dry-run enrichment step is the local proof that tags expected in Datadog are
+Upload-time enrichment validation proves that tags expected in Datadog are
 present in the final upload body. Raw payload files on disk are intentionally
 not the final enriched body.
 
