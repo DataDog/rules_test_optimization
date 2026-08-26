@@ -6341,6 +6341,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         extra_args: tuple[str, ...] = (),
         gzip_enabled: bool,
         keep_payloads: bool = True,
+        read_only_parent: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]], bool]:
         """Run one generated uploader against a recording local test intake."""
         bash = _require_functional_bash(self)
@@ -6353,6 +6354,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             payload_dir.mkdir(parents=True)
             source = payload_dir / "span_events_generated.json"
             source.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            if read_only_parent:
+                payload_dir.chmod(0o555)
             runfiles_dir = root / "empty.runfiles"
             runfiles_dir.mkdir()
 
@@ -6553,6 +6556,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     extra_args=("--validate-enrichment", "--expected-enriched-tag=event.id"),
                     gzip_enabled=True,
                     keep_payloads=False,
+                    read_only_parent=True,
                 )
                 output = result.stdout + result.stderr
                 self.assertEqual(0, result.returncode, output)

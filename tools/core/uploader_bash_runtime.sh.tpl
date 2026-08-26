@@ -3972,6 +3972,7 @@ cleanup_file() {
         # Some runfiles can be read-only; best-effort cleanup keeps uploads resilient.
         if ! rm -f "$file" 2>/dev/null; then
             chmod u+w "$file" 2>/dev/null || true
+            chmod u+w "$(dirname "$file")" 2>/dev/null || true
             rm -f "$file" 2>/dev/null || true
         fi
     else
