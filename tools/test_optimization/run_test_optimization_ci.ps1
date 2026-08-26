@@ -92,9 +92,9 @@ if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
       $UploaderReportJson = Join-Path $ReportDir "uploader-dry-run-report.json"
     }
   }
-  if ($Upload.IsPresent) {
-    $UploadReportJson = $UploaderReportJson
-  }
+}
+if ($Upload.IsPresent) {
+  $UploadReportJson = $UploaderReportJson
 }
 
 $keepGeneratedFiles = $KeepTmp.IsPresent -or $env:DD_TEST_OPTIMIZATION_KEEP_TMP -eq "1"

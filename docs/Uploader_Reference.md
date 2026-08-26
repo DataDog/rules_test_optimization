@@ -674,8 +674,11 @@ payload discovery/quiescence before proceeding.
   limit retain the existing unsplit upload path; larger payloads fail locally.
   PowerShell performs the same split with its built-in JSON support.
 - Split parts are uploaded in event order and retry independently. A failed
-  part does not prevent the uploader from attempting the remaining parts. The
-  source payload is reported as failed and retained unless every part succeeds.
+  part does not prevent the uploader from attempting the remaining parts. After
+  partial success, the retry payload is replaced with only the failed parts so
+  accepted events are not replayed. If every part fails, retry persistence
+  fails, or payload retention is explicitly enabled, the original source is
+  retained.
 - Terminal test-upload failures always log the HTTP status, up to 2,000
   characters of the response body, and the uncompressed, compressed, and
   transmitted byte counts. Response logging does not require debug mode.

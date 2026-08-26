@@ -3601,8 +3601,13 @@ test_output_dir_is_freshness_eligible() {
     log_freshness_skip_once "$outputs_dir" "BEP reported cached result for target $target_label output $output_key"
 	  elif [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" && "$FRESHNESS_MODE" == "required" ]]; then
 	    if [[ -n "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" ]] && grep -Fxq "$target_label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
-	      log "error: BEP required freshness cannot authorize $outputs_dir because the fresh TestResult for $target_label did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-	      exit 2
+	      log_freshness_skip_once "$outputs_dir" "fresh BEP TestResult for $target_label did not contain a mappable test.outputs reference"
+	      if (( FRESHNESS_SKIP_WAS_EMITTED == 1 )); then
+	        log "warning: BEP required freshness skipped $outputs_dir because the fresh TestResult for $target_label did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+	        if (( EXPECTED_TARGETS_CONFIGURED == 0 )); then
+	          ((++UPLOAD_FAILURES))
+	        fi
+	      fi
 	    else
 	      log_freshness_skip_once "$outputs_dir" "no fresh BEP TestResult matched target $target_label output $output_key"
 	    fi
@@ -4919,6 +4924,43 @@ prepare_test_payload_parts() {
     return 0
 }
 
+persist_failed_test_payload_parts() {
+    local source_file="$1"
+    shift
+    local retry_file failed_count=$#
+    if (( failed_count == 0 )) || [[ "$KEEP_PAYLOADS" == "1" ]]; then
+        return 0
+    fi
+    retry_file="$(mktemp "${source_file}.retry.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$retry_file" ]]; then
+        log "warning: failed to create retry payload beside source; retaining the original payload: $source_file"
+        return 1
+    fi
+    if (( failed_count == 1 )); then
+        if ! cp "$1" "$retry_file"; then
+            rm -f "$retry_file" 2>/dev/null || true
+            log "warning: failed to retain the rejected split payload part; retaining the original payload: $source_file"
+            return 1
+        fi
+    elif ! jq -cs '
+      .[0] as $first
+      | (reduce .[] as $part ([]; . + ($part.events // []))) as $events
+      | $first
+      | .events = $events
+    ' "$@" >"$retry_file"; then
+        rm -f "$retry_file" 2>/dev/null || true
+        log "warning: failed to combine rejected split payload parts; retaining the original payload: $source_file"
+        return 1
+    fi
+    if ! mv -f "$retry_file" "$source_file"; then
+        rm -f "$retry_file" 2>/dev/null || true
+        log "warning: failed to replace the source with rejected split payload parts; retaining the original payload: $source_file"
+        return 1
+    fi
+    log "retained $failed_count failed split payload part(s) for retry: $source_file"
+    return 0
+}
+
 bounded_upload_response() {
     local response_file="$1"
     head -c "$UPLOAD_RESPONSE_LOG_BYTES" "$response_file" 2>/dev/null | tr '\r\n' '  '
@@ -5017,6 +5059,7 @@ send_test_payload_part() {
 upload_single_test() {
     local file="$1"
     local body part part_index=0 part_count failed=0
+    local failed_parts=()
     body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$body" ]]; then
         log "error: failed to create temporary test payload: $file"
@@ -5044,8 +5087,12 @@ upload_single_test() {
         ((++part_index))
         if ! send_test_payload_part "$file" "$part" "$part_index" "$part_count"; then
             failed=1
+            failed_parts+=("$part")
         fi
     done
+    if (( failed == 1 && ${#failed_parts[@]} < part_count )); then
+        persist_failed_test_payload_parts "$file" "${failed_parts[@]}" || true
+    fi
     cleanup_prepared_test_payloads
     (( failed == 0 ))
 }

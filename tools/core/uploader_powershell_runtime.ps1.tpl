@@ -3330,8 +3330,13 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
     Write-FreshnessSkipOnce $OutputsDir "BEP reported cached result for target $targetLabel output $outputKey"
   } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
     if ($script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
-      Log "error: BEP required freshness cannot authorize $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-      exit 2
+      Write-FreshnessSkipOnce $OutputsDir "fresh BEP TestResult for $targetLabel did not contain a mappable test.outputs reference"
+      if ($script:FreshnessSkipWasWritten) {
+        Log "warning: BEP required freshness skipped $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+        if (-not $script:ExpectedTargetsConfigured) {
+          $script:UploadFailures++
+        }
+      }
     } else {
       Write-FreshnessSkipOnce $OutputsDir "no fresh BEP TestResult matched target $targetLabel output $outputKey"
     }
@@ -3973,6 +3978,31 @@ function Prepare-TestPayloadParts([string]$BodyPath, [string]$SourcePath) {
   }
   Log "split test payload: source='$SourcePath' uncompressed_bytes=$size parts=$($script:PreparedTestPayloads.Count) target_bytes=$($script:TestPayloadSplitTargetBytes)"
   return [bool]$true
+}
+
+function Save-FailedTestPayloadParts([string]$SourcePath, [string[]]$FailedParts) {
+  if ($KeepPayloads -or $null -eq $FailedParts -or $FailedParts.Count -eq 0) { return }
+  $retryPath = Join-Path (Split-Path -Parent $SourcePath) ((Split-Path -Leaf $SourcePath) + ".retry." + [System.Guid]::NewGuid().ToString("N"))
+  try {
+    $retryPayload = Get-Content -LiteralPath $FailedParts[0] -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    if ($FailedParts.Count -gt 1) {
+      $failedEvents = [System.Collections.Generic.List[object]]::new()
+      foreach ($partPath in $FailedParts) {
+        $partPayload = Get-Content -LiteralPath $partPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        foreach ($event in @(Get-MapValue $partPayload 'events')) {
+          $failedEvents.Add($event) | Out-Null
+        }
+      }
+      $retryPayload.events = @($failedEvents.ToArray())
+    }
+    Write-Utf8NoBomFile -Path $retryPath -Content (($retryPayload | ConvertTo-Json -Depth 100 -Compress) + "`n")
+    [System.IO.File]::Move($retryPath, $SourcePath, $true)
+    Log "retained $($FailedParts.Count) failed split payload part(s) for retry: $SourcePath"
+  } catch {
+    Log "warning: failed to retain rejected split payload parts; retaining the original payload '$SourcePath': $_"
+  } finally {
+    Remove-Item -LiteralPath $retryPath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Get-TelemetryHeaders([string]$FilePath) {
@@ -4622,6 +4652,7 @@ function Upload-SingleTest([string]$FilePath) {
     }
     $partCount = $script:PreparedTestPayloads.Count
     $failed = $false
+    $failedParts = [System.Collections.Generic.List[string]]::new()
     try {
         for ($index = 0; $index -lt $partCount; $index++) {
             $part = $script:PreparedTestPayloads[$index]
@@ -4634,7 +4665,11 @@ function Upload-SingleTest([string]$FilePath) {
             $resultStream = @(Send-PostJson $TestUrl $hdrs $part $FilePath ($index + 1) $partCount)
             if ($resultStream.Count -eq 0 -or -not [bool]$resultStream[-1]) {
                 $failed = $true
+                $failedParts.Add($part) | Out-Null
             }
+        }
+        if ($failed -and $failedParts.Count -lt $partCount) {
+            Save-FailedTestPayloadParts $FilePath @($failedParts.ToArray())
         }
     } finally {
         Clear-PreparedTestPayloads

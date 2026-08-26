@@ -605,9 +605,17 @@ exit 99
             env = os.environ.copy()
             env["BAZEL"] = str(fake_bazel)
             env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+            uploader_report = root / "custom-uploader-report.json"
 
             result = subprocess.run(
-                [bash, str(wrapper), "--upload", "//pkg:target"],
+                [
+                    bash,
+                    str(wrapper),
+                    "--upload",
+                    "--uploader-report-json",
+                    str(uploader_report),
+                    "//pkg:target",
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -624,6 +632,7 @@ exit 99
             self.assertEqual(1, len(upload_commands), upload_commands)
             self.assertIn("--validate-enrichment", upload_commands[0])
             self.assertNotIn("--dry-run", upload_commands[0])
+            self.assertIn(f"--report-json={uploader_report}", upload_commands[0])
 
     def test_bash_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate Bash support bundle path preserves the original test status."""
@@ -949,6 +958,8 @@ exit 99
             tmpdir.mkdir()
             env = os.environ.copy()
             env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+            uploader_report = root / "custom-uploader-report.json"
+            env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(uploader_report)
 
             result = subprocess.run(
                 [
@@ -980,6 +991,7 @@ exit 99
             self.assertEqual(1, len(upload_commands), upload_commands)
             self.assertIn("--validate-enrichment", upload_commands[0])
             self.assertNotIn("--dry-run", upload_commands[0])
+            self.assertIn(f"--report-json={uploader_report}", upload_commands[0])
 
     def test_powershell_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate PowerShell support bundle path preserves the original test status."""
@@ -6277,12 +6289,15 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
     @staticmethod
     def _write_mixed_fresh_output_fixture(root: Path) -> tuple[Path, Path]:
-        """Create one payload-producing and one empty fresh expected output."""
+        """Create valid, empty, and locally stale unmappable expected outputs."""
+        unmappable_output = root / "bazel-testlogs" / "pkg" / "a_unmappable" / "test.outputs"
         valid_output = root / "bazel-testlogs" / "pkg" / "valid" / "test.outputs"
         empty_output = root / "bazel-testlogs" / "pkg" / "empty" / "test.outputs"
+        unmappable_output.mkdir(parents=True)
         valid_output.mkdir(parents=True)
         empty_output.mkdir(parents=True)
         for output_dir, label in (
+            (unmappable_output, "//pkg:a_unmappable"),
             (valid_output, "//pkg:valid"),
             (empty_output, "//pkg:empty"),
         ):
@@ -6290,6 +6305,17 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 json.dumps({"bazel.target": label}),
                 encoding="utf-8",
             )
+        unmappable_payload_dir = unmappable_output / "payloads" / "tests"
+        unmappable_payload_dir.mkdir(parents=True)
+        (unmappable_payload_dir / "span_events_stale.json").write_text(
+            json.dumps({
+                "events": [{
+                    "type": "test",
+                    "content": {"resource": "pkg.stale", "meta": {}, "metrics": {}},
+                }],
+            }),
+            encoding="utf-8",
+        )
         payload_dir = valid_output / "payloads" / "tests"
         payload_dir.mkdir(parents=True)
         (payload_dir / "span_events_valid.json").write_text(
@@ -6305,6 +6331,20 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         TestOptimizationDoctorTests._write_bep(
             bep,
             [
+                {
+                    "id": {
+                        "testResult": {
+                            "label": "//pkg:a_unmappable",
+                            "run": 1,
+                            "shard": 1,
+                            "attempt": 1,
+                        },
+                    },
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [{"name": "test.log", "uri": "file:///tmp/test.log"}],
+                    },
+                },
                 TestOptimizationDoctorTests._bep_test_result(
                     "//pkg:empty",
                     empty_output.as_uri(),
@@ -6319,7 +6359,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         expected_targets.write_text(
             json.dumps({
                 "schema_version": 1,
-                "targets": ["//pkg:empty", "//pkg:missing", "//pkg:valid"],
+                "targets": ["//pkg:a_unmappable", "//pkg:empty", "//pkg:missing", "//pkg:valid"],
             }),
             encoding="utf-8",
         )
@@ -6390,7 +6430,11 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         gzip_enabled: bool,
         keep_payloads: bool = True,
         read_only_parent: bool = False,
-    ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]], bool]:
+    ) -> tuple[
+        subprocess.CompletedProcess[str],
+        list[dict[str, object]],
+        Optional[dict[str, object]],
+    ]:
         """Run one generated uploader against a recording local test intake."""
         bash = _require_functional_bash(self)
         pwsh = _require_command(self, "pwsh", "pwsh is required for generated uploader parity")
@@ -6466,7 +6510,10 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     timeout=45,
                     check=False,
                 )
-                return result, list(records), source.is_file()
+                retained_payload = None
+                if source.is_file():
+                    retained_payload = json.loads(source.read_text(encoding="utf-8"))
+                return result, list(records), retained_payload
         finally:
             if read_only_parent and payload_dir.exists():
                 payload_dir.chmod(0o755)
@@ -6502,7 +6549,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         for runtime in ("Bash", "PowerShell"):
             for gzip_enabled in (False, True):
                 with self.subTest(runtime=runtime, gzip=gzip_enabled):
-                    result, records, source_exists = self._run_local_test_upload(
+                    result, records, retained_payload = self._run_local_test_upload(
                         runtime,
                         payload,
                         reject,
@@ -6510,7 +6557,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     )
                     output = result.stdout + result.stderr
                     self.assertNotEqual(0, result.returncode, output)
-                    self.assertTrue(source_exists)
+                    self.assertIsNotNone(retained_payload)
                     self.assertGreaterEqual(len(records), 1)
                     self.assertIn("http=413", output)
                     self.assertIn("uncompressed_bytes=", output)
@@ -6544,7 +6591,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         for runtime in ("Bash", "PowerShell"):
             for gzip_enabled in (False, True):
                 with self.subTest(runtime=runtime, gzip=gzip_enabled):
-                    result, records, source_exists = self._run_local_test_upload(
+                    result, records, retained_payload = self._run_local_test_upload(
                         runtime,
                         payload,
                         retry_second_part,
@@ -6553,7 +6600,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     )
                     output = result.stdout + result.stderr
                     self.assertEqual(0, result.returncode, output)
-                    self.assertFalse(source_exists)
+                    self.assertIsNone(retained_payload)
                     self.assertIn("parts=2", output)
                     successful = [record for record in records if record["status"] == 200]
                     self.assertEqual(2, len(successful), records)
@@ -6584,7 +6631,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
         for runtime in ("Bash", "PowerShell"):
             with self.subTest(runtime=runtime):
-                result, records, source_exists = self._run_local_test_upload(
+                result, records, retained_payload = self._run_local_test_upload(
                     runtime,
                     payload,
                     accept,
@@ -6593,7 +6640,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 )
                 output = result.stdout + result.stderr
                 self.assertEqual(0, result.returncode, output)
-                self.assertTrue(source_exists)
+                self.assertIsNotNone(retained_payload)
                 self.assertEqual([], records)
                 self.assertIn("dry-run would split test payload", output)
                 self.assertIn("into 2 parts", output)
@@ -6607,7 +6654,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
         for runtime in ("Bash", "PowerShell"):
             with self.subTest(runtime=runtime, result="valid"):
-                result, records, source_exists = self._run_local_test_upload(
+                result, records, retained_payload = self._run_local_test_upload(
                     runtime,
                     payload,
                     accept,
@@ -6618,13 +6665,13 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 )
                 output = result.stdout + result.stderr
                 self.assertEqual(0, result.returncode, output)
-                self.assertFalse(source_exists)
+                self.assertIsNone(retained_payload)
                 self.assertEqual(1, len(records), records)
                 self.assertIn("validated enriched test payload", output)
                 self.assertNotIn("dry-run validated enriched test payload", output)
 
             with self.subTest(runtime=runtime, result="missing-tag"):
-                result, records, source_exists = self._run_local_test_upload(
+                result, records, retained_payload = self._run_local_test_upload(
                     runtime,
                     payload,
                     accept,
@@ -6634,12 +6681,12 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 )
                 output = result.stdout + result.stderr
                 self.assertNotEqual(0, result.returncode, output)
-                self.assertTrue(source_exists)
+                self.assertIsNotNone(retained_payload)
                 self.assertEqual([], records)
                 self.assertIn("missing expected tag(s): missing.tag", output)
 
-    def test_generated_uploaders_continue_after_one_split_part_fails(self) -> None:
-        """Keep successful parts uploaded while reporting aggregate source failure."""
+    def test_generated_uploaders_retry_only_failed_split_parts(self) -> None:
+        """Persist and retry only rejected parts after reporting aggregate failure."""
         payload = self._large_test_payload(event_count=4, blob_bytes=1_300_000)
 
         def reject_second_part(candidate, _records):
@@ -6650,7 +6697,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
         for runtime in ("Bash", "PowerShell"):
             with self.subTest(runtime=runtime):
-                result, records, source_exists = self._run_local_test_upload(
+                result, records, retained_payload = self._run_local_test_upload(
                     runtime,
                     payload,
                     reject_second_part,
@@ -6659,7 +6706,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 )
                 output = result.stdout + result.stderr
                 self.assertNotEqual(0, result.returncode, output)
-                self.assertTrue(source_exists)
+                self.assertIsNotNone(retained_payload)
                 first_part = [
                     record
                     for record in records
@@ -6676,6 +6723,30 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 self.assertTrue(all(record["status"] == 503 for record in failed_part))
                 self.assertIn("part=2/2", output)
                 self.assertIn("persistent part failure", output)
+                self.assertIn("retained 1 failed split payload part(s) for retry", output)
+                assert retained_payload is not None
+                retained_ids = [
+                    event["content"]["meta"]["event.id"]
+                    for event in retained_payload["events"]
+                ]
+                self.assertEqual(["event-2", "event-3"], retained_ids)
+
+                retry_result, retry_records, retry_payload = self._run_local_test_upload(
+                    runtime,
+                    retained_payload,
+                    lambda _candidate, _records: (200, {}),
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                )
+                retry_output = retry_result.stdout + retry_result.stderr
+                self.assertEqual(0, retry_result.returncode, retry_output)
+                self.assertIsNone(retry_payload)
+                retried_ids = [
+                    event["content"]["meta"]["event.id"]
+                    for record in retry_records
+                    for event in record["payload"]["events"]
+                ]
+                self.assertEqual(["event-2", "event-3"], retried_ids)
 
     def test_generated_uploaders_reject_unsplittable_single_event(self) -> None:
         """Reject one event above the hard intake limit without making a request."""
@@ -6686,7 +6757,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
         for runtime in ("Bash", "PowerShell"):
             with self.subTest(runtime=runtime):
-                result, records, source_exists = self._run_local_test_upload(
+                result, records, retained_payload = self._run_local_test_upload(
                     runtime,
                     payload,
                     accept,
@@ -6694,7 +6765,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 )
                 output = result.stdout + result.stderr
                 self.assertNotEqual(0, result.returncode, output)
-                self.assertTrue(source_exists)
+                self.assertIsNotNone(retained_payload)
                 self.assertEqual([], records)
                 self.assertIn("single_event_too_large", output)
 
@@ -6791,7 +6862,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     expected_targets.write_text(
                         json.dumps({
                             "schema_version": 1,
-                            "targets": ["//pkg:empty", "//pkg:missing", "//pkg:valid"],
+                            "targets": ["//pkg:a_unmappable", "//pkg:empty", "//pkg:missing", "//pkg:valid"],
                         }),
                         encoding="utf-8",
                     )
@@ -6821,6 +6892,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                         "no TestResult matched this target); continuing with other fresh outputs",
                         output,
                     )
+                    self.assertIn("BEP required freshness skipped", output)
                     self.assertIn("fresh expected test output produced no uploadable payloads", output)
                     self.assertIn("//pkg:empty", output)
                     report_doc = json.loads(report.read_text(encoding="utf-8"))
@@ -6831,7 +6903,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     expected_targets.write_text(
                         json.dumps({
                             "schema_version": 1,
-                            "targets": ["//pkg:missing", "//pkg:valid"],
+                            "targets": ["//pkg:a_unmappable", "//pkg:missing", "//pkg:valid"],
                         }),
                         encoding="utf-8",
                     )
@@ -6858,6 +6930,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     partial_output = partial_result.stdout + partial_result.stderr
                     self.assertNotEqual(0, partial_result.returncode, partial_output)
                     self.assertIn("continuing with other fresh outputs", partial_output)
+                    self.assertIn("BEP required freshness skipped", partial_output)
                     partial_report_doc = json.loads(partial_report.read_text(encoding="utf-8"))
                     self.assertEqual("fail", partial_report_doc["status"])
                     self.assertEqual(1, partial_report_doc["payloads"]["tests"]["processed"])

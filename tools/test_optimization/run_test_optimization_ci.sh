@@ -192,9 +192,9 @@ if [[ -n "$REPORT_DIR" ]]; then
       UPLOADER_REPORT_JSON="$REPORT_DIR/uploader-dry-run-report.json"
     fi
   fi
-  if [[ "$DO_UPLOAD" -eq 1 ]]; then
-    UPLOAD_REPORT_JSON="$UPLOADER_REPORT_JSON"
-  fi
+fi
+if [[ "$DO_UPLOAD" -eq 1 ]]; then
+  UPLOAD_REPORT_JSON="$UPLOADER_REPORT_JSON"
 fi
 command_manifest_json="$tmp_root/support-command-manifest.json"
 
