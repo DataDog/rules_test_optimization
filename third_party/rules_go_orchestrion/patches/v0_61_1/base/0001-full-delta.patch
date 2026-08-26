@@ -12841,14 +12841,16 @@ index 0000000..93f9e48
 +}
 diff --git a/go/tools/builders/orchestrion_cache.go b/go/tools/builders/orchestrion_cache.go
 new file mode 100644
-index 0000000..746ac80
+index 0000000..5cccefd
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_cache.go
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,348 @@
 +package main
 +
 +import (
++	"crypto/rand"
 +	"crypto/sha256"
++	"encoding/hex"
 +	"encoding/json"
 +	"fmt"
 +	"os"
@@ -12878,6 +12880,7 @@ index 0000000..746ac80
 +
 +	cacheManifestFileName = "manifest.json"
 +	cacheReadyFileName    = "ready"
++	cacheLockOwnerPrefix  = "owner-"
 +
 +	cacheLockPollInterval = 200 * time.Millisecond
 +	cacheLockTimeout      = 60 * time.Second
@@ -12918,7 +12921,7 @@ index 0000000..746ac80
 +func acquireCacheLockWithTimings(lockDir string, timeout, staleAfter, pollInterval time.Duration) (func(), error) {
 +	retryAfterStaleRemoval := true
 +	for {
-+		release, err := tryAcquireCacheLock(lockDir)
++		release, err := tryAcquireCacheLock(lockDir, staleAfter)
 +		if err == nil {
 +			return release, nil
 +		}
@@ -12929,7 +12932,7 @@ index 0000000..746ac80
 +		deadline := time.Now().Add(timeout)
 +		for time.Now().Before(deadline) {
 +			time.Sleep(pollInterval)
-+			release, err = tryAcquireCacheLock(lockDir)
++			release, err = tryAcquireCacheLock(lockDir, staleAfter)
 +			if err == nil {
 +				return release, nil
 +			}
@@ -12944,7 +12947,7 @@ index 0000000..746ac80
 +		}
 +		if stale && retryAfterStaleRemoval {
 +			retryAfterStaleRemoval = false
-+			if err := os.RemoveAll(lockDir); err != nil && !os.IsNotExist(err) {
++			if err := removeStaleCacheLock(lockDir); err != nil && !os.IsNotExist(err) {
 +				return nil, fmt.Errorf("remove stale cache lock %s: %w", lockDir, err)
 +			}
 +			continue
@@ -12956,16 +12959,85 @@ index 0000000..746ac80
 +	}
 +}
 +
-+func tryAcquireCacheLock(lockDir string) (func(), error) {
++func tryAcquireCacheLock(lockDir string, staleAfter time.Duration) (func(), error) {
 +	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
 +		return nil, err
 +	}
 +	if err := os.Mkdir(lockDir, 0o755); err != nil {
 +		return nil, err
 +	}
++	token, err := cacheLockToken()
++	if err != nil {
++		_ = os.Remove(lockDir)
++		return nil, err
++	}
++	ownerPath := filepath.Join(lockDir, cacheLockOwnerPrefix+token)
++	if err := os.WriteFile(ownerPath, []byte(token+"\n"), 0o600); err != nil {
++		_ = os.Remove(lockDir)
++		return nil, err
++	}
++	stopHeartbeat := make(chan struct{})
++	heartbeatDone := make(chan struct{})
++	go maintainCacheLockHeartbeat(lockDir, ownerPath, staleAfter, stopHeartbeat, heartbeatDone)
++	released := false
 +	return func() {
-+		_ = os.RemoveAll(lockDir)
++		if released {
++			return
++		}
++		released = true
++		close(stopHeartbeat)
++		<-heartbeatDone
++		if err := os.Remove(ownerPath); err != nil {
++			return
++		}
++		_ = os.Remove(lockDir)
 +	}, nil
++}
++
++func cacheLockToken() (string, error) {
++	var data [16]byte
++	if _, err := rand.Read(data[:]); err != nil {
++		return "", err
++	}
++	return hex.EncodeToString(data[:]), nil
++}
++
++func maintainCacheLockHeartbeat(lockDir, ownerPath string, staleAfter time.Duration, stop <-chan struct{}, done chan<- struct{}) {
++	defer close(done)
++	interval := staleAfter / 4
++	if interval < time.Millisecond {
++		interval = time.Millisecond
++	}
++	if interval > time.Minute {
++		interval = time.Minute
++	}
++	ticker := time.NewTicker(interval)
++	defer ticker.Stop()
++	for {
++		select {
++		case <-stop:
++			return
++		case now := <-ticker.C:
++			if err := os.Chtimes(ownerPath, now, now); err != nil {
++				return
++			}
++			if err := os.Chtimes(lockDir, now, now); err != nil {
++				return
++			}
++		}
++	}
++}
++
++func removeStaleCacheLock(lockDir string) error {
++	token, err := cacheLockToken()
++	if err != nil {
++		return err
++	}
++	staleDir := lockDir + ".stale-" + token
++	if err := os.Rename(lockDir, staleDir); err != nil {
++		return err
++	}
++	return os.RemoveAll(staleDir)
 +}
 +
 +func cacheLockIsStale(lockDir string, staleAfter time.Duration) (bool, error) {
@@ -13123,10 +13195,10 @@ index 0000000..746ac80
 +}
 diff --git a/go/tools/builders/orchestrion_cache_test.go b/go/tools/builders/orchestrion_cache_test.go
 new file mode 100644
-index 0000000..5bc0af2
+index 0000000..4e7f2bc
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_cache_test.go
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,157 @@
 +package main
 +
 +import (
@@ -13215,7 +13287,7 @@ index 0000000..5bc0af2
 +
 +func TestAcquireCacheLockWaitsForActiveOwnerPastTimeout(t *testing.T) {
 +	lockDir := filepath.Join(t.TempDir(), "cache.lock")
-+	releaseOwner, err := tryAcquireCacheLock(lockDir)
++	releaseOwner, err := tryAcquireCacheLock(lockDir, time.Minute)
 +	if err != nil {
 +		t.Fatalf("acquire owner lock: %v", err)
 +	}
@@ -13229,6 +13301,46 @@ index 0000000..5bc0af2
 +		t.Fatalf("wait for active owner: %v", err)
 +	}
 +	releaseWaiter()
++}
++
++func TestAcquireCacheLockDoesNotStealLiveOwnerPastStaleThreshold(t *testing.T) {
++	lockDir := filepath.Join(t.TempDir(), "cache.lock")
++	releaseOwner, err := tryAcquireCacheLock(lockDir, 20*time.Millisecond)
++	if err != nil {
++		t.Fatalf("acquire owner lock: %v", err)
++	}
++	go func() {
++		time.Sleep(80 * time.Millisecond)
++		releaseOwner()
++	}()
++
++	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 15*time.Millisecond, 20*time.Millisecond, 2*time.Millisecond)
++	if err != nil {
++		t.Fatalf("wait for live owner: %v", err)
++	}
++	releaseWaiter()
++}
++
++func TestOldCacheLockReleaseDoesNotRemoveReplacementOwner(t *testing.T) {
++	root := t.TempDir()
++	lockDir := filepath.Join(root, "cache.lock")
++	releaseOld, err := tryAcquireCacheLock(lockDir, time.Minute)
++	if err != nil {
++		t.Fatalf("acquire old lock: %v", err)
++	}
++	abandonedDir := filepath.Join(root, "abandoned.lock")
++	if err := os.Rename(lockDir, abandonedDir); err != nil {
++		t.Fatalf("rename old lock: %v", err)
++	}
++	releaseReplacement, err := tryAcquireCacheLock(lockDir, time.Minute)
++	if err != nil {
++		t.Fatalf("acquire replacement lock: %v", err)
++	}
++	releaseOld()
++	if _, err := os.Stat(lockDir); err != nil {
++		t.Fatalf("old release removed replacement lock: %v", err)
++	}
++	releaseReplacement()
 +}
 +
 +func TestWriteFileAtomically(t *testing.T) {

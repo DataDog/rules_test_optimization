@@ -119,8 +119,8 @@ Every successful Python onboarding should end with these pieces:
   flags and required BEP freshness/artifact flags. Use
   `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
   manual flows where one BEP file is sufficient.
-- CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`,
-  optional `uploader-upload-report.json`, and, when configured,
+- CI wrappers write `doctor-report.json`, one selected uploader report
+  (`uploader-dry-run-report.json` or `uploader-upload-report.json`), and
   `dd-test-optimization-support.zip` under a per-job report directory.
   Prefer the wrapper support bundle for full CI escalation; use the doctor-only
   support bundle for the simplest initial customer request. Keep individual

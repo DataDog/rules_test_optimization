@@ -621,9 +621,9 @@ exit 99
                 for line in log_path.read_text(encoding="utf-8").splitlines()
                 if "//:dd_upload_payloads" in line
             ]
-            self.assertEqual(2, len(upload_commands), upload_commands)
-            self.assertIn("--dry-run --validate-enrichment", upload_commands[0])
-            self.assertNotIn("--dry-run", upload_commands[1])
+            self.assertEqual(1, len(upload_commands), upload_commands)
+            self.assertIn("--validate-enrichment", upload_commands[0])
+            self.assertNotIn("--dry-run", upload_commands[0])
 
     def test_bash_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate Bash support bundle path preserves the original test status."""
@@ -977,9 +977,9 @@ exit 99
                 for line in log_path.read_text(encoding="utf-8").splitlines()
                 if "//:dd_upload_payloads" in line
             ]
-            self.assertEqual(2, len(upload_commands), upload_commands)
-            self.assertIn("--dry-run --validate-enrichment", upload_commands[0])
-            self.assertNotIn("--dry-run", upload_commands[1])
+            self.assertEqual(1, len(upload_commands), upload_commands)
+            self.assertIn("--validate-enrichment", upload_commands[0])
+            self.assertNotIn("--dry-run", upload_commands[0])
 
     def test_powershell_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate PowerShell support bundle path preserves the original test status."""
@@ -4667,6 +4667,54 @@ Path(out).mkdir(parents=True)
         self.assertTrue(any(line.startswith("staged\t//pkg:target\tpkg/target/test.outputs\t") for line in stdout_lines))
         self.assertEqual("", result.stderr)
 
+    def test_bep_artifact_stage_helper_skips_invalid_sibling_bep(self) -> None:
+        """Validate one malformed BEP does not prevent staging a valid sibling."""
+        helper = _runfile("tools/core/bep_artifact_stage_helper.py")
+        doctor_runtime = _runfile("tools/core/test_optimization_doctor.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_output = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            valid_bep = root / "valid.bep.json"
+            self._write_bep(
+                valid_bep,
+                [{
+                    "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [{
+                            "name": "test.outputs",
+                            "uri": source_output.as_uri(),
+                            "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                        }],
+                    },
+                }],
+            )
+            invalid_bep = root / "invalid.bep.json"
+            invalid_bep.write_text("{not-json}\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--doctor-runtime",
+                    str(doctor_runtime),
+                    "--staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--remote-artifacts=download",
+                    "--artifact-source=bep",
+                    str(invalid_bep),
+                    str(valid_bep),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("failed to parse BEP JSON", result.stderr)
+        self.assertIn("selected\t//pkg:target\tpkg/target/test.outputs", result.stdout)
+
     def test_bep_artifact_stage_helper_selects_remote_without_downloader_in_download_mode(self) -> None:
         """Validate helper suppresses stale local fallback even when remote staging skips."""
         helper = _runfile("tools/core/bep_artifact_stage_helper.py")
@@ -6808,11 +6856,88 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                         check=False,
                     )
                     partial_output = partial_result.stdout + partial_result.stderr
-                    self.assertEqual(0, partial_result.returncode, partial_output)
+                    self.assertNotEqual(0, partial_result.returncode, partial_output)
                     self.assertIn("continuing with other fresh outputs", partial_output)
                     partial_report_doc = json.loads(partial_report.read_text(encoding="utf-8"))
-                    self.assertEqual("ok", partial_report_doc["status"])
+                    self.assertEqual("fail", partial_report_doc["status"])
                     self.assertEqual(1, partial_report_doc["payloads"]["tests"]["processed"])
+
+    def test_generated_uploaders_process_valid_bep_siblings_before_reporting_missing_or_invalid_bep(self) -> None:
+        """Validate bad BEP inputs fail the result only after valid siblings are processed."""
+        _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
+        bash = _require_functional_bash(self)
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            valid_bep, expected_targets = self._write_mixed_fresh_output_fixture(root)
+            expected_targets.write_text(
+                json.dumps({"schema_version": 1, "targets": ["//pkg:valid"]}),
+                encoding="utf-8",
+            )
+            missing_bep = root / "missing.bep.json"
+            invalid_bep = root / "invalid.bep.json"
+            invalid_bep.write_text("{not-json}\n", encoding="utf-8")
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+            generated_powershell = root / "generated_uploader.ps1"
+            generated_powershell.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+
+            for name, command in (
+                ("Bash", [bash, str(generated_bash)]),
+                ("PowerShell", [pwsh, "-NoLogo", "-NoProfile", "-File", str(generated_powershell)]),
+            ):
+                with self.subTest(runtime=name):
+                    report = root / f"{name.lower()}-bad-bep-report.json"
+                    result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json", str(missing_bep),
+                            "--bep-json", str(invalid_bep),
+                            "--bep-json", str(valid_bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--artifact-source=bep",
+                            "--report-json", str(report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(1, result.returncode, output)
+                    self.assertIn("BEP JSON not found", output)
+                    self.assertIn("failed to parse BEP JSON", output)
+                    report_doc = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual(1, report_doc["payloads"]["tests"]["processed"])
+                    self.assertGreaterEqual(report_doc["upload_failures"], 2)
 
     def test_generated_uploaders_accept_empty_expected_target_set(self) -> None:
         """Validate an invocation without optimized targets ignores unrelated BEP rows."""
@@ -7330,7 +7455,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
         for runtime, result in (("Bash", bash_result), ("PowerShell", powershell_result)):
             output = result.stdout + result.stderr
-            self.assertEqual(2, result.returncode, f"{runtime} output:\n{output}")
+            self.assertEqual(1, result.returncode, f"{runtime} output:\n{output}")
             self.assertIn("BEP references remote-only test outputs", output)
             self.assertIn("local test.outputs was not found", output)
 

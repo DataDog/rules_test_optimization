@@ -286,8 +286,8 @@ RTO_ARCHIVE_TYPE="tar.gz"
 RULES_GO_UPSTREAM="v0_60_0"
 RULES_GO_VARIANT="base"
 RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
-DD_TRACE_GO_VERSION="v2.9.1"
-ORCHESTRION_VERSION="v1.12.0"
+DD_TRACE_GO_VERSION="v2.9.0"
+ORCHESTRION_VERSION="v1.9.0"
 ```
 
 The archive URL, SHA256, and prefix are tied to the repository commit.
@@ -1261,11 +1261,11 @@ the fact that the repo still owns the actual refresh command.
 
 Bootstrap can also generate an operator-owned validation script for large
 repositories. The script repeats the RFC flow without hiding Bazel behavior:
-`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`.
-Upload is disabled unless the operator passes `--upload`. Set
-`DD_TEST_OPTIMIZATION_REPORT_DIR` to keep its `doctor-report.json`,
-`uploader-dry-run-report.json`, and optional `uploader-upload-report.json`
-outside the script's temporary directory.
+`sync -> controls -> instrumented tests -> doctor -> validated uploader`.
+Without `--upload`, the uploader runs once in dry-run mode. With `--upload`, it
+runs once as a real upload and validates enrichment in that same pass. Set
+`DD_TEST_OPTIMIZATION_REPORT_DIR` to keep `doctor-report.json` and
+`uploader-report.json` outside the script's temporary directory.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
@@ -1596,10 +1596,9 @@ tools/test_optimization/run_test_optimization_ci.sh \
   //...
 ```
 
-The wrapper writes `.topt/reports/doctor-report.json` and
-`.topt/reports/uploader-dry-run-report.json`. When `--upload` is also used, it
-writes the real upload result to `.topt/reports/uploader-upload-report.json`
-instead of overwriting the dry-run report. Reports include a `result` block with
+The wrapper writes `.topt/reports/doctor-report.json` plus exactly one uploader
+report: `uploader-dry-run-report.json` without `--upload`, or
+`uploader-upload-report.json` with it. Reports include a `result` block with
 `status`, `reason_code`, `reason`, `next_steps`, and the exact counts needed to
 answer why payloads were or were not uploaded: expected/seen targets, BEP
 fresh/cached/remote-only outputs, artifact staging, discovered payloads,
@@ -1609,7 +1608,7 @@ For support tickets, prefer
 `.topt/reports/dd-test-optimization-support.zip`. For the simplest customer ask,
 run the doctor with `--support-bundle=<path>` and attach the resulting doctor-only
 bundle. In CI, prefer the wrapper `--support-bundle=<path>` because it also
-includes uploader dry-run and optional upload reports. Bundles are redacted and
+includes the selected uploader report. Bundles are redacted and
 bounded by default and include `summary.md`, selected BEP summaries, effective
 flags, runtime metadata, and a redaction manifest. They do not include raw
 payloads, raw CI logs, raw environment variables, or raw BEP files.

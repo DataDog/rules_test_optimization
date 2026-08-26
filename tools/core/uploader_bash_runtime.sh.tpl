@@ -658,6 +658,7 @@ DEFAULT_EXECUTION_LOG_JSON=".topt/bazel-execution-log.json"
 FRESHNESS_ELIGIBILITY_ENABLED=0
 FRESHNESS_SELECTED_SOURCE="none"
 FRESHNESS_ELIGIBLE_LABELS_FILE=""
+REMOTE_ONLY_OUTPUTS_VALIDATED=0
 FRESHNESS_ELIGIBLE_OUTPUTS_FILE=""
 FRESHNESS_CACHED_OUTPUTS_FILE=""
 FRESHNESS_SKIPPED_OUTPUTS_FILE=""
@@ -1502,8 +1503,8 @@ stage_bep_artifacts() {
     for bep_json in "${BEP_JSON_FILES[@]+"${BEP_JSON_FILES[@]}"}"; do
         resolved_bep_json="$(resolve_runtime_file_path "$bep_json")"
         if [[ -z "$resolved_bep_json" || ! -f "$resolved_bep_json" ]]; then
-            log "error: BEP JSON not found for artifact staging: $bep_json"
-            exit 2
+            log "error: BEP JSON not found for artifact staging: $bep_json; continuing with other BEP files"
+            continue
         fi
         resolved_bep_files+=("$resolved_bep_json")
     done
@@ -3074,15 +3075,16 @@ prepare_bep_eligibility() {
   : >"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
   : >"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
 
-  local bep_json resolved_bep tmp_records tmp_remote tmp_missing
+  local bep_json resolved_bep tmp_records tmp_remote tmp_missing bep_valid
   for bep_json in "${BEP_JSON_FILES[@]}"; do
     resolved_bep="$(resolve_runtime_file_path "$bep_json")"
     if [[ -z "$resolved_bep" || ! -f "$resolved_bep" ]]; then
       if optional_bep_unavailable "BEP JSON not found: $bep_json"; then
         return 0
       fi
-      log "error: BEP JSON not found: $bep_json"
-      exit 2
+      log "error: BEP JSON not found: $bep_json; continuing with other BEP files"
+      ((++UPLOAD_FAILURES))
+      continue
     fi
     tmp_records="$(mktemp "$TMP_PAYLOAD_DIR/bep_records.XXXXXX" 2>/dev/null || true)"
     tmp_remote="$(mktemp "$TMP_PAYLOAD_DIR/bep_remote.XXXXXX" 2>/dev/null || true)"
@@ -3092,6 +3094,7 @@ prepare_bep_eligibility() {
       exit 2
     fi
 
+	    bep_valid=1
 	    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
 	      def field($obj; $camel; $snake):
 	        ($obj[$camel] // $obj[$snake]);
@@ -3138,13 +3141,11 @@ prepare_bep_eligibility() {
       if optional_bep_unavailable "failed to parse BEP JSON: $resolved_bep"; then
         return 0
       fi
-      log "error: failed to parse BEP JSON: $resolved_bep"
-      exit 2
+      log "error: failed to parse BEP JSON: $resolved_bep; continuing with other BEP files"
+      bep_valid=0
     fi
-    awk -F '\t' '$3 == "eligible" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
-    awk -F '\t' '$3 == "cached" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_CACHED_OUTPUTS_FILE"
 
-    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
+    if (( bep_valid == 1 )) && ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
       def field($obj; $camel; $snake):
         ($obj[$camel] // $obj[$snake]);
 	      def candidates($output):
@@ -3193,12 +3194,11 @@ prepare_bep_eligibility() {
       if optional_bep_unavailable "failed to parse BEP remote-only outputs: $resolved_bep"; then
         return 0
       fi
-      log "error: failed to parse BEP remote-only outputs: $resolved_bep"
-      exit 2
+      log "error: failed to parse BEP remote-only outputs: $resolved_bep; continuing with other BEP files"
+      bep_valid=0
     fi
-    cat "$tmp_remote" >>"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
 
-    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
+    if (( bep_valid == 1 )) && ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
 	      def field($obj; $camel; $snake):
 	        ($obj[$camel] // $obj[$snake]);
 	      def candidates($output):
@@ -3244,9 +3244,16 @@ prepare_bep_eligibility() {
       if optional_bep_unavailable "failed to parse BEP missing output mappings: $resolved_bep"; then
         return 0
       fi
-      log "error: failed to parse BEP missing output mappings: $resolved_bep"
-      exit 2
+      log "error: failed to parse BEP missing output mappings: $resolved_bep; continuing with other BEP files"
+      bep_valid=0
     fi
+    if (( bep_valid == 0 )); then
+      ((++UPLOAD_FAILURES))
+      continue
+    fi
+    awk -F '\t' '$3 == "eligible" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+    awk -F '\t' '$3 == "cached" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_CACHED_OUTPUTS_FILE"
+    cat "$tmp_remote" >>"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
     cat "$tmp_missing" >>"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
   done
 
@@ -3332,10 +3339,15 @@ validate_expected_target_coverage() {
   done <"$EXPECTED_TARGETS_RESOLVED_FILE"
   if (( missing_count > 0 )); then
     log "warning: $missing_count expected target(s) produced no current uploadable output; available fresh payloads will still be processed"
+    UPLOAD_FAILURES=$((UPLOAD_FAILURES + missing_count))
   fi
 }
 
 validate_bep_remote_only_outputs() {
+  if (( REMOTE_ONLY_OUTPUTS_VALIDATED == 1 )); then
+    return 0
+  fi
+  REMOTE_ONLY_OUTPUTS_VALIDATED=1
   if [[ "$FRESHNESS_SELECTED_SOURCE" != "bep" ]]; then
     return 0
   fi
@@ -3345,8 +3357,11 @@ validate_bep_remote_only_outputs() {
     first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
     first_artifact_display="$(display_artifact_reference "$first_artifact")"
     if [[ "$FRESHNESS_MODE" == "required" || "$REMOTE_ARTIFACTS" == "required" ]]; then
-      log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact_display:-<unknown>}. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-      exit 2
+      local remote_count
+      remote_count="$(wc -l <"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" | tr -d ' ')"
+      log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact_display:-<unknown>}. Those outputs will be skipped while other fresh payloads are processed. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+      UPLOAD_FAILURES=$((UPLOAD_FAILURES + remote_count))
+      return 0
     fi
     if [[ "$REMOTE_ARTIFACTS" == "download" ]]; then
       log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} and they were not materialized: ${first_artifact_display:-<unknown>}; skipping those outputs."
@@ -4712,8 +4727,8 @@ PY
     return 0
 }
 
-# Track upload failures globally
-UPLOAD_FAILURES=0
+# Track per-payload upload report counters. UPLOAD_FAILURES is initialized
+# before BEP preparation so partial-input failures remain part of the result.
 REPORT_TESTS_PROCESSED=0
 REPORT_TESTS_FAILED=0
 REPORT_TESTS_SKIPPED=0

@@ -4032,13 +4032,6 @@ if ! grep -q 'orchestrion_mode = "test_optimization"' "$GUIDED_BOOT_WS/tools/bui
   exit 1
 fi
 
-# The release tracer pinned by default in this fixture is v2.9.1. The generated
-# wrapper above must still default to test_optimization mode, but that release
-# does not include the unreleased Go testing Orchestrion package needed to build
-# a real instrumented test binary. Run the raw target for this temporary runtime
-# smoke so the integration still validates generated Bazel wiring, staged
-# sources, metadata shape, doctor behavior, and payload discovery without
-# depending on unreleased tracer internals.
 GUIDED_BEP_JSON="$GUIDED_BOOT_WS/.topt/guided-bootstrap.bep.json"
 mkdir -p "$(dirname "$GUIDED_BEP_JSON")"
 rm -f "$GUIDED_BEP_JSON"
@@ -4046,7 +4039,7 @@ rm -f "$GUIDED_BEP_JSON"
   cd "$GUIDED_BOOT_WS"
   "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization \
     --build_event_json_file="$GUIDED_BEP_JSON" \
-    //src/go-project:hello_test__raw_go_test \
+    //src/go-project:hello_test \
     "${BAZEL_TEST_FLAGS[@]}" \
     "${REPO_ENVS[@]}"
 )
@@ -4071,7 +4064,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-root = Path(os.environ["GUIDED_TESTLOGS_DIR"]) / "src" / "go-project" / "hello_test__raw_go_test"
+root = Path(os.environ["GUIDED_TESTLOGS_DIR"]) / "src" / "go-project" / "hello_test"
 direct_path = root / "test.outputs" / "bazel_target_metadata.json"
 payload = None
 source = ""

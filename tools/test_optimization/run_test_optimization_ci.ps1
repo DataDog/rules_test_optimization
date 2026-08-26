@@ -86,9 +86,15 @@ if (-not [string]::IsNullOrWhiteSpace($ReportDir)) {
     $DoctorReportJson = Join-Path $ReportDir "doctor-report.json"
   }
   if ([string]::IsNullOrWhiteSpace($UploaderReportJson)) {
-    $UploaderReportJson = Join-Path $ReportDir "uploader-dry-run-report.json"
+    if ($Upload.IsPresent) {
+      $UploaderReportJson = Join-Path $ReportDir "uploader-upload-report.json"
+    } else {
+      $UploaderReportJson = Join-Path $ReportDir "uploader-dry-run-report.json"
+    }
   }
-  $UploadReportJson = Join-Path $ReportDir "uploader-upload-report.json"
+  if ($Upload.IsPresent) {
+    $UploadReportJson = $UploaderReportJson
+  }
 }
 
 $keepGeneratedFiles = $KeepTmp.IsPresent -or $env:DD_TEST_OPTIMIZATION_KEEP_TMP -eq "1"
@@ -236,24 +242,21 @@ try {
     $finalStatus = $doctorStatus
   }
 
-  $dryRunRuntimeArgs = $runtimeArgs
-  if (-not [string]::IsNullOrWhiteSpace($UploaderReportJson)) {
-    $dryRunRuntimeArgs += "--report-json=$UploaderReportJson"
-  }
-  $dryRunStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $dryRunRuntimeArgs + @("--dry-run", "--validate-enrichment"))
-  if ($dryRunStatus -ne 0 -and $finalStatus -eq 0) {
-    $finalStatus = $dryRunStatus
-  }
-
+  $uploaderRuntimeArgs = $runtimeArgs
   if ($Upload.IsPresent) {
-    $uploadRuntimeArgs = $runtimeArgs
     if (-not [string]::IsNullOrWhiteSpace($UploadReportJson)) {
-      $uploadRuntimeArgs += "--report-json=$UploadReportJson"
+      $uploaderRuntimeArgs += "--report-json=$UploadReportJson"
     }
-    $uploadStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $uploadRuntimeArgs)
-    if ($uploadStatus -ne 0 -and $finalStatus -eq 0) {
-      $finalStatus = $uploadStatus
+    $uploaderRuntimeArgs += "--validate-enrichment"
+  } else {
+    if (-not [string]::IsNullOrWhiteSpace($UploaderReportJson)) {
+      $uploaderRuntimeArgs += "--report-json=$UploaderReportJson"
     }
+    $uploaderRuntimeArgs += @("--dry-run", "--validate-enrichment")
+  }
+  $uploaderStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $uploaderRuntimeArgs)
+  if ($uploaderStatus -ne 0 -and $finalStatus -eq 0) {
+    $finalStatus = $uploaderStatus
   }
 
   exit $finalStatus

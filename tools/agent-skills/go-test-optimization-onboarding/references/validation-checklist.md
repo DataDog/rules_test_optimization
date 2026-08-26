@@ -227,7 +227,7 @@ artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
 report_dir="${REPORT_DIR:-.topt/reports}"
 mkdir -p "$report_dir"
 
-test_status=0; doctor_status=0; dry_run_status=0; upload_status=0
+test_status=0; doctor_status=0; uploader_status=0
 bazel test --config=test-optimization --build_event_json_file="$bep_json" //path/to:pilot_test || test_status=$?
 
 bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- \
@@ -238,16 +238,6 @@ bazel run --config=test-optimization //<topt-package>:dd_test_optimization_docto
   --artifact-staging-dir="$artifact_staging_dir" \
   --report-json="$report_dir/doctor-report.json" || doctor_status=$?
 
-bazel run --config=test-optimization //<topt-package>:dd_upload_payloads -- \
-  --bep-json="$bep_json" \
-  --freshness-source=bep \
-  --freshness-mode=required \
-  --artifact-source=bep \
-  --artifact-staging-dir="$artifact_staging_dir" \
-  --dry-run \
-  --validate-enrichment \
-  --report-json="$report_dir/uploader-dry-run-report.json" || dry_run_status=$?
-
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   bazel run --config=test-optimization //<topt-package>:dd_upload_payloads -- \
     --bep-json="$bep_json" \
@@ -255,9 +245,10 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
     --freshness-mode=required \
     --artifact-source=bep \
     --artifact-staging-dir="$artifact_staging_dir" \
-    --report-json="$report_dir/uploader-upload-report.json" || upload_status=$?
+    --validate-enrichment \
+    --report-json="$report_dir/uploader-upload-report.json" || uploader_status=$?
 
-for status in "$test_status" "$doctor_status" "$dry_run_status" "$upload_status"; do
+for status in "$test_status" "$doctor_status" "$uploader_status"; do
   if [ "$status" -ne 0 ]; then exit "$status"; fi
 done
 ```

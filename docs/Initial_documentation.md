@@ -68,10 +68,10 @@ The steps are:
    Bazel targets do not have to live in the root package. Small repositories
    can use root labels; large monorepos should use a lightweight package such
    as `//tools/test_optimization`.
-   Usage: run `bazel test`, then the doctor target, then the uploader with
-   `--dry-run --validate-enrichment`, then the real uploader target. Preserve
-   the earliest failure, but still let the real uploader process every available
-   fresh valid payload when upload is enabled.
+   Usage: run `bazel test`, then the doctor target, then one uploader pass with
+   `--validate-enrichment`; add `--dry-run` only when upload is disabled.
+   Preserve the earliest failure while still processing every available fresh
+   valid payload.
 
 4. **Language macros (optional)**:
    Thin wrappers (for Go/Python/Java/NodeJS/.NET/Ruby) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.

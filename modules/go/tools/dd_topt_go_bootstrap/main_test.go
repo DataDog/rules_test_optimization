@@ -164,6 +164,65 @@ func TestValidateRulesGoVariantRejectsCompleteVariant(t *testing.T) {
 	}
 }
 
+func TestValidateGoRuntimeCompatibility(t *testing.T) {
+	tests := []struct {
+		name        string
+		orchestrion string
+		runtime     string
+		wantError   bool
+	}{
+		{name: "minimum supported", orchestrion: "v1.12.0", runtime: "1.25.0"},
+		{name: "newer Go", orchestrion: "v1.12.1", runtime: "1.26"},
+		{name: "older Orchestrion", orchestrion: "v1.11.0", runtime: "1.24.9"},
+		{name: "runtime omitted", orchestrion: "v1.12.0"},
+		{name: "runtime too old", orchestrion: "v1.12.0", runtime: "1.24.9", wantError: true},
+		{name: "malformed runtime", orchestrion: "v1.12.0", runtime: "latest", wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateGoRuntimeCompatibility(config{
+				orchestrionVersion: test.orchestrion,
+				runtimeVersion:     test.runtime,
+			})
+			if (err != nil) != test.wantError {
+				t.Fatalf("validateGoRuntimeCompatibility() error=%v, wantError=%v", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestRunRejectsUnsupportedGoRuntimeBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	modulePath := filepath.Join(dir, "MODULE.bazel")
+	const originalModule = "module(name = \"example\")\n"
+	if err := os.WriteFile(modulePath, []byte(originalModule), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+	err := run(config{
+		workspaceDir:       dir,
+		guided:             true,
+		service:            "example",
+		runtimeVersion:     "1.24.9",
+		orchestrionVersion: "v1.12.0",
+		rulesGoUpstream:    "v0_60_0",
+		rulesGoVariant:     "base",
+		datadogFetch:       defaultDatadogFetch,
+		rulesGoFetch:       defaultRulesGoFetch,
+		goBinary:           defaultGoBinary,
+		goModSync:          defaultGoModSync,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires Go 1.25.0 or newer") {
+		t.Fatalf("run() error=%v, want minimum Go version error", err)
+	}
+	got, readErr := os.ReadFile(modulePath)
+	if readErr != nil {
+		t.Fatalf("read MODULE.bazel: %v", readErr)
+	}
+	if string(got) != originalModule {
+		t.Fatalf("MODULE.bazel changed before runtime validation:\n%s", got)
+	}
+}
+
 func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
 	cfg := config{
 		rulesGoRemote:      "https://github.com/example/repo.git",
@@ -740,11 +799,10 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`--artifact-source=bep`,
 		`--artifact-staging-dir=${ARTIFACT_STAGING_DIR}`,
 		`doctor-report.json`,
-		`uploader-dry-run-report.json`,
-		`uploader-upload-report.json`,
+		`uploader-report.json`,
 		`--report-json`,
 		`mktemp -d "${tmp_parent%/}/dd-go-topt.XXXXXX"`,
-		`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`,
+		`sync -> controls -> instrumented tests -> doctor -> validated uploader`,
 		`validate ordinary no-config bootstrap`,
 		`validate explicit disabled precedence`,
 		`query "@${SYNC_REPO}//:test_optimization_files"`,
@@ -978,8 +1036,7 @@ set -euo pipefail
 		"test --config=test-optimization --build_event_json_file=" + twoBEPPath + " //pkg:two_test",
 		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
 		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
-		"uploader-dry-run-report.json --dry-run --validate-enrichment",
-		"uploader-upload-report.json",
+		"uploader-report.json --validate-enrichment",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
@@ -1057,12 +1114,12 @@ exit 0
 		t.Fatalf("read fake bazel log: %v", err)
 	}
 	logText := string(logBytes)
-	if got := strings.Count(logText, "run --config=test-optimization //:dd_upload_payloads"); got != 2 {
-		t.Fatalf("uploader command count=%d, want dry-run and real upload:\n%s", got, logText)
+	if got := strings.Count(logText, "run --config=test-optimization //:dd_upload_payloads"); got != 1 {
+		t.Fatalf("uploader command count=%d, want one validated real upload:\n%s", got, logText)
 	}
-	if !strings.Contains(logText, "--dry-run --validate-enrichment") ||
-		!strings.Contains(logText, "uploader-upload-report.json") {
-		t.Fatalf("validation script did not run both uploader phases:\n%s", logText)
+	if strings.Contains(logText, "--dry-run") ||
+		!strings.Contains(logText, "uploader-report.json --validate-enrichment") {
+		t.Fatalf("validation script did not run one validated real upload:\n%s", logText)
 	}
 }
 
@@ -1110,8 +1167,7 @@ func TestValidationScriptUsesBepArtifactSourceForZippedOutputs(t *testing.T) {
 		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=",
 		"--freshness-source=bep --freshness-mode=required --artifact-source=bep",
 		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=",
-		"uploader-dry-run-report.json --dry-run --validate-enrichment",
-		"uploader-upload-report.json",
+		"uploader-report.json --validate-enrichment",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)

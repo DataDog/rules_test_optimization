@@ -16,8 +16,7 @@ run_example_runtests() {
   local bazelw
   local test_status=0
   local doctor_status=0
-  local dry_run_status=0
-  local upload_status=0
+  local uploader_status=0
   local tmp_root
   local artifact_staging_dir
   bazelw="${script_dir}/../../bazelw"
@@ -67,28 +66,16 @@ run_example_runtests() {
 
   echo "--- validating payloads"
   run_cmd "${bazelw}" run --config=test-optimization //:dd_test_optimization_doctor -- "${bep_args[@]}" || doctor_status=$?
-  if [[ "$doctor_status" -ne 0 ]]; then
-    if [[ "$test_status" -ne 0 ]]; then
-      return "$test_status"
-    fi
-    return "$doctor_status"
-  fi
 
-  echo "--- validating upload enrichment"
-  run_cmd "${bazelw}" run --config=test-optimization //:dd_upload_payloads -- "${bep_args[@]}" --dry-run --validate-enrichment || dry_run_status=$?
-  if [[ "$dry_run_status" -ne 0 ]]; then
-    if [[ "$test_status" -ne 0 ]]; then
-      return "$test_status"
-    fi
-    return "$dry_run_status"
-  fi
-
-  echo "--- uploading payloads"
+  echo "--- validating and uploading payloads"
   # Requires DD_API_KEY and DD_SITE environment variables.
-  DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run --config=test-optimization //:dd_upload_payloads -- "${bep_args[@]}" || upload_status=$?
+  DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run --config=test-optimization //:dd_upload_payloads -- "${bep_args[@]}" --validate-enrichment || uploader_status=$?
 
   if [[ "$test_status" -ne 0 ]]; then
     return "$test_status"
   fi
-  return "$upload_status"
+  if [[ "$doctor_status" -ne 0 ]]; then
+    return "$doctor_status"
+  fi
+  return "$uploader_status"
 }

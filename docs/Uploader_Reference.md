@@ -106,16 +106,16 @@ $env:DD_SITE = "datadoghq.com"
   //...
 ```
 
-Always preserve all statuses. Test failures win, followed by doctor, dry-run,
-and uploader failures. When upload is enabled, validation failures do not block
-the uploader from processing other fresh valid payloads.
+Always preserve all statuses. Test failures win, followed by doctor and uploader
+failures. When upload is enabled, enrichment validation happens during the real
+upload and does not block processing other fresh valid payloads.
 
 Enrichment validation:
 
-- The CI wrappers always run `--dry-run --validate-enrichment` before a real
-  upload. A normal uploader invocation can instead pass
-  `--validate-enrichment` without `--dry-run` to validate each enriched source
-  payload once, immediately before splitting and upload. Manual invocations
+- The CI wrappers run the uploader exactly once. Without upload they pass
+  `--dry-run --validate-enrichment`; with upload they pass
+  `--validate-enrichment` without `--dry-run`, validating each enriched source
+  payload once immediately before splitting and upload. Manual invocations
   should pass the matching `--bep-json=<path>` together with
   `--freshness-source=bep --freshness-mode=required --artifact-source=bep`.
 - Dry-run mode does not upload data, does not require `DD_API_KEY` in
@@ -327,10 +327,9 @@ tools/test_optimization/run_test_optimization_ci.sh \
   //...
 ```
 
-The wrapper writes `.topt/reports/doctor-report.json` and
-`.topt/reports/uploader-dry-run-report.json`. If upload is enabled, it writes
-`.topt/reports/uploader-upload-report.json` for the real upload so the dry-run
-report is preserved.
+The wrapper writes `.topt/reports/doctor-report.json` plus exactly one uploader
+report: `.topt/reports/uploader-dry-run-report.json` without upload, or
+`.topt/reports/uploader-upload-report.json` with upload.
 
 For first-pass support, the doctor can create a doctor-only bundle without the
 wrapper:

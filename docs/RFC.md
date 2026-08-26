@@ -140,10 +140,10 @@ At a high level, the proposal moves all network‑dependent metadata fetching ou
 
   - A single workspace-level uploader target (normal rule, not test) runs via `bazel run` after tests complete.
   - The uploader discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for filesystem quiescence, enriches test payloads with `context.json` (if present), uploads via agentless (`DD_API_KEY`, `DD_SITE`) or an EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`), and deletes successfully uploaded files.
-  - Usage: run `bazel test`, then `//:dd_test_optimization_doctor`, then
-    `//:dd_upload_payloads -- --dry-run --validate-enrichment`, then the real
-    `//:dd_upload_payloads` target. Preserve the earliest failure while still
-    uploading every available fresh valid payload.
+  - Usage: run `bazel test`, then `//:dd_test_optimization_doctor`, then one
+    `//:dd_upload_payloads -- --validate-enrichment` pass. Add `--dry-run` when
+    upload is disabled. Preserve the earliest failure while still processing
+    every available fresh valid payload.
 
 
 - [Multi‑service monorepos](../tools/core/test_optimization_multi_sync.bzl):  
@@ -265,12 +265,7 @@ Runtime Uploader
     if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
     exit "$doctor_status"
   fi
-  bazel run --config=test-optimization //:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-  if [ "$dry_run_status" -ne 0 ]; then
-    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-    exit "$dry_run_status"
-  fi
-  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //:dd_upload_payloads -- --validate-enrichment
   upload_status=$?
   if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
   exit "$upload_status"

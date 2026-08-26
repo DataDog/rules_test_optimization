@@ -712,6 +712,7 @@ $script:FreshnessSkippedOutputs = [System.Collections.Generic.HashSet[string]]::
 $script:FreshnessRemoteOnlyOutputs = New-Object System.Collections.Generic.List[object]
 $script:FreshnessMissingOutputLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkipWasWritten = $false
+$script:RemoteOnlyOutputsValidated = $false
 $script:ExpectedTargetsConfigured = $false
 $script:ExpectedTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:HandledFreshOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -1390,8 +1391,8 @@ function Stage-BepArtifacts {
     foreach ($bepJson in @($script:BepJsonFiles)) {
         $resolvedBepJson = Resolve-RuntimeFilePath $bepJson
         if ([string]::IsNullOrWhiteSpace($resolvedBepJson) -or -not (Test-Path -LiteralPath $resolvedBepJson -PathType Leaf)) {
-            Log "error: BEP JSON not found for artifact staging: $bepJson"
-            exit 2
+            Log "error: BEP JSON not found for artifact staging: $bepJson; continuing with other BEP files"
+            continue
         }
         $resolvedBepJsonFiles.Add($resolvedBepJson) | Out-Null
     }
@@ -2947,9 +2948,15 @@ function Initialize-BepEligibility {
 	      if (Use-OptionalBepUnavailable "BEP JSON not found: $bepJson") {
 	        return
 	      }
-	      Log "error: BEP JSON not found: $bepJson"
-	      exit 2
+	      Log "error: BEP JSON not found: $bepJson; continuing with other BEP files"
+	      $script:UploadFailures++
+	      continue
 	    }
+    $eligibleLabelsBefore = @($script:FreshnessEligibleLabels)
+    $eligibleOutputsBefore = @($script:FreshnessEligibleOutputs)
+    $cachedOutputsBefore = @($script:FreshnessCachedOutputs)
+    $remoteOutputsBefore = @($script:FreshnessRemoteOnlyOutputs.ToArray())
+    $missingLabelsBefore = @($script:FreshnessMissingOutputLabels)
     try {
       foreach ($event in @(Get-JsonStreamObjects $resolvedBep)) {
         $eventId = Get-MapValue $event 'id'
@@ -3038,11 +3045,22 @@ function Initialize-BepEligibility {
 	        }
       }
 	    } catch {
+	      $script:FreshnessEligibleLabels.Clear()
+	      foreach ($entry in $eligibleLabelsBefore) { $script:FreshnessEligibleLabels.Add([string]$entry) | Out-Null }
+	      $script:FreshnessEligibleOutputs.Clear()
+	      foreach ($entry in $eligibleOutputsBefore) { $script:FreshnessEligibleOutputs.Add([string]$entry) | Out-Null }
+	      $script:FreshnessCachedOutputs.Clear()
+	      foreach ($entry in $cachedOutputsBefore) { $script:FreshnessCachedOutputs.Add([string]$entry) | Out-Null }
+	      $script:FreshnessRemoteOnlyOutputs.Clear()
+	      foreach ($entry in $remoteOutputsBefore) { $script:FreshnessRemoteOnlyOutputs.Add($entry) | Out-Null }
+	      $script:FreshnessMissingOutputLabels.Clear()
+	      foreach ($entry in $missingLabelsBefore) { $script:FreshnessMissingOutputLabels.Add([string]$entry) | Out-Null }
 	      if (Use-OptionalBepUnavailable "failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message))") {
 	        return
 	      }
-	      Log "error: failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message))"
-	      exit 2
+	      Log "error: failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message)); continuing with other BEP files"
+	      $script:UploadFailures++
+	      continue
 	    }
   }
 
@@ -3238,6 +3256,7 @@ function Assert-ExpectedTargetCoverage {
   }
   if ($missingCount -gt 0) {
     Log "warning: $missingCount expected target(s) produced no current uploadable output; available fresh payloads will still be processed"
+    $script:UploadFailures += $missingCount
   }
 }
 
@@ -3248,13 +3267,16 @@ function Write-ExecutionSkipOnce([string]$OutputsDir, [string]$Reason) {
 }
 
 function Assert-NoRequiredRemoteOnlyBepOutputs {
+  if ($script:RemoteOnlyOutputsValidated) { return }
+  $script:RemoteOnlyOutputsValidated = $true
   if ($script:FreshnessSelectedSource -ne "bep") { return }
   if ($script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
     $first = $script:FreshnessRemoteOnlyOutputs[0]
     $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
     if ($script:FreshnessMode -eq "required" -or $script:RemoteArtifacts -eq "required") {
-      Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $firstArtifact. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-      exit 2
+      Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $firstArtifact. Those outputs will be skipped while other fresh payloads are processed. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+      $script:UploadFailures += $script:FreshnessRemoteOnlyOutputs.Count
+      return
     }
     if ($script:RemoteArtifacts -eq "download") {
       Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; unmaterialized outputs will be skipped."
@@ -3763,8 +3785,8 @@ function Remove-PayloadFile([string]$FilePath) {
     }
 }
 
-# Track upload failures globally
-$script:UploadFailures = 0
+# Track per-payload upload report counters. UploadFailures is initialized
+# before BEP preparation so partial-input failures remain part of the result.
 $script:ReportTestsProcessed = 0
 $script:ReportTestsFailed = 0
 $script:ReportTestsSkipped = 0

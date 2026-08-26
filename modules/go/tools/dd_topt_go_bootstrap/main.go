@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/DataDog/rules_test_optimization/modules/go/tools/onboardingpins"
@@ -414,6 +415,9 @@ func run(cfg config) error {
 	if err := validateBootstrapMode(cfg); err != nil {
 		return err
 	}
+	if err := validateGoRuntimeCompatibility(cfg); err != nil {
+		return err
+	}
 	if err := validateValidationScriptConfig(cfg); err != nil {
 		return err
 	}
@@ -660,6 +664,61 @@ func validateBootstrapMode(cfg config) error {
 		}
 	}
 	return nil
+}
+
+// validateGoRuntimeCompatibility rejects managed SDK versions that cannot
+// build the configured Orchestrion release before bootstrap writes any files.
+func validateGoRuntimeCompatibility(cfg config) error {
+	runtimeVersion := strings.TrimSpace(cfg.runtimeVersion)
+	if runtimeVersion == "" {
+		return nil
+	}
+	orchestrionVersion, err := parseVersionTriplet(cfg.orchestrionVersion)
+	if err != nil {
+		return fmt.Errorf("invalid Orchestrion version %q: %w", cfg.orchestrionVersion, err)
+	}
+	if compareVersionTriplets(orchestrionVersion, [3]int{1, 12, 0}) < 0 {
+		return nil
+	}
+	goVersion, err := parseVersionTriplet(runtimeVersion)
+	if err != nil {
+		return fmt.Errorf("invalid Go runtime version %q: %w", runtimeVersion, err)
+	}
+	if compareVersionTriplets(goVersion, [3]int{1, 25, 0}) < 0 {
+		return fmt.Errorf("Orchestrion %s requires Go 1.25.0 or newer; got --runtime-version=%s", cfg.orchestrionVersion, runtimeVersion)
+	}
+	return nil
+}
+
+func parseVersionTriplet(value string) ([3]int, error) {
+	match := regexp.MustCompile(`^[vV]?(\d+)\.(\d+)(?:\.(\d+))?(?:[-+].*)?$`).FindStringSubmatch(strings.TrimSpace(value))
+	if match == nil {
+		return [3]int{}, errors.New("expected a semantic version such as 1.25.0")
+	}
+	var parsed [3]int
+	for i := range parsed {
+		if match[i+1] == "" {
+			continue
+		}
+		component, err := strconv.Atoi(match[i+1])
+		if err != nil {
+			return [3]int{}, fmt.Errorf("parse numeric component: %w", err)
+		}
+		parsed[i] = component
+	}
+	return parsed, nil
+}
+
+func compareVersionTriplets(left, right [3]int) int {
+	for i := range left {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 // runWorkspaceMode writes only local scaffolding files for WORKSPACE consumers.
@@ -1474,8 +1533,7 @@ func validationScript(cfg config) (string, error) {
 	buf.WriteString("ARTIFACT_STAGING_DIR=\"\"\n")
 	buf.WriteString("REPORT_DIR=\"${DD_TEST_OPTIMIZATION_REPORT_DIR:-}\"\n")
 	buf.WriteString("DOCTOR_REPORT_JSON=\"\"\n")
-	buf.WriteString("UPLOADER_DRY_RUN_REPORT_JSON=\"\"\n")
-	buf.WriteString("UPLOADER_UPLOAD_REPORT_JSON=\"\"\n")
+	buf.WriteString("UPLOADER_REPORT_JSON=\"\"\n")
 	fmt.Fprintf(&buf, "MIN_FREE_DISK_GB=%d\n", cfg.minFreeDiskGB)
 	fmt.Fprintf(&buf, "LARGE_MONOREPO=%s\n", shellBool(cfg.largeMonorepo))
 	fmt.Fprintf(&buf, "SHUTDOWN_BAZEL_ON_EXIT=%s\n", shellBool(cfg.shutdownBazelOnExit))
@@ -1502,7 +1560,7 @@ usage() {
 Usage: validate_go_pilot.sh [--upload|--no-upload]
 
 Runs the Datadog Go Test Optimization validation flow:
-  sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload
+  sync -> controls -> instrumented tests -> doctor -> validated uploader
 
 Upload is disabled by default. Pass --upload only when local Datadog
 credentials are already available in the environment. When enabled, every
@@ -1562,8 +1620,7 @@ prepare_bep_files() {
   fi
   mkdir -p "${BEP_JSON_DIR}" "${ARTIFACT_STAGING_DIR}" "${REPORT_DIR}"
   DOCTOR_REPORT_JSON="${REPORT_DIR}/doctor-report.json"
-  UPLOADER_DRY_RUN_REPORT_JSON="${REPORT_DIR}/uploader-dry-run-report.json"
-  UPLOADER_UPLOAD_REPORT_JSON="${REPORT_DIR}/uploader-upload-report.json"
+  UPLOADER_REPORT_JSON="${REPORT_DIR}/uploader-report.json"
   BEP_RUN_ARGS+=("--artifact-staging-dir=${ARTIFACT_STAGING_DIR}")
 }
 
@@ -1689,23 +1746,21 @@ if (( doctor_status != 0 && final_status == 0 )); then
 fi
 
 check_disk
-run_step "dry-run upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_DRY_RUN_REPORT_JSON}" --dry-run --validate-enrichment
-dry_run_status=$?
-if (( dry_run_status != 0 && final_status == 0 )); then
-  final_status=${dry_run_status}
-fi
-
 if (( upload == 0 )); then
+  run_step "dry-run upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_REPORT_JSON}" --dry-run --validate-enrichment
+  uploader_status=$?
+  if (( uploader_status != 0 && final_status == 0 )); then
+    final_status=${uploader_status}
+  fi
   log "upload skipped; rerun with --upload to run ${UPLOAD_TARGET}"
   log_report_dir
   exit "${final_status}"
 fi
 
-check_disk
-run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_UPLOAD_REPORT_JSON}"
-upload_status=$?
-if (( upload_status != 0 && final_status == 0 )); then
-  final_status=${upload_status}
+run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_REPORT_JSON}" --validate-enrichment
+uploader_status=$?
+if (( uploader_status != 0 && final_status == 0 )); then
+  final_status=${uploader_status}
 fi
 log_report_dir
 exit "${final_status}"

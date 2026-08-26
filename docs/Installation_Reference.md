@@ -371,12 +371,12 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
 ```
 
 The generated script runs
-`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`.
+`sync -> controls -> instrumented tests -> doctor -> validated uploader`.
 It captures one BEP JSON file per Bazel test invocation and passes those files
 to doctor/uploader with `--freshness-source=bep --freshness-mode=required`. It
-always runs the uploader dry-run with enrichment validation after a successful
-doctor, and uploads only when called with `--upload`; the default is
-`--no-upload`. It does not delete caches, print secrets, proxy payloads, or pass
+runs the uploader exactly once with enrichment validation: dry-run by default,
+or real upload when called with `--upload`. It does not delete caches, print
+secrets, proxy payloads, or pass
 `DD_GIT_*` through `--test_env`. The generated test config uses
 `--zip_undeclared_test_outputs`, and the script passes `--artifact-source=bep`
 to doctor/uploader so local `outputs.zip` carriers are extracted through BEP
@@ -385,9 +385,9 @@ carriers, doctor/uploader can stage them natively with
 `--remote-artifacts=download` or `required`; bytestream/CAS/custom-auth
 providers still need `--bep-artifact-downloader`. Set
 `DD_TEST_OPTIMIZATION_REPORT_DIR` to choose where the
-generated script writes `doctor-report.json`, `uploader-dry-run-report.json`,
-and, when upload is enabled, `uploader-upload-report.json`; otherwise it writes
-those reports under its per-run temporary directory and logs that path.
+generated script writes `doctor-report.json` and `uploader-report.json` under
+that directory; otherwise it writes them under its per-run temporary directory
+and logs that path.
 
 ### Go Bazel config
 
