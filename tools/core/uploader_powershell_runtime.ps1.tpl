@@ -3989,10 +3989,12 @@ function Save-FailedTestPayloadParts([string]$SourcePath, [string[]]$FailedParts
       $sourceDirItem.IsReadOnly = $false
     }
   } catch {}
-  if (-not $IsWindows) {
+  $isWindowsPlatform = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+  if (-not $isWindowsPlatform) {
     & chmod u+w -- $sourceDir 2>$null
   }
   $retryPath = Join-Path $sourceDir ((Split-Path -Leaf $SourcePath) + ".retry." + [System.Guid]::NewGuid().ToString("N"))
+  $backupPath = Join-Path $sourceDir ((Split-Path -Leaf $SourcePath) + ".backup." + [System.Guid]::NewGuid().ToString("N"))
   try {
     $retryPayload = Get-Content -LiteralPath $FailedParts[0] -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
     if ($FailedParts.Count -gt 1) {
@@ -4006,12 +4008,13 @@ function Save-FailedTestPayloadParts([string]$SourcePath, [string[]]$FailedParts
       $retryPayload.events = @($failedEvents.ToArray())
     }
     Write-Utf8NoBomFile -Path $retryPath -Content (($retryPayload | ConvertTo-Json -Depth 100 -Compress) + "`n")
-    [System.IO.File]::Move($retryPath, $SourcePath, $true)
+    [System.IO.File]::Replace($retryPath, $SourcePath, $backupPath)
     Log "retained $($FailedParts.Count) failed split payload part(s) for retry: $SourcePath"
   } catch {
     Log "warning: failed to retain rejected split payload parts; retaining the original payload '$SourcePath': $_"
   } finally {
     Remove-Item -LiteralPath $retryPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
   }
 }
 

@@ -7159,6 +7159,23 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertNotIn("cygwin", bash_text)
         self.assertNotIn("exec powershell.exe", bash_text)
 
+    def test_partial_retry_uses_windows_powershell_51_compatible_apis(self) -> None:
+        """Keep partial retry persistence compatible with Windows PowerShell 5.1."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        retry_block = self._extract_text_block(
+            powershell_text,
+            "function Save-FailedTestPayloadParts",
+            "function Get-TelemetryHeaders",
+        )
+
+        self.assertIn("[System.Environment]::OSVersion.Platform", retry_block)
+        self.assertIn("[System.PlatformID]::Win32NT", retry_block)
+        self.assertNotIn("$IsWindows", retry_block)
+        self.assertIn("[System.IO.File]::Replace($retryPath, $SourcePath, $backupPath)", retry_block)
+        self.assertNotIn("[System.IO.File]::Move(", retry_block)
+
     def test_bash_runtime_guards_context_enrichment_failures(self) -> None:
         """Validate bash runtime falls back when jq context enrichment fails."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
