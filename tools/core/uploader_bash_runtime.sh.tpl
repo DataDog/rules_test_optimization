@@ -600,6 +600,9 @@ KEEP_PAYLOADS=$(normalize_bool "${DD_TEST_OPTIMIZATION_KEEP_PAYLOADS:-__DDTPL_KE
 FILTER_PREFIX=$(normalize_bool "${DD_TEST_OPTIMIZATION_FILTER_PREFIX:-__DDTPL_FILTER_PREFIX__}")
 DEBUG=$(normalize_bool "${DD_TEST_OPTIMIZATION_DEBUG:-__DDTPL_DEBUG__}")
 GZIP_PAYLOADS=$(normalize_bool "${DD_TEST_OPTIMIZATION_GZIP:-__DDTPL_GZIP_PAYLOADS__}")
+TEST_PAYLOAD_SPLIT_TARGET_BYTES=4500000
+TEST_PAYLOAD_MAX_BYTES=5000000
+UPLOAD_RESPONSE_LOG_BYTES=2000
 RULES_VERSION="__DDTPL_RULES_VERSION__"
 RUNTIME_ID=$(generate_uuid)
 # Reuse one uploader-local session fallback for telemetry files that do not
@@ -678,11 +681,11 @@ DEFAULT_EXPECTED_ENRICHED_TAGS=(
 
 print_usage() {
     cat <<'EOF'
-Usage: dd_upload_payloads [--dry-run [--validate-enrichment] [--expected-enriched-tag=TAG ...]]
+Usage: dd_upload_payloads [--dry-run] [--validate-enrichment] [--expected-enriched-tag=TAG ...]
 
 Options:
   --dry-run                    Enrich and validate payloads without uploading or deleting files.
-  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment.
+  --validate-enrichment        Require key context and Bazel tags after enrichment, before upload.
   --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags.
   --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable.
   --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto.
@@ -889,11 +892,6 @@ if (( FRESHNESS_DISABLED_EXPLICIT == 1 )); then
     EXECUTION_LOG_MODE="disabled"
 fi
 
-if (( VALIDATE_ENRICHMENT == 1 && DRY_RUN == 0 )); then
-    log "error: --validate-enrichment requires --dry-run"
-    exit 2
-fi
-
 FRESHNESS_MODE="$(echo "$FRESHNESS_MODE" | tr '[:upper:]' '[:lower:]')"
 FRESHNESS_SOURCE="$(echo "$FRESHNESS_SOURCE" | tr '[:upper:]' '[:lower:]')"
 ARTIFACT_SOURCE="$(echo "$ARTIFACT_SOURCE" | tr '[:upper:]' '[:lower:]')"
@@ -961,6 +959,10 @@ dbg "gzip enabled: $GZIP_PAYLOADS"
 CURL_RETRY_FLAGS=(__DDTPL_CURL_RETRY_FLAGS__)
 if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
     CURL_RETRY_FLAGS+=(--retry-all-errors)
+fi
+CURL_FAIL_FLAG=(-f)
+if curl --help all 2>/dev/null | grep -q -- '--fail-with-body'; then
+    CURL_FAIL_FLAG=(--fail-with-body)
 fi
 dbg "curl retry flags: ${CURL_RETRY_FLAGS[*]}"
 
@@ -4756,7 +4758,11 @@ validate_enriched_payload_tags() {
         log "error: enriched test payload for '$source_file' is missing expected tag(s): ${missing[*]}"
         return 1
     fi
-    log "dry-run validated enriched test payload: $source_file"
+    if (( DRY_RUN == 1 )); then
+        log "dry-run validated enriched test payload: $source_file"
+    else
+        log "validated enriched test payload: $source_file"
+    fi
     return 0
 }
 
@@ -4778,54 +4784,161 @@ dry_run_single_test() {
         rm -f "$body" 2>/dev/null || true
         return 1
     fi
-    rm -f "$body" 2>/dev/null || true
+    if ! prepare_test_payload_parts "$body" "$file"; then
+        cleanup_prepared_test_payloads
+        return 1
+    fi
+    if (( ${#PREPARED_TEST_PAYLOADS[@]} > 1 )); then
+        log "dry-run would split test payload '$file' into ${#PREPARED_TEST_PAYLOADS[@]} parts"
+    fi
+    cleanup_prepared_test_payloads
     return 0
 }
 
-# Handle upload single test behavior.
-upload_single_test() {
-    local file="$1"
-    local body resp payload_file gz http rc
-    # Use a temp file to avoid collisions when multiple uploads run in parallel.
-    body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
-    if [[ -z "$body" ]]; then
-        dbg "upload_single_test: failed to create temp file"
+PREPARED_TEST_PAYLOADS=()
+PREPARED_TEST_TEMP_FILES=()
+
+test_payload_size_bytes() {
+    wc -c <"$1" | tr -d '[:space:]'
+}
+
+track_prepared_test_temp_file() {
+    PREPARED_TEST_TEMP_FILES+=("$1")
+}
+
+cleanup_prepared_test_payloads() {
+    local path
+    for path in "${PREPARED_TEST_TEMP_FILES[@]}"; do
+        [[ -n "$path" ]] && rm -f "$path" 2>/dev/null || true
+    done
+    PREPARED_TEST_PAYLOADS=()
+    PREPARED_TEST_TEMP_FILES=()
+}
+
+split_test_payload_part() {
+    local payload="$1"
+    local source_file="$2"
+    local size event_count midpoint left right
+    size="$(test_payload_size_bytes "$payload")"
+    if (( size <= TEST_PAYLOAD_SPLIT_TARGET_BYTES )); then
+        PREPARED_TEST_PAYLOADS+=("$payload")
+        return 0
+    fi
+
+    if ! event_count="$(jq -r '.events | if type == "array" then length else -1 end' "$payload" 2>/dev/null)" ||
+       [[ ! "$event_count" =~ ^[0-9]+$ ]] || (( event_count < 1 )); then
+        log "error: oversized test payload cannot be split because its events array is invalid: $source_file"
         return 1
     fi
-    enrich_with_context "$file" "$body"
-    validate_payload "$body"
-    build_common_headers "$body"
-    dbg "upload_single_test: posting '$file' (body '$body')"
-    if [[ "$DEBUG" == "1" ]]; then
-        local gzip_note=""
-        if [[ "$GZIP_PAYLOADS" == "1" ]]; then
-            gzip_note="; Content-Encoding=gzip"
+    if (( event_count == 1 )); then
+        if (( size <= TEST_PAYLOAD_MAX_BYTES )); then
+            log "warning: single-event test payload exceeds the split target but remains within the intake limit: source='$source_file' uncompressed_bytes=$size"
+            PREPARED_TEST_PAYLOADS+=("$payload")
+            return 0
         fi
-        echo "[dd-uploader][dbg] payload content (enriched) for '$file':" >&2
-        cat "$body" >&2
-        echo "" >&2
-        log_start_time_stats "$body"
-        dbg "headers: Content-Type=application/json${gzip_note}"
+        log "error: single_event_too_large: source='$source_file' uncompressed_bytes=$size max_bytes=$TEST_PAYLOAD_MAX_BYTES"
+        return 1
     fi
+
+    midpoint=$((event_count / 2))
+    left="$(mktemp "$TMP_PAYLOAD_DIR/test_payload_part.XXXXXX" 2>/dev/null || true)"
+    right="$(mktemp "$TMP_PAYLOAD_DIR/test_payload_part.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$left" || -z "$right" ]]; then
+        [[ -n "$left" ]] && rm -f "$left" 2>/dev/null || true
+        [[ -n "$right" ]] && rm -f "$right" 2>/dev/null || true
+        log "error: failed to create temporary files while splitting test payload: $source_file"
+        return 1
+    fi
+    track_prepared_test_temp_file "$left"
+    track_prepared_test_temp_file "$right"
+    if ! jq -c --argjson midpoint "$midpoint" '.events = .events[0:$midpoint]' "$payload" >"$left" ||
+       ! jq -c --argjson midpoint "$midpoint" '.events = .events[$midpoint:]' "$payload" >"$right"; then
+        log "error: failed to split oversized test payload: $source_file"
+        return 1
+    fi
+    split_test_payload_part "$left" "$source_file" && split_test_payload_part "$right" "$source_file"
+}
+
+prepare_test_payload_parts() {
+    local body="$1"
+    local source_file="$2"
+    local size compact
+    PREPARED_TEST_PAYLOADS=()
+    PREPARED_TEST_TEMP_FILES=("$body")
+    size="$(test_payload_size_bytes "$body")"
+    if (( size <= TEST_PAYLOAD_SPLIT_TARGET_BYTES )); then
+        PREPARED_TEST_PAYLOADS=("$body")
+        return 0
+    fi
+    if (( JQ_AVAILABLE == 0 )); then
+        if (( size <= TEST_PAYLOAD_MAX_BYTES )); then
+            log "warning: test payload exceeds the split target but jq is unavailable; sending within the intake limit: source='$source_file' uncompressed_bytes=$size"
+            PREPARED_TEST_PAYLOADS=("$body")
+            return 0
+        fi
+        log "error: oversized test payload requires jq for event splitting: source='$source_file' uncompressed_bytes=$size"
+        return 1
+    fi
+
+    compact="$(mktemp "$TMP_PAYLOAD_DIR/test_payload_compact.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$compact" ]]; then
+        log "error: failed to create temporary file while preparing test payload: $source_file"
+        return 1
+    fi
+    track_prepared_test_temp_file "$compact"
+    if ! jq -c '.' "$body" >"$compact"; then
+        if (( size <= TEST_PAYLOAD_MAX_BYTES )); then
+            log "warning: oversized test payload could not be compacted; sending within the intake limit: source='$source_file' uncompressed_bytes=$size"
+            PREPARED_TEST_PAYLOADS=("$body")
+            return 0
+        fi
+        log "error: oversized test payload is not valid JSON and cannot be split: $source_file"
+        return 1
+    fi
+    if ! split_test_payload_part "$compact" "$source_file"; then
+        return 1
+    fi
+    log "split test payload: source='$source_file' uncompressed_bytes=$size parts=${#PREPARED_TEST_PAYLOADS[@]} target_bytes=$TEST_PAYLOAD_SPLIT_TARGET_BYTES"
+    return 0
+}
+
+bounded_upload_response() {
+    local response_file="$1"
+    head -c "$UPLOAD_RESPONSE_LOG_BYTES" "$response_file" 2>/dev/null | tr '\r\n' '  '
+}
+
+send_test_payload_part() {
+    local source_file="$1"
+    local body="$2"
+    local part_index="$3"
+    local part_count="$4"
+    local resp payload_file gz http rc uncompressed_bytes transmitted_bytes compressed_bytes encoding response_bytes response_text truncated
+    build_common_headers "$body"
+    uncompressed_bytes="$(test_payload_size_bytes "$body")"
 
     payload_file="$body"
     gz=""
+    compressed_bytes="none"
+    encoding="identity"
     if [[ "$GZIP_PAYLOADS" == "1" ]]; then
         # Compress enriched payload, but gracefully fall back to plain JSON if
         # gzip is unavailable/fails on the host.
         gz="$body.gz"
         if gzip -c "$body" > "$gz"; then
             payload_file="$gz"
+            compressed_bytes="$(test_payload_size_bytes "$gz")"
+            encoding="gzip"
         else
             log "warning: gzip failed; sending uncompressed payload"
             gz=""
         fi
     fi
+    transmitted_bytes="$(test_payload_size_bytes "$payload_file")"
 
     resp="$(mktemp "$TMP_PAYLOAD_DIR/test_resp.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$resp" ]]; then
-        dbg "upload_single_test: failed to create response temp file"
-        rm -f "$body" "$gz" 2>/dev/null || true
+        log "error: failed to create response temp file for test payload: $source_file"
+        rm -f "$gz" 2>/dev/null || true
         return 1
     fi
     local ce_hdr=()
@@ -4844,14 +4957,14 @@ upload_single_test() {
         fi
     fi
     if (( AGENTLESS == 1 )); then
-      if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+      if http=$(curl_agentless "${CURL_FAIL_FLAG[@]}" -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?
       fi
     else
-      if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+      if http=$(curl "${CURL_FAIL_FLAG[@]}" -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${TEST_EVP[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
@@ -4859,18 +4972,63 @@ upload_single_test() {
       fi
     fi
     http="${http:-000}"
-    if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
-        dbg "upload_single_test: HTTP $http (rc=$rc)"
-        if [[ -s "$resp" ]]; then
-            dbg "upload_single_test response: $(head -c 2000 "$resp")"
-        fi
+    if [[ "$DEBUG" == "1" ]]; then
+        dbg "upload_single_test: HTTP $http (rc=$rc; part=$part_index/$part_count; uncompressed_bytes=$uncompressed_bytes; transmitted_bytes=$transmitted_bytes; encoding=$encoding)"
     fi
-    rm -f "$resp" "$body" "$gz" 2>/dev/null || true
+    if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        response_bytes="$(test_payload_size_bytes "$resp")"
+        response_text="<empty>"
+        truncated="false"
+        if [[ -s "$resp" ]]; then
+            response_text="$(bounded_upload_response "$resp")"
+            (( response_bytes > UPLOAD_RESPONSE_LOG_BYTES )) && truncated="true"
+        fi
+        log "upload failed: source='$source_file' part=$part_index/$part_count http=$http curl_rc=$rc encoding=$encoding uncompressed_bytes=$uncompressed_bytes compressed_bytes=$compressed_bytes transmitted_bytes=$transmitted_bytes response_bytes=$response_bytes response_truncated=$truncated response_body='$response_text'"
+    fi
+    rm -f "$resp" "$gz" 2>/dev/null || true
     # Cleanup happens before return to avoid temp-file buildup on retries/runs.
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
         return 1
     fi
     return 0
+}
+
+# Enrich one source payload, split it when necessary, and send every prepared
+# part independently so one failed part does not suppress the remaining data.
+upload_single_test() {
+    local file="$1"
+    local body part part_index=0 part_count failed=0
+    body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+        log "error: failed to create temporary test payload: $file"
+        return 1
+    fi
+    enrich_with_context "$file" "$body"
+    validate_payload "$body"
+    dbg "upload_single_test: posting '$file' (body '$body')"
+    if [[ "$DEBUG" == "1" ]]; then
+        echo "[dd-uploader][dbg] payload content (enriched) for '$file':" >&2
+        cat "$body" >&2
+        echo "" >&2
+        log_start_time_stats "$body"
+    fi
+    if ! validate_enriched_payload_tags "$body" "$file"; then
+        rm -f "$body" 2>/dev/null || true
+        return 1
+    fi
+    if ! prepare_test_payload_parts "$body" "$file"; then
+        cleanup_prepared_test_payloads
+        return 1
+    fi
+    part_count=${#PREPARED_TEST_PAYLOADS[@]}
+    for part in "${PREPARED_TEST_PAYLOADS[@]}"; do
+        ((++part_index))
+        if ! send_test_payload_part "$file" "$part" "$part_index" "$part_count"; then
+            failed=1
+        fi
+    done
+    cleanup_prepared_test_payloads
+    (( failed == 0 ))
 }
 
 # Handle upload single coverage behavior.

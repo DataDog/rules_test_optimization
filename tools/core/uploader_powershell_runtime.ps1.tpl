@@ -644,6 +644,9 @@ $KeepPayloads = if ($env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS) { Normalize-Bool $e
 $FilterPrefix = if ($env:DD_TEST_OPTIMIZATION_FILTER_PREFIX) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_FILTER_PREFIX } else { Normalize-Bool "__DDTPL_FILTER_PREFIX__" }
 $Debug = if ($env:DD_TEST_OPTIMIZATION_DEBUG) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_DEBUG } else { Normalize-Bool "__DDTPL_DEBUG__" }
 $GzipPayloads = if ($env:DD_TEST_OPTIMIZATION_GZIP) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_GZIP } else { Normalize-Bool "__DDTPL_GZIP_PAYLOADS__" }
+$script:TestPayloadSplitTargetBytes = 4500000
+$script:TestPayloadMaxBytes = 5000000
+$script:UploadResponseLogChars = 2000
 
 # Now that $Debug is set, update the script-level debug mode for Dbg function
 $script:DebugMode = $Debug
@@ -725,11 +728,11 @@ $DefaultExpectedEnrichedTags = @(
 )
 
 function Show-Usage {
-    Write-Host "Usage: dd_upload_payloads [--dry-run [--validate-enrichment] [--expected-enriched-tag=TAG ...]]"
+    Write-Host "Usage: dd_upload_payloads [--dry-run] [--validate-enrichment] [--expected-enriched-tag=TAG ...]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --dry-run                    Enrich and validate payloads without uploading or deleting files."
-    Write-Host "  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment."
+    Write-Host "  --validate-enrichment        Require key context and Bazel tags after enrichment, before upload."
     Write-Host "  --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags."
     Write-Host "  --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable."
     Write-Host "  --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto."
@@ -939,10 +942,6 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     exit 2
 }
 
-if ($ValidateEnrichment -and -not $DryRun) {
-    Log "error: --validate-enrichment requires --dry-run"
-    exit 2
-}
 if ($FreshnessDisabledExplicit) {
     $FreshnessMode = "disabled"
     $ExecutionLogMode = "disabled"
@@ -3773,9 +3772,30 @@ $script:ReportTelemetryProcessed = 0
 $script:ReportTelemetryFailed = 0
 $script:ReportTelemetrySkipped = 0
 
-function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
+function Format-BoundedUploadResponse([string]$Body) {
+  if ([string]::IsNullOrEmpty($Body)) {
+    return [pscustomobject]@{ Text = '<empty>'; Bytes = 0; Truncated = $false }
+  }
+  $responseBytes = [System.Text.Encoding]::UTF8.GetByteCount($Body)
+  $singleLine = $Body.Replace("`r", ' ').Replace("`n", ' ')
+  $truncated = $singleLine.Length -gt $script:UploadResponseLogChars
+  if ($truncated) {
+    $singleLine = $singleLine.Substring(0, $script:UploadResponseLogChars)
+  }
+  return [pscustomobject]@{ Text = $singleLine; Bytes = $responseBytes; Truncated = $truncated }
+}
+
+function Send-PostJson(
+  [string]$url,
+  [hashtable]$headers,
+  [string]$file,
+  [string]$SourcePath = $file,
+  [int]$PartIndex = 1,
+  [int]$PartCount = 1
+) {
   $maxRetries = 3
   $retryDelay = 2
+  $uncompressedBytes = (Get-Item -LiteralPath $file -ErrorAction Stop).Length
   if (-not (Ensure-HttpClientTypes)) {
     Log "upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
     return [bool]$false
@@ -3805,10 +3825,16 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
         $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $compressed)
         $content.Headers.ContentType = 'application/json'
         $null = $content.Headers.ContentEncoding.Add('gzip')
+        $compressedBytes = $compressed.Length
+        $transmittedBytes = $compressedBytes
+        $encoding = 'gzip'
         Dbg "Send-PostJson: Content-Type=application/json; Content-Encoding=gzip (bytes=$($compressed.Length))"
       } else {
         $content = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8))
         $content.Headers.ContentType = 'application/json'
+        $compressedBytes = 'none'
+        $transmittedBytes = $uncompressedBytes
+        $encoding = 'identity'
         Dbg "Send-PostJson: Content-Type=application/json"
       }
       $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
@@ -3822,15 +3848,18 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Dbg "Send-PostJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
         if ($attempt -eq $maxRetries) {
-          # Emit user-facing failure only after retry budget is exhausted.
-          Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
+          $bounded = Format-BoundedUploadResponse $body
+          Log "upload failed: source='$SourcePath' part=$PartIndex/$PartCount http=$([int]$resp.StatusCode) encoding=$encoding uncompressed_bytes=$uncompressedBytes compressed_bytes=$compressedBytes transmitted_bytes=$transmittedBytes response_bytes=$($bounded.Bytes) response_truncated=$($bounded.Truncated.ToString().ToLowerInvariant()) response_body='$($bounded.Text)'"
           return [bool]$false
         }
       }
     } catch {
       Dbg "Send-PostJson: Exception on attempt $attempt - $_"
       if ($attempt -eq $maxRetries) {
-        Log "upload failed: $_"
+        $encoding = if ($script:GzipPayloads) { 'gzip' } else { 'identity' }
+        $compressedBytes = if ($script:GzipPayloads -and $null -ne $compressed) { $compressed.Length } else { 'none' }
+        $transmittedBytes = if ($script:GzipPayloads -and $null -ne $compressed) { $compressed.Length } else { $uncompressedBytes }
+        Log "upload failed: source='$SourcePath' part=$PartIndex/$PartCount http=000 encoding=$encoding uncompressed_bytes=$uncompressedBytes compressed_bytes=$compressedBytes transmitted_bytes=$transmittedBytes response_bytes=0 response_truncated=false response_body='<empty>' exception='$_'"
         return [bool]$false
       }
     } finally {
@@ -3841,6 +3870,80 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
     Start-Sleep -Seconds $retryDelay
   }
   return [bool]$false
+}
+
+$script:PreparedTestPayloads = [System.Collections.Generic.List[string]]::new()
+$script:PreparedTestTempFiles = [System.Collections.Generic.List[string]]::new()
+
+function Clear-PreparedTestPayloads {
+  foreach ($path in @($script:PreparedTestTempFiles.ToArray())) {
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  }
+  $script:PreparedTestPayloads.Clear()
+  $script:PreparedTestTempFiles.Clear()
+}
+
+function Write-TestPayloadPart($Payload, [object[]]$Events) {
+  $path = Join-Path $script:TmpPayloadDir ("test_payload_part_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+  $Payload.events = @($Events)
+  Write-Utf8NoBomFile -Path $path -Content (($Payload | ConvertTo-Json -Depth 100 -Compress) + "`n")
+  $script:PreparedTestTempFiles.Add($path) | Out-Null
+  return $path
+}
+
+function Split-TestPayloadEvents($Payload, [object[]]$Events, [string]$SourcePath) {
+  $path = Write-TestPayloadPart $Payload $Events
+  $size = (Get-Item -LiteralPath $path -ErrorAction Stop).Length
+  if ($size -le $script:TestPayloadSplitTargetBytes) {
+    $script:PreparedTestPayloads.Add($path) | Out-Null
+    return [bool]$true
+  }
+  if ($Events.Count -eq 1) {
+    if ($size -le $script:TestPayloadMaxBytes) {
+      Log "warning: single-event test payload exceeds the split target but remains within the intake limit: source='$SourcePath' uncompressed_bytes=$size"
+      $script:PreparedTestPayloads.Add($path) | Out-Null
+      return [bool]$true
+    }
+    Log "error: single_event_too_large: source='$SourcePath' uncompressed_bytes=$size max_bytes=$($script:TestPayloadMaxBytes)"
+    return [bool]$false
+  }
+
+  $midpoint = [int][Math]::Floor($Events.Count / 2)
+  $left = @($Events[0..($midpoint - 1)])
+  $right = @($Events[$midpoint..($Events.Count - 1)])
+  return [bool]((Split-TestPayloadEvents $Payload $left $SourcePath) -and (Split-TestPayloadEvents $Payload $right $SourcePath))
+}
+
+function Prepare-TestPayloadParts([string]$BodyPath, [string]$SourcePath) {
+  $script:PreparedTestPayloads.Clear()
+  $script:PreparedTestTempFiles.Clear()
+  $script:PreparedTestTempFiles.Add($BodyPath) | Out-Null
+  $size = (Get-Item -LiteralPath $BodyPath -ErrorAction Stop).Length
+  if ($size -le $script:TestPayloadSplitTargetBytes) {
+    $script:PreparedTestPayloads.Add($BodyPath) | Out-Null
+    return [bool]$true
+  }
+  try {
+    $payload = Get-Content -LiteralPath $BodyPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    if ($size -le $script:TestPayloadMaxBytes) {
+      Log "warning: oversized test payload is not valid JSON; sending within the intake limit: source='$SourcePath' uncompressed_bytes=$size"
+      $script:PreparedTestPayloads.Add($BodyPath) | Out-Null
+      return [bool]$true
+    }
+    Log "error: oversized test payload is not valid JSON and cannot be split: $SourcePath"
+    return [bool]$false
+  }
+  $events = @(Get-MapValue $payload 'events')
+  if ($events.Count -lt 1) {
+    Log "error: oversized test payload cannot be split because its events array is invalid: $SourcePath"
+    return [bool]$false
+  }
+  if (-not (Split-TestPayloadEvents $payload $events $SourcePath)) {
+    return [bool]$false
+  }
+  Log "split test payload: source='$SourcePath' uncompressed_bytes=$size parts=$($script:PreparedTestPayloads.Count) target_bytes=$($script:TestPayloadSplitTargetBytes)"
+  return [bool]$true
 }
 
 function Get-TelemetryHeaders([string]$FilePath) {
@@ -4471,26 +4574,40 @@ function Upload-SingleTest([string]$FilePath) {
     $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
     Validate-Payload $body
-    $hdrs = Get-CommonHeaders $body
-    if (-not $Agentless) { $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }
     Dbg "Upload-SingleTest: posting '$FilePath' (body '$body')"
     if ($script:DebugMode) {
         Write-Host "[dd-uploader][dbg] payload content (enriched) for '$FilePath':"
         Write-Host (Get-Content -LiteralPath $body -Raw)
-        Dbg "request: POST $TestUrl"
-        Dbg-Headers "common" $hdrs
         Log-StartTimeStats $body
     }
-    # Native command / .NET call paths can emit incidental pipeline items.
-    # Consume the stream and treat the final emitted value as the boolean result.
-    $resultStream = @(Send-PostJson $TestUrl $hdrs $body)
-    $result = $false
-    if ($resultStream.Count -gt 0) {
-        $result = [bool]$resultStream[-1]
+    if (-not (Test-EnrichedPayloadTags $body $FilePath)) {
+        Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
+        return [bool]$false
     }
-    # Enriched temp payload is always ephemeral.
-    Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
-    return [bool]$result
+    if (-not (Prepare-TestPayloadParts $body $FilePath)) {
+        Clear-PreparedTestPayloads
+        return [bool]$false
+    }
+    $partCount = $script:PreparedTestPayloads.Count
+    $failed = $false
+    try {
+        for ($index = 0; $index -lt $partCount; $index++) {
+            $part = $script:PreparedTestPayloads[$index]
+            $hdrs = Get-CommonHeaders $part
+            if (-not $Agentless) { $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }
+            if ($script:DebugMode) {
+                Dbg "request: POST $TestUrl (part=$($index + 1)/$partCount)"
+                Dbg-Headers "common" $hdrs
+            }
+            $resultStream = @(Send-PostJson $TestUrl $hdrs $part $FilePath ($index + 1) $partCount)
+            if ($resultStream.Count -eq 0 -or -not [bool]$resultStream[-1]) {
+                $failed = $true
+            }
+        }
+    } finally {
+        Clear-PreparedTestPayloads
+    }
+    return [bool](-not $failed)
 }
 
 function Get-ExpectedEnrichedTags {
@@ -4512,7 +4629,7 @@ function Test-EventHasEnrichedTag($EventObj, [string]$Tag) {
 
 function Test-EnrichedPayloadTags([string]$BodyPath, [string]$SourcePath) {
     if (-not $script:ValidateEnrichment) { return [bool]$true }
-    $payload = Read-JsonObjectFile $BodyPath "dry-run could not parse enriched test payload '$SourcePath'"
+    $payload = Read-JsonObjectFile $BodyPath "could not parse enriched test payload '$SourcePath'"
     if (-not $payload) { return [bool]$false }
     $events = @(Get-MapValue $payload 'events')
     $missing = New-Object System.Collections.Generic.List[string]
@@ -4534,7 +4651,11 @@ function Test-EnrichedPayloadTags([string]$BodyPath, [string]$SourcePath) {
         Log "error: enriched test payload for '$SourcePath' is missing expected tag(s): $($missing -join ', ')"
         return [bool]$false
     }
-    Log "dry-run validated enriched test payload: $SourcePath"
+    if ($script:DryRun) {
+        Log "dry-run validated enriched test payload: $SourcePath"
+    } else {
+        Log "validated enriched test payload: $SourcePath"
+    }
     return [bool]$true
 }
 
@@ -4558,8 +4679,18 @@ function DryRun-SingleTest([string]$FilePath) {
                 Write-Output $item
             }
         }
-        return [bool]$validated
+        if (-not $validated) {
+            return [bool]$false
+        }
+        if (-not (Prepare-TestPayloadParts $body $FilePath)) {
+            return [bool]$false
+        }
+        if ($script:PreparedTestPayloads.Count -gt 1) {
+            Log "dry-run would split test payload '$FilePath' into $($script:PreparedTestPayloads.Count) parts"
+        }
+        return [bool]$true
     } finally {
+        Clear-PreparedTestPayloads
         Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
     }
 }

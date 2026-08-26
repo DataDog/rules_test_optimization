@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import functools
+import gzip
 import http.server
 import importlib.util
 import io
@@ -177,6 +178,38 @@ def _serve_handler(handler: type[http.server.BaseHTTPRequestHandler]) -> Iterato
         thread.join(timeout=5)
 
 
+@contextlib.contextmanager
+def _serve_test_uploads(responder):
+    """Record decoded citestcycle requests and return responder-selected statuses."""
+    records: list[dict[str, object]] = []
+
+    class Handler(QuietBaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+            length = int(self.headers.get("Content-Length", "0"))
+            wire_body = self.rfile.read(length)
+            encoding = self.headers.get("Content-Encoding", "").lower()
+            decoded_body = gzip.decompress(wire_body) if "gzip" in encoding else wire_body
+            payload = json.loads(decoded_body.decode("utf-8"))
+            status, response = responder(payload, records)
+            response_body = json.dumps(response, separators=(",", ":")).encode("utf-8")
+            records.append({
+                "decoded_bytes": len(decoded_body),
+                "encoding": encoding,
+                "headers": {key.lower(): value for key, value in self.headers.items()},
+                "payload": payload,
+                "status": status,
+                "wire_bytes": len(wire_body),
+            })
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+
+    with _serve_handler(Handler) as base_url:
+        yield base_url, records
+
+
 def _render_uploader_runtime_template(
     rel_path: str,
     *,
@@ -185,6 +218,7 @@ def _render_uploader_runtime_template(
     expected_targets_path: str = "",
     expected_targets_file_path: str = "",
     fail_on_error: bool = False,
+    curl_retry_flags: str = "--retry 3 --retry-delay 2 --retry-connrefused",
 ) -> str:
     """Render uploader runtime template placeholders for direct unit tests."""
     text = _runfile(rel_path).read_text(encoding="utf-8")
@@ -194,7 +228,7 @@ def _render_uploader_runtime_template(
         "context_json_rloc": "",
         "context_manifest_path": "",
         "context_manifest_rloc": "",
-        "curl_retry_flags": "--retry 3 --retry-delay 2 --retry-connrefused",
+        "curl_retry_flags": curl_retry_flags,
         "debug": "false",
         "doctor_runtime_rloc": doctor_runtime_rloc,
         "expected_targets_file_path": expected_targets_file_path,
@@ -6297,6 +6331,310 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         })
         env.pop("RUNFILES_MANIFEST_FILE", None)
         return env
+
+    def _run_local_test_upload(
+        self,
+        runtime: str,
+        payload: dict[str, object],
+        responder,
+        *,
+        extra_args: tuple[str, ...] = (),
+        gzip_enabled: bool,
+        keep_payloads: bool = True,
+    ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]], bool]:
+        """Run one generated uploader against a recording local test intake."""
+        bash = _require_functional_bash(self)
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated uploader parity")
+        _require_command(self, "jq", "jq is required for oversized Bash payload splitting")
+
+        root = Path(tempfile.mkdtemp())
+        try:
+            payload_dir = root / "bazel-testlogs" / "pkg" / "test" / "test.outputs" / "payloads" / "tests"
+            payload_dir.mkdir(parents=True)
+            source = payload_dir / "span_events_generated.json"
+            source.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            runfiles_dir = root / "empty.runfiles"
+            runfiles_dir.mkdir()
+
+            if runtime == "Bash":
+                generated = root / "generated_uploader.sh"
+                generated.write_text(
+                    _render_uploader_runtime_template(
+                        "tools/core/uploader_bash_runtime.sh.tpl",
+                        fail_on_error=True,
+                        curl_retry_flags="--retry 1 --retry-delay 0 --retry-connrefused",
+                    ),
+                    encoding="utf-8",
+                )
+                generated.chmod(0o755)
+                command = [bash, str(generated), *extra_args]
+            elif runtime == "PowerShell":
+                generated = root / "generated_uploader.ps1"
+                generated.write_text(
+                    _render_uploader_runtime_template(
+                        "tools/core/uploader_powershell_runtime.ps1.tpl",
+                        fail_on_error=True,
+                    ),
+                    encoding="utf-8",
+                )
+                command = [pwsh, "-NoLogo", "-NoProfile", "-File", str(generated), *extra_args]
+            else:
+                raise AssertionError(f"unknown uploader runtime: {runtime}")
+
+            env = os.environ.copy()
+            env.update({
+                "BUILD_WORKSPACE_DIRECTORY": str(root),
+                "DD_TEST_OPTIMIZATION_DEBUG": "0",
+                "DD_TEST_OPTIMIZATION_GZIP": "1" if gzip_enabled else "0",
+                "DD_TEST_OPTIMIZATION_KEEP_PAYLOADS": "1" if keep_payloads else "0",
+                "DD_TEST_OPTIMIZATION_MAX_WAIT_SEC": "0",
+                "DD_TEST_OPTIMIZATION_QUIESCENT_SEC": "0",
+                "RUNFILES_DIR": str(runfiles_dir),
+                "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+            })
+            env.pop("DD_API_KEY", None)
+            env.pop("RUNFILES_MANIFEST_FILE", None)
+
+            with _serve_test_uploads(responder) as (base_url, records):
+                env["DD_TEST_OPTIMIZATION_AGENT_URL"] = base_url
+                result = subprocess.run(
+                    command,
+                    cwd=root,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+                return result, list(records), source.is_file()
+        finally:
+            _cleanup_tempdir_with_windows_retry(root)
+
+    @staticmethod
+    def _large_test_payload(*, event_count: int, blob_bytes: int) -> dict[str, object]:
+        """Build an oversized payload without checking a large fixture into the repo."""
+        return {
+            "custom_envelope": {"preserved": True},
+            "events": [
+                {
+                    "content": {
+                        "meta": {"blob": "x" * blob_bytes, "event.id": f"event-{index}"},
+                        "metrics": {},
+                        "resource": f"pkg.test.{index}",
+                    },
+                    "type": "test",
+                }
+                for index in range(event_count)
+            ],
+            "metadata": {"*": {"language": "python", "library_version": "test"}},
+            "version": 1,
+        }
+
+    def test_generated_uploaders_log_failed_test_upload_details(self) -> None:
+        """Expose bounded response bodies and wire sizes without debug mode."""
+        payload = self._large_test_payload(event_count=1, blob_bytes=64)
+
+        def reject(_payload, _records):
+            return 413, {"error": "payload too large"}
+
+        for runtime in ("Bash", "PowerShell"):
+            for gzip_enabled in (False, True):
+                with self.subTest(runtime=runtime, gzip=gzip_enabled):
+                    result, records, source_exists = self._run_local_test_upload(
+                        runtime,
+                        payload,
+                        reject,
+                        gzip_enabled=gzip_enabled,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertNotEqual(0, result.returncode, output)
+                    self.assertTrue(source_exists)
+                    self.assertGreaterEqual(len(records), 1)
+                    self.assertIn("http=413", output)
+                    self.assertIn("uncompressed_bytes=", output)
+                    self.assertIn("transmitted_bytes=", output)
+                    self.assertIn("response_body='{\"error\":\"payload too large\"}'", output)
+                    self.assertIn(
+                        "encoding=gzip" if gzip_enabled else "encoding=identity",
+                        output,
+                    )
+                    self.assertIn(
+                        "compressed_bytes=" if gzip_enabled else "compressed_bytes=none",
+                        output,
+                    )
+
+    def test_generated_uploaders_split_large_test_payloads_and_retry_parts(self) -> None:
+        """Split before transport while preserving order, envelope, gzip, and retry isolation."""
+        payload = self._large_test_payload(event_count=4, blob_bytes=1_300_000)
+
+        def retry_second_part(candidate, records):
+            event_ids = [event["content"]["meta"]["event.id"] for event in candidate["events"]]
+            prior_attempts = sum(
+                1
+                for record in records
+                if [event["content"]["meta"]["event.id"] for event in record["payload"]["events"]]
+                == event_ids
+            )
+            if event_ids == ["event-2", "event-3"] and prior_attempts == 0:
+                return 503, {"error": "retry this part"}
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            for gzip_enabled in (False, True):
+                with self.subTest(runtime=runtime, gzip=gzip_enabled):
+                    result, records, source_exists = self._run_local_test_upload(
+                        runtime,
+                        payload,
+                        retry_second_part,
+                        gzip_enabled=gzip_enabled,
+                        keep_payloads=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(0, result.returncode, output)
+                    self.assertFalse(source_exists)
+                    self.assertIn("parts=2", output)
+                    successful = [record for record in records if record["status"] == 200]
+                    self.assertEqual(2, len(successful), records)
+                    event_ids = [
+                        event["content"]["meta"]["event.id"]
+                        for record in successful
+                        for event in record["payload"]["events"]
+                    ]
+                    self.assertEqual([f"event-{index}" for index in range(4)], event_ids)
+                    for record in records:
+                        self.assertLessEqual(record["decoded_bytes"], 4_500_000)
+                        self.assertEqual({"preserved": True}, record["payload"]["custom_envelope"])
+                        self.assertEqual(1, record["payload"]["version"])
+                        self.assertEqual("gzip" if gzip_enabled else "", record["encoding"])
+                    first_part_attempts = [
+                        record
+                        for record in records
+                        if record["payload"]["events"][0]["content"]["meta"]["event.id"] == "event-0"
+                    ]
+                    self.assertEqual(1, len(first_part_attempts), records)
+
+    def test_generated_uploaders_dry_run_validates_split_without_uploading(self) -> None:
+        """Use the real split preparation during dry-run without sending data."""
+        payload = self._large_test_payload(event_count=4, blob_bytes=1_300_000)
+
+        def accept(_payload, _records):
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime):
+                result, records, source_exists = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--dry-run",),
+                    gzip_enabled=True,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(0, result.returncode, output)
+                self.assertTrue(source_exists)
+                self.assertEqual([], records)
+                self.assertIn("dry-run would split test payload", output)
+                self.assertIn("into 2 parts", output)
+
+    def test_generated_uploaders_validate_enrichment_during_upload(self) -> None:
+        """Validate the enriched outbound body without a separate dry-run pass."""
+        payload = self._large_test_payload(event_count=1, blob_bytes=64)
+
+        def accept(_payload, _records):
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime, result="valid"):
+                result, records, source_exists = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--validate-enrichment", "--expected-enriched-tag=event.id"),
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(0, result.returncode, output)
+                self.assertFalse(source_exists)
+                self.assertEqual(1, len(records), records)
+                self.assertIn("validated enriched test payload", output)
+                self.assertNotIn("dry-run validated enriched test payload", output)
+
+            with self.subTest(runtime=runtime, result="missing-tag"):
+                result, records, source_exists = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--validate-enrichment", "--expected-enriched-tag=missing.tag"),
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(0, result.returncode, output)
+                self.assertTrue(source_exists)
+                self.assertEqual([], records)
+                self.assertIn("missing expected tag(s): missing.tag", output)
+
+    def test_generated_uploaders_continue_after_one_split_part_fails(self) -> None:
+        """Keep successful parts uploaded while reporting aggregate source failure."""
+        payload = self._large_test_payload(event_count=4, blob_bytes=1_300_000)
+
+        def reject_second_part(candidate, _records):
+            first_id = candidate["events"][0]["content"]["meta"]["event.id"]
+            if first_id == "event-2":
+                return 503, {"error": "persistent part failure"}
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime):
+                result, records, source_exists = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    reject_second_part,
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(0, result.returncode, output)
+                self.assertTrue(source_exists)
+                first_part = [
+                    record
+                    for record in records
+                    if record["payload"]["events"][0]["content"]["meta"]["event.id"] == "event-0"
+                ]
+                failed_part = [
+                    record
+                    for record in records
+                    if record["payload"]["events"][0]["content"]["meta"]["event.id"] == "event-2"
+                ]
+                self.assertEqual(1, len(first_part), records)
+                self.assertEqual(200, first_part[0]["status"])
+                self.assertGreaterEqual(len(failed_part), 2, records)
+                self.assertTrue(all(record["status"] == 503 for record in failed_part))
+                self.assertIn("part=2/2", output)
+                self.assertIn("persistent part failure", output)
+
+    def test_generated_uploaders_reject_unsplittable_single_event(self) -> None:
+        """Reject one event above the hard intake limit without making a request."""
+        payload = self._large_test_payload(event_count=1, blob_bytes=5_100_000)
+
+        def accept(_payload, _records):
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime):
+                result, records, source_exists = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    gzip_enabled=False,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(0, result.returncode, output)
+                self.assertTrue(source_exists)
+                self.assertEqual([], records)
+                self.assertIn("single_event_too_large", output)
 
     def _assert_uploader_report_success(self, report_path: Path, bep_path: Path, staging_dir: Path) -> None:
         """Validate a successful generated uploader machine-readable report."""

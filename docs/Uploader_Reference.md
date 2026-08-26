@@ -110,17 +110,21 @@ Always preserve all statuses. Test failures win, followed by doctor, dry-run,
 and uploader failures. When upload is enabled, validation failures do not block
 the uploader from processing other fresh valid payloads.
 
-Dry-run enrichment validation:
+Enrichment validation:
 
 - The CI wrappers always run `--dry-run --validate-enrichment` before a real
-  upload. Manual invocations should pass the matching `--bep-json=<path>`
-  together with `--freshness-source=bep --freshness-mode=required
-  --artifact-source=bep`.
+  upload. A normal uploader invocation can instead pass
+  `--validate-enrichment` without `--dry-run` to validate each enriched source
+  payload once, immediately before splitting and upload. Manual invocations
+  should pass the matching `--bep-json=<path>` together with
+  `--freshness-source=bep --freshness-mode=required --artifact-source=bep`.
 - Dry-run mode does not upload data, does not require `DD_API_KEY` in
   agentless mode, and does not delete payload files.
 - Raw files under `bazel-testlogs` are not expected to contain every final tag.
-  The dry-run validates the enriched outbound body after merging `context.json`
-  and `bazel_target_metadata.json`.
+  Validation inspects the enriched outbound body after merging `context.json`
+  and `bazel_target_metadata.json`. During a normal upload, a validation failure
+  prevents that source payload from being sent but does not suppress other
+  fresh payloads.
 - Empty JSON placeholders such as `{}` under `payloads/tests/` are skipped.
   They have no uploadable `events[]` and are not valid Test Optimization test
   payloads.
@@ -267,7 +271,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 |----------|---------|---------|
 | `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | `0` uploads all payload files; set to `1` to only upload `span_events_*.json` or `coverage_*.json` |
-| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
+| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose attempt, success, startTime, and runfile/CODEOWNERS resolution logging. Terminal test-upload failures always report the HTTP status, a bounded response body, and payload sizes. |
 | `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip test payloads before upload (adds `Content-Encoding: gzip`) |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
@@ -659,6 +663,23 @@ payload discovery/quiescence before proceeding.
   attempts
 - Both transient errors (connection issues) and HTTP errors (4xx/5xx) trigger
   retries
+- After enrichment, test payloads larger than 4,500,000 bytes are split by
+  their top-level `events` array before compression and transport. Each part
+  preserves the original top-level envelope and remains at or below the split
+  target when possible. This leaves headroom below the 5,000,000-byte intake
+  limit.
+- A single event between the split target and the intake limit is sent intact.
+  A single event above the intake limit cannot be split and fails without an
+  upload attempt.
+- On Unix, splitting requires `jq`. Without it, payloads at or below the intake
+  limit retain the existing unsplit upload path; larger payloads fail locally.
+  PowerShell performs the same split with its built-in JSON support.
+- Split parts are uploaded in event order and retry independently. A failed
+  part does not prevent the uploader from attempting the remaining parts. The
+  source payload is reported as failed and retained unless every part succeeds.
+- Terminal test-upload failures always log the HTTP status, up to 2,000
+  characters of the response body, and the uncompressed, compressed, and
+  transmitted byte counts. Response logging does not require debug mode.
 - Behavior is consistent across Linux/macOS (bash/curl) and Windows
   (PowerShell-only runtime path; no Git Bash requirement)
 

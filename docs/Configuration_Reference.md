@@ -642,7 +642,7 @@ Uploader CLI flags:
 | Flag | Purpose |
 |------|---------|
 | `--dry-run` | Enrich and validate discovered payloads without uploading or deleting files |
-| `--validate-enrichment` | In dry-run mode, require key Git and Bazel tags to exist after enrichment |
+| `--validate-enrichment` | Require key Git and Bazel tags to exist after enrichment, before either validation-only completion or upload |
 | `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package`. Add `bazel.go.payload_selection` explicitly when a Go rollout must prove per-module selection |
 | `--bep-json=<path>` | BEP JSON file from the matching Bazel test invocation; repeat for multiple invocations |
 | `--freshness-source=<source>` | Freshness source: `auto`, `bep`, or `execution_log` |
