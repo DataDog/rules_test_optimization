@@ -546,8 +546,9 @@ bazel build //tools/test_optimization:go_stdlib_warmup \
 ```
 
 The named config supplies the same Orchestrion enablement used by
-`dd_topt_go_test`; the warmup target selects `test_optimization` mode and
-materializes both the instrumented stdlib and its Go build cache. The consumer
+`dd_topt_go_test`; the warmup target applies the same Go configuration
+transitions, selects `test_optimization` mode, and materializes both the
+instrumented stdlib and its Go build cache. The consumer
 remains responsible for restricting remote-cache writes to a trusted CI
 invocation.
 Without the named config, the target is a no-op so ordinary broad builds can

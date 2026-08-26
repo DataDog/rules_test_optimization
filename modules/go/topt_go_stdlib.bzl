@@ -8,6 +8,7 @@
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@rules_go//go/private:providers.bzl", "GoStdLib")
+load("@rules_go//go/private/rules:transition.bzl", "go_transition")
 
 _ORCHESTRION_MODE_SETTING = "@rules_go//go/private/orchestrion:mode"
 _ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
@@ -34,19 +35,35 @@ def _first_target(dep):
         return dep[0]
     return dep
 
-def _dd_topt_go_stdlib_warmup_impl(ctx):
-    if not ctx.attr._orchestrion_enabled[BuildSettingInfo].value:
-        return [DefaultInfo()]
-    stdlib = _first_target(ctx.attr._stdlib)[GoStdLib]
+def _go_transition_stdlib_warmup_impl(ctx):
+    stdlib = ctx.attr._stdlib[GoStdLib]
     return [DefaultInfo(files = depset(transitive = [stdlib.libs, stdlib.cache_dir]))]
 
-dd_topt_go_stdlib_warmup = rule(
-    implementation = _dd_topt_go_stdlib_warmup_impl,
+_go_transition_stdlib_warmup = rule(
+    implementation = _go_transition_stdlib_warmup_impl,
     attrs = {
         "_stdlib": attr.label(
             default = "@rules_go//:stdlib",
-            cfg = _stdlib_warmup_transition,
             providers = [GoStdLib],
+        ),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+    cfg = go_transition,
+)
+
+def _dd_topt_go_stdlib_warmup_impl(ctx):
+    if not ctx.attr._orchestrion_enabled[BuildSettingInfo].value:
+        return [DefaultInfo()]
+    return [DefaultInfo(files = _first_target(ctx.attr.actual)[DefaultInfo].files)]
+
+_dd_topt_go_stdlib_warmup = rule(
+    implementation = _dd_topt_go_stdlib_warmup_impl,
+    attrs = {
+        "actual": attr.label(
+            mandatory = True,
+            cfg = _stdlib_warmup_transition,
         ),
         "_orchestrion_enabled": attr.label(
             default = "@rules_go//go/private/orchestrion:enabled",
@@ -58,3 +75,17 @@ dd_topt_go_stdlib_warmup = rule(
     },
     doc = "Builds the Orchestrion-instrumented Go standard library used by Test Optimization.",
 )
+
+def dd_topt_go_stdlib_warmup(name, **kwargs):
+    """Creates a warmup target with the same Go transitions as a real go_test."""
+    transitioned_name = name + "__go_transition"
+    _go_transition_stdlib_warmup(
+        name = transitioned_name,
+        tags = ["manual"],
+        visibility = ["//visibility:private"],
+    )
+    _dd_topt_go_stdlib_warmup(
+        name = name,
+        actual = ":" + transitioned_name,
+        **kwargs
+    )
