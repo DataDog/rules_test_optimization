@@ -59,7 +59,8 @@ func (e *env) runCommandWithJobserver(args []string, jobserver *orchestrionJobse
 }
 
 // newBufferedCommand creates a subprocess command wired to the shared builder
-// buffer and applies the stdlib cache override needed by Orchestrion actions.
+// buffer and advertises the declared stdlib archive source without replacing
+// the subprocess's writable GOCACHE.
 func (e *env) newBufferedCommand(args []string, buf *bytes.Buffer) *exec.Cmd {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = buf
@@ -67,7 +68,6 @@ func (e *env) newBufferedCommand(args []string, buf *bytes.Buffer) *exec.Cmd {
 	cmd.Env = os.Environ()
 	if e.stdlibCache != "" {
 		if info, err := os.Stat(e.stdlibCache); err == nil && info.IsDir() {
-			cmd.Env = setEnv(cmd.Env, "GOCACHE", e.stdlibCache)
 			cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, e.stdlibCache)
 		}
 	}

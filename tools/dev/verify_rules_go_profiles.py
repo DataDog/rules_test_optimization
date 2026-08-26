@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import shutil
 import subprocess
 import sys
@@ -171,6 +174,10 @@ def verify_workspace_runtime_functional_smoke(
         "--@io_bazel_rules_go//go/private/orchestrion:enabled=true",
         "--@io_bazel_rules_go//go/private/orchestrion:mode=test_optimization",
     ]
+    isolated_cache_flags = [
+        "--disk_cache=",
+        "--remote_cache=",
+    ]
     run_bazel(
         bazel,
         bazel_output_user_root,
@@ -178,11 +185,22 @@ def verify_workspace_runtime_functional_smoke(
         ["build", *common_flags, "@go_sdk//:builder"],
         private_safe_patterns=private_safe_patterns,
     )
-    run_bazel(
+    first_plain = run_stdlib_inventory(
         bazel,
         bazel_output_user_root,
         workspace,
-        ["test", *orchestrion_flags, "--test_output=errors", "//app:hello_test"],
+        command="build",
+        mode_flags=[*common_flags, *isolated_cache_flags],
+        target="//app:hello_test",
+        private_safe_patterns=private_safe_patterns,
+    )
+    first_orchestrion = run_stdlib_inventory(
+        bazel,
+        bazel_output_user_root,
+        workspace,
+        command="test",
+        mode_flags=[*orchestrion_flags, *isolated_cache_flags, "--test_output=errors"],
+        target="//app:hello_test",
         private_safe_patterns=private_safe_patterns,
     )
     aquery = run_bazel(
@@ -193,6 +211,34 @@ def verify_workspace_runtime_functional_smoke(
         private_safe_patterns=private_safe_patterns,
     )
     assert_aquery_contains(aquery.stdout, patch)
+
+    replay_output_user_root = work_root / "bazel_output_user_root_replay"
+    second_plain = run_stdlib_inventory(
+        bazel,
+        replay_output_user_root,
+        workspace,
+        command="build",
+        mode_flags=[*common_flags, *isolated_cache_flags],
+        target="//app:hello_test",
+        private_safe_patterns=private_safe_patterns,
+    )
+    second_orchestrion = run_stdlib_inventory(
+        bazel,
+        replay_output_user_root,
+        workspace,
+        command="test",
+        mode_flags=[*orchestrion_flags, *isolated_cache_flags, "--test_output=errors"],
+        target="//app:hello_test",
+        private_safe_patterns=private_safe_patterns,
+    )
+    assert_plain_stdlib_cache(first_plain, patch)
+    assert_plain_stdlib_cache(second_plain, patch)
+    assert_orchestrion_stdlib_cache(first_orchestrion, patch)
+    assert_orchestrion_stdlib_cache(second_orchestrion, patch)
+    if first_plain != second_plain:
+        raise ValueError("plain stdlib cache inventories differ for %s" % patch)
+    if first_orchestrion != second_orchestrion:
+        raise ValueError("Test Optimization stdlib cache inventories differ for %s" % patch)
 
 
 def write_smoke_workspace(
@@ -312,6 +358,161 @@ def run_bazel(
             "bazel command failed (%s):\n%s" % (" ".join(args), details)
         )
     return result
+
+
+@dataclass(frozen=True)
+class StdlibCacheSnapshot:
+    """Canonical declared-cache inventory plus its manifest contents."""
+
+    inventory: dict[str, str]
+    manifest: str | None
+
+
+def run_stdlib_inventory(
+    bazel: Path,
+    output_user_root: Path,
+    workspace: Path,
+    *,
+    command: str,
+    mode_flags: list[str],
+    target: str,
+    private_safe_patterns: list[str] | None = None,
+) -> StdlibCacheSnapshot:
+    """Execute one stdlib action and inventory its declared cache TreeArtifact."""
+    run_bazel(
+        bazel,
+        output_user_root,
+        workspace,
+        [command, *mode_flags, target],
+        private_safe_patterns=private_safe_patterns,
+    )
+    output_path_result = run_bazel(
+        bazel,
+        output_user_root,
+        workspace,
+        ["info", *mode_flags, "output_path"],
+        private_safe_patterns=private_safe_patterns,
+    )
+    output_path = Path(output_path_result.stdout.strip())
+    candidates = sorted(
+        path
+        for path in output_path.rglob("gocache")
+        if path.parent.name == "stdlib_" and path.is_dir()
+    )
+    if not candidates:
+        raise ValueError(
+            "expected a declared GoStdlib gocache under %s" % output_path
+        )
+    snapshots = [(path, canonical_tree_inventory(path)) for path in candidates]
+    manifested = [(path, snapshot) for path, snapshot in snapshots if snapshot.manifest is not None]
+    if len(manifested) > 1:
+        raise ValueError(
+            "multiple declared GoStdlib caches contain manifests under %s: %s"
+            % (output_path, [path.as_posix() for path, _ in manifested])
+        )
+    for path, snapshot in snapshots:
+        if manifested and path == manifested[0][0]:
+            continue
+        if snapshot.inventory:
+            raise ValueError(
+                "non-selected declared GoStdlib cache is not empty: %s contains %s"
+                % (path, sorted(snapshot.inventory))
+            )
+    if manifested:
+        return manifested[0][1]
+    return StdlibCacheSnapshot(inventory={}, manifest=None)
+
+
+def canonical_tree_inventory(root: Path) -> StdlibCacheSnapshot:
+    """Return a deterministic relative-path inventory and reject symlinks."""
+    inventory: dict[str, str] = {}
+    manifest: str | None = None
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise ValueError("declared stdlib cache contains symlink %s" % relative)
+        if path.is_dir():
+            inventory[relative] = "dir"
+            continue
+        if not path.is_file():
+            raise ValueError("declared stdlib cache contains non-file %s" % relative)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        inventory[relative] = "file:%s" % digest
+        if relative == ".orchestrion_stdlib_cache_manifest":
+            manifest = path.read_text(encoding="utf-8")
+    return StdlibCacheSnapshot(inventory=inventory, manifest=manifest)
+
+
+def assert_plain_stdlib_cache(snapshot: StdlibCacheSnapshot, patch: Path) -> None:
+    """Require the plain-mode declared stdlib cache to be empty."""
+    if snapshot.inventory or snapshot.manifest is not None:
+        raise ValueError(
+            "plain stdlib cache for %s is not empty: %s"
+            % (patch, sorted(snapshot.inventory))
+        )
+
+
+def assert_orchestrion_stdlib_cache(snapshot: StdlibCacheSnapshot, patch: Path) -> None:
+    """Require only sorted, manifested Go cache data entries."""
+    manifest_name = ".orchestrion_stdlib_cache_manifest"
+    inventory = snapshot.inventory
+    manifest_value = inventory.get(manifest_name, "")
+    if not manifest_value.startswith("file:"):
+        raise ValueError("Test Optimization stdlib cache for %s has no manifest" % patch)
+    if snapshot.manifest is None:
+        raise ValueError("Test Optimization stdlib cache for %s has no manifest contents" % patch)
+    lines = snapshot.manifest.splitlines()
+    if not lines:
+        raise ValueError("Test Optimization stdlib cache manifest for %s is empty" % patch)
+
+    expected = {manifest_name}
+    archives: set[str] = set()
+    directories: set[str] = set()
+    packages: set[str] = set()
+    package_order: list[str] = []
+    for line in lines:
+        package, separator, relative = line.partition("=")
+        relative_path = PurePosixPath(relative)
+        if (
+            not separator
+            or not package
+            or package in packages
+            or not relative
+            or "\\" in relative
+            or relative_path.is_absolute()
+            or ".." in relative_path.parts
+            or relative_path.name.endswith("-a")
+            or not relative_path.name.endswith("-d")
+        ):
+            raise ValueError(
+                "invalid Test Optimization stdlib cache manifest entry for %s: %r"
+                % (patch, line)
+            )
+        packages.add(package)
+        package_order.append(package)
+        archives.add(relative)
+        parent = relative_path.parent
+        while parent != PurePosixPath("."):
+            directories.add(parent.as_posix())
+            parent = parent.parent
+
+    if package_order != sorted(package_order):
+        raise ValueError("Test Optimization stdlib cache manifest for %s is unsorted" % patch)
+
+    expected.update(archives)
+    expected.update(directories)
+    actual = set(inventory)
+    if actual != expected:
+        raise ValueError(
+            "Test Optimization stdlib cache for %s contains unmanifested entries: missing=%s extra=%s"
+            % (patch, sorted(expected - actual), sorted(actual - expected))
+        )
+    for relative in archives:
+        if not inventory[relative].startswith("file:"):
+            raise ValueError("manifested stdlib archive %s is not a file" % relative)
+    for relative in directories:
+        if inventory[relative] != "dir":
+            raise ValueError("stdlib cache parent %s is not a directory" % relative)
 
 
 @contextmanager

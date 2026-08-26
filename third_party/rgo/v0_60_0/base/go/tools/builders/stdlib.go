@@ -96,20 +96,15 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	os.Setenv("GOROOT", output)
 	goenv.goroot = output
 
-	// Create a temporary cache directory. "go build" requires this starting
-	// in Go 1.12.
-	cachePath := filepath.Join(output, ".gocache")
-	if *cacheOut != "" {
-		cachePath = abs(*cacheOut)
-		goenv.stdlibCache = cachePath
+	// Live Go commands use an action-private scratch cache. The separately
+	// declared cache output is populated only with deterministic woven archives.
+	cachePath, declaredCache, cleanupCache, err := prepareStdlibCaches(output, *cacheOut)
+	if err != nil {
+		return err
 	}
+	defer cleanupCache()
+	goenv.stdlibCache = declaredCache
 	os.Setenv("GOCACHE", cachePath)
-	if err := os.MkdirAll(cachePath, 0o755); err != nil {
-		return fmt.Errorf("prepare stdlib gocache at %s: %w", cachePath, err)
-	}
-	if shouldRemoveStdlibCache(*orchestrion, *cacheOut) {
-		defer os.RemoveAll(cachePath)
-	}
 
 	// Disable modules for the plain stdlib build command. When Orchestrion is
 	// enabled we flip this back on later after preparing a synthetic module that
@@ -356,12 +351,33 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 	return nil
 }
 
-// shouldRemoveStdlibCache reports whether the builder owns the cache directory
-// as scratch space. A non-empty -cacheout value is a Bazel-declared TreeArtifact
-// output, so it must remain present even for plain non-Orchestrion stdlib
-// actions.
-func shouldRemoveStdlibCache(orchestrionPath, cacheOut string) bool {
-	return strings.TrimSpace(orchestrionPath) == "" && strings.TrimSpace(cacheOut) == ""
+func prepareStdlibCaches(output, cacheOut string) (scratchCache, declaredCache string, cleanup func(), err error) {
+	scratchCache = filepath.Join(abs(output), ".gocache")
+	cleanup = func() {
+		_ = os.RemoveAll(scratchCache)
+	}
+	if err := os.MkdirAll(scratchCache, 0o755); err != nil {
+		return "", "", func() {}, fmt.Errorf("prepare stdlib scratch gocache at %s: %w", scratchCache, err)
+	}
+	if strings.TrimSpace(cacheOut) == "" {
+		return scratchCache, "", cleanup, nil
+	}
+
+	declaredCache = abs(cacheOut)
+	if sameFilePath(scratchCache, declaredCache) {
+		cleanup()
+		return "", "", func() {}, fmt.Errorf("stdlib scratch gocache aliases declared cache output at %s", declaredCache)
+	}
+	if err := os.MkdirAll(declaredCache, 0o755); err != nil {
+		cleanup()
+		return "", "", func() {}, fmt.Errorf("prepare declared stdlib cache output at %s: %w", declaredCache, err)
+	}
+	return scratchCache, declaredCache, cleanup, nil
+}
+
+func sameFilePath(left, right string) bool {
+	rel, err := filepath.Rel(abs(left), abs(right))
+	return err == nil && rel == "."
 }
 
 func mergeGoDebugSetting(existing, setting string) string {
@@ -497,109 +513,99 @@ func syncPersistedOrchestrionExportsToCache(goenv *env, exports map[string]strin
 	defer func() {
 		span.End(err)
 	}()
-	if goenv == nil || len(exports) == 0 {
+	if goenv == nil || len(exports) == 0 || len(roots) == 0 || strings.TrimSpace(goenv.stdlibCache) == "" {
 		return nil
 	}
 
-	// We have two cache families to keep consistent:
-	// 1. the Bazel-declared stdlib cache consumed by later compile/link actions
-	// 2. the shared Datadog/Orchestrion cache used by internal `go list -export`
-	//    dependency resolution when woven deps are injected.
-	//
-	// If only one is populated, compile and link can observe different archive
-	// fingerprints for stdlib packages like log/fmt/flag. Populate both from the
-	// same woven persisted exports.
-	candidateCaches := []string{}
-	seenCaches := map[string]struct{}{}
-	addCache := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
-		}
-		path = abs(path)
-		if _, ok := seenCaches[path]; ok {
-			return
-		}
-		seenCaches[path] = struct{}{}
-		candidateCaches = append(candidateCaches, path)
+	scratchCache := strings.TrimSpace(os.Getenv("GOCACHE"))
+	if scratchCache == "" {
+		return fmt.Errorf("publish stdlib cache exports: GOCACHE scratch path is empty")
 	}
-
-	addCache(goenv.stdlibCache)
-	if envCache := strings.TrimSpace(os.Getenv("GOCACHE")); envCache != "" {
-		addCache(envCache)
+	scratchCache = abs(scratchCache)
+	declaredCache := abs(goenv.stdlibCache)
+	if sameFilePath(scratchCache, declaredCache) {
+		return fmt.Errorf("publish stdlib cache exports: scratch cache %s aliases declared cache %s", scratchCache, declaredCache)
 	}
-	if len(candidateCaches) == 0 {
-		addCache(filepath.Join(abs(goenv.goroot), ".gocache"))
+	if err := os.MkdirAll(declaredCache, 0o755); err != nil {
+		return fmt.Errorf("prepare declared stdlib cache exports at %s: %w", declaredCache, err)
 	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "stdlib: resolving cache exports against scratch GOCACHE=%s\n", scratchCache)
+	}
+	cacheExports, err := resolveCacheStdlibExportsAt(goenv, roots, scratchCache)
+	if err != nil {
+		return err
+	}
+	return publishPersistedOrchestrionExportsToCache(exports, cacheExports, scratchCache, declaredCache, verbose)
+}
 
-	prevCachePath, hadPrevCachePath := os.LookupEnv("GOCACHE")
-	defer func() {
-		if hadPrevCachePath {
-			_ = os.Setenv("GOCACHE", prevCachePath)
-		} else {
-			_ = os.Unsetenv("GOCACHE")
+func publishPersistedOrchestrionExportsToCache(exports, cacheExports map[string]string, scratchCache, declaredCache string, verbose bool) error {
+	manifestPath := filepath.Join(abs(declaredCache), orchestrionStdlibCacheManifestName)
+	if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale stdlib cache manifest at %s: %w", manifestPath, err)
+	}
+	packages := make([]string, 0, len(cacheExports))
+	for pkg := range cacheExports {
+		packages = append(packages, pkg)
+	}
+	sort.Strings(packages)
+	var manifest strings.Builder
+	for _, pkg := range packages {
+		src := strings.TrimSpace(exports[pkg])
+		if src == "" {
+			return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
 		}
-	}()
-
-	for _, cachePath := range candidateCaches {
-		if err := os.MkdirAll(cachePath, 0o755); err != nil {
-			return fmt.Errorf("prepare stdlib cache exports at %s: %w", cachePath, err)
-		}
-		if err := os.Setenv("GOCACHE", cachePath); err != nil {
-			return fmt.Errorf("set stdlib cache exports path %s: %w", cachePath, err)
-		}
-		if verbose {
-			fmt.Fprintf(os.Stderr, "stdlib: resolving cache-family exports against GOCACHE=%s\n", cachePath)
-		}
-
-		cacheExports, err := resolveCacheStdlibExportsAt(goenv, roots, cachePath)
+		dst, relDst, err := projectStdlibCacheArchive(scratchCache, declaredCache, cacheExports[pkg])
 		if err != nil {
+			return fmt.Errorf("project stdlib cache archive for %s: %w", pkg, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		packages := make([]string, 0, len(cacheExports))
-		for pkg := range cacheExports {
-			packages = append(packages, pkg)
+		if err := copyArchiveFile(src, dst); err != nil {
+			return fmt.Errorf("copy persisted stdlib archive %s -> declared cache %s: %w", src, dst, err)
 		}
-		sort.Strings(packages)
-		var manifest strings.Builder
-		for _, pkg := range packages {
-			src := exports[pkg]
-			dst, ok := cacheExports[pkg]
-			if !ok || dst == "" {
-				continue
-			}
-			if strings.TrimSpace(src) == "" {
-				return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
-			}
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-				return err
-			}
-			if err := copyArchiveFile(src, dst); err != nil {
-				return fmt.Errorf("copy persisted stdlib archive %s -> cache %s: %w", src, dst, err)
-			}
-			if verbose {
-				fmt.Fprintf(os.Stderr, "stdlib: synced persisted orchestrion export %s -> cache %s\n", src, dst)
-			}
-			relDst := dst
-			if rel, err := filepath.Rel(cachePath, dst); err == nil {
-				relDst = rel
-			}
-			manifest.WriteString(pkg)
-			manifest.WriteString("=")
-			manifest.WriteString(relDst)
-			manifest.WriteString("\n")
-		}
-		if manifest.Len() > 0 {
-			manifestPath := filepath.Join(cachePath, orchestrionStdlibCacheManifestName)
-			if err := os.WriteFile(manifestPath, []byte(manifest.String()), 0o644); err != nil {
-				return fmt.Errorf("write stdlib cache manifest at %s: %w", manifestPath, err)
-			}
-			if verbose {
-				fmt.Fprintf(os.Stderr, "stdlib: wrote stdlib cache manifest %s\n", manifestPath)
-			}
+		manifest.WriteString(pkg)
+		manifest.WriteString("=")
+		manifest.WriteString(relDst)
+		manifest.WriteString("\n")
+		if verbose {
+			fmt.Fprintf(os.Stderr, "stdlib: published persisted orchestrion export %s -> declared cache %s\n", src, dst)
 		}
 	}
+	if manifest.Len() == 0 {
+		return nil
+	}
+	if err := writeFileAtomically(manifestPath, []byte(manifest.String()), 0o644); err != nil {
+		return fmt.Errorf("write stdlib cache manifest at %s: %w", manifestPath, err)
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "stdlib: wrote stdlib cache manifest %s\n", manifestPath)
+	}
 	return nil
+}
+
+func projectStdlibCacheArchive(scratchCache, declaredCache, scratchArchive string) (destination, relative string, err error) {
+	scratchRoot := abs(scratchCache)
+	declaredRoot := abs(declaredCache)
+	archive := abs(scratchArchive)
+	rel, err := filepath.Rel(scratchRoot, archive)
+	if err != nil {
+		return "", "", err
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("cache archive %s escapes scratch root %s", archive, scratchRoot)
+	}
+	if !strings.HasSuffix(filepath.Base(rel), "-d") {
+		return "", "", fmt.Errorf("cache archive %s is not a Go cache data entry", archive)
+	}
+	destination = filepath.Join(declaredRoot, rel)
+	destinationRel, err := filepath.Rel(declaredRoot, destination)
+	if err != nil || filepath.Clean(destinationRel) != rel {
+		return "", "", fmt.Errorf("cache archive destination %s escapes declared root %s", destination, declaredRoot)
+	}
+	return destination, filepath.ToSlash(rel), nil
 }
 
 func ensureSyntheticOrchestrionToolGo(verbose bool, orchestrionMode string) (func(), error) {

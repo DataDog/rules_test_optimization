@@ -7598,7 +7598,7 @@ index 2bea17e..154b543 100644
  	if err := cmd.Run(); err != nil {
 diff --git a/go/tools/builders/env_orchestrion.go b/go/tools/builders/env_orchestrion.go
 new file mode 100644
-index 0000000..fbc392c
+index 0000000..73c7992
 --- /dev/null
 +++ b/go/tools/builders/env_orchestrion.go
 @@ -0,0 +1,81 @@
@@ -7663,7 +7663,8 @@ index 0000000..fbc392c
 +}
 +
 +// newBufferedCommand creates a subprocess command wired to the shared builder
-+// buffer and applies the stdlib cache override needed by Orchestrion actions.
++// buffer and advertises the declared stdlib archive source without replacing
++// the subprocess's writable GOCACHE.
 +func (e *env) newBufferedCommand(args []string, buf *bytes.Buffer) *exec.Cmd {
 +	cmd := exec.Command(args[0], args[1:]...)
 +	cmd.Stdout = buf
@@ -7671,7 +7672,6 @@ index 0000000..fbc392c
 +	cmd.Env = os.Environ()
 +	if e.stdlibCache != "" {
 +		if info, err := os.Stat(e.stdlibCache); err == nil && info.IsDir() {
-+			cmd.Env = setEnv(cmd.Env, "GOCACHE", e.stdlibCache)
 +			cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, e.stdlibCache)
 +		}
 +	}
@@ -8139,7 +8139,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..3f0e203 100644
+index c25763a..4c859ae 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -8237,7 +8237,7 @@ index c25763a..3f0e203 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1678 @@ package with this path is linked.`,
+@@ -213,6 +286,1695 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -9259,29 +9259,17 @@ index c25763a..3f0e203 100644
 +	baseEnv = setEnv(baseEnv, "GOROOT", goenv.goroot)
 +	baseEnv = setEnv(baseEnv, "GO111MODULE", "off")
 +	baseEnv = setEnv(baseEnv, "GOWORK", "off")
-+	orchestrionCachePath := goenv.stdlibCache
-+	if orchestrionCachePath == "" {
-+		orchestrionCachePath = filepath.Join(goenv.goroot, ".gocache")
-+	}
-+	cachePath := ""
-+	if info, err := os.Stat(orchestrionCachePath); err == nil && info.IsDir() {
-+		cachePath = orchestrionCachePath
-+	}
-+	if cachePath == "" {
-+		cachePath = getEnv(baseEnv, "GOCACHE")
-+	}
-+	if cachePath == "" {
-+		if goenv.stdlibCache != "" {
-+			cachePath = goenv.stdlibCache
-+		} else {
-+			cachePath = filepath.Join(goenv.goroot, ".gocache")
-+		}
-+	}
-+	cachePath = abs(cachePath)
-+	if err := os.MkdirAll(cachePath, 0o755); err != nil {
++	cachePath, err := writableStdlibCacheRoot(goenv, baseEnv)
++	if err != nil {
 +		return nil, fmt.Errorf("prepare stdlib export cache: %w", err)
 +	}
++	if err := seedWovenStdlibCache(goenv, cachePath); err != nil {
++		return nil, fmt.Errorf("seed stdlib export cache: %w", err)
++	}
 +	baseEnv = setEnv(baseEnv, "GOCACHE", cachePath)
++	if goenv.stdlibCache != "" {
++		baseEnv = setEnv(baseEnv, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
++	}
 +	if getEnv(baseEnv, "HOME") == "" {
 +		homePath := filepath.Join(goenv.goroot, ".home")
 +		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -9321,9 +9309,18 @@ index c25763a..3f0e203 100644
 +}
 +
 +func resolveCacheStdlibExports(goenv *env, packages []string) (map[string]string, error) {
-+	cacheRoot := ""
-+	if goenv != nil {
-+		cacheRoot = goenv.stdlibCache
++	if goenv != nil && goenv.stdlibCache != "" {
++		exports, err := readStdlibCacheManifest(goenv.stdlibCache, packages)
++		if err != nil {
++			return nil, err
++		}
++		if len(exports) > 0 {
++			return exports, nil
++		}
++	}
++	cacheRoot, err := writableStdlibCacheRoot(goenv, os.Environ())
++	if err != nil {
++		return nil, err
 +	}
 +	return resolveCacheStdlibExportsAt(goenv, packages, cacheRoot)
 +}
@@ -9351,6 +9348,9 @@ index c25763a..3f0e203 100644
 +			)
 +			return manifestExports, nil
 +		}
++	}
++	if goenv.stdlibCache != "" && sameFilePath(cacheRoot, goenv.stdlibCache) {
++		return nil, fmt.Errorf("refusing to use declared stdlib cache %s as writable GOCACHE", abs(goenv.stdlibCache))
 +	}
 +	goenv.goroot = abs(goenv.goroot)
 +	goenv.sdk = abs(goenv.sdk)
@@ -9433,6 +9433,24 @@ index c25763a..3f0e203 100644
 +	env = setEnv(env, "GOWORK", "off")
 +	env = setEnv(env, "GOCACHE", cachePath)
 +	return env
++}
++
++func writableStdlibCacheRoot(goenv *env, environ []string) (string, error) {
++	cacheRoot := strings.TrimSpace(getEnv(environ, "GOCACHE"))
++	if cacheRoot == "" {
++		if goenv == nil || strings.TrimSpace(goenv.goroot) == "" {
++			return "", fmt.Errorf("writable stdlib GOCACHE is empty")
++		}
++		cacheRoot = filepath.Join(abs(goenv.goroot), ".gocache")
++	}
++	cacheRoot = abs(cacheRoot)
++	if goenv != nil && goenv.stdlibCache != "" && sameFilePath(cacheRoot, goenv.stdlibCache) {
++		return "", fmt.Errorf("writable stdlib GOCACHE %s aliases declared cache", cacheRoot)
++	}
++	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
++		return "", err
++	}
++	return cacheRoot, nil
 +}
 +
 +func readStdlibCacheManifest(cacheRoot string, packages []string) (map[string]string, error) {
@@ -9829,18 +9847,17 @@ index c25763a..3f0e203 100644
 +	cmd.Env = setEnv(cmd.Env, "GOROOT", goenv.goroot)
 +	cmd.Env = setEnv(cmd.Env, "GO111MODULE", "on")
 +	cmd.Env = setEnv(cmd.Env, "GOWORK", "off")
-+	cachePath := goenv.stdlibCache
-+	if cachePath == "" {
-+		cachePath = getEnv(cmd.Env, "GOCACHE")
-+	}
-+	if cachePath == "" {
-+		cachePath = filepath.Join(goenv.goroot, ".gocache")
-+	}
-+	cachePath = abs(cachePath)
-+	if err := os.MkdirAll(cachePath, 0o755); err != nil {
++	cachePath, err := writableStdlibCacheRoot(goenv, cmd.Env)
++	if err != nil {
 +		return nil, fmt.Errorf("prepare stdlib closure cache: %w", err)
 +	}
++	if err := seedWovenStdlibCache(goenv, cachePath); err != nil {
++		return nil, fmt.Errorf("seed stdlib closure cache: %w", err)
++	}
 +	cmd.Env = setEnv(cmd.Env, "GOCACHE", cachePath)
++	if goenv.stdlibCache != "" {
++		cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
++	}
 +	normalizedEnv, err := normalizeGoActionCacheEnv(cmd.Env)
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare stdlib closure action cache env: %w", err)
@@ -9918,10 +9935,10 @@ index c25763a..3f0e203 100644
  	known   []string
 diff --git a/go/tools/builders/importcfg_test.go b/go/tools/builders/importcfg_test.go
 new file mode 100644
-index 0000000..3724594
+index 0000000..35a1fa4
 --- /dev/null
 +++ b/go/tools/builders/importcfg_test.go
-@@ -0,0 +1,816 @@
+@@ -0,0 +1,857 @@
 +package main
 +
 +import (
@@ -10484,6 +10501,47 @@ index 0000000..3724594
 +	}
 +	if got := getEnv(envv, "GOWORK"); got != "off" {
 +		t.Fatalf("GOWORK = %q, want off", got)
++	}
++}
++
++func TestWritableStdlibCacheRootUsesPrivateCache(t *testing.T) {
++	privateCache := filepath.Join(t.TempDir(), "private")
++	declaredCache := filepath.Join(t.TempDir(), "declared")
++	cacheRoot, err := writableStdlibCacheRoot(&env{
++		goroot:      t.TempDir(),
++		stdlibCache: declaredCache,
++	}, []string{"GOCACHE=" + privateCache})
++	if err != nil {
++		t.Fatalf("writableStdlibCacheRoot error: %v", err)
++	}
++	if cacheRoot != abs(privateCache) {
++		t.Fatalf("writable cache = %q, want %q", cacheRoot, abs(privateCache))
++	}
++	if info, err := os.Stat(cacheRoot); err != nil || !info.IsDir() {
++		t.Fatalf("writable cache was not created: %v", err)
++	}
++}
++
++func TestWritableStdlibCacheRootRejectsDeclaredCache(t *testing.T) {
++	declaredCache := filepath.Join(t.TempDir(), "declared")
++	_, err := writableStdlibCacheRoot(&env{
++		goroot:      t.TempDir(),
++		stdlibCache: declaredCache,
++	}, []string{"GOCACHE=" + declaredCache})
++	if err == nil || !strings.Contains(err.Error(), "aliases declared cache") {
++		t.Fatalf("writableStdlibCacheRoot error = %v", err)
++	}
++}
++
++func TestResolveCacheStdlibExportsRejectsDeclaredCacheAsWritable(t *testing.T) {
++	declaredCache := t.TempDir()
++	_, err := resolveCacheStdlibExportsAt(&env{
++		goroot:      "fake-goroot",
++		sdk:         "fake-sdk",
++		stdlibCache: declaredCache,
++	}, []string{"fmt"}, declaredCache)
++	if err == nil || !strings.Contains(err.Error(), "refusing to use declared stdlib cache") {
++		t.Fatalf("resolveCacheStdlibExportsAt error = %v", err)
 +	}
 +}
 +
@@ -15655,7 +15713,7 @@ index 0000000..9edae16
 +	}
 +}
 diff --git a/go/tools/builders/stdlib.go b/go/tools/builders/stdlib.go
-index cfcb991..08b2992 100644
+index cfcb991..9b5c36c 100644
 --- a/go/tools/builders/stdlib.go
 +++ b/go/tools/builders/stdlib.go
 @@ -21,15 +21,29 @@ import (
@@ -15704,7 +15762,7 @@ index cfcb991..08b2992 100644
  	goroot := os.Getenv("GOROOT")
  	if goroot == "" {
  		return fmt.Errorf("GOROOT not set")
-@@ -58,27 +80,40 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -58,27 +80,35 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	}
  
  	// Link in the bare minimum needed to the new GOROOT
@@ -15725,21 +15783,19 @@ index cfcb991..08b2992 100644
  	os.Setenv("GOROOT", output)
 +	goenv.goroot = output
  
- 	// Create a temporary cache directory. "go build" requires this starting
- 	// in Go 1.12.
- 	cachePath := filepath.Join(output, ".gocache")
-+	if *cacheOut != "" {
-+		cachePath = abs(*cacheOut)
-+		goenv.stdlibCache = cachePath
+-	// Create a temporary cache directory. "go build" requires this starting
+-	// in Go 1.12.
+-	cachePath := filepath.Join(output, ".gocache")
++	// Live Go commands use an action-private scratch cache. The separately
++	// declared cache output is populated only with deterministic woven archives.
++	cachePath, declaredCache, cleanupCache, err := prepareStdlibCaches(output, *cacheOut)
++	if err != nil {
++		return err
 +	}
++	defer cleanupCache()
++	goenv.stdlibCache = declaredCache
  	os.Setenv("GOCACHE", cachePath)
 -	defer os.RemoveAll(cachePath)
-+	if err := os.MkdirAll(cachePath, 0o755); err != nil {
-+		return fmt.Errorf("prepare stdlib gocache at %s: %w", cachePath, err)
-+	}
-+	if shouldRemoveStdlibCache(*orchestrion, *cacheOut) {
-+		defer os.RemoveAll(cachePath)
-+	}
  
 -	// Disable modules for the 'go install' command. Depending on the sandboxing
 -	// mode, there may be a go.mod file in a parent directory which will turn
@@ -15750,7 +15806,7 @@ index cfcb991..08b2992 100644
  	os.Setenv("GO111MODULE", "off")
  
  	// Make sure we have an absolute path to the C compiler.
-@@ -89,6 +124,19 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -89,6 +119,19 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	for _, path := range filepath.SplitList(os.Getenv("PATH")) {
  		absPaths = append(absPaths, abs(path))
  	}
@@ -15770,7 +15826,7 @@ index cfcb991..08b2992 100644
  	os.Setenv("PATH", strings.Join(absPaths, string(os.PathListSeparator)))
  
  	sandboxPath := abs(".")
-@@ -113,7 +161,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -113,7 +156,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  		}
  	}
  	os.Setenv("CGO_LDFLAGS_ALLOW", b.String())
@@ -15779,7 +15835,7 @@ index cfcb991..08b2992 100644
  
  	// Build the commands needed to build the std library in the right mode
  	// NOTE: the go command stamps compiled .a files with build ids, which are
-@@ -121,7 +169,112 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -121,7 +164,112 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	// creating reproducible builds because the build ids are hashed from
  	// CGO_CFLAGS, which frequently contains absolute paths. As a workaround,
  	// we strip the build ids, since they won't be used after this.
@@ -15893,7 +15949,7 @@ index cfcb991..08b2992 100644
  	if len(build.Default.BuildTags) > 0 {
  		installArgs = append(installArgs, "-tags", strings.Join(build.Default.BuildTags, ","))
  	}
-@@ -135,7 +288,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -135,7 +283,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  		installArgs = append(installArgs, "-msan")
  	}
  	if *pgoprofile != "" {
@@ -15902,7 +15958,7 @@ index cfcb991..08b2992 100644
  	}
  	if *shared {
  		gcflags = append(gcflags, "-shared")
-@@ -167,8 +320,377 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -167,8 +315,388 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	}
  
  	installArgs = append(installArgs, packages...)
@@ -15942,12 +15998,33 @@ index cfcb991..08b2992 100644
  	return nil
  }
 +
-+// shouldRemoveStdlibCache reports whether the builder owns the cache directory
-+// as scratch space. A non-empty -cacheout value is a Bazel-declared TreeArtifact
-+// output, so it must remain present even for plain non-Orchestrion stdlib
-+// actions.
-+func shouldRemoveStdlibCache(orchestrionPath, cacheOut string) bool {
-+	return strings.TrimSpace(orchestrionPath) == "" && strings.TrimSpace(cacheOut) == ""
++func prepareStdlibCaches(output, cacheOut string) (scratchCache, declaredCache string, cleanup func(), err error) {
++	scratchCache = filepath.Join(abs(output), ".gocache")
++	cleanup = func() {
++		_ = os.RemoveAll(scratchCache)
++	}
++	if err := os.MkdirAll(scratchCache, 0o755); err != nil {
++		return "", "", func() {}, fmt.Errorf("prepare stdlib scratch gocache at %s: %w", scratchCache, err)
++	}
++	if strings.TrimSpace(cacheOut) == "" {
++		return scratchCache, "", cleanup, nil
++	}
++
++	declaredCache = abs(cacheOut)
++	if sameFilePath(scratchCache, declaredCache) {
++		cleanup()
++		return "", "", func() {}, fmt.Errorf("stdlib scratch gocache aliases declared cache output at %s", declaredCache)
++	}
++	if err := os.MkdirAll(declaredCache, 0o755); err != nil {
++		cleanup()
++		return "", "", func() {}, fmt.Errorf("prepare declared stdlib cache output at %s: %w", declaredCache, err)
++	}
++	return scratchCache, declaredCache, cleanup, nil
++}
++
++func sameFilePath(left, right string) bool {
++	rel, err := filepath.Rel(abs(left), abs(right))
++	return err == nil && rel == "."
 +}
 +
 +func mergeGoDebugSetting(existing, setting string) string {
@@ -16083,109 +16160,99 @@ index cfcb991..08b2992 100644
 +	defer func() {
 +		span.End(err)
 +	}()
-+	if goenv == nil || len(exports) == 0 {
++	if goenv == nil || len(exports) == 0 || len(roots) == 0 || strings.TrimSpace(goenv.stdlibCache) == "" {
 +		return nil
 +	}
 +
-+	// We have two cache families to keep consistent:
-+	// 1. the Bazel-declared stdlib cache consumed by later compile/link actions
-+	// 2. the shared Datadog/Orchestrion cache used by internal `go list -export`
-+	//    dependency resolution when woven deps are injected.
-+	//
-+	// If only one is populated, compile and link can observe different archive
-+	// fingerprints for stdlib packages like log/fmt/flag. Populate both from the
-+	// same woven persisted exports.
-+	candidateCaches := []string{}
-+	seenCaches := map[string]struct{}{}
-+	addCache := func(path string) {
-+		path = strings.TrimSpace(path)
-+		if path == "" {
-+			return
-+		}
-+		path = abs(path)
-+		if _, ok := seenCaches[path]; ok {
-+			return
-+		}
-+		seenCaches[path] = struct{}{}
-+		candidateCaches = append(candidateCaches, path)
++	scratchCache := strings.TrimSpace(os.Getenv("GOCACHE"))
++	if scratchCache == "" {
++		return fmt.Errorf("publish stdlib cache exports: GOCACHE scratch path is empty")
 +	}
-+
-+	addCache(goenv.stdlibCache)
-+	if envCache := strings.TrimSpace(os.Getenv("GOCACHE")); envCache != "" {
-+		addCache(envCache)
++	scratchCache = abs(scratchCache)
++	declaredCache := abs(goenv.stdlibCache)
++	if sameFilePath(scratchCache, declaredCache) {
++		return fmt.Errorf("publish stdlib cache exports: scratch cache %s aliases declared cache %s", scratchCache, declaredCache)
 +	}
-+	if len(candidateCaches) == 0 {
-+		addCache(filepath.Join(abs(goenv.goroot), ".gocache"))
++	if err := os.MkdirAll(declaredCache, 0o755); err != nil {
++		return fmt.Errorf("prepare declared stdlib cache exports at %s: %w", declaredCache, err)
 +	}
++	if verbose {
++		fmt.Fprintf(os.Stderr, "stdlib: resolving cache exports against scratch GOCACHE=%s\n", scratchCache)
++	}
++	cacheExports, err := resolveCacheStdlibExportsAt(goenv, roots, scratchCache)
++	if err != nil {
++		return err
++	}
++	return publishPersistedOrchestrionExportsToCache(exports, cacheExports, scratchCache, declaredCache, verbose)
++}
 +
-+	prevCachePath, hadPrevCachePath := os.LookupEnv("GOCACHE")
-+	defer func() {
-+		if hadPrevCachePath {
-+			_ = os.Setenv("GOCACHE", prevCachePath)
-+		} else {
-+			_ = os.Unsetenv("GOCACHE")
++func publishPersistedOrchestrionExportsToCache(exports, cacheExports map[string]string, scratchCache, declaredCache string, verbose bool) error {
++	manifestPath := filepath.Join(abs(declaredCache), orchestrionStdlibCacheManifestName)
++	if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
++		return fmt.Errorf("remove stale stdlib cache manifest at %s: %w", manifestPath, err)
++	}
++	packages := make([]string, 0, len(cacheExports))
++	for pkg := range cacheExports {
++		packages = append(packages, pkg)
++	}
++	sort.Strings(packages)
++	var manifest strings.Builder
++	for _, pkg := range packages {
++		src := strings.TrimSpace(exports[pkg])
++		if src == "" {
++			return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
 +		}
-+	}()
-+
-+	for _, cachePath := range candidateCaches {
-+		if err := os.MkdirAll(cachePath, 0o755); err != nil {
-+			return fmt.Errorf("prepare stdlib cache exports at %s: %w", cachePath, err)
-+		}
-+		if err := os.Setenv("GOCACHE", cachePath); err != nil {
-+			return fmt.Errorf("set stdlib cache exports path %s: %w", cachePath, err)
-+		}
-+		if verbose {
-+			fmt.Fprintf(os.Stderr, "stdlib: resolving cache-family exports against GOCACHE=%s\n", cachePath)
-+		}
-+
-+		cacheExports, err := resolveCacheStdlibExportsAt(goenv, roots, cachePath)
++		dst, relDst, err := projectStdlibCacheArchive(scratchCache, declaredCache, cacheExports[pkg])
 +		if err != nil {
++			return fmt.Errorf("project stdlib cache archive for %s: %w", pkg, err)
++		}
++		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 +			return err
 +		}
-+		packages := make([]string, 0, len(cacheExports))
-+		for pkg := range cacheExports {
-+			packages = append(packages, pkg)
++		if err := copyArchiveFile(src, dst); err != nil {
++			return fmt.Errorf("copy persisted stdlib archive %s -> declared cache %s: %w", src, dst, err)
 +		}
-+		sort.Strings(packages)
-+		var manifest strings.Builder
-+		for _, pkg := range packages {
-+			src := exports[pkg]
-+			dst, ok := cacheExports[pkg]
-+			if !ok || dst == "" {
-+				continue
-+			}
-+			if strings.TrimSpace(src) == "" {
-+				return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
-+			}
-+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-+				return err
-+			}
-+			if err := copyArchiveFile(src, dst); err != nil {
-+				return fmt.Errorf("copy persisted stdlib archive %s -> cache %s: %w", src, dst, err)
-+			}
-+			if verbose {
-+				fmt.Fprintf(os.Stderr, "stdlib: synced persisted orchestrion export %s -> cache %s\n", src, dst)
-+			}
-+			relDst := dst
-+			if rel, err := filepath.Rel(cachePath, dst); err == nil {
-+				relDst = rel
-+			}
-+			manifest.WriteString(pkg)
-+			manifest.WriteString("=")
-+			manifest.WriteString(relDst)
-+			manifest.WriteString("\n")
-+		}
-+		if manifest.Len() > 0 {
-+			manifestPath := filepath.Join(cachePath, orchestrionStdlibCacheManifestName)
-+			if err := os.WriteFile(manifestPath, []byte(manifest.String()), 0o644); err != nil {
-+				return fmt.Errorf("write stdlib cache manifest at %s: %w", manifestPath, err)
-+			}
-+			if verbose {
-+				fmt.Fprintf(os.Stderr, "stdlib: wrote stdlib cache manifest %s\n", manifestPath)
-+			}
++		manifest.WriteString(pkg)
++		manifest.WriteString("=")
++		manifest.WriteString(relDst)
++		manifest.WriteString("\n")
++		if verbose {
++			fmt.Fprintf(os.Stderr, "stdlib: published persisted orchestrion export %s -> declared cache %s\n", src, dst)
 +		}
 +	}
++	if manifest.Len() == 0 {
++		return nil
++	}
++	if err := writeFileAtomically(manifestPath, []byte(manifest.String()), 0o644); err != nil {
++		return fmt.Errorf("write stdlib cache manifest at %s: %w", manifestPath, err)
++	}
++	if verbose {
++		fmt.Fprintf(os.Stderr, "stdlib: wrote stdlib cache manifest %s\n", manifestPath)
++	}
 +	return nil
++}
++
++func projectStdlibCacheArchive(scratchCache, declaredCache, scratchArchive string) (destination, relative string, err error) {
++	scratchRoot := abs(scratchCache)
++	declaredRoot := abs(declaredCache)
++	archive := abs(scratchArchive)
++	rel, err := filepath.Rel(scratchRoot, archive)
++	if err != nil {
++		return "", "", err
++	}
++	rel = filepath.Clean(rel)
++	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
++		return "", "", fmt.Errorf("cache archive %s escapes scratch root %s", archive, scratchRoot)
++	}
++	if !strings.HasSuffix(filepath.Base(rel), "-d") {
++		return "", "", fmt.Errorf("cache archive %s is not a Go cache data entry", archive)
++	}
++	destination = filepath.Join(declaredRoot, rel)
++	destinationRel, err := filepath.Rel(declaredRoot, destination)
++	if err != nil || filepath.Clean(destinationRel) != rel {
++		return "", "", fmt.Errorf("cache archive destination %s escapes declared root %s", destination, declaredRoot)
++	}
++	return destination, filepath.ToSlash(rel), nil
 +}
 +
 +func ensureSyntheticOrchestrionToolGo(verbose bool, orchestrionMode string) (func(), error) {
@@ -16282,15 +16349,19 @@ index cfcb991..08b2992 100644
 +}
 diff --git a/go/tools/builders/stdlib_test.go b/go/tools/builders/stdlib_test.go
 new file mode 100644
-index 0000000..b92f214
+index 0000000..7ca400c
 --- /dev/null
 +++ b/go/tools/builders/stdlib_test.go
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,464 @@
 +package main
 +
 +import (
++	"bytes"
++	"crypto/sha256"
++	"fmt"
 +	"os"
 +	"path/filepath"
++	"reflect"
 +	"strings"
 +	"testing"
 +)
@@ -16404,45 +16475,220 @@ index 0000000..b92f214
 +	}
 +}
 +
-+func TestShouldRemoveStdlibCache(t *testing.T) {
-+	t.Parallel()
++func TestPrepareStdlibCachesWithoutDeclaredOutput(t *testing.T) {
++	output := filepath.Join(t.TempDir(), "stdlib")
++	scratch, declared, cleanup, err := prepareStdlibCaches(output, "")
++	if err != nil {
++		t.Fatalf("prepareStdlibCaches error: %v", err)
++	}
++	if want := filepath.Join(abs(output), ".gocache"); scratch != want {
++		t.Fatalf("scratch cache = %q, want %q", scratch, want)
++	}
++	if declared != "" {
++		t.Fatalf("declared cache = %q, want empty", declared)
++	}
++	if info, err := os.Stat(scratch); err != nil || !info.IsDir() {
++		t.Fatalf("scratch cache was not created: %v", err)
++	}
++	cleanup()
++	if _, err := os.Stat(scratch); !os.IsNotExist(err) {
++		t.Fatalf("scratch cache still exists after cleanup: %v", err)
++	}
++}
 +
-+	tests := []struct {
-+		name            string
-+		orchestrionPath string
-+		cacheOut        string
-+		want            bool
-+	}{
-+		{
-+			name: "plain internal cache",
-+			want: true,
-+		},
-+		{
-+			name:     "plain declared cache output",
-+			cacheOut: "bazel-out/bin/external/rules_go/stdlib_/gocache",
-+			want:     false,
-+		},
-+		{
-+			name:            "orchestrion internal cache",
-+			orchestrionPath: "external/rules_go_orchestrion_tool/orchestrion",
-+			want:            false,
-+		},
-+		{
-+			name:            "orchestrion declared cache output",
-+			orchestrionPath: "external/rules_go_orchestrion_tool/orchestrion",
-+			cacheOut:        "bazel-out/bin/external/rules_go/stdlib_/gocache",
-+			want:            false,
-+		},
++func TestPrepareStdlibCachesSeparatesDeclaredOutput(t *testing.T) {
++	root := t.TempDir()
++	output := filepath.Join(root, "stdlib")
++	cacheOut := filepath.Join(root, "declared")
++	scratch, declared, cleanup, err := prepareStdlibCaches(output, cacheOut)
++	if err != nil {
++		t.Fatalf("prepareStdlibCaches error: %v", err)
++	}
++	if sameFilePath(scratch, declared) {
++		t.Fatalf("scratch cache %q aliases declared cache %q", scratch, declared)
++	}
++	for name, path := range map[string]string{"scratch": scratch, "declared": declared} {
++		if info, err := os.Stat(path); err != nil || !info.IsDir() {
++			t.Fatalf("%s cache was not created: %v", name, err)
++		}
++	}
++	cleanup()
++	if _, err := os.Stat(scratch); !os.IsNotExist(err) {
++		t.Fatalf("scratch cache still exists after cleanup: %v", err)
++	}
++	if info, err := os.Stat(declared); err != nil || !info.IsDir() {
++		t.Fatalf("declared cache should remain after scratch cleanup: %v", err)
++	}
++}
++
++func TestPrepareStdlibCachesNormalizesRelativeInputs(t *testing.T) {
++	root := t.TempDir()
++	previousWD, err := os.Getwd()
++	if err != nil {
++		t.Fatalf("getwd: %v", err)
++	}
++	if err := os.Chdir(root); err != nil {
++		t.Fatalf("chdir: %v", err)
++	}
++	defer func() { _ = os.Chdir(previousWD) }()
++	normalizedRoot, err := os.Getwd()
++	if err != nil {
++		t.Fatalf("get normalized workdir: %v", err)
 +	}
 +
++	scratch, declared, cleanup, err := prepareStdlibCaches("stdlib", "declared")
++	if err != nil {
++		t.Fatalf("prepareStdlibCaches error: %v", err)
++	}
++	defer cleanup()
++	if !filepath.IsAbs(scratch) || !filepath.IsAbs(declared) {
++		t.Fatalf("cache paths are not absolute: scratch=%q declared=%q", scratch, declared)
++	}
++	if scratch != filepath.Join(normalizedRoot, "stdlib", ".gocache") {
++		t.Fatalf("scratch cache = %q", scratch)
++	}
++	if declared != filepath.Join(normalizedRoot, "declared") {
++		t.Fatalf("declared cache = %q", declared)
++	}
++}
++
++func TestPrepareStdlibCachesRejectsAliasedOutput(t *testing.T) {
++	output := filepath.Join(t.TempDir(), "stdlib")
++	alias := filepath.Join(output, ".gocache")
++	if _, _, _, err := prepareStdlibCaches(output, alias); err == nil || !strings.Contains(err.Error(), "aliases declared cache") {
++		t.Fatalf("prepareStdlibCaches alias error = %v", err)
++	}
++	if _, err := os.Stat(alias); !os.IsNotExist(err) {
++		t.Fatalf("aliased scratch cache still exists after failure: %v", err)
++	}
++}
++
++func TestNewBufferedCommandPreservesWritableGoCache(t *testing.T) {
++	scratch := filepath.Join(t.TempDir(), "scratch")
++	declared := filepath.Join(t.TempDir(), "declared")
++	if err := os.MkdirAll(declared, 0o755); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("GOCACHE", scratch)
++
++	cmd := (&env{stdlibCache: declared}).newBufferedCommand([]string{"go", "version"}, &bytes.Buffer{})
++	if got := getEnv(cmd.Env, "GOCACHE"); got != scratch {
++		t.Fatalf("GOCACHE = %q, want writable cache %q", got, scratch)
++	}
++	if got := getEnv(cmd.Env, orchestrionStdlibCacheEnvVar); got != declared {
++		t.Fatalf("%s = %q, want %q", orchestrionStdlibCacheEnvVar, got, declared)
++	}
++
++	for _, invalid := range []string{"", filepath.Join(t.TempDir(), "missing")} {
++		cmd = (&env{stdlibCache: invalid}).newBufferedCommand([]string{"go", "version"}, &bytes.Buffer{})
++		if got := getEnv(cmd.Env, "GOCACHE"); got != scratch {
++			t.Fatalf("invalid declared cache %q replaced GOCACHE with %q", invalid, got)
++		}
++		if got := getEnv(cmd.Env, orchestrionStdlibCacheEnvVar); got != "" {
++			t.Fatalf("invalid declared cache %q set %s=%q", invalid, orchestrionStdlibCacheEnvVar, got)
++		}
++	}
++}
++
++func TestPublishPersistedOrchestrionExportsIsDeterministic(t *testing.T) {
++	archives := map[string][]byte{
++		"fmt": []byte("woven fmt archive"),
++		"log": []byte("woven log archive"),
++	}
++	cachePaths := map[string]string{
++		"fmt": filepath.Join("11", "fmt-d"),
++		"log": filepath.Join("aa", "log-d"),
++	}
++
++	inventories := make([]map[string]string, 0, 2)
++	for run := 0; run < 2; run++ {
++		scratch := filepath.Join(t.TempDir(), "scratch")
++		declared := filepath.Join(t.TempDir(), "declared")
++		persisted := filepath.Join(t.TempDir(), "persisted")
++		if err := os.MkdirAll(scratch, 0o755); err != nil {
++			t.Fatal(err)
++		}
++		exports := make(map[string]string, len(archives))
++		resolved := make(map[string]string, len(cachePaths))
++		for pkg, data := range archives {
++			src := filepath.Join(persisted, pkg+".a")
++			writeTestFile(t, src, data)
++			exports[pkg] = src
++			resolved[pkg] = filepath.Join(scratch, cachePaths[pkg])
++			writeTestFile(t, resolved[pkg], []byte(fmt.Sprintf("unwoven run %d", run)))
++		}
++		writeTestFile(t, filepath.Join(scratch, "11", "fmt-a"), []byte(fmt.Sprintf("timestamp %d", run)))
++		writeTestFile(t, filepath.Join(scratch, "trim.txt"), []byte(fmt.Sprintf("trim %d", run)))
++		writeTestFile(t, filepath.Join(scratch, "unrelated", "entry-d"), []byte(fmt.Sprintf("unrelated %d", run)))
++
++		if err := publishPersistedOrchestrionExportsToCache(exports, resolved, scratch, declared, false); err != nil {
++			t.Fatalf("publish run %d: %v", run, err)
++		}
++		inventory := testTreeInventory(t, declared)
++		inventories = append(inventories, inventory)
++		if len(inventory) != len(archives)+1 {
++			t.Fatalf("declared inventory has unexpected entries: %v", inventory)
++		}
++		for pkg, data := range archives {
++			path := filepath.ToSlash(cachePaths[pkg])
++			if got := inventory[path]; got != testDigest(data) {
++				t.Fatalf("published %s digest = %q, want %q", path, got, testDigest(data))
++			}
++		}
++		manifest, err := os.ReadFile(filepath.Join(declared, orchestrionStdlibCacheManifestName))
++		if err != nil {
++			t.Fatal(err)
++		}
++		wantManifest := "fmt=11/fmt-d\nlog=aa/log-d\n"
++		if string(manifest) != wantManifest {
++			t.Fatalf("manifest = %q, want %q", string(manifest), wantManifest)
++		}
++	}
++	if !reflect.DeepEqual(inventories[0], inventories[1]) {
++		t.Fatalf("declared cache inventories differ:\nrun 1: %v\nrun 2: %v", inventories[0], inventories[1])
++	}
++}
++
++func TestProjectStdlibCacheArchiveRejectsInvalidPaths(t *testing.T) {
++	root := t.TempDir()
++	scratch := filepath.Join(root, "scratch")
++	declared := filepath.Join(root, "declared")
++	tests := []struct {
++		name    string
++		archive string
++		want    string
++	}{
++		{name: "outside scratch", archive: filepath.Join(root, "outside", "entry-d"), want: "escapes scratch root"},
++		{name: "action index", archive: filepath.Join(scratch, "aa", "entry-a"), want: "not a Go cache data entry"},
++	}
 +	for _, tt := range tests {
-+		tt := tt
 +		t.Run(tt.name, func(t *testing.T) {
-+			t.Parallel()
-+			if got := shouldRemoveStdlibCache(tt.orchestrionPath, tt.cacheOut); got != tt.want {
-+				t.Fatalf("shouldRemoveStdlibCache(%q, %q) = %v, want %v", tt.orchestrionPath, tt.cacheOut, got, tt.want)
++			if _, _, err := projectStdlibCacheArchive(scratch, declared, tt.archive); err == nil || !strings.Contains(err.Error(), tt.want) {
++				t.Fatalf("projectStdlibCacheArchive error = %v, want %q", err, tt.want)
 +			}
 +		})
++	}
++}
++
++func TestPublishPersistedOrchestrionExportsFailureLeavesNoManifest(t *testing.T) {
++	root := t.TempDir()
++	scratch := filepath.Join(root, "scratch")
++	declared := filepath.Join(root, "declared")
++	manifest := filepath.Join(declared, orchestrionStdlibCacheManifestName)
++	writeTestFile(t, manifest, []byte("stale=stale-d\n"))
++
++	err := publishPersistedOrchestrionExportsToCache(
++		map[string]string{},
++		map[string]string{"fmt": filepath.Join(scratch, "aa", "fmt-d")},
++		scratch,
++		declared,
++		false,
++	)
++	if err == nil || !strings.Contains(err.Error(), "missing persisted stdlib archive for cache package fmt") {
++		t.Fatalf("publish error = %v", err)
++	}
++	if _, err := os.Stat(manifest); !os.IsNotExist(err) {
++		t.Fatalf("manifest exists after failed publication: %v", err)
 +	}
 +}
 +
@@ -16525,6 +16771,51 @@ index 0000000..b92f214
 +			t.Fatalf("manifest missing %q:\n%s", want, string(manifest))
 +		}
 +	}
++}
++
++func writeTestFile(t *testing.T, path string, data []byte) {
++	t.Helper()
++	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
++		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
++	}
++	if err := os.WriteFile(path, data, 0o644); err != nil {
++		t.Fatalf("write %s: %v", path, err)
++	}
++}
++
++func testTreeInventory(t *testing.T, root string) map[string]string {
++	t.Helper()
++	inventory := make(map[string]string)
++	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
++		if err != nil {
++			return err
++		}
++		if path == root || entry.IsDir() {
++			return nil
++		}
++		if entry.Type()&os.ModeSymlink != 0 {
++			return fmt.Errorf("unexpected symlink %s", path)
++		}
++		data, err := os.ReadFile(path)
++		if err != nil {
++			return err
++		}
++		rel, err := filepath.Rel(root, path)
++		if err != nil {
++			return err
++		}
++		inventory[filepath.ToSlash(rel)] = testDigest(data)
++		return nil
++	})
++	if err != nil {
++		t.Fatalf("inventory %s: %v", root, err)
++	}
++	return inventory
++}
++
++func testDigest(data []byte) string {
++	sum := sha256.Sum256(data)
++	return fmt.Sprintf("%x", sum[:])
 +}
 diff --git a/go/tools/builders/stdliblist.go b/go/tools/builders/stdliblist.go
 index adbbe4a..4404c30 100644

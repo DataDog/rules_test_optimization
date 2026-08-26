@@ -563,6 +563,47 @@ func TestCacheStdlibGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
 	}
 }
 
+func TestWritableStdlibCacheRootUsesPrivateCache(t *testing.T) {
+	privateCache := filepath.Join(t.TempDir(), "private")
+	declaredCache := filepath.Join(t.TempDir(), "declared")
+	cacheRoot, err := writableStdlibCacheRoot(&env{
+		goroot:      t.TempDir(),
+		stdlibCache: declaredCache,
+	}, []string{"GOCACHE=" + privateCache})
+	if err != nil {
+		t.Fatalf("writableStdlibCacheRoot error: %v", err)
+	}
+	if cacheRoot != abs(privateCache) {
+		t.Fatalf("writable cache = %q, want %q", cacheRoot, abs(privateCache))
+	}
+	if info, err := os.Stat(cacheRoot); err != nil || !info.IsDir() {
+		t.Fatalf("writable cache was not created: %v", err)
+	}
+}
+
+func TestWritableStdlibCacheRootRejectsDeclaredCache(t *testing.T) {
+	declaredCache := filepath.Join(t.TempDir(), "declared")
+	_, err := writableStdlibCacheRoot(&env{
+		goroot:      t.TempDir(),
+		stdlibCache: declaredCache,
+	}, []string{"GOCACHE=" + declaredCache})
+	if err == nil || !strings.Contains(err.Error(), "aliases declared cache") {
+		t.Fatalf("writableStdlibCacheRoot error = %v", err)
+	}
+}
+
+func TestResolveCacheStdlibExportsRejectsDeclaredCacheAsWritable(t *testing.T) {
+	declaredCache := t.TempDir()
+	_, err := resolveCacheStdlibExportsAt(&env{
+		goroot:      "fake-goroot",
+		sdk:         "fake-sdk",
+		stdlibCache: declaredCache,
+	}, []string{"fmt"}, declaredCache)
+	if err == nil || !strings.Contains(err.Error(), "refusing to use declared stdlib cache") {
+		t.Fatalf("resolveCacheStdlibExportsAt error = %v", err)
+	}
+}
+
 func TestModuleExportCacheManifestRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	paths := orchestrionCachePaths(root, "module-exports", "abc123")

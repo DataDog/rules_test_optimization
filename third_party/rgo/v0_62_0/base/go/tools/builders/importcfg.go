@@ -1304,29 +1304,17 @@ func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string
 	baseEnv = setEnv(baseEnv, "GOROOT", goenv.goroot)
 	baseEnv = setEnv(baseEnv, "GO111MODULE", "off")
 	baseEnv = setEnv(baseEnv, "GOWORK", "off")
-	orchestrionCachePath := goenv.stdlibCache
-	if orchestrionCachePath == "" {
-		orchestrionCachePath = filepath.Join(goenv.goroot, ".gocache")
-	}
-	cachePath := ""
-	if info, err := os.Stat(orchestrionCachePath); err == nil && info.IsDir() {
-		cachePath = orchestrionCachePath
-	}
-	if cachePath == "" {
-		cachePath = getEnv(baseEnv, "GOCACHE")
-	}
-	if cachePath == "" {
-		if goenv.stdlibCache != "" {
-			cachePath = goenv.stdlibCache
-		} else {
-			cachePath = filepath.Join(goenv.goroot, ".gocache")
-		}
-	}
-	cachePath = abs(cachePath)
-	if err := os.MkdirAll(cachePath, 0o755); err != nil {
+	cachePath, err := writableStdlibCacheRoot(goenv, baseEnv)
+	if err != nil {
 		return nil, fmt.Errorf("prepare stdlib export cache: %w", err)
 	}
+	if err := seedWovenStdlibCache(goenv, cachePath); err != nil {
+		return nil, fmt.Errorf("seed stdlib export cache: %w", err)
+	}
 	baseEnv = setEnv(baseEnv, "GOCACHE", cachePath)
+	if goenv.stdlibCache != "" {
+		baseEnv = setEnv(baseEnv, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
+	}
 	if getEnv(baseEnv, "HOME") == "" {
 		homePath := filepath.Join(goenv.goroot, ".home")
 		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -1366,9 +1354,18 @@ func resolveInstrumentedStdlibExports(goenv *env, packages []string) (map[string
 }
 
 func resolveCacheStdlibExports(goenv *env, packages []string) (map[string]string, error) {
-	cacheRoot := ""
-	if goenv != nil {
-		cacheRoot = goenv.stdlibCache
+	if goenv != nil && goenv.stdlibCache != "" {
+		exports, err := readStdlibCacheManifest(goenv.stdlibCache, packages)
+		if err != nil {
+			return nil, err
+		}
+		if len(exports) > 0 {
+			return exports, nil
+		}
+	}
+	cacheRoot, err := writableStdlibCacheRoot(goenv, os.Environ())
+	if err != nil {
+		return nil, err
 	}
 	return resolveCacheStdlibExportsAt(goenv, packages, cacheRoot)
 }
@@ -1396,6 +1393,9 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 			)
 			return manifestExports, nil
 		}
+	}
+	if goenv.stdlibCache != "" && sameFilePath(cacheRoot, goenv.stdlibCache) {
+		return nil, fmt.Errorf("refusing to use declared stdlib cache %s as writable GOCACHE", abs(goenv.stdlibCache))
 	}
 	goenv.goroot = abs(goenv.goroot)
 	goenv.sdk = abs(goenv.sdk)
@@ -1478,6 +1478,24 @@ func cacheStdlibGoListBaseEnv(goenv *env, cachePath string, environ []string) []
 	env = setEnv(env, "GOWORK", "off")
 	env = setEnv(env, "GOCACHE", cachePath)
 	return env
+}
+
+func writableStdlibCacheRoot(goenv *env, environ []string) (string, error) {
+	cacheRoot := strings.TrimSpace(getEnv(environ, "GOCACHE"))
+	if cacheRoot == "" {
+		if goenv == nil || strings.TrimSpace(goenv.goroot) == "" {
+			return "", fmt.Errorf("writable stdlib GOCACHE is empty")
+		}
+		cacheRoot = filepath.Join(abs(goenv.goroot), ".gocache")
+	}
+	cacheRoot = abs(cacheRoot)
+	if goenv != nil && goenv.stdlibCache != "" && sameFilePath(cacheRoot, goenv.stdlibCache) {
+		return "", fmt.Errorf("writable stdlib GOCACHE %s aliases declared cache", cacheRoot)
+	}
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		return "", err
+	}
+	return cacheRoot, nil
 }
 
 func readStdlibCacheManifest(cacheRoot string, packages []string) (map[string]string, error) {
@@ -1874,18 +1892,17 @@ func resolveStdlibExportsForPackage(goenv *env, pkg string) (map[string]string, 
 	cmd.Env = setEnv(cmd.Env, "GOROOT", goenv.goroot)
 	cmd.Env = setEnv(cmd.Env, "GO111MODULE", "on")
 	cmd.Env = setEnv(cmd.Env, "GOWORK", "off")
-	cachePath := goenv.stdlibCache
-	if cachePath == "" {
-		cachePath = getEnv(cmd.Env, "GOCACHE")
-	}
-	if cachePath == "" {
-		cachePath = filepath.Join(goenv.goroot, ".gocache")
-	}
-	cachePath = abs(cachePath)
-	if err := os.MkdirAll(cachePath, 0o755); err != nil {
+	cachePath, err := writableStdlibCacheRoot(goenv, cmd.Env)
+	if err != nil {
 		return nil, fmt.Errorf("prepare stdlib closure cache: %w", err)
 	}
+	if err := seedWovenStdlibCache(goenv, cachePath); err != nil {
+		return nil, fmt.Errorf("seed stdlib closure cache: %w", err)
+	}
 	cmd.Env = setEnv(cmd.Env, "GOCACHE", cachePath)
+	if goenv.stdlibCache != "" {
+		cmd.Env = setEnv(cmd.Env, orchestrionStdlibCacheEnvVar, goenv.stdlibCache)
+	}
 	normalizedEnv, err := normalizeGoActionCacheEnv(cmd.Env)
 	if err != nil {
 		return nil, fmt.Errorf("prepare stdlib closure action cache env: %w", err)
