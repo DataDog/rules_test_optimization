@@ -550,6 +550,8 @@ The named config supplies the same Orchestrion enablement used by
 materializes both the instrumented stdlib and its Go build cache. The consumer
 remains responsible for restricting remote-cache writes to a trusted CI
 invocation.
+Without the named config, the target is a no-op so ordinary broad builds can
+analyze its package without enabling Test Optimization.
 
 ### Bzlmod + Python companion (`dd_topt_py_test`)
 

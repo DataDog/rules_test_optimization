@@ -36,7 +36,7 @@ def _first_target(dep):
 
 def _dd_topt_go_stdlib_warmup_impl(ctx):
     if not ctx.attr._orchestrion_enabled[BuildSettingInfo].value:
-        fail("dd_topt_go_stdlib_warmup requires the consumer's Test Optimization Bazel config")
+        return [DefaultInfo()]
     stdlib = _first_target(ctx.attr._stdlib)[GoStdLib]
     return [DefaultInfo(files = depset(transitive = [stdlib.libs, stdlib.cache_dir]))]
 

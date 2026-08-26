@@ -72,6 +72,7 @@ load(
     "resolve_topt_service_key_missing_target_rule",
     "resolve_topt_service_key_unknown_failure_test",
     "resolve_topt_service_key_unknown_target_rule",
+    "stdlib_warmup_disabled_noop_test",
     "stdlib_warmup_transition_selects_test_optimization_test",
     "validate_orchestrion_mode_invalid_failure_test",
     "validate_orchestrion_mode_invalid_target_rule",
@@ -82,6 +83,10 @@ load(
     "wrapper_output_name_non_windows_test",
     "wrapper_output_name_target_rule",
     "wrapper_output_name_windows_test",
+)
+load(
+    "@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl",
+    "dd_topt_go_stdlib_warmup",
 )
 load(
     ":test_payloads_selector.bzl",
@@ -783,6 +788,16 @@ stdlib_warmup_transition_selects_test_optimization_test(
     timeout = "short",
 )
 
+dd_topt_go_stdlib_warmup(
+    name = "stdlib_warmup_disabled_target",
+    tags = ["manual"],
+)
+
+stdlib_warmup_disabled_noop_test(
+    name = "stdlib_warmup_disabled_noop_test",
+    target_under_test = ":stdlib_warmup_disabled_target",
+)
+
 test_suite(
     name = "tests",
     tests = [
@@ -851,6 +866,7 @@ test_suite(
         ":selector_override_miss_failure_test",
         ":selector_override_test",
         ":service_mapping_entries_filters_non_service_test",
+        ":stdlib_warmup_disabled_noop_test",
         ":stdlib_warmup_transition_selects_test_optimization_test",
         ":validate_orchestrion_mode_invalid_failure_test",
         ":validate_orchestrion_mode_test",

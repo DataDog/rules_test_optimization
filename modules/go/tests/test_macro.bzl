@@ -1037,6 +1037,13 @@ def _stdlib_warmup_transition_selects_test_optimization_test_impl(ctx):
     asserts.false(env, "@rules_go//go/private/orchestrion:enabled" in result)
     return unittest.end(env)
 
+def _stdlib_warmup_disabled_noop_test_impl(ctx):
+    """Assert broad builds can analyze the warmup target without enablement."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.equals(env, 0, len(target[DefaultInfo].files.to_list()))
+    return analysistest.end(env)
+
 def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
     """Assert the wrapper target ships transitioned inputs as siblings."""
     env = analysistest.begin(ctx)
@@ -1221,6 +1228,9 @@ orch_transition_forwards_mode_test = unittest.make(
 )
 stdlib_warmup_transition_selects_test_optimization_test = unittest.make(
     _stdlib_warmup_transition_selects_test_optimization_test_impl,
+)
+stdlib_warmup_disabled_noop_test = analysistest.make(
+    _stdlib_warmup_disabled_noop_test_impl,
 )
 orch_wrapper_materialized_actual_non_windows_test = analysistest.make(
     _orch_wrapper_materialized_actual_non_windows_test_impl,
