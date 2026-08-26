@@ -294,6 +294,15 @@ func digestFileOrMissing(path string) (string, error) {
 	return shortDigest(data), nil
 }
 
+func fullDigestFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:]), nil
+}
+
 // goSDKCacheIdentity returns a stable cache identity for the selected Go SDK
 // without depending on Bazel's output-base-specific execroot path. The identity
 // is derived from SDK file contents that remain stable across equivalent

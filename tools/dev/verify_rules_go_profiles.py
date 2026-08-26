@@ -236,9 +236,33 @@ def verify_workspace_runtime_functional_smoke(
     assert_orchestrion_stdlib_cache(first_orchestrion, patch)
     assert_orchestrion_stdlib_cache(second_orchestrion, patch)
     if first_plain != second_plain:
-        raise ValueError("plain stdlib cache inventories differ for %s" % patch)
+        raise ValueError(
+            "plain stdlib cache inventories differ for %s: %s"
+            % (patch, describe_snapshot_difference(first_plain, second_plain))
+        )
     if first_orchestrion != second_orchestrion:
-        raise ValueError("Test Optimization stdlib cache inventories differ for %s" % patch)
+        raise ValueError(
+            "Test Optimization stdlib cache inventories differ for %s: %s"
+            % (
+                patch,
+                describe_snapshot_difference(first_orchestrion, second_orchestrion),
+            )
+        )
+
+
+def describe_snapshot_difference(
+    first: StdlibCacheSnapshot, second: StdlibCacheSnapshot
+) -> str:
+    """Describe canonical cache entries that differ between two executions."""
+    differences = []
+    for relative in sorted(set(first.inventory) | set(second.inventory)):
+        first_value = first.inventory.get(relative, "missing")
+        second_value = second.inventory.get(relative, "missing")
+        if first_value != second_value:
+            differences.append("%s=(%s != %s)" % (relative, first_value, second_value))
+    if first.manifest != second.manifest:
+        differences.append("manifest contents differ")
+    return ", ".join(differences) or "snapshot metadata differs"
 
 
 def write_smoke_workspace(

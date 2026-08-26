@@ -555,7 +555,7 @@ func publishPersistedOrchestrionExportsToCache(exports, cacheExports map[string]
 		if src == "" {
 			return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
 		}
-		dst, relDst, err := projectStdlibCacheArchive(scratchCache, declaredCache, cacheExports[pkg])
+		dst, relDst, err := projectStdlibCacheArchive(scratchCache, declaredCache, cacheExports[pkg], src)
 		if err != nil {
 			return fmt.Errorf("project stdlib cache archive for %s: %w", pkg, err)
 		}
@@ -585,27 +585,32 @@ func publishPersistedOrchestrionExportsToCache(exports, cacheExports map[string]
 	return nil
 }
 
-func projectStdlibCacheArchive(scratchCache, declaredCache, scratchArchive string) (destination, relative string, err error) {
+func projectStdlibCacheArchive(scratchCache, declaredCache, scratchArchive, persistedArchive string) (destination, relative string, err error) {
 	scratchRoot := abs(scratchCache)
 	declaredRoot := abs(declaredCache)
 	archive := abs(scratchArchive)
-	rel, err := filepath.Rel(scratchRoot, archive)
+	scratchRel, err := filepath.Rel(scratchRoot, archive)
 	if err != nil {
 		return "", "", err
 	}
-	rel = filepath.Clean(rel)
-	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	scratchRel = filepath.Clean(scratchRel)
+	if scratchRel == "." || filepath.IsAbs(scratchRel) || scratchRel == ".." || strings.HasPrefix(scratchRel, ".."+string(filepath.Separator)) {
 		return "", "", fmt.Errorf("cache archive %s escapes scratch root %s", archive, scratchRoot)
 	}
-	if !strings.HasSuffix(filepath.Base(rel), "-d") {
+	if !strings.HasSuffix(filepath.Base(scratchRel), "-d") {
 		return "", "", fmt.Errorf("cache archive %s is not a Go cache data entry", archive)
 	}
-	destination = filepath.Join(declaredRoot, rel)
+	digest, err := fullDigestFile(persistedArchive)
+	if err != nil {
+		return "", "", fmt.Errorf("digest persisted stdlib archive %s: %w", persistedArchive, err)
+	}
+	relative = filepath.Join(digest[:2], digest+"-d")
+	destination = filepath.Join(declaredRoot, relative)
 	destinationRel, err := filepath.Rel(declaredRoot, destination)
-	if err != nil || filepath.Clean(destinationRel) != rel {
+	if err != nil || filepath.Clean(destinationRel) != relative {
 		return "", "", fmt.Errorf("cache archive destination %s escapes declared root %s", destination, declaredRoot)
 	}
-	return destination, filepath.ToSlash(rel), nil
+	return destination, filepath.ToSlash(relative), nil
 }
 
 func ensureSyntheticOrchestrionToolGo(verbose bool, orchestrionMode string) (func(), error) {

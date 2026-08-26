@@ -12909,10 +12909,10 @@ index 0000000..93f9e48
 +}
 diff --git a/go/tools/builders/orchestrion_cache.go b/go/tools/builders/orchestrion_cache.go
 new file mode 100644
-index 0000000..5cccefd
+index 0000000..876316e
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_cache.go
-@@ -0,0 +1,348 @@
+@@ -0,0 +1,357 @@
 +package main
 +
 +import (
@@ -13207,6 +13207,15 @@ index 0000000..5cccefd
 +		return "", err
 +	}
 +	return shortDigest(data), nil
++}
++
++func fullDigestFile(path string) (string, error) {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return "", err
++	}
++	sum := sha256.Sum256(data)
++	return fmt.Sprintf("%x", sum[:]), nil
 +}
 +
 +// goSDKCacheIdentity returns a stable cache identity for the selected Go SDK
@@ -15719,7 +15728,7 @@ index 0000000..9edae16
 +	}
 +}
 diff --git a/go/tools/builders/stdlib.go b/go/tools/builders/stdlib.go
-index cfcb991..9b5c36c 100644
+index cfcb991..65244aa 100644
 --- a/go/tools/builders/stdlib.go
 +++ b/go/tools/builders/stdlib.go
 @@ -21,15 +21,29 @@ import (
@@ -15964,7 +15973,7 @@ index cfcb991..9b5c36c 100644
  	}
  	if *shared {
  		gcflags = append(gcflags, "-shared")
-@@ -167,8 +315,388 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -167,8 +315,393 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	}
  
  	installArgs = append(installArgs, packages...)
@@ -16208,7 +16217,7 @@ index cfcb991..9b5c36c 100644
 +		if src == "" {
 +			return fmt.Errorf("missing persisted stdlib archive for cache package %s", pkg)
 +		}
-+		dst, relDst, err := projectStdlibCacheArchive(scratchCache, declaredCache, cacheExports[pkg])
++		dst, relDst, err := projectStdlibCacheArchive(scratchCache, declaredCache, cacheExports[pkg], src)
 +		if err != nil {
 +			return fmt.Errorf("project stdlib cache archive for %s: %w", pkg, err)
 +		}
@@ -16238,27 +16247,32 @@ index cfcb991..9b5c36c 100644
 +	return nil
 +}
 +
-+func projectStdlibCacheArchive(scratchCache, declaredCache, scratchArchive string) (destination, relative string, err error) {
++func projectStdlibCacheArchive(scratchCache, declaredCache, scratchArchive, persistedArchive string) (destination, relative string, err error) {
 +	scratchRoot := abs(scratchCache)
 +	declaredRoot := abs(declaredCache)
 +	archive := abs(scratchArchive)
-+	rel, err := filepath.Rel(scratchRoot, archive)
++	scratchRel, err := filepath.Rel(scratchRoot, archive)
 +	if err != nil {
 +		return "", "", err
 +	}
-+	rel = filepath.Clean(rel)
-+	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
++	scratchRel = filepath.Clean(scratchRel)
++	if scratchRel == "." || filepath.IsAbs(scratchRel) || scratchRel == ".." || strings.HasPrefix(scratchRel, ".."+string(filepath.Separator)) {
 +		return "", "", fmt.Errorf("cache archive %s escapes scratch root %s", archive, scratchRoot)
 +	}
-+	if !strings.HasSuffix(filepath.Base(rel), "-d") {
++	if !strings.HasSuffix(filepath.Base(scratchRel), "-d") {
 +		return "", "", fmt.Errorf("cache archive %s is not a Go cache data entry", archive)
 +	}
-+	destination = filepath.Join(declaredRoot, rel)
++	digest, err := fullDigestFile(persistedArchive)
++	if err != nil {
++		return "", "", fmt.Errorf("digest persisted stdlib archive %s: %w", persistedArchive, err)
++	}
++	relative = filepath.Join(digest[:2], digest+"-d")
++	destination = filepath.Join(declaredRoot, relative)
 +	destinationRel, err := filepath.Rel(declaredRoot, destination)
-+	if err != nil || filepath.Clean(destinationRel) != rel {
++	if err != nil || filepath.Clean(destinationRel) != relative {
 +		return "", "", fmt.Errorf("cache archive destination %s escapes declared root %s", destination, declaredRoot)
 +	}
-+	return destination, filepath.ToSlash(rel), nil
++	return destination, filepath.ToSlash(relative), nil
 +}
 +
 +func ensureSyntheticOrchestrionToolGo(verbose bool, orchestrionMode string) (func(), error) {
@@ -16355,10 +16369,10 @@ index cfcb991..9b5c36c 100644
 +}
 diff --git a/go/tools/builders/stdlib_test.go b/go/tools/builders/stdlib_test.go
 new file mode 100644
-index 0000000..7ca400c
+index 0000000..1d4cf60
 --- /dev/null
 +++ b/go/tools/builders/stdlib_test.go
-@@ -0,0 +1,464 @@
+@@ -0,0 +1,477 @@
 +package main
 +
 +import (
@@ -16601,9 +16615,15 @@ index 0000000..7ca400c
 +		"fmt": []byte("woven fmt archive"),
 +		"log": []byte("woven log archive"),
 +	}
-+	cachePaths := map[string]string{
-+		"fmt": filepath.Join("11", "fmt-d"),
-+		"log": filepath.Join("aa", "log-d"),
++	cachePaths := []map[string]string{
++		{
++			"fmt": filepath.Join("11", "fmt-d"),
++			"log": filepath.Join("aa", "log-d"),
++		},
++		{
++			"fmt": filepath.Join("22", "different-fmt-d"),
++			"log": filepath.Join("bb", "different-log-d"),
++		},
 +	}
 +
 +	inventories := make([]map[string]string, 0, 2)
@@ -16615,12 +16635,12 @@ index 0000000..7ca400c
 +			t.Fatal(err)
 +		}
 +		exports := make(map[string]string, len(archives))
-+		resolved := make(map[string]string, len(cachePaths))
++		resolved := make(map[string]string, len(cachePaths[run]))
 +		for pkg, data := range archives {
 +			src := filepath.Join(persisted, pkg+".a")
 +			writeTestFile(t, src, data)
 +			exports[pkg] = src
-+			resolved[pkg] = filepath.Join(scratch, cachePaths[pkg])
++			resolved[pkg] = filepath.Join(scratch, cachePaths[run][pkg])
 +			writeTestFile(t, resolved[pkg], []byte(fmt.Sprintf("unwoven run %d", run)))
 +		}
 +		writeTestFile(t, filepath.Join(scratch, "11", "fmt-a"), []byte(fmt.Sprintf("timestamp %d", run)))
@@ -16635,8 +16655,9 @@ index 0000000..7ca400c
 +		if len(inventory) != len(archives)+1 {
 +			t.Fatalf("declared inventory has unexpected entries: %v", inventory)
 +		}
-+		for pkg, data := range archives {
-+			path := filepath.ToSlash(cachePaths[pkg])
++		for _, data := range archives {
++			digest := testDigest(data)
++			path := filepath.ToSlash(filepath.Join(digest[:2], digest+"-d"))
 +			if got := inventory[path]; got != testDigest(data) {
 +				t.Fatalf("published %s digest = %q, want %q", path, got, testDigest(data))
 +			}
@@ -16645,7 +16666,13 @@ index 0000000..7ca400c
 +		if err != nil {
 +			t.Fatal(err)
 +		}
-+		wantManifest := "fmt=11/fmt-d\nlog=aa/log-d\n"
++		fmtDigest := testDigest(archives["fmt"])
++		logDigest := testDigest(archives["log"])
++		wantManifest := fmt.Sprintf(
++			"fmt=%s/%s-d\nlog=%s/%s-d\n",
++			fmtDigest[:2], fmtDigest,
++			logDigest[:2], logDigest,
++		)
 +		if string(manifest) != wantManifest {
 +			t.Fatalf("manifest = %q, want %q", string(manifest), wantManifest)
 +		}
@@ -16669,7 +16696,7 @@ index 0000000..7ca400c
 +	}
 +	for _, tt := range tests {
 +		t.Run(tt.name, func(t *testing.T) {
-+			if _, _, err := projectStdlibCacheArchive(scratch, declared, tt.archive); err == nil || !strings.Contains(err.Error(), tt.want) {
++			if _, _, err := projectStdlibCacheArchive(scratch, declared, tt.archive, filepath.Join(root, "persisted.a")); err == nil || !strings.Contains(err.Error(), tt.want) {
 +				t.Fatalf("projectStdlibCacheArchive error = %v, want %q", err, tt.want)
 +			}
 +		})

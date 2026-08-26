@@ -240,9 +240,15 @@ func TestPublishPersistedOrchestrionExportsIsDeterministic(t *testing.T) {
 		"fmt": []byte("woven fmt archive"),
 		"log": []byte("woven log archive"),
 	}
-	cachePaths := map[string]string{
-		"fmt": filepath.Join("11", "fmt-d"),
-		"log": filepath.Join("aa", "log-d"),
+	cachePaths := []map[string]string{
+		{
+			"fmt": filepath.Join("11", "fmt-d"),
+			"log": filepath.Join("aa", "log-d"),
+		},
+		{
+			"fmt": filepath.Join("22", "different-fmt-d"),
+			"log": filepath.Join("bb", "different-log-d"),
+		},
 	}
 
 	inventories := make([]map[string]string, 0, 2)
@@ -254,12 +260,12 @@ func TestPublishPersistedOrchestrionExportsIsDeterministic(t *testing.T) {
 			t.Fatal(err)
 		}
 		exports := make(map[string]string, len(archives))
-		resolved := make(map[string]string, len(cachePaths))
+		resolved := make(map[string]string, len(cachePaths[run]))
 		for pkg, data := range archives {
 			src := filepath.Join(persisted, pkg+".a")
 			writeTestFile(t, src, data)
 			exports[pkg] = src
-			resolved[pkg] = filepath.Join(scratch, cachePaths[pkg])
+			resolved[pkg] = filepath.Join(scratch, cachePaths[run][pkg])
 			writeTestFile(t, resolved[pkg], []byte(fmt.Sprintf("unwoven run %d", run)))
 		}
 		writeTestFile(t, filepath.Join(scratch, "11", "fmt-a"), []byte(fmt.Sprintf("timestamp %d", run)))
@@ -274,8 +280,9 @@ func TestPublishPersistedOrchestrionExportsIsDeterministic(t *testing.T) {
 		if len(inventory) != len(archives)+1 {
 			t.Fatalf("declared inventory has unexpected entries: %v", inventory)
 		}
-		for pkg, data := range archives {
-			path := filepath.ToSlash(cachePaths[pkg])
+		for _, data := range archives {
+			digest := testDigest(data)
+			path := filepath.ToSlash(filepath.Join(digest[:2], digest+"-d"))
 			if got := inventory[path]; got != testDigest(data) {
 				t.Fatalf("published %s digest = %q, want %q", path, got, testDigest(data))
 			}
@@ -284,7 +291,13 @@ func TestPublishPersistedOrchestrionExportsIsDeterministic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantManifest := "fmt=11/fmt-d\nlog=aa/log-d\n"
+		fmtDigest := testDigest(archives["fmt"])
+		logDigest := testDigest(archives["log"])
+		wantManifest := fmt.Sprintf(
+			"fmt=%s/%s-d\nlog=%s/%s-d\n",
+			fmtDigest[:2], fmtDigest,
+			logDigest[:2], logDigest,
+		)
 		if string(manifest) != wantManifest {
 			t.Fatalf("manifest = %q, want %q", string(manifest), wantManifest)
 		}
@@ -308,7 +321,7 @@ func TestProjectStdlibCacheArchiveRejectsInvalidPaths(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := projectStdlibCacheArchive(scratch, declared, tt.archive); err == nil || !strings.Contains(err.Error(), tt.want) {
+			if _, _, err := projectStdlibCacheArchive(scratch, declared, tt.archive, filepath.Join(root, "persisted.a")); err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("projectStdlibCacheArchive error = %v, want %q", err, tt.want)
 			}
 		})
