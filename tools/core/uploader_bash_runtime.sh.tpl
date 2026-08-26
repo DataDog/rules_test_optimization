@@ -4927,14 +4927,19 @@ prepare_test_payload_parts() {
 persist_failed_test_payload_parts() {
     local source_file="$1"
     shift
-    local retry_file failed_count=$#
+    local retry_file source_dir failed_count=$#
     if (( failed_count == 0 )) || [[ "$KEEP_PAYLOADS" == "1" ]]; then
         return 0
     fi
     retry_file="$(mktemp "${source_file}.retry.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$retry_file" ]]; then
-        log "warning: failed to create retry payload beside source; retaining the original payload: $source_file"
-        return 1
+        source_dir="$(dirname "$source_file")"
+        chmod u+w "$source_dir" 2>/dev/null || true
+        retry_file="$(mktemp "${source_file}.retry.XXXXXX" 2>/dev/null || true)"
+        if [[ -z "$retry_file" ]]; then
+            log "warning: failed to create retry payload beside source; retaining the original payload: $source_file"
+            return 1
+        fi
     fi
     if (( failed_count == 1 )); then
         if ! cp "$1" "$retry_file"; then

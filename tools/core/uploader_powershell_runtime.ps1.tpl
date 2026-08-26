@@ -3982,7 +3982,17 @@ function Prepare-TestPayloadParts([string]$BodyPath, [string]$SourcePath) {
 
 function Save-FailedTestPayloadParts([string]$SourcePath, [string[]]$FailedParts) {
   if ($KeepPayloads -or $null -eq $FailedParts -or $FailedParts.Count -eq 0) { return }
-  $retryPath = Join-Path (Split-Path -Parent $SourcePath) ((Split-Path -Leaf $SourcePath) + ".retry." + [System.Guid]::NewGuid().ToString("N"))
+  $sourceDir = Split-Path -Parent $SourcePath
+  try {
+    $sourceDirItem = Get-Item -LiteralPath $sourceDir -ErrorAction Stop
+    if ($sourceDirItem.PSObject.Properties['IsReadOnly'] -and $sourceDirItem.IsReadOnly) {
+      $sourceDirItem.IsReadOnly = $false
+    }
+  } catch {}
+  if (-not $IsWindows) {
+    & chmod u+w -- $sourceDir 2>$null
+  }
+  $retryPath = Join-Path $sourceDir ((Split-Path -Leaf $SourcePath) + ".retry." + [System.Guid]::NewGuid().ToString("N"))
   try {
     $retryPayload = Get-Content -LiteralPath $FailedParts[0] -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
     if ($FailedParts.Count -gt 1) {

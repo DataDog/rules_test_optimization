@@ -6703,6 +6703,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     reject_second_part,
                     gzip_enabled=True,
                     keep_payloads=False,
+                    read_only_parent=True,
                 )
                 output = result.stdout + result.stderr
                 self.assertNotEqual(0, result.returncode, output)
