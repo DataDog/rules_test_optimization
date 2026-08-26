@@ -6370,7 +6370,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 generated.chmod(0o755)
-                command = [bash, str(generated), *extra_args]
+                command = [bash, str(generated), "--allow-cached-payload-uploads", *extra_args]
             elif runtime == "PowerShell":
                 generated = root / "generated_uploader.ps1"
                 generated.write_text(
@@ -6380,7 +6380,15 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                command = [pwsh, "-NoLogo", "-NoProfile", "-File", str(generated), *extra_args]
+                command = [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-File",
+                    str(generated),
+                    "--allow-cached-payload-uploads",
+                    *extra_args,
+                ]
             else:
                 raise AssertionError(f"unknown uploader runtime: {runtime}")
 
@@ -6412,6 +6420,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 )
                 return result, list(records), source.is_file()
         finally:
+            if read_only_parent and payload_dir.exists():
+                payload_dir.chmod(0o755)
             _cleanup_tempdir_with_windows_retry(root)
 
     @staticmethod
