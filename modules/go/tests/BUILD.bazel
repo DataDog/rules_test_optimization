@@ -72,6 +72,7 @@ load(
     "resolve_topt_service_key_missing_target_rule",
     "resolve_topt_service_key_unknown_failure_test",
     "resolve_topt_service_key_unknown_target_rule",
+    "stdlib_warmup_transition_selects_test_optimization_test",
     "validate_orchestrion_mode_invalid_failure_test",
     "validate_orchestrion_mode_invalid_target_rule",
     "validate_orchestrion_mode_test",
@@ -776,6 +777,12 @@ orch_transition_forwards_mode_test(
     timeout = "short",
 )
 
+stdlib_warmup_transition_selects_test_optimization_test(
+    name = "stdlib_warmup_transition_selects_test_optimization_test",
+    size = "small",
+    timeout = "short",
+)
+
 test_suite(
     name = "tests",
     tests = [
@@ -844,6 +851,7 @@ test_suite(
         ":selector_override_miss_failure_test",
         ":selector_override_test",
         ":service_mapping_entries_filters_non_service_test",
+        ":stdlib_warmup_transition_selects_test_optimization_test",
         ":validate_orchestrion_mode_invalid_failure_test",
         ":validate_orchestrion_mode_test",
         ":validate_test_optimization_pin_files_missing_go_mod_failure_test",

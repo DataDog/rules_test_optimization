@@ -530,6 +530,27 @@ Go setup. Manual Go callsites should set
 `orchestrion_mode = "test_optimization"` for standard Go `testing`; the default
 `general` mode preserves broader generic Orchestrion behavior.
 
+Large consumers can warm the matching instrumented standard library in a
+dedicated cache-writing invocation:
+
+```bzl
+load("@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl", "dd_topt_go_stdlib_warmup")
+
+dd_topt_go_stdlib_warmup(name = "go_stdlib_warmup")
+```
+
+```bash
+bazel build //tools/test_optimization:go_stdlib_warmup \
+  --config=test-optimization \
+  --config=remote-cache-write
+```
+
+The named config supplies the same Orchestrion enablement used by
+`dd_topt_go_test`; the warmup target selects `test_optimization` mode and
+materializes both the instrumented stdlib and its Go build cache. The consumer
+remains responsible for restricting remote-cache writes to a trusted CI
+invocation.
+
 ### Bzlmod + Python companion (`dd_topt_py_test`)
 
 Configure the Python sync extension with `enabled_by_env = True` and put

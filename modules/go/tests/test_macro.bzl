@@ -29,6 +29,10 @@ load(
     "windows_wrapper_content_for_tests",
 )
 load(
+    "@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl",
+    "stdlib_warmup_transition_impl_for_tests",
+)
+load(
     "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "dd_topt_go_test",
     "has_go_mod_pin_for_tests",
@@ -1024,6 +1028,15 @@ def _orch_transition_forwards_mode_test_impl(ctx):
     asserts.false(env, "@rules_go//go/private/orchestrion:enabled" in result)
     return unittest.end(env)
 
+def _stdlib_warmup_transition_selects_test_optimization_test_impl(ctx):
+    """Assert the cache-warm target selects the exact instrumented stdlib."""
+    env = unittest.begin(ctx)
+    result = stdlib_warmup_transition_impl_for_tests(None, None)
+    asserts.equals(env, 1, len(result))
+    asserts.equals(env, "test_optimization", result["@rules_go//go/private/orchestrion:mode"])
+    asserts.false(env, "@rules_go//go/private/orchestrion:enabled" in result)
+    return unittest.end(env)
+
 def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
     """Assert the wrapper target ships transitioned inputs as siblings."""
     env = analysistest.begin(ctx)
@@ -1205,6 +1218,9 @@ validate_orchestrion_mode_test = unittest.make(
 )
 orch_transition_forwards_mode_test = unittest.make(
     _orch_transition_forwards_mode_test_impl,
+)
+stdlib_warmup_transition_selects_test_optimization_test = unittest.make(
+    _stdlib_warmup_transition_selects_test_optimization_test_impl,
 )
 orch_wrapper_materialized_actual_non_windows_test = analysistest.make(
     _orch_wrapper_materialized_actual_non_windows_test_impl,

@@ -12,6 +12,7 @@ exports_files(
         "topt_go_infer.bzl",
         "topt_go_extension.bzl",
         "topt_go_orchestrion_repository.bzl",
+        "topt_go_stdlib.bzl",
         "topt_go_workspace.bzl",
     ],
     visibility = ["//visibility:public"],
