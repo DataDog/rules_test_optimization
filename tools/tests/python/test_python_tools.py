@@ -7176,6 +7176,21 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("[System.IO.File]::Replace($retryPath, $SourcePath, $backupPath)", retry_block)
         self.assertNotIn("[System.IO.File]::Move(", retry_block)
 
+    def test_payload_cleanup_uses_windows_powershell_51_compatible_platform_detection(self) -> None:
+        """Keep successful-upload cleanup compatible with Windows PowerShell 5.1."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        cleanup_block = self._extract_text_block(
+            powershell_text,
+            "function Remove-PayloadFile",
+            "# Track per-payload upload report counters.",
+        )
+
+        self.assertIn("[System.Environment]::OSVersion.Platform", cleanup_block)
+        self.assertIn("[System.PlatformID]::Win32NT", cleanup_block)
+        self.assertNotIn("$IsWindows", cleanup_block)
+
     def test_bash_runtime_guards_context_enrichment_failures(self) -> None:
         """Validate bash runtime falls back when jq context enrichment fails."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")

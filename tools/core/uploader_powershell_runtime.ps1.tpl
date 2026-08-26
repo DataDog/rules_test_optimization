@@ -3781,7 +3781,8 @@ function Remove-PayloadFile([string]$FilePath) {
                     $item.IsReadOnly = $false
                 }
             } catch {}
-            if (-not $IsWindows) {
+            $isWindowsPlatform = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+            if (-not $isWindowsPlatform) {
                 & chmod u+w -- (Split-Path -Parent $FilePath) 2>$null
             }
             Remove-Item -LiteralPath $FilePath -Force -ErrorAction SilentlyContinue
