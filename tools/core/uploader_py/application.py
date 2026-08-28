@@ -17,7 +17,7 @@ from typing import Callable, TextIO
 
 from topt_runtime.runfiles import RunfilesResolver
 
-from .config import UploaderConfig
+from .config import ConfigError, UploaderConfig, validate_upload_credentials
 from .coordinator import (
     CoordinatorOutcome,
     CoordinatorSettings,
@@ -56,6 +56,7 @@ from .worker_pool import WorkerPoolError
 
 
 _CONTROLLED_ERRORS = (
+    ConfigError,
     DiscoveryError,
     ExpectedTargetsError,
     FreshnessError,
@@ -236,6 +237,10 @@ def _run_uploader_with_lock(
             freshness_skipped = len(freshness_result.skipped_outputs)
             for output_key in freshness_result.skipped_outputs:
                 logger.debug("freshness skipped output_key=%s", output_key)
+            if filtered_discovery.tasks:
+                validate_upload_credentials(config)
+            else:
+                logger.debug("credential validation skipped: no upload tasks")
             resources = load_resources(
                 resolver,
                 ResourceInputs(
@@ -478,7 +483,7 @@ def _legacy_context(
         freshness_remote_only_outputs=len(freshness_plan.remote_only_outputs),
         freshness_skipped_outputs=freshness_skipped,
         freshness_missing_output_labels=len(freshness_plan.missing_output_labels),
-        staging_dir=(str(config.artifact_staging_dir) if staged_roots else ""),
+        staging_dir=str(config.artifact_staging_dir),
         staged_testlogs_dirs=len(staged_roots),
         selected_remote_artifacts=len(freshness_plan.selected_artifact_outputs),
         staged_remote_artifacts=len(freshness_plan.staged_outputs),

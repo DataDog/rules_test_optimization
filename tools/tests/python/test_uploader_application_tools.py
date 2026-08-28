@@ -74,6 +74,7 @@ class ApplicationTests(unittest.TestCase):
         self,
         root: Path,
         *,
+        dry_run: bool = True,
         fail_on_error: bool = False,
         extra_arguments: tuple[str, ...] = (),
         extra_environment: dict[str, str] | None = None,
@@ -102,14 +103,12 @@ class ApplicationTests(unittest.TestCase):
             "TESTLOGS_DIR": str(root / "bazel-testlogs"),
         }
         environment.update(extra_environment or {})
+        arguments = ["--config", str(config_path)]
+        if dry_run:
+            arguments.append("--dry-run")
+        arguments.extend(("--allow-cached-payload-uploads", *extra_arguments))
         return parse_uploader_config(
-            [
-                "--config",
-                str(config_path),
-                "--dry-run",
-                "--allow-cached-payload-uploads",
-                *extra_arguments,
-            ],
+            arguments,
             environ=environment,
             cwd=root,
         )
@@ -171,7 +170,76 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(3, report["requests"]["planned"])
             self.assertEqual(0, report["requests"]["attempted"])
             self.assertEqual("upload_skipped_dry_run", report["result"]["reason_code"])
+            self.assertEqual(
+                str(config.artifact_staging_dir),
+                report["artifacts"]["staging_dir"],
+            )
             self.assertIn("task=file-000001", log_stream.getvalue())
+
+    def test_agentless_upload_without_payloads_does_not_require_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            (root / "bazel-testlogs").mkdir()
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                dry_run=False,
+                extra_arguments=(f"--report-json={report_path}",),
+            )
+            transport_factory = mock.Mock(
+                side_effect=AssertionError("transport must not be created")
+            )
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=StringIO()),
+                stream=StringIO(),
+                transport_factory=transport_factory,
+            )
+
+            self.assertEqual(0, exit_code)
+            transport_factory.assert_not_called()
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(0, report["files"]["discovered"])
+            self.assertEqual(0, report["requests"]["attempted"])
+
+    def test_agentless_upload_with_payload_requires_api_key_before_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "bazel-testlogs" / "pkg" / "target" / "test.outputs"
+            _write_payload(
+                output,
+                "tests",
+                "events.json",
+                {"events": [{"content": {}}]},
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                dry_run=False,
+                extra_arguments=(f"--report-json={report_path}",),
+            )
+            transport_factory = mock.Mock(
+                side_effect=AssertionError("transport must not be created")
+            )
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=StringIO()),
+                stream=StringIO(),
+                transport_factory=transport_factory,
+            )
+
+            self.assertEqual(2, exit_code)
+            transport_factory.assert_not_called()
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(1, report["files"]["discovered"])
+            self.assertEqual(0, report["files"]["processed"])
+            self.assertEqual(0, report["requests"]["attempted"])
 
     def test_fail_on_error_reports_tests_without_payloads(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

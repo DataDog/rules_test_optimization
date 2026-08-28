@@ -334,7 +334,10 @@ class UploaderConfigTests(unittest.TestCase):
         )
         self.assertEqual("bep", config.artifact_source)
         self.assertEqual("download", config.remote_artifacts)
-        self.assertEqual(self.root / "relative staging", config.artifact_staging_dir)
+        self.assertEqual(
+            self.root.resolve() / "relative staging",
+            config.artifact_staging_dir,
+        )
         self.assertEqual(Path("cli-report.json"), config.report_json)
         self.assertEqual(Path("execution.json"), config.execution_log_json)
         self.assertEqual(Path("fetch tool"), config.bep_artifact_downloader)
@@ -387,6 +390,14 @@ class UploaderConfigTests(unittest.TestCase):
             cwd=self.root,
         )
         validate_upload_credentials(evp)
+
+    def test_ci_environment_false_markers_match_legacy_runtime(self) -> None:
+        for value in ("", "0", "false", "FALSE", " no "):
+            with self.subTest(value=value):
+                self.assertFalse(self.parse(environ={"CI": value}).ci)
+        for value in ("1", "true", "yes"):
+            with self.subTest(value=value):
+                self.assertTrue(self.parse(environ={"CI": value}).ci)
 
     def test_dd_site_normalization_and_endpoint_modes(self) -> None:
         accepted = {

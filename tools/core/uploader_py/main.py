@@ -30,14 +30,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
-    from .config import ConfigError, parse_uploader_config, validate_upload_credentials
+    from .config import ConfigError, parse_uploader_config
     from .endpoints import build_endpoints
     from .logging_utils import configure_logging
     from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
     try:
         config = parse_uploader_config(sys.argv[1:] if argv is None else argv)
-        validate_upload_credentials(config)
         endpoints = build_endpoints(config)
     except ConfigError as exc:
         print(f"[dd-uploader] error: {exc}", file=sys.stderr)

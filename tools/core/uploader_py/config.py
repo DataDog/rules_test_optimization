@@ -326,7 +326,7 @@ def parse_uploader_config(
         proxy_environment=tuple(
             (name, env[name]) for name in PROXY_ENVIRONMENT_NAMES if env.get(name)
         ),
-        ci=bool(env.get("CI")),
+        ci=env.get("CI", "").strip().lower() not in {"", "0", "false", "no"},
     )
 
 
