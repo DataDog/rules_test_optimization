@@ -1549,7 +1549,7 @@ concurrently without report, cleanup, or payload regressions.
 
 - [x] Generate uploader config JSON and Python runfiles from the rule.
 - [x] Generate small launchers that resolve Python and `uploader_main.py` only.
-- [ ] Confirm the implemented Windows manifest-only runfiles launcher in
+- [x] Confirm the implemented Windows manifest-only runfiles launcher in
       Windows CI.
 - [x] Add a temporary, clearly documented legacy fallback for rollout if
       required by release policy.
@@ -1562,7 +1562,7 @@ concurrently without report, cleanup, or payload regressions.
 - [ ] Delete the large Bash and PowerShell runtime templates.
 - [ ] Remove jq/curl/gzip uploader runtime requirements from user docs where no
       longer applicable.
-- [ ] Make host Python 3.10+ an explicit uploader requirement.
+- [x] Make host Python 3.10+ an explicit uploader requirement.
 - [ ] Update `UPLOADER_VERSION` intentionally.
 - [ ] Update `LICENSE-3rdparty.csv` only if implementation introduces a new
       dependency; the planned stdlib-only implementation should not.
@@ -1851,7 +1851,7 @@ The migration is complete only when all of the following are true:
 - [x] `workers=4` demonstrates actual concurrent requests in the mock harness.
 - [ ] Linux, macOS, and Windows validation passes.
 - [ ] The cross-repository consumer fixture passes.
-- [ ] User documentation states the Python 3.10+ runtime requirement.
+- [x] User documentation states the Python 3.10+ runtime requirement.
 - [ ] Legacy functional Bash and PowerShell uploader code is removed after the
       rollout window.
 

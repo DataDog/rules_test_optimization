@@ -1359,7 +1359,11 @@ Optional tooling:
   split oversized test payloads. If missing, uploads proceed without enrichment;
   payloads up to the 5,000,000-byte intake limit can still be sent intact, but
   larger payloads fail because their `events` array cannot be partitioned.
-- **python3** - Used for uploader payload schema validation and Unix telemetry metadata extraction. If missing, schema validation is skipped and telemetry files fail individually with a warning.
+- **Python 3.10+** - Required on every platform when the uploader target opts in
+  with `use_python_uploader = True`; see the
+  [parallel Python uploader rollout](docs/Uploader_Reference.md#opt-in-to-the-parallel-python-uploader).
+  With the default legacy uploader it remains optional and is used for payload
+  schema validation and Unix telemetry metadata extraction.
 
 ### Contract gate checklist
 
