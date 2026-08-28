@@ -361,6 +361,49 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(0, report["files"]["discovered"])
             self.assertEqual(0, report["requests"]["attempted"])
 
+    def test_partial_cached_coverage_does_not_short_circuit_remote_output(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bep = _runfile(
+                "tools/tests/python/fixtures/bep_snake_case_remote_cached.ndjson"
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                dry_run=False,
+                fail_on_error=True,
+                expected_targets=("//pkg:target", "//pkg:remote_only"),
+                allow_cached_payload_uploads=False,
+                extra_arguments=(
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                    f"--bep-json={bep}",
+                    f"--report-json={report_path}",
+                ),
+            )
+
+            with mock.patch(
+                "uploader_py.application.resolve_local_testlogs_root",
+                return_value=None,
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=StringIO(),
+                )
+
+            self.assertEqual(2, exit_code)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "bep_output_remote_only_without_downloader",
+                report["result"]["reason_code"],
+            )
+            self.assertEqual(1, report["bep"]["cached_outputs"])
+            self.assertEqual(1, report["bep"]["remote_only_outputs"])
+            self.assertEqual(0, report["requests"]["attempted"])
+
     def test_interrupted_worker_outcome_still_prints_and_writes_final_report(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

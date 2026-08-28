@@ -187,10 +187,16 @@ def _run_uploader_with_lock(
                 len(freshness_plan.cached_outputs),
                 len(freshness_plan.remote_only_outputs),
             )
+            expected_target_labels = frozenset(expected_plan.targets)
+            cached_target_labels = frozenset(
+                label for label, _output_key in freshness_plan.cached_outputs
+            )
             all_expected_outputs_cached = bool(
-                expected_plan.targets
-                and freshness_plan.cached_outputs
+                expected_target_labels
+                and cached_target_labels == expected_target_labels
                 and not freshness_plan.eligible_outputs
+                and not freshness_plan.remote_only_outputs
+                and not freshness_plan.missing_output_labels
             )
             if (
                 not preparation.scan_roots
