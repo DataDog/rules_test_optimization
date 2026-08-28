@@ -481,7 +481,7 @@ function Initialize-RuntimeSelectionArguments {
             exit 2
         }
         if ($script:RuntimeContextEntries.Contains($repoKey)) { Log "error: duplicate --context-entry repository '$repoKey'"; exit 2 }
-        if (-not $seenPaths.Add($resolved)) { Log "error: duplicate --context-entry path '$resolved'"; exit 2 }
+        if (-not $seenPaths.Add($resolved)) { Log "error: duplicate --context-entry path for repository '$repoKey'"; exit 2 }
         Assert-RuntimeContextPair $repoKey $resolved $telemetry
         $script:RuntimeContextEntries[$repoKey] = $resolved
         $script:RuntimeTelemetryFacts.Add([System.IO.Path]::GetFullPath($telemetry)) | Out-Null
@@ -511,7 +511,7 @@ $ContextJsonPath = "__DDTPL_CONTEXT_JSON_PATH__"
 $TelemetryFactsManifestRloc = "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__"
 $TelemetryFactsManifestPath = "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"
 $ContextJsonOverride = $env:DD_TEST_OPTIMIZATION_CONTEXT_JSON
-Dbg "context.json resolution inputs: override='$ContextJsonOverride' path='$ContextJsonPath' rloc='$ContextJsonRloc' manifest_path='$ContextManifestPath' manifest_rloc='$ContextManifestRloc'"
+Dbg "resolving configured context.json and manifest inputs"
 $script:ContextJson = $null
 $script:PrimaryContextJson = $null
 $script:ContextManifest = $null
@@ -576,7 +576,7 @@ if ($script:RuntimeContextEntries.Count -gt 0) {
     $script:PrimaryContextJson = Resolve-ArtifactPath $ContextJsonOverride
     if ($script:PrimaryContextJson) {
         $contextJsonFromOverride = $true
-        Dbg "context.json resolved via runtime override: '$script:PrimaryContextJson'"
+        Dbg "context.json resolved via runtime override"
     } else {
         Log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     }
@@ -584,20 +584,20 @@ if ($script:RuntimeContextEntries.Count -gt 0) {
 if (-not $script:PrimaryContextJson) {
     $script:ContextManifest = Resolve-ArtifactPath $ContextManifestPath
     if ($script:ContextManifest) {
-        Dbg "context manifest resolved via direct path: '$script:ContextManifest'"
+        Dbg "context manifest resolved via direct path"
     } elseif ($ContextManifestRloc) {
         $script:ContextManifest = Resolve-Runfile $ContextManifestRloc
         if ($script:ContextManifest) {
-            Dbg "context manifest resolved via runfiles: '$script:ContextManifest'"
+            Dbg "context manifest resolved via runfiles"
         }
     }
     Load-ContextManifestEntries -ManifestPath $script:ContextManifest
     if ($script:BundledContextEntries.Count -gt 0) {
         $script:PrimaryContextJson = @($script:BundledContextEntries.Values)[0]
         if ($script:BundledContextEntries.Count -eq 1) {
-            Dbg "context.json resolved from single bundled context: '$script:PrimaryContextJson'"
+            Dbg "context.json resolved from single bundled context"
         } else {
-            Dbg "primary context.json resolved from bundled manifest: '$script:PrimaryContextJson' (repos=$([string]::Join(', ', @($script:BundledContextEntries.Keys))))"
+            Dbg "primary context.json resolved from bundled manifest (repos=$([string]::Join(', ', @($script:BundledContextEntries.Keys))))"
         }
     }
 }
@@ -605,14 +605,14 @@ if (-not $script:PrimaryContextJson) {
     $script:PrimaryContextJson = Resolve-ArtifactPath $ContextJsonPath
     if ($script:PrimaryContextJson) {
         # Direct artifact path is preferred when launcher preserves it.
-        Dbg "context.json resolved via direct path: '$script:PrimaryContextJson'"
+        Dbg "context.json resolved via direct path"
     } elseif ($ContextJsonRloc) {
         # Runfiles fallback supports manifest-only and bzlmod path variants.
         $script:PrimaryContextJson = Resolve-Runfile $ContextJsonRloc
         if (-not $script:PrimaryContextJson) {
             Log "warning: context.json not found in runfiles; payloads will not be enriched"
         } else {
-            Dbg "context.json resolved via runfiles: '$script:PrimaryContextJson'"
+            Dbg "context.json resolved via runfiles"
         }
     } else {
         Dbg "context.json not configured in data files; enrichment disabled"
@@ -1997,7 +1997,7 @@ if ($Agentless -and -not $script:DryRun) {
 }
 Dbg "headers prepared (agentless=$Agentless; test headers can be derived from metadata)"
 
-Dbg "primary context.json: $(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { '<none>' } else { $script:PrimaryContextJson })"
+Dbg "primary context.json $(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { 'unavailable' } else { 'available' })"
 
 # Optional check: verify fetch-time API key fingerprint matches uploader API key.
 $ContextFingerprint = $null
@@ -3584,7 +3584,7 @@ function Get-ContextInfo([string]$ContextPath) {
       $info.JsonText = Get-Content -LiteralPath $ContextPath -Raw -Encoding UTF8
       $info.Object = $info.JsonText | ConvertFrom-Json -ErrorAction Stop
     } catch {
-      Log "warning: failed to parse context.json for payload enrichment: $ContextPath"
+      Log "warning: failed to parse context.json for payload enrichment"
     }
   }
 
@@ -3627,7 +3627,7 @@ function Resolve-ContextJsonForPayload([string]$PayloadFile) {
   }
 
   $matchedContext = [string]$script:BundledContextEntries[$repoKey]
-  Dbg "selected bundled context '$matchedContext' for payload '$PayloadFile' via repo '$repoKey'"
+  Dbg "selected bundled context for payload via repo '$repoKey'"
   return $matchedContext
 }
 
@@ -3670,7 +3670,7 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
   $selectedContextPath = Resolve-ContextJsonForPayload $infile
   $selectedContextInfo = Get-ContextInfo $selectedContextPath
   $selectedContextObj = if ($selectedContextInfo) { $selectedContextInfo.Object } else { $null }
-  Dbg "Merge-With-Context: infile='$infile' selected_ctx='$(if ([string]::IsNullOrEmpty($selectedContextPath)) { '<none>' } else { $selectedContextPath })' primary='$(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { '<none>' } else { $script:PrimaryContextJson })'"
+  Dbg "Merge-With-Context: context_selected=$(-not [string]::IsNullOrEmpty($selectedContextPath))"
 
   if (-not $payload.metadata) { $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{} -Force }
   $meta = Ensure-Hashtable $payload.metadata

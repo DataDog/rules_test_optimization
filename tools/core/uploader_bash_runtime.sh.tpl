@@ -453,7 +453,7 @@ scan_runtime_selection_args() {
             done
             for existing in "${RUNTIME_CONTEXT_FILES[@]+"${RUNTIME_CONTEXT_FILES[@]}"}"; do
                 if [[ "$existing" == "$resolved" ]]; then
-                    log "error: duplicate --context-entry path '$resolved'"
+                    log "error: duplicate --context-entry path for repository '$repo_key'"
                     exit 2
                 fi
             done
@@ -506,7 +506,7 @@ CONTEXT_JSON_PATH="__DDTPL_CONTEXT_JSON_PATH__"
 TELEMETRY_FACTS_MANIFEST_RLOC="__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__"
 TELEMETRY_FACTS_MANIFEST_PATH="__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"
 CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"
-dbg "context.json resolution inputs: override='$CONTEXT_JSON_OVERRIDE' path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC' manifest_path='$CONTEXT_MANIFEST_PATH' manifest_rloc='$CONTEXT_MANIFEST_RLOC'"
+dbg "resolving configured context.json and manifest inputs"
 CONTEXT_JSON=""
 CONTEXT_JSON_FROM_OVERRIDE=0
 CONTEXT_MANIFEST=""
@@ -571,7 +571,7 @@ elif [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
     CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_OVERRIDE")
     if [[ -n "$CONTEXT_JSON" ]]; then
         CONTEXT_JSON_FROM_OVERRIDE=1
-        dbg "context.json resolved via runtime override: '$CONTEXT_JSON'"
+        dbg "context.json resolved via runtime override"
     else
         log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     fi
@@ -579,20 +579,20 @@ fi
 if (( ${#RUNTIME_CONTEXT_REPOS[@]} == 0 && CONTEXT_JSON_FROM_OVERRIDE == 0 )); then
     CONTEXT_MANIFEST="$(resolve_artifact_path "$CONTEXT_MANIFEST_PATH")"
     if [[ -n "$CONTEXT_MANIFEST" ]]; then
-        dbg "context manifest resolved via direct path: '$CONTEXT_MANIFEST'"
+        dbg "context manifest resolved via direct path"
     elif [[ -n "$CONTEXT_MANIFEST_RLOC" ]]; then
         CONTEXT_MANIFEST="$(resolve_runfile "$CONTEXT_MANIFEST_RLOC")"
         if [[ -n "$CONTEXT_MANIFEST" ]]; then
-            dbg "context manifest resolved via runfiles: '$CONTEXT_MANIFEST'"
+            dbg "context manifest resolved via runfiles"
         fi
     fi
     load_context_manifest_entries "$CONTEXT_MANIFEST"
     if (( CONTEXT_REPO_COUNT > 0 )); then
         CONTEXT_JSON="${CONTEXT_REPO_FILES[0]}"
         if (( CONTEXT_REPO_COUNT == 1 )); then
-            dbg "context.json resolved from single bundled context: '$CONTEXT_JSON'"
+            dbg "context.json resolved from single bundled context"
         else
-            dbg "primary context.json resolved from bundled manifest: '$CONTEXT_JSON' (repos=${CONTEXT_REPO_KEYS[*]})"
+            dbg "primary context.json resolved from bundled manifest (repos=${CONTEXT_REPO_KEYS[*]})"
         fi
     fi
 fi
@@ -600,21 +600,25 @@ if [[ -z "$CONTEXT_JSON" ]]; then
     CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")
     if [[ -n "$CONTEXT_JSON" ]]; then
         # Direct artifact path is fastest and most deterministic when available.
-        dbg "context.json resolved via direct path: '$CONTEXT_JSON'"
+        dbg "context.json resolved via direct path"
     elif [[ -n "$CONTEXT_JSON_RLOC" ]]; then
         # Runfiles lookup supports launcher/platform variants and bzlmod naming.
         CONTEXT_JSON=$(resolve_runfile "$CONTEXT_JSON_RLOC")
         if [[ -z "$CONTEXT_JSON" ]]; then
             log "warning: context.json not found in runfiles; payloads will not be enriched"
         else
-            dbg "context.json resolved via runfiles: '$CONTEXT_JSON'"
+            dbg "context.json resolved via runfiles"
         fi
     else
         dbg "context.json not configured in data files; enrichment disabled"
     fi
 fi
 PRIMARY_CONTEXT_JSON="$CONTEXT_JSON"
-dbg "primary context.json: ${PRIMARY_CONTEXT_JSON:-<none>} (bundled_contexts=$CONTEXT_REPO_COUNT)"
+if [[ -n "$PRIMARY_CONTEXT_JSON" ]]; then
+    dbg "primary context.json available (bundled_contexts=$CONTEXT_REPO_COUNT)"
+else
+    dbg "primary context.json unavailable (bundled_contexts=$CONTEXT_REPO_COUNT)"
+fi
 
 dbg "telemetry facts manifest resolution inputs: path='$TELEMETRY_FACTS_MANIFEST_PATH' rloc='$TELEMETRY_FACTS_MANIFEST_RLOC'"
 TELEMETRY_FACTS_MANIFEST=$(resolve_artifact_path "$TELEMETRY_FACTS_MANIFEST_PATH")
@@ -2177,7 +2181,11 @@ dbg_headers() {
 JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 dbg "jq available: $JQ_AVAILABLE"
-dbg "primary context.json: ${PRIMARY_CONTEXT_JSON:-<none>}"
+if [[ -n "$PRIMARY_CONTEXT_JSON" ]]; then
+  dbg "primary context.json available"
+else
+  dbg "primary context.json unavailable"
+fi
 
 # CODEOWNERS state (initialized lazily on first enrichment attempt).
 CODEOWNERS_INITIALIZED=0
@@ -3973,7 +3981,7 @@ select_context_json_for_payload() {
     return 0
   fi
 
-  dbg "selected bundled context '$matched_context' for payload '$payload_file' via repo '$repo_key'"
+  dbg "selected bundled context for payload via repo '$repo_key'"
   echo "$matched_context"
 }
 
@@ -4014,7 +4022,7 @@ enrich_with_context() {
   local infile="$1"; local tmpfile="$2"
   local selected_ctx_file=""
   selected_ctx_file="$(select_context_json_for_payload "$infile")"
-  dbg "enrich_with_context: infile='$infile' outfile='$tmpfile' ctx='${selected_ctx_file:-<none>}' primary='${PRIMARY_CONTEXT_JSON:-<none>}' jq=$JQ_AVAILABLE"
+  dbg "enrich_with_context: jq=$JQ_AVAILABLE"
   if (( JQ_AVAILABLE == 0 )); then
     # No jq means no structural merge; forward original payload unchanged.
     cp "$infile" "$tmpfile"

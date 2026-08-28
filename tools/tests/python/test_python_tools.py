@@ -7341,16 +7341,44 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     self.assertIn("requires at least one --expected-target", result.stdout + result.stderr)
 
                 with self.subTest(runtime=runtime, case="valid-multi-service"):
+                    debug_env = os.environ.copy()
+                    debug_env["DD_TEST_OPTIMIZATION_DEBUG"] = "1"
                     result = subprocess.run(
                         [*command, "--expected-target", "//pkg:test.topt", *context_args, "--help"],
                         cwd=root,
+                        env=debug_env,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
                         timeout=30,
                         check=False,
                     )
-                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    output = result.stdout + result.stderr
+                    self.assertEqual(0, result.returncode, output)
+                    for context_path in context_paths:
+                        self.assertNotIn(str(context_path), output)
+
+                with self.subTest(runtime=runtime, case="duplicate-path-redacted"):
+                    duplicate_args = [
+                        "--context-entry",
+                        f"repo-b={context_paths[0]}",
+                        "--context-entry",
+                        f"repo-c={context_paths[0]}",
+                    ]
+                    result = subprocess.run(
+                        [*command, "--expected-target", "//pkg:test.topt", *duplicate_args, "--help"],
+                        cwd=root,
+                        env=debug_env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(2, result.returncode, output)
+                    self.assertIn("duplicate --context-entry path for repository 'repo-c'", output)
+                    self.assertNotIn(str(context_paths[0]), output)
 
                 with self.subTest(runtime=runtime, case="identity-mismatch"):
                     result = subprocess.run(
