@@ -421,7 +421,7 @@ scan_runtime_selection_args() {
 
         if [[ "$arg" == --expected-target* ]]; then
             validate_runtime_expected_target "$value"
-            for existing in "${RUNTIME_EXPECTED_TARGETS[@]}"; do
+            for existing in "${RUNTIME_EXPECTED_TARGETS[@]+"${RUNTIME_EXPECTED_TARGETS[@]}"}"; do
                 if [[ "$existing" == "$value" ]]; then
                     log "error: duplicate --expected-target '$value'"
                     exit 2
@@ -445,13 +445,13 @@ scan_runtime_selection_args() {
                 log "error: context entry for '$repo_key' is missing sibling telemetry_facts.json"
                 exit 2
             fi
-            for existing in "${RUNTIME_CONTEXT_REPOS[@]}"; do
+            for existing in "${RUNTIME_CONTEXT_REPOS[@]+"${RUNTIME_CONTEXT_REPOS[@]}"}"; do
                 if [[ "$existing" == "$repo_key" ]]; then
                     log "error: duplicate --context-entry repository '$repo_key'"
                     exit 2
                 fi
             done
-            for existing in "${RUNTIME_CONTEXT_FILES[@]}"; do
+            for existing in "${RUNTIME_CONTEXT_FILES[@]+"${RUNTIME_CONTEXT_FILES[@]}"}"; do
                 if [[ "$existing" == "$resolved" ]]; then
                     log "error: duplicate --context-entry path '$resolved'"
                     exit 2
@@ -4411,7 +4411,7 @@ resolve_telemetry_facts_sources() {
         fi
     fi
 
-    for resolved in "${RUNTIME_TELEMETRY_FACTS_FILES[@]}"; do
+    for resolved in "${RUNTIME_TELEMETRY_FACTS_FILES[@]+"${RUNTIME_TELEMETRY_FACTS_FILES[@]}"}"; do
         canonical=$(canonicalize_existing_file "$resolved")
         if [[ -n "$canonical" ]]; then
             printf '%s\n' "$canonical" >>"$tmp_sources"

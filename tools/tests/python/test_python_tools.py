@@ -105,7 +105,8 @@ def _load_module(name: str, rel_path: str) -> types.ModuleType:
 
 def _require_functional_bash(testcase: unittest.TestCase) -> str:
     """Return a usable Bash executable or skip the caller's test."""
-    bash = shutil.which("bash")
+    system_bash = Path("/bin/bash")
+    bash = str(system_bash) if system_bash.is_file() else shutil.which("bash")
     if bash is None:
         testcase.skipTest("bash is required for Bash runtime execution")
     result = subprocess.run(
