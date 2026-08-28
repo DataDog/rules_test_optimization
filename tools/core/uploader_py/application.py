@@ -423,6 +423,16 @@ def _run_uploader_with_lock(
                 logger.debug("BEP staging cleanup completed")
 
     assert outcome is not None
+    # The coordinator measures only worker preparation and delivery. Final
+    # invocation statistics must also include locking, BEP staging, discovery
+    # quiescence, resource loading, and staging cleanup.
+    outcome = CoordinatorOutcome(
+        replace(
+            outcome.report,
+            elapsed_seconds=max(0.0, clock() - started),
+        ),
+        outcome.initialization_warning_codes,
+    )
     report_context = _legacy_context(
         config,
         freshness_plan=freshness_plan,

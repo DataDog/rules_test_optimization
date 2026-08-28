@@ -181,6 +181,33 @@ class ApplicationTests(unittest.TestCase):
             )
             self.assertIn("task=file-000001", log_stream.getvalue())
 
+    def test_success_statistics_report_full_invocation_elapsed_time(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "bazel-testlogs" / "pkg" / "target" / "test.outputs"
+            _write_payload(
+                output,
+                "tests",
+                "events.json",
+                {"events": [{"content": {}}]},
+            )
+            config = self._config(root)
+            stream = StringIO()
+            clock = mock.Mock(side_effect=(100.0, 108.0, 110.0, 125.0))
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=StringIO()),
+                stream=stream,
+                clock=clock,
+            )
+
+            self.assertEqual(0, exit_code)
+            self.assertIn("elapsed=25.00s", stream.getvalue())
+            self.assertEqual(4, clock.call_count)
+
     def test_agentless_upload_without_payloads_does_not_require_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
