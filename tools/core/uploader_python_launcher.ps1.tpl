@@ -12,6 +12,8 @@ param(
 $ErrorActionPreference = "Stop"
 $script:LauncherPath = $MyInvocation.MyCommand.Path
 $script:LauncherDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:LauncherBase = [System.IO.Path]::GetFileNameWithoutExtension($script:LauncherPath)
+$script:BatchLauncherPath = Join-Path $script:LauncherDir "$script:LauncherBase.bat"
 
 function Resolve-UploaderRunfile {
     param(
@@ -42,7 +44,13 @@ function Resolve-UploaderRunfile {
     }
     [void]$logicalCandidates.Add("_main/$normalized")
 
-    $roots = @($env:RUNFILES_DIR, $env:TEST_SRCDIR, "$script:LauncherPath.runfiles")
+    $roots = @(
+        $env:RUNFILES_DIR,
+        $env:TEST_SRCDIR,
+        "$script:LauncherPath.runfiles",
+        "$script:BatchLauncherPath.runfiles",
+        (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles")
+    )
     foreach ($root in $roots) {
         if (-not $root -or -not (Test-Path -LiteralPath $root -PathType Container)) {
             continue
@@ -63,7 +71,11 @@ function Resolve-UploaderRunfile {
     $manifests = @(
         $env:RUNFILES_MANIFEST_FILE,
         "$script:LauncherPath.runfiles_manifest",
-        "$script:LauncherPath.runfiles\MANIFEST"
+        "$script:BatchLauncherPath.runfiles_manifest",
+        (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles_manifest"),
+        "$script:LauncherPath.runfiles\MANIFEST",
+        "$script:BatchLauncherPath.runfiles\MANIFEST",
+        (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles\MANIFEST")
     )
     foreach ($manifest in $manifests) {
         if (-not $manifest -or -not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
