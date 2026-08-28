@@ -1261,6 +1261,7 @@ def _stage_bep_artifacts(
     workspace: Path,
     staging_dir: Path,
     remote_artifacts: str,
+    selected_labels: set[str] | None = None,
     downloader: str = "",
     downloader_timeout_sec: float = 300.0,
 ) -> list[StagedBepArtifact]:
@@ -1287,6 +1288,8 @@ def _stage_bep_artifacts(
                 _fail(message)
             warn_once(message)
         for ref in refs:
+            if selected_labels is not None and ref.label not in selected_labels:
+                continue
             if ref.cached:
                 continue
             display_fetch_value = _display_artifact_reference(ref.fetch_value)
@@ -2884,12 +2887,19 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             staged=staged,
         )
         if staging_enabled and freshness is not None:
+            selected_labels = set(expected_targets) if expected_targets else None
             selected_bep_artifact_outputs = _selected_bep_artifact_outputs(
                 freshness,
                 workspace,
                 args.remote_artifacts,
             )
+            if selected_labels is not None:
+                selected_bep_artifact_outputs = {
+                    output for output in selected_bep_artifact_outputs if output[0] in selected_labels
+                }
             blocked_bep_artifact_labels = _blocked_bep_artifact_labels(freshness, args.remote_artifacts)
+            if selected_labels is not None:
+                blocked_bep_artifact_labels.intersection_update(selected_labels)
             _update_diagnostic_bep(
                 report,
                 freshness,
@@ -2902,6 +2912,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 workspace=workspace,
                 staging_dir=staging_base,
                 remote_artifacts=args.remote_artifacts,
+                selected_labels=selected_labels,
                 downloader=args.bep_artifact_downloader,
                 downloader_timeout_sec=args.bep_artifact_downloader_timeout_sec,
             )

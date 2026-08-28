@@ -2980,6 +2980,95 @@ $rows | ConvertTo-Json -Compress
 
             self.assertEqual(0, rc)
 
+    def test_doctor_expected_target_ignores_mixed_ordinary_bep_artifact(self) -> None:
+        """Validate mixed ordinary outputs are not staged for expected-target validation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            optimized = self._write_doctor_output(
+                root / "optimized-artifact",
+                "module",
+                "//pkg:target.topt",
+            )
+            ordinary = root / "ordinary-artifact" / "test.outputs"
+            ordinary.mkdir(parents=True)
+            (ordinary / "passthrough.txt").write_text("ordinary\n", encoding="utf-8")
+            config_path = self._write_doctor_config(root, ["//pkg:target.topt"])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {
+                            "testResult": {
+                                "label": "//pkg:target.topt",
+                                "run": 1,
+                                "shard": 1,
+                                "attempt": 1,
+                            },
+                        },
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": optimized.as_uri(),
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "pkg",
+                                        "target.topt",
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                    {
+                        "id": {
+                            "testResult": {
+                                "label": "//tools:ordinary",
+                                "run": 1,
+                                "shard": 1,
+                                "attempt": 1,
+                            },
+                        },
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": ordinary.as_uri(),
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "tools",
+                                        "ordinary",
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root)}, clear=False):
+                os.environ.pop("TESTLOGS_DIR", None)
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                ])
+
+            self.assertEqual(0, rc)
+
     def test_doctor_required_remote_disabled_fails_remote_only_freshness(self) -> None:
         """Validate disabling downloads does not authorize stale local fallback in required mode."""
         with tempfile.TemporaryDirectory() as tmp:
