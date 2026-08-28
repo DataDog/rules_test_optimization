@@ -96,6 +96,8 @@ class LauncherTests(unittest.TestCase):
             self.assertIn("summary: mode=dry-run", completed.stdout)
 
     def test_powershell_launcher_finds_batch_runfiles_manifest(self) -> None:
+        if os.name == "nt":
+            self.skipTest("covered by the generated uploader Windows CI smoke")
         powershell = (
             shutil.which("pwsh")
             or shutil.which("powershell.exe")
@@ -107,19 +109,12 @@ class LauncherTests(unittest.TestCase):
         main = _repo_file("tools/core/uploader_main.py")
         with tempfile.TemporaryDirectory(prefix="uploader launcher ") as raw_root:
             root = Path(raw_root)
-            if os.name == "nt":
-                fake_python = root / "fake python.cmd"
-                fake_python.write_text(
-                    "@echo off\r\necho summary: mode=dry-run\r\nexit /b 0\r\n",
-                    encoding="utf-8",
-                )
-            else:
-                fake_python = root / "fake python"
-                fake_python.write_text(
-                    "#!/usr/bin/env sh\necho 'summary: mode=dry-run'\n",
-                    encoding="utf-8",
-                )
-                fake_python.chmod(0o755)
+            fake_python = root / "fake python"
+            fake_python.write_text(
+                "#!/usr/bin/env sh\necho 'summary: mode=dry-run'\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
             launcher_dir = root / "generated files"
             launcher_dir.mkdir()
             testlogs = root / "empty testlogs"
@@ -198,6 +193,11 @@ class LauncherTests(unittest.TestCase):
                 self.assertNotIn("codeowners", text.lower())
                 self.assertNotIn("multipart", text.lower())
                 self.assertNotIn("payloads/tests", text.lower())
+                if relative.endswith(".ps1.tpl"):
+                    self.assertIn(
+                        "$script:BatchLauncherPath.runfiles_manifest",
+                        text,
+                    )
 
 
 if __name__ == "__main__":
