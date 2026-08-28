@@ -8,6 +8,27 @@
 set -euo pipefail
 
 launcher_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+launcher_path="$launcher_dir/$(basename "${BASH_SOURCE[0]}")"
+
+if [[ -z "${RUNFILES_MANIFEST_FILE:-}" || ! -f "$RUNFILES_MANIFEST_FILE" ]]; then
+  for manifest_candidate in \
+    "$launcher_path.runfiles_manifest" \
+    "$launcher_path.runfiles/MANIFEST"; do
+    if [[ -f "$manifest_candidate" ]]; then
+      RUNFILES_MANIFEST_FILE="$manifest_candidate"
+      export RUNFILES_MANIFEST_FILE
+      break
+    fi
+  done
+fi
+
+decode_runfiles_manifest_field() {
+  local decoded="$1"
+  decoded="${decoded//\\s/ }"
+  decoded="${decoded//\\n/$'\n'}"
+  decoded="${decoded//\\b/\\}"
+  printf '%s' "$decoded"
+}
 
 resolve_runfile() {
   local direct="$1"
@@ -36,7 +57,7 @@ resolve_runfile() {
   fi
   logical_candidates+=("_main/$normalized")
 
-  local roots=("${RUNFILES_DIR:-}" "${TEST_SRCDIR:-}" "${BASH_SOURCE[0]}.runfiles")
+  local roots=("${RUNFILES_DIR:-}" "${TEST_SRCDIR:-}" "$launcher_path.runfiles")
   for root in "${roots[@]}"; do
     [[ -n "$root" && -d "$root" ]] || continue
     for candidate in "${logical_candidates[@]}"; do
@@ -51,15 +72,22 @@ resolve_runfile() {
 
   local manifests=(
     "${RUNFILES_MANIFEST_FILE:-}"
-    "${BASH_SOURCE[0]}.runfiles_manifest"
-    "${BASH_SOURCE[0]}.runfiles/MANIFEST"
+    "$launcher_path.runfiles_manifest"
+    "$launcher_path.runfiles/MANIFEST"
   )
   for manifest in "${manifests[@]}"; do
     [[ -n "$manifest" && -f "$manifest" ]] || continue
     while IFS= read -r line || [[ -n "$line" ]]; do
-      [[ "$line" == *" "* ]] || continue
-      key="${line%% *}"
-      value="${line#* }"
+      if [[ "${line:0:1}" == " " ]]; then
+        line="${line:1}"
+        [[ "$line" == *" "* ]] || continue
+        key="$(decode_runfiles_manifest_field "${line%% *}")"
+        value="$(decode_runfiles_manifest_field "${line#* }")"
+      else
+        [[ "$line" == *" "* ]] || continue
+        key="${line%% *}"
+        value="${line#* }"
+      fi
       for candidate in "${logical_candidates[@]}"; do
         if [[ "$key" == "$candidate" || "$key" == */"$candidate" ]]; then
           [[ -f "$value" ]] || continue

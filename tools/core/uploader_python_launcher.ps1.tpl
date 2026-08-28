@@ -15,6 +15,27 @@ $script:LauncherDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:LauncherBase = [System.IO.Path]::GetFileNameWithoutExtension($script:LauncherPath)
 $script:BatchLauncherPath = Join-Path $script:LauncherDir "$script:LauncherBase.bat"
 
+foreach ($manifestCandidate in @(
+    $env:RUNFILES_MANIFEST_FILE,
+    "$script:LauncherPath.runfiles_manifest",
+    "$script:BatchLauncherPath.runfiles_manifest",
+    (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles_manifest"),
+    "$script:LauncherPath.runfiles\MANIFEST",
+    "$script:BatchLauncherPath.runfiles\MANIFEST",
+    (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles\MANIFEST")
+)) {
+    if ($manifestCandidate -and
+        (Test-Path -LiteralPath $manifestCandidate -PathType Leaf)) {
+        $env:RUNFILES_MANIFEST_FILE = (Resolve-Path -LiteralPath $manifestCandidate).Path
+        break
+    }
+}
+
+function ConvertFrom-RunfilesManifestField {
+    param([string]$Value)
+    return $Value.Replace("\s", " ").Replace("\n", "`n").Replace("\b", "\")
+}
+
 function Resolve-UploaderRunfile {
     param(
         [string]$DirectPath,
@@ -82,10 +103,21 @@ function Resolve-UploaderRunfile {
             continue
         }
         foreach ($line in [System.IO.File]::ReadLines($manifest)) {
-            $separator = $line.IndexOf(" ")
-            if ($separator -le 0) { continue }
-            $key = $line.Substring(0, $separator).Replace("\", "/")
-            $value = $line.Substring($separator + 1)
+            if ($line.StartsWith(" ")) {
+                $encoded = $line.Substring(1)
+                $separator = $encoded.IndexOf(" ")
+                if ($separator -le 0) { continue }
+                $key = ConvertFrom-RunfilesManifestField `
+                    $encoded.Substring(0, $separator)
+                $value = ConvertFrom-RunfilesManifestField `
+                    $encoded.Substring($separator + 1)
+            } else {
+                $separator = $line.IndexOf(" ")
+                if ($separator -le 0) { continue }
+                $key = $line.Substring(0, $separator)
+                $value = $line.Substring($separator + 1)
+            }
+            $key = $key.Replace("\", "/")
             foreach ($candidate in $logicalCandidates) {
                 if (($key -eq $candidate -or $key.EndsWith("/$candidate")) -and
                     (Test-Path -LiteralPath $value -PathType Leaf)) {

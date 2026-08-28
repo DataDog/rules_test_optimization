@@ -63,6 +63,16 @@ def _manifest_line(line: str, *, first_line: bool) -> tuple[str, str] | None:
     normalized = line.rstrip("\r\n")
     if first_line:
         normalized = normalized.lstrip("\ufeff")
+    if normalized.startswith(" "):
+        encoded = normalized[1:]
+        separator_index = encoded.find(" ")
+        if separator_index <= 0:
+            return None
+        key = _decode_manifest_field(encoded[:separator_index])
+        value = _decode_manifest_field(encoded[separator_index + 1 :])
+        if not value:
+            return None
+        return key.replace("\\", "/"), value
     space_index = normalized.find(" ")
     tab_index = normalized.find("\t")
     indexes = [index for index in (space_index, tab_index) if index >= 0]
@@ -76,6 +86,11 @@ def _manifest_line(line: str, *, first_line: bool) -> tuple[str, str] | None:
     if not value:
         return None
     return key.replace("\\", "/"), value
+
+
+def _decode_manifest_field(value: str) -> str:
+    """Decode Bazel's escaped runfiles manifest field representation."""
+    return value.replace(r"\s", " ").replace(r"\n", "\n").replace(r"\b", "\\")
 
 
 def _load_manifest(path: Path | None) -> Mapping[str, Path]:

@@ -54,7 +54,7 @@ class LauncherTests(unittest.TestCase):
             rendered = template.read_text(encoding="utf-8")
             substitutions = {
                 "PYTHON_MAIN_PATH": "missing/direct/uploader_main.py",
-                "PYTHON_MAIN_RLOC": "repo/tools/core/uploader_main.py",
+                "PYTHON_MAIN_RLOC": "repo/tools/core/uploader main.py",
                 "PYTHON_CONFIG_PATH": "missing/direct/config.json",
                 "PYTHON_CONFIG_RLOC": "repo/generated/config.json",
                 "PYTHON_CONFIG_NAME": config.name,
@@ -64,15 +64,14 @@ class LauncherTests(unittest.TestCase):
             self.assertNotIn("__DDTPL_", rendered)
             launcher.write_text(rendered, encoding="utf-8")
             launcher.chmod(0o755)
-            manifest = root / "MANIFEST"
+            manifest = Path(f"{launcher}.runfiles_manifest")
             manifest.write_text(
-                f"repo/tools/core/uploader_main.py {main}\n",
+                f" repo/tools/core/uploader\\smain.py {main}\n",
                 encoding="utf-8",
             )
             environment = {
                 "PATH": os.environ.get("PATH", ""),
                 "DD_TEST_OPTIMIZATION_PYTHON": sys.executable,
-                "RUNFILES_MANIFEST_FILE": str(manifest),
                 "BUILD_WORKSPACE_DIRECTORY": str(root),
                 "TESTLOGS_DIR": str(testlogs),
             }
@@ -80,6 +79,7 @@ class LauncherTests(unittest.TestCase):
             completed = subprocess.run(
                 [
                     str(launcher),
+                    "--debug",
                     "--dry-run",
                     "--allow-cached-payload-uploads",
                 ],
@@ -94,6 +94,7 @@ class LauncherTests(unittest.TestCase):
 
             self.assertEqual(0, completed.returncode, completed.stderr)
             self.assertIn("summary: mode=dry-run", completed.stdout)
+            self.assertIn(f"manifest={manifest.resolve()}", completed.stderr)
 
     def test_powershell_launcher_finds_batch_runfiles_manifest(self) -> None:
         if os.name == "nt":
@@ -111,7 +112,7 @@ class LauncherTests(unittest.TestCase):
             root = Path(raw_root)
             fake_python = root / "fake python"
             fake_python.write_text(
-                "#!/usr/bin/env sh\necho 'summary: mode=dry-run'\n",
+                "#!/usr/bin/env sh\nprintf '%s\\n' \"$RUNFILES_MANIFEST_FILE\"\n",
                 encoding="utf-8",
             )
             fake_python.chmod(0o755)
@@ -144,8 +145,15 @@ class LauncherTests(unittest.TestCase):
             self.assertNotIn("__DDTPL_", rendered)
             launcher.write_text(rendered, encoding="utf-8")
             manifest = launcher_dir / "uploader.python.bat.runfiles_manifest"
+            manifest_main = root / "runtime files" / "uploader main.py"
+            manifest_main.parent.mkdir()
+            manifest_main.write_bytes(main.read_bytes())
+            encoded_main = (
+                str(manifest_main).replace("\\", r"\b").replace(" ", r"\s")
+            )
             manifest.write_text(
-                f"repo/tools/core/uploader_main.py {main}\n",
+                " repo/tools/core/uploader_main.py "
+                f"{encoded_main}\n",
                 encoding="utf-8",
             )
             environment = dict(os.environ)
@@ -179,7 +187,7 @@ class LauncherTests(unittest.TestCase):
             )
 
             self.assertEqual(0, completed.returncode, completed.stderr)
-            self.assertIn("summary: mode=dry-run", completed.stdout)
+            self.assertIn(str(manifest.resolve()), completed.stdout)
 
     def test_launchers_contain_resolution_only_not_uploader_behavior(self) -> None:
         for relative in (
@@ -198,6 +206,9 @@ class LauncherTests(unittest.TestCase):
                         "$script:BatchLauncherPath.runfiles_manifest",
                         text,
                     )
+                    self.assertIn("$env:RUNFILES_MANIFEST_FILE =", text)
+                else:
+                    self.assertIn("export RUNFILES_MANIFEST_FILE", text)
 
 
 if __name__ == "__main__":

@@ -644,6 +644,30 @@ class UploaderRunfilesTests(unittest.TestCase):
             self.assertEqual(exact.resolve(), resolver.resolve_file("pkg/context.json"))
             self.assertEqual(suffix.resolve(), resolver.resolve_file("pkg/facts.json"))
 
+    def test_manifest_decodes_bazel_escaped_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            expected = root / "actual files" / "context.json"
+            expected.parent.mkdir()
+            expected.write_text("{}", encoding="utf-8")
+            encoded_path = (
+                str(expected).replace("\\", r"\b").replace(" ", r"\s")
+            )
+            manifest = root / "MANIFEST"
+            manifest.write_text(
+                f" workspace/pkg\\sname/context.json {encoded_path}\n",
+                encoding="utf-8",
+            )
+            resolver = RunfilesResolver.from_environment(
+                environ={"RUNFILES_MANIFEST_FILE": str(manifest)},
+                cwd=root,
+            )
+
+            self.assertEqual(
+                expected.resolve(),
+                resolver.resolve_file("workspace/pkg name/context.json"),
+            )
+
     def test_short_path_normalization_and_suspicious_labels(self) -> None:
         self.assertEqual(
             (
