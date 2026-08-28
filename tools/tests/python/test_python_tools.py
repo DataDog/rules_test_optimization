@@ -6352,6 +6352,59 @@ class LintUploaderTemplatesTests(unittest.TestCase):
                 "exit /b %ERRORLEVEL%\n"
             )
 
+    def test_main_lints_legacy_runtimes_and_python_launchers(self) -> None:
+        """Keep both rollout implementations covered by the lint entrypoint."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            core = repo / "tools" / "core"
+            core.mkdir(parents=True)
+            for name in (
+                "uploader_bash_runtime.sh.tpl",
+                "uploader_python_launcher.sh.tpl",
+            ):
+                (core / name).write_text(
+                    "#!/usr/bin/env bash\necho __DDTPL_VALUE__\n",
+                    encoding="utf-8",
+                )
+            for name in (
+                "uploader_powershell_runtime.ps1.tpl",
+                "uploader_python_launcher.ps1.tpl",
+            ):
+                (core / name).write_text(
+                    "Write-Output __DDTPL_VALUE__\n",
+                    encoding="utf-8",
+                )
+            (core / "uploader_batch_runtime.bat.tpl").write_text(
+                "@echo off\n"
+                "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\" %*\n"
+                "exit /b %ERRORLEVEL%\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(
+                self.mod,
+                "_repo_root",
+                return_value=repo,
+            ), mock.patch.object(self.mod, "_run") as run, mock.patch.object(
+                sys,
+                "argv",
+                ["lint_uploader_templates.py"],
+            ):
+                self.assertEqual(0, self.mod.main())
+
+            shellcheck_calls = [
+                call
+                for call in run.call_args_list
+                if call.args[0][0] == "shellcheck"
+            ]
+            powershell_calls = [
+                call
+                for call in run.call_args_list
+                if call.args[0][0] == "pwsh"
+            ]
+            self.assertEqual(2, len(shellcheck_calls))
+            self.assertEqual(2, len(powershell_calls))
+
 
 class RuntimeTemplateParityTests(unittest.TestCase):
     """Test case group covering RuntimeTemplateParityTests behaviors."""
@@ -6404,6 +6457,23 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         if match is None:
             raise AssertionError("unable to locate PowerShell fingerprint alphabet")
         return match.group(1).replace("''", "'")
+
+    @staticmethod
+    def _extract_python_fingerprint_alphabet(python_text: str) -> str:
+        """Extract the Python runtime alphabet without importing uploader code."""
+        tree = ast.parse(python_text)
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if any(
+                isinstance(target, ast.Name)
+                and target.id == "FINGERPRINT_ALPHABET"
+                for target in node.targets
+            ):
+                value = ast.literal_eval(node.value)
+                if isinstance(value, str):
+                    return value
+        raise AssertionError("unable to locate Python fingerprint alphabet")
 
     @staticmethod
     def _write_bep_staging_smoke_fixture(root: Path) -> Path:
@@ -7426,10 +7496,14 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
             encoding="utf-8"
         )
+        python_text = _runfile("tools/core/uploader_py/credentials.py").read_text(
+            encoding="utf-8"
+        )
 
         expected = self._extract_starlark_fingerprint_alphabet(sync_text)
         self.assertEqual(expected, self._extract_bash_fingerprint_alphabet(bash_text))
         self.assertEqual(expected, self._extract_powershell_fingerprint_alphabet(powershell_text))
+        self.assertEqual(expected, self._extract_python_fingerprint_alphabet(python_text))
 
     def test_runtime_unknown_char_bucketing_matches_sync(self) -> None:
         """Validate runtime unknown char bucketing matches sync behavior."""
@@ -7437,8 +7511,12 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
             encoding="utf-8"
         )
+        python_text = _runfile("tools/core/uploader_py/credentials.py").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("idx=$((alpha_len + (i % 7)))", bash_text)
         self.assertIn("$idx = $alphabet.Length + ($i % 7)", powershell_text)
+        self.assertIn("alphabet_length + (index % 7)", python_text)
 
     def test_bash_jq_avoids_reserved_label_variable(self) -> None:
         """Validate jq programs remain compatible with versions reserving `label`."""
@@ -7883,7 +7961,16 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("_doctor_runtime", rule_text)
         self.assertIn("bep_artifact_stage_helper.py", rule_text)
         self.assertIn("test_optimization_doctor.py", rule_text)
-        self.assertIn("files = depset([bash_file, ps_file, bat_file])", rule_text)
+        self.assertIn("files = depset([", rule_text)
+        for output_name in (
+            "bash_file",
+            "ps_file",
+            "bat_file",
+            "python_bash_file",
+            "python_ps_file",
+            "python_bat_file",
+        ):
+            self.assertIn(output_name, rule_text)
         self.assertIn("--artifact-source=local|bep|auto", rule_text)
         self.assertIn("DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE", rule_text)
         self.assertIn("--remote-artifacts=disabled|download|required", rule_text)

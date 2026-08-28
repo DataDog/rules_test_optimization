@@ -11,3 +11,12 @@ dd_payload_uploader(
     data = [],
     tags = ["manual"],
 )
+
+dd_payload_uploader(
+    name = "generated_python_uploader",
+    data = [],
+    max_wait_sec = 0,
+    quiescent_sec = 0,
+    tags = ["manual"],
+    use_python_uploader = True,
+)

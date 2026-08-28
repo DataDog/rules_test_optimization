@@ -126,6 +126,18 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/... --test_output=errors
 
+      - name: Smoke Python uploader launcher (opt-in dry-run)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          ./bazelw run \
+            //tools/tests/python/fixtures/generated_uploader:generated_python_uploader \
+            -- \
+            --dry-run \
+            --allow-cached-payload-uploads \
+            --workers=3 \
+            --debug
+
       - name: Build examples
         timeout-minutes: 20
         shell: bash
@@ -237,6 +249,18 @@ jobs:
       - name: Run Bazel tests
         shell: bash
         run: ./bazelw test //tools/... --test_output=errors
+
+      - name: Smoke Python uploader launcher (opt-in dry-run)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          ./bazelw run \
+            //tools/tests/python/fixtures/generated_uploader:generated_python_uploader \
+            -- \
+            --dry-run \
+            --allow-cached-payload-uploads \
+            --workers=3 \
+            --debug
 
       - name: Run Bazel tests (go companion module)
         shell: bash

@@ -27,7 +27,21 @@ exports_files(
         "uploader_bash_runtime.sh.tpl",
         "uploader_powershell_runtime.ps1.tpl",
         "uploader_batch_runtime.bat.tpl",
+        "uploader_python_launcher.sh.tpl",
+        "uploader_python_launcher.ps1.tpl",
         "validate_payload_schema.py",
     ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "uploader_python_runtime",
+    srcs = [
+        "uploader_main.py",
+        "validate_payload_schema.py",
+    ] + glob([
+        "topt_runtime/*.py",
+        "uploader_py/*.py",
+    ]),
     visibility = ["//visibility:public"],
 )

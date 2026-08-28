@@ -22,7 +22,7 @@ import json
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 DEFAULT_MAX_ERRORS = 20
 _DEBUG_TRUTHY = {"1", "true", "yes", "on"}
@@ -36,6 +36,19 @@ _UNSUPPORTED_KEYWORDS = {
     "contains",
 }
 _UNSUPPORTED_POLICY_ENV = "DD_TEST_OPTIMIZATION_SCHEMA_UNSUPPORTED_KEYWORDS"
+
+
+class ValidationResult(NamedTuple):
+    """Structured result returned by the importable validation API."""
+
+    errors: Tuple[str, ...]
+    warnings: Tuple[str, ...]
+    stats: Dict[str, int]
+
+    @property
+    def valid(self) -> bool:
+        """Whether the payload satisfies the supported schema subset."""
+        return not self.errors
 
 
 def _new_stats() -> Dict[str, int]:
@@ -230,6 +243,7 @@ def _validate(
     stats: Optional[Dict[str, int]] = None,
     warned_unsupported: Optional[Set[str]] = None,
     unsupported_policy: str = "error",
+    warning_output: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Internal helper for validate behavior."""
     if stats is None:
@@ -251,10 +265,14 @@ def _validate(
                 )
                 return
             if keyword not in warned_unsupported:
-                print(
-                    f"warning: unsupported JSON Schema keyword '{keyword}' at {path} is ignored",
-                    file=sys.stderr,
+                warning = (
+                    f"warning: unsupported JSON Schema keyword '{keyword}' "
+                    f"at {path} is ignored"
                 )
+                if warning_output is None:
+                    print(warning, file=sys.stderr)
+                else:
+                    warning_output(warning)
                 warned_unsupported.add(keyword)
 
     if "$ref" in schema:
@@ -263,11 +281,11 @@ def _validate(
         except ValueError as exc:
             errors.append(f"{path}: {exc}")
             return
-        _validate(value, ref_schema, root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy)
+        _validate(value, ref_schema, root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
         return
 
     for subschema in schema.get("allOf", []):
-        _validate(value, subschema, root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy)
+        _validate(value, subschema, root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
         if len(errors) >= max_errors:
             return
 
@@ -275,7 +293,7 @@ def _validate(
         _stat_inc(stats, "anyof")
         for subschema in schema["anyOf"]:
             sub_errors: List[str] = []
-            _validate(value, subschema, root, path, sub_errors, max_errors, stats, warned_unsupported, unsupported_policy)
+            _validate(value, subschema, root, path, sub_errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
             if not sub_errors:
                 _stat_inc(stats, "anyof_matched")
                 break
@@ -287,15 +305,15 @@ def _validate(
     if "if" in schema:
         _stat_inc(stats, "if")
         cond_errors: List[str] = []
-        _validate(value, schema["if"], root, path, cond_errors, max_errors, stats, warned_unsupported, unsupported_policy)
+        _validate(value, schema["if"], root, path, cond_errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
         if not cond_errors:
             if "then" in schema:
                 _stat_inc(stats, "then")
-                _validate(value, schema["then"], root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                _validate(value, schema["then"], root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
         else:
             if "else" in schema:
                 _stat_inc(stats, "else")
-                _validate(value, schema["else"], root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                _validate(value, schema["else"], root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
 
     if "type" in schema:
         _stat_inc(stats, "type_checks")
@@ -352,33 +370,69 @@ def _validate(
             matched = False
             if key in props:
                 matched = True
-                _validate(val, props[key], root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                _validate(val, props[key], root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
             for regex, subschema in patterns:
                 if regex.search(key):
                     matched = True
-                    _validate(val, subschema, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                    _validate(val, subschema, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
             if not matched:
                 addl = schema.get("additionalProperties", True)
                 if addl is False:
                     errors.append(f"{path}: additional property '{key}' not allowed")
                 elif isinstance(addl, dict):
-                    _validate(val, addl, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                    _validate(val, addl, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
 
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
             for idx, item in enumerate(value):
-                _validate(item, items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                _validate(item, items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
         elif isinstance(items, list):
             for idx, item in enumerate(value):
                 if idx < len(items):
-                    _validate(item, items[idx], root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                    _validate(item, items[idx], root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
                 else:
                     additional_items = schema.get("additionalItems", True)
                     if additional_items is False:
                         errors.append(f"{path}[{idx}]: additional item not allowed")
                     elif isinstance(additional_items, dict):
-                        _validate(item, additional_items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy)
+                        _validate(item, additional_items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+
+
+def validate_payload(
+    payload: Any,
+    schema: Dict[str, Any],
+    *,
+    max_errors: int = DEFAULT_MAX_ERRORS,
+    unsupported_policy: str = "error",
+) -> ValidationResult:
+    """Validate an already-decoded payload without process-global state.
+
+    The schema is read-only during validation, so one loaded instance can be
+    shared safely by independent uploader threads. Errors, warnings, and stats
+    belong exclusively to this call.
+    """
+    if max_errors <= 0:
+        raise ValueError("max_errors must be > 0")
+    if unsupported_policy not in {"error", "warn"}:
+        raise ValueError("unsupported_policy must be 'error' or 'warn'")
+
+    errors: List[str] = []
+    warnings: List[str] = []
+    stats = _new_stats()
+    _validate(
+        payload,
+        schema,
+        schema,
+        "$",
+        errors,
+        max_errors,
+        stats,
+        set(),
+        unsupported_policy,
+        warnings.append,
+    )
+    return ValidationResult(tuple(errors), tuple(warnings), dict(stats))
 
 
 def main() -> int:
@@ -455,12 +509,17 @@ def main() -> int:
         if sample:
             _debug(f"payload key sample: {sample}", debug)
 
-    errors: List[str] = []
-    stats = _new_stats()
-    warned_unsupported: Set[str] = set()
     _debug("validation start", debug)
-    _validate(payload, schema, schema, "$", errors, max_errors, stats, warned_unsupported, unsupported_policy)
-    _STATS = dict(stats)
+    result = validate_payload(
+        payload,
+        schema,
+        max_errors=max_errors,
+        unsupported_policy=unsupported_policy,
+    )
+    errors = list(result.errors)
+    for warning in result.warnings:
+        print(warning, file=sys.stderr)
+    _STATS = dict(result.stats)
 
     if errors:
         print("schema validation failed:", file=sys.stderr)

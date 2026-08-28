@@ -86,20 +86,20 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = _repo_root()
-    bash_tpl = repo / "tools/core/uploader_bash_runtime.sh.tpl"
-    ps_tpl = repo / "tools/core/uploader_powershell_runtime.ps1.tpl"
+    bash_templates = (
+        repo / "tools/core/uploader_bash_runtime.sh.tpl",
+        repo / "tools/core/uploader_python_launcher.sh.tpl",
+    )
+    powershell_templates = (
+        repo / "tools/core/uploader_powershell_runtime.ps1.tpl",
+        repo / "tools/core/uploader_python_launcher.ps1.tpl",
+    )
     batch_tpl = repo / "tools/core/uploader_batch_runtime.bat.tpl"
-    bash_template = _normalize_bash_template_for_lint(bash_tpl.read_text(encoding="utf-8"))
-    ps_template = _normalize_powershell_template_for_lint(ps_tpl.read_text(encoding="utf-8"))
     batch_template = batch_tpl.read_text(encoding="utf-8")
 
     with tempfile.TemporaryDirectory(prefix="uploader_template_lint.") as tmp:
         tmp_dir = Path(tmp)
-        bash_file = tmp_dir / "uploader_template.sh"
-        ps_file = tmp_dir / "uploader_template.ps1"
         ps_parse_file = tmp_dir / "parse_template.ps1"
-        bash_file.write_text(bash_template, encoding="utf-8")
-        ps_file.write_text(ps_template, encoding="utf-8")
         ps_parse_file.write_text(
             (
                 "param([string]$TemplatePath)\n"
@@ -115,21 +115,37 @@ def main() -> int:
         )
 
         if not args.skip_shellcheck:
-            _run(["shellcheck", "--severity=error", str(bash_file)], repo)
+            for index, template_path in enumerate(bash_templates):
+                bash_file = tmp_dir / f"uploader_template_{index}.sh"
+                bash_file.write_text(
+                    _normalize_bash_template_for_lint(
+                        template_path.read_text(encoding="utf-8")
+                    ),
+                    encoding="utf-8",
+                )
+                _run(["shellcheck", "--severity=error", str(bash_file)], repo)
 
         if not args.skip_powershell_parse:
-            _run(
-                [
-                    "pwsh",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-File",
-                    str(ps_parse_file),
-                    "-TemplatePath",
-                    str(ps_file),
-                ],
-                repo,
-            )
+            for index, template_path in enumerate(powershell_templates):
+                ps_file = tmp_dir / f"uploader_template_{index}.ps1"
+                ps_file.write_text(
+                    _normalize_powershell_template_for_lint(
+                        template_path.read_text(encoding="utf-8")
+                    ),
+                    encoding="utf-8",
+                )
+                _run(
+                    [
+                        "pwsh",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-File",
+                        str(ps_parse_file),
+                        "-TemplatePath",
+                        str(ps_file),
+                    ],
+                    repo,
+                )
     _lint_batch_template(batch_template)
 
     print("uploader template lint: ok")

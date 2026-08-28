@@ -1,0 +1,377 @@
+#!/usr/bin/env python3
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+"""Whole Python uploader application tests without backend access."""
+
+from __future__ import annotations
+
+from io import StringIO
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+def _runfile(rel_path: str) -> Path:
+    workspace = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
+    test_srcdir = os.environ.get("TEST_SRCDIR", "")
+    test_workspace = os.environ.get("TEST_WORKSPACE", "")
+    candidates = []
+    if test_srcdir and test_workspace:
+        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
+    if test_srcdir:
+        candidates.append(Path(test_srcdir) / rel_path)
+    if workspace:
+        candidates.append(Path(workspace) / rel_path)
+    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
+        if (parent / "MODULE.bazel").exists() or (parent / ".git").exists():
+            candidates.append(parent / rel_path)
+            break
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
+    if manifest_path and Path(manifest_path).is_file():
+        keys = {rel_path, f"{test_workspace}/{rel_path}"}
+        with Path(manifest_path).open("r", encoding="utf-8") as handle:
+            for line in handle:
+                key, separator, value = line.rstrip("\n").partition(" ")
+                if separator and key in keys:
+                    return Path(value)
+    raise FileNotFoundError(f"runfile not found: {rel_path}")
+
+
+CORE_DIR = _runfile("tools/core/uploader_main.py").parent
+if str(CORE_DIR) not in sys.path:
+    sys.path.insert(0, str(CORE_DIR))
+
+from topt_runtime.runfiles import RunfilesResolver  # noqa: E402
+from uploader_py.application import run_uploader  # noqa: E402
+from uploader_py.coordinator import CoordinatorOutcome  # noqa: E402
+from uploader_py.config import parse_uploader_config  # noqa: E402
+from uploader_py.endpoints import build_endpoints  # noqa: E402
+from uploader_py.freshness import FreshnessError  # noqa: E402
+from uploader_py.logging_utils import configure_logging  # noqa: E402
+from uploader_py.reporting import AggregateReport  # noqa: E402
+
+
+def _write_payload(output: Path, kind: str, name: str, body: object) -> Path:
+    path = output / "payloads" / kind / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
+class ApplicationTests(unittest.TestCase):
+    def _config(
+        self,
+        root: Path,
+        *,
+        fail_on_error: bool = False,
+        extra_arguments: tuple[str, ...] = (),
+        extra_environment: dict[str, str] | None = None,
+    ):
+        config_path = root / "uploader-config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "quiescent_sec": 0,
+                    "max_wait_sec": 0,
+                    "fail_on_error": fail_on_error,
+                    "workers": 3,
+                    "rules_version": "rules-test",
+                    "uploader_version": "uploader-test",
+                    "workspace_name": "workspace",
+                    "doctor_runtime_path": str(
+                        _runfile("tools/core/test_optimization_doctor.py")
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        environment = {
+            "BUILD_WORKSPACE_DIRECTORY": str(root),
+            "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+        }
+        environment.update(extra_environment or {})
+        return parse_uploader_config(
+            [
+                "--config",
+                str(config_path),
+                "--dry-run",
+                "--allow-cached-payload-uploads",
+                *extra_arguments,
+            ],
+            environ=environment,
+            cwd=root,
+        )
+
+    def test_dry_run_prepares_all_types_prints_stats_and_writes_schema_v1(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "bazel-testlogs" / "pkg" / "target" / "test.outputs"
+            sources = (
+                _write_payload(
+                    output,
+                    "tests",
+                    "events.json",
+                    {"events": [{"content": {}}]},
+                ),
+                _write_payload(
+                    output,
+                    "coverage",
+                    "coverage.json",
+                    {"files": []},
+                ),
+                _write_payload(
+                    output,
+                    "telemetry",
+                    "telemetry.json",
+                    {
+                        "api_version": "v2",
+                        "request_type": "app-started",
+                        "runtime_id": "runtime",
+                        "application": {
+                            "service_name": "service",
+                            "language_name": "python",
+                        },
+                    },
+                ),
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                extra_arguments=(f"--report-json={report_path}",),
+            )
+            stream = StringIO()
+            log_stream = StringIO()
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=True, stream=log_stream),
+                stream=stream,
+            )
+
+            self.assertEqual(0, exit_code)
+            self.assertTrue(all(source.is_file() for source in sources))
+            self.assertIn("files: discovered=3", stream.getvalue())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(1, report["schema_version"])
+            self.assertEqual(3, report["files"]["succeeded"])
+            self.assertEqual(3, report["requests"]["planned"])
+            self.assertEqual(0, report["requests"]["attempted"])
+            self.assertEqual("upload_skipped_dry_run", report["result"]["reason_code"])
+            self.assertIn("task=file-000001", log_stream.getvalue())
+
+    def test_fail_on_error_reports_tests_without_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            testlogs = root / "bazel-testlogs"
+            marker = testlogs / "pkg" / "target" / "test.log"
+            marker.parent.mkdir(parents=True)
+            marker.write_text("ran", encoding="utf-8")
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                fail_on_error=True,
+                extra_arguments=(f"--report-json={report_path}",),
+            )
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=StringIO()),
+                stream=StringIO(),
+            )
+
+            self.assertEqual(1, exit_code)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual("tests_ran_without_payloads", report["result"]["reason_code"])
+            self.assertEqual(0, report["files"]["processed"])
+
+    def test_interrupted_worker_outcome_still_prints_and_writes_final_report(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "bazel-testlogs" / "pkg" / "target" / "test.outputs"
+            source = _write_payload(
+                output,
+                "tests",
+                "events.json",
+                {"events": [{"content": {}}]},
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                extra_arguments=(f"--report-json={report_path}",),
+            )
+            stream = StringIO()
+
+            def interrupted_outcome(discovery, *, settings, **_kwargs):
+                report = AggregateReport.create(
+                    dry_run=settings.dry_run,
+                    exit_code=130,
+                    configured_workers=settings.workers,
+                    worker_threads=1,
+                    peak_active_workers=1,
+                    elapsed_seconds=0.1,
+                    discovered_by_type=discovery.counts(),
+                    results=(),
+                    cancelled=len(discovery.tasks),
+                    initialization_warning_codes=("invocation_interrupted",),
+                )
+                return CoordinatorOutcome(report, report.initialization_warning_codes)
+
+            with mock.patch(
+                "uploader_py.application.execute_discovery",
+                side_effect=interrupted_outcome,
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=stream,
+                )
+
+            self.assertEqual(130, exit_code)
+            self.assertTrue(source.exists())
+            self.assertIn("exit_code=130", stream.getvalue())
+            self.assertIn("cancelled=1", stream.getvalue())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual("interrupted", report["result"]["reason_code"])
+            self.assertEqual(1, report["files"]["cancelled"])
+
+    def test_staging_cleanup_failure_preserves_completed_worker_statistics(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "bazel-testlogs" / "pkg" / "target" / "test.outputs"
+            _write_payload(
+                output,
+                "tests",
+                "events.json",
+                {"events": [{"content": {}}]},
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                extra_arguments=(f"--report-json={report_path}",),
+            )
+            from uploader_py import application
+
+            real_prepare = application.prepare_freshness
+
+            def preparation_with_failed_cleanup(*args, **kwargs):
+                prepared = real_prepare(*args, **kwargs)
+                return mock.Mock(
+                    plan=prepared.plan,
+                    scan_roots=prepared.scan_roots,
+                    staged_roots=prepared.staged_roots,
+                    cleanup=mock.Mock(
+                        side_effect=FreshnessError("simulated staging cleanup failure")
+                    ),
+                )
+
+            with mock.patch(
+                "uploader_py.application.prepare_freshness",
+                side_effect=preparation_with_failed_cleanup,
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=StringIO(),
+                )
+
+            self.assertEqual(2, exit_code)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(1, report["files"]["processed"])
+            self.assertEqual(1, report["files"]["succeeded"])
+            self.assertEqual(1, report["requests"]["planned"])
+            self.assertEqual("staging_cleanup_failed", report["result"]["reason_code"])
+            self.assertEqual(1, report["warnings"]["staging_cleanup_failed"])
+
+    def test_workspace_lock_is_held_until_final_report_is_emitted(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            (root / "bazel-testlogs").mkdir()
+            config = self._config(root)
+            events: list[str] = []
+            locks = []
+
+            class RecordingLock:
+                def __init__(self, workspace: Path) -> None:
+                    self.workspace = workspace
+                    self.acquired = False
+                    locks.append(self)
+
+                def acquire(self):
+                    self.acquired = True
+                    events.append("acquire")
+                    return self
+
+                def release(self) -> None:
+                    events.append("release")
+                    self.acquired = False
+
+            def record_report(*_args, **_kwargs) -> None:
+                self.assertTrue(locks[0].acquired)
+                events.append("report")
+
+            with mock.patch(
+                "uploader_py.application.WorkspaceLock",
+                RecordingLock,
+            ), mock.patch(
+                "uploader_py.application.emit_outcome",
+                side_effect=record_report,
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=StringIO(),
+                )
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual(["acquire", "report", "release"], events)
+
+            events.clear()
+
+            def fail_report(*_args, **_kwargs) -> None:
+                self.assertTrue(locks[-1].acquired)
+                events.append("report")
+                raise RuntimeError("report stream failed")
+
+            with mock.patch(
+                "uploader_py.application.WorkspaceLock",
+                RecordingLock,
+            ), mock.patch(
+                "uploader_py.application.emit_outcome",
+                side_effect=fail_report,
+            ), self.assertRaisesRegex(RuntimeError, "report stream failed"):
+                run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=StringIO(),
+                )
+
+            self.assertFalse(locks[-1].acquired)
+            self.assertEqual(["acquire", "report", "release"], events)
+
+
+if __name__ == "__main__":
+    unittest.main()

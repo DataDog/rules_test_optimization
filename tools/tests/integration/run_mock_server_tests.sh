@@ -295,6 +295,12 @@ dd_payload_uploader(
 )
 
 dd_payload_uploader(
+    name = "dd_upload_payloads_python",
+    use_python_uploader = True,
+    workers = 3,
+)
+
+dd_payload_uploader(
     name = "dd_upload_payloads_with_context",
     data = ["@test_optimization_data//:test_optimization_context"],
 )
@@ -922,6 +928,62 @@ if grep -qiE "DD_API_KEY mismatch|API[ _-]?key mismatch" "$UPLOADER_LOG"; then
   cat "$UPLOADER_LOG" || true
   exit 1
 fi
+
+# Exercise the opt-in Python implementation through its real Bazel launcher and
+# the same three protocol sources used by the legacy baseline above. Keep the
+# source files so both implementations can run in one deterministic scenario.
+PYTHON_UPLOAD_LOG_START="$(log_line_count)"
+PYTHON_UPLOADER_LOG="$TMP_WS/uploader_python.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_python \
+  "${REPO_ENVS[@]}" -- --debug >"$PYTHON_UPLOADER_LOG" 2>&1; then
+  echo "error: opt-in Python uploader command failed"
+  cat "$PYTHON_UPLOADER_LOG" || true
+  exit 1
+fi
+if ! grep -q "summary: mode=upload result=success exit_code=0 workers=3" "$PYTHON_UPLOADER_LOG"; then
+  echo "error: opt-in Python uploader did not emit the expected final statistics"
+  cat "$PYTHON_UPLOADER_LOG" || true
+  exit 1
+fi
+LOG_FILE="$LOG_FILE" LOG_START="$PYTHON_UPLOAD_LOG_START" "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+
+expected = {
+    "/api/v2/citestcycle",
+    "/api/v2/citestcov",
+    "/api/v2/apmtelemetry",
+}
+start = int(os.environ["LOG_START"])
+paths = set()
+with open(os.environ["LOG_FILE"], "r", encoding="utf-8") as handle:
+    for index, line in enumerate(handle):
+        if index < start:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        path = record.get("path")
+        if isinstance(path, str):
+            paths.add(path)
+
+missing = sorted(expected - paths)
+if missing:
+    print("error: opt-in Python uploader missed protocol endpoints:", missing)
+    print("seen:", sorted(paths))
+    sys.exit(1)
+PY
 
 # Scenario: CI defaults to cache-safe uploads. If no BEP or legacy execution log
 # is available, the uploader must fail closed unless the caller opts out explicitly.
